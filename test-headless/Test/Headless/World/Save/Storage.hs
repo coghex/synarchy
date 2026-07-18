@@ -26,7 +26,7 @@ import Data.Either (isLeft)
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
     , doesDirectoryExist, doesFileExist, listDirectory, removeFile
-    , getPermissions, setPermissions, Permissions(..) )
+    , getPermissions, setPermissions, Permissions(..), createFileLink )
 import System.FilePath ((</>))
 
 import World.Save.Storage
@@ -130,6 +130,22 @@ buildEncoded seed name ts =
     let snap = snapshotWithSeed seed
         meta = snapshotSaveMetadata (SaveRequestMeta name ts) snap
     in (meta, encodeSessionSnapshot meta snap)
+
+-- | A STRUCTURALLY VALID, fully checksummed envelope (every checksum
+--   agrees — 'encodeSessionSnapshot' always computes real ones,
+--   regardless of content) whose snapshot has NO world pages at all —
+--   bypassing 'captureSessionSnapshot''s own "no persistable pages"
+--   guard via a direct record update, since that guard is exactly what
+--   makes this case otherwise unconstructible through the normal
+--   capture path. The one deliberately-uncorrupted way to prove
+--   'checkWorldCount' classifies as 'GenerationIncompatible' (never a
+--   fallback trigger), as opposed to every OTHER test file in this
+--   module, which corrupts real bytes to produce 'GenerationCorrupt'.
+emptyPagesBytes ∷ BS.ByteString
+emptyPagesBytes =
+    let snap = (snapshotWithSeed 1) { snapPages = HM.empty }
+        meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-empty") snap
+    in encodeSessionSnapshot meta snap
 
 -- ---------------------------------------------------------------------
 -- Scratch directory
@@ -241,6 +257,12 @@ spec = do
                 r `shouldBe` Right []
                 BS.readFile (authPath dir) `shouldReturn` bytesC
                 BS.readFile (prevPath dir) `shouldReturn` bytesB
+                -- The first generation, staged out of the way during
+                -- rotation (requirement 5), must be cleaned up once the
+                -- new publication is durable -- no stray file survives.
+                entries ← listDirectory dir
+                entries `shouldMatchList`
+                    [authoritativeFileName, previousGenerationFileName]
 
         it "never publishes a candidate that fails to decode, leaving \
            \an existing authoritative generation untouched" $
@@ -259,6 +281,19 @@ spec = do
             withTempSlotDir $ \dir → do
                 let (rightMeta, bytes) = buildEncoded 1 "slot" "t1"
                     wrongMeta = rightMeta { smName = "different-slot" }
+                r ← publishGeneration dir "slot" wrongMeta bytes
+                case r of
+                    Left f  → pfPhase f `shouldBe` PhaseCandidateValidate
+                    Right _ → expectationFailure "expected a validate failure"
+                doesFileExist (authPath dir) `shouldReturn` False
+
+        it "never publishes a candidate whose COMPLETE metadata doesn't \
+           \match the request even when only name/timestamp agree -- a \
+           \self-consistent candidate belonging to a different world \
+           \must not slip through on two matching fields alone" $
+            withTempSlotDir $ \dir → do
+                let (rightMeta, bytes) = buildEncoded 1 "slot" "t1"
+                    wrongMeta = rightMeta { smSeed = smSeed rightMeta + 1 }
                 r ← publishGeneration dir "slot" wrongMeta bytes
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateValidate
@@ -289,6 +324,22 @@ spec = do
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateCreate
                     Right _ → expectationFailure "expected a candidate-create failure"
+
+        it "reports an unsafe-path failure and never writes through a \
+           \slot directory that is itself a symlink" $
+            withTempSlotDir $ \dir → do
+                let target = dir <> "-target"
+                createDirectoryIfMissing True target
+                createFileLink target dir
+                (`finally` (removeFile dir >> removeDirectoryRecursive target)) $ do
+                    let (meta, bytes) = buildEncoded 1 "slot" "t1"
+                    r ← publishGeneration dir "slot" meta bytes
+                    case r of
+                        Left f  → pfPhase f `shouldBe` PhaseUnsafePath
+                        Right _ → expectationFailure "expected an unsafe-path failure"
+                    doesFileExist (target </> authoritativeFileName)
+                        `shouldReturn` False
+                    listDirectory target `shouldReturn` []
 
         it "reports a rotate-previous failure without destroying the \
            \existing authoritative generation, when the previous-\
@@ -322,11 +373,22 @@ spec = do
            \successful publish" $
             withTempSlotDir $ \dir → do
                 createDirectoryIfMissing True dir
-                BS.writeFile (dir </> "world.synworld.tmp-stale123")
+                BS.writeFile (dir </> "world-synworld-tmp99999")
                     "leftover from an earlier interrupted publish"
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 entries ← listDirectory dir
                 entries `shouldBe` [authoritativeFileName]
+
+        it "never sweeps a file that merely shares the temp-candidate \
+           \prefix without matching its digit-suffix naming convention \
+           \(a real unrelated file, not a transaction artifact)" $
+            withTempSlotDir $ \dir → do
+                createDirectoryIfMissing True dir
+                BS.writeFile (dir </> "world-synworld-tmp-notes")
+                    "a real file a user or another tool left here"
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                BS.readFile (dir </> "world-synworld-tmp-notes")
+                    `shouldReturn` "a real file a user or another tool left here"
 
         it "removes a stale pre-#759 world_gen.yaml companion on a \
            \successful publish, without disturbing an unrelated file" $
@@ -421,6 +483,64 @@ spec = do
                         ("expected no fallback, got " <> show (lsSource s))
                     Left err → T.unpack err `shouldContain` "incompatible"
 
+        it "does NOT fall back when the authoritative generation is \
+           \structurally valid (every checksum agrees) but has no world \
+           \pages -- checkWorldCount is a content-validation failure, \
+           \not storage corruption -- even though a valid previous \
+           \generation exists" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                BS.writeFile (authPath dir) emptyPagesBytes
+                sel ← selectLoadGeneration dir "slot"
+                case sel of
+                    Right s  → expectationFailure
+                        ("expected no fallback, got " <> show (lsSource s))
+                    Left err → T.unpack err `shouldContain` "incompatible"
+
+        it "reports an unsafe-path failure and never reads through a \
+           \slot directory that is itself a symlink" $
+            withTempSlotDir $ \dir → do
+                let target = dir <> "-target"
+                _ ← publishOK target "slot" 1 "slot" "t1"
+                createFileLink target dir
+                sel ← selectLoadGeneration dir "slot"
+                    `finally` (removeFile dir
+                                >> removeDirectoryRecursive target)
+                case sel of
+                    Left err → T.unpack err `shouldContain` "symlink"
+                    Right s  → expectationFailure
+                        ("expected an unsafe-path failure, got " <> show s)
+
+        it "recovers the still-intact current authoritative generation \
+           \when interrupted right after staging the old previous \
+           \generation out of the way, before rotation ever begins \
+           \(requirement 5/6: staging never destroys the displaced \
+           \generation until the new publication is durable)" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                -- Simulate the exact on-disk state a crash immediately
+                -- after staging (and before the rotate rename) would
+                -- leave: the old previous generation sitting under a
+                -- staged name, the current authoritative untouched, and
+                -- NO previous-generation file at all (never rotated).
+                staged ← BS.readFile (prevPath dir)
+                forceRemoveFile (prevPath dir)
+                BS.writeFile (dir </> "world-synworld-stale77777") staged
+                sel ← selectLoadGeneration dir "slot"
+                case sel of
+                    Right s → do
+                        lsSource s `shouldBe` FromAuthoritative
+                        smSeed (sdMetadata (lsSaveData s)) `shouldBe` 2
+                    Left err → expectationFailure (T.unpack err)
+                -- A subsequent successful publish must sweep the
+                -- leftover staged file like any other owned artifact.
+                _ ← publishOK dir "slot" 3 "slot" "t3"
+                entries ← listDirectory dir
+                entries `shouldMatchList`
+                    [authoritativeFileName, previousGenerationFileName]
+
         it "reports a failure (not a valid loadable save) when neither \
            \generation is valid" $
             withTempSlotDir $ \dir → do
@@ -449,7 +569,7 @@ spec = do
            \is ignored" $
             withTempSlotDir $ \dir → do
                 _ ← publishOK dir "slot" 1 "slot" "t1"
-                BS.writeFile (dir </> "world.synworld.tmp-partial")
+                BS.writeFile (dir </> "world-synworld-tmp88888")
                     "an interrupted write, never fully validated"
                 sel ← selectLoadGeneration dir "slot"
                 case sel of
@@ -463,7 +583,7 @@ spec = do
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 forceRemoveFile (authPath dir)
-                BS.writeFile (dir </> "world.synworld.tmp-partial")
+                BS.writeFile (dir </> "world-synworld-tmp88888")
                     "an interrupted write, never fully validated"
                 sel ← selectLoadGeneration dir "slot"
                 case sel of

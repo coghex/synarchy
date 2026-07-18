@@ -1703,37 +1703,61 @@ truncate or corrupt the sole copy of a generation the way a direct
 only already-encoded envelope bytes, the `SaveMetadata` they should decode
 back to, a slot directory, and a slot name for diagnostics — no live
 gameplay state, no snapshot-capture participation (it runs after the #758
-barrier has already released). `publishGeneration` is a classic
-write-validate-publish-rotate transaction: write the candidate to a
-uniquely-named temp file in the SAME slot directory
+barrier has already released). Both `publishGeneration` and
+`selectLoadGeneration` first refuse to operate at all through a slot
+directory that is itself a symlink (`rejectSymlinkedSlotDir`,
+`PhaseUnsafePath`) — otherwise a pre-existing `saves/<slot>` symlink would
+be silently followed by directory creation, the temp candidate, every
+rename, and cleanup alike, publishing into and deleting from wherever it
+points, outside `saves/` entirely (requirement 12).
+
+`publishGeneration` is a write-validate-publish-rotate transaction: write
+the candidate to a uniquely-named temp file in the SAME slot directory
 (`System.IO.openBinaryTempFile`, so concurrent publishers can't collide on
 a predictable name and the eventual publish rename stays on one
 filesystem); flush + durably `fsync` it
 (`System.Posix.Unistd.fileSynchronise`); re-read it FROM DISK (never trust
 the in-memory encode alone) and fully decode + deep-force it, applying the
 same validation bar the load path enforces (structure, checksums, every
-component, `checkWorldCount`, PLUS confirming the re-read metadata matches
-the intended slot/timestamp); only once validated, atomically
-`renameFile` the current authoritative generation (if any) into the single
-retained `world.synworld.prev` slot, then atomically `renameFile` the
-candidate into `world.synworld`; `fsync` the containing directory so both
-renames' directory-entry changes are durable; THEN report success — never
-before. Every phase (`World.Save.Storage.StoragePhase`) is wrapped in `try`
-and reported as a `PublishFailure` naming the phase, slot, and path
-(directory-create, candidate-create/write/flush/re-read/validate, rotate-
-previous, publish-rename, directory-sync), so a failure text like `engine.
-getSaveStatus()`'s `SaveAborted` outcome always identifies exactly where a
-save failed. A best-effort cleanup sweep (leftover temp files, a stale
-`world_gen.yaml`) runs only AFTER the durability boundary, so a cleanup
-failure is a non-fatal warning, never an overall save failure. Durability
-means: candidate data + both renames' directory entries have been handed
-to `fsync` successfully. On Linux this is a real crash/power-loss
-guarantee; on macOS, plain POSIX `fsync` does NOT guarantee the drive's
-own write cache reached physical media (only the much slower
-`F_FULLFSYNC` does) — this module deliberately uses ordinary `fsync` on
-both platforms rather than pay that cost on every save, the same
-trade-off most non-database desktop applications make. Windows is out of
-scope (see Platform Notes).
+component, `checkWorldCount`), PLUS confirming the re-read metadata is
+EXACTLY (`≡`, every field) the metadata this publish intended — not just
+the slot name/timestamp, so a caller-side mix-up between two saves'
+metadata can't slip through on two matching fields alone; only once
+validated: if a previous generation already exists, stage it out of the
+way under a freshly-claimed unique name FIRST (`stageOldPrevious`,
+`PhaseStalePrevious`) rather than letting the rotate rename destroy it
+outright — requirement 5's "older generations are removed only after the
+new publication is durable" means the displaced generation must stay
+fully intact on disk (just under a different name) until AFTER the
+durability boundary, not disappear the instant it's rotated out of the
+`world.synworld.prev` slot; THEN atomically `renameFile` the current
+authoritative generation into the now-free `world.synworld.prev` slot,
+then atomically `renameFile` the candidate into `world.synworld`; `fsync`
+the containing directory so every rename's directory-entry change is
+durable; THEN report success — never before; ONLY NOW remove the staged-
+away old generation and any other recognized stale artifact. Every phase
+(`World.Save.Storage.StoragePhase`) is wrapped in `try` and reported as a
+`PublishFailure` naming the phase, slot, and path, so a failure text like
+`engine.getSaveStatus()`'s `SaveAborted` outcome always identifies exactly
+where a save failed. A best-effort cleanup sweep (the just-staged old
+generation, any other leftover temp/staged artifact from an earlier
+interrupted publish, a stale `world_gen.yaml`) runs only AFTER the
+durability boundary, so a cleanup failure is a non-fatal warning, never an
+overall save failure. Every transient name this module generates uses a
+dot-free template (`"world-synworld-tmp"`/`"world-synworld-stale"`) so
+`openBinaryTempFile`'s numeric suffix always trails the template instead
+of splicing before a `.`-preserved extension; cleanup recognises ONLY a
+name that is the template immediately followed by a digit
+(`isOwnedArtifactName`) — never a mere shared prefix — so a real but
+oddly-named user file dropped in the slot directory (e.g.
+`world-synworld-tmp-notes`) is never swept (requirement 12/13). Durability
+means: candidate data + every rename's directory entry have been handed to
+`fsync` successfully. On Linux this is a real crash/power-loss guarantee;
+on macOS, plain POSIX `fsync` does NOT guarantee the drive's own write
+cache reached physical media (only the much slower `F_FULLFSYNC` does) —
+this module deliberately uses ordinary `fsync` on both platforms rather
+than pay that cost on every save, the same trade-off most non-database
+desktop applications make. Windows is out of scope (see Platform Notes).
 
 Load-source selection (`selectLoadGeneration`, used by both
 `World.Save.Serialize.loadWorld` and `listSaves`) classifies WHY a
@@ -1743,33 +1767,42 @@ absent, truncated, bad framing, or a checksum failure — the shape routine
 storage corruption from an interrupted publish actually takes — is
 `GenerationCorrupt` and falls back to a fully valid `world.synworld.prev`;
 a structurally coherent but unsupported/incompatible file (unknown
-component version, failed content/assembly validation) is
-`GenerationIncompatible` and is reported directly, NEVER triggering a
-fallback — silently rolling back to an older generation would hide a real
-compatibility problem instead of reporting it. A load never combines
-components across generations (exactly one generation's `SaveData` is
-ever returned) and is read-only (a recovered load never rewrites or
-promotes `world.synworld.prev`); a later explicit save is what publishes
-a fresh authoritative generation. `loadWorld`/`listSaves` log a recovered
-selection loudly (`logWarn`); `engine.listSaves()` additionally exposes a
-`recovered` boolean on a listing recovered this way (no save/load UI
-change required to consume it). A pre-#759 legacy flat file
+component version, failed content/assembly validation, INCLUDING
+`checkWorldCount`'s empty-pages check — a content-validation failure, not
+storage damage, even though in practice `assembleSnapshot`'s own
+`validateSessionSnapshot` already rejects an empty page set earlier in the
+same decode) is `GenerationIncompatible` and is reported directly, NEVER
+triggering a fallback — silently rolling back to an older generation would
+hide a real compatibility problem instead of reporting it. A load never
+combines components across generations (exactly one generation's
+`SaveData` is ever returned) and is read-only (a recovered load never
+rewrites or promotes `world.synworld.prev`); a later explicit save is what
+publishes a fresh authoritative generation. `loadWorld`/`listSaves` log a
+recovered selection loudly (`logWarn`); `engine.listSaves()` additionally
+exposes a `recovered` boolean on a listing recovered this way (no
+save/load UI change required to consume it). A pre-#759 legacy flat file
 (`saves/<name>.synworld`, no slot directory) is untouched by any of this
 — it has no previous-generation/temp-file concept and either decodes
 cleanly or is rejected outright, exactly as before #762.
 
 Pure/integration coverage: `Test.Headless.World.Save.Storage` (the "atomic
-save storage" describe) — first/second/third publish retention, candidate
-re-read+validation (corrupt bytes, a metadata/request mismatch) never
+save storage" describe) — first/second/third publish retention (incl. the
+staged-and-cleaned-up first generation leaving no stray file behind),
+candidate re-read+validation (corrupt bytes, a full-metadata mismatch —
+including a same-name/timestamp-but-different-seed candidate) never
 touching an existing authoritative generation, every forceable failure
 phase (directory pre-occupied by a plain file, a read-only slot directory,
-a rotate/publish-rename target blocked by an existing directory) reporting
-the correct `StoragePhase` without destroying anything, stale-temp/stale-
-`world_gen.yaml` cleanup never touching an unrelated file, and
-`selectLoadGeneration` across every constructed on-disk state (missing/
-truncated/bad-framing/checksum-corrupt authoritative, a stray leftover
-temp file, an incompatible-but-checksummed authoritative that must NOT
-fall back, neither generation valid) proving a recovered load is read-only
+a symlinked slot directory, a rotate/publish-rename target blocked by an
+existing directory) reporting the correct `StoragePhase` without
+destroying anything, stale-temp/staged-previous/stale-`world_gen.yaml`
+cleanup never touching an unrelated file (incl. one merely sharing a
+transient-name prefix without its digit suffix), and `selectLoadGeneration`
+across every constructed on-disk state (missing/truncated/bad-framing/
+checksum-corrupt authoritative, a structurally-valid-but-empty-pages
+authoritative, a stray leftover temp file, a symlinked slot directory, the
+exact intermediate state a crash immediately after staging would leave, an
+incompatible-but-checksummed authoritative that must NOT fall back,
+neither generation valid) proving a recovered load is read-only
 and never selects a partial candidate. Real multi-thread/real-restart
 coverage: **`python3 tools/save_storage_probe.py`** — against an ISOLATED
 temporary resource root (never a real player's `saves/`) — two real saves

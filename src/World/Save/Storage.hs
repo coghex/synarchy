@@ -15,43 +15,51 @@
 --   produced, a slot directory, and a slot name for diagnostics, and
 --   performs a classic write-validate-publish-rotate transaction:
 --
---   1. Write the candidate to a UNIQUELY named temporary file in the SAME
+--   1. Refuse to operate at all through a slot directory that is itself a
+--      symlink (requirement 12) — see 'rejectSymlinkedSlotDir'.
+--   2. Write the candidate to a UNIQUELY named temporary file in the SAME
 --      slot directory (so the final publish step can use an atomic
 --      same-filesystem rename) — never a shared/predictable name two
 --      concurrent publishers could collide on
 --      ('System.IO.openBinaryTempFile' handles this).
---   2. Flush + durably sync the candidate ('fileSynchronise', POSIX
+--   3. Flush + durably sync the candidate ('fileSynchronise', POSIX
 --      @fsync@) before ever trusting it.
---   3. Re-read the candidate FROM DISK (not the in-memory bytes the
+--   4. Re-read the candidate FROM DISK (not the in-memory bytes the
 --      encoder produced) and fully decode + deep-force it, applying the
---      same validation bar the load path enforces — an in-memory encode
---      success is never sufcient on its own to publish.
---   4. Only once validated: rotate the CURRENT authoritative generation
---      (if any) into the single retained previous-generation slot via an
---      atomic rename, then atomically rename the validated candidate into
---      the authoritative path. Both renames use
+--      same validation bar the load path enforces, PLUS confirming the
+--      re-read metadata is EXACTLY the metadata this publish intended —
+--      an in-memory encode success is never sufficient on its own to
+--      publish.
+--   5. Only once validated: if a previous generation already exists,
+--      stage it out of the way under a fresh unique name FIRST (never
+--      destroying it outright yet — requirement 5's "older generations
+--      are removed only after the new publication is durable"), rotate
+--      the CURRENT authoritative generation into the now-free previous-
+--      generation slot, then atomically rename the validated candidate
+--      into the authoritative path. Every rename uses
 --      'System.Directory.renameFile', which is POSIX @rename(2)@ — a
 --      single atomic filesystem operation that either fully replaces the
 --      destination or doesn't happen at all; there is no filesystem-level
 --      "partway through a rename" state to defend against.
---   5. Sync the containing directory so the rename's directory-entry
+--   6. Sync the containing directory so every rename's directory-entry
 --      change is itself durable, THEN report success — never before.
+--   7. Only now — past the durability boundary — remove the staged old
+--      generation and any other recognized stale transaction artifact.
 --
 --   === Documented durability boundary (requirement 4)
 --
 --   \"Durable\" here means: the candidate's data + the directory entries
---   for both the rotate-to-previous rename and the publish rename have
---   been handed to 'fileSynchronise' (@fsync@) and that call returned
---   without error. On Linux (ext4/xfs/btrfs) this is a real durability
---   guarantee against a subsequent crash or power loss. On macOS, the
---   kernel's plain @fsync(2)@ does NOT guarantee the drive's own write
---   cache has been flushed to physical media — only @F_FULLFSYNC@ does,
---   and it is dramatically slower (typically 10-100x), so this module
---   deliberately uses the ordinary POSIX @fsync@ (via
---   'System.Posix.Unistd.fileSynchronise') on both platforms rather than
---   pay that cost on every save. This is the same trade-off essentially
---   every desktop application (this one is a game engine, not a
---   database) makes; a save is protected against process crashes,
+--   for every rename above have been handed to 'fileSynchronise' (@fsync@)
+--   and that call returned without error. On Linux (ext4/xfs/btrfs) this
+--   is a real durability guarantee against a subsequent crash or power
+--   loss. On macOS, the kernel's plain @fsync(2)@ does NOT guarantee the
+--   drive's own write cache has been flushed to physical media — only
+--   @F_FULLFSYNC@ does, and it is dramatically slower (typically
+--   10-100x), so this module deliberately uses the ordinary POSIX @fsync@
+--   (via 'System.Posix.Unistd.fileSynchronise') on both platforms rather
+--   than pay that cost on every save. This is the same trade-off
+--   essentially every desktop application (this one is a game engine, not
+--   a database) makes; a save is protected against process crashes,
 --   application bugs, and disk-full/permission failures either way — the
 --   narrower residual risk this accepts is a genuine OS-level crash or
 --   power loss landing in the exact window between a macOS @fsync@
@@ -63,25 +71,30 @@
 --
 --   Every phase above is ordered so that an interruption at ANY point —
 --   before the temp file exists, mid-write, after write but before
---   validation, after validation but before rotation, mid-rotation,
---   mid-publish, after publish but before the directory syncs, or during
---   the final best-effort cleanup sweep — always leaves AT LEAST ONE of
---   the old or the new generation fully intact and selectable
---   ('selectLoadGeneration'), NEVER a partial/hybrid result:
+--   validation, after validation but before staging/rotation, mid-
+--   staging, mid-rotation, mid-publish, after publish but before the
+--   directory syncs, or during the final best-effort cleanup sweep —
+--   always leaves AT LEAST ONE of the old or the new generation fully
+--   intact and selectable ('selectLoadGeneration'), NEVER a partial/
+--   hybrid result:
 --
 --   * Anything before the publish rename completes: the authoritative
 --     path is untouched (or, if the rotate rename already ran, the OLD
 --     generation is sitting at the previous-generation path instead) —
---     either way a complete old generation is selectable.
+--     either way a complete old generation is selectable. Staging a
+--     previous generation out of the way never destroys it — it only
+--     moves to a differently-named file, still fully intact on disk,
+--     until cleanup removes it after the durability boundary.
 --   * Anything from the publish rename onward: the authoritative path
 --     already holds the complete NEW generation (a rename is atomic; it
 --     cannot be observed half-applied).
 --
---   A leftover, unpublished temporary file is always harmless dead
---   weight — never consulted by 'selectLoadGeneration' or
+--   A leftover, unpublished temporary or staged-previous file is always
+--   harmless dead weight — never consulted by 'selectLoadGeneration' or
 --   "World.Save.Serialize"'s listing (it lives under a name other than
---   @world.synworld@) — and is swept on the NEXT successful publish to
---   this slot, or left for a future explicit cleanup if none ever comes.
+--   @world.synworld@/@world.synworld.prev@) — and is swept on the NEXT
+--   successful publish to this slot, or left for a future explicit
+--   cleanup if none ever comes.
 module World.Save.Storage
     ( authoritativeFileName
     , previousGenerationFileName
@@ -98,10 +111,11 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Text as T
+import Data.Char (isDigit)
 import Control.Exception (IOException, SomeException, try, finally)
 import System.Directory
     ( createDirectoryIfMissing, doesFileExist, removeFile, listDirectory
-    , renameFile )
+    , renameFile, pathIsSymbolicLink )
 import System.FilePath ((</>))
 import System.IO (Handle, openBinaryTempFile, hFlush, hClose)
 import System.Posix.IO
@@ -130,11 +144,24 @@ previousGenerationFileName = "world.synworld.prev"
 
 -- | Every candidate this transaction ever creates is opened through
 --   'System.IO.openBinaryTempFile' with this template — the RTS mixes in
---   its own per-call unique suffix (retried under an exclusive create on
---   collision), so concurrent publishers to the same slot can never
---   predictably collide on a shared temp name (requirement 2).
+--   its own per-call unique NUMERIC suffix (retried under an exclusive
+--   create on collision), so concurrent publishers to the same slot can
+--   never predictably collide on a shared temp name (requirement 2).
+--   Deliberately contains no @.@: 'openBinaryTempFile' treats a template's
+--   LAST dot as an extension to preserve and inserts its generated suffix
+--   BEFORE it (e.g. a @"foo.tmp"@ template yields @"foo1234-0.tmp"@, not
+--   @"foo.tmp1234"@) — a dot-free template keeps the generated suffix
+--   trailing, which 'isOwnedArtifactName' below relies on to recognise
+--   (and only ever recognise) this module's own files.
 candidateTemplate ∷ String
-candidateTemplate = "world.synworld.tmp"
+candidateTemplate = "world-synworld-tmp"
+
+-- | The unique name a previous generation is staged under while a new
+--   candidate is being rotated into place (requirement 5) — see
+--   'stageOldPrevious'. Same dot-free-template reasoning as
+--   'candidateTemplate'.
+staleTemplate ∷ String
+staleTemplate = "world-synworld-stale"
 
 -- | The pre-#759 companion file. #759 requirement 5 made it
 --   non-authoritative and unused; requirement 13 here lets a successful
@@ -142,18 +169,58 @@ candidateTemplate = "world.synworld.tmp"
 staleGenYamlFileName ∷ FilePath
 staleGenYamlFileName = "world_gen.yaml"
 
+-- | True iff @name@ is exactly one of this module's own generated
+--   transient names: @template@ immediately followed by at least one
+--   digit — 'openBinaryTempFile''s own naming convention for a dot-free
+--   template (a numeric suffix, optionally @-N@ on retry, always
+--   digit-first). Digit-anchored so cleanup can never sweep an unrelated
+--   file that merely shares the prefix (e.g. a player's own note file
+--   dropped in the slot directory) — requirement 12's "recognized stale
+--   transaction artifacts... never unrelated files" and requirement 13's
+--   "cleanup must not affect unrelated user files".
+isTransientName ∷ String → String → Bool
+isTransientName template name = case L.stripPrefix template name of
+    Just (c : _) → isDigit c
+    _            → False
+
+isOwnedArtifactName ∷ String → Bool
+isOwnedArtifactName name =
+    isTransientName candidateTemplate name ∨ isTransientName staleTemplate name
+
+-- Path safety ------------------------------------------------------------
+
+-- | Refuse to operate through a slot directory that is itself a symlink
+--   (requirement 12): a pre-existing @saves/\<slot\>@ symlink would
+--   otherwise be silently followed by directory creation, the temp
+--   candidate, every rename, and cleanup alike — publishing into, and
+--   deleting recognized-artifact-named files from, wherever it points,
+--   outside the resolved resource root's @saves/@ tree entirely. A
+--   nonexistent path is not a symlink (nothing to reject — an ordinary
+--   new slot); a filesystem error other than "does not exist" while
+--   checking is treated the same as "not a symlink" and left for the
+--   caller's own next operation to report properly.
+rejectSymlinkedSlotDir ∷ FilePath → IO (Either Text ())
+rejectSymlinkedSlotDir dir = do
+    result ← try (pathIsSymbolicLink dir)
+    pure $ case (result ∷ Either IOException Bool) of
+        Right True → Left ("slot directory is a symlink, refusing to \
+                            \operate through it: " <> T.pack dir)
+        _          → Right ()
+
 -- Publication ------------------------------------------------------------
 
 -- | Every phase 'publishGeneration' can fail in, in the order a real
 --   publication reaches them (requirement 10: an error names the storage
 --   phase, never just "save failed").
 data StoragePhase
-    = PhaseDirectoryCreate
+    = PhaseUnsafePath
+    | PhaseDirectoryCreate
     | PhaseCandidateCreate
     | PhaseCandidateWrite
     | PhaseCandidateFlush
     | PhaseCandidateReread
     | PhaseCandidateValidate
+    | PhaseStalePrevious
     | PhaseRotatePrevious
     | PhasePublishRename
     | PhaseDirectorySync
@@ -195,19 +262,24 @@ publishGeneration
     → BS.ByteString      -- ^ complete, already-encoded envelope bytes
     → IO (Either PublishFailure [Text])
 publishGeneration dir slotName expectedMeta encoded = do
-    dirResult ← try (createDirectoryIfMissing True dir)
-    case dirResult of
-        Left (e ∷ IOException) →
-            pure (Left (failure PhaseDirectoryCreate (Just dir) (showT e)))
+    safety ← rejectSymlinkedSlotDir dir
+    case safety of
+        Left reason →
+            pure (Left (failure PhaseUnsafePath (Just dir) reason))
         Right () → do
-            created ← try (openBinaryTempFile dir candidateTemplate)
-            case created of
+            dirResult ← try (createDirectoryIfMissing True dir)
+            case dirResult of
                 Left (e ∷ IOException) →
-                    pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
-                Right (tempPath, h) →
-                    writeValidateAndPublish dir slotName expectedMeta encoded
-                        tempPath h
-                        `finally` cleanupLeftoverTemp tempPath
+                    pure (Left (failure PhaseDirectoryCreate (Just dir) (showT e)))
+                Right () → do
+                    created ← try (openBinaryTempFile dir candidateTemplate)
+                    case created of
+                        Left (e ∷ IOException) →
+                            pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
+                        Right (tempPath, h) →
+                            writeValidateAndPublish dir slotName expectedMeta encoded
+                                tempPath h
+                                `finally` cleanupLeftoverTemp tempPath
   where
     failure = publishFailureFor slotName
 
@@ -271,16 +343,18 @@ closeQuietly h = do
 --   checksums, required components, component decode/migrate/validate,
 --   and 'checkWorldCount' — PLUS a re-read-metadata-matches-request
 --   check the load path has no analogue for (loading never has an
---   "expected" name/timestamp to compare against; publishing does). An
---   in-memory encode success alone is never sufficient — only what
---   'BS.hPut' actually put on disk, read back, counts.
+--   "expected" metadata to compare against; publishing does — the
+--   COMPLETE 'SaveMetadata', not just the slot name/timestamp, so a
+--   caller-side mismatch between @expectedMeta@ and what @encoded@
+--   actually contains can never slip through on two matching fields
+--   alone). An in-memory encode success alone is never sufficient — only
+--   what 'BS.hPut' actually put on disk, read back, counts.
 validateCandidate ∷ SaveMetadata → BS.ByteString → Either Text ()
 validateCandidate expectedMeta bytes = do
     (meta, snap) ← decodeSessionEnvelope bytes
-    when (smName meta ≢ smName expectedMeta
-          ∨ smTimestamp meta ≢ smTimestamp expectedMeta) $
+    when (meta ≢ expectedMeta) $
         Left "re-read candidate metadata does not match the intended save \
-             \request (slot name/timestamp mismatch)"
+             \request"
     let req = SaveRequestMeta { srmSlotName  = smName meta
                               , srmTimestamp = smTimestamp meta }
     sd ← checkWorldCount (snapshotToSaveData req snap)
@@ -295,65 +369,123 @@ validateCandidate expectedMeta bytes = do
     -- entire save-data tree.
     length (show sd) `seq` Right ()
 
--- | Rotate the current authoritative generation (if any) into the
+-- | Stage the current previous generation (if any) out from under
+--   'previousGenerationFileName' and onto a freshly claimed unique name,
+--   rotate the CURRENT authoritative generation into the now-free
 --   previous-generation slot, then atomically publish the validated
 --   candidate as the new authoritative generation, then sync the
 --   directory. Called only after 'validateCandidate' has already
 --   accepted the candidate — never a candidate that merely encoded
 --   successfully in memory.
+--
+--   Staging (rather than letting the rotate rename destroy the old
+--   previous generation outright) is what satisfies requirement 5:
+--   "older generations are removed only after the new publication is
+--   durable" — the displaced generation stays fully intact under its
+--   staged name until 'cleanupAfterPublish' removes it, which runs only
+--   AFTER the directory sync below confirms durability.
 publishValidated ∷ FilePath → Text → FilePath → IO (Either PublishFailure [Text])
 publishValidated dir slotName tempPath = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
-    authExists ← doesFileExist authPath
-    rotateResult ←
-        if authExists
-          then try (renameFile authPath prevPath)
-          else pure (Right ())
-    case rotateResult of
+    stageResult ← stageOldPrevious dir prevPath
+    case stageResult of
         Left (e ∷ IOException) →
-            pure (Left (fail' PhaseRotatePrevious (Just authPath) (showT e)))
-        Right () → do
-            publishResult ← try (renameFile tempPath authPath)
-            case publishResult of
+            pure (Left (fail' PhaseStalePrevious (Just prevPath) (showT e)))
+        Right mStaled → do
+            authExists ← doesFileExist authPath
+            rotateResult ←
+                if authExists
+                  then try (renameFile authPath prevPath)
+                  else pure (Right ())
+            case rotateResult of
                 Left (e ∷ IOException) →
-                    pure (Left (fail' PhasePublishRename (Just tempPath) (showT e)))
+                    pure (Left (fail' PhaseRotatePrevious (Just authPath) (showT e)))
                 Right () → do
-                    syncResult ← try (syncDirectory dir)
-                    case syncResult of
-                        Left (e ∷ SomeException) →
-                            pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
-                        Right () →
-                            Right ⊚ cleanupStaleArtifacts dir
+                    publishResult ← try (renameFile tempPath authPath)
+                    case publishResult of
+                        Left (e ∷ IOException) →
+                            pure (Left (fail' PhasePublishRename (Just tempPath) (showT e)))
+                        Right () → do
+                            syncResult ← try (syncDirectory dir)
+                            case syncResult of
+                                Left (e ∷ SomeException) →
+                                    pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
+                                Right () →
+                                    Right ⊚ cleanupAfterPublish dir mStaled
   where
     fail' = publishFailureFor slotName
+
+-- | If a previous generation exists, move it onto a freshly claimed
+--   unique name and return that path; 'Nothing' when there was none to
+--   stage (e.g. the slot's first-ever publish). The move is a single
+--   atomic rename — the previous generation is never observed missing
+--   without also being observed at its new staged name.
+stageOldPrevious ∷ FilePath → FilePath → IO (Either IOException (Maybe FilePath))
+stageOldPrevious dir prevPath = do
+    exists ← doesFileExist prevPath
+    if not exists
+        then pure (Right Nothing)
+        else try $ do
+            staledPath ← claimUniquePath dir staleTemplate
+            renameFile prevPath staledPath
+            pure (Just staledPath)
+
+-- | Atomically claim a filesystem-unique path under @dir@ named
+--   @template@ + a generated numeric suffix, without leaving a file
+--   behind at it — 'openBinaryTempFile' is the only portable way this
+--   codebase has to generate a collision-free name (requirement 2's
+--   same guarantee, reused here for the staged-previous name); the
+--   briefly-created placeholder is closed and removed immediately so the
+--   caller can rename an EXISTING file onto the now-free name. This
+--   leaves a narrow (microsecond) window where another process could
+--   claim the identical name first, same as any "reserve a name" dance
+--   without a dedicated atomic rename-to-fresh-name primitive; a
+--   collision here surfaces as an ordinary 'PhaseStalePrevious' rename
+--   failure, not silent corruption.
+claimUniquePath ∷ FilePath → String → IO FilePath
+claimUniquePath dir template = do
+    (path, h) ← openBinaryTempFile dir template
+    hClose h
+    removeFile path
+    pure path
 
 syncDirectory ∷ FilePath → IO ()
 syncDirectory dir = do
     fd ← openFd dir ReadOnly defaultFileFlags
     fileSynchronise fd `finally` closeFd fd
 
--- | Best-effort removal of every leftover temporary candidate belonging
---   to this slot (from this or an earlier interrupted publish — the just
---   -published one is gone already, having been renamed away) plus a
---   stale pre-#759 @world_gen.yaml@ companion (requirement 13). Runs
---   only AFTER the documented durability boundary has already completed
---   (the caller), so any failure here is reported as a warning, never as
---   an overall publish failure.
+-- | Runs only AFTER the durability boundary (the caller's directory
+--   sync): remove the staged-away previous generation this publish
+--   itself displaced (if any), then sweep every other recognized stale
+--   transaction artifact belonging to this slot (requirement 13).
+cleanupAfterPublish ∷ FilePath → Maybe FilePath → IO [Text]
+cleanupAfterPublish dir mStaled = do
+    staledWarnings ← maybe (pure []) removeIfExists mStaled
+    artifactWarnings ← cleanupStaleArtifacts dir
+    pure (staledWarnings ⧺ artifactWarnings)
+
+-- | Best-effort removal of every leftover transaction artifact belonging
+--   to this slot (temp candidates AND staged-previous files from THIS or
+--   an earlier interrupted publish — see 'isOwnedArtifactName') plus a
+--   stale pre-#759 @world_gen.yaml@ companion (requirement 13). Any
+--   failure here is reported as a warning, never an overall publish
+--   failure (the caller only reaches this after the durability boundary
+--   already completed).
 cleanupStaleArtifacts ∷ FilePath → IO [Text]
 cleanupStaleArtifacts dir = do
-    staleTemps ← listStaleTempFiles dir
-    tempWarnings ← concat ⊚ mapM removeIfExists staleTemps
+    owned ← listOwnedArtifacts dir
+    artifactWarnings ← concat ⊚ mapM removeIfExists owned
     yamlWarnings ← removeIfExists (dir </> staleGenYamlFileName)
-    pure (tempWarnings ⧺ yamlWarnings)
+    pure (artifactWarnings ⧺ yamlWarnings)
 
-listStaleTempFiles ∷ FilePath → IO [FilePath]
-listStaleTempFiles dir = do
+listOwnedArtifacts ∷ FilePath → IO [FilePath]
+listOwnedArtifacts dir = do
     listed ← try (listDirectory dir)
     case (listed ∷ Either SomeException [FilePath]) of
         Left _        → pure []
         Right entries → pure
-            [ dir </> e | e ← entries, candidateTemplate `L.isPrefixOf` e ]
+            [ dir </> e | e ← entries, isOwnedArtifactName e ]
 
 removeIfExists ∷ FilePath → IO [Text]
 removeIfExists path = do
@@ -403,6 +535,13 @@ data LoadSelection = LoadSelection
 --   generations: exactly one generation's 'SaveData' is ever returned.
 selectLoadGeneration ∷ FilePath → Text → IO (Either Text LoadSelection)
 selectLoadGeneration dir slotName = do
+    safety ← rejectSymlinkedSlotDir dir
+    case safety of
+        Left reason → pure (Left reason)
+        Right ()    → selectLoadGenerationUnsafe dir slotName
+
+selectLoadGenerationUnsafe ∷ FilePath → Text → IO (Either Text LoadSelection)
+selectLoadGenerationUnsafe dir slotName = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
     authExists ← doesFileExist authPath
@@ -443,6 +582,18 @@ selectLoadGeneration dir slotName = do
                         <> ") and the previous generation is also unusable ("
                         <> renderGenerationFailure prevFail <> ")"))
 
+-- | Decode + fully validate one candidate generation file, classified
+--   per 'GenerationFailure'. 'checkWorldCount' classifies as
+--   'GenerationIncompatible', not 'GenerationCorrupt': by the time it
+--   runs, the envelope's own structural checksums have already passed
+--   (see 'World.Save.Envelope.decodeSessionEnvelopeClassified'), so an
+--   empty-pages result reflects a genuine content-validation failure
+--   (issue #762 requirement 7's "fails gameplay/content validation" —
+--   never a fallback trigger), not routine storage damage. In practice
+--   'World.Save.Component.assembleSnapshot''s own cross-component
+--   'validateSessionSnapshot' check already rejects an empty page set
+--   earlier in this same decode, so this classification is defense in
+--   depth rather than a normally-reachable path.
 decodeGenerationFile ∷ FilePath → IO (Either GenerationFailure SaveData)
 decodeGenerationFile path = do
     readResult ← try (BS.readFile path)
@@ -452,5 +603,5 @@ decodeGenerationFile path = do
         Right bytes → pure $ do
             (meta, snap) ← decodeSessionEnvelopeClassified bytes
             let req = SaveRequestMeta (smName meta) (smTimestamp meta)
-            either (Left . GenerationCorrupt) Right
+            either (Left . GenerationIncompatible) Right
                    (checkWorldCount (snapshotToSaveData req snap))
