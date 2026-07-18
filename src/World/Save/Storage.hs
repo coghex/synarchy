@@ -31,22 +31,28 @@
 --      re-read metadata is EXACTLY the metadata this publish intended —
 --      an in-memory encode success is never sufficient on its own to
 --      publish.
---   5. Only once validated: if a previous generation already exists,
---      stage it out of the way under a fresh unique name FIRST (never
---      destroying it outright yet — requirement 5's "older generations
---      are removed only after the new publication is durable"), THEN
---      SYNC THE DIRECTORY so that staging handoff is itself a confirmed-
---      durable recovery point; rotate the CURRENT authoritative
---      generation into the now-free previous-generation slot, THEN SYNC
---      AGAIN; then atomically rename the validated candidate into the
---      authoritative path, THEN SYNC A FINAL TIME. Every rename uses
---      'System.Directory.renameFile', which is POSIX @rename(2)@ — a
---      single atomic filesystem operation that either fully replaces the
---      destination or doesn't happen at all; there is no filesystem-level
---      "partway through a rename" state to defend against. Syncing after
---      EACH rename (not only the last) means every intermediate handoff
---      is durable in its own right before the next step ever runs — see
---      'publishValidated'.
+--   5. Only once validated: if an authoritative generation currently
+--      exists, stage the existing previous generation (if any) out of
+--      the way under a fresh unique name FIRST (never destroying it
+--      outright yet — requirement 5's "older generations are removed
+--      only after the new publication is durable"), THEN SYNC THE
+--      DIRECTORY so that staging handoff is itself a confirmed-durable
+--      recovery point; rotate the CURRENT authoritative generation into
+--      the now-free previous-generation slot, THEN SYNC AGAIN. If NO
+--      authoritative generation currently exists — a "previous-only"
+--      recovery state — staging/rotation are skipped entirely and the
+--      existing previous generation (the slot's ONLY known-valid
+--      generation right now) is left completely untouched, never at
+--      risk of being destroyed before the new candidate is durable; see
+--      'publishValidated'. Either way, finally atomically rename the
+--      validated candidate into the authoritative path, THEN SYNC A
+--      FINAL TIME. Every rename uses 'System.Directory.renameFile',
+--      which is POSIX @rename(2)@ — a single atomic filesystem
+--      operation that either fully replaces the destination or doesn't
+--      happen at all; there is no filesystem-level "partway through a
+--      rename" state to defend against. Syncing after EACH rename (not
+--      only the last) means every intermediate handoff is durable in
+--      its own right before the next step ever runs.
 --   6. Report success only after that FINAL sync (following the publish
 --      rename) confirms the new generation's own durability — never
 --      before.
@@ -411,15 +417,35 @@ validateCandidate expectedMeta bytes = do
 --   staged name until 'cleanupAfterPublish' removes it, which runs only
 --   AFTER the FINAL directory sync (following the publish rename)
 --   confirms the new generation's own durability, never before.
+--
+--   Staging and rotation happen ONLY when an authoritative generation
+--   currently exists to rotate out of the way. When it does not — a
+--   \"previous-only\" recovery state, e.g. the slot's own authoritative
+--   file was already lost to an earlier interruption and
+--   'selectLoadGeneration' has been recovering from
+--   'previousGenerationFileName' alone — there is nothing for rotation
+--   to displace, so 'previousGenerationFileName' is left COMPLETELY
+--   untouched all the way through the publish rename below: staging it
+--   away regardless (as an earlier revision of this function did) would
+--   itself have destroyed the ONLY known-valid generation before the
+--   new candidate became durably selectable, opening exactly the
+--   destroy-before-recoverable window requirement 6 forbids. Left
+--   untouched, that pre-existing file simply continues to serve as the
+--   previous generation once the new candidate publishes — no explicit
+--   rotation needed, since it was never moved out of that slot at all.
 publishValidated ∷ FilePath → Text → FilePath → IO (Either PublishFailure [Text])
 publishValidated dir slotName tempPath = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
-    stageResult ← stageOldPrevious dir prevPath
-    case stageResult of
-        Left (e ∷ IOException) →
-            pure (Left (fail' PhaseStalePrevious (Just prevPath) (showT e)))
-        Right mStaled → afterSync (rotate authPath prevPath mStaled)
+    authExists ← doesFileExist authPath
+    if not authExists
+        then publish authPath Nothing
+        else do
+            stageResult ← stageOldPrevious dir prevPath
+            case stageResult of
+                Left (e ∷ IOException) →
+                    pure (Left (fail' PhaseStalePrevious (Just prevPath) (showT e)))
+                Right mStaled → afterSync (rotate authPath prevPath mStaled)
   where
     fail' = publishFailureFor slotName
     -- Sync the directory, then run @next@ only on success — every
@@ -431,11 +457,7 @@ publishValidated dir slotName tempPath = do
                 pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
             Right () → next
     rotate authPath prevPath mStaled = do
-        authExists ← doesFileExist authPath
-        rotateResult ←
-            if authExists
-              then try (renameFile authPath prevPath)
-              else pure (Right ())
+        rotateResult ← try (renameFile authPath prevPath)
         case rotateResult of
             Left (e ∷ IOException) →
                 pure (Left (fail' PhaseRotatePrevious (Just authPath) (showT e)))

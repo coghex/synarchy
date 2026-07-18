@@ -377,6 +377,27 @@ spec = do
                         Right _ → expectationFailure "expected an unsafe-path failure"
                     listDirectory target `shouldReturn` []
 
+        it "never touches (stages, rotates, or destroys) the sole \
+           \previous generation when publishing from an authoritative-\
+           \missing 'previous-only' recovery state -- there is nothing \
+           \to rotate it out of the way for, so it simply becomes the \
+           \new previous generation untouched, never at risk of being \
+           \destroyed before the new candidate is durable" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                -- Simulate an earlier interrupted rotation that left the
+                -- slot in exactly the recovery state
+                -- 'selectLoadGeneration' is designed to recover from:
+                -- authoritative missing, previous generation intact.
+                forceRemoveFile (authPath dir)
+                prevBefore ← BS.readFile (prevPath dir)
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesC
+                BS.readFile (prevPath dir) `shouldReturn` prevBefore
+
         it "reports a rotate-previous failure without destroying the \
            \existing authoritative generation, when the previous-\
            \generation path is blocked" $
