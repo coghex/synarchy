@@ -33,12 +33,18 @@ import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
-    , MissingDefRef(..), renderMissingDefRef, missingDefReferences )
+    , MissingDefRef(..), renderMissingDefRef, missingDefReferences
+    , MissingItemDefRef(..), missingItemDefReferences
+    , MissingRecipeRef(..), missingRecipeReferences
+    , MissingConstructDefRef(..)
+    , missingConstructDefReferences
+    , WorldPageSave(..) )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
+import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Structure.Palette (emptyTexPalette)
+import Structure.Palette (emptyTexPalette, TexPalette(..))
 import Item.Ground (emptyGroundItems, GroundItems(..), GroundItem(..))
 import Item.Types (ItemInstance(..))
 import World.Spoil.Types (emptySpoilPiles)
@@ -47,6 +53,8 @@ import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Mine.Types (MineDesignation(..))
+import World.Construct.Types
+    ( ConstructDesignation(..), ConstructTarget(..), ConstructStatus(..) )
 import World.Time.Types (CalendarConfig(..))
 import World.Weather.Types
     ( ClimateState(..), ClimateGrid(..), ClimateCoord(..), RegionClimate(..)
@@ -309,6 +317,39 @@ pageCore pid = PageCoreDTO
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
     , pcIdentity = Nothing }
 
+-- | A minimal 'WorldPageSave' fixture (all designation/entity maps
+--   empty) for the round-8 def-reference validators below, which only
+--   ever look at 'wpsBuildings'/'wpsUnits'/'wpsGroundItems'/
+--   'wpsCraftBills'/'wpsConstructDesignations'.
+minimalWorldPageSave ∷ WorldPageId → WorldPageSave
+minimalWorldPageSave pid = WorldPageSave
+    { wpsPageId       = pid
+    , wpsGenParams    = defaultGP
+    , wpsCameraX      = 0, wpsCameraY = 0, wpsCameraZoom = 1
+    , wpsCameraFacing = FaceSouth
+    , wpsTimeHour     = 0, wpsTimeMinute = 0
+    , wpsDateYear     = 1, wpsDateMonth = 1, wpsDateDay = 1
+    , wpsTimeScale    = 1
+    , wpsMapMode      = ZMDefault
+    , wpsToolMode     = DefaultTool
+    , wpsEdits        = emptyWorldEdits
+    , wpsMineDesignations      = HM.empty
+    , wpsConstructDesignations = HM.empty
+    , wpsGroundItems  = emptyGroundItems
+    , wpsSpoilPiles   = emptySpoilPiles
+    , wpsBuildings    = BuildingSnapshot HM.empty 10
+    , wpsUnits        = UnitSnapshot HM.empty 10
+    , wpsUnitSimStates = HM.empty
+    , wpsFloraHarvests = emptyFloraHarvests
+    , wpsChopDesignations = HM.empty
+    , wpsCraftBills   = emptyCraftBills
+    , wpsPowerNodes   = emptyPowerNodes
+    , wpsTillDesignations = HM.empty
+    , wpsCropPlots    = emptyCropPlots
+    , wpsPlantDesignations = HM.empty
+    , wpsIdentity     = Nothing
+    }
+
 hexDecode ∷ String → BS.ByteString
 hexDecode = BS.pack . go
   where
@@ -397,6 +438,73 @@ spec = do
 
         it "world-pages self-validates an empty page set" $
             ccValidate worldPagesCodec (WorldPagesDTO []) `shouldSatisfy` (not . null)
+
+        -- #760 round 8: per-page allocator validation for the three
+        -- per-page (not global) id counters — craft bills, power nodes,
+        -- ground items — mirroring world-pages' own component-local
+        -- @ccValidate@ precedent above.
+        it "craft-bills self-validates a bill id at/above the page's own \
+           \allocator" $ do
+            let badQueue = BillQueueDTO
+                    { bqBills = HM.singleton (BillId 5) CraftBillDTO
+                        { bilId = BillId 5, bilStation = BuildingId 1
+                        , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
+                        , bilClaimedAt = 0, bilProgress = 0, bilSeq = 5
+                        , bilPaused = False, bilWorking = False
+                        , bilMode = RepeatForever, bilTarget = 0
+                        , bilOutputItem = "" }
+                    , bqNextId = 5 }
+                bad = CraftBillsDTO [ PageCraftBillsDTO page1 badQueue ]
+            ccValidate craftBillsCodec bad `shouldSatisfy` (not . null)
+
+        it "craft-bills accepts a queue whose every bill id sits below the \
+           \allocator" $
+            ccValidate craftBillsCodec
+                (CraftBillsDTO [ PageCraftBillsDTO page1
+                                    (toBillQueueDTO richBills) ])
+                `shouldBe` []
+
+        it "power-nodes self-validates a node id at/above the page's own \
+           \allocator" $ do
+            let badReg = NodeRegistryDTO
+                    { regNodes = HM.singleton (PowerNodeId 3) PowerNodeDTO
+                        { nodId = PowerNodeId 3, nodBuilding = BuildingId 1
+                        , nodRole = PowerSource, nodPeakWatts = 400
+                        , nodCapacityWh = 0, nodStoredWh = 0 }
+                    , regNextId = 3 }
+                bad = PowerNodesDTO [ PagePowerNodesDTO page1 badReg ]
+            ccValidate powerNodesCodec bad `shouldSatisfy` (not . null)
+
+        it "power-nodes accepts a registry whose every node id sits below \
+           \the allocator" $
+            ccValidate powerNodesCodec
+                (PowerNodesDTO [ PagePowerNodesDTO page1
+                                    (toNodeRegistryDTO richNodes) ])
+                `shouldBe` []
+
+        it "world-activity self-validates a ground-item id at/above the \
+           \page's own allocator" $ do
+            let badGround = GroundItemsDTO
+                    { gisiNextId = 1
+                    , gisiItems = HM.singleton 1
+                        (toGroundItemDTO (GroundItem richItem 0 0)) }
+                bad = WorldActivityDTO
+                    [ PageActivityDTO page1 HM.empty HM.empty HM.empty
+                        HM.empty HM.empty emptyFloraHarvests HM.empty
+                        badGround HM.empty ]
+            ccValidate worldActivityCodec bad `shouldSatisfy` (not . null)
+
+        it "world-activity accepts ground items whose ids all sit below \
+           \the allocator" $
+            ccValidate worldActivityCodec
+                (WorldActivityDTO
+                    [ PageActivityDTO page1 HM.empty HM.empty HM.empty
+                        HM.empty HM.empty emptyFloraHarvests HM.empty
+                        (GroundItemsDTO 2
+                            (HM.singleton 1 (toGroundItemDTO
+                                (GroundItem richItem 0 0))))
+                        HM.empty ])
+                `shouldBe` []
 
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \
@@ -715,6 +823,157 @@ spec = do
                     renderMissingDefRef m `shouldSatisfy` T.isInfixOf "page1"
                 other → expectationFailure
                     ("expected exactly one missing ref, got " <> show other)
+
+    -- #760 round 8: recursive item-instance id validation. The previous
+    -- 'allItemInstanceIds' only ever looked at a container's OUTER id,
+    -- so a nested item's id colliding with the allocator (or with
+    -- another item elsewhere) went undetected.
+    describe "recursive item-instance id validation (#760 round 8)" $ do
+        it "rejects a NESTED item id at/above the item allocator, not just \
+           \an outer container's id" $ do
+            let nestedTooHigh = richItem
+                    { iiInstanceId = 5
+                    , iiContents = case iiContents richItem of
+                        (b : _) → [ b { iiInstanceId = 999999 } ]
+                        []      → []
+                    }
+                badPage = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1)
+                            ((minimalBuildingInstance [nestedTooHigh])))
+                        10 }
+                snap = buildSessionSnapshot
+                         minimalGlobals { sgNextItemId = 1000 } [badPage]
+            validateSessionSnapshot snap
+                `shouldSatisfy` any (\e → case e of
+                    ItemInstanceIdNotBelowAllocator 999999 → True
+                    _                                      → False)
+
+        it "rejects a NESTED item id duplicating another item's id \
+           \elsewhere in the session" $ do
+            let dupNested = richItem
+                    { iiInstanceId = 5
+                    , iiContents = case iiContents richItem of
+                        (b : _) → [ b { iiInstanceId = 5 } ]
+                        []      → []
+                    }
+                badPage = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1)
+                            (minimalBuildingInstance [dupNested]))
+                        10 }
+                snap = buildSessionSnapshot
+                         minimalGlobals { sgNextItemId = 1000 } [badPage]
+            validateSessionSnapshot snap
+                `shouldSatisfy` any (\e → case e of
+                    DuplicateItemInstanceId 5 → True
+                    _                         → False)
+
+        it "accepts a session whose nested item ids are all distinct and \
+           \below the allocator (the recursive check does not over-reject \
+           \a valid recursive item)" $
+            captureSessionSnapshot minimalGlobals { sgNextItemId = 1000 }
+                [fullPage page1] `shouldSatisfy` (\r → case r of
+                    Right _ → True
+                    Left _  → False)
+
+    -- #760 round 8: item def-name validation, including recursively
+    -- through 'iiContents'.
+    describe "missing item definition rejection (#760 round 8)" $ do
+        let knownItems = HS.fromList ["first_aid_kit", "bandage", "mini_kit"]
+            pageWith w = [(page1, w)]
+
+        it "accepts a page whose every item (incl. nested contents) \
+           \resolves" $
+            missingItemDefReferences knownItems
+                (pageWith (minimalWorldPageSave page1)
+                    { wpsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1)
+                            (minimalBuildingInstance [richItem])) 10 })
+                `shouldBe` []
+
+        it "flags a NESTED item (inside a kit-in-kit) whose def is \
+           \unregistered, not just the outer container" $ do
+            let missing = missingItemDefReferences
+                    (HS.fromList ["first_aid_kit", "bandage"])
+                    (pageWith (minimalWorldPageSave page1)
+                        { wpsBuildings = BuildingSnapshot
+                            (HM.singleton (BuildingId 1)
+                                (minimalBuildingInstance [richItem])) 10 })
+            map midrDefName missing `shouldBe` ["mini_kit"]
+
+        it "flags an unregistered ground item" $ do
+            let ground = emptyGroundItems
+                    { gisNextId = 1
+                    , gisItems = HM.singleton 0
+                        (GroundItem (richItem { iiContents = [] }) 1 1) }
+                missing = missingItemDefReferences (HS.fromList ["bandage"])
+                    (pageWith (minimalWorldPageSave page1)
+                        { wpsGroundItems = ground })
+            map midrDefName missing `shouldBe` ["first_aid_kit"]
+
+        it "flags an unregistered item in unit inventory/equipped/\
+           \accessories" $ do
+            let u = (minimalUnitInstance [richItem { iiContents = [] }])
+                    { uisEquipped = HM.singleton "head"
+                        (richItem { iiContents = [], iiInstanceId = 5000
+                                  , iiDefName = "ghost_helmet" }) }
+                missing = missingItemDefReferences (HS.fromList ["bandage"])
+                    (pageWith (minimalWorldPageSave page1)
+                        { wpsUnits = UnitSnapshot
+                            (HM.singleton (UnitId 1) u) 10 })
+            HS.fromList (map midrDefName missing)
+                `shouldBe` HS.fromList ["first_aid_kit", "ghost_helmet"]
+
+    -- #760 round 8: craft-bill recipe validation.
+    describe "missing recipe definition rejection (#760 round 8)" $ do
+        it "accepts a page whose every bill's recipe resolves" $
+            missingRecipeReferences (HS.fromList ["smelt_steel"])
+                [(page1, (minimalWorldPageSave page1)
+                    { wpsCraftBills = richBills })]
+                `shouldBe` []
+
+        it "flags a bill whose recipe is no longer registered" $ do
+            let missing = missingRecipeReferences (HS.fromList ["other_recipe"])
+                    [(page1, (minimalWorldPageSave page1)
+                        { wpsCraftBills = richBills })]
+            map mrrRecipe missing `shouldBe` ["smelt_steel"]
+            map mrrPage missing `shouldBe` [page1]
+
+    -- #760 round 8: construct-designation building-def-name reference
+    -- validation.
+    describe "missing construct-target building definition rejection \
+             \(#760 round 8)" $ do
+        let designation defName = HM.singleton (1, 2) ConstructDesignation
+                { cdZ = 0, cdTarget = CtBuilding defName, cdStatus = CsPending
+                , cdProgress = 0, cdMaterialsPaid = False }
+
+        it "accepts a construct designation whose building target resolves" $
+            missingConstructDefReferences (HS.fromList ["cargo_hold_S"])
+                [(page1, (minimalWorldPageSave page1)
+                    { wpsConstructDesignations = designation "cargo_hold_S" })]
+                `shouldBe` []
+
+        it "flags a construct designation whose building target is \
+           \unregistered" $ do
+            let missing = missingConstructDefReferences HS.empty
+                    [(page1, (minimalWorldPageSave page1)
+                        { wpsConstructDesignations = designation "ghost_bldg" })]
+            map mcdDefName missing `shouldBe` ["ghost_bldg"]
+            map mcdTile missing `shouldBe` [(1, 2)]
+
+    -- #760 round 8: the "texture-palette" component no longer rides on
+    -- TexPalette's own live Serialize instance.
+    describe "texture-palette frozen DTO (#760 round 8)" $
+        it "round-trips a non-empty palette through the component codec" $ do
+            let tp = TexPalette
+                    { tpPathToId = HM.fromList [("a.png", 0), ("b.png", 1)]
+                    , tpIdToPath = HM.fromList [(0, "a.png"), (1, "b.png")]
+                    , tpNextId   = 2 }
+                snap = richSnapshot { snapTexPalette = tp }
+            case ccDecode texPaletteCodec 1 (ccEncode texPaletteCodec snap) of
+                Left e  → expectationFailure (T.unpack (renderComponentError e))
+                Right d → fromTexPaletteDTO d `shouldBe` tp
 
 -- Helpers -----------------------------------------------------------
 

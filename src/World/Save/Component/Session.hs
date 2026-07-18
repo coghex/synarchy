@@ -29,6 +29,8 @@ module World.Save.Component.Session
     , TexPaletteDTO(..)
     , LuaStateDTO(..)
     , applyCoreSession
+    , toTexPaletteDTO
+    , fromTexPaletteDTO
     , coreSessionTexPalette
     , coreSessionLua
     ) where
@@ -37,7 +39,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
-import Structure.Palette (TexPalette)
+import Structure.Palette (TexPalette(..))
 import World.Page.Types (WorldPageId)
 import Engine.Graphics.Camera (CameraFacing)
 import World.Save.Snapshot
@@ -110,17 +112,46 @@ applyCoreSession d snap = snap
 
 -- texture-palette ---------------------------------------------------
 
-newtype TexPaletteDTO = TexPaletteDTO { tpdPalette ∷ TexPalette }
-    deriving stock (Generic)
-    deriving newtype (Show, Eq, Serialize)
+-- | Frozen mirror of 'TexPalette' (#760 round 8). The previous version
+--   rode directly on 'TexPalette''s own hand-written 'Serialize'
+--   instance ("Structure.Palette") via a @deriving newtype@ — exactly
+--   the live-manager-identity case the frozen-DTO boundary rule (see
+--   "World.Save.Component.Types") forbids: 'TexPalette' is mutated in
+--   place by the renderer's structure/edit layer as new textures are
+--   interned, so a change to ITS instance (not just its record shape)
+--   could silently drift this component's bytes with no version bump
+--   here to notice. This DTO instead mirrors exactly what that instance
+--   already persists — the next id, then the (path, id) pairs, in that
+--   order — via an explicit conversion; the inverse id→path map is
+--   rebuilt on load exactly as 'TexPalette''s own @get@ already does.
+--   Field order matches the live instance's @put@ exactly, so the
+--   derived cereal layout is byte-identical to the previous embedding
+--   (the frozen tracked fixture stays valid).
+data TexPaletteDTO = TexPaletteDTO
+    { tpdNextId ∷ !Int
+    , tpdPairs  ∷ ![(Text, Int)]
+    } deriving (Show, Eq, Generic, Serialize)
+
+toTexPaletteDTO ∷ TexPalette → TexPaletteDTO
+toTexPaletteDTO tp =
+    TexPaletteDTO (tpNextId tp) (HM.toList (tpPathToId tp))
+
+fromTexPaletteDTO ∷ TexPaletteDTO → TexPalette
+fromTexPaletteDTO d =
+    let pairs = tpdPairs d
+    in TexPalette
+        { tpPathToId = HM.fromList pairs
+        , tpIdToPath = HM.fromList [ (i, p) | (p, i) ← pairs ]
+        , tpNextId   = tpdNextId d
+        }
 
 texPaletteCodec ∷ ComponentCodec TexPaletteDTO
 texPaletteCodec = serializeCodec
     texPaletteComponentId 1 True []
-    (\snap → TexPaletteDTO (snapTexPalette snap)) (\_ d → Right d) (const [])
+    (\snap → toTexPaletteDTO (snapTexPalette snap)) (\_ d → Right d) (const [])
 
 coreSessionTexPalette ∷ TexPaletteDTO → SessionSnapshot → SessionSnapshot
-coreSessionTexPalette d snap = snap { snapTexPalette = tpdPalette d }
+coreSessionTexPalette d snap = snap { snapTexPalette = fromTexPaletteDTO d }
 
 -- lua-state ---------------------------------------------------------
 

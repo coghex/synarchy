@@ -18,6 +18,15 @@ module World.Save.Types
     , MissingDefRef(..)
     , renderMissingDefRef
     , missingDefReferences
+    , MissingItemDefRef(..)
+    , renderMissingItemDefRef
+    , missingItemDefReferences
+    , MissingRecipeRef(..)
+    , renderMissingRecipeRef
+    , missingRecipeReferences
+    , MissingConstructDefRef(..)
+    , renderMissingConstructDefRef
+    , missingConstructDefReferences
     ) where
 
 import UPrelude
@@ -33,8 +42,9 @@ import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
-import World.Construct.Types (ConstructDesignations)
-import Craft.Bills (CraftBills)
+import World.Construct.Types
+    (ConstructDesignations, ConstructDesignation(..), ConstructTarget(..))
+import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -42,7 +52,7 @@ import World.Plant.Types (PlantDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.CropPlot (CropPlots)
-import Item.Ground (GroundItems)
+import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..), buildingsOnPage)
@@ -889,3 +899,127 @@ missingDefReferences buildingDefs unitDefs pages = concatMap pageRefs pages
         [ MissingDefRef "unit" pid (unUnitId uid) (uisDefName u)
         | (uid, u) ← HM.toList (usnInstances us)
         , not (HS.member (uisDefName u) unitDefs) ]
+
+-- Item / recipe / construct-target def-name validation (#760 round 8) -
+
+-- | A saved 'ItemInstance' (anywhere in the save — building storage/
+--   materials-delivered, unit inventory/equipped/accessories, ground
+--   items) whose 'iiDefName' does not resolve against the currently-
+--   registered item definitions. Checked recursively through
+--   'iiContents' (a first-aid kit's own nested items) — same
+--   load-validation contract as 'MissingDefRef' (requirement 9): the
+--   complete load is rejected before any live state publishes, not a
+--   silent per-item drop.
+data MissingItemDefRef = MissingItemDefRef
+    { midrSource  ∷ !Text          -- ^ e.g. "building storage", "unit inventory"
+    , midrPage    ∷ !WorldPageId
+    , midrItemId  ∷ !Word64        -- ^ the item's own 'iiInstanceId'
+    , midrDefName ∷ !Text          -- ^ the unresolved item definition name
+    } deriving (Show, Eq)
+
+renderMissingItemDefRef ∷ MissingItemDefRef → Text
+renderMissingItemDefRef r =
+    midrSource r <> " item #" <> T.pack (show (midrItemId r)) <> " on page '"
+        <> unWorldPageId (midrPage r) <> "' references unknown item \
+           \definition '" <> midrDefName r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | One 'ItemInstance' plus every item nested (recursively) in its
+--   'iiContents' (mirrors 'World.Save.Snapshot.flattenItemInstanceIds').
+flattenItemInstances ∷ ItemInstance → [ItemInstance]
+flattenItemInstances i = i : concatMap flattenItemInstances (iiContents i)
+
+-- | Every saved item instance — across ground items, unit inventory/
+--   equipped/accessories, and building storage/materials-delivered,
+--   recursively through nested contents — whose def name is absent
+--   from the registered item-definition key set. Empty ⇒ every item
+--   reference resolves and the load may proceed.
+missingItemDefReferences
+    ∷ HS.HashSet Text                     -- ^ registered item def names
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingItemDefRef]
+missingItemDefReferences itemDefs pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) = concat
+        [ concatMap (buildingRefs pid) (HM.elems (bsnInstances (wpsBuildings w)))
+        , concatMap (unitRefs pid) (HM.elems (usnInstances (wpsUnits w)))
+        , concatMap (groundRefs pid) (HM.elems (gisItems (wpsGroundItems w)))
+        ]
+    buildingRefs pid b = concat
+        [ concatMap (itemRefs pid "building storage") (bisStorage b)
+        , concatMap (itemRefs pid "building materials delivered")
+              (concat (HM.elems (bisMaterialsDelivered b)))
+        ]
+    unitRefs pid u = concat
+        [ concatMap (itemRefs pid "unit inventory") (uisInventory u)
+        , concatMap (itemRefs pid "unit equipped") (HM.elems (uisEquipped u))
+        , concatMap (itemRefs pid "unit accessories") (uisAccessories u)
+        ]
+    groundRefs pid gi = itemRefs pid "ground item" (giInst gi)
+    itemRefs pid src inst =
+        [ MissingItemDefRef src pid (iiInstanceId i) (iiDefName i)
+        | i ← flattenItemInstances inst
+        , not (HS.member (iiDefName i) itemDefs) ]
+
+-- | A saved craft bill whose 'cbRecipe' does not resolve against the
+--   currently-registered recipe catalogue. Same load-validation
+--   contract as 'MissingDefRef'.
+data MissingRecipeRef = MissingRecipeRef
+    { mrrPage   ∷ !WorldPageId
+    , mrrBillId ∷ !Word32
+    , mrrRecipe ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingRecipeRef ∷ MissingRecipeRef → Text
+renderMissingRecipeRef r =
+    "craft bill #" <> T.pack (show (mrrBillId r)) <> " on page '"
+        <> unWorldPageId (mrrPage r) <> "' references unknown recipe '"
+        <> mrrRecipe r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved craft bill, across all pages, whose recipe id is absent
+--   from the registered recipe key set. Empty ⇒ every recipe reference
+--   resolves and the load may proceed.
+missingRecipeReferences
+    ∷ HS.HashSet Text                     -- ^ registered recipe ids
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingRecipeRef]
+missingRecipeReferences recipeDefs pages =
+    [ MissingRecipeRef pid (unBillId (cbId b)) (cbRecipe b)
+    | (pid, w) ← pages
+    , b ← HM.elems (cbsBills (wpsCraftBills w))
+    , not (HS.member (cbRecipe b) recipeDefs) ]
+
+-- | A saved construct designation whose target names a building
+--   definition ('World.Construct.Types.CtBuilding') that does not
+--   resolve against the currently-registered building definitions.
+--   Same load-validation contract as 'MissingDefRef' — a 'CtStructure'
+--   target references a structure-pack piece, not a building def, and
+--   is out of scope here.
+data MissingConstructDefRef = MissingConstructDefRef
+    { mcdPage    ∷ !WorldPageId
+    , mcdTile    ∷ !(Int, Int)
+    , mcdDefName ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingConstructDefRef ∷ MissingConstructDefRef → Text
+renderMissingConstructDefRef r =
+    "construct designation at " <> T.pack (show (mcdTile r)) <> " on page '"
+        <> unWorldPageId (mcdPage r) <> "' references unknown building \
+           \definition '" <> mcdDefName r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved construct designation, across all pages, whose
+--   'CtBuilding' target names a building definition absent from the
+--   registered building key set. Empty ⇒ every construct-target
+--   reference resolves and the load may proceed.
+missingConstructDefReferences
+    ∷ HS.HashSet Text                     -- ^ registered building def names
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingConstructDefRef]
+missingConstructDefReferences buildingDefs pages =
+    [ MissingConstructDefRef pid tile defName
+    | (pid, w) ← pages
+    , (tile, cd) ← HM.toList (wpsConstructDesignations w)
+    , CtBuilding defName ← [cdTarget cd]
+    , not (HS.member defName buildingDefs) ]

@@ -19,9 +19,15 @@ import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
 import World.Save.Serialize (listSaves, loadWorld, sanitizeSaveName)
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
-                        , missingDefReferences, renderMissingDefRef)
+                        , missingDefReferences, renderMissingDefRef
+                        , missingItemDefReferences, renderMissingItemDefRef
+                        , missingRecipeReferences, renderMissingRecipeRef
+                        , missingConstructDefReferences
+                        , renderMissingConstructDefRef)
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
+import Item.Types (ItemManager(..))
+import Craft.Types (RecipeManager(..))
 import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
                    , LoadPhase(..))
 import World.Page.Types (WorldPageId(..))
@@ -229,35 +235,59 @@ loadSaveFn env = do
             case result of
                 Right saveData → do
                     logger ← Lua.liftIO $ readIORef (loggerRef env)
-                    -- #760 req. 9: validate every saved building/unit
-                    -- content-definition reference against the currently-
-                    -- registered defs BEFORE publishing ANY live state (Lua
-                    -- blobs, pause, world-thread restore). A missing gameplay
-                    -- DEFINITION rejects the COMPLETE load with a clear error
-                    -- naming what's missing — rather than the world-thread
-                    -- restore silently pruning those entities (the old
+                    -- #760 req. 9 (round 8 extends this to every gameplay
+                    -- content reference, not just building/unit defs):
+                    -- validate every saved content-definition reference
+                    -- against the currently-registered defs BEFORE
+                    -- publishing ANY live state (Lua blobs, pause,
+                    -- world-thread restore). A missing gameplay DEFINITION
+                    -- rejects the COMPLETE load with a clear error naming
+                    -- what's missing — rather than the world-thread restore
+                    -- silently pruning those entities (the old
                     -- fromBuildingSnapshot/fromUnitSnapshot filter + log). This
                     -- runs earliest, in the Lua thread, so an all-or-nothing
                     -- rejection touches nothing: engine.loadSave just returns
                     -- false. (Missing visual ASSETS stay a soft #756 fallback,
-                    -- not gated here — only definitions.)
+                    -- not gated here — only definitions. FloraId/location-
+                    -- overlay ids, MaterialId references, and equipment
+                    -- slot-id keys all remain a documented, pre-existing,
+                    -- out-of-#760-scope gap per
+                    -- docs/persistence_state_inventory.md §9 — not addressed
+                    -- here.)
                     bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
                     um ← Lua.liftIO $ readIORef (unitManagerRef env)
-                    let missing = missingDefReferences
-                            (HM.keysSet (bmDefs bm)) (HM.keysSet (umDefs um))
+                    im ← Lua.liftIO $ readIORef (itemManagerRef env)
+                    rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
+                    let buildingDefs = HM.keysSet (bmDefs bm)
+                        pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
+                        missing = missingDefReferences
+                            buildingDefs (HM.keysSet (umDefs um))
                             [ (wpsPageId w, wpsBuildings w, wpsUnits w)
                             | w ← sdWorlds saveData ]
-                    if not (null missing)
+                        missingItems =
+                            missingItemDefReferences (HM.keysSet (imDefs im)) pages
+                        missingRecipes =
+                            missingRecipeReferences (HM.keysSet (rmDefs rm)) pages
+                        missingConstruct =
+                            missingConstructDefReferences buildingDefs pages
+                        allMissing = length missing + length missingItems
+                            + length missingRecipes + length missingConstruct
+                        allMessages =
+                            map renderMissingDefRef missing
+                            ⧺ map renderMissingItemDefRef missingItems
+                            ⧺ map renderMissingRecipeRef missingRecipes
+                            ⧺ map renderMissingConstructDefRef missingConstruct
+                    if allMissing > 0
                       then do
                         Lua.liftIO $ logWarn logger CatWorld $
                             "loadSave rejected for '" <> saveName <> "': "
-                            <> T.pack (show (length missing))
-                            <> " saved entit" <> (if length missing ≡ 1
+                            <> T.pack (show allMissing)
+                            <> " saved entit" <> (if allMissing ≡ 1
                                                     then "y references a"
                                                     else "ies reference")
                             <> " gameplay definition no longer registered — "
                             <> "aborting the entire load (nothing changed): "
-                            <> T.intercalate "; " (map renderMissingDefRef missing)
+                            <> T.intercalate "; " allMessages
                         Lua.pushboolean False
                       else loadValidatedSave env logger saveData
                 Left err → do

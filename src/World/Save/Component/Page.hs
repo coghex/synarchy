@@ -596,11 +596,30 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | Component-local invariant (#760 round 8, mirrors
+--   @worldPagesCodec@'s @validatePages@ precedent above): every ground
+--   item's own id must sit below that page's ground-items allocator
+--   ('gisiNextId') — 'Item.Ground.GroundItems' ids are allocated
+--   per-page (see 'Item.Ground.emptyGroundItems'). A literal duplicate
+--   key within one page's @gisiItems@ map is structurally impossible
+--   once decoded (a 'HashMap' cannot carry two entries under the same
+--   key), so there is nothing further to check there.
+validateWorldActivity ∷ WorldActivityDTO → [ComponentError]
+validateWorldActivity (WorldActivityDTO slices) =
+    [ ComponentError worldActivityComponentId 1 ValidatePhase
+        ("page '" <> tshow (padPageId s) <> "': ground item #"
+         <> tshow gid <> " is not below the page's ground-item \
+            \allocator (" <> tshow (gisiNextId (padGroundItems s)) <> ")")
+    | s   ← slices
+    , gid ← HM.keys (gisiItems (padGroundItems s))
+    , gid ≥ gisiNextId (padGroundItems s)
+    ]
+
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = serializeCodec
     worldActivityComponentId 1 True [worldPagesComponentId]
     (\snap → WorldActivityDTO (map toActivity (orderedPages snap)))
-    (\_ d → Right d) (const [])
+    (\_ d → Right d) validateWorldActivity
   where
     toActivity p = PageActivityDTO
         { padPageId        = pgsPageId p

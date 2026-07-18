@@ -245,25 +245,37 @@ orphanedUnitSimStateErrors snap =
     , uid ← HM.keys (pgsUnitSimStates page)
     , not (HM.member uid (usnInstances (pgsUnits page))) ]
 
+-- | Every id reachable from one 'ItemInstance', including its own AND
+--   every id nested (recursively) in 'iiContents' — a first-aid kit's
+--   own kit-in-kit contents (#760 round 8: the previous version only
+--   ever looked at each container's OUTER id, so a nested item's id
+--   colliding with the allocator or with another item elsewhere in the
+--   session went undetected).
+flattenItemInstanceIds ∷ ItemInstance → [Word64]
+flattenItemInstanceIds i =
+    iiInstanceId i : concatMap flattenItemInstanceIds (iiContents i)
+
 -- | Every item-instance id across the whole session: ground items,
 --   unit inventory/equipped/accessories, and building storage/
 --   materials-delivered — the full scope 'nextItemInstanceIdRef' (#67)
---   governs.
+--   governs. Recurses into 'iiContents' via 'flattenItemInstanceIds'.
 allItemInstanceIds ∷ SessionSnapshot → [Word64]
 allItemInstanceIds snap = concatMap pageItemIds (HM.elems (snapPages snap))
   where
     pageItemIds page =
-        map (iiInstanceId ∘ giInst) (HM.elems (gisItems (pgsGroundItems page)))
+        concatMap (flattenItemInstanceIds ∘ giInst)
+                  (HM.elems (gisItems (pgsGroundItems page)))
         ⧺ concatMap unitItemIds (HM.elems (usnInstances (pgsUnits page)))
         ⧺ concatMap buildingItemIds
               (HM.elems (bsnInstances (pgsBuildings page)))
     unitItemIds u =
-        map iiInstanceId (uisInventory u)
-        ⧺ map iiInstanceId (HM.elems (uisEquipped u))
-        ⧺ map iiInstanceId (uisAccessories u)
+        concatMap flattenItemInstanceIds (uisInventory u)
+        ⧺ concatMap flattenItemInstanceIds (HM.elems (uisEquipped u))
+        ⧺ concatMap flattenItemInstanceIds (uisAccessories u)
     buildingItemIds b =
-        concatMap (map iiInstanceId) (HM.elems (bisMaterialsDelivered b))
-        ⧺ map iiInstanceId (bisStorage b)
+        concatMap (concatMap flattenItemInstanceIds)
+                  (HM.elems (bisMaterialsDelivered b))
+        ⧺ concatMap flattenItemInstanceIds (bisStorage b)
 
 itemAllocatorErrors ∷ SessionSnapshot → [SnapshotError]
 itemAllocatorErrors snap =

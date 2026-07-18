@@ -114,14 +114,15 @@ module World.Save.Component.Entities
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
+import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import World.Page.Types (WorldPageId)
 import Building.Types (BuildingId)
 import Craft.Bills
-    ( CraftBills(..), CraftBill(..), BillId, BillMode )
+    ( CraftBills(..), CraftBill(..), BillId(..), BillMode )
 import Power.Types
-    ( PowerNodes(..), PowerNode(..), PowerNodeId, PowerRole )
+    ( PowerNodes(..), PowerNode(..), PowerNodeId(..), PowerRole )
 import Unit.Types (UnitId, StatModifier(..), Wound(..), Scar(..))
 import Unit.Sim.Types
     ( UnitSimState(..), MoveTarget(..), Pose, UnitActivity, Direction )
@@ -135,6 +136,9 @@ import World.Save.Component.Types
 
 orderedPages ∷ SessionSnapshot → [PageSnapshot]
 orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
+
+tshow ∷ Show a ⇒ a → Text
+tshow = T.pack . show
 
 -- buildings ---------------------------------------------------------
 
@@ -681,13 +685,33 @@ newtype CraftBillsDTO = CraftBillsDTO { cbdPages ∷ [PageCraftBillsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | Component-local invariant (#760 round 8, mirrors
+--   "World.Save.Component.Page"'s @worldPagesCodec@ @validatePages@
+--   precedent): every bill's own id must sit below that PAGE's queue
+--   allocator ('bqNextId') — 'BillId' is allocated per-page (see
+--   'Craft.Bills.emptyCraftBills'), unlike the item/building/unit
+--   allocators, which are global. A literal duplicate key within one
+--   page's @bqBills@ map is structurally impossible once decoded (a
+--   'HashMap' cannot carry two entries under the same key), so there is
+--   nothing further to check there.
+validateCraftBills ∷ CraftBillsDTO → [ComponentError]
+validateCraftBills (CraftBillsDTO slices) =
+    [ ComponentError craftBillsComponentId 1 ValidatePhase
+        ("page '" <> tshow (pcbPageId s) <> "': bill #"
+         <> tshow (unBillId bid) <> " is not below the page's bill \
+            \allocator (" <> tshow (bqNextId (pcbBills s)) <> ")")
+    | s   ← slices
+    , bid ← HM.keys (bqBills (pcbBills s))
+    , unBillId bid ≥ bqNextId (pcbBills s)
+    ]
+
 craftBillsCodec ∷ ComponentCodec CraftBillsDTO
 craftBillsCodec = serializeCodec
     craftBillsComponentId 1 True [worldPagesComponentId, buildingsComponentId]
     (\snap → CraftBillsDTO
         [ PageCraftBillsDTO (pgsPageId p) (toBillQueueDTO (pgsCraftBills p))
         | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+    (\_ d → Right d) validateCraftBills
 
 applyCraftBills
     ∷ Word32 → CraftBillsDTO → HM.HashMap WorldPageId PageSnapshot
@@ -754,13 +778,30 @@ newtype PowerNodesDTO = PowerNodesDTO { pndPages ∷ [PagePowerNodesDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | Component-local invariant (#760 round 8), same shape as
+--   'validateCraftBills': every node's own id must sit below that
+--   page's node-registry allocator ('regNextId') — 'PowerNodeId' is
+--   allocated per-page (see 'Power.Types.emptyPowerNodes'). A literal
+--   duplicate key within one page's @regNodes@ map is structurally
+--   impossible once decoded, same reasoning as bills.
+validatePowerNodes ∷ PowerNodesDTO → [ComponentError]
+validatePowerNodes (PowerNodesDTO slices) =
+    [ ComponentError powerNodesComponentId 1 ValidatePhase
+        ("page '" <> tshow (ppnPageId s) <> "': power node #"
+         <> tshow (unPowerNodeId nid) <> " is not below the page's node \
+            \allocator (" <> tshow (regNextId (ppnNodes s)) <> ")")
+    | s   ← slices
+    , nid ← HM.keys (regNodes (ppnNodes s))
+    , unPowerNodeId nid ≥ regNextId (ppnNodes s)
+    ]
+
 powerNodesCodec ∷ ComponentCodec PowerNodesDTO
 powerNodesCodec = serializeCodec
     powerNodesComponentId 1 True [worldPagesComponentId, buildingsComponentId]
     (\snap → PowerNodesDTO
         [ PagePowerNodesDTO (pgsPageId p) (toNodeRegistryDTO (pgsPowerNodes p))
         | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+    (\_ d → Right d) validatePowerNodes
 
 applyPowerNodes
     ∷ Word32 → PowerNodesDTO → HM.HashMap WorldPageId PageSnapshot
