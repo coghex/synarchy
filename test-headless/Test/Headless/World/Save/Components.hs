@@ -32,7 +32,8 @@ import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), BuildingInstanceSnapshot(..)
-    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
+    , UnitSnapshot(..), UnitInstanceSnapshot(..)
+    , MissingDefRef(..), renderMissingDefRef, missingDefReferences )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
@@ -657,6 +658,63 @@ spec = do
                 Right _   → expectationFailure
                     "a B1-era save must not silently decode under B2"
                 Left msg  → msg `shouldSatisfy` T.isInfixOf "session"
+
+    -- #760 requirement 9: a saved building/unit whose content DEFINITION
+    -- is no longer registered must be a LOAD-VALIDATION FAILURE (the
+    -- complete load is rejected before any live state is published), not
+    -- the silent per-entity pruning fromBuildingSnapshot/fromUnitSnapshot
+    -- fall back to. 'missingDefReferences' is the pure detector the load
+    -- boundary (Engine.Scripting.Lua.API.Save.loadSaveFn) runs against the
+    -- live managers' registered def key-sets before it touches anything;
+    -- the real engine boundary itself needs a full engine (covered by the
+    -- multiworld save probe's round-trip), but the decision logic is here.
+    describe "missing gameplay definition rejection (#760 requirement 9)" $ do
+        let knownB = HS.fromList ["test_building"]
+            knownU = HS.fromList ["test_unit"]
+            withB defName = BuildingSnapshot
+                (HM.singleton (BuildingId 1)
+                    ((minimalBuildingInstance []) { bisDefName = defName })) 10
+            withU defName = UnitSnapshot
+                (HM.singleton (UnitId 1)
+                    ((minimalUnitInstance []) { uisDefName = defName })) 10
+            emptyB = BuildingSnapshot HM.empty 10
+            emptyU = UnitSnapshot HM.empty 10
+
+        it "accepts a save whose every building/unit def resolves" $
+            missingDefReferences knownB knownU
+                [(page1, withB "test_building", withU "test_unit")]
+                `shouldBe` []
+
+        it "flags (does not silently drop) a building whose def is \
+           \unregistered" $ do
+            let miss = missingDefReferences knownB knownU
+                          [(page1, withB "ghost_building", emptyU)]
+            map mdrKind miss `shouldBe` ["building"]
+            map mdrDefName miss `shouldBe` ["ghost_building"]
+            map mdrPage miss `shouldBe` [page1]
+
+        it "flags a unit whose def is unregistered" $ do
+            let miss = missingDefReferences knownB knownU
+                          [(page1, emptyB, withU "ghost_unit")]
+            map mdrKind miss `shouldBe` ["unit"]
+            map mdrDefName miss `shouldBe` ["ghost_unit"]
+
+        it "reports EVERY missing reference across pages, not just the \
+           \first (whole-session rejection)" $
+            length (missingDefReferences knownB knownU
+                        [ (page1, withB "ghost_building", emptyU)
+                        , (page2, emptyB, withU "ghost_unit") ])
+                `shouldBe` 2
+
+        it "renders a reference naming the kind, page, and unresolved def" $
+            case missingDefReferences knownB knownU
+                     [(page1, withB "ghost_building", emptyU)] of
+                [m] → do
+                    renderMissingDefRef m `shouldSatisfy` T.isInfixOf "ghost_building"
+                    renderMissingDefRef m `shouldSatisfy` T.isInfixOf "building"
+                    renderMissingDefRef m `shouldSatisfy` T.isInfixOf "page1"
+                other → expectationFailure
+                    ("expected exactly one missing ref, got " <> show other)
 
 -- Helpers -----------------------------------------------------------
 

@@ -18,7 +18,10 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
 import World.Save.Serialize (listSaves, loadWorld, sanitizeSaveName)
-import World.Save.Types (SaveMetadata(..), SaveData(..))
+import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
+                        , missingDefReferences, renderMissingDefRef)
+import Building.Types (BuildingManager(..))
+import Unit.Types (UnitManager(..))
 import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
                    , LoadPhase(..))
 import World.Page.Types (WorldPageId(..))
@@ -226,6 +229,57 @@ loadSaveFn env = do
             case result of
                 Right saveData → do
                     logger ← Lua.liftIO $ readIORef (loggerRef env)
+                    -- #760 req. 9: validate every saved building/unit
+                    -- content-definition reference against the currently-
+                    -- registered defs BEFORE publishing ANY live state (Lua
+                    -- blobs, pause, world-thread restore). A missing gameplay
+                    -- DEFINITION rejects the COMPLETE load with a clear error
+                    -- naming what's missing — rather than the world-thread
+                    -- restore silently pruning those entities (the old
+                    -- fromBuildingSnapshot/fromUnitSnapshot filter + log). This
+                    -- runs earliest, in the Lua thread, so an all-or-nothing
+                    -- rejection touches nothing: engine.loadSave just returns
+                    -- false. (Missing visual ASSETS stay a soft #756 fallback,
+                    -- not gated here — only definitions.)
+                    bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
+                    um ← Lua.liftIO $ readIORef (unitManagerRef env)
+                    let missing = missingDefReferences
+                            (HM.keysSet (bmDefs bm)) (HM.keysSet (umDefs um))
+                            [ (wpsPageId w, wpsBuildings w, wpsUnits w)
+                            | w ← sdWorlds saveData ]
+                    if not (null missing)
+                      then do
+                        Lua.liftIO $ logWarn logger CatWorld $
+                            "loadSave rejected for '" <> saveName <> "': "
+                            <> T.pack (show (length missing))
+                            <> " saved entit" <> (if length missing ≡ 1
+                                                    then "y references a"
+                                                    else "ies reference")
+                            <> " gameplay definition no longer registered — "
+                            <> "aborting the entire load (nothing changed): "
+                            <> T.intercalate "; " (map renderMissingDefRef missing)
+                        Lua.pushboolean False
+                      else loadValidatedSave env logger saveData
+                Left err → do
+                    Lua.liftIO $ do
+                        logger ← readIORef (loggerRef env)
+                        logWarn logger CatWorld $
+                            "loadSave failed for '" <> saveName <> "': " <> err
+                    Lua.pushboolean False
+            return 1
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+
+-- | Publish a decoded, def-validated save: pause, restore Lua module
+--   state, then queue the engine-side (chunks/buildings/units/sim)
+--   restore. Split out of 'loadSaveFn' so the def-reference validation
+--   above can reject the complete load BEFORE this ever touches live
+--   state (#760 requirement 9).
+loadValidatedSave
+    ∷ EngineEnv → LoggerState → SaveData
+    → Lua.LuaE Lua.Exception ()
+loadValidatedSave env logger saveData = do
                     -- Pause the engine BEFORE restoring Lua state, mirroring
                     -- the save path. The deserializers clobber the per-id
                     -- singletons and snapshot _preLoadState, but the
@@ -254,16 +308,6 @@ loadSaveFn env = do
                     Lua.liftIO $ Q.writeQueue (worldQueue env)
                         (WorldLoadSave pageId saveData)
                     Lua.pushboolean True
-                Left err → do
-                    Lua.liftIO $ do
-                        logger ← readIORef (loggerRef env)
-                        logWarn logger CatWorld $
-                            "loadSave failed for '" <> saveName <> "': " <> err
-                    Lua.pushboolean False
-            return 1
-        Nothing → do
-            Lua.pushboolean False
-            return 1
 
 -- | Set the head world's loading phase to "in progress" so
 --   'world.waitForInit' will block correctly even though the actual

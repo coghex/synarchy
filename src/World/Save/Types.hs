@@ -15,12 +15,17 @@ module World.Save.Types
     , UnitInstanceSnapshot(..)
     , toUnitSnapshot
     , fromUnitSnapshot
+    , MissingDefRef(..)
+    , renderMissingDefRef
+    , missingDefReferences
     ) where
 
 import UPrelude
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
@@ -836,3 +841,51 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiForceLoop   = False
     , uiClimbDest   = Nothing   -- runtime-only; not persisted
     }
+
+-- Missing-definition validation (#760 requirement 9) -----------------
+
+-- | A saved building/unit instance whose content-definition reference
+--   ('bisDefName'/'uisDefName') does NOT resolve against the currently-
+--   registered definitions. Per #760 requirement 9 a missing gameplay
+--   definition is a LOAD-VALIDATION FAILURE (the complete load is
+--   rejected), not the silent per-entity pruning
+--   'fromBuildingSnapshot'/'fromUnitSnapshot' fall back to — those still
+--   return orphans as defense-in-depth, but the load boundary rejects a
+--   save carrying any such reference before publishing any live state, so
+--   that pruning path is unreachable in normal play. (Missing VISUAL
+--   assets remain a soft #756 fallback — this is only about definitions.)
+data MissingDefRef = MissingDefRef
+    { mdrKind    ∷ !Text          -- ^ @"building"@ or @"unit"@
+    , mdrPage    ∷ !WorldPageId
+    , mdrEntity  ∷ !Word32        -- ^ the 'BuildingId'/'UnitId' raw value
+    , mdrDefName ∷ !Text          -- ^ the unresolved definition name
+    } deriving (Show, Eq)
+
+renderMissingDefRef ∷ MissingDefRef → Text
+renderMissingDefRef r =
+    mdrKind r <> " #" <> T.pack (show (mdrEntity r)) <> " on page '"
+        <> unWorldPageId (mdrPage r) <> "' references unknown definition '"
+        <> mdrDefName r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved building/unit whose definition name is absent from the
+--   registered-definition key sets, across all saved pages. Empty ⇒ every
+--   content reference resolves and the load may proceed. Pure: the def
+--   key-sets come from the live managers at the load boundary
+--   (@'Building.Types.bmDefs'@/@'Unit.Types.umDefs'@), the per-page
+--   snapshots from the decoded save.
+missingDefReferences
+    ∷ HS.HashSet Text                               -- ^ registered building def names
+    → HS.HashSet Text                               -- ^ registered unit def names
+    → [(WorldPageId, BuildingSnapshot, UnitSnapshot)]
+    → [MissingDefRef]
+missingDefReferences buildingDefs unitDefs pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, bs, us) =
+        [ MissingDefRef "building" pid (unBuildingId bid) (bisDefName b)
+        | (bid, b) ← HM.toList (bsnInstances bs)
+        , not (HS.member (bisDefName b) buildingDefs) ]
+        ⧺
+        [ MissingDefRef "unit" pid (unUnitId uid) (uisDefName u)
+        | (uid, u) ← HM.toList (usnInstances us)
+        , not (HS.member (uisDefName u) unitDefs) ]
