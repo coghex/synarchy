@@ -118,6 +118,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                               "day/night balance + save/restart/load round-trip scenario"),
     "save_pause": (SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),
     "save_barrier": (SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),
+    "save_storage": (SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
+                                     "atomic storage transaction's restart-and-select fallback"),
     # --- targeted: useful regression probes, but too narrow for the default
     # PR gate. Run them when touching the named feature. ---
     "collapse_crawl": (TARGETED, "narrow #304 collapse/crawl hysteresis regression"),

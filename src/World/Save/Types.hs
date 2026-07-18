@@ -7,6 +7,7 @@ module World.Save.Types
     , SaveHeader(..)
     , saveMagic
     , currentSaveVersion
+    , checkWorldCount
     , BuildingSnapshot(..)
     , BuildingInstanceSnapshot(..)
     , toBuildingSnapshot
@@ -573,6 +574,24 @@ activeWorldPage sd =
         []    → case sdWorlds sd of
                   (w:_) → Just w
                   []    → Nothing
+
+-- | Reject a decoded save with NO world pages (corrupt / truncated). Any
+--   non-empty 'sdWorlds' is accepted: the save command snapshots every live
+--   page (#216) and the load handler restores all of them (#217/#218), so a
+--   multi-page save is fully supported. Only the empty case is rejected, so
+--   the rest of the loader can assume at least one page.
+--
+--   Applied by 'World.Save.Serialize.loadWorld' AND, for issue #762's
+--   storage-transaction candidate re-read (requirement 3), by
+--   'World.Save.Storage' before either a fresh publish or a
+--   previous-generation load fallback trusts a decoded generation. NOT
+--   applied by 'World.Save.Serialize.listSaves': listing decodes just the
+--   \"metadata\" component (issue #759 requirement 4), which never carries
+--   'sdWorlds' at all.
+checkWorldCount ∷ SaveData → Either Text SaveData
+checkWorldCount sd = case sdWorlds sd of
+    [] → Left "Save contains no world pages (corrupt or truncated file)"
+    _  → Right sd
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`
 --   (regenerated from YAML at boot) and `bmSelected` (transient UI

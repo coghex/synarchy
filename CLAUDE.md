@@ -1566,8 +1566,11 @@ record fields are only forced to WHNF, not deeply — Strict/`HashMap.Strict` fo
 outer shape and each value at ONE level, never recursively) as a capture failure while the
 barrier still blocks everyone, instead of letting it surface later during the write after
 owners have already resumed. `World.Save.Serialize.writeSaveFiles` (the actual disk I/O,
-run after the release) wraps its own directory-creation/`BS.writeFile`/YAML-write in `try`
-and converts any exception to `Left` (review round 2 follow-up): this runs on the world
+run after the release) delegates to `World.Save.Storage.publishGeneration` (issue #762,
+persistence-overhaul C1 — see "Atomic save storage" below), whose every phase is wrapped
+in `try` and converts any exception to a `Left PublishFailure` naming the phase (review
+round 2 follow-up, generalized by #762 from a single directory-creation/`BS.writeFile`
+wrap into the full write-validate-publish-rotate transaction): this runs on the world
 thread AFTER the capture lock has already released, so an uncaught exception there would
 otherwise escape all the way to `World.Thread`'s top-level crash handler instead of
 reaching `failSave` — crashing the whole world thread AND leaving the barrier stuck open
@@ -1690,7 +1693,183 @@ assembly cross-validation (metadata mismatch, orphan sim, allocator
 collision, missing active page, one-bad-component-no-partial), and a
 frozen multi-component tracked-bytes fixture.
 
-Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here; since #760 it versions only the transitional `SaveData`/`WorldPageSave` load bridge, not any wire contract — gameplay components carry their own schema versions). Saves live under `saves/<name>/world.synworld` (binary) — the sole authoritative file for a save generation; there is no companion `world_gen.yaml` (removed by #759 — generation params now live in the `world-pages` component).
+Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here; since #760 it versions only the transitional `SaveData`/`WorldPageSave` load bridge, not any wire contract — gameplay components carry their own schema versions). Saves live under `saves/<name>/` — `world.synworld` (binary) is the SOLE authoritative file a load/list reads, but is never written to directly (see "Atomic save storage" below); a slot may also carry a `world.synworld.prev` recovery copy, invisible to listing/loading except as an automatic fallback. There is no companion `world_gen.yaml` (removed by #759 — generation params now live in the `world-pages` component); a stale one left over from an older save is removed the next time that slot publishes successfully (#762).
+
+**Atomic save storage (#762, persistence-overhaul C1):** `World.Save.Storage`
+owns the ONLY code path that ever touches a save slot's files on disk — a
+crash, power loss, disk-full condition, or write failure can no longer
+truncate or corrupt the sole copy of a generation the way a direct
+`BS.writeFile` (the pre-#762 `writeSaveFilesUnsafe`) could. It receives
+only already-encoded envelope bytes, the `SaveMetadata` they should decode
+back to, a slot directory, and a slot name for diagnostics — no live
+gameplay state, no snapshot-capture participation (it runs after the #758
+barrier has already released). `publishGeneration`, `selectLoadGeneration`,
+AND `World.Save.Serialize.listSaves` (which walks `saves/` directly
+rather than through either of the other two, so it applies the same
+check itself before ever reading a slot's bytes) all first refuse to
+operate at all through a slot directory that is itself a symlink, OR
+whose IMMEDIATE PARENT (in production, `saves/` itself) is
+(`rejectSymlinkedSlotDir`, `PhaseUnsafePath`) — otherwise a pre-existing
+symlink at either level would be silently followed by directory
+creation, the temp candidate, every rename, cleanup, and even a plain
+listing alike, reading from and publishing into and deleting from
+wherever it points, outside `saves/` entirely (requirement 12). This
+deliberately checks only ONE level up, not every ancestor to the
+filesystem root: `pathIsSymbolicLink` inspects just a path's own final
+component (ordinary POSIX `lstat` semantics), so it can never misfire on
+an unrelated OS-level symlink further up the resource root's own path
+(e.g. macOS's `/tmp` → `/private/tmp`). `rejectSymlinkedSlotDir` is built
+from a single exported primitive, `rejectSymlinkedPath` (reject one exact
+path that is itself a symlink) — the SAME primitive `decodeGenerationFile`
+uses to check `world.synworld`/`world.synworld.prev` THEMSELVES (a slot
+directory being safe says nothing about a FILE inside it also being a
+symlink — a scenario `publishGeneration` itself never produces, since an
+atomic rename replaces a destination symlink's own entry rather than
+writing through it, but which requirement 12 still asks to be rejected if
+found), and `listSaves` uses AGAIN for the exact same reason, since its
+directory-listing read path (`loadDirEntry`/`tryPreviousListing`) is
+entirely separate from `selectLoadGeneration`/`decodeGenerationFile` and
+does not automatically inherit that check.
+
+`publishGeneration` is a write-validate-publish-rotate transaction: write
+the candidate to a uniquely-named temp file in the SAME slot directory
+(`System.IO.openBinaryTempFile`, so concurrent publishers can't collide on
+a predictable name and the eventual publish rename stays on one
+filesystem); flush + durably `fsync` it
+(`System.Posix.Unistd.fileSynchronise`); re-read it FROM DISK (never trust
+the in-memory encode alone) and fully decode + deep-force it, applying the
+same validation bar the load path enforces (structure, checksums, every
+component, `checkWorldCount`), PLUS confirming the re-read metadata is
+EXACTLY (`≡`, every field) the metadata this publish intended — not just
+the slot name/timestamp, so a caller-side mix-up between two saves'
+metadata can't slip through on two matching fields alone; only once
+validated: if a previous generation already exists, stage it out of the
+way under a freshly-claimed unique name FIRST (`stageOldPrevious`,
+`PhaseStalePrevious`) rather than letting the rotate rename destroy it
+outright — requirement 5's "older generations are removed only after the
+new publication is durable" means the displaced generation must stay
+fully intact on disk (just under a different name) until AFTER the
+durability boundary, not disappear the instant it's rotated out of the
+`world.synworld.prev` slot; `fsync` the directory so that staging handoff
+is itself a confirmed-durable recovery point; THEN atomically `renameFile`
+the current authoritative generation into the now-free
+`world.synworld.prev` slot, `fsync` again; then atomically `renameFile`
+the candidate into `world.synworld`, `fsync` a FINAL time — every one of
+the three renames gets its own directory sync immediately after it, not
+one combined sync at the very end, so each intermediate handoff is a
+confirmed-durable recovery point in its own right before the next step
+ever runs; THEN report success — never before; ONLY NOW remove the staged-
+away old generation and any other recognized stale artifact. Every phase
+(`World.Save.Storage.StoragePhase`) is wrapped in `try` and reported as a
+`PublishFailure` naming the phase, slot, and path, so a failure text like
+`engine.getSaveStatus()`'s `SaveAborted` outcome always identifies exactly
+where a save failed. A best-effort cleanup sweep (the just-staged old
+generation, any other leftover temp/staged artifact from an earlier
+interrupted publish, a stale `world_gen.yaml`) runs only AFTER the
+durability boundary, so a cleanup failure is a non-fatal warning, never an
+overall save failure. Every transient name this module generates uses a
+dot-free template (`"world-synworld-tmp"`/`"world-synworld-stale"`) so
+`openBinaryTempFile`'s numeric suffix always trails the template instead
+of splicing before a `.`-preserved extension; cleanup recognises ONLY a
+name that is the template immediately followed by a digit
+(`isOwnedArtifactName`) — never a mere shared prefix — so a real but
+oddly-named user file dropped in the slot directory (e.g.
+`world-synworld-tmp-notes`) is never swept (requirement 12/13). Durability
+means: candidate data + every rename's directory entry have been handed to
+`fsync` successfully. On Linux this is a real crash/power-loss guarantee;
+on macOS, plain POSIX `fsync` does NOT guarantee the drive's own write
+cache reached physical media (only the much slower `F_FULLFSYNC` does) —
+this module deliberately uses ordinary `fsync` on both platforms rather
+than pay that cost on every save, the same trade-off most non-database
+desktop applications make. Windows is out of scope (see Platform Notes).
+
+Load-source selection (`selectLoadGeneration`, used by both
+`World.Save.Serialize.loadWorld` and `listSaves`) classifies WHY a
+candidate failed to decode
+(`World.Save.Envelope.GenerationFailure`/`isRecoverableEnvelopeError`):
+absent, truncated, bad framing, a checksum failure, or the file itself
+being a symlink — the shape routine storage corruption (or something
+outside the transaction entirely, since `publishGeneration` never leaves
+a symlink at either path itself — `renameFile` replaces a destination
+symlink's own entry rather than writing through it) actually takes — is
+`GenerationCorrupt` and falls back to a fully valid `world.synworld.prev`
+(itself independently re-checked, so a symlink at BOTH paths still
+correctly reports a hard failure rather than reading through either);
+a structurally coherent but unsupported/incompatible file (unknown
+component version, failed content/assembly validation, INCLUDING
+`checkWorldCount`'s empty-pages check — a content-validation failure, not
+storage damage, even though in practice `assembleSnapshot`'s own
+`validateSessionSnapshot` already rejects an empty page set earlier in the
+same decode) is `GenerationIncompatible` and is reported directly, NEVER
+triggering a fallback — silently rolling back to an older generation would
+hide a real compatibility problem instead of reporting it. A load never
+combines components across generations (exactly one generation's
+`SaveData` is ever returned) and is read-only (a recovered load never
+rewrites or promotes `world.synworld.prev`); a later explicit save is what
+publishes a fresh authoritative generation. `loadWorld`/`listSaves` log a
+recovered selection loudly (`logWarn`); `engine.listSaves()` additionally
+exposes a `recovered` boolean on a listing recovered this way (no
+save/load UI change required to consume it). A pre-#759 legacy flat file
+(`saves/<name>.synworld`, no slot directory) has no previous-generation/
+temp-file/rotation concept and either decodes cleanly or is rejected
+outright, exactly as before #762 — but it DOES get the same symlink
+containment check both `loadWorld` and `listSaves` apply everywhere else
+(`rejectSymlinkedSlotDir` on the flat file's own path, which — via its
+immediate-parent check — also covers a symlinked `saves/`), since that
+one piece of #762's hardening is orthogonal to the generation/rotation
+machinery the legacy format otherwise never touches.
+
+`listSaves` itself only decodes the envelope structure/checksums and the
+`"metadata"` component for each candidate (`decodeSaveEnvelopeMetadata`/
+`Classified`) — the SAME depth #759 requirement 4 established before
+#762 existed, deliberately never a full per-save component decode (that
+would cost proportionally to every listed save's full gameplay payload,
+exactly what #759 designed listing to avoid). #762 does not deepen this:
+it only adds the previous-generation fallback ON TOP of that pre-existing
+metadata-only depth, so a slot can still list as normal even when its
+authoritative generation would actually fail to fully load — a problem
+confined to a gameplay component OTHER than `"metadata"` — precisely as
+it already could before this issue.
+
+Pure/integration coverage: `Test.Headless.World.Save.Storage` (the "atomic
+save storage" describe) — first/second/third publish retention (incl. the
+staged-and-cleaned-up first generation leaving no stray file behind),
+candidate re-read+validation (corrupt bytes, a full-metadata mismatch —
+including a same-name/timestamp-but-different-seed candidate) never
+touching an existing authoritative generation, every forceable failure
+phase (directory pre-occupied by a plain file, a read-only slot directory,
+a symlinked slot directory or its immediate parent, a rotate/publish-rename
+target blocked by an existing directory) reporting the correct
+`StoragePhase` without destroying anything, a publish from a "previous-only"
+recovery state (authoritative missing) leaving the sole previous generation
+completely untouched rather than staging it away, stale-temp/staged-
+previous/stale-`world_gen.yaml` cleanup never touching an unrelated file
+(incl. one merely sharing a transient-name prefix without its digit
+suffix), `selectLoadGeneration` across every constructed on-disk state
+(missing/truncated/bad-framing/checksum-corrupt authoritative, a
+structurally-valid-but-empty-pages authoritative, a stray leftover temp
+file, a symlinked slot directory or its immediate parent, a symlinked
+authoritative or previous FILE itself (incl. both at once, proving a
+hard failure rather than reading through either), the exact intermediate
+state a crash immediately after staging would leave, an incompatible-
+but-checksummed authoritative that must NOT fall back, neither generation
+valid) proving a recovered load is read-only and never selects a partial
+candidate, and `listSaves`/`loadWorld` refusing to list or read through a
+slot (directory-format OR a legacy flat file) reached via a symlinked
+slot directory, a symlinked `saves/` itself, a symlinked legacy file, OR
+a symlinked authoritative/previous generation FILE (incl. listing
+falling back to the previous generation exactly like load selection
+does, and skipping the slot outright when both generation files are
+symlinks). Real multi-thread/real-restart
+coverage: **`python3 tools/save_storage_probe.py`** — against an ISOLATED
+temporary resource root (never a real player's `saves/`) — two real saves
+to one slot (publish, then retain-as-previous), restart-and-select across
+the same constructed on-disk states via the resumed session's live camera
+position (an unambiguous, real, in-session observation of which
+generation actually loaded), `engine.listSaves()`'s `recovered` flag, and
+a real disk-level write failure (the #758-established pre-occupied-path
+trick) reporting its `StoragePhase` through `engine.getSaveStatus()` with
+the barrier recovering for an immediate follow-up save.
 
 ```bash
 # From headless / debug console

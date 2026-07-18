@@ -719,6 +719,7 @@ library
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component
+                     World.Save.Storage
                      World.Save.Serialize
                      World.Scale
                      World.Slope
@@ -983,6 +984,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
+                   Test.Headless.World.Save.Storage
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.Identity

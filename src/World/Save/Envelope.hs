@@ -47,6 +47,11 @@ module World.Save.Envelope
     , encodeSessionSnapshot
     , decodeSessionEnvelope
     , decodeSaveEnvelopeMetadata
+    , GenerationFailure(..)
+    , renderGenerationFailure
+    , isRecoverableEnvelopeError
+    , decodeSessionEnvelopeClassified
+    , decodeSaveEnvelopeMetadataClassified
     ) where
 
 import UPrelude
@@ -143,6 +148,111 @@ decodeValidatedEnvelope =
     either (Left . renderEnvelopeError) Right
         . decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
                           knownComponentIds readerRequiredComponentIds
+
+-- | Load-time generation-validity classification (issue #762, storage-
+--   overhaul C1): whether a structurally-invalid file is safe to treat as
+--   RECOVERABLE STORAGE CORRUPTION — eligible for previous-generation
+--   fallback ('World.Save.Storage.selectLoadGeneration') — versus a
+--   well-formed-but-semantically-INCOMPATIBLE file, which must be
+--   reported directly and never silently rolled back to an older
+--   generation (issue #762 requirement 7: "Do not silently fall back
+--   merely because a structurally valid authoritative generation has
+--   unsupported component versions, fails gameplay/content validation, or
+--   cannot be migrated").
+data GenerationFailure
+    = GenerationCorrupt !Text
+        -- ^ Absent, truncated, bad framing, or a checksum failure — the
+        --   kind of damage an interrupted publish can actually leave
+        --   behind. Safe to fall back to a previous generation.
+    | GenerationIncompatible !Text
+        -- ^ The bytes are structurally coherent (checksums agree) but
+        --   this build cannot interpret them as a valid session: an
+        --   unsupported envelope/component version, an unknown/missing
+        --   required component, or an assembly/content-validation
+        --   failure. Never a fallback trigger — reporting the real
+        --   compatibility problem beats silently rolling back progress.
+    deriving (Show, Eq)
+
+renderGenerationFailure ∷ GenerationFailure → Text
+renderGenerationFailure (GenerationCorrupt t)      = t
+renderGenerationFailure (GenerationIncompatible t) = t
+
+-- | Classifies exactly why 'decodeEnvelope' failed. 'True' ⇒ the failure
+--   is the shape routine storage corruption takes (missing/truncated/
+--   malformed framing, or any checksum mismatch) — everything
+--   'decodeEnvelope' can detect BEFORE trusting a single component byte,
+--   i.e. before any question of schema compatibility even arises. 'False'
+--   ⇒ the envelope is internally consistent (every checksum agreed) but
+--   declares a version/component set this reader doesn't recognise —
+--   only a foreign (older/future/other-build) file produces these, never
+--   this build's own interrupted write, so treating them as fallback
+--   triggers would mask a genuine compatibility problem instead of
+--   recovering from damage.
+isRecoverableEnvelopeError ∷ EnvelopeError → Bool
+isRecoverableEnvelopeError e = case e of
+    TruncatedHeader              → True
+    BadMagic                     → True
+    ManifestTooLarge _           → True
+    ManifestTruncated            → True
+    ManifestMalformed _          → True
+    ManifestChecksumMismatch     → True
+    TooManyComponents _          → True
+    ComponentIdTooLong _         → True
+    DuplicateComponentId _       → True
+    PayloadTooLarge _ _          → True
+    TotalPayloadTooLarge _       → True
+    OverlappingComponents _ _    → True
+    TruncatedPayload _           → True
+    ComponentChecksumMismatch _  → True
+    TrailingBytes _              → True
+    UnsupportedEnvelopeVersion _ → False
+    UnknownRequiredComponent _   → False
+    MissingRequiredComponent _   → False
+    UnsupportedComponentVersion _ _ → False
+    ComponentDecodeError _ _         → False
+
+-- | Shared entry point for both classified decoders below: validate the
+--   envelope structure, classifying a failure per 'GenerationFailure'.
+decodeClassifiedEnvelope ∷ BS.ByteString → Either GenerationFailure DecodedEnvelope
+decodeClassifiedEnvelope bytes =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                         knownComponentIds readerRequiredComponentIds bytes of
+        Left err
+          | isRecoverableEnvelopeError err
+                      → Left (GenerationCorrupt (renderEnvelopeError err))
+          | otherwise → Left (GenerationIncompatible (renderEnvelopeError err))
+        Right decoded → Right decoded
+
+-- | 'decodeSaveEnvelopeMetadata', classified per 'GenerationFailure' —
+--   the metadata-only read the storage layer's load-source selection
+--   uses so it never has to decode a whole gameplay payload just to
+--   decide whether the authoritative file is even worth trying.
+decodeSaveEnvelopeMetadataClassified
+    ∷ BS.ByteString → Either GenerationFailure SaveMetadata
+decodeSaveEnvelopeMetadataClassified bytes = do
+    decoded ← decodeClassifiedEnvelope bytes
+    either (Left . GenerationIncompatible) Right (decodeMetadataComponent decoded)
+
+-- | 'decodeSessionEnvelope', classified per 'GenerationFailure' — the
+--   full decode 'World.Save.Storage.selectLoadGeneration' uses to decide,
+--   for one candidate file, whether a load failure is eligible for
+--   previous-generation fallback (requirement 7). A component-level
+--   decode/migrate/validate/assemble failure (an 'assembleSnapshot'
+--   'ComponentError', e.g. an unsupported component schema version or a
+--   cross-component invariant violation) always classifies as
+--   'GenerationIncompatible': by the time 'assembleSnapshot' runs, every
+--   component's own per-payload checksum has already passed inside
+--   'decodeEnvelope', so a failure here reflects a genuine schema/content
+--   mismatch, never routine bit-level corruption.
+decodeSessionEnvelopeClassified
+    ∷ BS.ByteString → Either GenerationFailure (SaveMetadata, SessionSnapshot)
+decodeSessionEnvelopeClassified bytes = do
+    decoded ← decodeClassifiedEnvelope bytes
+    meta ← either (Left . GenerationIncompatible) Right
+                  (decodeMetadataComponent decoded)
+    snap ← either (Left . GenerationIncompatible . renderComponentErrors)
+                  Right (assembleSnapshot meta decoded)
+    pure (meta, snap)
 
 -- | Decode the @"metadata"@ component, rejecting an unsupported schema
 --   version before touching its bytes. The descriptor/payload "missing"

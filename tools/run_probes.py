@@ -169,6 +169,10 @@ PROBES = [
      "save/load pause-semantics regression (#42)"),
     ("save_barrier", "save_barrier_probe.py",
      "coordinated save owner acknowledgement and paused reload smoke test (#757)"),
+    ("save_storage", "save_storage_probe.py",
+     "atomic save-storage transaction: publish/retain generations, restart-and-select "
+     "fallback across corrupted/missing/incompatible authoritative files, real "
+     "disk-write-failure phase reporting (#762)"),
     ("sleep", "sleep_probe.py",
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
     ("state_of_mind", "state_of_mind_probe.py",
