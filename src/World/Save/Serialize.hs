@@ -216,26 +216,38 @@ listSaves logger = do
                 else return []
 
     loadDirEntry name dir = do
-        let authPath = dir </> Storage.authoritativeFileName
-            prevPath = dir </> Storage.previousGenerationFileName
-        authExists ← doesFileExist authPath
-        if not authExists
-            then tryPreviousListing name prevPath
-                    "authoritative save file is missing"
-            else do
-                bytes ← BS.readFile authPath
-                -- Envelope-aware: skip files whose magic/version/manifest/
-                -- checksums don't validate. A pre-#759 flat file fails the
-                -- envelope version check and is skipped with a logged
-                -- warning so the user has a chance of noticing.
-                case decodeSaveEnvelopeMetadataClassified bytes of
-                    Right meta → return [mkListing name meta False]
-                    Left (GenerationIncompatible err) → do
-                        logWarn logger CatWorld $
-                            "listSaves: skipping " <> name <> ": " <> err
-                        return []
-                    Left (GenerationCorrupt err) →
-                        tryPreviousListing name prevPath err
+        -- Requirement 12: the same containment check publishGeneration/
+        -- selectLoadGeneration apply — a symlinked slot (or a symlinked
+        -- saves/ itself) must never have its bytes read and reported on
+        -- via listing either, even though listing itself never writes.
+        safety ← Storage.rejectSymlinkedSlotDir dir
+        case safety of
+            Left reason → do
+                logWarn logger CatWorld $
+                    "listSaves: skipping " <> name <> ": " <> reason
+                return []
+            Right () → do
+                let authPath = dir </> Storage.authoritativeFileName
+                    prevPath = dir </> Storage.previousGenerationFileName
+                authExists ← doesFileExist authPath
+                if not authExists
+                    then tryPreviousListing name prevPath
+                            "authoritative save file is missing"
+                    else do
+                        bytes ← BS.readFile authPath
+                        -- Envelope-aware: skip files whose magic/version/
+                        -- manifest/checksums don't validate. A pre-#759
+                        -- flat file fails the envelope version check and
+                        -- is skipped with a logged warning so the user has
+                        -- a chance of noticing.
+                        case decodeSaveEnvelopeMetadataClassified bytes of
+                            Right meta → return [mkListing name meta False]
+                            Left (GenerationIncompatible err) → do
+                                logWarn logger CatWorld $
+                                    "listSaves: skipping " <> name <> ": " <> err
+                                return []
+                            Left (GenerationCorrupt err) →
+                                tryPreviousListing name prevPath err
 
     tryPreviousListing name prevPath authErr = do
         prevExists ← doesFileExist prevPath

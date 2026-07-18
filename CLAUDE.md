@@ -1703,13 +1703,16 @@ truncate or corrupt the sole copy of a generation the way a direct
 only already-encoded envelope bytes, the `SaveMetadata` they should decode
 back to, a slot directory, and a slot name for diagnostics — no live
 gameplay state, no snapshot-capture participation (it runs after the #758
-barrier has already released). Both `publishGeneration` and
-`selectLoadGeneration` first refuse to operate at all through a slot
-directory that is itself a symlink, OR whose IMMEDIATE PARENT (in
-production, `saves/` itself) is (`rejectSymlinkedSlotDir`,
-`PhaseUnsafePath`) — otherwise a pre-existing symlink at either level
-would be silently followed by directory creation, the temp candidate,
-every rename, and cleanup alike, publishing into and deleting from
+barrier has already released). `publishGeneration`, `selectLoadGeneration`,
+AND `World.Save.Serialize.listSaves` (which walks `saves/` directly
+rather than through either of the other two, so it applies the same
+check itself before ever reading a slot's bytes) all first refuse to
+operate at all through a slot directory that is itself a symlink, OR
+whose IMMEDIATE PARENT (in production, `saves/` itself) is
+(`rejectSymlinkedSlotDir`, `PhaseUnsafePath`) — otherwise a pre-existing
+symlink at either level would be silently followed by directory
+creation, the temp candidate, every rename, cleanup, and even a plain
+listing alike, reading from and publishing into and deleting from
 wherever it points, outside `saves/` entirely (requirement 12). This
 deliberately checks only ONE level up, not every ancestor to the
 filesystem root: `pathIsSymbolicLink` inspects just a path's own final
@@ -1802,18 +1805,23 @@ candidate re-read+validation (corrupt bytes, a full-metadata mismatch —
 including a same-name/timestamp-but-different-seed candidate) never
 touching an existing authoritative generation, every forceable failure
 phase (directory pre-occupied by a plain file, a read-only slot directory,
-a symlinked slot directory, a rotate/publish-rename target blocked by an
-existing directory) reporting the correct `StoragePhase` without
-destroying anything, stale-temp/staged-previous/stale-`world_gen.yaml`
-cleanup never touching an unrelated file (incl. one merely sharing a
-transient-name prefix without its digit suffix), and `selectLoadGeneration`
-across every constructed on-disk state (missing/truncated/bad-framing/
-checksum-corrupt authoritative, a structurally-valid-but-empty-pages
-authoritative, a stray leftover temp file, a symlinked slot directory, the
-exact intermediate state a crash immediately after staging would leave, an
+a symlinked slot directory or its immediate parent, a rotate/publish-rename
+target blocked by an existing directory) reporting the correct
+`StoragePhase` without destroying anything, a publish from a "previous-only"
+recovery state (authoritative missing) leaving the sole previous generation
+completely untouched rather than staging it away, stale-temp/staged-
+previous/stale-`world_gen.yaml` cleanup never touching an unrelated file
+(incl. one merely sharing a transient-name prefix without its digit
+suffix), `selectLoadGeneration` across every constructed on-disk state
+(missing/truncated/bad-framing/checksum-corrupt authoritative, a
+structurally-valid-but-empty-pages authoritative, a stray leftover temp
+file, a symlinked slot directory or its immediate parent, the exact
+intermediate state a crash immediately after staging would leave, an
 incompatible-but-checksummed authoritative that must NOT fall back,
-neither generation valid) proving a recovered load is read-only
-and never selects a partial candidate. Real multi-thread/real-restart
+neither generation valid) proving a recovered load is read-only and never
+selects a partial candidate, and `listSaves` refusing to list (or read
+through) a slot reached via either a symlinked slot directory or a
+symlinked `saves/` itself. Real multi-thread/real-restart
 coverage: **`python3 tools/save_storage_probe.py`** — against an ISOLATED
 temporary resource root (never a real player's `saves/`) — two real saves
 to one slot (publish, then retain-as-previous), restart-and-select across

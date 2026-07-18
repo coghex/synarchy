@@ -26,9 +26,14 @@ import Data.Either (isLeft)
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
     , doesDirectoryExist, doesFileExist, listDirectory, removeFile
-    , getPermissions, setPermissions, Permissions(..), createFileLink )
+    , getPermissions, setPermissions, Permissions(..), createFileLink
+    , withCurrentDirectory )
 import System.FilePath ((</>), takeDirectory)
+import System.IO (stderr)
 
+import Engine.Core.Log
+    (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
+import World.Save.Serialize (listSaves, savesDirectory, SaveListing(..))
 import World.Save.Storage
 import World.Save.Envelope (encodeSessionSnapshot)
 import World.Save.Snapshot
@@ -238,6 +243,29 @@ corruptEnvelopeVersion bytes =
     let versionBytes = BS.take 4 (BS.drop 4 bytes)
         bumped = BS.map (`xor` 0xFF) versionBytes
     in BS.take 4 bytes <> bumped <> BS.drop 8 bytes
+
+-- | A throwaway logger for the 'listSaves' tests below (they only need
+--   somewhere for its 'logWarn' calls to go).
+testLogger ∷ IO LoggerState
+testLogger = initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+
+-- | 'World.Save.Serialize.listSaves' resolves everything relative to the
+--   process's CURRENT DIRECTORY (its own @savesDirectory@ constant is a
+--   bare relative @"saves"@), unlike every other function this file
+--   tests — so exercising it for real means temporarily chdir'ing into
+--   an isolated scratch root, wiped clean before and after (mirrors
+--   'withTempSlotDir', same sequential-suite safety rationale).
+withSavesRoot ∷ IO a → IO a
+withSavesRoot action = do
+    tmp ← getTemporaryDirectory
+    let root = tmp </> "synarchy-listsaves-symlink-spec"
+    reset root
+    createDirectoryIfMissing True root
+    withCurrentDirectory root action `finally` reset root
+  where
+    reset root = do
+        isDir ← doesDirectoryExist root
+        when isDir (removeDirectoryRecursive root)
 
 spec ∷ Spec
 spec = do
@@ -648,3 +676,26 @@ spec = do
                         lsSource s `shouldBe` FromPrevious
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 1
                     Left err → expectationFailure (T.unpack err)
+
+    describe "World.Save.Serialize.listSaves symlink containment \
+             \(issue #762 round 4 — the same containment check applies \
+             \to listing, not just publish/select)" $ do
+        it "never lists (or reads through) a slot whose directory is \
+           \itself a symlink" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let target = "leaked-target"
+                _ ← publishOK target "leaked" 1 "leaked" "t1"
+                createDirectoryIfMissing True savesDirectory
+                createFileLink target (savesDirectory </> "leaked")
+                saves ← listSaves logger
+                map slName saves `shouldNotContain` ["leaked"]
+
+        it "never lists any slot when saves/ itself is a symlink" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let target = "leaked-target"
+                _ ← publishOK (target </> "leaked") "leaked" 1 "leaked" "t1"
+                createFileLink target savesDirectory
+                saves ← listSaves logger
+                saves `shouldBe` []

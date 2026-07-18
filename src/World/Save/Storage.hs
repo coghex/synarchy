@@ -111,6 +111,7 @@
 module World.Save.Storage
     ( authoritativeFileName
     , previousGenerationFileName
+    , rejectSymlinkedSlotDir
     , StoragePhase(..)
     , PublishFailure(..)
     , renderPublishFailure
@@ -207,7 +208,14 @@ isOwnedArtifactName name =
 --   otherwise be silently followed by directory creation, the temp
 --   candidate, every rename, and cleanup alike — publishing into, and
 --   deleting recognized-artifact-named files from, wherever it points,
---   outside the resolved resource root's @saves/@ tree entirely. Checks
+--   outside the resolved resource root's @saves/@ tree entirely.
+--   Exported so 'World.Save.Serialize.listSaves' — the one caller in
+--   this slot's family that reads directory entries directly rather
+--   than through 'publishGeneration'/'selectLoadGeneration' — can apply
+--   the SAME containment check before it ever inspects or reports on a
+--   slot's contents; otherwise a symlinked slot 'loadWorld' correctly
+--   refuses could still be listed (and its bytes read) by
+--   @engine.listSaves()@. Checks
 --   both @dir@ itself AND its immediate parent (in production, exactly
 --   @savesDirectory@, e.g. @"saves"@ — a symlinked @saves/@ would let
 --   every slot beneath it escape the same way): 'pathIsSymbolicLink'
