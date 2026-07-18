@@ -44,7 +44,7 @@ import World.Save.Envelope.Codec (DecodedEnvelope(..))
 import World.Save.Types (SaveMetadata(..))
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..), PageSnapshot(..)
-    , validateSessionSnapshot )
+    , validateSessionSnapshot, structureEditPaletteErrors )
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldIdentity(..), WorldPageId(..))
 import Structure.Palette (emptyTexPalette)
@@ -215,7 +215,14 @@ assembleSnapshot meta de = do
                 Right s' → (es, s')
         if not (null applyErrs) then Left applyErrs else do
             -- 3. Cross-component invariants (requirement 6/9/12).
+            --    'structureEditPaletteErrors' is called here rather than
+            --    folded into 'validateSessionSnapshot' itself, since THIS
+            --    call site is load-only (every component has already
+            --    cereal-decoded into fully concrete values) — see its
+            --    haddock in "World.Save.Snapshot" for why that distinction
+            --    matters (the capture-path "full-encode forcing" contract).
             let crossErrs = map snapErr (validateSessionSnapshot snap)
+                            ++ map snapErr (structureEditPaletteErrors snap)
                             ++ metadataErrors meta snap
             if null crossErrs then Right snap else Left crossErrs
   where

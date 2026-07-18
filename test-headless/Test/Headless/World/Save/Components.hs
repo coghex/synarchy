@@ -464,6 +464,25 @@ spec = do
                                     (toBillQueueDTO richBills) ])
                 `shouldBe` []
 
+        -- #760 round 9 (still-open item 1): the allocator check alone
+        -- doesn't catch a map key that disagrees with the bill's OWN
+        -- embedded id -- a hand-crafted envelope could carry
+        -- @bqBills = {#1 -> bill{bilId=#2}}@ and slip past the allocator
+        -- check (both #1 and #2 sit below it).
+        it "craft-bills rejects a bill whose map key disagrees with its \
+           \own embedded id" $ do
+            let mismatched = BillQueueDTO
+                    { bqBills = HM.singleton (BillId 1) CraftBillDTO
+                        { bilId = BillId 2, bilStation = BuildingId 1
+                        , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
+                        , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
+                        , bilPaused = False, bilWorking = False
+                        , bilMode = RepeatForever, bilTarget = 0
+                        , bilOutputItem = "" }
+                    , bqNextId = 5 }
+                bad = CraftBillsDTO [ PageCraftBillsDTO page1 mismatched ]
+            ccValidate craftBillsCodec bad `shouldSatisfy` (not . null)
+
         it "power-nodes self-validates a node id at/above the page's own \
            \allocator" $ do
             let badReg = NodeRegistryDTO
@@ -481,6 +500,19 @@ spec = do
                 (PowerNodesDTO [ PagePowerNodesDTO page1
                                     (toNodeRegistryDTO richNodes) ])
                 `shouldBe` []
+
+        -- #760 round 9 (still-open item 1): same key/value identity gap
+        -- as craft-bills above, for power nodes.
+        it "power-nodes rejects a node whose map key disagrees with its \
+           \own embedded id" $ do
+            let mismatched = NodeRegistryDTO
+                    { regNodes = HM.singleton (PowerNodeId 1) PowerNodeDTO
+                        { nodId = PowerNodeId 2, nodBuilding = BuildingId 1
+                        , nodRole = PowerSource, nodPeakWatts = 400
+                        , nodCapacityWh = 0, nodStoredWh = 0 }
+                    , regNextId = 5 }
+                bad = PowerNodesDTO [ PagePowerNodesDTO page1 mismatched ]
+            ccValidate powerNodesCodec bad `shouldSatisfy` (not . null)
 
         it "world-activity self-validates a ground-item id at/above the \
            \page's own allocator" $ do
@@ -699,6 +731,141 @@ spec = do
                          minimalGlobals { sgActivePage = page2 } [minimalPage page1]
                 meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
                 bytes = encodeSessionSnapshot meta snap
+            decodeSessionEnvelope bytes `shouldSatisfy` isLeft
+
+        -- #760 round 9 (still-open item 1): the FULL envelope pipeline
+        -- (not just the isolated ccValidate calls above) must reject a
+        -- craft-bill/power-node whose map key disagrees with its own
+        -- embedded id. Built the same way "one malformed component
+        -- prevents ANY partial snapshot result" below substitutes a
+        -- tampered payload for one real component's real bytes.
+        it "rejects a decoded envelope whose craft-bill map key disagrees \
+           \with its own embedded id" $ do
+            let mismatched = BillQueueDTO
+                    { bqBills = HM.singleton (BillId 1) CraftBillDTO
+                        { bilId = BillId 2, bilStation = BuildingId 1
+                        , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
+                        , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
+                        , bilPaused = False, bilWorking = False
+                        , bilMode = RepeatForever, bilTarget = 0
+                        , bilOutputItem = "" }
+                    , bqNextId = 5 }
+                badDTO = CraftBillsDTO
+                    [ PageCraftBillsDTO page1 mismatched
+                    , PageCraftBillsDTO page2 (toBillQueueDTO emptyCraftBills) ]
+                good = encodeComponentSpecs richSnapshot
+                tampered = [ if cid ≡ craftBillsComponentId
+                               then (cid, ver, req, S.encode badDTO)
+                               else s
+                           | s@(cid, ver, req, _) ← good ]
+                specs = (metadataComponentId, metadataComponentVersion, True
+                        , S.encode richMeta) : tampered
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion specs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope bytes of
+                Left msg → msg `shouldSatisfy` T.isInfixOf "map key"
+                Right _  → expectationFailure
+                    "expected the key/value id mismatch to be rejected"
+
+        it "rejects a decoded envelope whose power-node map key disagrees \
+           \with its own embedded id" $ do
+            let mismatched = NodeRegistryDTO
+                    { regNodes = HM.singleton (PowerNodeId 1) PowerNodeDTO
+                        { nodId = PowerNodeId 2, nodBuilding = BuildingId 1
+                        , nodRole = PowerSource, nodPeakWatts = 400
+                        , nodCapacityWh = 0, nodStoredWh = 0 }
+                    , regNextId = 5 }
+                badDTO = PowerNodesDTO
+                    [ PagePowerNodesDTO page1 mismatched
+                    , PagePowerNodesDTO page2 (toNodeRegistryDTO emptyPowerNodes) ]
+                good = encodeComponentSpecs richSnapshot
+                tampered = [ if cid ≡ powerNodesComponentId
+                               then (cid, ver, req, S.encode badDTO)
+                               else s
+                           | s@(cid, ver, req, _) ← good ]
+                specs = (metadataComponentId, metadataComponentVersion, True
+                        , S.encode richMeta) : tampered
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion specs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope bytes of
+                Left msg → msg `shouldSatisfy` T.isInfixOf "map key"
+                Right _  → expectationFailure
+                    "expected the key/value id mismatch to be rejected"
+
+        -- #760 round 9 (new item 2b): a structure edit's texture/facemap
+        -- palette id must resolve in the assembled texture palette -- a
+        -- genuine cross-component check (world-edits' pgsEdits against
+        -- core-session's snapTexPalette), unlike the tolerated dangling
+        -- craft-bill-station/power-node-building references.
+        it "rejects a structure edit referencing a texture palette id \
+           \absent from the assembled palette" $ do
+            let badPage = (minimalPage page1)
+                    { pgsEdits = HM.singleton (ChunkCoord 0 0)
+                        [ WeSetStructure 1 2 0 5 6 3 ] }
+                snap = buildSessionSnapshot
+                         minimalGlobals { sgTexPalette = emptyTexPalette } [badPage]
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                bytes = encodeSessionSnapshot meta snap
+            decodeSessionEnvelope bytes `shouldSatisfy` isLeft
+
+        it "accepts a structure edit whose texture/facemap palette ids \
+           \both resolve in the assembled palette (does not over-reject a \
+           \valid structure edit)" $ do
+            let tp = TexPalette
+                    { tpPathToId = HM.fromList [("a.png", 5), ("b.png", 6)]
+                    , tpIdToPath = HM.fromList [(5, "a.png"), (6, "b.png")]
+                    , tpNextId   = 7 }
+                goodPage = (minimalPage page1)
+                    { pgsEdits = HM.singleton (ChunkCoord 0 0)
+                        [ WeSetStructure 1 2 0 5 6 3 ] }
+                snap = buildSessionSnapshot
+                         minimalGlobals { sgTexPalette = tp } [goodPage]
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                bytes = encodeSessionSnapshot meta snap
+            case decodeSessionEnvelope bytes of
+                Left err → expectationFailure (T.unpack err)
+                Right (_, snap') → snap' `shouldBe` snap
+
+        -- #760 round 9 (new item 2a): the texture-palette component's own
+        -- local bijection/allocator invariant, exercised through the FULL
+        -- envelope pipeline (not just the isolated ccValidate call).
+        it "rejects a decoded envelope whose texture palette has a \
+           \duplicate id (non-bijective)" $ do
+            let badTP = TexPaletteDTO 2 [("a.png", 0), ("b.png", 0)]
+                good = encodeComponentSpecs richSnapshot
+                tampered = [ if cid ≡ texPaletteComponentId
+                               then (cid, ver, req, S.encode badTP)
+                               else s
+                           | s@(cid, ver, req, _) ← good ]
+                specs = (metadataComponentId, metadataComponentVersion, True
+                        , S.encode richMeta) : tampered
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion specs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope bytes of
+                Left msg → msg `shouldSatisfy` T.isInfixOf "duplicate"
+                Right _  → expectationFailure
+                    "expected the non-bijective palette to be rejected"
+
+        it "rejects a decoded envelope whose texture palette carries an id \
+           \at/above its own allocator" $ do
+            let badTP = TexPaletteDTO 1 [("a.png", 1)]
+                good = encodeComponentSpecs richSnapshot
+                tampered = [ if cid ≡ texPaletteComponentId
+                               then (cid, ver, req, S.encode badTP)
+                               else s
+                           | s@(cid, ver, req, _) ← good ]
+                specs = (metadataComponentId, metadataComponentVersion, True
+                        , S.encode richMeta) : tampered
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion specs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
             decodeSessionEnvelope bytes `shouldSatisfy` isLeft
 
         it "one malformed component prevents ANY partial snapshot result \

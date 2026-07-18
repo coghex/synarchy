@@ -694,15 +694,36 @@ newtype CraftBillsDTO = CraftBillsDTO { cbdPages ∷ [PageCraftBillsDTO] }
 --   page's @bqBills@ map is structurally impossible once decoded (a
 --   'HashMap' cannot carry two entries under the same key), so there is
 --   nothing further to check there.
+--
+--   Round 9 adds the companion check the allocator check alone misses:
+--   the map KEY and the DTO's own embedded 'bilId' are two independent
+--   copies of the same identity (mirrored from live 'CraftBill'/
+--   'CraftBills', which always keeps them in sync by construction — but
+--   a decoded-from-disk envelope has no such guarantee). A hand-crafted
+--   or corrupted envelope could carry @bqBills = {#1 -> bill{bilId=#2}}@
+--   and the allocator check alone would accept it (both #1 and #2 sit
+--   below the allocator), yet runtime APIs (which key off BOTH the
+--   registry's map key via 'Craft.Bills.claimBill'/'releaseBill' AND the
+--   bill's own 'cbId' field) would then disagree about which bill this
+--   is. Reject any entry where the two disagree.
 validateCraftBills ∷ CraftBillsDTO → [ComponentError]
-validateCraftBills (CraftBillsDTO slices) =
-    [ ComponentError craftBillsComponentId 1 ValidatePhase
-        ("page '" <> tshow (pcbPageId s) <> "': bill #"
-         <> tshow (unBillId bid) <> " is not below the page's bill \
-            \allocator (" <> tshow (bqNextId (pcbBills s)) <> ")")
-    | s   ← slices
-    , bid ← HM.keys (bqBills (pcbBills s))
-    , unBillId bid ≥ bqNextId (pcbBills s)
+validateCraftBills (CraftBillsDTO slices) = concat
+    [ [ ComponentError craftBillsComponentId 1 ValidatePhase
+          ("page '" <> tshow (pcbPageId s) <> "': bill #"
+           <> tshow (unBillId bid) <> " is not below the page's bill \
+              \allocator (" <> tshow (bqNextId (pcbBills s)) <> ")")
+      | s   ← slices
+      , bid ← HM.keys (bqBills (pcbBills s))
+      , unBillId bid ≥ bqNextId (pcbBills s)
+      ]
+    , [ ComponentError craftBillsComponentId 1 ValidatePhase
+          ("page '" <> tshow (pcbPageId s) <> "': bill map key #"
+           <> tshow (unBillId k) <> " holds a bill whose own id is #"
+           <> tshow (unBillId (bilId v)))
+      | s      ← slices
+      , (k, v) ← HM.toList (bqBills (pcbBills s))
+      , k ≠ bilId v
+      ]
     ]
 
 craftBillsCodec ∷ ComponentCodec CraftBillsDTO
@@ -784,15 +805,30 @@ newtype PowerNodesDTO = PowerNodesDTO { pndPages ∷ [PagePowerNodesDTO] }
 --   allocated per-page (see 'Power.Types.emptyPowerNodes'). A literal
 --   duplicate key within one page's @regNodes@ map is structurally
 --   impossible once decoded, same reasoning as bills.
+--
+--   Round 9 adds the same key/value identity check 'validateCraftBills'
+--   gained: the map key and the DTO's own embedded 'nodId' must agree —
+--   a decoded envelope with @regNodes = {#1 -> node{nodId=#2}}@ would
+--   otherwise pass the allocator check yet leave runtime APIs (which key
+--   off both identities) disagreeing about which node this is.
 validatePowerNodes ∷ PowerNodesDTO → [ComponentError]
-validatePowerNodes (PowerNodesDTO slices) =
-    [ ComponentError powerNodesComponentId 1 ValidatePhase
-        ("page '" <> tshow (ppnPageId s) <> "': power node #"
-         <> tshow (unPowerNodeId nid) <> " is not below the page's node \
-            \allocator (" <> tshow (regNextId (ppnNodes s)) <> ")")
-    | s   ← slices
-    , nid ← HM.keys (regNodes (ppnNodes s))
-    , unPowerNodeId nid ≥ regNextId (ppnNodes s)
+validatePowerNodes (PowerNodesDTO slices) = concat
+    [ [ ComponentError powerNodesComponentId 1 ValidatePhase
+          ("page '" <> tshow (ppnPageId s) <> "': power node #"
+           <> tshow (unPowerNodeId nid) <> " is not below the page's node \
+              \allocator (" <> tshow (regNextId (ppnNodes s)) <> ")")
+      | s   ← slices
+      , nid ← HM.keys (regNodes (ppnNodes s))
+      , unPowerNodeId nid ≥ regNextId (ppnNodes s)
+      ]
+    , [ ComponentError powerNodesComponentId 1 ValidatePhase
+          ("page '" <> tshow (ppnPageId s) <> "': power node map key #"
+           <> tshow (unPowerNodeId k) <> " holds a node whose own id is #"
+           <> tshow (unPowerNodeId (nodId v)))
+      | s      ← slices
+      , (k, v) ← HM.toList (regNodes (ppnNodes s))
+      , k ≠ nodId v
+      ]
     ]
 
 powerNodesCodec ∷ ComponentCodec PowerNodesDTO

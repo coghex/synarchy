@@ -32,15 +32,16 @@ module World.Save.Snapshot
     , buildSessionSnapshot
     , validateSessionSnapshot
     , captureSessionSnapshot
+    , structureEditPaletteErrors
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import Structure.Palette (TexPalette)
+import Structure.Palette (TexPalette(..))
 import World.Generate.Types (WorldGenParams)
 import World.Page.Types (WorldPageId, WorldIdentity)
 import World.Render.Zoom.Types (ZoomMapMode)
-import World.Edit.Types (WorldEdits)
+import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
@@ -172,6 +173,7 @@ data SnapshotError
     | DuplicateItemInstanceId !Word64
     | BuildingAllocatorTooLow !BuildingId
     | UnitAllocatorTooLow !UnitId
+    | StructureEditPaletteIdMissing !WorldPageId !Int
     deriving (Show, Eq)
 
 -- | Build the raw candidate snapshot (unconditionally — validation is
@@ -233,6 +235,40 @@ validateSessionSnapshot snap = concat
     , duplicateItemIdErrors snap
     , buildingAllocatorErrors snap
     , unitAllocatorErrors snap
+    ]
+
+-- | Every texture/facemap palette id a persisted 'WeSetStructure' edit
+--   references, across every page (#760 round 9). Unlike a craft bill's
+--   station reference or a power node's host-building reference (both
+--   deliberately NOT checked above — a demolished station/building
+--   leaving a dangling reference is documented, tolerated gameplay
+--   behaviour), a structure edit's palette id is NOT optional/tolerable:
+--   'Structure.Palette.lookupPath' is how the renderer turns the id back
+--   into a texture path at load, so an id absent from the assembled
+--   'TexPalette' can never be resolved to anything — the edit would
+--   render as nothing. This genuinely is corruption, so it's a hard
+--   reject rather than a tolerated gap.
+--
+--   Deliberately NOT folded into 'validateSessionSnapshot' (unlike every
+--   other cross-cutting check above): that function is shared with
+--   'captureSessionSnapshot', which the "full-encode forcing" contract
+--   (see "Test.Headless.Save.Snapshot") requires to never force a page's
+--   edit-log list ELEMENTS, only its top-level shape — a deferred
+--   exploding thunk buried in 'pgsEdits' must survive capture/validation
+--   and only explode later, at the real encode. Pattern-matching each
+--   edit against 'WeSetStructure' would force exactly those elements.
+--   This check is therefore called separately, ONLY on the load path
+--   ("World.Save.Component"'s 'assembleSnapshot', after every component
+--   has already cereal-decoded its bytes into fully concrete values —
+--   there is no deferred thunk left to protect there).
+structureEditPaletteErrors ∷ SessionSnapshot → [SnapshotError]
+structureEditPaletteErrors snap =
+    [ StructureEditPaletteIdMissing (pgsPageId page) pid
+    | page  ← HM.elems (snapPages snap)
+    , edits ← HM.elems (pgsEdits page)
+    , WeSetStructure _ _ _ texId faceId _ ← edits
+    , pid ← [texId, faceId]
+    , not (HM.member pid (tpIdToPath (snapTexPalette snap)))
     ]
 
 -- | A unit sim-state entry with no matching restored unit instance on

@@ -37,6 +37,7 @@ module World.Save.Component.Session
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Structure.Palette (TexPalette(..))
@@ -45,6 +46,9 @@ import Engine.Graphics.Camera (CameraFacing)
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..) )
 import World.Save.Component.Types
+
+tshow ∷ Show a ⇒ a → Text
+tshow = T.pack . show
 
 -- core-session ------------------------------------------------------
 
@@ -145,10 +149,45 @@ fromTexPaletteDTO d =
         , tpNextId   = tpdNextId d
         }
 
+-- | Component-local invariant (#760 round 9): 'TexPalette' is a
+--   bijective path<->id map plus a "next id to hand out" allocator —
+--   riding on the live instance's own hand-written 'put'/'get'
+--   (see "Structure.Palette") used to guarantee this structurally
+--   (round-tripping through the SAME in-memory maps the live code
+--   maintains by construction), but the frozen DTO decodes an arbitrary
+--   @(path, id)@ pair list off disk with no such guarantee. Reject:
+--   a duplicate path (two ids claiming the same texture), a duplicate id
+--   (two paths claiming the same slot — non-bijective, so
+--   'fromTexPaletteDTO's @tpIdToPath@ rebuild would silently drop one),
+--   and any id at or above the palette's own 'tpdNextId' allocator
+--   (mirrors 'validateCraftBills'/'validatePowerNodes''s allocator
+--   check).
+validateTexPalette ∷ TexPaletteDTO → [ComponentError]
+validateTexPalette (TexPaletteDTO nextId pairs) = concat
+    [ [ ComponentError texPaletteComponentId 1 ValidatePhase
+          ("duplicate texture palette path " <> tshow path)
+      | (path, n) ← HM.toList
+            (HM.fromListWith (+) [ (p, 1 ∷ Int) | (p, _) ← pairs ])
+      , n > 1
+      ]
+    , [ ComponentError texPaletteComponentId 1 ValidatePhase
+          ("duplicate texture palette id #" <> tshow pid)
+      | (pid, n) ← HM.toList
+            (HM.fromListWith (+) [ (i, 1 ∷ Int) | (_, i) ← pairs ])
+      , n > 1
+      ]
+    , [ ComponentError texPaletteComponentId 1 ValidatePhase
+          ("texture palette id #" <> tshow pid <> " is not below the \
+           \palette's own allocator (" <> tshow nextId <> ")")
+      | (_, pid) ← pairs, pid ≥ nextId
+      ]
+    ]
+
 texPaletteCodec ∷ ComponentCodec TexPaletteDTO
 texPaletteCodec = serializeCodec
     texPaletteComponentId 1 True []
-    (\snap → toTexPaletteDTO (snapTexPalette snap)) (\_ d → Right d) (const [])
+    (\snap → toTexPaletteDTO (snapTexPalette snap)) (\_ d → Right d)
+    validateTexPalette
 
 coreSessionTexPalette ∷ TexPaletteDTO → SessionSnapshot → SessionSnapshot
 coreSessionTexPalette d snap = snap { snapTexPalette = fromTexPaletteDTO d }
