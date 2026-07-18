@@ -409,3 +409,41 @@ spec = do
             , "assert(not prep.ok, 'a crashing references() must fail the whole load')"
             , "assert(called, 'references() must actually be invoked during prepareLoad')"
             ]
+
+    describe "unit_ai save component (issue #761 requirements 13/14)" $ do
+        it "strips every transient *Candidate scratch field from the \
+           \persisted snapshot -- craftCandidate in particular embeds a \
+           \full live RecipeDef (craft.get()'s return value), which must \
+           \never be copied into a save payload" $ runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local fakeAiState = { [1] = {"
+            , "  currentAction = 'idle',"
+            , "  craftCandidate = { bill = { id = 5, station = 10 },"
+            , "    recipe = { id = 'x', inputs = { a = 1 }, outputs = { b = 2 },"
+            , "               station = 'forge' }, demands = {}, dist = 3 },"
+            , "  repairCandidate = { instanceId = 42, defName = 'axe' },"
+            , "  digCandidate = { x = 3, y = 4 } } }"
+            , "local fakeUnitAi = {}"
+            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local snap = saveModules.registry.unit_ai.snapshot()"
+            , "assert(snap[1] ~= nil, 'live unit state must still be present')"
+            , "assert(snap[1].currentAction == 'idle', 'non-candidate fields survive')"
+            , "assert(snap[1].craftCandidate == nil,"
+            , "  'craftCandidate (which embeds a live RecipeDef) must be stripped')"
+            , "assert(snap[1].repairCandidate == nil, 'repairCandidate must be stripped')"
+            , "assert(snap[1].digCandidate == nil, 'digCandidate must be stripped')"
+            , "-- The live singleton itself must be untouched (only the"
+            , "-- SNAPSHOT copy is stripped) -- the AI loop still needs its"
+            , "-- own in-memory candidate on this same tick."
+            , "assert(fakeAiState[1].craftCandidate ~= nil,"
+            , "  'stripping must not mutate the live aiState singleton')"
+            , "-- The encoded payload itself must not contain the recipe id"
+            , "-- as a smuggled string anywhere, proving no leftover copy"
+            , "-- survives via some other path."
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local payload = codec.encode(snap)"
+            , "assert(payload:find('forge') == nil,"
+            , "  'no trace of the live recipe content may reach the encoded payload')"
+            ]

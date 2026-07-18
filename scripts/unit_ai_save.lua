@@ -21,6 +21,25 @@ M.AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
                              "notifyTarget", "lungeTarget" }
 M.AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
 
+-- Per-unit "*Candidate" fields (issue #761 requirement 13/14): scratch
+-- space a utility function fills in on ITS OWN tick and that the
+-- matching execute() immediately consumes or drops within the same
+-- tick -- never a committed, durable decision the way a Job/Claim is.
+-- Some of these (craftCandidate/repairCandidate in particular) embed a
+-- full live content definition (craft.get()'s RecipeDef, by way of
+-- unit_ai_craft.lua's `cand.recipe`) rather than a stable id, which
+-- requirement 14 forbids persisting as a copy. Since every candidate is
+-- cheaply re-derivable from scratch on the very next tick (the utility
+-- functions always re-scan rather than trusting a stale candidate), the
+-- simplest and most correct fix is to never persist any of them at all
+-- -- stripped at snapshot time (below), so they load back as nil and
+-- get recomputed fresh, exactly like Lua RNG/iteration state is never
+-- persisted for the same reason.
+local TRANSIENT_CANDIDATE_FIELDS = {
+    "chopCandidate", "digCandidate", "tillCandidate", "plantCandidate",
+    "constructCandidate", "repairCandidate", "craftCandidate",
+}
+
 -- Component-local validator (issue #761): `data` must be a table keyed
 -- by positive-integer unit ids, each mapping to a state table. Deep
 -- per-field validation of aiState's own shape is deliberately not
@@ -46,28 +65,30 @@ end
 
 -- Every reference this component carries (requirement 12) -- unit/
 -- building/craft-bill/item/ground-item ids reachable from a per-unit
--- aiState entry, including ones nested inside claim/job/candidate
--- tables and collection-held ones inside loot lists:
+-- aiState entry, including ones nested inside claim/job tables and
+-- collection-held ones inside loot lists:
 --   unit_ai_medic.lua's treatClaim/treatPending
 --   unit_ai_deliver.lua's deliveryClaim/deliveryPendingTarget
---   unit_ai_craft.lua's craftJob/craftCandidate
---   unit_ai_repair.lua's repairJob/repairCandidate
+--   unit_ai_craft.lua's craftJob
+--   unit_ai_repair.lua's repairJob
 --   unit_ai_pickup.lua's pickupOrder
 --   unit_ai_needs.lua's forageTarget/forageLoot
 --   unit_ai_farm.lua's harvestLoot
--- Traversed here for documentation/diagnostics (actually CALLED by
--- saveModules.prepareLoad, requirement 11/12 -- not merely declared
--- and left dead); a dangling entry is NOT rejected by this validator
--- (per the #761 issue-review clarification: a target that legitimately
--- died before the save boundary must stay representable) -- a job/
--- claim one is cleared at reconcile time instead, by unit_ai.lua's
--- scrubStaleRefs/onSaveLoaded (a candidate/loot one self-heals on the
--- next tick, since those are recomputed/re-validated fresh rather than
--- trusted across a load the way a committed claim is).
--- NB: any NEW nested claim/job/candidate field, or new loot-style list,
--- that stores a unit/building/bill/item/ground-item id MUST be added
--- here too (mirroring scrubStaleRefs for the claim/job fields it also
--- reconciles).
+-- (the *Candidate fields carry no reference here at all -- see
+-- TRANSIENT_CANDIDATE_FIELDS above: they are stripped before this
+-- function ever sees them.) Traversed here for documentation/
+-- diagnostics (actually CALLED by saveModules.prepareLoad, requirement
+-- 11/12 -- not merely declared and left dead); a dangling entry is NOT
+-- rejected by this validator (per the #761 issue-review clarification:
+-- a target that legitimately died before the save boundary must stay
+-- representable) -- it is cleared at reconcile time instead, by
+-- unit_ai.lua's scrubStaleRefs/onSaveLoaded.
+-- NB: any NEW nested claim/job field, or new loot-style list, that
+-- stores a unit/building/bill/item/ground-item id MUST be added here
+-- too (mirroring scrubStaleRefs for the claim/job fields it also
+-- reconciles); any NEW *Candidate-style scratch field should instead be
+-- added to TRANSIENT_CANDIDATE_FIELDS if it can embed a raw id or a
+-- copy of live content, matching the existing ones.
 local function unitAiReferences(data)
     local refs = {}
     local function addRef(kind, id)
@@ -89,16 +110,9 @@ local function unitAiReferences(data)
             addRef("craft_bill", s.craftJob.billId)
             addRef("building", s.craftJob.bid)
         end
-        if s.craftCandidate and s.craftCandidate.bill then
-            addRef("craft_bill", s.craftCandidate.bill.id)
-            addRef("building", s.craftCandidate.bill.station)
-        end
         if s.repairJob then
             addRef("item_instance", s.repairJob.instanceId)
             addRef("building", s.repairJob.bid)
-        end
-        if s.repairCandidate then
-            addRef("item_instance", s.repairCandidate.instanceId)
         end
         if s.pickupOrder then addRef("ground_item", s.pickupOrder.gid) end
         if s.forageTarget and s.forageTarget.kind == "ground" then
@@ -108,6 +122,19 @@ local function unitAiReferences(data)
         addRefList("ground_item", s.harvestLoot)
     end
     return refs
+end
+
+-- A shallow copy of one unit's aiState entry with every transient
+-- candidate field stripped (requirement 13/14) -- see
+-- TRANSIENT_CANDIDATE_FIELDS. Nested tables that DO get persisted
+-- (craftJob, treatClaim, ...) are shared by reference with the live
+-- state, which is safe: the snapshot is encoded (deep-copied into a
+-- byte string) before this tick's AI loop could mutate them again.
+local function snapshotUnitState(s)
+    local copy = {}
+    for k, v in pairs(s) do copy[k] = v end
+    for _, f in ipairs(TRANSIENT_CANDIDATE_FIELDS) do copy[f] = nil end
+    return copy
 end
 
 -- Register the "unit_ai" persistent save component. `unitAi` is the
@@ -141,9 +168,14 @@ function M.register(unitAi, aiState)
             -- it. Dropping dead ids at the source means they never reach
             -- the payload. unit.exists is GLOBAL, so live units on every
             -- page are still saved (#195).
+            -- Also strips every transient candidate field
+            -- (snapshotUnitState, requirement 13/14) -- scratch
+            -- utility-scoring state that's cheaply re-derived next
+            -- tick, one path of which would otherwise copy a live
+            -- content definition (a full RecipeDef) into the payload.
             local live = {}
             for uid, s in pairs(aiState) do
-                if unit.exists(uid) then live[uid] = s end
+                if unit.exists(uid) then live[uid] = snapshotUnitState(s) end
             end
             return live
         end,

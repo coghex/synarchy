@@ -335,6 +335,27 @@ lua "local sm = require('scripts.lib.save_modules'); \
 sleep 0.3
 assert_eq "a normal save still succeeds once restored" "true" \
     "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_recovered')"
+# engine.saveWorld returns on enqueue -- poll listSaves (same idiom as
+# [7] above) until the recovery save has actually landed on disk, so
+# this proves the barrier genuinely recovered and completed a REAL
+# save, not merely that a command was queued. Written as an
+# immediately-invoked function expression (matching [7]'s own working
+# "newer save sorts first" query below) rather than a bare
+# local-then-return chunk: `lua()`/`assert_eq` always prepend an extra
+# "return ", and a chunk that already ends in its own top-level
+# `return` can't follow another `return` (nor does the debug console's
+# no-wrap fallback help, since the chunk still starts with `local`).
+RECOVERED_QUERY="(function() local list = engine.listSaves(); for _, s in ipairs(list) do if s.name == '${TEST_SAVE_NAME}_recovered' then return true end end return false end)()"
+RECOVERED_SEEN=false
+for _i in $(seq 1 40); do
+    if [ "$(lua "return ${RECOVERED_QUERY}")" = "true" ]; then
+        RECOVERED_SEEN=true
+        break
+    fi
+    sleep 0.25
+done
+assert_eq "the recovery save actually completed and is listed" "true" \
+    "$RECOVERED_SEEN"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""
