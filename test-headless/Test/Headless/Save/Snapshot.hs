@@ -15,7 +15,7 @@ import Control.Exception (evaluate)
 import qualified Data.HashMap.Strict as HM
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter
-import World.Save.Serialize (encodeSaveData)
+import World.Save.Envelope (encodeSessionSnapshot)
 import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
@@ -367,10 +367,11 @@ spec = do
     -- record fields are only forced to WHNF (via Strict/HashMap.Strict),
     -- never deeply, so a thunk buried inside a LIST stored as a HashMap
     -- VALUE survives every construction step untouched.
-    -- 'World.Save.Serialize.encodeSaveData' is what
+    -- 'World.Save.Envelope.encodeSessionSnapshot' is what
     -- 'World.Thread.Command.Save.WriteWorld' forces (via 'evaluate') BEFORE
     -- releasing the #757 barrier -- this proves it actually reaches, and
-    -- forces, a payload this deeply nested.
+    -- forces, a payload this deeply nested (now buried inside the
+    -- "world-edits" component rather than a monolithic SaveData, #760).
     describe "full-encode forcing (review round 2 follow-up)" $ do
         it "captureSessionSnapshot accepts a snapshot with a deferred, \
            \deeply-nested exploding thunk buried in a page's edit log \
@@ -383,8 +384,8 @@ spec = do
                 Right _   → pure ()
                 Left errs → expectationFailure (show errs)
 
-        it "encodeSaveData forces that same deferred thunk and throws -- \
-           \proving the #758 fix catches it BEFORE the barrier would \
+        it "encodeSessionSnapshot forces that same deferred thunk and throws \
+           \-- proving the #758 fix catches it BEFORE the barrier would \
            \release, rather than later during the disk write" $ do
             let req = SaveRequestMeta { srmSlotName = "my_save", srmTimestamp = "ts" }
                 explodingEdits = HM.singleton (ChunkCoord 0 0)
@@ -393,6 +394,6 @@ spec = do
                 snap = case captureSessionSnapshot minimalGlobals [page] of
                     Right s   → s
                     Left errs → error ("expected acceptance, got " <> show errs)
-                sd = snapshotToSaveData req snap
-            evaluate (encodeSaveData sd)
+                meta = snapshotSaveMetadata req snap
+            evaluate (encodeSessionSnapshot meta snap)
                 `shouldThrow` errorCall "deferred nested payload boom"

@@ -2698,11 +2698,196 @@ def test_audit_against_the_real_repo():
     """End-to-end smoke test against the actual checked-out inventory and
     source files -- this is what CI/make ci actually runs via main()."""
     from persistence_inventory_audit import _load_repo_state  # type: ignore
-    record_sources, scripts_text_by_file, inventory_text = _load_repo_state()
-    violations = audit(record_sources, scripts_text_by_file, inventory_text)
+    record_sources, scripts_text_by_file, inventory_text, registered_ids = \
+        _load_repo_state()
+    violations = audit(record_sources, scripts_text_by_file, inventory_text,
+                       registered_ids=registered_ids)
     expect(not violations,
-           f"the real repo's inventory has no unclassified root-owner fields "
-           f"or Lua save modules, got {violations}")
+           f"the real repo's inventory has no unclassified root-owner fields, "
+           f"Lua save modules, or unregistered persistent save components, "
+           f"got {violations}")
+
+
+# ----- #760 component-registration checks --------------------------------
+
+# The derived registered set, as `derive_registered_component_ids` would
+# produce it for these fixtures: only "registered-comp" is truly wired
+# into the registry (see the derivation fixtures further below).
+SYNTHETIC_REGISTERED_IDS = {"registered-comp"}
+
+# The inventory classifies a component persistent AND documents its
+# (registered) ComponentId -- the well-formed case.
+SYNTHETIC_INVENTORY_COMPONENT_OK = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+"""
+
+# The inventory classifies a component persistent but its ComponentId is
+# NOT registered in the Haskell source -- must fail.
+SYNTHETIC_INVENTORY_COMPONENT_UNREGISTERED = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+| `GhostDTO` | `ghost-comp` | Persist exactly |
+"""
+
+# The would-be unregistered owner is instead classified Reset/Exclude --
+# a rebuilt/reset/excluded owner requires no registration, so no failure.
+SYNTHETIC_INVENTORY_COMPONENT_RESET_OK = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+| `GhostDTO` | `ghost-comp` | Reset to default |
+"""
+
+
+def test_component_check_accepts_registered_persistent_owner():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    v = find_component_registration_violations(
+        SYNTHETIC_INVENTORY_COMPONENT_OK, SYNTHETIC_REGISTERED_IDS)
+    expect(v == [],
+           f"a persistent component whose ComponentId IS registered passes, "
+           f"got {v}")
+
+
+def test_component_check_flags_unregistered_persistent_owner():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    v = find_component_registration_violations(
+        SYNTHETIC_INVENTORY_COMPONENT_UNREGISTERED, SYNTHETIC_REGISTERED_IDS)
+    expect(any("ghost-comp" in x for x in v),
+           f"a persistent Haskell save-component owner WITHOUT a registered "
+           f"ComponentId fails the audit, got {v}")
+
+
+def test_component_check_reset_owner_needs_no_registration():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    v = find_component_registration_violations(
+        SYNTHETIC_INVENTORY_COMPONENT_RESET_OK, SYNTHETIC_REGISTERED_IDS)
+    expect(v == [],
+           f"an owner classified reset/rebuilt/excluded requires no component "
+           f"registration and does NOT fail, got {v}")
+
+
+def test_component_check_flags_registered_component_missing_a_row():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    # registry has "registered-comp" but the inventory documents no row
+    # for it at all -- a new component owner landed without a decision.
+    v = find_component_registration_violations(
+        "# empty inventory\n", SYNTHETIC_REGISTERED_IDS)
+    expect(any("registered-comp" in x for x in v),
+           f"a registered component with no persistent inventory row fails "
+           f"the audit, got {v}")
+
+
+# ----- #760 registry-DERIVATION checks (round-4 review) ------------------
+#
+# The audit must derive its registered set from real registry membership,
+# not from every `ComponentId "..."` literal that exists. These fixtures
+# model that: `ghost-comp` HAS an id literal (and is documented) but is
+# never added to `saveComponentRegistry`, so it must NOT be treated as
+# registered.
+
+# A registry list that registers ONE codec (regCodec) and the metadata
+# component is wired by the envelope, not this list.
+SYNTHETIC_REGISTRY_LIST = """\
+saveComponentRegistry ∷ [RegisteredComponent]
+saveComponentRegistry =
+    [ registerComponent regCodec
+    ]
+"""
+
+# The codec definitions: regCodec resolves to registeredComponentId;
+# ghostCodec exists in source but is NOT in the registry list above.
+SYNTHETIC_CODEC_SOURCE = """\
+regCodec ∷ ComponentCodec RegDTO
+regCodec = serializeCodec
+    registeredComponentId 1 True []
+    encodeReg (\\_ d → Right d) (const [])
+
+ghostCodec ∷ ComponentCodec GhostDTO
+ghostCodec = serializeCodec
+    ghostComponentId 1 True []
+    encodeGhost (\\_ d → Right d) (const [])
+"""
+
+# Both id identifiers are DEFINED here -- a naive literal grep would treat
+# BOTH as registered. Only registeredComponentId is actually wired.
+SYNTHETIC_ID_TYPES = """\
+registeredComponentId ∷ ComponentId
+registeredComponentId = ComponentId "registered-comp"
+ghostComponentId ∷ ComponentId
+ghostComponentId = ComponentId "ghost-comp"
+metadataComponentId ∷ ComponentId
+metadataComponentId = ComponentId "metadata"
+"""
+
+# The envelope wires in the metadata component as a direct spec tuple,
+# exactly like the real World.Save.Envelope.
+SYNTHETIC_ENVELOPE = """\
+encodeSessionSnapshot meta snap =
+    let metaSpec = (metadataComponentId, metadataComponentVersion, True
+                   , S.encode meta)
+        specs    = metaSpec : encodeComponentSpecs snap
+    in encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion specs
+"""
+
+
+def test_derive_registered_ids_traces_real_membership_not_literals():
+    from persistence_inventory_audit import (  # type: ignore
+        derive_registered_component_ids)
+    ids = derive_registered_component_ids(
+        SYNTHETIC_REGISTRY_LIST, SYNTHETIC_CODEC_SOURCE, SYNTHETIC_ID_TYPES,
+        SYNTHETIC_ENVELOPE)
+    # regCodec -> registeredComponentId -> "registered-comp"; envelope
+    # -> "metadata". ghost-comp is DEFINED but never registered.
+    expect(ids == {"registered-comp", "metadata"},
+           f"the derived set traces registry membership (registered-comp + "
+           f"the envelope's metadata) and EXCLUDES the defined-but-"
+           f"unregistered ghost-comp, got {ids}")
+
+
+def test_derive_registered_ids_excludes_defined_but_unregistered_and_audit_flags_it():
+    """The exact round-4 gap: an id literal defined + documented persistent
+    but NOT wired into saveComponentRegistry must be flagged."""
+    from persistence_inventory_audit import (  # type: ignore
+        derive_registered_component_ids, find_component_registration_violations)
+    registered = derive_registered_component_ids(
+        SYNTHETIC_REGISTRY_LIST, SYNTHETIC_CODEC_SOURCE, SYNTHETIC_ID_TYPES,
+        SYNTHETIC_ENVELOPE)
+    expect("ghost-comp" not in registered,
+           f"a defined-but-unregistered ComponentId is NOT in the derived "
+           f"registered set, got {registered}")
+    # The inventory documents ghost-comp as a persistent component; because
+    # it is not truly registered, the linkage check must flag it -- which a
+    # literal-grep audit (round-4 bug) would have missed.
+    inventory = (
+        "# Fake inventory\n\n### Save components\n\n"
+        "| Component DTO | ComponentId | Classification |\n"
+        "|---|---|---|\n"
+        "| `RegDTO` | `registered-comp` | Persist exactly |\n"
+        "| `MetaDTO` | `metadata` | Persist exactly |\n"
+        "| `GhostDTO` | `ghost-comp` | Persist exactly |\n")
+    v = find_component_registration_violations(inventory, registered)
+    expect(any("ghost-comp" in x for x in v),
+           f"a documented-persistent-but-unregistered component is flagged, "
+           f"got {v}")
 
 
 # ----- Runner --------------------------------------------------------------
@@ -2856,6 +3041,12 @@ def main() -> int:
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
         test_audit_against_the_real_repo,
+        test_component_check_accepts_registered_persistent_owner,
+        test_component_check_flags_unregistered_persistent_owner,
+        test_component_check_reset_owner_needs_no_registration,
+        test_component_check_flags_registered_component_missing_a_row,
+        test_derive_registered_ids_traces_real_membership_not_literals,
+        test_derive_registered_ids_excludes_defined_but_unregistered_and_audit_flags_it,
     ]
 
     for t in tests:

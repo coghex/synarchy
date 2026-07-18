@@ -713,6 +713,12 @@ library
                      World.Save.Envelope.Types
                      World.Save.Envelope.Codec
                      World.Save.Envelope
+                     World.Save.Component.Types
+                     World.Save.Component.WorldGen
+                     World.Save.Component.Session
+                     World.Save.Component.Page
+                     World.Save.Component.Entities
+                     World.Save.Component
                      World.Save.Serialize
                      World.Scale
                      World.Slope
@@ -976,6 +982,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
+                   Test.Headless.World.Save.Components
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.Identity

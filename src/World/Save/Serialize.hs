@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Save.Serialize
-    ( encodeSaveData
+    ( encodeSessionSnapshot
     , writeSaveFiles
     , loadWorld
     , listSaves
@@ -22,7 +22,8 @@ import System.Directory (createDirectoryIfMissing, listDirectory
 import System.FilePath ((</>), takeExtension, dropExtension)
 import World.Save.Types (SaveData(..), SaveMetadata(..))
 import World.Save.Envelope
-    (encodeSaveData, decodeSaveEnvelope, decodeSaveEnvelopeMetadata)
+    (encodeSessionSnapshot, decodeSessionEnvelope, decodeSaveEnvelopeMetadata)
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import Engine.Core.Log (LoggerState, LogCategory(..), logWarn)
 
 -- | Validate a user-supplied save name before it touches the filesystem.
@@ -62,11 +63,14 @@ saveExtension = ".synworld"
 binaryFileName ∷ String
 binaryFileName = "world" <> saveExtension
 
--- | Write already-encoded envelope bytes (see 'encodeSaveData') to
+-- | Write already-encoded envelope bytes (see 'encodeSessionSnapshot') to
 --   disk. Creates saves/{name}/world.synworld — the SOLE authoritative
 --   file for a save generation (issue #759 requirement 5): there is no
 --   longer a @world_gen.yaml@ companion; generation params live in the
---   envelope's "session" component like every other gameplay field.
+--   @"world-pages"@ Haskell-owned component (issue #760, save-overhaul
+--   B2 — see "World.Save.Component.Page") alongside every other
+--   gameplay field, not the retired transitional @"session"@ component
+--   B1 originally introduced.
 --
 --   Every pure computation already ran to produce @encoded@ — the only
 --   work left here is genuine, unpredictable-until-attempted I/O
@@ -124,9 +128,19 @@ loadWorld rawName = case sanitizeSaveName rawName of
     -- pauses the engine, restores Lua blobs, or marks the head world
     -- loading. Catching it only in the world-thread handler would
     -- wedge the session on the loading screen after those side effects.
+    -- Reconstruct the complete, cross-validated 'SessionSnapshot' from
+    -- the component envelope (issue #760), then bridge it back into the
+    -- transitional 'SaveData' shape the world-thread load path still
+    -- consumes — using the AUTHORITATIVE metadata (name/timestamp) the
+    -- metadata component carries, so a within-session re-load keys its
+    -- provenance under the same save name as before.
     decodeFile path = do
         bytes ← BS.readFile path
-        return (decodeSaveEnvelope bytes ⌦ checkWorldCount)
+        return $ do
+            (meta, snap) ← decodeSessionEnvelope bytes
+            let req = SaveRequestMeta { srmSlotName  = smName meta
+                                      , srmTimestamp = smTimestamp meta }
+            checkWorldCount (snapshotToSaveData req snap)
 
 -- | Reject a decoded save with NO world pages (corrupt / truncated). Any
 --   non-empty 'sdWorlds' is accepted: the save command snapshots every live

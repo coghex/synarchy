@@ -2,13 +2,19 @@
 -- | The immutable, validated in-memory capture of an entire game
 --   session at one coordinated "Engine.Save.Barrier" boundary (#758,
 --   save-overhaul A3). This is deliberately NOT 'World.Save.Types'
---   ('SaveData'/'WorldPageSave') — those are the positional cereal WIRE
---   SCHEMA, append-only and version-bumped on every layout change.
---   'SessionSnapshot' has no 'Serialize' instance and no append-only
---   constraint: it is built once, validated once, and handed to a
---   serializer (currently 'World.Save.Snapshot.Adapter', a temporary
---   bridge to the unchanged v88 'SaveData' format) — never itself
---   written to disk.
+--   ('SaveData'/'WorldPageSave') — those are the positional cereal
+--   shape B1/B2's legacy in-memory load bridge still uses internally,
+--   append-only and version-bumped on every layout change to THAT
+--   bridge shape, not to the wire format. 'SessionSnapshot' has no
+--   'Serialize' instance and no append-only constraint: it is built
+--   once, validated once, and (on save) handed straight to
+--   "World.Save.Envelope"'s component encoders (issue #760,
+--   save-overhaul B2) — never itself written to disk, and no longer
+--   routed through 'World.Save.Snapshot.Adapter' on the way out.
+--   'World.Save.Snapshot.Adapter' still exists as the reverse,
+--   LOAD-side bridge: decoding an envelope reconstructs a
+--   'SessionSnapshot' first, then the adapter converts that into the
+--   legacy shape the world-thread load path consumes.
 --
 --   Everything here is pure. The caller (currently
 --   'World.Thread.Command.Save.WriteWorld') still owns every
@@ -32,15 +38,16 @@ module World.Save.Snapshot
     , buildSessionSnapshot
     , validateSessionSnapshot
     , captureSessionSnapshot
+    , structureEditPaletteErrors
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import Structure.Palette (TexPalette)
+import Structure.Palette (TexPalette(..))
 import World.Generate.Types (WorldGenParams)
 import World.Page.Types (WorldPageId, WorldIdentity)
 import World.Render.Zoom.Types (ZoomMapMode)
-import World.Edit.Types (WorldEdits)
+import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
@@ -172,6 +179,7 @@ data SnapshotError
     | DuplicateItemInstanceId !Word64
     | BuildingAllocatorTooLow !BuildingId
     | UnitAllocatorTooLow !UnitId
+    | StructureEditPaletteIdMissing !WorldPageId !Int
     deriving (Show, Eq)
 
 -- | Build the raw candidate snapshot (unconditionally — validation is
@@ -235,6 +243,40 @@ validateSessionSnapshot snap = concat
     , unitAllocatorErrors snap
     ]
 
+-- | Every texture/facemap palette id a persisted 'WeSetStructure' edit
+--   references, across every page (#760 round 9). Unlike a craft bill's
+--   station reference or a power node's host-building reference (both
+--   deliberately NOT checked above — a demolished station/building
+--   leaving a dangling reference is documented, tolerated gameplay
+--   behaviour), a structure edit's palette id is NOT optional/tolerable:
+--   'Structure.Palette.lookupPath' is how the renderer turns the id back
+--   into a texture path at load, so an id absent from the assembled
+--   'TexPalette' can never be resolved to anything — the edit would
+--   render as nothing. This genuinely is corruption, so it's a hard
+--   reject rather than a tolerated gap.
+--
+--   Deliberately NOT folded into 'validateSessionSnapshot' (unlike every
+--   other cross-cutting check above): that function is shared with
+--   'captureSessionSnapshot', which the "full-encode forcing" contract
+--   (see "Test.Headless.Save.Snapshot") requires to never force a page's
+--   edit-log list ELEMENTS, only its top-level shape — a deferred
+--   exploding thunk buried in 'pgsEdits' must survive capture/validation
+--   and only explode later, at the real encode. Pattern-matching each
+--   edit against 'WeSetStructure' would force exactly those elements.
+--   This check is therefore called separately, ONLY on the load path
+--   ("World.Save.Component"'s 'assembleSnapshot', after every component
+--   has already cereal-decoded its bytes into fully concrete values —
+--   there is no deferred thunk left to protect there).
+structureEditPaletteErrors ∷ SessionSnapshot → [SnapshotError]
+structureEditPaletteErrors snap =
+    [ StructureEditPaletteIdMissing (pgsPageId page) pid
+    | page  ← HM.elems (snapPages snap)
+    , edits ← HM.elems (pgsEdits page)
+    , WeSetStructure _ _ _ texId faceId _ ← edits
+    , pid ← [texId, faceId]
+    , not (HM.member pid (tpIdToPath (snapTexPalette snap)))
+    ]
+
 -- | A unit sim-state entry with no matching restored unit instance on
 --   the same page (#756: "not currently detected" — this is the new
 --   check that closes that gap).
@@ -245,25 +287,37 @@ orphanedUnitSimStateErrors snap =
     , uid ← HM.keys (pgsUnitSimStates page)
     , not (HM.member uid (usnInstances (pgsUnits page))) ]
 
+-- | Every id reachable from one 'ItemInstance', including its own AND
+--   every id nested (recursively) in 'iiContents' — a first-aid kit's
+--   own kit-in-kit contents (#760 round 8: the previous version only
+--   ever looked at each container's OUTER id, so a nested item's id
+--   colliding with the allocator or with another item elsewhere in the
+--   session went undetected).
+flattenItemInstanceIds ∷ ItemInstance → [Word64]
+flattenItemInstanceIds i =
+    iiInstanceId i : concatMap flattenItemInstanceIds (iiContents i)
+
 -- | Every item-instance id across the whole session: ground items,
 --   unit inventory/equipped/accessories, and building storage/
 --   materials-delivered — the full scope 'nextItemInstanceIdRef' (#67)
---   governs.
+--   governs. Recurses into 'iiContents' via 'flattenItemInstanceIds'.
 allItemInstanceIds ∷ SessionSnapshot → [Word64]
 allItemInstanceIds snap = concatMap pageItemIds (HM.elems (snapPages snap))
   where
     pageItemIds page =
-        map (iiInstanceId ∘ giInst) (HM.elems (gisItems (pgsGroundItems page)))
+        concatMap (flattenItemInstanceIds ∘ giInst)
+                  (HM.elems (gisItems (pgsGroundItems page)))
         ⧺ concatMap unitItemIds (HM.elems (usnInstances (pgsUnits page)))
         ⧺ concatMap buildingItemIds
               (HM.elems (bsnInstances (pgsBuildings page)))
     unitItemIds u =
-        map iiInstanceId (uisInventory u)
-        ⧺ map iiInstanceId (HM.elems (uisEquipped u))
-        ⧺ map iiInstanceId (uisAccessories u)
+        concatMap flattenItemInstanceIds (uisInventory u)
+        ⧺ concatMap flattenItemInstanceIds (HM.elems (uisEquipped u))
+        ⧺ concatMap flattenItemInstanceIds (uisAccessories u)
     buildingItemIds b =
-        concatMap (map iiInstanceId) (HM.elems (bisMaterialsDelivered b))
-        ⧺ map iiInstanceId (bisStorage b)
+        concatMap (concatMap flattenItemInstanceIds)
+                  (HM.elems (bisMaterialsDelivered b))
+        ⧺ concatMap flattenItemInstanceIds (bisStorage b)
 
 itemAllocatorErrors ∷ SessionSnapshot → [SnapshotError]
 itemAllocatorErrors snap =

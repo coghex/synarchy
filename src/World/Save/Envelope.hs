@@ -1,30 +1,51 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 -- | Ties the generic tagged-envelope codec ("World.Save.Envelope.Codec")
---   to this codebase's two concrete components (issue #759,
---   save-overhaul B1):
+--   to this codebase's concrete save components (issue #760,
+--   save-overhaul B2 — replacing #759 B1's single transitional
+--   @"session"@ component):
 --
 --   - @"metadata"@ — a small, required component carrying exactly
 --     'SaveMetadata' (name/seed/size/plates/timestamp/worldName/
---     worldGloss), so 'World.Save.Serialize.listSaves' can discover and
---     display every save WITHOUT decoding the (much larger) gameplay
---     payload (requirement 4).
---   - @"session"@ — a required, TRANSITIONAL component carrying the
---     complete, unchanged 'SaveData' (requirement 13). B2 replaces this
---     one component with several independently-versioned Haskell
---     components; nothing here anticipates that split.
+--     worldGloss), so 'World.Save.Serialize.listSaves' can display every
+--     save WITHOUT decoding the gameplay payload (requirement 12).
+--   - the full Haskell-owned gameplay component set
+--     ("World.Save.Component.saveComponentRegistry") — @"core-session"@,
+--     @"texture-palette"@, @"lua-state"@, @"world-pages"@, @"world-edits"@,
+--     @"world-activity"@, @"buildings"@, @"units"@, @"unit-sim"@,
+--     @"craft-bills"@, @"power-nodes"@ — each independently versioned,
+--     converted to/from "World.Save.Snapshot"'s 'SessionSnapshot'.
 --
---   Both components are required by construction — there is no
---   coherent save missing either — so both this reader's own
---   requirement AND the writer's own 'cdRequired' declaration agree.
+--   The envelope's own framing version ('currentEnvelopeVersion') is
+--   independent of every component's schema version — the framing
+--   contract has not changed for B2, so it stays as B1 assigned it (1);
+--   component evolution now uses component versions, not a global save
+--   bump (requirement 15). 'World.Save.Types.currentSaveVersion' is
+--   likewise untouched by this change — it now only versions the
+--   transitional 'SaveData'/'WorldPageSave' bridge shape used by the
+--   load path, no longer any wire contract.
+--
+--   INTENTIONAL INCOMPATIBILITY: a save written by B1-era code (a
+--   single required @"session"@ component, no gameplay components) can
+--   no longer be loaded once this module lands — @"session"@ is
+--   dropped from 'knownComponentIds', so 'decodeSessionEnvelope' fails
+--   it as an unknown required component (requirement 13: retire the
+--   transitional payload; #760's acceptance explicitly permits this in
+--   place of a migration, provided it is documented and tested — see
+--   "Test.Headless.World.Save.Components"'s \"B1 -> B2 intentional
+--   incompatibility\" case). A real migration from the transitional
+--   shape is out of scope for B2; #760's Related section assigns
+--   long-lived compatibility fixtures/migrations to a future C4.
+--   Metadata-only reads ('decodeSaveEnvelopeMetadata', i.e.
+--   'World.Save.Serialize.listSaves') validate the SAME envelope
+--   structure before ever touching the metadata payload, so a B1-era
+--   save also can't be listed under B2 — it disappears from the save
+--   browser entirely rather than appearing but failing to load.
 module World.Save.Envelope
     ( currentEnvelopeVersion
     , metadataComponentId
-    , sessionComponentId
     , metadataComponentVersion
-    , sessionComponentVersion
-    , encodeSaveEnvelope
-    , encodeSaveData
-    , decodeSaveEnvelope
+    , encodeSessionSnapshot
+    , decodeSessionEnvelope
     , decodeSaveEnvelopeMetadata
     ) where
 
@@ -36,108 +57,86 @@ import qualified Data.Serialize as S
 import qualified Data.Text as T
 import World.Save.Envelope.Types
 import World.Save.Envelope.Codec
-import World.Save.Types (SaveData(..), SaveMetadata, currentSaveVersion)
+import World.Save.Types (SaveMetadata)
+import World.Save.Snapshot (SessionSnapshot)
+import World.Save.Component
+    (componentKnownIds, componentRequiredIds
+    , encodeComponentSpecs, assembleSnapshot)
+import World.Save.Component.Types
+    (ComponentError, renderComponentError, metadataComponentId)
 
--- | The v_new envelope-framing generation (requirement 3): bumped only
---   when the FRAMING contract itself changes incompatibly — never
---   merely because a carried component's own schema version changes.
+-- | The envelope-framing generation (requirement 15): bumped only when
+--   the FRAMING contract itself changes incompatibly — never merely
+--   because a carried component's own schema version changes. B2 does
+--   not change the framing, so this stays at B1's assigned 1.
 currentEnvelopeVersion ∷ Word32
 currentEnvelopeVersion = 1
 
-metadataComponentId ∷ ComponentId
-metadataComponentId = ComponentId "metadata"
-
-sessionComponentId ∷ ComponentId
-sessionComponentId = ComponentId "session"
-
--- | The "metadata" component's own schema version — a small,
---   independent counter (requirement 3: envelope/component versioning
---   stay separate). Bump this, not 'currentEnvelopeVersion', if
---   'SaveMetadata''s shape ever changes.
+-- | The @"metadata"@ component's own schema version — a small,
+--   independent counter (requirement 3). Bump this, not
+--   'currentEnvelopeVersion', if 'SaveMetadata''s shape ever changes.
 metadataComponentVersion ∷ Word32
 metadataComponentVersion = 1
 
--- | The "session" component's schema version is the SAME counter
---   'SaveData'/'WorldPageSave' have always used — this transitional
---   component carries that positional format byte-for-byte (requirement
---   13), so its version identity doesn't change just because it now
---   rides inside an envelope instead of being the whole file.
-sessionComponentVersion ∷ Word32
-sessionComponentVersion = fromIntegral currentSaveVersion
-
--- | Every component id this codebase knows how to interpret.
+-- | Every component id this reader knows how to interpret: the metadata
+--   component plus every registered gameplay component.
 knownComponentIds ∷ HS.HashSet ComponentId
-knownComponentIds = HS.fromList [metadataComponentId, sessionComponentId]
+knownComponentIds = HS.insert metadataComponentId componentKnownIds
 
--- | Both components are a hard requirement of THIS reader regardless
---   of what a writer's own 'cdRequired' flag says (requirement 6) —
---   there is no such thing as a coherent save missing either.
+-- | Every component this reader HARD-requires regardless of a writer's
+--   own 'cdRequired' flag (requirement 6/7): metadata + every required
+--   gameplay component (all of them, currently).
 readerRequiredComponentIds ∷ HS.HashSet ComponentId
-readerRequiredComponentIds = knownComponentIds
+readerRequiredComponentIds = HS.insert metadataComponentId componentRequiredIds
 
 renderEnvelopeError ∷ EnvelopeError → Text
 renderEnvelopeError = T.pack . show
 
--- | Encode a 'SaveData' into a validated, checksummed envelope. Pure —
---   'Left' means @limits@ were exceeded (an oversized manifest/
---   component/total), never a thrown exception.
-encodeSaveEnvelope ∷ EnvelopeLimits → SaveData → Either Text BS.ByteString
-encodeSaveEnvelope limits sd =
-    let metaBytes    = S.encode (sdMetadata sd)
-        sessionBytes = S.encode sd
-        specs = [ (metadataComponentId, metadataComponentVersion, True, metaBytes)
-                , (sessionComponentId, sessionComponentVersion, True, sessionBytes)
-                ]
-    in either (Left . renderEnvelopeError) Right
-              (encodeEnvelope limits currentEnvelopeVersion specs)
+renderComponentErrors ∷ [ComponentError] → Text
+renderComponentErrors = T.intercalate "; " . map renderComponentError
 
--- | Total wrapper matching the pre-#759 'encodeSaveData' signature:
---   'World.Thread.Command.Save.WriteWorld' forces this via 'evaluate'
---   BEFORE releasing the #758 capture-lock barrier, relying on forcing
---   a strict 'BS.ByteString' to WHNF fully realizing every byte —
---   which in turn forces cereal's traversal of the ENTIRE 'SaveData'.
---   Returning an 'Either' directly from THIS function would stop that
---   forcing at the 'Left'/'Right' constructor without ever touching
---   the ByteString sitting inside it; the 'case' below still fully
---   forces 'encodeSaveEnvelope''s result to pick a branch, so the
---   invariant survives unchanged. A 'Left' here means our own generous
---   'defaultEnvelopeLimits' were exceeded — effectively unreachable for
---   any real save — so 'error' (caught as a capture failure exactly
---   like any other unexpected exception at that call site) is the
---   right response, not a silent 'Either' plumbed through call sites
---   that have never needed to handle one.
-encodeSaveData ∷ SaveData → BS.ByteString
-encodeSaveData sd = case encodeSaveEnvelope defaultEnvelopeLimits sd of
-    Right bytes → bytes
-    Left err    → error ("encodeSaveData: " <> T.unpack err)
+-- | Encode a fully-captured, already-validated 'SessionSnapshot' plus
+--   its manifest 'SaveMetadata' into a checksummed component envelope.
+--   Total (not 'Either') so the caller
+--   ('World.Thread.Command.Save.WriteWorld') can force a strict
+--   'BS.ByteString' to WHNF and, in doing so, force every component's
+--   full cereal traversal BEFORE releasing the #757 barrier (a deferred
+--   exploding thunk buried in any component surfaces right here, as a
+--   capture failure, not later during the disk write). A 'Left' from the
+--   codec means our own generous 'defaultEnvelopeLimits' were exceeded —
+--   effectively unreachable for a real save — so 'error' (caught as a
+--   capture failure at that call site) is the right response.
+encodeSessionSnapshot ∷ SaveMetadata → SessionSnapshot → BS.ByteString
+encodeSessionSnapshot meta snap =
+    let metaSpec = (metadataComponentId, metadataComponentVersion, True
+                   , S.encode meta)
+        specs    = metaSpec : encodeComponentSpecs snap
+    in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion specs of
+        Right bytes → bytes
+        Left err    → error ("encodeSessionSnapshot: "
+                             <> T.unpack (renderEnvelopeError err))
 
 -- | Decode + validate the envelope structure, then decode ONLY the
---   "metadata" component — the "session" component's (much larger)
---   payload is never even cereal-decoded (requirement 4: "Metadata
---   inspection without gameplay decoding"). Its own schema version is
---   checked exactly like the "session" component's (below) — a
---   structurally valid envelope declaring an unsupported metadata
---   schema version is rejected before 'S.decode' ever runs, not
---   trusted merely because its bytes happen to still parse as the
---   CURRENT 'SaveMetadata' shape.
+--   @"metadata"@ component (requirement 12: metadata inspection without
+--   gameplay decoding). Its own schema version is checked before
+--   'S.decode' ever runs.
 decodeSaveEnvelopeMetadata ∷ BS.ByteString → Either Text SaveMetadata
 decodeSaveEnvelopeMetadata bytes = do
     decoded ← decodeValidatedEnvelope bytes
-    decodeComponent "metadata" metadataComponentId metadataComponentVersion decoded
+    decodeMetadataComponent decoded
 
--- | Decode + validate the envelope structure, then decode the
---   "session" component into the (unchanged) 'SaveData' shape existing
---   callers already expect. Also validates "metadata"'s own schema
---   version (though its CONTENT is never needed here) — a save
---   incompatible enough to fail 'decodeSaveEnvelopeMetadata' must not
---   silently succeed loading merely because loading never touches that
---   component's payload.
-decodeSaveEnvelope ∷ BS.ByteString → Either Text SaveData
-decodeSaveEnvelope bytes = do
+-- | Decode + validate the envelope, decode the metadata component, then
+--   reconstruct the complete, cross-validated 'SessionSnapshot' from all
+--   gameplay components (requirement 6). Returns both so the caller has
+--   the authoritative metadata (name/timestamp) alongside the gameplay
+--   state.
+decodeSessionEnvelope ∷ BS.ByteString → Either Text (SaveMetadata, SessionSnapshot)
+decodeSessionEnvelope bytes = do
     decoded ← decodeValidatedEnvelope bytes
-    checkComponentVersion "metadata" metadataComponentId
-                          metadataComponentVersion decoded
-    decodeComponent "session" sessionComponentId sessionComponentVersion decoded
+    meta    ← decodeMetadataComponent decoded
+    snap    ← either (Left . renderComponentErrors) Right
+                     (assembleSnapshot meta decoded)
+    pure (meta, snap)
 
 decodeValidatedEnvelope ∷ BS.ByteString → Either Text DecodedEnvelope
 decodeValidatedEnvelope =
@@ -145,37 +144,22 @@ decodeValidatedEnvelope =
         . decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
                           knownComponentIds readerRequiredComponentIds
 
--- | Look up one component's descriptor in an already
---   structurally-validated envelope and reject a schema-version
---   mismatch (this codebase's per-component compatibility contract,
---   requirement 3) — without needing that component's payload at all.
---   The "descriptor missing" case is unreachable in practice: both
---   component ids are in 'readerRequiredComponentIds', so
---   'decodeValidatedEnvelope' already refused any envelope missing it.
-checkComponentVersion ∷ Text → ComponentId → Word32 → DecodedEnvelope
-                     → Either Text ()
-checkComponentVersion label cid expectedVersion decoded = do
-    desc ← maybe (Left (label <> " component descriptor missing \
-                              \(unreachable — already required)")) Right
-                 (findDescriptor cid (deManifest decoded))
-    when (cdVersion desc ≢ expectedVersion) $
-        Left ("Save format incompatible: expected " <> label
-              <> " component v" <> T.pack (show expectedVersion)
-              <> ", got v" <> T.pack (show (cdVersion desc)))
-
--- | 'checkComponentVersion' plus the payload lookup + cereal decode.
---   The "payload missing" case is unreachable for the same reason as
---   above.
-decodeComponent ∷ S.Serialize a
-                ⇒ Text → ComponentId → Word32 → DecodedEnvelope
-                → Either Text a
-decodeComponent label cid expectedVersion decoded = do
-    checkComponentVersion label cid expectedVersion decoded
-    payload ← maybe (Left (label <> " component payload missing \
-                                 \(unreachable — already required)")) Right
-                    (HM.lookup cid (dePayloads decoded))
-    either (Left . (("Failed to decode " <> label <> " component: ") <>)
-                 . T.pack)
+-- | Decode the @"metadata"@ component, rejecting an unsupported schema
+--   version before touching its bytes. The descriptor/payload "missing"
+--   cases are unreachable — metadata is in 'readerRequiredComponentIds'.
+decodeMetadataComponent ∷ DecodedEnvelope → Either Text SaveMetadata
+decodeMetadataComponent decoded = do
+    desc ← maybe (Left "metadata component descriptor missing \
+                        \(unreachable — already required)") Right
+                 (findDescriptor metadataComponentId (deManifest decoded))
+    when (cdVersion desc ≢ metadataComponentVersion) $
+        Left ("Save format incompatible: expected metadata component v"
+              <> T.pack (show metadataComponentVersion) <> ", got v"
+              <> T.pack (show (cdVersion desc)))
+    payload ← maybe (Left "metadata component payload missing \
+                           \(unreachable — already required)") Right
+                    (HM.lookup metadataComponentId (dePayloads decoded))
+    either (Left . (("Failed to decode metadata component: ") <>) . T.pack)
            Right (S.decode payload)
 
 findDescriptor ∷ ComponentId → EnvelopeManifest → Maybe ComponentDescriptor
