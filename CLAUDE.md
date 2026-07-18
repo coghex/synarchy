@@ -1705,11 +1705,17 @@ back to, a slot directory, and a slot name for diagnostics — no live
 gameplay state, no snapshot-capture participation (it runs after the #758
 barrier has already released). Both `publishGeneration` and
 `selectLoadGeneration` first refuse to operate at all through a slot
-directory that is itself a symlink (`rejectSymlinkedSlotDir`,
-`PhaseUnsafePath`) — otherwise a pre-existing `saves/<slot>` symlink would
-be silently followed by directory creation, the temp candidate, every
-rename, and cleanup alike, publishing into and deleting from wherever it
-points, outside `saves/` entirely (requirement 12).
+directory that is itself a symlink, OR whose IMMEDIATE PARENT (in
+production, `saves/` itself) is (`rejectSymlinkedSlotDir`,
+`PhaseUnsafePath`) — otherwise a pre-existing symlink at either level
+would be silently followed by directory creation, the temp candidate,
+every rename, and cleanup alike, publishing into and deleting from
+wherever it points, outside `saves/` entirely (requirement 12). This
+deliberately checks only ONE level up, not every ancestor to the
+filesystem root: `pathIsSymbolicLink` inspects just a path's own final
+component (ordinary POSIX `lstat` semantics), so it can never misfire on
+an unrelated OS-level symlink further up the resource root's own path
+(e.g. macOS's `/tmp` → `/private/tmp`).
 
 `publishGeneration` is a write-validate-publish-rotate transaction: write
 the candidate to a uniquely-named temp file in the SAME slot directory
@@ -1730,11 +1736,15 @@ outright — requirement 5's "older generations are removed only after the
 new publication is durable" means the displaced generation must stay
 fully intact on disk (just under a different name) until AFTER the
 durability boundary, not disappear the instant it's rotated out of the
-`world.synworld.prev` slot; THEN atomically `renameFile` the current
-authoritative generation into the now-free `world.synworld.prev` slot,
-then atomically `renameFile` the candidate into `world.synworld`; `fsync`
-the containing directory so every rename's directory-entry change is
-durable; THEN report success — never before; ONLY NOW remove the staged-
+`world.synworld.prev` slot; `fsync` the directory so that staging handoff
+is itself a confirmed-durable recovery point; THEN atomically `renameFile`
+the current authoritative generation into the now-free
+`world.synworld.prev` slot, `fsync` again; then atomically `renameFile`
+the candidate into `world.synworld`, `fsync` a FINAL time — every one of
+the three renames gets its own directory sync immediately after it, not
+one combined sync at the very end, so each intermediate handoff is a
+confirmed-durable recovery point in its own right before the next step
+ever runs; THEN report success — never before; ONLY NOW remove the staged-
 away old generation and any other recognized stale artifact. Every phase
 (`World.Save.Storage.StoragePhase`) is wrapped in `try` and reported as a
 `PublishFailure` naming the phase, slot, and path, so a failure text like

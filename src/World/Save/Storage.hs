@@ -16,7 +16,8 @@
 --   performs a classic write-validate-publish-rotate transaction:
 --
 --   1. Refuse to operate at all through a slot directory that is itself a
---      symlink (requirement 12) — see 'rejectSymlinkedSlotDir'.
+--      symlink, OR whose immediate parent (in production, @saves/@
+--      itself) is (requirement 12) — see 'rejectSymlinkedSlotDir'.
 --   2. Write the candidate to a UNIQUELY named temporary file in the SAME
 --      slot directory (so the final publish step can use an atomic
 --      same-filesystem rename) — never a shared/predictable name two
@@ -33,16 +34,22 @@
 --   5. Only once validated: if a previous generation already exists,
 --      stage it out of the way under a fresh unique name FIRST (never
 --      destroying it outright yet — requirement 5's "older generations
---      are removed only after the new publication is durable"), rotate
---      the CURRENT authoritative generation into the now-free previous-
---      generation slot, then atomically rename the validated candidate
---      into the authoritative path. Every rename uses
+--      are removed only after the new publication is durable"), THEN
+--      SYNC THE DIRECTORY so that staging handoff is itself a confirmed-
+--      durable recovery point; rotate the CURRENT authoritative
+--      generation into the now-free previous-generation slot, THEN SYNC
+--      AGAIN; then atomically rename the validated candidate into the
+--      authoritative path, THEN SYNC A FINAL TIME. Every rename uses
 --      'System.Directory.renameFile', which is POSIX @rename(2)@ — a
 --      single atomic filesystem operation that either fully replaces the
 --      destination or doesn't happen at all; there is no filesystem-level
---      "partway through a rename" state to defend against.
---   6. Sync the containing directory so every rename's directory-entry
---      change is itself durable, THEN report success — never before.
+--      "partway through a rename" state to defend against. Syncing after
+--      EACH rename (not only the last) means every intermediate handoff
+--      is durable in its own right before the next step ever runs — see
+--      'publishValidated'.
+--   6. Report success only after that FINAL sync (following the publish
+--      rename) confirms the new generation's own durability — never
+--      before.
 --   7. Only now — past the durability boundary — remove the staged old
 --      generation and any other recognized stale transaction artifact.
 --
@@ -116,7 +123,7 @@ import Control.Exception (IOException, SomeException, try, finally)
 import System.Directory
     ( createDirectoryIfMissing, doesFileExist, removeFile, listDirectory
     , renameFile, pathIsSymbolicLink )
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 import System.IO (Handle, openBinaryTempFile, hFlush, hClose)
 import System.Posix.IO
     (OpenMode(..), closeFd, defaultFileFlags, handleToFd, openFd)
@@ -194,18 +201,33 @@ isOwnedArtifactName name =
 --   otherwise be silently followed by directory creation, the temp
 --   candidate, every rename, and cleanup alike — publishing into, and
 --   deleting recognized-artifact-named files from, wherever it points,
---   outside the resolved resource root's @saves/@ tree entirely. A
---   nonexistent path is not a symlink (nothing to reject — an ordinary
---   new slot); a filesystem error other than "does not exist" while
---   checking is treated the same as "not a symlink" and left for the
---   caller's own next operation to report properly.
+--   outside the resolved resource root's @saves/@ tree entirely. Checks
+--   both @dir@ itself AND its immediate parent (in production, exactly
+--   @savesDirectory@, e.g. @"saves"@ — a symlinked @saves/@ would let
+--   every slot beneath it escape the same way): 'pathIsSymbolicLink'
+--   only inspects a path's OWN final component, transparently resolving
+--   everything before it (ordinary POSIX @lstat@ semantics), so this
+--   deliberately does NOT walk any further up than the immediate parent
+--   — the resource root itself sitting behind an OS-level symlink (e.g.
+--   macOS's @\/tmp@ → @\/private\/tmp@) is a pre-existing, unrelated
+--   concern this check must not misfire on. A nonexistent path is not a
+--   symlink (nothing to reject — an ordinary new slot); a filesystem
+--   error other than "does not exist" while checking is treated the
+--   same as "not a symlink" and left for the caller's own next
+--   operation to report properly.
 rejectSymlinkedSlotDir ∷ FilePath → IO (Either Text ())
 rejectSymlinkedSlotDir dir = do
-    result ← try (pathIsSymbolicLink dir)
-    pure $ case (result ∷ Either IOException Bool) of
-        Right True → Left ("slot directory is a symlink, refusing to \
-                            \operate through it: " <> T.pack dir)
-        _          → Right ()
+    slotSafe ← checkNotSymlink dir
+    case slotSafe of
+        Left err → pure (Left err)
+        Right () → checkNotSymlink (takeDirectory dir)
+  where
+    checkNotSymlink path = do
+        result ← try (pathIsSymbolicLink path)
+        pure $ case (result ∷ Either IOException Bool) of
+            Right True → Left ("path is a symlink, refusing to operate \
+                                \through it: " <> T.pack path)
+            _          → Right ()
 
 -- Publication ------------------------------------------------------------
 
@@ -373,17 +395,22 @@ validateCandidate expectedMeta bytes = do
 --   'previousGenerationFileName' and onto a freshly claimed unique name,
 --   rotate the CURRENT authoritative generation into the now-free
 --   previous-generation slot, then atomically publish the validated
---   candidate as the new authoritative generation, then sync the
---   directory. Called only after 'validateCandidate' has already
---   accepted the candidate — never a candidate that merely encoded
---   successfully in memory.
+--   candidate as the new authoritative generation — syncing the
+--   directory after EVERY one of those renames, not only the last, so
+--   each intermediate handoff is itself a confirmed-durable recovery
+--   point before the next step ever runs (requirement 6's crash-window
+--   list names staging, rotation, AND publication as separate
+--   interruption phases). Called only after 'validateCandidate' has
+--   already accepted the candidate — never a candidate that merely
+--   encoded successfully in memory.
 --
 --   Staging (rather than letting the rotate rename destroy the old
 --   previous generation outright) is what satisfies requirement 5:
 --   "older generations are removed only after the new publication is
 --   durable" — the displaced generation stays fully intact under its
 --   staged name until 'cleanupAfterPublish' removes it, which runs only
---   AFTER the directory sync below confirms durability.
+--   AFTER the FINAL directory sync (following the publish rename)
+--   confirms the new generation's own durability, never before.
 publishValidated ∷ FilePath → Text → FilePath → IO (Either PublishFailure [Text])
 publishValidated dir slotName tempPath = do
     let authPath = dir </> authoritativeFileName
@@ -392,29 +419,33 @@ publishValidated dir slotName tempPath = do
     case stageResult of
         Left (e ∷ IOException) →
             pure (Left (fail' PhaseStalePrevious (Just prevPath) (showT e)))
-        Right mStaled → do
-            authExists ← doesFileExist authPath
-            rotateResult ←
-                if authExists
-                  then try (renameFile authPath prevPath)
-                  else pure (Right ())
-            case rotateResult of
-                Left (e ∷ IOException) →
-                    pure (Left (fail' PhaseRotatePrevious (Just authPath) (showT e)))
-                Right () → do
-                    publishResult ← try (renameFile tempPath authPath)
-                    case publishResult of
-                        Left (e ∷ IOException) →
-                            pure (Left (fail' PhasePublishRename (Just tempPath) (showT e)))
-                        Right () → do
-                            syncResult ← try (syncDirectory dir)
-                            case syncResult of
-                                Left (e ∷ SomeException) →
-                                    pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
-                                Right () →
-                                    Right ⊚ cleanupAfterPublish dir mStaled
+        Right mStaled → afterSync (rotate authPath prevPath mStaled)
   where
     fail' = publishFailureFor slotName
+    -- Sync the directory, then run @next@ only on success — every
+    -- rename below is followed by this before the transaction proceeds.
+    afterSync next = do
+        syncResult ← try (syncDirectory dir)
+        case syncResult of
+            Left (e ∷ SomeException) →
+                pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
+            Right () → next
+    rotate authPath prevPath mStaled = do
+        authExists ← doesFileExist authPath
+        rotateResult ←
+            if authExists
+              then try (renameFile authPath prevPath)
+              else pure (Right ())
+        case rotateResult of
+            Left (e ∷ IOException) →
+                pure (Left (fail' PhaseRotatePrevious (Just authPath) (showT e)))
+            Right () → afterSync (publish authPath mStaled)
+    publish authPath mStaled = do
+        publishResult ← try (renameFile tempPath authPath)
+        case publishResult of
+            Left (e ∷ IOException) →
+                pure (Left (fail' PhasePublishRename (Just tempPath) (showT e)))
+            Right () → afterSync (Right ⊚ cleanupAfterPublish dir mStaled)
 
 -- | If a previous generation exists, move it onto a freshly claimed
 --   unique name and return that path; 'Nothing' when there was none to

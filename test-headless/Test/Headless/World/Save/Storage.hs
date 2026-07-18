@@ -27,7 +27,7 @@ import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
     , doesDirectoryExist, doesFileExist, listDirectory, removeFile
     , getPermissions, setPermissions, Permissions(..), createFileLink )
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 
 import World.Save.Storage
 import World.Save.Envelope (encodeSessionSnapshot)
@@ -155,26 +155,43 @@ emptyPagesBytes =
 --   'Test.Headless.Core.ConfigState''s withTempDir — the suite runs
 --   sequentially, so a single fixed path under the system temp dir,
 --   never inside the repo or 'saves/', is safe to reuse across 'it's).
+--
+--   Deliberately nests the slot dir handed to each test TWO levels below
+--   the system temp directory (@root\/saves\/slot@, mirroring production's
+--   @\<resource root\>\/saves\/\<slot\>@) rather than directly under it: on
+--   macOS the system temp directory itself (@\/tmp@) is a symlink to
+--   @\/private\/tmp@, and 'World.Save.Storage.rejectSymlinkedSlotDir'
+--   checks a slot's immediate parent as well as the slot itself
+--   (requirement 12) — a flat @tmp\/slot@ layout would make every test
+--   below spuriously trip that check via an OS-level symlink this suite
+--   has nothing to do with. @savesLikeDir@ (the slot's immediate parent)
+--   is always a REAL directory this module creates itself, so it only
+--   ever looks like a symlink when a test deliberately makes it one.
 withTempSlotDir ∷ (FilePath → IO a) → IO a
 withTempSlotDir action = do
     tmp ← getTemporaryDirectory
-    let dir = tmp </> "synarchy-save-storage-spec"
-    reset dir
-    action dir `finally` reset dir
+    let root = tmp </> "synarchy-save-storage-spec-root"
+        savesLikeDir = root </> "saves"
+        dir = savesLikeDir </> "slot"
+    reset root
+    createDirectoryIfMissing True savesLikeDir
+    action dir `finally` reset root
   where
-    -- A fault-injection test below may leave 'd' as a plain FILE (the
-    -- directory-create-failure case occupies the path with one) or as a
-    -- read-only DIRECTORY (the candidate-create-failure case) instead of
-    -- an ordinary writable directory — handle both, or a later test's
-    -- own setup would fail at this same path.
-    reset d = do
-        isDir ← doesDirectoryExist d
+    -- A fault-injection test below may leave 'root' (or 'dir' nested
+    -- inside it) as a plain FILE or a read-only DIRECTORY instead of an
+    -- ordinary writable tree — handle both at the top level (removing a
+    -- directory ENTRY only ever needs write permission on its PARENT,
+    -- never on the entry itself, so nothing nested needs its own
+    -- permissions restored), or a later test's own setup would fail at
+    -- this same path.
+    reset root = do
+        isDir ← doesDirectoryExist root
         when isDir $ do
-            perms ← getPermissions d
-            setPermissions d (perms { writable = True })
-            removeDirectoryRecursive d
-        isFile ← doesFileExist d
-        when isFile $ removeFile d
+            perms ← getPermissions root
+            setPermissions root (perms { writable = True })
+            removeDirectoryRecursive root
+        isFile ← doesFileExist root
+        when isFile $ removeFile root
 
 -- | Publish for real via the transaction under test, failing the test
 --   (rather than the assertion under test) if setup itself can't
@@ -339,6 +356,25 @@ spec = do
                         Right _ → expectationFailure "expected an unsafe-path failure"
                     doesFileExist (target </> authoritativeFileName)
                         `shouldReturn` False
+                    listDirectory target `shouldReturn` []
+
+        it "reports an unsafe-path failure and never writes through a \
+           \slot whose IMMEDIATE PARENT (standing in for saves/ itself) \
+           \is a symlink, without walking any further up (a raw OS-level \
+           \ancestor symlink like macOS's /tmp must never trip this)" $
+            withTempSlotDir $ \dir → do
+                let savesLikeDir = takeDirectory dir
+                    target = savesLikeDir <> "-target"
+                createDirectoryIfMissing True target
+                removeDirectoryRecursive savesLikeDir
+                createFileLink target savesLikeDir
+                (`finally` (removeFile savesLikeDir
+                             >> removeDirectoryRecursive target)) $ do
+                    let (meta, bytes) = buildEncoded 1 "slot" "t1"
+                    r ← publishGeneration dir "slot" meta bytes
+                    case r of
+                        Left f  → pfPhase f `shouldBe` PhaseUnsafePath
+                        Right _ → expectationFailure "expected an unsafe-path failure"
                     listDirectory target `shouldReturn` []
 
         it "reports a rotate-previous failure without destroying the \
