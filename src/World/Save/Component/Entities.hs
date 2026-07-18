@@ -706,6 +706,21 @@ newtype CraftBillsDTO = CraftBillsDTO { cbdPages ∷ [PageCraftBillsDTO] }
 --   registry's map key via 'Craft.Bills.claimBill'/'releaseBill' AND the
 --   bill's own 'cbId' field) would then disagree about which bill this
 --   is. Reject any entry where the two disagree.
+--
+--   Deliberately OUT OF SCOPE here (round 9 opposite-brand review,
+--   maintainer call): a dangling 'cbStation'/'cbClaimant' reference (a
+--   station 'BuildingId'/claimant 'UnitId' absent from the loaded page's
+--   @"buildings"@/@"units"@ components) is NOT hard-validated, and never
+--   rejects the load. This is not an oversight — it would contradict an
+--   existing, deliberate design decision from #758: "World.Save.Snapshot"
+--   (~line 199-207) documents that a demolished station leaving its bills
+--   "lingering, visible + cancellable" is tolerated gameplay behaviour,
+--   not corruption, and hard-failing on it would reject otherwise-valid
+--   saves. "World.Thread.Command.Save.LoadPage" (~line 172-181) already
+--   implements the intended handling: it PRUNES bills/nodes whose station
+--   building isn't present on the loaded page rather than rejecting the
+--   whole load. Adding a hard cross-component reject here would fight
+--   that pruning path, not complement it.
 validateCraftBills ∷ CraftBillsDTO → [ComponentError]
 validateCraftBills (CraftBillsDTO slices) = concat
     [ [ ComponentError craftBillsComponentId 1 ValidatePhase
@@ -811,6 +826,15 @@ newtype PowerNodesDTO = PowerNodesDTO { pndPages ∷ [PagePowerNodesDTO] }
 --   a decoded envelope with @regNodes = {#1 -> node{nodId=#2}}@ would
 --   otherwise pass the allocator check yet leave runtime APIs (which key
 --   off both identities) disagreeing about which node this is.
+--
+--   Deliberately OUT OF SCOPE here (round 9 opposite-brand review,
+--   maintainer call, same reasoning as 'validateCraftBills' above): a
+--   dangling 'pnBuilding' reference (a host building absent from the
+--   loaded page's @"buildings"@ component) is NOT hard-validated. See
+--   "World.Save.Snapshot" (~line 199-207) and
+--   "World.Thread.Command.Save.LoadPage" (~line 172-181) — the latter
+--   already prunes a power node whose host building isn't present on the
+--   loaded page, rather than rejecting the whole load.
 validatePowerNodes ∷ PowerNodesDTO → [ComponentError]
 validatePowerNodes (PowerNodesDTO slices) = concat
     [ [ ComponentError powerNodesComponentId 1 ValidatePhase

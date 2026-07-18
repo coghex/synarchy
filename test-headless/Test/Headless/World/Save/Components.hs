@@ -36,6 +36,7 @@ import World.Save.Types
     , MissingDefRef(..), renderMissingDefRef, missingDefReferences
     , MissingItemDefRef(..), missingItemDefReferences
     , MissingRecipeRef(..), missingRecipeReferences
+    , MissingBillOutputItemRef(..), missingBillOutputItemReferences
     , MissingConstructDefRef(..)
     , missingConstructDefReferences
     , WorldPageSave(..) )
@@ -1106,6 +1107,37 @@ spec = do
                         { wpsCraftBills = richBills })]
             map mrrRecipe missing `shouldBe` ["smelt_steel"]
             map mrrPage missing `shouldBe` [page1]
+
+    -- #760 round 9 (opposite-brand review): UntilStock craft-bill output-
+    -- item validation, the same content-definition load-rejection contract
+    -- as recipe/item/construct-target references above. 'richBills' is
+    -- already an UntilStock bill with 'cbOutputItem = "steel_bar"'.
+    describe "missing craft-bill output-item definition rejection \
+             \(#760 round 9)" $ do
+        it "accepts a page whose UntilStock bill's output item resolves" $
+            missingBillOutputItemReferences (HS.fromList ["steel_bar"])
+                [(page1, (minimalWorldPageSave page1)
+                    { wpsCraftBills = richBills })]
+                `shouldBe` []
+
+        it "flags an UntilStock bill whose output item is no longer \
+           \registered" $ do
+            let missing = missingBillOutputItemReferences
+                    (HS.fromList ["other_item"])
+                    [(page1, (minimalWorldPageSave page1)
+                        { wpsCraftBills = richBills })]
+            map mbirDefName missing `shouldBe` ["steel_bar"]
+            map mbirPage missing `shouldBe` [page1]
+
+        it "does not flag a FixedCount/RepeatForever bill, whose \
+           \cbOutputItem is always empty" $ do
+            let plainBill = (cbsBills richBills HM.! BillId 3)
+                    { cbMode = RepeatForever, cbOutputItem = "" }
+                bills = richBills { cbsBills = HM.singleton (BillId 3) plainBill }
+            missingBillOutputItemReferences HS.empty
+                [(page1, (minimalWorldPageSave page1)
+                    { wpsCraftBills = bills })]
+                `shouldBe` []
 
     -- #760 round 8: construct-designation building-def-name reference
     -- validation.

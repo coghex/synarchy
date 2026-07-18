@@ -24,6 +24,9 @@ module World.Save.Types
     , MissingRecipeRef(..)
     , renderMissingRecipeRef
     , missingRecipeReferences
+    , MissingBillOutputItemRef(..)
+    , renderMissingBillOutputItemRef
+    , missingBillOutputItemReferences
     , MissingConstructDefRef(..)
     , renderMissingConstructDefRef
     , missingConstructDefReferences
@@ -989,6 +992,41 @@ missingRecipeReferences recipeDefs pages =
     | (pid, w) ← pages
     , b ← HM.elems (cbsBills (wpsCraftBills w))
     , not (HS.member (cbRecipe b) recipeDefs) ]
+
+-- | A saved craft bill's 'cbOutputItem' (#795 — the item-definition name an
+--   UntilStock bill's stock target counts against, captured at add time)
+--   that does not resolve against the currently-registered item
+--   definitions. Same load-validation contract as 'MissingRecipeRef'/
+--   'MissingItemDefRef': the complete load is rejected before any live
+--   state publishes. 'cbOutputItem' is empty for FixedCount/RepeatForever
+--   bills (never set), so only a non-empty value is checked here.
+data MissingBillOutputItemRef = MissingBillOutputItemRef
+    { mbirPage    ∷ !WorldPageId
+    , mbirBillId  ∷ !Word32
+    , mbirDefName ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingBillOutputItemRef ∷ MissingBillOutputItemRef → Text
+renderMissingBillOutputItemRef r =
+    "craft bill #" <> T.pack (show (mbirBillId r)) <> " on page '"
+        <> unWorldPageId (mbirPage r) <> "' references unknown output item \
+           \definition '" <> mbirDefName r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved craft bill, across all pages, whose non-empty
+--   'cbOutputItem' is absent from the registered item-definition key set.
+--   Empty ⇒ every bill output-item reference resolves (or has none) and
+--   the load may proceed.
+missingBillOutputItemReferences
+    ∷ HS.HashSet Text                     -- ^ registered item def names
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingBillOutputItemRef]
+missingBillOutputItemReferences itemDefs pages =
+    [ MissingBillOutputItemRef pid (unBillId (cbId b)) (cbOutputItem b)
+    | (pid, w) ← pages
+    , b ← HM.elems (cbsBills (wpsCraftBills w))
+    , not (T.null (cbOutputItem b))
+    , not (HS.member (cbOutputItem b) itemDefs) ]
 
 -- | A saved construct designation whose target names a building
 --   definition ('World.Construct.Types.CtBuilding') that does not

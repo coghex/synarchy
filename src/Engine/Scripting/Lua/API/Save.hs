@@ -22,6 +22,8 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingDefReferences, renderMissingDefRef
                         , missingItemDefReferences, renderMissingItemDefRef
                         , missingRecipeReferences, renderMissingRecipeRef
+                        , missingBillOutputItemReferences
+                        , renderMissingBillOutputItemRef
                         , missingConstructDefReferences
                         , renderMissingConstructDefRef)
 import Building.Types (BuildingManager(..))
@@ -268,14 +270,21 @@ loadSaveFn env = do
                             missingItemDefReferences (HM.keysSet (imDefs im)) pages
                         missingRecipes =
                             missingRecipeReferences (HM.keysSet (rmDefs rm)) pages
+                        missingBillOutputItems =
+                            missingBillOutputItemReferences
+                                (HM.keysSet (imDefs im)) pages
                         missingConstruct =
                             missingConstructDefReferences buildingDefs pages
                         allMissing = length missing + length missingItems
-                            + length missingRecipes + length missingConstruct
+                            + length missingRecipes
+                            + length missingBillOutputItems
+                            + length missingConstruct
                         allMessages =
                             map renderMissingDefRef missing
                             ⧺ map renderMissingItemDefRef missingItems
                             ⧺ map renderMissingRecipeRef missingRecipes
+                            ⧺ map renderMissingBillOutputItemRef
+                                  missingBillOutputItems
                             ⧺ map renderMissingConstructDefRef missingConstruct
                     if allMissing > 0
                       then do
