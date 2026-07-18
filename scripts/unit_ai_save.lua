@@ -48,6 +48,14 @@ local function buildItemDefSet()
     return set
 end
 
+local function buildBuildingDefSet()
+    local set = {}
+    for _, d in ipairs(building.listDefs() or {}) do
+        set[d.name] = true
+    end
+    return set
+end
+
 -- Self-contained mirror of unit_ai_construct.lua's packBuildInfo lookup
 -- (issue #761 round-5 review): does a pack/kind still resolve to a real
 -- structure-pack build entry? Deliberately NOT a require of
@@ -77,7 +85,7 @@ end
 -- check in Engine.Scripting.Lua.API.Save already enforces for
 -- building/unit defs). `itemDefs` is built once per validate() call,
 -- not per job, since scanning item.listDefs() is a linear walk.
-local function validateJobContentRefs(uid, s, itemDefs, errs)
+local function validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
     local function checkItem(name, what)
         if name ~= nil and not itemDefs[name] then
             errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. what
@@ -116,7 +124,19 @@ local function validateJobContentRefs(uid, s, itemDefs, errs)
     -- maps, deliveryClaim/deliveryPendingTarget's material-sourcing
     -- maps (materials/claim/fromGround/fromMule are all item def
     -- names), and plantJob's crop (a flora species name).
-    if s.constructJob and s.constructJob.category ~= "building" then
+    if s.constructJob and s.constructJob.category == "building" then
+        -- A "building" job persists a durable building-def NAME
+        -- (unit_ai_construct.lua's building.spawn(job.building, ...)
+        -- call once the piece is placed), not a pack/kind pair -- round-6
+        -- review: this must be checked too, the same as every other
+        -- content id here.
+        local job = s.constructJob
+        if not buildingDefs[job.building] then
+            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
+                .. " constructJob references unknown building def '"
+                .. tostring(job.building) .. "'"
+        end
+    elseif s.constructJob then
         local job = s.constructJob
         if not packHasBuildEntry(job.pack, job.kind) then
             errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
@@ -162,6 +182,7 @@ local function validateUnitAiData(data)
     end
     local errs = {}
     local itemDefs = nil
+    local buildingDefs = nil
     for uid, s in pairs(data) do
         if type(uid) ~= "number" or uid ~= math.floor(uid) or uid < 1 then
             errs[#errs + 1] = "unit_ai: invalid unit id key " .. tostring(uid)
@@ -172,7 +193,16 @@ local function validateUnitAiData(data)
                 or s.deliveryClaim or s.deliveryPendingTarget
                 or s.plantJob then
             itemDefs = itemDefs or buildItemDefSet()
-            validateJobContentRefs(uid, s, itemDefs, errs)
+            -- buildingDefs is only ever consulted for a "building"-
+            -- category constructJob -- built lazily so every other
+            -- scenario (craft/repair/delivery/plant-only saves, and
+            -- every existing test/probe fixture that stubs `item`/
+            -- `craft`/`repair`/`flora` but not `building`) never
+            -- touches the `building` global at all.
+            if s.constructJob and s.constructJob.category == "building" then
+                buildingDefs = buildingDefs or buildBuildingDefSet()
+            end
+            validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
         end
     end
     if #errs > 0 then return errs end
@@ -182,7 +212,10 @@ end
 -- Every reference this component carries (requirement 12) -- unit/
 -- building/craft-bill/item/ground-item ids reachable from a per-unit
 -- aiState entry, including ones nested inside claim/job tables and
--- collection-held ones inside loot lists:
+-- collection-held ones inside loot lists, plus (round-6 review) the
+-- OUTER per-unit key itself -- the same "the id this entry is keyed by
+-- is a reference too" pattern building_spawn.lua's own references()
+-- already uses for its per-building key:
 --   unit_ai_medic.lua's treatClaim/treatPending
 --   unit_ai_deliver.lua's deliveryClaim/deliveryPendingTarget
 --   unit_ai_craft.lua's craftJob
@@ -215,7 +248,8 @@ local function unitAiReferences(data)
             for _, id in ipairs(ids) do addRef(kind, id) end
         end
     end
-    for _, s in pairs(data) do
+    for uid, s in pairs(data) do
+        addRef("unit", uid)
         for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do addRef("unit", s[f]) end
         for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do addRef("building", s[f]) end
         if s.treatClaim then addRef("unit", s.treatClaim.patient) end

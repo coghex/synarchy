@@ -11,7 +11,9 @@
 --       inputVersions = {1},      -- versions this reader can decode
 --       required      = true,     -- required/optional (requirement 7)
 --       scope         = "global", -- documented scope tag (diagnostic only)
---       deps          = {},       -- ids of other registered components
+--       deps          = {},       -- ids of other Lua components in THIS
+--                                  -- registry (never a Haskell component
+--                                  -- id -- see the deps validation below)
 --       snapshot  = function() return dataOnlyTable end,
 --       decode    = function(version, data) return canonicalTable end,
 --       validate  = function(data) return errorStringsOrNil end,
@@ -258,9 +260,25 @@ function saveModules.register(id, spec)
             .. "'per-page', 'per-entity')")
     end
 
-    local deps = spec.deps or {}
+    -- Requirement 2 (round-6 review): like scope/inputVersions, deps is
+    -- an EXPLICIT declaration -- no silent "omitted means no
+    -- dependencies" default, so a component that genuinely has none
+    -- still says so (deps = {}) rather than leaving the question
+    -- unanswered. Scope note: these ids are ALWAYS Lua-registry-local
+    -- (checked against THIS registry by registryStaticErrors below,
+    -- mirroring the equally registry-local `deps` on the Haskell side's
+    -- own "World.Save.Component.RegisteredComponent") -- there is no
+    -- cross-language dependency to declare here, because ordering
+    -- between the two registries is a structural invariant, not a
+    -- declared one: every Lua component's apply() always runs (via
+    -- saveModules.applyAll(), see Engine.Scripting.Lua.API.Save's
+    -- applyLuaLoad) strictly BEFORE the Haskell-side world-thread
+    -- restore is ever queued (WorldLoadSave), for every load, with no
+    -- exception a per-component flag could opt out of.
+    local deps = spec.deps
     if type(deps) ~= "table" then
-        error("saveModules.register: '" .. id .. "' deps must be an array of ids")
+        error("saveModules.register: '" .. id
+            .. "' must declare a deps array (possibly empty -- no default)")
     end
 
     saveModules.registry[id] = {

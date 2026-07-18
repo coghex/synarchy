@@ -218,6 +218,7 @@ spec = do
             , "saveModules.register('t_valid_required', " <> validSpecLua "t_valid_required" <> ")"
             , "saveModules.register('t_valid_optional', {"
             , "  version = 1, inputVersions = {1}, required = false, scope = 'global',"
+            , "  deps = {},"
             , "  snapshot = function() return { x = 1 } end,"
             , "  decode = function(v, d) return d end,"
             , "  validate = function(d) return nil end,"
@@ -269,6 +270,20 @@ spec = do
             , "  validate = function() end, apply = function() end })"
             , "assert(not ok2, 'an explicit but empty inputVersions must \
                               \also be rejected')"
+            ]
+
+        it "rejects a registration with no deps declared at all (issue \
+           \#761 round-6 review) -- requirement 2 requires every \
+           \persistent component to explicitly declare its dependencies, \
+           \possibly as an empty list, rather than silently defaulting a \
+           \missing field to {}" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local ok = pcall(saveModules.register, 't_no_deps', {"
+            , "  version = 1, inputVersions = {1}, required = true, scope = 'global',"
+            , "  snapshot = function() end, decode = function() end,"
+            , "  validate = function() end, apply = function() end })"
+            , "assert(not ok, 'a registration with no deps field must be \
+                             \rejected, not defaulted to {}')"
             ]
 
         it "rejects registration missing a required callback" $ runsOk $ lns
@@ -529,6 +544,8 @@ spec = do
             [ "unit = { exists = function(_uid) return true end }"
             , "item = { listDefs = function()"
             , "  return { { name = 'wood' }, { name = 'stone' } } end }"
+            , "building = { listDefs = function()"
+            , "  return { { name = 'workbench' } } end }"
             , "flora = { exists = function(name) return name == 'wheat' end }"
             , "engine.loadYaml = function(path)"
             , "  if path == 'data/structure_packs/known_pack.yaml' then"
@@ -577,10 +594,14 @@ spec = do
             , "  'a constructJob whose pack/kind/items all still exist must not be rejected: '"
             , "  .. table.concat(goodConstruct.errors or {}, '; '))"
             , "local buildingConstruct = prepareWith({ [1] = { constructJob = {"
-            , "  category = 'building', building = 'anything', x = 1, y = 1 } } })"
+            , "  category = 'building', building = 'workbench', x = 1, y = 1 } } })"
             , "assert(buildingConstruct.ok,"
-            , "  'a building-category constructJob must not be rejected: '"
+            , "  'a known building-category constructJob must not be rejected: '"
             , "  .. table.concat(buildingConstruct.errors or {}, '; '))"
+            , "local badBuildingConstruct = prepareWith({ [1] = { constructJob = {"
+            , "  category = 'building', building = 'ghost_building', x = 1, y = 1 } } })"
+            , "assert(not badBuildingConstruct.ok,"
+            , "  'a constructJob referencing a removed building def must reject the load')"
             , "local badDeliveryClaim = prepareWith({ [1] = { deliveryClaim = {"
             , "  bid = 1, materials = { unobtainium = 1 } } } })"
             , "assert(not badDeliveryClaim.ok,"
@@ -616,6 +637,23 @@ spec = do
             , "local payload = codec.encode(snap)"
             , "assert(payload:find('build_work') == nil,"
             , "  'no trace of the live build-cost content may reach the encoded payload')"
+            ]
+
+        it "includes the OUTER per-unit key itself as a unit reference \
+           \(issue #761 round-6 review), mirroring building_spawn.lua's \
+           \own references() including its per-building key -- not just \
+           \the ids nested inside claim/job fields" $ runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "unitAiSave.register({}, {})"
+            , "local refs = saveModules.registry.unit_ai.references("
+            , "  { [42] = { currentAction = 'idle' } })"
+            , "local found = false"
+            , "for _, r in ipairs(refs) do"
+            , "  if r.kind == 'unit' and r.id == 42 then found = true end"
+            , "end"
+            , "assert(found, 'the outer unit id itself must be a declared reference')"
             ]
 
     describe "component version bounds (issue #761 round-4 review)" $ do
