@@ -22,7 +22,7 @@ import Control.Exception (finally)
 import Data.Either (isLeft)
 import Data.IORef (readIORef, writeIORef)
 import qualified Data.Text as T
-import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import System.Directory (doesFileExist, removePathForcibly)
 import Engine.Core.State (EngineEnv(..))
@@ -148,13 +148,13 @@ spec = do
             -- Save with id_named_w8 as the primary (active) page.
             sendWorldCommand env
                 (WorldSave (WorldPageId "id_named_w8") slotA
-                           "2026-07-10T00:00:00.000000Z" HM.empty)
+                           "2026-07-10T00:00:00.000000Z" [])
             waitForFile ("saves/" <> slotA <> "/world.synworld")
 
             -- Decode the file directly: identities and metadata are in
             -- the save exactly as stored.
             logger ← readIORef (loggerRef env)
-            sdA ← loadWorld logger slotA ⌦ either
+            (sdA, _) ← loadWorld logger slotA HS.empty HS.empty ⌦ either
                 (\e → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure
@@ -184,9 +184,9 @@ spec = do
             -- page's identity must still be the original one.
             sendWorldCommand env
                 (WorldSave (WorldPageId "main_world") slotB
-                           "2026-07-10T00:00:01.000000Z" HM.empty)
+                           "2026-07-10T00:00:01.000000Z" [])
             waitForFile ("saves/" <> slotB <> "/world.synworld")
-            sdB ← loadWorld logger slotB ⌦ either
+            (sdB, _) ← loadWorld logger slotB HS.empty HS.empty ⌦ either
                 (\e → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure

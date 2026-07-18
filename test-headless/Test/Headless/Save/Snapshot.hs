@@ -75,10 +75,11 @@ minimalPage pid = PageSnapshot
     , pgsIdentity     = Nothing
     }
 
--- | A minimal, otherwise-valid globals record: one Lua module blob
---   (representative of a real session; an empty map is also legal —
---   see the "no Lua modules captured" test), camera attributed to
---   'page1'.
+-- | A minimal, otherwise-valid globals record, camera attributed to
+--   'page1'. Lua-owned state is no longer part of this type at all
+--   (issue #761) — each registered Lua module rides as its own
+--   dynamically-added envelope component, gathered and applied outside
+--   'SessionSnapshot' entirely.
 minimalGlobals ∷ SessionGlobals
 minimalGlobals = SessionGlobals
     { sgGameTime       = 0
@@ -86,7 +87,6 @@ minimalGlobals = SessionGlobals
     , sgNextItemId     = 1
     , sgNextBuildingId = 1
     , sgNextUnitId     = 1
-    , sgLuaModules     = HM.singleton "pause" "placeholder-blob"
     , sgActivePage     = page1
     , sgVisiblePages   = [page1]
     , sgLiveCamera     = LiveCameraSnapshot
@@ -261,14 +261,6 @@ spec = do
                 Left errs → errs `shouldContain` [UnitAllocatorTooLow (UnitId 4)]
                 Right _   → expectationFailure "expected rejection"
 
-        it "accepts a session with no Lua modules captured (a Lua-less \
-           \engine-only save is legitimate -- see World.Save.Snapshot's \
-           \validateSessionSnapshot haddock for why this isn't checked)" $
-            case capture minimalGlobals { sgLuaModules = HM.empty }
-                    [minimalPage page1] of
-                Right _   → pure ()
-                Left errs → expectationFailure (show errs)
-
     describe "camera representation (contract requirement 5)" $ do
         it "represents the live camera exactly once, attributed to its owner page" $ do
             let snap = buildSessionSnapshot minimalGlobals
@@ -395,5 +387,5 @@ spec = do
                     Right s   → s
                     Left errs → error ("expected acceptance, got " <> show errs)
                 meta = snapshotSaveMetadata req snap
-            evaluate (encodeSessionSnapshot meta snap)
+            evaluate (encodeSessionSnapshot meta snap [])
                 `shouldThrow` errorCall "deferred nested payload boom"

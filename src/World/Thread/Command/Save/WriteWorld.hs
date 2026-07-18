@@ -15,6 +15,7 @@ module World.Thread.Command.Save.WriteWorld
     ) where
 
 import UPrelude
+import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
@@ -39,10 +40,15 @@ import World.Edit.Types (WorldEdit(..), WorldEdits, appendEdit)
 import World.Generate.Coordinates (chunkToGlobal)
 
 -- | Save: capture the live WorldState into a validated snapshot,
---   release the barrier, then write to disk.
+--   release the barrier, then write to disk. @luaComponents@ is every
+--   currently-registered Lua save component (bare name, version,
+--   required, already-encoded payload — issue #761), gathered on the
+--   Lua thread before this command was queued; it rides straight into
+--   'encodeSessionSnapshot' below rather than through 'SessionGlobals'
+--   at all — Lua-owned state is no longer part of 'SessionSnapshot'.
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
-                       → Text → HM.HashMap Text Text → IO ()
-handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
+                       → Text → [(Text, Word32, Bool, BS.ByteString)] → IO ()
+handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents = do
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
     -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
@@ -191,7 +197,6 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 , sgNextItemId     = nextItemId
                                 , sgNextBuildingId = bmNextId bm
                                 , sgNextUnitId     = umNextId um
-                                , sgLuaModules     = luaBlobs
                                 , sgActivePage     = primaryId
                                 -- Record visibility so the loaded game comes up
                                 -- showing what the player last saw (#216).
@@ -234,7 +239,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             -- and skip the release entirely — failSave's own
                             -- phase transition already unblocks
                             -- 'captureLocked' for every other owner.
-                            encodedOrErr ← try (evaluate (encodeSessionSnapshot meta snap))
+                            encodedOrErr ← try (evaluate
+                                (encodeSessionSnapshot meta snap luaComponents))
                             case encodedOrErr of
                               Left (e ∷ SomeException) → do
                                 let msg = "session snapshot failed to encode: "
@@ -256,7 +262,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- instant after release can never change
                                 -- what gets written.
                                 releaseCaptureLock' env
+                                let luaKnownNames =
+                                        HS.fromList [ n | (n,_,_,_) ← luaComponents ]
+                                    luaRequiredNames =
+                                        HS.fromList [ n | (n,_,req,_) ← luaComponents, req ]
                                 result ← writeSaveFiles saveName meta encoded
+                                            luaKnownNames luaRequiredNames
                                 case result of
                                   Right warnings →
                                     do

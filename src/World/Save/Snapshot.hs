@@ -84,11 +84,6 @@ data SessionGlobals = SessionGlobals
       --   behaviour); this snapshot represents it correctly, once.
     , sgNextUnitId     ∷ !Word32
       -- ^ 'Unit.Types.umNextId', same reasoning.
-    , sgLuaModules     ∷ !(HM.HashMap Text Text)
-      -- ^ Per-module opaque blobs, already collected on the Lua thread
-      --   at the barrier's snapshot boundary (see
-      --   'Engine.Scripting.Lua.API.Save.collectLuaBlobs') — this
-      --   module only ever receives the finished map.
     , sgActivePage     ∷ !WorldPageId
     , sgVisiblePages   ∷ ![WorldPageId]
     , sgLiveCamera     ∷ !LiveCameraSnapshot
@@ -159,7 +154,6 @@ data SessionSnapshot = SessionSnapshot
     , snapNextItemId     ∷ !Word64
     , snapNextBuildingId ∷ !Word32
     , snapNextUnitId     ∷ !Word32
-    , snapLuaModules     ∷ !(HM.HashMap Text Text)
     , snapActivePage     ∷ !WorldPageId
     , snapVisiblePages   ∷ ![WorldPageId]
     , snapLiveCamera     ∷ !LiveCameraSnapshot
@@ -195,7 +189,6 @@ buildSessionSnapshot globals pages = SessionSnapshot
     , snapNextItemId     = sgNextItemId globals
     , snapNextBuildingId = sgNextBuildingId globals
     , snapNextUnitId     = sgNextUnitId globals
-    , snapLuaModules     = sgLuaModules globals
     , snapActivePage     = sgActivePage globals
     , snapVisiblePages   = sgVisiblePages globals
     , snapLiveCamera     = sgLiveCamera globals
@@ -215,16 +208,13 @@ buildSessionSnapshot globals pages = SessionSnapshot
 --   requirement). What IS checked below are invariants that should
 --   ALWAYS hold by construction; a violation means real corruption.
 --
---   Also deliberately NOT checked: "Lua component capture succeeded."
---   An empty 'snapLuaModules' cannot be distinguished, from this
---   type alone, between "a real Lua thread's collectLuaBlobs silently
---   swallowed an error" (worth flagging) and "there is no Lua thread
---   in this session at all" (a legitimate, exercised scenario —
---   engine-only tests drive 'WorldSave' directly with an empty blob
---   map). Hard-failing on emptiness rejected a real, valid save in
---   exactly that second case; the distinction this would need lives
---   above this module's boundary (did a Lua thread run at all?), not
---   in the snapshot's own data.
+--   Lua-owned state is not represented in this type at all (issue #761,
+--   save-overhaul B3 — previously an opaque @snapLuaModules@ blob map):
+--   each registered Lua module now snapshots/decodes/validates/applies
+--   itself as its own dynamically-added envelope component
+--   (@"lua.<module>"@), gathered and validated by
+--   "Engine.Scripting.Lua.API.Save" entirely outside 'SessionSnapshot',
+--   so there is no Lua-shaped gap for this validator to (not) check.
 validateSessionSnapshot ∷ SessionSnapshot → [SnapshotError]
 validateSessionSnapshot snap = concat
     [ [ NoPersistablePages | HM.null (snapPages snap) ]

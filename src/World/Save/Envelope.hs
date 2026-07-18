@@ -10,10 +10,25 @@
 --     save WITHOUT decoding the gameplay payload (requirement 12).
 --   - the full Haskell-owned gameplay component set
 --     ("World.Save.Component.saveComponentRegistry") — @"core-session"@,
---     @"texture-palette"@, @"lua-state"@, @"world-pages"@, @"world-edits"@,
+--     @"texture-palette"@, @"world-pages"@, @"world-edits"@,
 --     @"world-activity"@, @"buildings"@, @"units"@, @"unit-sim"@,
 --     @"craft-bills"@, @"power-nodes"@ — each independently versioned,
 --     converted to/from "World.Save.Snapshot"'s 'SessionSnapshot'.
+--   - a DYNAMIC set of Lua-owned components (issue #761, save-overhaul
+--     B3), one per module registered with
+--     @scripts/lib/save_modules.lua@, each riding under the reserved
+--     @"lua.<module>"@ id ("World.Save.Component.Types.luaComponentPrefix")
+--     in the SAME manifest namespace as the Haskell set above. Unlike
+--     the Haskell set, this module has no static knowledge of which Lua
+--     ids exist — every function below that touches them takes the
+--     CURRENT Lua registry's bare (unprefixed) names as an explicit
+--     parameter, gathered by the caller
+--     ("Engine.Scripting.Lua.API.Save", which alone has Lua access) via
+--     @saveModules.describeAll()@ before encoding/decoding. This mirrors
+--     exactly how the Haskell side's OWN "current build's registry"
+--     already governs known/required ids — a foreign id this build
+--     doesn't recognise (Haskell OR Lua) is an incompatibility, not
+--     silently ignored.
 --
 --   The envelope's own framing version ('currentEnvelopeVersion') is
 --   independent of every component's schema version — the framing
@@ -44,6 +59,7 @@ module World.Save.Envelope
     ( currentEnvelopeVersion
     , metadataComponentId
     , metadataComponentVersion
+    , LuaComponentSpec
     , encodeSessionSnapshot
     , decodeSessionEnvelope
     , decodeSaveEnvelopeMetadata
@@ -68,7 +84,8 @@ import World.Save.Component
     (componentKnownIds, componentRequiredIds
     , encodeComponentSpecs, assembleSnapshot)
 import World.Save.Component.Types
-    (ComponentError, renderComponentError, metadataComponentId)
+    (ComponentError, renderComponentError, metadataComponentId
+    , luaComponentPrefix)
 
 -- | The envelope-framing generation (requirement 15): bumped only when
 --   the FRAMING contract itself changes incompatibly — never merely
@@ -83,16 +100,34 @@ currentEnvelopeVersion = 1
 metadataComponentVersion ∷ Word32
 metadataComponentVersion = 1
 
+-- | One Lua-owned component: its bare (unprefixed) registry id, schema
+--   version, the writer's own required/optional declaration, and its
+--   already-canonically-encoded payload bytes (see
+--   @scripts/lib/data_codec.lua@) — the same shape
+--   "World.Save.Envelope.Codec.ComponentSpec" uses for the Haskell set,
+--   minus the id-namespacing this module owns (issue #761).
+type LuaComponentSpec = (Text, Word32, Bool, BS.ByteString)
+
+luaComponentId ∷ Text → ComponentId
+luaComponentId name = ComponentId (luaComponentPrefix <> name)
+
 -- | Every component id this reader knows how to interpret: the metadata
---   component plus every registered gameplay component.
-knownComponentIds ∷ HS.HashSet ComponentId
-knownComponentIds = HS.insert metadataComponentId componentKnownIds
+--   component, every registered Haskell gameplay component, and every
+--   NAME the caller reports as currently Lua-registered (prefixed into
+--   the reserved @"lua."@ namespace).
+knownComponentIds ∷ HS.HashSet Text → HS.HashSet ComponentId
+knownComponentIds luaNames =
+    HS.insert metadataComponentId componentKnownIds
+        `HS.union` HS.map luaComponentId luaNames
 
 -- | Every component this reader HARD-requires regardless of a writer's
 --   own 'cdRequired' flag (requirement 6/7): metadata + every required
---   gameplay component (all of them, currently).
-readerRequiredComponentIds ∷ HS.HashSet ComponentId
-readerRequiredComponentIds = HS.insert metadataComponentId componentRequiredIds
+--   Haskell gameplay component + every NAME the caller reports as
+--   currently required in the live Lua registry.
+readerRequiredComponentIds ∷ HS.HashSet Text → HS.HashSet ComponentId
+readerRequiredComponentIds luaRequiredNames =
+    HS.insert metadataComponentId componentRequiredIds
+        `HS.union` HS.map luaComponentId luaRequiredNames
 
 renderEnvelopeError ∷ EnvelopeError → Text
 renderEnvelopeError = T.pack . show
@@ -101,21 +136,27 @@ renderComponentErrors ∷ [ComponentError] → Text
 renderComponentErrors = T.intercalate "; " . map renderComponentError
 
 -- | Encode a fully-captured, already-validated 'SessionSnapshot' plus
---   its manifest 'SaveMetadata' into a checksummed component envelope.
---   Total (not 'Either') so the caller
+--   its manifest 'SaveMetadata' and every currently-registered Lua
+--   component's already-encoded payload into a checksummed component
+--   envelope. Total (not 'Either') so the caller
 --   ('World.Thread.Command.Save.WriteWorld') can force a strict
 --   'BS.ByteString' to WHNF and, in doing so, force every component's
 --   full cereal traversal BEFORE releasing the #757 barrier (a deferred
 --   exploding thunk buried in any component surfaces right here, as a
 --   capture failure, not later during the disk write). A 'Left' from the
---   codec means our own generous 'defaultEnvelopeLimits' were exceeded —
---   effectively unreachable for a real save — so 'error' (caught as a
+--   codec means our own generous 'defaultEnvelopeLimits' were exceeded,
+--   OR a Lua component id collided with another spec (structurally
+--   unreachable given the reserved @"lua."@ prefix, but still reported
+--   rather than silently dropped) — either way 'error' (caught as a
 --   capture failure at that call site) is the right response.
-encodeSessionSnapshot ∷ SaveMetadata → SessionSnapshot → BS.ByteString
-encodeSessionSnapshot meta snap =
-    let metaSpec = (metadataComponentId, metadataComponentVersion, True
-                   , S.encode meta)
-        specs    = metaSpec : encodeComponentSpecs snap
+encodeSessionSnapshot
+    ∷ SaveMetadata → SessionSnapshot → [LuaComponentSpec] → BS.ByteString
+encodeSessionSnapshot meta snap luaSpecs =
+    let metaSpec   = (metadataComponentId, metadataComponentVersion, True
+                     , S.encode meta)
+        luaEnvSpecs = [ (luaComponentId name, ver, req, payload)
+                      | (name, ver, req, payload) ← luaSpecs ]
+        specs = metaSpec : encodeComponentSpecs snap ⧺ luaEnvSpecs
     in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion specs of
         Right bytes → bytes
         Left err    → error ("encodeSessionSnapshot: "
@@ -124,30 +165,55 @@ encodeSessionSnapshot meta snap =
 -- | Decode + validate the envelope structure, then decode ONLY the
 --   @"metadata"@ component (requirement 12: metadata inspection without
 --   gameplay decoding). Its own schema version is checked before
---   'S.decode' ever runs.
-decodeSaveEnvelopeMetadata ∷ BS.ByteString → Either Text SaveMetadata
-decodeSaveEnvelopeMetadata bytes = do
-    decoded ← decodeValidatedEnvelope bytes
+--   'S.decode' ever runs. @luaKnownNames@ is the current Lua registry's
+--   bare ids (requirement: an unrecognised Lua-required component must
+--   not make a save unlistable, so this needs the SAME known-id
+--   widening the full decode gets — never any Lua REQUIRED-ness, since
+--   listing never demands a Lua component be present).
+decodeSaveEnvelopeMetadata
+    ∷ HS.HashSet Text → BS.ByteString → Either Text SaveMetadata
+decodeSaveEnvelopeMetadata luaKnownNames bytes = do
+    decoded ← decodeValidatedEnvelope luaKnownNames HS.empty bytes
     decodeMetadataComponent decoded
 
 -- | Decode + validate the envelope, decode the metadata component, then
 --   reconstruct the complete, cross-validated 'SessionSnapshot' from all
---   gameplay components (requirement 6). Returns both so the caller has
---   the authoritative metadata (name/timestamp) alongside the gameplay
---   state.
-decodeSessionEnvelope ∷ BS.ByteString → Either Text (SaveMetadata, SessionSnapshot)
-decodeSessionEnvelope bytes = do
-    decoded ← decodeValidatedEnvelope bytes
+--   Haskell gameplay components (requirement 6), returning it alongside
+--   every present Lua component's raw (name, version, payload) —
+--   Haskell never interprets a Lua component's bytes itself; the caller
+--   hands these to @saveModules.prepareLoad@/@applyAll@.
+--   @luaKnownNames@/@luaRequiredNames@ are the CURRENT Lua registry's
+--   ids (gathered via @saveModules.describeAll()@ before this call).
+decodeSessionEnvelope
+    ∷ HS.HashSet Text → HS.HashSet Text → BS.ByteString
+    → Either Text (SaveMetadata, SessionSnapshot, [LuaComponentSpec])
+decodeSessionEnvelope luaKnownNames luaRequiredNames bytes = do
+    decoded ← decodeValidatedEnvelope luaKnownNames luaRequiredNames bytes
     meta    ← decodeMetadataComponent decoded
     snap    ← either (Left . renderComponentErrors) Right
                      (assembleSnapshot meta decoded)
-    pure (meta, snap)
+    pure (meta, snap, extractLuaComponents decoded)
 
-decodeValidatedEnvelope ∷ BS.ByteString → Either Text DecodedEnvelope
-decodeValidatedEnvelope =
+-- | Every component in the decoded envelope whose id carries the
+--   reserved @"lua."@ prefix, with that prefix stripped back to the bare
+--   registry name Lua itself uses.
+extractLuaComponents ∷ DecodedEnvelope → [LuaComponentSpec]
+extractLuaComponents de =
+    [ (name, cdVersion d, cdRequired d, payload)
+    | d ← emComponents (deManifest de)
+    , Just name ← [T.stripPrefix luaComponentPrefix (cidText (cdId d))]
+    , Just payload ← [HM.lookup (cdId d) (dePayloads de)]
+    ]
+  where cidText (ComponentId t) = t
+
+decodeValidatedEnvelope
+    ∷ HS.HashSet Text → HS.HashSet Text → BS.ByteString
+    → Either Text DecodedEnvelope
+decodeValidatedEnvelope luaKnownNames luaRequiredNames =
     either (Left . renderEnvelopeError) Right
         . decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-                          knownComponentIds readerRequiredComponentIds
+                          (knownComponentIds luaKnownNames)
+                          (readerRequiredComponentIds luaRequiredNames)
 
 -- | Load-time generation-validity classification (issue #762, storage-
 --   overhaul C1): whether a structurally-invalid file is safe to treat as
@@ -213,10 +279,13 @@ isRecoverableEnvelopeError e = case e of
 
 -- | Shared entry point for both classified decoders below: validate the
 --   envelope structure, classifying a failure per 'GenerationFailure'.
-decodeClassifiedEnvelope ∷ BS.ByteString → Either GenerationFailure DecodedEnvelope
-decodeClassifiedEnvelope bytes =
+decodeClassifiedEnvelope
+    ∷ HS.HashSet Text → HS.HashSet Text → BS.ByteString
+    → Either GenerationFailure DecodedEnvelope
+decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-                         knownComponentIds readerRequiredComponentIds bytes of
+                         (knownComponentIds luaKnownNames)
+                         (readerRequiredComponentIds luaRequiredNames) bytes of
         Left err
           | isRecoverableEnvelopeError err
                       → Left (GenerationCorrupt (renderEnvelopeError err))
@@ -228,9 +297,9 @@ decodeClassifiedEnvelope bytes =
 --   uses so it never has to decode a whole gameplay payload just to
 --   decide whether the authoritative file is even worth trying.
 decodeSaveEnvelopeMetadataClassified
-    ∷ BS.ByteString → Either GenerationFailure SaveMetadata
-decodeSaveEnvelopeMetadataClassified bytes = do
-    decoded ← decodeClassifiedEnvelope bytes
+    ∷ HS.HashSet Text → BS.ByteString → Either GenerationFailure SaveMetadata
+decodeSaveEnvelopeMetadataClassified luaKnownNames bytes = do
+    decoded ← decodeClassifiedEnvelope luaKnownNames HS.empty bytes
     either (Left . GenerationIncompatible) Right (decodeMetadataComponent decoded)
 
 -- | 'decodeSessionEnvelope', classified per 'GenerationFailure' — the
@@ -245,18 +314,20 @@ decodeSaveEnvelopeMetadataClassified bytes = do
 --   'decodeEnvelope', so a failure here reflects a genuine schema/content
 --   mismatch, never routine bit-level corruption.
 decodeSessionEnvelopeClassified
-    ∷ BS.ByteString → Either GenerationFailure (SaveMetadata, SessionSnapshot)
-decodeSessionEnvelopeClassified bytes = do
-    decoded ← decodeClassifiedEnvelope bytes
+    ∷ HS.HashSet Text → HS.HashSet Text → BS.ByteString
+    → Either GenerationFailure (SaveMetadata, SessionSnapshot, [LuaComponentSpec])
+decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes = do
+    decoded ← decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes
     meta ← either (Left . GenerationIncompatible) Right
                   (decodeMetadataComponent decoded)
     snap ← either (Left . GenerationIncompatible . renderComponentErrors)
                   Right (assembleSnapshot meta decoded)
-    pure (meta, snap)
+    pure (meta, snap, extractLuaComponents decoded)
 
 -- | Decode the @"metadata"@ component, rejecting an unsupported schema
 --   version before touching its bytes. The descriptor/payload "missing"
---   cases are unreachable — metadata is in 'readerRequiredComponentIds'.
+--   cases are unreachable — metadata is always in the reader's required
+--   set.
 decodeMetadataComponent ∷ DecodedEnvelope → Either Text SaveMetadata
 decodeMetadataComponent decoded = do
     desc ← maybe (Left "metadata component descriptor missing \

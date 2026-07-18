@@ -157,25 +157,30 @@ def main() -> int:
         print(f"After destroy: unit.exists(A)=no, aiState[A]={leaked} "
               f"(lingering in memory = the leak)")
 
-        # Serializer filter: even though aiState[A] lingers in memory, the
-        # SAVE blob must exclude it. Otherwise, on a cross-session load, A's
+        # Snapshot filter: even though aiState[A] lingers in memory, the
+        # SAVE payload must exclude it. Otherwise, on a cross-session load, A's
         # dead loaded-page id could collide with a live off-page unit and be
         # misattributed (onSaveLoaded can't tell stale loaded-page leftovers
-        # from off-page state — the blob isn't page-keyed). Run the registered
-        # serializer and confirm A is filtered out while B is kept.
+        # from off-page state — the payload isn't page-keyed). Run the
+        # registered unit_ai component's snapshot() (via saveModules.snapshotAll,
+        # issue #761) and confirm A is filtered out while B is kept.
         blobcheck = send(args.port,
             "local sm=require('scripts.lib.save_modules'); "
-            "local ser=require('scripts.lib.serialize'); "
-            "local r=ser.deserialize(sm.serializeAll().unit_ai) or {}; "
+            "local codec=require('scripts.lib.data_codec'); "
+            "local snap=sm.snapshotAll(); "
+            "local payload; "
+            "for _,c in ipairs(snap.components) do "
+            "if c.id=='unit_ai' then payload=c.payload end end; "
+            "local r=codec.decode(payload) or {}; "
             "local ha,hb=false,false; "
             f"for k in pairs(r) do local n=tonumber(k); "
             f"if n=={a} then ha=true elseif n=={b} then hb=true end end; "
             "return (ha and 'present' or 'absent')..','..(hb and 'present' or 'absent')")
-        print(f"Serialized blob: A={blobcheck.split(',')[0]}, "
+        print(f"Snapshotted unit_ai component: A={blobcheck.split(',')[0]}, "
               f"B={blobcheck.split(',')[-1]}")
         if blobcheck != "absent,present":
-            print("FAIL: destroyed unit A leaked into the save blob (or B "
-                  "missing) — serializer filter not working")
+            print("FAIL: destroyed unit A leaked into the save payload (or B "
+                  "missing) — snapshot filter not working")
             ok = False
 
         # Save + load. The engine fires onSaveLoaded after the load
@@ -263,14 +268,15 @@ def main() -> int:
                 print("PASS: stale nested references scrubbed, survivor kept")
 
         # (ii) Off-page state must NOT be rolled back by an older save, and a
-        # stale blob id must NOT be kept. This drives the REAL blob-restore
-        # path (the registered deserializer), not just onSaveLoaded:
+        # stale blob id must NOT be kept. This drives the REAL apply path
+        # (the registered component's apply() -- issue #761), not just
+        # onSaveLoaded:
         #   * mark B's live state (probeMarker),
-        #   * run the deserializer with a STALE blob (B without the marker +
-        #     a fake dead id) — it snapshots pre-load, clobbers, loads stale,
+        #   * run apply() with STALE data (B without the marker + a fake dead
+        #     id) -- it snapshots pre-load, clobbers, loads stale,
         #   * onSaveLoaded with B as NON-survivor (i.e. B is "off-page").
-        # Expect: B keeps its pre-load marker (not the blob's stale copy), and
-        # the fake dead id from the blob is dropped.
+        # Expect: B keeps its pre-load marker (not the stale data's copy), and
+        # the fake dead id from the stale data is dropped.
         DEAD = 998877
         if ok:
             send(args.port,
@@ -278,10 +284,10 @@ def main() -> int:
                  f"return 'ok'", expect_result=False)
             send(args.port,
                  "local sm=require('scripts.lib.save_modules'); "
-                 "local ser=require('scripts.lib.serialize'); "
-                 f"local stale=ser.serialize({{[{b}]={{currentAction='idle'}},"
-                 f"[{DEAD}]={{currentAction='attack'}}}}); "
-                 "sm.registry.unit_ai.deserialize(stale); return 'ok'",
+                 "local reg=sm.registry.unit_ai; "
+                 f"local stale={{[{b}]={{currentAction='idle'}},"
+                 f"[{DEAD}]={{currentAction='attack'}}}}; "
+                 "reg.apply(reg.decode(reg.version, stale)); return 'ok'",
                  expect_result=False)
             # B is live but NOT a loaded-page survivor → treated as off-page.
             send(args.port, f"{ai}.onSaveLoaded({{}}, {{}}); return 'ok'",

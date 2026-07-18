@@ -37,8 +37,7 @@ emptyTexPalette ∷ TexPalette
 emptyTexPalette = TexPalette HM.empty HM.empty 0
 
 -- | Serialize only nextId + the (path,id) pairs; rebuild both maps on load.
---   (Text + lists + tuples all have Serialize instances in scope — cf.
---   sdLuaModules :: HashMap Text Text.)
+--   (Text + lists + tuples all have Serialize instances in scope.)
 instance Serialize TexPalette where
     put tp = do
         S.put (tpNextId tp)

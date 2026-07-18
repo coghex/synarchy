@@ -86,7 +86,7 @@ module World.Save.Component.Types
     , metadataComponentId
     , coreSessionComponentId
     , texPaletteComponentId
-    , luaStateComponentId
+    , luaComponentPrefix
     , worldPagesComponentId
     , worldEditsComponentId
     , worldActivityComponentId
@@ -331,8 +331,23 @@ coreSessionComponentId ∷ ComponentId
 coreSessionComponentId = ComponentId "core-session"
 texPaletteComponentId  ∷ ComponentId
 texPaletteComponentId  = ComponentId "texture-palette"
-luaStateComponentId    ∷ ComponentId
-luaStateComponentId    = ComponentId "lua-state"
+
+-- | Reserved namespace prefix for every dynamically-registered Lua save
+--   component (issue #761, save-overhaul B3): a Lua module registered
+--   as @"unit_ai"@ rides in the SAME envelope manifest namespace as
+--   every Haskell-owned component (#760) under the id
+--   @"lua.unit_ai"@ — disjoint from any Haskell component id by
+--   construction (none of them carry a @.@), so a cross-language id
+--   collision can only ever be a same-prefix Lua/Lua collision, which
+--   'World.Save.Envelope.Codec.encodeEnvelope'/'decodeEnvelope' already
+--   reject structurally as a 'DuplicateComponentId'. Lua's own registry
+--   ids are the bare, unprefixed name (@scripts/lib/save_modules.lua@'s
+--   @saveModules.register(id, ...)@) — only the Haskell-side glue
+--   ("Engine.Scripting.Lua.API.Save") ever applies this prefix, so it
+--   lives in exactly one place.
+luaComponentPrefix ∷ Text
+luaComponentPrefix = "lua."
+
 worldPagesComponentId  ∷ ComponentId
 worldPagesComponentId  = ComponentId "world-pages"
 worldEditsComponentId  ∷ ComponentId

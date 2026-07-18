@@ -105,6 +105,7 @@ import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
+import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 
 main ∷ IO ()
 main = hspec $ do
@@ -170,6 +171,7 @@ main = hspec $ do
     describe "atomic save storage" SaveStorage.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Save.Snapshot" SaveSnapshot.spec
+    describe "Lua persistence components" LuaSaveModules.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec

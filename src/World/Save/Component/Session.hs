@@ -17,22 +17,23 @@
 --     persistent reference data that genuinely CANNOT be rebuilt from
 --     content definitions (requirement 2 bullet 10) — structure edits
 --     store palette ids that only this table resolves back to paths.
---   - @"lua-state"@ (required, transitional) — the opaque per-module Lua
---     blob map, carried verbatim until B3 replaces its internal contract
---     (requirement 2 bullet 11). Owner: the Lua save-module registry.
+--   Lua-owned save state no longer rides through this module at all
+--   (issue #761, save-overhaul B3): each registered Lua module is its
+--   own dynamically-added envelope component (@"lua.<module>"@,
+--   "World.Save.Component.Types.luaComponentPrefix"), assembled outside
+--   'World.Save.Snapshot.SessionSnapshot' entirely by
+--   "Engine.Scripting.Lua.API.Save" — never a Haskell-owned
+--   'ComponentCodec'.
 module World.Save.Component.Session
     ( coreSessionCodec
     , texPaletteCodec
-    , luaStateCodec
     , CoreSessionDTO(..)
     , LiveCameraDTO(..)
     , TexPaletteDTO(..)
-    , LuaStateDTO(..)
     , applyCoreSession
     , toTexPaletteDTO
     , fromTexPaletteDTO
     , coreSessionTexPalette
-    , coreSessionLua
     ) where
 
 import UPrelude
@@ -191,17 +192,3 @@ texPaletteCodec = serializeCodec
 
 coreSessionTexPalette ∷ TexPaletteDTO → SessionSnapshot → SessionSnapshot
 coreSessionTexPalette d snap = snap { snapTexPalette = fromTexPaletteDTO d }
-
--- lua-state ---------------------------------------------------------
-
-newtype LuaStateDTO = LuaStateDTO { lsdModules ∷ HM.HashMap Text Text }
-    deriving stock (Generic)
-    deriving newtype (Show, Eq, Serialize)
-
-luaStateCodec ∷ ComponentCodec LuaStateDTO
-luaStateCodec = serializeCodec
-    luaStateComponentId 1 True []
-    (\snap → LuaStateDTO (snapLuaModules snap)) (\_ d → Right d) (const [])
-
-coreSessionLua ∷ LuaStateDTO → SessionSnapshot → SessionSnapshot
-coreSessionLua d snap = snap { snapLuaModules = lsdModules d }

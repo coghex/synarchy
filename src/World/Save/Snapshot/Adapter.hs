@@ -89,7 +89,6 @@ snapshotToSaveData req snap = SaveData
       -- Always True: a captured snapshot is understood to load paused
       -- (contract requirement 4), never the toggle's live value.
     , sdEnginePaused       = True
-    , sdLuaModules         = snapLuaModules snap
     , sdTexPalette         = snapTexPalette snap
     , sdNextItemInstanceId = snapNextItemId snap
     , sdActivePage         = snapActivePage snap

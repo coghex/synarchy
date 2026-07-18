@@ -125,6 +125,7 @@ module World.Save.Storage
 
 import UPrelude
 import qualified Data.ByteString as BS
+import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Char (isDigit)
@@ -311,6 +312,8 @@ publishGeneration
     → Text             -- ^ slot name (diagnostics only)
     → SaveMetadata      -- ^ metadata this candidate must decode back to
     → BS.ByteString      -- ^ complete, already-encoded envelope bytes
+    → HS.HashSet Text    -- ^ every Lua component NAME this encode included
+    → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
 publishGeneration = publishGenerationWithCandidateCreator openBinaryTempFile
 
@@ -325,8 +328,11 @@ publishGenerationWithCandidateCreator
     → Text             -- ^ slot name (diagnostics only)
     → SaveMetadata      -- ^ metadata this candidate must decode back to
     → BS.ByteString      -- ^ complete, already-encoded envelope bytes
+    → HS.HashSet Text    -- ^ every Lua component NAME this encode included
+    → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
-publishGenerationWithCandidateCreator createCandidate dir slotName expectedMeta encoded = do
+publishGenerationWithCandidateCreator createCandidate dir slotName expectedMeta
+    encoded luaKnownNames luaRequiredNames = do
     safety ← rejectSymlinkedSlotDir dir
     case safety of
         Left reason →
@@ -343,7 +349,7 @@ publishGenerationWithCandidateCreator createCandidate dir slotName expectedMeta 
                             pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
                         Right (tempPath, h) →
                             writeValidateAndPublish dir slotName expectedMeta encoded
-                                tempPath h
+                                luaKnownNames luaRequiredNames tempPath h
                                 `finally` cleanupLeftoverTemp tempPath
   where
     failure = publishFailureFor slotName
@@ -357,9 +363,11 @@ publishFailureFor slotName phase path reason =
     PublishFailure phase slotName path reason
 
 writeValidateAndPublish
-    ∷ FilePath → Text → SaveMetadata → BS.ByteString → FilePath → Handle
+    ∷ FilePath → Text → SaveMetadata → BS.ByteString
+    → HS.HashSet Text → HS.HashSet Text → FilePath → Handle
     → IO (Either PublishFailure [Text])
-writeValidateAndPublish dir slotName expectedMeta encoded tempPath h = do
+writeValidateAndPublish dir slotName expectedMeta encoded
+    luaKnownNames luaRequiredNames tempPath h = do
     writeResult ← try (BS.hPut h encoded)
     case writeResult of
         Left (e ∷ IOException) → do
@@ -376,7 +384,8 @@ writeValidateAndPublish dir slotName expectedMeta encoded tempPath h = do
                         Left (e ∷ IOException) →
                             pure (Left (fail' PhaseCandidateReread (Just tempPath) (showT e)))
                         Right rereadBytes →
-                            case validateCandidate expectedMeta rereadBytes of
+                            case validateCandidate expectedMeta
+                                    luaKnownNames luaRequiredNames rereadBytes of
                                 Left reason →
                                     pure (Left (fail' PhaseCandidateValidate
                                                     (Just tempPath) reason))
@@ -414,9 +423,12 @@ closeQuietly h = do
 --   actually contains can never slip through on two matching fields
 --   alone). An in-memory encode success alone is never sufficient — only
 --   what 'BS.hPut' actually put on disk, read back, counts.
-validateCandidate ∷ SaveMetadata → BS.ByteString → Either Text ()
-validateCandidate expectedMeta bytes = do
-    (meta, snap) ← decodeSessionEnvelope bytes
+validateCandidate
+    ∷ SaveMetadata → HS.HashSet Text → HS.HashSet Text → BS.ByteString
+    → Either Text ()
+validateCandidate expectedMeta luaKnownNames luaRequiredNames bytes = do
+    (meta, snap, _luaComponents) ←
+        decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
     when (meta ≢ expectedMeta) $
         Left "re-read candidate metadata does not match the intended save \
              \request"
@@ -611,6 +623,12 @@ data LoadSelection = LoadSelection
     { lsSource   ∷ !GenerationSource
     , lsDetail   ∷ !Text          -- ^ human-readable "why" (requirement 7)
     , lsSaveData ∷ !SaveData
+    , lsLuaComponents ∷ ![(Text, Word32, BS.ByteString)]
+        -- ^ Every Lua-owned component present in the SELECTED generation
+        --   (bare name, encoded version, raw payload — issue #761), for
+        --   the caller to hand to @saveModules.prepareLoad@. Comes from
+        --   the SAME generation as 'lsSaveData' — never merged across
+        --   generations, same as every other field here.
     } deriving (Show)
 
 -- | Load-source selection (requirement 7). A fully valid authoritative
@@ -623,26 +641,31 @@ data LoadSelection = LoadSelection
 --   back to an older generation would hide a real compatibility problem
 --   instead of reporting it. Never combines components across
 --   generations: exactly one generation's 'SaveData' is ever returned.
-selectLoadGeneration ∷ FilePath → Text → IO (Either Text LoadSelection)
-selectLoadGeneration dir slotName = do
+selectLoadGeneration
+    ∷ HS.HashSet Text → HS.HashSet Text → FilePath → Text
+    → IO (Either Text LoadSelection)
+selectLoadGeneration luaKnownNames luaRequiredNames dir slotName = do
     safety ← rejectSymlinkedSlotDir dir
     case safety of
         Left reason → pure (Left reason)
-        Right ()    → selectLoadGenerationUnsafe dir slotName
+        Right ()    →
+            selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName
 
-selectLoadGenerationUnsafe ∷ FilePath → Text → IO (Either Text LoadSelection)
-selectLoadGenerationUnsafe dir slotName = do
+selectLoadGenerationUnsafe
+    ∷ HS.HashSet Text → HS.HashSet Text → FilePath → Text
+    → IO (Either Text LoadSelection)
+selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
     authExists ← doesFileExist authPath
     if not authExists
       then fallbackToPrevious prevPath "authoritative save file is missing"
       else do
-        authResult ← decodeGenerationFile authPath
+        authResult ← decodeGenerationFile luaKnownNames luaRequiredNames authPath
         case authResult of
-            Right sd →
+            Right (sd, luaComponents) →
                 pure (Right (LoadSelection FromAuthoritative
-                        "authoritative generation" sd))
+                        "authoritative generation" sd luaComponents))
             Left (GenerationIncompatible reason) →
                 pure (Left (incompatibleMessage reason))
             Left (GenerationCorrupt reason) →
@@ -659,12 +682,13 @@ selectLoadGenerationUnsafe dir slotName = do
                 <> "' authoritative generation is unreadable (" <> authReason
                 <> ") and no previous generation exists to recover from"))
           else do
-            prevResult ← decodeGenerationFile prevPath
+            prevResult ← decodeGenerationFile luaKnownNames luaRequiredNames prevPath
             case prevResult of
-                Right sd →
+                Right (sd, luaComponents) →
                     pure (Right (LoadSelection FromPrevious
                         ("authoritative generation unreadable (" <> authReason
-                         <> "); recovered from the previous generation") sd))
+                         <> "); recovered from the previous generation")
+                        sd luaComponents))
                 Left prevFail →
                     pure (Left ("save '" <> slotName
                         <> "' authoritative generation is unreadable ("
@@ -684,8 +708,10 @@ selectLoadGenerationUnsafe dir slotName = do
 --   'validateSessionSnapshot' check already rejects an empty page set
 --   earlier in this same decode, so this classification is defense in
 --   depth rather than a normally-reachable path.
-decodeGenerationFile ∷ FilePath → IO (Either GenerationFailure SaveData)
-decodeGenerationFile path = do
+decodeGenerationFile
+    ∷ HS.HashSet Text → HS.HashSet Text → FilePath
+    → IO (Either GenerationFailure (SaveData, [(Text, Word32, BS.ByteString)]))
+decodeGenerationFile luaKnownNames luaRequiredNames path = do
     -- requirement 12: 'publishGeneration' never leaves a symlink at
     -- 'authoritativeFileName'/'previousGenerationFileName' itself
     -- ('System.Directory.renameFile' replaces a destination symlink
@@ -708,7 +734,9 @@ decodeGenerationFile path = do
                 Left (e ∷ IOException) →
                     pure (Left (GenerationCorrupt ("cannot read: " <> showT e)))
                 Right bytes → pure $ do
-                    (meta, snap) ← decodeSessionEnvelopeClassified bytes
+                    (meta, snap, luaComponents) ← decodeSessionEnvelopeClassified
+                        luaKnownNames luaRequiredNames bytes
                     let req = SaveRequestMeta (smName meta) (smTimestamp meta)
-                    either (Left . GenerationIncompatible) Right
+                    sd ← either (Left . GenerationIncompatible) Right
                            (checkWorldCount (snapshotToSaveData req snap))
+                    pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ])

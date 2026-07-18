@@ -117,27 +117,12 @@ end
 -- Engine script hooks
 function pause.init(scriptId)
     engine.logInfo("Pause module initializing...")
-    -- Register save hook so the player's prevTimeScale and the local
-    -- `paused` mirror survive a save/load. Without this the load
-    -- handler restores `enginePausedRef` directly but Lua's
-    -- pause.paused mirror stays stale until the next manual toggle.
-    local saveLib  = require("scripts.lib.serialize")
-    local saveMods = require("scripts.lib.save_modules")
-    saveMods.register("pause",
-        function()
-            return saveLib.serialize({
-                paused        = pause.paused,
-            })
-        end,
-        function(blob)
-            local t = saveLib.deserialize(blob) or {}
-            -- Ignore t.paused: the engine flag is authoritative at this
-            -- point (engine restored enginePausedRef from sdEnginePaused
-            -- before this Lua hook fires). The blob field is kept for
-            -- forward-compat with v6 saves but is no longer load-bearing.
-            pause.paused        = engine.isPaused()
-            pause.prevTimeScale = 1.0
-        end)
+    -- No save registration (issue #761, requirement 5): pause is NOT
+    -- persistent. `pause.paused` is never read for real logic (see
+    -- `pause.isPaused`/`pause.set` above -- it's just a transition-
+    -- detection hint compared against the authoritative
+    -- `engine.isPaused()`), and a loaded session always begins paused
+    -- and resumes at default speed via `pause.onSaveLoaded` below.
 end
 
 function pause.shutdown()

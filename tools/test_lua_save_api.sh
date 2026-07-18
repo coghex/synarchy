@@ -24,7 +24,8 @@ cleanup() {
         echo 'engine.quit()' | nc -w 2 localhost $PORT >/dev/null 2>&1 || true
         wait $HPID 2>/dev/null || true
     fi
-    rm -rf "saves/${TEST_SAVE_NAME}" "saves/${SECOND_SAVE_NAME}" 2>/dev/null
+    rm -rf "saves/${TEST_SAVE_NAME}" "saves/${SECOND_SAVE_NAME}" \
+        "saves/${TEST_SAVE_NAME}_broken" "saves/${TEST_SAVE_NAME}_recovered" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -304,6 +305,29 @@ assert_eq "activeLineCount is a function" "true" \
     "type(require('scripts.popup').activeLineCount) == 'function'"
 assert_eq "activeLastLineCount is a function" "true" \
     "type(require('scripts.popup').activeLastLineCount) == 'function'"
+
+echo "[22] a REQUIRED Lua save component's snapshot failure aborts the \
+whole save (issue #761 requirement 6)"
+# Temporarily break unit_ai's registered snapshot function so
+# saveModules.snapshotAll() reports {ok=false}. engine.saveWorld must
+# then return false and never queue a WorldSave command -- no partial
+# save, no stale barrier. Stash the original in a Lua global so it
+# survives across separate debug-console connections.
+lua "engine.setPaused(false)" > /dev/null
+lua "local sm = require('scripts.lib.save_modules'); \
+     _G.__smoke_orig_snapshot = sm.registry.unit_ai.snapshot; \
+     sm.registry.unit_ai.snapshot = function() error('smoke-injected failure') end" > /dev/null
+assert_eq "save fails when a required component's snapshot throws" \
+    "false" "engine.saveWorld('test', '${TEST_SAVE_NAME}_broken')"
+assert_eq "no save directory was created for the aborted save" \
+    "false" \
+    "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}_broken' then return true end end return false end)()"
+lua "local sm = require('scripts.lib.save_modules'); \
+     sm.registry.unit_ai.snapshot = _G.__smoke_orig_snapshot; \
+     _G.__smoke_orig_snapshot = nil" > /dev/null
+sleep 0.3
+assert_eq "a normal save still succeeds once restored" "true" \
+    "engine.saveWorld('test', '${TEST_SAVE_NAME}_recovered')"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""
