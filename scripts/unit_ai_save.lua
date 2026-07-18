@@ -48,6 +48,24 @@ local function buildItemDefSet()
     return set
 end
 
+-- Self-contained mirror of unit_ai_construct.lua's packBuildInfo lookup
+-- (issue #761 round-5 review): does a pack/kind still resolve to a real
+-- structure-pack build entry? Deliberately NOT a require of
+-- unit_ai_construct.lua itself -- that module (via unit_ai_core.lua)
+-- expects scripts.unit_ai to already be self-registered in
+-- package.loaded, a bootstrap order only unit_ai.lua's own require
+-- chain guarantees, which this standalone validator (requireable and
+-- tested on its own, see Test.Headless.Lua.SaveModules) cannot assume.
+-- Uncached (unlike the original): prepareLoad runs once per load, not
+-- per tick, so there's no hot-path cost to justify the cache's
+-- complexity here.
+local function packHasBuildEntry(pack, kind)
+    if type(pack) ~= "string" or type(kind) ~= "string" then return false end
+    local y = engine.loadYaml("data/structure_packs/" .. pack .. ".yaml")
+    local build = y and y.build
+    return build ~= nil and build[kind] ~= nil
+end
+
 -- craftJob/repairJob (issue #761 round-4 review) durably persist
 -- content-definition ids (a recipe id, item def names for the crafted
 -- item's shortfall-sourcing maps, and the item being repaired + its
@@ -91,6 +109,43 @@ local function validateJobContentRefs(uid, s, itemDefs, errs)
         checkItem(s.repairJob.defName, "repairJob.defName")
         checkItem(s.repairJob.consumable, "repairJob.consumable")
     end
+    -- round-5 review: the same "reject a dangling content reference
+    -- before any mutation" contract extends to every other job type
+    -- that persists a content-definition id -- constructJob's
+    -- pack/kind (a structure-pack build entry) and material-sourcing
+    -- maps, deliveryClaim/deliveryPendingTarget's material-sourcing
+    -- maps (materials/claim/fromGround/fromMule are all item def
+    -- names), and plantJob's crop (a flora species name).
+    if s.constructJob and s.constructJob.category ~= "building" then
+        local job = s.constructJob
+        if not packHasBuildEntry(job.pack, job.kind) then
+            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
+                .. " constructJob references unknown structure pack/kind '"
+                .. tostring(job.pack) .. "/" .. tostring(job.kind) .. "'"
+        end
+        checkItemKeys(job.need, "constructJob.need")
+        checkItemKeys(job.fromGround, "constructJob.fromGround")
+        checkItemKeys(job.fromMule, "constructJob.fromMule")
+    end
+    if s.deliveryClaim then
+        checkItemKeys(s.deliveryClaim.materials, "deliveryClaim.materials")
+        checkItemKeys(s.deliveryClaim.fromGround, "deliveryClaim.fromGround")
+        checkItemKeys(s.deliveryClaim.fromMule, "deliveryClaim.fromMule")
+    end
+    if s.deliveryPendingTarget then
+        checkItemKeys(s.deliveryPendingTarget.claim,
+            "deliveryPendingTarget.claim")
+        checkItemKeys(s.deliveryPendingTarget.fromGround,
+            "deliveryPendingTarget.fromGround")
+        checkItemKeys(s.deliveryPendingTarget.fromMule,
+            "deliveryPendingTarget.fromMule")
+    end
+    if s.plantJob and s.plantJob.crop ~= nil
+            and not flora.exists(s.plantJob.crop) then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
+            .. " plantJob references unknown crop species '"
+            .. tostring(s.plantJob.crop) .. "'"
+    end
 end
 
 -- Component-local validator (issue #761): `data` must be a table keyed
@@ -113,7 +168,9 @@ local function validateUnitAiData(data)
         elseif type(s) ~= "table" then
             errs[#errs + 1] = "unit_ai: state for unit " .. tostring(uid)
                 .. " is not a table"
-        elseif s.craftJob or s.repairJob then
+        elseif s.craftJob or s.repairJob or s.constructJob
+                or s.deliveryClaim or s.deliveryPendingTarget
+                or s.plantJob then
             itemDefs = itemDefs or buildItemDefSet()
             validateJobContentRefs(uid, s, itemDefs, errs)
         end
@@ -193,6 +250,25 @@ local function snapshotUnitState(s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
     for _, f in ipairs(TRANSIENT_CANDIDATE_FIELDS) do copy[f] = nil end
+    -- constructJob (round-5 review) retains the full parsed structure-
+    -- pack YAML build-cost table (unit_ai_construct.lua's
+    -- packBuildInfo -- materials/build_work/etc.) rather than a stable
+    -- id, which requirement 14 forbids persisting as a copy. Unlike
+    -- the *Candidate fields above, constructJob is a multi-tick
+    -- DURABLE job (can't just be dropped and re-derived next tick), so
+    -- only its .build sub-field is stripped, on a shallow copy of the
+    -- job table itself -- constructJob is a reference SHARED with the
+    -- live aiState entry, so mutating it in place here would corrupt
+    -- the live job the AI is still working. unit_ai_construct.lua's
+    -- refundStructureMaterials already falls back to a fresh
+    -- packBuildInfo(job.pack, job.kind) lookup whenever job.build is
+    -- absent, so nothing needs to re-populate it after a load.
+    if copy.constructJob and copy.constructJob.build ~= nil then
+        local jobCopy = {}
+        for jk, jv in pairs(copy.constructJob) do jobCopy[jk] = jv end
+        jobCopy.build = nil
+        copy.constructJob = jobCopy
+    end
     return copy
 end
 

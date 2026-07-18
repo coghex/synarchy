@@ -199,10 +199,18 @@ function saveModules.register(id, spec)
             .. "32-bit unsigned value (1.." .. WORD32_MAX .. ")")
     end
 
-    local inputVersions = spec.inputVersions or { version }
+    -- Requirement 2 (round-5 review): inputVersions must be an EXPLICIT
+    -- declaration of every schema version this component's decode() can
+    -- still read, not silently defaulted to "just the current version" --
+    -- a defaulted registration would look identical to one that
+    -- deliberately dropped support for reading its own prior saves, with
+    -- no signal at registration time that support was never declared.
+    local inputVersions = spec.inputVersions
     if type(inputVersions) ~= "table" or #inputVersions == 0 then
         error("saveModules.register: '" .. id
-            .. "' inputVersions must be a non-empty array")
+            .. "' must declare a non-empty inputVersions array (no default "
+            .. "-- list every schema version this component's decode() "
+            .. "can still read)")
     end
     local hasCurrentVersion = false
     for _, v in ipairs(inputVersions) do
