@@ -286,6 +286,62 @@ spec = do
                              \rejected, not defaulted to {}')"
             ]
 
+        it "rejects a deps table that is not a genuine dense array (issue \
+           \#761 round-7 review) -- an associative/sparse table (e.g. a \
+           \typo'd {hibernate = 'core-session'} instead of {'core-session'}) \
+           \was previously accepted at registration and then silently \
+           \skipped everywhere deps is consumed via ipairs, reporting zero \
+           \static errors for a dependency that was never actually \
+           \declared" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local function mk(deps) return { version = 1, inputVersions = {1},"
+            , "  required = true, scope = 'global', deps = deps,"
+            , "  snapshot = function() end, decode = function() end,"
+            , "  validate = function() end, apply = function() end } end"
+            , "local ok1 = pcall(saveModules.register, 't_deps_assoc',"
+            , "  mk({ hibernate = 'core-session' }))"
+            , "assert(not ok1, 'an associative-shaped deps table must be rejected')"
+            , "local ok2 = pcall(saveModules.register, 't_deps_sparse',"
+            , "  mk({ [1] = 'core-session', [3] = 'units' }))"
+            , "assert(not ok2, 'a sparse deps table must be rejected')"
+            , "local ok3 = pcall(saveModules.register, 't_deps_nonstring',"
+            , "  mk({ 42 }))"
+            , "assert(not ok3, 'a deps entry that is not a string must be rejected')"
+            , "local ok4 = pcall(saveModules.register, 't_deps_ok', mk({ 'core-session' }))"
+            , "assert(ok4, 'a genuine dense array of string ids must still register')"
+            ]
+
+        it "accepts a Lua component's dependency on a known Haskell \
+           \component id (issue #761 requirement 2's \"dependencies on \
+           \Haskell or Lua components\" -- round-7 review correction: an \
+           \earlier round wrongly rejected every Haskell id as \
+           \\"unregistered\"), while still rejecting one that names \
+           \neither a registered Lua id nor a real Haskell one" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "saveModules.register('t_depends_on_units', {"
+            , "  version = 1, inputVersions = {1}, required = true, scope = 'global',"
+            , "  deps = { 'units' },"
+            , "  snapshot = function() end, decode = function() end,"
+            , "  validate = function() end, apply = function() end })"
+            , "local errs1 = saveModules.registryStaticErrors()"
+            , "assert(#errs1 == 0, 'a dependency on the known Haskell units "
+              <> "component must not be reported as unregistered: ' "
+              <> ".. table.concat(errs1, '; '))"
+            , "saveModules.register('t_depends_on_nothing', {"
+            , "  version = 1, inputVersions = {1}, required = true, scope = 'global',"
+            , "  deps = { 'not_a_real_component_anywhere' },"
+            , "  snapshot = function() end, decode = function() end,"
+            , "  validate = function() end, apply = function() end })"
+            , "local errs2 = saveModules.registryStaticErrors()"
+            , "local found = false"
+            , "for _, e in ipairs(errs2) do"
+            , "  if e:find('not_a_real_component_anywhere') then found = true end"
+            , "end"
+            , "assert(found, 'a dependency naming neither a Lua nor a "
+              <> "Haskell component must still be rejected')"
+            ]
+
         it "rejects registration missing a required callback" $ runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"
             , "local ok = pcall(saveModules.register, 't_missing_cb', {"

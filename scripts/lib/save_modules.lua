@@ -11,9 +11,12 @@
 --       inputVersions = {1},      -- versions this reader can decode
 --       required      = true,     -- required/optional (requirement 7)
 --       scope         = "global", -- documented scope tag (diagnostic only)
---       deps          = {},       -- ids of other Lua components in THIS
---                                  -- registry (never a Haskell component
---                                  -- id -- see the deps validation below)
+--       deps          = {},       -- ids this component depends on -- a
+--                                  -- Lua id in THIS registry, or a known
+--                                  -- Haskell component id (requirement 2's
+--                                  -- "dependencies on Haskell or Lua
+--                                  -- components" -- see the deps
+--                                  -- validation below)
 --       snapshot  = function() return dataOnlyTable end,
 --       decode    = function(version, data) return canonicalTable end,
 --       validate  = function(data) return errorStringsOrNil end,
@@ -102,6 +105,43 @@ local function isValidComponentVersion(v)
         and v >= 1 and v <= WORD32_MAX
 end
 
+-- Requirement 2's `deps` is "dependencies on Haskell OR Lua components" --
+-- a Lua component genuinely can depend on a Haskell-owned one (round-6
+-- review wrongly assumed this registry only needed Lua-to-Lua deps).
+-- Haskell's own registry ("World.Save.Component.Types"'s
+-- *ComponentId values, World.Save.Component.saveComponentRegistry) has
+-- no Lua-visible introspection, so this is a deliberately hand-kept
+-- mirror of that FIXED set of top-level component ids -- add an entry
+-- here whenever a new one is added there. A Lua component depending on
+-- one of these never affects saveModules.dependencyOrder's Lua-internal
+-- apply ordering (a non-Lua-registered id is never treated as a
+-- blocker there, since every Lua apply() already runs strictly before
+-- the Haskell-side restore, unconditionally -- see the register()
+-- comment on deps' scope) -- it exists purely so the dependency is
+-- DECLARED and its id validated, per requirement 2/3.
+local HASKELL_COMPONENT_IDS = {
+    ["metadata"] = true, ["core-session"] = true, ["texture-palette"] = true,
+    ["world-pages"] = true, ["world-edits"] = true, ["world-activity"] = true,
+    ["buildings"] = true, ["units"] = true, ["unit-sim"] = true,
+    ["craft-bills"] = true, ["power-nodes"] = true,
+}
+
+-- A genuine dense array: integer keys 1..n with no gaps and no other
+-- key types -- rejects an associative/sparse table a caller may have
+-- intended as an array but mistyped (e.g. `{hibernate = 'x'}`), which
+-- `ipairs` would otherwise silently skip everywhere deps is consumed.
+local function isDenseArray(t)
+    local n = #t
+    local count = 0
+    for k in pairs(t) do
+        count = count + 1
+        if type(k) ~= "number" or k ~= math.floor(k) or k < 1 or k > n then
+            return false
+        end
+    end
+    return count == n
+end
+
 local function sortedIds(t)
     local ids = {}
     for id in pairs(t) do ids[#ids + 1] = id end
@@ -148,9 +188,11 @@ end
 
 -- Build-time-equivalent registry invariants (requirement 3), re-checked
 -- on every save/load since Lua registration happens incrementally as
--- scripts load: every declared dependency resolves to a REGISTERED
--- persistent component, and the dependency graph has no cycle. Empty
--- list = well-formed.
+-- scripts load: every declared dependency resolves to a REGISTERED Lua
+-- persistent component or a known Haskell one (requirement 2's
+-- "dependencies on Haskell or Lua components" -- see register()'s
+-- deps comment), and the Lua-to-Lua dependency graph has no cycle.
+-- Empty list = well-formed.
 function saveModules.registryStaticErrors()
     local errs = {}
     local ids = sortedIds(saveModules.registry)
@@ -159,7 +201,7 @@ function saveModules.registryStaticErrors()
     for _, id in ipairs(ids) do
         local reg = saveModules.registry[id]
         for _, d in ipairs(reg.deps) do
-            if not idSet[d] then
+            if not idSet[d] and not HASKELL_COMPONENT_IDS[d] then
                 errs[#errs + 1] = "component '" .. id
                     .. "' depends on unregistered '" .. tostring(d) .. "'"
             end
@@ -260,25 +302,42 @@ function saveModules.register(id, spec)
             .. "'per-page', 'per-entity')")
     end
 
-    -- Requirement 2 (round-6 review): like scope/inputVersions, deps is
-    -- an EXPLICIT declaration -- no silent "omitted means no
-    -- dependencies" default, so a component that genuinely has none
-    -- still says so (deps = {}) rather than leaving the question
-    -- unanswered. Scope note: these ids are ALWAYS Lua-registry-local
-    -- (checked against THIS registry by registryStaticErrors below,
-    -- mirroring the equally registry-local `deps` on the Haskell side's
-    -- own "World.Save.Component.RegisteredComponent") -- there is no
-    -- cross-language dependency to declare here, because ordering
-    -- between the two registries is a structural invariant, not a
-    -- declared one: every Lua component's apply() always runs (via
-    -- saveModules.applyAll(), see Engine.Scripting.Lua.API.Save's
-    -- applyLuaLoad) strictly BEFORE the Haskell-side world-thread
-    -- restore is ever queued (WorldLoadSave), for every load, with no
-    -- exception a per-component flag could opt out of.
+    -- Requirement 2: like scope/inputVersions, deps is an EXPLICIT
+    -- declaration -- no silent "omitted means no dependencies" default,
+    -- so a component that genuinely has none still says so (deps = {})
+    -- rather than leaving the question unanswered. Requirement 2 is
+    -- explicit that this covers "dependencies on Haskell or Lua
+    -- components" (round-7 review correction -- an earlier version of
+    -- this comment wrongly claimed deps was Lua-registry-local only):
+    -- each entry must be either another id in THIS registry (checked
+    -- against the live Lua registry by registryStaticErrors below,
+    -- since Lua registration is incremental and a same-run sibling may
+    -- not exist yet) or one of HASKELL_COMPONENT_IDS' fixed top-level
+    -- ids (checked immediately -- that set never changes mid-run). A
+    -- Haskell-id dependency never participates in
+    -- saveModules.dependencyOrder's Lua-internal Kahn ordering (a dep
+    -- outside the live Lua id set is never treated as a blocker there)
+    -- because ordering between the two registries is itself a
+    -- structural invariant, not something a topological sort needs to
+    -- enforce: every Lua component's apply() (saveModules.applyAll(),
+    -- via Engine.Scripting.Lua.API.Save's applyLuaLoad) always runs
+    -- strictly BEFORE the Haskell-side world-thread restore is ever
+    -- queued (WorldLoadSave), for every load, with no exception. The
+    -- declaration still matters -- documenting a real cross-language
+    -- coupling, and rejecting a typo'd/nonexistent id outright, same as
+    -- a bad Lua-to-Lua dep.
     local deps = spec.deps
-    if type(deps) ~= "table" then
+    if type(deps) ~= "table" or not isDenseArray(deps) then
         error("saveModules.register: '" .. id
-            .. "' must declare a deps array (possibly empty -- no default)")
+            .. "' must declare deps as a dense array of component id "
+            .. "strings (possibly empty -- no default, and no "
+            .. "associative/sparse table)")
+    end
+    for _, d in ipairs(deps) do
+        if type(d) ~= "string" or d == "" then
+            error("saveModules.register: '" .. id
+                .. "' deps entries must be non-empty component id strings")
+        end
     end
 
     saveModules.registry[id] = {
