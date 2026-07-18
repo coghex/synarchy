@@ -657,12 +657,31 @@ selectLoadGenerationUnsafe dir slotName = do
 --   depth rather than a normally-reachable path.
 decodeGenerationFile ∷ FilePath → IO (Either GenerationFailure SaveData)
 decodeGenerationFile path = do
-    readResult ← try (BS.readFile path)
-    case readResult of
-        Left (e ∷ IOException) →
-            pure (Left (GenerationCorrupt ("cannot read: " <> showT e)))
-        Right bytes → pure $ do
-            (meta, snap) ← decodeSessionEnvelopeClassified bytes
-            let req = SaveRequestMeta (smName meta) (smTimestamp meta)
-            either (Left . GenerationIncompatible) Right
-                   (checkWorldCount (snapshotToSaveData req snap))
+    -- requirement 12: 'publishGeneration' never leaves a symlink at
+    -- 'authoritativeFileName'/'previousGenerationFileName' itself
+    -- ('System.Directory.renameFile' replaces a destination symlink
+    -- entry outright rather than writing through it — see
+    -- 'World.Save.Storage.publishValidated'), so finding one here can
+    -- only come from something outside this transaction. Classified as
+    -- 'GenerationCorrupt' (fallback-eligible) rather than a hard
+    -- refusal: the file simply isn't present "in the expected form",
+    -- the same bucket 'World.Save.Envelope.isRecoverableEnvelopeError'
+    -- already puts a missing/truncated/malformed file in — the OTHER
+    -- generation still gets its own independent version of this exact
+    -- check before it is ever trusted, so a symlink at BOTH paths still
+    -- correctly reports a hard failure rather than reading through either.
+    isLinkResult ← try (pathIsSymbolicLink path)
+    case (isLinkResult ∷ Either IOException Bool) of
+        Right True →
+            pure (Left (GenerationCorrupt
+                ("path is a symlink, refusing to read it: " <> T.pack path)))
+        _ → do
+            readResult ← try (BS.readFile path)
+            case readResult of
+                Left (e ∷ IOException) →
+                    pure (Left (GenerationCorrupt ("cannot read: " <> showT e)))
+                Right bytes → pure $ do
+                    (meta, snap) ← decodeSessionEnvelopeClassified bytes
+                    let req = SaveRequestMeta (smName meta) (smTimestamp meta)
+                    either (Left . GenerationIncompatible) Right
+                           (checkWorldCount (snapshotToSaveData req snap))

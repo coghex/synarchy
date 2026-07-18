@@ -127,7 +127,16 @@ loadWorld logger rawName = case sanitizeSaveName rawName of
                 legacyExists ← doesFileExist legacyPath
                 if not legacyExists
                     then return (Left $ "Save not found: " <> name)
-                    else decodeLegacyFile legacyPath
+                    else do
+                        -- Requirement 12: the SAME containment check the
+                        -- directory-format path gets via
+                        -- 'Storage.selectLoadGeneration' — a legacy flat
+                        -- file, or 'savesDirectory' itself, being a
+                        -- symlink must not be silently followed and read.
+                        safety ← Storage.rejectSymlinkedSlotDir legacyPath
+                        case safety of
+                            Left reason → return (Left reason)
+                            Right ()    → decodeLegacyFile legacyPath
   where
     -- Validate sdWorlds cardinality (and every other load-bearing check)
     -- at DECODE time so the load API fails cleanly (Left → engine.loadSave
@@ -189,12 +198,29 @@ data SaveListing = SaveListing
 --   A slot whose authoritative generation is missing/truncated/checksum-
 --   corrupt (recoverable storage corruption) lists from its valid
 --   previous generation instead of disappearing outright ('slRecovered'
---   marks this). A slot whose authoritative generation is present but
---   semantically INCOMPATIBLE (unsupported schema) is still dropped with
---   a logged reason, same as before #762 — requirement 7's "never fall
---   back for an incompatible generation" rule applies to listing too.
---   Neither a previous generation nor a temporary candidate file is ever
---   listed as its own slot.
+--   marks this). A slot whose authoritative generation's ENVELOPE
+--   structure or @"metadata"@ component is present but semantically
+--   INCOMPATIBLE (unsupported version) is still dropped with a logged
+--   reason, same as before #762 — requirement 7's "never fall back for
+--   an incompatible generation" rule applies to listing too, to
+--   whatever depth listing itself validates. Neither a previous
+--   generation nor a temporary candidate file is ever listed as its own
+--   slot.
+--
+--   Listing decodes ONLY the envelope structure/checksums and the
+--   @"metadata"@ component (issue #759 requirement 4's deliberate,
+--   pre-#762 design: @listSaves@\/@engine.listSaves()@ never decodes a
+--   save's gameplay payload at all, so populating a save browser never
+--   costs a full component-by-component decode). A slot can therefore
+--   still be listed as normal even when its authoritative generation
+--   would fail to actually LOAD — an incompatible/invalid problem
+--   confined to a gameplay component OTHER than @"metadata"@ — exactly
+--   as it already could before this issue; #762 does not change what
+--   listing validates, only adds the previous-generation fallback path
+--   ON TOP of that same pre-existing metadata-only depth. Fully
+--   predicting loadability during listing would mean decoding every
+--   component (buildings, units, world-pages, ...) for every listed
+--   save — the per-save cost #759 explicitly designed listing to avoid.
 listSaves ∷ LoggerState → IO [SaveListing]
 listSaves logger = do
     createDirectoryIfMissing True savesDirectory
@@ -279,13 +305,24 @@ listSaves logger = do
                         return []
 
     loadLegacyEntry name path = do
-        bytes ← BS.readFile path
-        case decodeSaveEnvelopeMetadata bytes of
-            Left err → do
+        -- Requirement 12: a legacy flat file's OWN listing path never
+        -- routed through 'loadDirEntry''s containment check — apply it
+        -- here directly (also covers a symlinked 'savesDirectory' via
+        -- 'path''s immediate parent).
+        safety ← Storage.rejectSymlinkedSlotDir path
+        case safety of
+            Left reason → do
                 logWarn logger CatWorld $
-                    "listSaves: skipping " <> T.pack path <> ": " <> err
+                    "listSaves: skipping " <> T.pack path <> ": " <> reason
                 return []
-            Right meta → return [mkListing name meta False]
+            Right () → do
+                bytes ← BS.readFile path
+                case decodeSaveEnvelopeMetadata bytes of
+                    Left err → do
+                        logWarn logger CatWorld $
+                            "listSaves: skipping " <> T.pack path <> ": " <> err
+                        return []
+                    Right meta → return [mkListing name meta False]
 
     mkListing name meta recovered = SaveListing
         { slName      = name

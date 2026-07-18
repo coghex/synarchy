@@ -33,7 +33,8 @@ import System.IO (stderr)
 
 import Engine.Core.Log
     (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
-import World.Save.Serialize (listSaves, savesDirectory, SaveListing(..))
+import World.Save.Serialize
+    (listSaves, loadWorld, savesDirectory, SaveListing(..))
 import World.Save.Storage
 import World.Save.Envelope (encodeSessionSnapshot)
 import World.Save.Snapshot
@@ -597,6 +598,41 @@ spec = do
                     Right s  → expectationFailure
                         ("expected an unsafe-path failure, got " <> show s)
 
+        it "falls back to the previous generation when the \
+           \AUTHORITATIVE FILE ITSELF (not the slot directory, which is \
+           \perfectly ordinary) is a symlink -- publishGeneration never \
+           \leaves one there, so this can only come from outside the \
+           \transaction" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                let decoy = dir <> "-decoy.txt"
+                BS.writeFile decoy "not a real save"
+                removeFile (authPath dir)
+                createFileLink decoy (authPath dir)
+                sel ← selectLoadGeneration dir "slot"
+                    `finally` removeFile decoy
+                case sel of
+                    Right s → do
+                        lsSource s `shouldBe` FromPrevious
+                        smSeed (sdMetadata (lsSaveData s)) `shouldBe` 1
+                    Left err → expectationFailure (T.unpack err)
+
+        it "reports a failure (not a hybrid) when BOTH the authoritative \
+           \and previous generation files are themselves symlinks" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                let decoy = dir <> "-decoy.txt"
+                BS.writeFile decoy "not a real save"
+                removeFile (authPath dir)
+                removeFile (prevPath dir)
+                createFileLink decoy (authPath dir)
+                createFileLink decoy (prevPath dir)
+                sel ← selectLoadGeneration dir "slot"
+                    `finally` removeFile decoy
+                sel `shouldSatisfy` isLeft
+
         it "recovers the still-intact current authoritative generation \
            \when interrupted right after staging the old previous \
            \generation out of the way, before rotation ever begins \
@@ -699,3 +735,25 @@ spec = do
                 createFileLink target savesDirectory
                 saves ← listSaves logger
                 saves `shouldBe` []
+
+        it "never lists (or reads through) a legacy flat-file save \
+           \whose file is itself a symlink" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let decoy = "decoy-legacy-target"
+                BS.writeFile decoy "not a real save"
+                createDirectoryIfMissing True savesDirectory
+                createFileLink decoy (savesDirectory </> "leaked.synworld")
+                saves ← listSaves logger
+                map slName saves `shouldNotContain` ["leaked"]
+
+        it "loadWorld never reads through a legacy flat-file save whose \
+           \file is itself a symlink" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let decoy = "decoy-legacy-target2"
+                BS.writeFile decoy "not a real save"
+                createDirectoryIfMissing True savesDirectory
+                createFileLink decoy (savesDirectory </> "leaked2.synworld")
+                result ← loadWorld logger "leaked2"
+                result `shouldSatisfy` isLeft

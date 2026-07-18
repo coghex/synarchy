@@ -1776,9 +1776,14 @@ Load-source selection (`selectLoadGeneration`, used by both
 `World.Save.Serialize.loadWorld` and `listSaves`) classifies WHY a
 candidate failed to decode
 (`World.Save.Envelope.GenerationFailure`/`isRecoverableEnvelopeError`):
-absent, truncated, bad framing, or a checksum failure — the shape routine
-storage corruption from an interrupted publish actually takes — is
-`GenerationCorrupt` and falls back to a fully valid `world.synworld.prev`;
+absent, truncated, bad framing, a checksum failure, or the file itself
+being a symlink — the shape routine storage corruption (or something
+outside the transaction entirely, since `publishGeneration` never leaves
+a symlink at either path itself — `renameFile` replaces a destination
+symlink's own entry rather than writing through it) actually takes — is
+`GenerationCorrupt` and falls back to a fully valid `world.synworld.prev`
+(itself independently re-checked, so a symlink at BOTH paths still
+correctly reports a hard failure rather than reading through either);
 a structurally coherent but unsupported/incompatible file (unknown
 component version, failed content/assembly validation, INCLUDING
 `checkWorldCount`'s empty-pages check — a content-validation failure, not
@@ -1794,9 +1799,26 @@ publishes a fresh authoritative generation. `loadWorld`/`listSaves` log a
 recovered selection loudly (`logWarn`); `engine.listSaves()` additionally
 exposes a `recovered` boolean on a listing recovered this way (no
 save/load UI change required to consume it). A pre-#759 legacy flat file
-(`saves/<name>.synworld`, no slot directory) is untouched by any of this
-— it has no previous-generation/temp-file concept and either decodes
-cleanly or is rejected outright, exactly as before #762.
+(`saves/<name>.synworld`, no slot directory) has no previous-generation/
+temp-file/rotation concept and either decodes cleanly or is rejected
+outright, exactly as before #762 — but it DOES get the same symlink
+containment check both `loadWorld` and `listSaves` apply everywhere else
+(`rejectSymlinkedSlotDir` on the flat file's own path, which — via its
+immediate-parent check — also covers a symlinked `saves/`), since that
+one piece of #762's hardening is orthogonal to the generation/rotation
+machinery the legacy format otherwise never touches.
+
+`listSaves` itself only decodes the envelope structure/checksums and the
+`"metadata"` component for each candidate (`decodeSaveEnvelopeMetadata`/
+`Classified`) — the SAME depth #759 requirement 4 established before
+#762 existed, deliberately never a full per-save component decode (that
+would cost proportionally to every listed save's full gameplay payload,
+exactly what #759 designed listing to avoid). #762 does not deepen this:
+it only adds the previous-generation fallback ON TOP of that pre-existing
+metadata-only depth, so a slot can still list as normal even when its
+authoritative generation would actually fail to fully load — a problem
+confined to a gameplay component OTHER than `"metadata"` — precisely as
+it already could before this issue.
 
 Pure/integration coverage: `Test.Headless.World.Save.Storage` (the "atomic
 save storage" describe) — first/second/third publish retention (incl. the
@@ -1815,13 +1837,16 @@ previous/stale-`world_gen.yaml` cleanup never touching an unrelated file
 suffix), `selectLoadGeneration` across every constructed on-disk state
 (missing/truncated/bad-framing/checksum-corrupt authoritative, a
 structurally-valid-but-empty-pages authoritative, a stray leftover temp
-file, a symlinked slot directory or its immediate parent, the exact
-intermediate state a crash immediately after staging would leave, an
-incompatible-but-checksummed authoritative that must NOT fall back,
-neither generation valid) proving a recovered load is read-only and never
-selects a partial candidate, and `listSaves` refusing to list (or read
-through) a slot reached via either a symlinked slot directory or a
-symlinked `saves/` itself. Real multi-thread/real-restart
+file, a symlinked slot directory or its immediate parent, a symlinked
+authoritative or previous FILE itself (incl. both at once, proving a
+hard failure rather than reading through either), the exact intermediate
+state a crash immediately after staging would leave, an incompatible-
+but-checksummed authoritative that must NOT fall back, neither generation
+valid) proving a recovered load is read-only and never selects a partial
+candidate, and `listSaves`/`loadWorld` refusing to list or read through a
+slot (directory-format OR a legacy flat file) reached via a symlinked
+slot directory, a symlinked `saves/` itself, or a symlinked legacy file.
+Real multi-thread/real-restart
 coverage: **`python3 tools/save_storage_probe.py`** — against an ISOLATED
 temporary resource root (never a real player's `saves/`) — two real saves
 to one slot (publish, then retain-as-previous), restart-and-select across
