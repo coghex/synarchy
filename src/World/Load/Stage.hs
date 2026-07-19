@@ -59,7 +59,7 @@ import Building.Types (BuildingManager(..), BuildingId, BuildingDef)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
-import World.Thread.Helpers (sendGenLog, unWorldPageId)
+import World.Thread.Helpers (unWorldPageId)
 import World.Thread.ChunkLoading (locationStampsFor)
 
 newtype StageError = StageError Text deriving (Eq, Show)
@@ -83,12 +83,14 @@ data PageStageResult = PageStageResult
     }
 
 -- | Stage the complete replacement session from a decoded, already
---   content-validated 'SaveData'. Never touches a live 'EngineEnv' ref;
---   'env' is read ONLY for registered (session-independent) content —
---   the material registry, flora catalog, and the currently-registered
---   building/unit DEFS — plus 'luaQueue' for non-critical progress
---   toasts (see 'sendGenLog', requirement 11: notification hooks are
---   never critical/gameplay state).
+--   content-validated 'SaveData'. Never touches a live 'EngineEnv' ref
+--   at all (requirement 6 — staging must not send work through a live
+--   queue either, so unlike the pre-#763 restore this never calls
+--   'World.Thread.Helpers.sendGenLog'): 'env' is read ONLY for
+--   registered (session-independent) content — the material registry,
+--   flora catalog, and the currently-registered building/unit DEFS.
+--   "World.Load.Publish" fires the one user-facing "Save loaded" toast
+--   once the session actually publishes.
 stageSession ∷ EngineEnv → LoggerState → SaveData
              → IO (Either StageError StagedSession)
 stageSession env logger saveData = case sdWorlds saveData of
@@ -109,7 +111,7 @@ stageSession env logger saveData = case sdWorlds saveData of
                              ⧺ [activeWps]
 
         results ← forM orderedPages $
-            stagePage env logger registry palette catalog
+            stagePage logger registry palette catalog
                       buildingDefs unitDefs activeWpsId
 
         let buildingOrphans = concatMap psrBuildingOrphans results
@@ -175,10 +177,10 @@ stageSession env logger saveData = case sdWorlds saveData of
 --   location-stamp dispatch) becomes a value collected onto the result
 --   instead, deferred to "World.Load.Publish".
 stagePage
-    ∷ EngineEnv → LoggerState → MaterialRegistry → ZoomColorPalette
+    ∷ LoggerState → MaterialRegistry → ZoomColorPalette
     → FloraCatalog → HM.HashMap Text BuildingDef → HM.HashMap Text UnitDef
     → WorldPageId → WorldPageSave → IO PageStageResult
-stagePage env logger registry palette catalog buildingDefs unitDefs
+stagePage logger registry palette catalog buildingDefs unitDefs
           activeWpsId wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
@@ -193,7 +195,6 @@ stagePage env logger registry palette catalog buildingDefs unitDefs
         totalSteps = 4
 
     when isActive $ writeIORef phaseRef (LoadPhase1 1 totalSteps)
-    when isActive $ sendGenLog env "Loading saved world state..."
     writeIORef (wsGenParamsRef worldState) (Just params)
     writeIORef (wsIdentityRef worldState) (wpsIdentity wps)
     writeIORef (wsCameraRef worldState)
@@ -229,7 +230,6 @@ stagePage env logger registry palette catalog buildingDefs unitDefs
       if isArenaParams params
         then do
           when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
-          when isActive $ sendGenLog env "Rebuilding arena page..."
           edits   ← readIORef (wsEditsRef worldState)
           desigs  ← readIORef (wsMineDesignationsRef worldState)
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
@@ -246,7 +246,6 @@ stagePage env logger registry palette catalog buildingDefs unitDefs
           writeIORef phaseRef LoadDone
           mCam ← if isActive
             then do
-              sendGenLog env "Save loaded: arena page rebuilt"
               logInfo logger CatWorld $
                   "Save loaded: arena page rebuilt: " <> unWorldPageId pid
               pure $ Just Camera2D
@@ -273,10 +272,8 @@ stagePage env logger registry palette catalog buildingDefs unitDefs
           (mZoomAtlasVal, mPreviewVal) ← if isActive
             then do
               _ ← evaluate (force chunkPixels)
-              sendGenLog env "Assembling zoom texture atlas..."
               let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
               _ ← evaluate (force atlas)
-              sendGenLog env "Rendering world preview..."
               let preview = buildPreviewFromPixels params zoomCache chunkPixels
               _ ← evaluate (force preview)
               pure ( Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
@@ -284,7 +281,6 @@ stagePage env logger registry palette catalog buildingDefs unitDefs
             else pure (Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-          when isActive $ sendGenLog env "Generating initial chunks..."
           let centerCoord@(ChunkCoord camCX camCY) =
                   cameraChunkCoord (wpsCameraFacing wps)
                                    (wpsCameraX wps)
@@ -341,8 +337,6 @@ stagePage env logger registry palette catalog buildingDefs unitDefs
                   (surfaceElev, _mat) =
                       elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
                   startZSlice = surfaceElev + surfaceHeadroom
-              sendGenLog env $ "Save loaded: "
-                  <> T.pack (show totalInitialChunks) <> " chunks queued"
               logInfo logger CatWorld $ "Save loaded: "
                   <> T.pack (show totalInitialChunks) <> " chunks, "
                   <> "surface at z=" <> T.pack (show surfaceElev)

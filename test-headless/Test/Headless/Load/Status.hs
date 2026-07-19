@@ -2,8 +2,12 @@
 module Test.Headless.Load.Status (spec) where
 
 import UPrelude
+import qualified Data.Text as T
 import Test.Hspec
 import Engine.Load.Status
+import World.Thread (partitionAuthorized)
+import World.Command.Types (WorldCommand(..))
+import World.Page.Types (WorldPageId(..))
 
 -- | Pure coverage for the whole-session LOAD transaction status surface
 --   (issue #763, save-overhaul C2) — the load-side counterpart to
@@ -85,3 +89,49 @@ spec = describe "transactional load" $ do
         ref ← newLoadStatusRef
         readLoadStatus ref `shouldReturn` Nothing
         loadInProgress ref `shouldReturn` False
+
+    -- issue #763 review round 1: a load publish must not merely DEFER
+    -- every other command still queued at the captureLocked boundary —
+    -- deferring it would let it survive to run again, against the
+    -- REPLACEMENT session, on the world thread's very next unlocked
+    -- tick (World.Thread.processAuthorizedSave). A save has no such
+    -- discontinuity (the live session is the SAME session before and
+    -- after), so its own deferred commands are still preserved exactly
+    -- as before. WorldCommand has no Eq instance (it can carry an
+    -- MVar), so these compare rendered Show text instead of the values
+    -- themselves.
+    describe "captureLocked authorized-command discard (requirement 12)" $ do
+        it "a save keeps its non-authorized commands, deferred in order" $ do
+            let hide  = WorldHide (WorldPageId "a")
+                save  = WorldSave (WorldPageId "alpha") "slot" "ts" []
+                shw   = WorldShow (WorldPageId "b")
+                (authorized, deferred) = partitionAuthorized [hide, save, shw]
+            map (T.pack . show) authorized `shouldBe` [T.pack (show save)]
+            map (T.pack . show) deferred
+                `shouldBe` [T.pack (show hide), T.pack (show shw)]
+
+        it "a load publish discards every other queued command instead\
+           \ of deferring it" $ do
+            let hide = WorldHide (WorldPageId "a")
+                pub  = WorldLoadPublish 7
+                shw  = WorldShow (WorldPageId "b")
+                (authorized, deferred) = partitionAuthorized [hide, pub, shw]
+            map (T.pack . show) authorized `shouldBe` [T.pack (show pub)]
+            deferred `shouldSatisfy` null
+
+        it "a load publish discards a stale command targeting the SAME\
+           \ page id the replacement session will also use" $ do
+            -- The concrete danger scenario: a stale WorldSetTime for
+            -- page "alpha", still queued when the load's own
+            -- WorldLoadPublish for "alpha" reaches this boundary, must
+            -- not survive to mutate the freshly-published "alpha".
+            let stale = WorldSetTime (WorldPageId "alpha") 23 59
+                pub   = WorldLoadPublish 1
+                (authorized, deferred) = partitionAuthorized [stale, pub]
+            map (T.pack . show) authorized `shouldBe` [T.pack (show pub)]
+            deferred `shouldSatisfy` null
+
+        it "an empty batch authorizes and defers nothing" $ do
+            let (authorized, deferred) =
+                    partitionAuthorized ([] ∷ [WorldCommand])
+            (null authorized, null deferred) `shouldBe` (True, True)

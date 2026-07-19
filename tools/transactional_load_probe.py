@@ -42,6 +42,15 @@ narrower and focuses on what's NEW here:
      speed).
   6. Repeated loads in the same session do not accumulate ghost pages —
      loading twice leaves exactly the second load's pages live.
+  7. Stale old-session work (requirement 12): commands fired for the
+     replacement page's own id WHILE staging is still running have no
+     effect on the published result — staging builds the new page
+     entirely from the decoded save, never from any live ref. The
+     narrower captureLocked-boundary case (a command still queued at the
+     exact instant publication starts) isn't reproducible from a
+     black-box TCP client — that's covered instead by the deterministic
+     pure hspec case, Test.Headless.Load.Status's "captureLocked
+     authorized-command discard" group.
 
 Usage:
   python3 tools/transactional_load_probe.py [--port 9220] [--seed 42]
@@ -279,6 +288,25 @@ def main() -> int:
         print("\n--- mutual exclusion (requirement 1) ---")
         loaded = send(args.port, f"return engine.loadSave('{slot_valid}')")
         chk.ok(loaded.strip() == "true", "valid load: engine.loadSave accepted")
+
+        # Inject stale old-session work (requirement 12): staging builds
+        # the replacement page entirely from the decoded save file, never
+        # from any live ref, so old-session commands for the SAME page id
+        # ("alpha") processed normally (unlocked) WHILE staging is still
+        # running must have no effect on the published result — this is
+        # deterministic (staging is measurably slow: real chunk gen, not
+        # a sub-tick race) unlike the captureLocked boundary itself,
+        # which is covered instead by the always-reproducible pure
+        # hspec case (Test.Headless.Load.Status's "captureLocked
+        # authorized-command discard" group, World.Thread.partitionAuthorized)
+        # — a live black-box TCP round trip can't reliably land a call
+        # inside a window that narrow.
+        poison_year = 9999
+        for _ in range(5):
+            send(args.port, f"world.setDate('alpha', {poison_year}, 12, 31); "
+                             "return 'ok'", expect_result=False, timeout=2)
+            time.sleep(0.2)
+
         # Race the mutual-exclusion window: fire these immediately, before
         # the async staging transaction can possibly have published yet.
         save_during_load = send(args.port,
@@ -309,6 +337,13 @@ def main() -> int:
         if not published:
             print("FAIL: cannot continue without a published load", file=sys.stderr)
             return 1
+
+        post_date = send(args.port, "return world.getDate('alpha')")
+        chk.ok(f'"year":{poison_year}' not in post_date,
+               f"stale world.setDate('alpha', {poison_year}, ...) fired "
+               f"during staging did not survive into the replacement "
+               f"session (got {post_date})")
+
         send(args.port, "return world.waitForInit(180)", timeout=190)
         time.sleep(1.5)
 
@@ -419,6 +454,38 @@ def main() -> int:
         chk.ok(not page_exists(args.port, "gamma"),
                "no ghost 'gamma' page (never part of the save) "
                "reappeared across repeated loads")
+
+        # ── 9. A save's PRIMARY page need not be the visible one ────────
+        print("\n--- a non-visible primary page becomes active on load ---")
+        # engine.saveWorld is explicitly page-targeted (WriteWorld.hs's
+        # sgActivePage/sgVisiblePages split) -- a debug/headless caller
+        # may save a page that isn't even the one on screen. The loaded
+        # session must still make THAT page active, not whatever
+        # happened to be visible at save time.
+        send(args.port, "world.hide('alpha'); return 'ok'")
+        send(args.port, "world.show('beta'); return 'ok'")
+        if not wait_active(args.port, "beta"):
+            chk.ok(False, "setup: beta never became active for the "
+                          "non-visible-primary scenario")
+        else:
+            slot_primary = f"{SAVE_PREFIX}primary_{run_id}"
+            save_dirs.append(os.path.join("saves", slot_primary))
+            saved = send(args.port, f"return engine.saveWorld('alpha', '{slot_primary}')")
+            chk.ok(saved.strip() == "true",
+                   "saving 'alpha' (hidden, non-visible) as primary is accepted")
+            save_file = os.path.join("saves", slot_primary, "world.synworld")
+            for _ in range(100):
+                if os.path.exists(save_file):
+                    break
+                time.sleep(0.1)
+            loaded = send(args.port, f"return engine.loadSave('{slot_primary}')")
+            chk.ok(loaded.strip() == "true", "loading the non-visible-primary save is accepted")
+            published, status = wait_load_published(args.port, 180)
+            chk.ok(published, f"non-visible-primary load: transaction publishes ({status})")
+            if published:
+                chk.ok(wait_active(args.port, "alpha"),
+                       "the save's PRIMARY page ('alpha') is active after load, "
+                       "even though it was hidden (not 'beta') at save time")
 
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
               f"{chk.failed} check(s) failed")

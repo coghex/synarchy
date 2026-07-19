@@ -63,7 +63,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probelib import boot, poll_until, quit_engine, send, send_json
+from probelib import boot, poll_until, quit_engine, send, send_json, wait_load_published
 
 failures = 0
 
@@ -538,10 +538,13 @@ def location_map_icons_reload_check(port: int, tgx: int, tgy: int) -> None:
     load (run against a NEW engine instance, mirroring how the rest of
     this probe's own quit/restart pattern works elsewhere)."""
     send(port, "engine.loadSave('offscreen_icon_test'); return 'queued'")
-    # world.waitForInit blocks until the load's world-thread work is done
-    # (the same barrier tools/multiworld_save_probe.py uses after a load —
-    # engine.loadSave itself only QUEUES the load; getInitProgress tracks
-    # fresh generation, not a load, so it never reaches phase 3 here).
+    # Issue #763: engine.loadSave only ACCEPTS synchronously -- the saved
+    # page doesn't exist live (and world.waitForInit/getInitProgress
+    # resolve nothing) until the whole-session transaction publishes.
+    published, load_status = wait_load_published(port, 120)
+    check("load transaction published", published)
+    if not published:
+        print(f"  (getLoadStatus: {load_status})")
     send(port, "return world.waitForInit(120)", timeout=125.0)
     send(port, "world.show('main_world'); return 'ok'")
     time.sleep(0.5)

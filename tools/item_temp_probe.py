@@ -21,7 +21,7 @@ Usage: python3 tools/item_temp_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
 
@@ -178,8 +178,11 @@ def main():
                    "return 'ok'")
         time.sleep(3.0)
         send(port, "engine.loadSave('item_temp_v68_check'); return 'ok'")
-        time.sleep(15.0)
-        send(port, "world.show('main_world'); return 'ok'")
+        published, load_status = wait_load_published(port, 200)
+        if not published:
+            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            return 1
+        send(port, "world.show('probe'); return 'ok'")
         post = num(port, f"return item.getGroundTemp({gid_save})")
         # Loaded worlds come up paused, so the tracked value should be
         # exactly what the pre-save (paused) read saw.

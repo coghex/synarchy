@@ -21,20 +21,23 @@ module World.Load.Publish
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (atomically, writeTVar)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Engine.Input.Types (defaultInputState)
+import UI.Focus (FocusManager(..))
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Blood.Teardown (enqueueBloodDisposalAll)
 import World.Thread.Command.UI (handleWorldShowCommand)
-import World.Thread.Helpers (sendSaveLoaded, unWorldPageId)
+import World.Thread.Helpers (sendSaveLoaded, sendGenLog, unWorldPageId)
 import Building.Types (BuildingManager(..), unBuildingId)
 import Unit.Types (UnitManager(..), unUnitId)
 import Unit.Sim.Types (UnitThreadState(..))
@@ -96,11 +99,19 @@ publishStagedSession env logger staged = do
         }
 
     -- Restore visibility through the real handler so its side effects
-    -- fire (SimActivateWorld, quad-cache bump). Reverse order so
-    -- ssVisiblePages's head — the page that was actually on screen at
-    -- save time — ends up at the head of wmVisible, matching
-    -- resolveActiveWorld's "first visible wins" rule.
-    forM_ (reverse (ssVisiblePages staged)) $ \pid →
+    -- fire (SimActivateWorld, quad-cache bump). ssActivePage is the
+    -- save's REQUESTED primary page (engine.saveWorld is page-targeted
+    -- and may target a page that wasn't even visible at save time —
+    -- WriteWorld.hs's own sgActivePage/sgVisiblePages split), so it is
+    -- prepended ahead of ssVisiblePages here rather than assumed to
+    -- already be a member of it — dedupPageIds then keeps only its
+    -- first occurrence. Reverse order so the front of that combined
+    -- list — ssActivePage itself — ends up at the head of wmVisible,
+    -- matching resolveActiveWorld's "first visible wins" rule: a load
+    -- must always make its own primary page active, exactly like a
+    -- fresh world.show would.
+    let wantVisible = dedupPageIds (ssActivePage staged : ssVisiblePages staged)
+    forM_ (reverse wantVisible) $ \pid →
         handleWorldShowCommand env logger pid
 
     -- Fire every deferred sim-seed / location-stamp collected during
@@ -124,17 +135,44 @@ publishStagedSession env logger staged = do
     let bIds = map (fromIntegral . unBuildingId) (HM.keys (bmInstances (ssBuildings staged)))
         uIds = map (fromIntegral . unUnitId) (HM.keys (umInstances (ssUnits staged)))
     sendSaveLoaded env uIds bIds
+    -- The one user-facing "done" toast for the whole transaction —
+    -- staging deliberately never sends one (requirement 6: no live-queue
+    -- work while staging), so this is the sole place a load reports
+    -- completion via the ordinary gen-log toast channel.
+    sendGenLog env "Save loaded"
+
+-- | The first occurrence of each page id, in order — used to fold
+--   ssActivePage into ssVisiblePages without risking a duplicate head
+--   entry when the active page was already visible at save time.
+dedupPageIds ∷ [WorldPageId] → [WorldPageId]
+dedupPageIds = go HS.empty
+  where
+    go _    []       = []
+    go seen (p : ps)
+        | p `HS.member` seen = go seen ps
+        | otherwise          = p : go (HS.insert p seen) ps
 
 -- | Clear the runtime-only, per-session state requirement 13 excludes
---   from a loaded session: pending build-tool ghost, and the previous
---   session's combat/injury/thought/action-outcome/player-event streams
---   (never persisted, never meaningful to carry across a whole-session
---   replacement). Toolbar/selection/focus reset is the pre-existing
---   'onSaveLoaded' Lua broadcast's job (see 'sendSaveLoaded' above),
---   unchanged by this issue.
+--   from a loaded session: pending build-tool ghost, held/pending input
+--   gestures (key/mouse state, pending UI click/activation — a stale
+--   press or release must not act on the replacement session), UI
+--   keyboard-control focus, and the previous session's combat/injury/
+--   thought/action-outcome/player-event streams (never persisted, never
+--   meaningful to carry across a whole-session replacement).
+--   'focusManagerRef' clears only the CURRENT focus, not its registered
+--   target map — the live UI tree (and the targets it registered) is
+--   rebuilt by Lua on this same load, but that rebuild is a consequence
+--   of the 'sendSaveLoaded' broadcast above and hasn't necessarily run
+--   yet at this exact point, so wiping the whole map here could
+--   transiently desync it from what's still on screen. Toolbar/
+--   selection reset is the pre-existing 'onSaveLoaded' Lua broadcast's
+--   job (see 'sendSaveLoaded' above), unchanged by this issue.
 resetTransientState ∷ EngineEnv → IO ()
 resetTransientState env = do
     writeIORef (buildingGhostRef env) Nothing
+    writeIORef (inputStateRef env) defaultInputState
+    atomicModifyIORef' (focusManagerRef env) $ \fm →
+        (fm { fmCurrentFocus = Nothing }, ())
     writeIORef (combatEventsRef env) Seq.empty
     writeIORef (injuryEventsRef env) Seq.empty
     writeIORef (thoughtEventsRef env) Seq.empty

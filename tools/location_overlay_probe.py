@@ -51,7 +51,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/location_overlay_engine.log"
 
@@ -283,8 +283,13 @@ def main() -> int:
     proc = boot(args.port, log=LOG)
     try:
         send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
-        time.sleep(6.0)
-        send(args.port, "world.show('main_world'); return 'ok'")
+        # Issue #763: the saved page ("wa", its own id verbatim -- no more
+        # main_world remap) doesn't exist live until the transaction
+        # publishes.
+        published, load_status = wait_load_published(args.port, 60)
+        if not published:
+            failures.append(f"load transaction did not publish: {load_status}")
+        send(args.port, "world.show('wa'); return 'ok'")
         time.sleep(1.0)
 
         # Overlay persisted: no location YAML loaded yet, so this CANNOT be a
@@ -364,8 +369,12 @@ def main() -> int:
         try:
             send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
             send(args.port, "engine.loadSave('loc_centre_probe'); return 'queued'")
-            time.sleep(6.0)
-            send(args.port, "world.show('main_world'); return 'ok'")
+            # Issue #763: the saved page ("wd", its own id verbatim -- no
+            # more main_world remap) doesn't exist live until published.
+            published, load_status = wait_load_published(args.port, 60)
+            if not published:
+                failures.append(f"load transaction did not publish: {load_status}")
+            send(args.port, "world.show('wd'); return 'ok'")
             # Do NOT force-load (0,0) — it is the synchronous centre chunk.
             if wait_floor(args.port, 8, 8):
                 print("PASS: saved-camera centre chunk (0,0) present on first load (Save hook)")
