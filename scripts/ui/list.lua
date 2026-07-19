@@ -419,6 +419,20 @@ function list.selectItem(id, dataIndex)
         .. " [" .. dataIndex .. "] = " .. ls.items[dataIndex].text)
 end
 
+-- Like list.selectItem, but never fires onSelect (#748). For restoring
+-- highlight state after a rebuild that re-created the list (e.g. a
+-- framebuffer-resize rebuild) — re-running the real selection callback
+-- there would re-trigger whatever consequential action it performs
+-- (save_browser's onSelect loads and transitions the whole game).
+function list.setSelectedIndex(id, dataIndex)
+    local ls = lists[id]
+    if not ls then return end
+    if dataIndex < 1 or dataIndex > #ls.items then return end
+
+    ls.selectedIndex = dataIndex
+    list.refreshSlots(id)
+end
+
 -----------------------------------------------------------
 -- Click Handling
 -----------------------------------------------------------

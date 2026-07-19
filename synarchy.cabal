@@ -1028,6 +1028,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.FocusNavigation
                    Test.Headless.UI.Clipping
                    Test.Headless.UI.PopupPlacement
+                   Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.ClickCorrelation

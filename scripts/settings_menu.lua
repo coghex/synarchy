@@ -3,6 +3,7 @@
 -- scroll infrastructure. Delegates tab content to tab modules and
 -- settings state to data module.
 local scale          = require("scripts.ui.scale")
+local responsive     = require("scripts.ui.responsive")
 local panel          = require("scripts.ui.panel")
 local label          = require("scripts.ui.label")
 local textbox        = require("scripts.ui.textbox")
@@ -306,9 +307,27 @@ end
 
 -----------------------------------------------------------
 -- Full UI rebuild
+--
+-- opts.preserveState (#748): true for a mere geometry/scale-notification
+-- rebuild (window resize, or another screen picking up a UI-scale change
+-- someone else applied) as opposed to a semantic re-entry (init/show/
+-- Defaults) — preserves unapplied pending settings and each tab's
+-- clamped scroll offset instead of discarding them. Active tab is
+-- always preserved (createUI never touches settingsMenu.activeTab)
+-- regardless of opts.
 -----------------------------------------------------------
 
-function settingsMenu.createUI()
+function settingsMenu.createUI(opts)
+    opts = opts or {}
+    local preserveState = opts.preserveState or false
+
+    local savedScroll = {}
+    if preserveState then
+        for key, ts in pairs(settingsMenu.tabScroll) do
+            savedScroll[key] = ts.scrollOffset
+        end
+    end
+
     -- Tear down owned elements only (not global destroyAll)
     settingsMenu.destroyOwned()
 
@@ -328,7 +347,9 @@ function settingsMenu.createUI()
         UI.deletePage(settingsMenu.page)
     end
 
-    data.resetPending()
+    if not preserveState then
+        data.resetPending()
+    end
 
     local uiscale = data.current.uiScale
     local s = scale.applyAllWith(settingsMenu.baseSizes, uiscale)
@@ -369,6 +390,14 @@ function settingsMenu.createUI()
     -- Bottom buttons
     settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         bounds, s, uiscale)
+
+    if preserveState then
+        for key, ts in pairs(settingsMenu.tabScroll) do
+            local maxOffset = math.max(0, ts.totalRows - ts.maxVisibleRows)
+            local restored = math.max(0, math.min(savedScroll[key] or 0, maxOffset))
+            settingsMenu.onTabScroll(key, restored)
+        end
+    end
 
     settingsMenu.showTab(settingsMenu.activeTab)
     settingsMenu.uiCreated = true
@@ -782,13 +811,18 @@ end
 -- Apply / Save / Back
 -----------------------------------------------------------
 
+-- #748: a scale change fans out through the shared notification
+-- contract instead of settings_menu rebuilding only itself — every
+-- other already-initialized screen (main menu, create-world, ...)
+-- picks up the new scale immediately too, not just on its next own
+-- show(). Reuses the current fbW/fbH (only the scale changed).
 function settingsMenu.onApply()
     engine.logInfo("Applying settings...")
     local vals = graphicsTab.getWidgetValues()
     local result = data.apply(vals)
     if result.scaleChanged then
-        settingsMenu.createUI()
-        settingsMenu.show()
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        if settingsMenu.page then UI.showPage(settingsMenu.page) end
     end
 end
 
@@ -797,8 +831,8 @@ function settingsMenu.onSave()
     local vals = graphicsTab.getWidgetValues()
     local result = data.save(vals)
     if result.scaleChanged then
-        settingsMenu.createUI()
-        settingsMenu.show()
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        if settingsMenu.page then UI.showPage(settingsMenu.page) end
     end
 end
 
@@ -831,7 +865,9 @@ end
 function settingsMenu.onFramebufferResize(width, height)
     settingsMenu.fbW = width
     settingsMenu.fbH = height
-    if settingsMenu.uiCreated then settingsMenu.createUI() end
+    if settingsMenu.uiCreated then
+        settingsMenu.createUI({ preserveState = true })
+    end
 end
 
 -----------------------------------------------------------

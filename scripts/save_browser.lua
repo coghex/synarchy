@@ -304,7 +304,26 @@ function saveBrowser.onFramebufferResize(width, height)
     saveBrowser.fbW = width
     saveBrowser.fbH = height
     if saveBrowser.uiCreated and saveBrowser.page then
+        -- #748: preserve the selected save across a mere geometry
+        -- rebuild — list.new() always starts with no selection, so
+        -- without this a resize would silently deselect whatever the
+        -- player had picked.
+        local prevValue = saveBrowser.listId
+            and list.getSelectedValue(saveBrowser.listId)
+
         saveBrowser.createUI()
+
+        if prevValue and saveBrowser.listId then
+            for idx, save in ipairs(saveBrowser.saves) do
+                if save.name == prevValue then
+                    -- setSelectedIndex, not selectItem: restoring the
+                    -- highlight must not re-fire onSelect (which loads
+                    -- the save and transitions the whole game).
+                    list.setSelectedIndex(saveBrowser.listId, idx)
+                    break
+                end
+            end
+        end
     end
 end
 

@@ -324,6 +324,13 @@ end
 -----------------------------------------------------------
 
 function createWorldMenu.createUI()
+    -- #748: preserve the log's clamped scroll position and repaint its
+    -- existing lines across a mere rebuild (resize, or a fresh preview
+    -- image arriving mid-generation) — createWorldMenu.logLines itself
+    -- is never touched here (only logPanelMod.clear does that), but the
+    -- fresh label slots logPanelMod.create builds always start blank.
+    local prevLogScrollOffset = createWorldMenu.logScrollOffset
+
     createWorldMenu.destroyOwned()
 
     createWorldMenu.backButtonId       = nil
@@ -427,6 +434,16 @@ function createWorldMenu.createUI()
     createWorldMenu.logLineHeight  = logResult.logLineHeight
     createWorldMenu.logX           = logResult.logX
     createWorldMenu.logStartY      = logResult.logStartY
+
+    if createWorldMenu.logScrollbarId then
+        logPanelMod.updateScrollbar(createWorldMenu)
+        -- setScrollOffset clamps against the just-updated content size
+        -- and repaints via its onScroll -> onLogScroll -> refreshDisplay
+        -- chain, so this both restores and redraws in one call.
+        scrollbar.setScrollOffset(createWorldMenu.logScrollbarId, prevLogScrollOffset)
+    else
+        logPanelMod.refreshDisplay(createWorldMenu)
+    end
 
     -- Bottom buttons
     createWorldMenu.btnLayout = {

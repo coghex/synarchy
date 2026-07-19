@@ -78,6 +78,7 @@ import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
+import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
@@ -211,6 +212,7 @@ main = hspec $ do
     describe "UI.FocusNavigation" UIFocusNavigation.spec
     describe "UI.Clipping" UIClipping.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
+    describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     UISlider.spec
     UIClickCorrelation.spec

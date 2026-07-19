@@ -528,6 +528,87 @@ there is horizontal. Tooltip placement (`UI.Tooltip.Layout`/`Render`)
 deliberately stays on its own separate cursor-relative clamp,
 untouched by this change.
 
+**Responsive menu lifecycle** (#748, Phase C child C2, see
+`Test.Headless.UI.ResponsiveMenus`): `scripts/ui/responsive.lua` is the
+one shared framebuffer/UI-scale notification contract every C2 menu
+screen (main, pause, settings, create-world, save browser, loading)
+adopts, replacing the per-screen copies that used to exist —
+`ui_manager_boot`'s hand-listed `onFramebufferResize` fan-out and
+`settings_menu`'s own scaleChanged-only self-rebuild. Gameplay surfaces
+(HUD/overlays) are C4 and still use their own explicit forwarding in
+`ui_manager_boot.lua`; the contract is ready for C4 to adopt without
+duplicating it.
+
+The supported envelope (`responsive.bands`, inclusive on both ends,
+contiguous, non-overlapping): 600-900px framebuffer height at
+0.5x-1x UI scale; 901-1200 at 0.75x-2x; 1201-1600 at 1x-3x; 1601-2160
+at 1.5x-4x. Formal minimum framebuffer: 800x600 (`responsive.MIN_WIDTH`/
+`MIN_HEIGHT`). `responsive.classify(fbW, fbH, uiscale)` is pure
+introspection only — it never clamps or mutates anything, so an
+out-of-envelope combination (e.g. 800x600@4x, or any resolution below
+900px height driven by loadDefaults' `1x` at 4K, which itself falls
+outside its own 1.5x-4x band) stays fully explorable; screens degrade
+best-effort (no crash, no invalid geometry, fixed actions stay
+reachable) rather than being blocked or having their stored scale
+silently rewritten.
+
+`responsive.register(name, screenModule)` (called once per screen, at
+`ui_manager_boot.lua` load time — safe even before a screen's own
+`init()` ever runs, since every registered screen's
+`onFramebufferResize` only touches its own module fields and no-ops
+its rebuild while `uiCreated` is still false) and
+`responsive.notifyResize(fbW, fbH)` (the fan-out call, using the
+engine's live `engine.getUIScale()`) are the whole contract. It
+0x0-minimize-guards uniformly: a zero/negative dimension is never
+forwarded to a registered screen's own resize handler (never rebuilds
+degenerate geometry), only remembered via
+`responsive.getGeometry(name).pendingRestore`; the next call with a
+real size rebuilds normally, since every screen's own
+`onFramebufferResize` already rebuilds unconditionally off whatever
+real size it's given. Re-invoking `notifyResize` with the SAME
+dimensions (a UI-scale-only change, e.g. Settings Apply/Save) makes
+every already-initialized screen pick up the new scale immediately —
+not just whichever screen the change originated from, which is what
+`settingsMenu.onApply`/`onSave` now do instead of rebuilding only
+themselves.
+
+Settings and create-world already followed the fixed-nav/scrollable-
+content pattern the envelope needs (tab bar + bottom action buttons
+positioned once from the panel's own dimensions, tab/log content
+virtual-scrolled within a fixed frame) — C2 didn't have to invent it,
+only fix a real gap: a mere geometry rebuild (window resize, or a scale
+change forwarded via `notifyResize`) must preserve state a semantic
+re-entry (opening the menu fresh, Load Defaults) is allowed to reset.
+`settingsMenu.createUI(opts)` takes `opts.preserveState` — `init`/
+`show`/`onDefaults` omit it (fresh pending + scroll, as before);
+`onFramebufferResize` and the scale-change notify path pass
+`preserveState = true`, which skips `data.resetPending()` (the
+concrete bug this closed — a resize used to silently discard
+unapplied Settings edits) and restores each tab's scroll offset
+clamped to the rebuilt content's new row count. `createWorldMenu`'s
+log scroll offset is likewise clamped-and-restored (and its lines
+repainted — `logPanelMod.create` always starts every slot blank)
+across every rebuild unconditionally, since nothing there ever wants a
+hard reset except `logPanelMod.clear()`'s own explicit call.
+`saveBrowser.onFramebufferResize` restores the previously-selected
+save via `list.setSelectedIndex` (`scripts/ui/list.lua`) rather than
+`list.selectItem` — the latter re-fires `onSelect`, which for the save
+list is a real, consequential action (loads the save and transitions
+the whole game), so restoring a highlight must never replay it.
+Genuine text reflow/wrapping and cross-rebuild keyboard-focus-position
+restoration are follow-ups, not covered by this pass.
+
+Geometry for headless introspection needs no new surface: a screen's
+own tracked panel id via `panel.getPosition`/`getSize`, `UI.
+getElementInfo` on any element handle, and `responsive.dump()`/
+`getGeometry(name)` for the notification contract's own state are
+sufficient — see `Test.Headless.UI.ResponsiveMenus` for the pattern
+(bare Lua backend + synthetic texture/font handles, since the full
+`ui_manager` boot never reaches menu construction headless — it gates
+on `fontsReady`, which needs real font rasterization, gated behind
+`Engine.Scripting.Lua.Message`'s `whenGraphical` and so never true
+without a GPU).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
