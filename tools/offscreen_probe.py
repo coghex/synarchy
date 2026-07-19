@@ -537,6 +537,21 @@ def location_map_icons_reload_check(port: int, tgx: int, tgy: int) -> None:
     """Continuation of 'location_map_icons_phase' after a fresh restart +
     load (run against a NEW engine instance, mirroring how the rest of
     this probe's own quit/restart pattern works elsewhere)."""
+    # The debug console answering (what boot() itself waits for) is a
+    # much earlier milestone than the real UI flow's unit/building/
+    # item/location content defs actually being loaded -- those load
+    # asynchronously via scripts/*.lua's own startup_loader once the
+    # loading screen reaches the main menu (see the identical wait at
+    # this file's own "1. real UI flow" step). Calling engine.loadSave
+    # before that finishes raced an essentially empty content registry
+    # against issue #760/#763's own pre-publication content-reference
+    # validation, which correctly rejects a load referencing defs that
+    # were never actually loaded yet -- not a defect in that
+    # validation, a missing readiness wait here.
+    menu_up = poll_until(60.0, lambda: find_widget(port, "Create World"))
+    if menu_up is None:
+        print("  WARNING: main menu never became ready before the reload "
+              "attempt -- proceeding anyway, load will likely fail")
     send(port, "engine.loadSave('offscreen_icon_test'); return 'queued'")
     # Issue #763: engine.loadSave only ACCEPTS synchronously -- the saved
     # page doesn't exist live (and world.waitForInit/getInitProgress

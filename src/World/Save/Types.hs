@@ -40,6 +40,9 @@ module World.Save.Types
     , MissingLocationRef(..)
     , renderMissingLocationRef
     , missingLocationOverlayReferences
+    , MissingInfectionRef(..)
+    , renderMissingInfectionRef
+    , missingInfectionReferences
     ) where
 
 import UPrelude
@@ -69,6 +72,7 @@ import World.Flora.Harvest (FloraHarvests)
 import World.Flora.CropPlot (CropPlots, CropPlot(..))
 import World.Flora.Types (FloraId(..), FloraCatalog, lookupSpecies)
 import World.Chunk.Types (ChunkCoord(..))
+import Infection.Types (InfectionManager, lookupInfection)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -1251,3 +1255,51 @@ missingLocationOverlayReferences locationDefs pages = concatMap pageRefs pages
         [ MissingLocationRef pid (cx, cy) locId
         | (ChunkCoord cx cy, locId) ← HM.toList (wgpLocationOverlay (wpsGenParams w))
         , not (HS.member locId locationDefs) ]
+
+-- Infection-definition validation (issue #763 round-8 review) --------
+
+-- | A saved 'Wound' whose 'woundInfectionType' does not resolve against
+--   the currently-registered 'Infection.Types.InfectionManager'. Empty
+--   string is the documented "no infection" sentinel (every wound
+--   starts this way; see 'Combat.Resolution'/'Combat.Wounds.Sever') and
+--   is deliberately excluded, mirroring 'World.Material.isKnownMaterial'\'s
+--   own air (id 0) exclusion — same shape of problem, a real sentinel
+--   value that must never be treated as "missing". A genuinely
+--   unresolved infection type is a required-content gap of the same
+--   kind as a missing unit/item/building/recipe/material/location
+--   definition: 'Engine.Scripting.Lua.API.Units.Combat.lookupInfection'
+--   drives the actual gameplay treatment/progression path off it, so
+--   loading with a fallback here would silently change the wound's
+--   behavior after publication rather than rejecting the load.
+data MissingInfectionRef = MissingInfectionRef
+    { mirPage    ∷ !WorldPageId
+    , mirUnitId  ∷ !Word32
+    , mirWoundPart ∷ !Text
+    , mirInfType ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingInfectionRef ∷ MissingInfectionRef → Text
+renderMissingInfectionRef r =
+    "unit #" <> T.pack (show (mirUnitId r)) <> " wound (" <> mirWoundPart r
+        <> ") on page '" <> unWorldPageId (mirPage r)
+        <> "' references unknown infection id '" <> mirInfType r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved wound-infection reference, across all pages, that does
+--   not resolve against the currently-registered infection catalogue.
+--   Empty ⇒ every reference resolves and the load may proceed.
+missingInfectionReferences
+    ∷ InfectionManager
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingInfectionRef]
+missingInfectionReferences infMgr pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingInfectionRef pid (unUnitId uid) (woundPart wd) infType
+        | (uid, u) ← HM.toList (usnInstances (wpsUnits w))
+        , wd ← uisWounds u
+        , let infType = woundInfectionType wd
+        , not (T.null infType)
+        , not (isJust (lookupInfection infType infMgr)) ]
+    isJust (Just _) = True
+    isJust Nothing  = False

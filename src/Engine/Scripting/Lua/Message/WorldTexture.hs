@@ -139,12 +139,31 @@ handleWorldPreview = do
                             { previewTexture =
                                 Just (TransientTexture texHandle cleanupAll) } }
 
-                    let (TextureHandle h) = texHandle
-                    liftIO $ Q.writeQueue (luaQueue env)
-                        (LuaWorldPreviewReady (fromIntegral h))
+                    -- Round 8 review: the same stale-generation window
+                    -- 'handleZoomAtlasUpload' guards against below — a
+                    -- load's own preview ('World.Load.Publish
+                    -- .publishStagedSession', which writes
+                    -- 'worldPreviewRef' before swapping
+                    -- 'worldManagerRef') can overtake an upload already
+                    -- in flight for the OLD session. Re-check
+                    -- 'worldPreviewRef' before announcing this handle
+                    -- to Lua: if something newer is already pending,
+                    -- this preview is stale — skip the broadcast and
+                    -- let the next poll (which dequeues the newer data)
+                    -- announce the right generation instead.
+                    stillCurrent ← liftIO $ readIORef (worldPreviewRef env)
+                    case stillCurrent of
+                        Just _ →
+                            logInfoM CatWorld
+                                "World preview upload superseded before \
+                                \publish — discarding stale generation"
+                        Nothing → do
+                            let (TextureHandle h) = texHandle
+                            liftIO $ Q.writeQueue (luaQueue env)
+                                (LuaWorldPreviewReady (fromIntegral h))
 
-                    logInfoM CatWorld $ "World preview texture created: handle="
-                        <> T.pack (show h)
+                            logInfoM CatWorld $ "World preview texture created: handle="
+                                <> T.pack (show h)
 
                 _ → logWarnM CatWorld
                         "Cannot create preview texture: Vulkan not ready"
@@ -242,13 +261,40 @@ handleZoomAtlasUpload = do
                             , zaiChunksPerRow = chunksPerRow
                             }
 
-                    worldManager ← liftIO $ readIORef (worldManagerRef env)
-                    forM_ (wmWorlds worldManager) $ \(_pageId, ws) →
-                        liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
+                    -- Round 8 review (issue #763): this upload is async
+                    -- and can take multiple frames (staging buffer +
+                    -- Vulkan copy above), so a LOAD's own atlas
+                    -- (World.Load.Publish.publishStagedSession, which
+                    -- writes 'zoomAtlasDataRef' before swapping
+                    -- 'worldManagerRef') can be queued and even
+                    -- overtake an upload that was ALREADY in flight for
+                    -- the OLD session. Re-check 'zoomAtlasDataRef'
+                    -- right before writing to every current world: if
+                    -- something newer is already pending, the atlas
+                    -- this call just finished uploading is stale —
+                    -- skip the write and let the NEXT poll (which will
+                    -- dequeue that newer data) do it instead, rather
+                    -- than momentarily pointing a freshly-published
+                    -- session's pages at the wrong generation's
+                    -- texture. 'zoomAtlasDataRef' is written strictly
+                    -- BEFORE 'worldManagerRef' is swapped at publish,
+                    -- so by the time 'worldManagerRef' shows the new
+                    -- pages, this ref is guaranteed to already be
+                    -- non-empty if a load raced this upload.
+                    stillCurrent ← liftIO $ readIORef (zoomAtlasDataRef env)
+                    case stillCurrent of
+                        Just _ →
+                            logInfoM CatWorld
+                                "Zoom atlas upload superseded before \
+                                \publish — discarding stale generation"
+                        Nothing → do
+                            worldManager ← liftIO $ readIORef (worldManagerRef env)
+                            forM_ (wmWorlds worldManager) $ \(_pageId, ws) →
+                                liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
 
-                    logInfoM CatWorld $ "Zoom atlas uploaded: handle="
-                        <> T.pack (show texHandle) <> ", chunksPerRow="
-                        <> T.pack (show chunksPerRow)
+                            logInfoM CatWorld $ "Zoom atlas uploaded: handle="
+                                <> T.pack (show texHandle) <> ", chunksPerRow="
+                                <> T.pack (show chunksPerRow)
 
                 _ → logWarnM CatWorld
                         "Cannot upload zoom atlas: Vulkan not ready"

@@ -209,6 +209,24 @@ runLuaLoop env ls stateRef debugQueue = do
                 if locked
                   then threadDelay 1000 >> pure True
                   else do
+                    -- Round 8 review: releaseCaptureLock (world thread,
+                    -- right after publishStagedSession) flips
+                    -- captureLocked False the INSTANT publish
+                    -- completes -- but LuaSaveLoaded was already queued
+                    -- onto luaQueue by publishStagedSession itself,
+                    -- strictly BEFORE that release. Processing debug
+                    -- commands first (as this branch used to, unconditionally)
+                    -- let an ALREADY-queued debug command run against
+                    -- the freshly-published session before the required
+                    -- onSaveLoaded reconciliation (off-page-survivor
+                    -- pruning, stale nested-reference scrub, UI reset)
+                    -- ever got a chance to. Draining whatever's already
+                    -- in luaQueue first closes that ordering gap without
+                    -- disturbing the blocking-wait-based sleep below,
+                    -- which only ever blocks on genuinely NEW messages;
+                    -- nothing here double-processes since each queue
+                    -- read removes what it reads.
+                    processLuaMsgs env ls stateRef
                     processDebugCommands (lbsLuaState ls) debugQueue
 
                     currentSecs ← nowSeconds
