@@ -310,7 +310,11 @@ function buildingSpawn.init(scriptId)
         inputVersions = { 1 },
         required = true,
         scope = "global",
-        deps = {},
+        -- Requirement 2 (round-8 review): buildingSpawnReferences above
+        -- declares "building" (the outer per-building key) and "unit"
+        -- (lastUid) -- the Haskell components that own those entity
+        -- kinds.
+        deps = { "buildings", "units" },
         snapshot = function()
             -- Serialize only LIVE buildings' state. `state` is a global
             -- singleton that can retain entries for buildings destroyed

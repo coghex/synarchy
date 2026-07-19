@@ -324,7 +324,19 @@ function M.register(unitAi, aiState)
         inputVersions = { 1 },
         required = true,
         scope = "global",
-        deps = {},
+        -- Requirement 2 (round-8 review): unitAiReferences above
+        -- declares every reference KIND this component's data actually
+        -- carries -- "unit"/"building" (AI_UNIT_REF_FIELDS/
+        -- AI_BUILDING_REF_FIELDS, claim/job bid/patient/uid fields),
+        -- "craft_bill" (craftJob.billId), and "ground_item"
+        -- (pickupOrder/forageTarget/forageLoot/harvestLoot). Each maps
+        -- to the Haskell component that owns that entity kind:
+        -- units/buildings/craft-bills directly, and ground items via
+        -- world-activity ("designations/flora/crops/ground/spoil" --
+        -- see the persistence contract). "item_instance"
+        -- (repairJob.instanceId) is carried inventory, owned by the
+        -- "units" component's own snapshot, not a separate one.
+        deps = { "units", "buildings", "craft-bills", "world-activity" },
         snapshot = function()
             -- Serialize only LIVE units' state. aiState is a global
             -- singleton that accumulates entries and never drops them when

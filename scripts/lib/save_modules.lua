@@ -249,12 +249,19 @@ function saveModules.register(id, spec)
     -- a defaulted registration would look identical to one that
     -- deliberately dropped support for reading its own prior saves, with
     -- no signal at registration time that support was never declared.
+    -- Round-8 review: also must be a genuine dense array (same
+    -- isDenseArray check as deps below) -- a sparse/associative table
+    -- like {1, [3] = 2} previously registered successfully and then
+    -- silently dropped version 2 everywhere inputVersions is consumed
+    -- via ipairs (isVersionSupported, hasCurrentVersion below), exactly
+    -- the deps bug fixed in round 7.
     local inputVersions = spec.inputVersions
-    if type(inputVersions) ~= "table" or #inputVersions == 0 then
+    if type(inputVersions) ~= "table" or not isDenseArray(inputVersions)
+            or #inputVersions == 0 then
         error("saveModules.register: '" .. id
-            .. "' must declare a non-empty inputVersions array (no default "
-            .. "-- list every schema version this component's decode() "
-            .. "can still read)")
+            .. "' must declare inputVersions as a non-empty dense array "
+            .. "(no default, no associative/sparse table) -- list every "
+            .. "schema version this component's decode() can still read")
     end
     local hasCurrentVersion = false
     for _, v in ipairs(inputVersions) do

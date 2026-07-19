@@ -272,6 +272,28 @@ spec = do
                               \also be rejected')"
             ]
 
+        it "rejects an inputVersions table that is not a genuine dense \
+           \array (issue #761 round-8 review) -- e.g. {1, [3] = 2} \
+           \previously registered successfully and then silently dropped \
+           \version 2 everywhere inputVersions is consumed via ipairs \
+           \(isVersionSupported), exactly the deps bug fixed in round 7" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local function mk(iv) return { version = 1, inputVersions = iv,"
+            , "  required = true, scope = 'global', deps = {},"
+            , "  snapshot = function() end, decode = function() end,"
+            , "  validate = function() end, apply = function() end } end"
+            , "local ok1 = pcall(saveModules.register, 't_iv_sparse',"
+            , "  mk({ 1, [3] = 2 }))"
+            , "assert(not ok1, 'a sparse inputVersions table must be rejected')"
+            , "local ok2 = pcall(saveModules.register, 't_iv_assoc',"
+            , "  mk({ current = 1 }))"
+            , "assert(not ok2, 'an associative-shaped inputVersions table \
+                              \must be rejected')"
+            , "local ok3 = pcall(saveModules.register, 't_iv_ok', mk({ 1 }))"
+            , "assert(ok3, 'a genuine dense array of versions must still register')"
+            ]
+
         it "rejects a registration with no deps declared at all (issue \
            \#761 round-6 review) -- requirement 2 requires every \
            \persistent component to explicitly declare its dependencies, \
@@ -710,6 +732,37 @@ spec = do
             , "  if r.kind == 'unit' and r.id == 42 then found = true end"
             , "end"
             , "assert(found, 'the outer unit id itself must be a declared reference')"
+            ]
+
+        it "declares real Haskell-owned dependencies on the ACTUAL \
+           \unit_ai and building_spawn registrations (issue #761 \
+           \round-8 review) -- not just a synthetic component in the \
+           \registry-mechanism tests above, since a mechanism nobody's \
+           \real registration exercises doesn't satisfy requirement 2" $
+            runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local buildingSpawn = require('scripts.building_spawn')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "unitAiSave.register({}, {})"
+            , "buildingSpawn.init('test')"
+            , "local function hasDep(regId, dep)"
+            , "  for _, d in ipairs(saveModules.registry[regId].deps) do"
+            , "    if d == dep then return true end"
+            , "  end"
+            , "  return false"
+            , "end"
+            , "assert(hasDep('unit_ai', 'units'),"
+            , "  'unit_ai must declare a real dependency on units')"
+            , "assert(hasDep('unit_ai', 'buildings'),"
+            , "  'unit_ai must declare a real dependency on buildings')"
+            , "assert(hasDep('building_spawn', 'buildings'),"
+            , "  'building_spawn must declare a real dependency on buildings')"
+            , "assert(hasDep('building_spawn', 'units'),"
+            , "  'building_spawn must declare a real dependency on units')"
+            , "local errs = saveModules.registryStaticErrors()"
+            , "assert(#errs == 0, 'the real registrations must resolve their "
+              <> "own deps cleanly: ' .. table.concat(errs, '; '))"
             ]
 
     describe "component version bounds (issue #761 round-4 review)" $ do
