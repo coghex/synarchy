@@ -47,8 +47,8 @@ getFPSFn env = do
   Lua.pushnumber (Lua.Number fps)
   return 1
 
--- | engine.setPaused(bool) — write the global pause flag.
---   Side effects (timeScale, etc.) are handled Lua-side in
+-- | engine.setPaused(bool) → bool (applied?) — write the global pause
+--   flag. Side effects (timeScale, etc.) are handled Lua-side in
 --   scripts/pause.lua so the engine doesn't depend on world state.
 --
 --   Round 15 review (issue #763): an UNPAUSE (setPaused(false)) while a
@@ -62,10 +62,19 @@ getFPSFn env = do
 --   was, per the #763 "nothing changed" contract — so this holds it
 --   paused instead. A PAUSE (setPaused(true)) is never blocked: pausing
 --   an already-paused-or-not session can't violate that contract.
+--
+--   Round 16 rereview: the boolean return (previously no return value
+--   at all) reports whether the flag was actually flipped —
+--   scripts/pause.lua's pause.set was applying its OWN side effects
+--   (the paused-state mirror, world.setTimeScale) unconditionally,
+--   with no way to notice a rejection, which reintroduced the exact
+--   "half-paused world: ticks frozen, but world time still advancing"
+--   desync the module's own comments already describe for OTHER
+--   causes — see that module for the fix on the calling side.
 setPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setPausedFn env = do
   b ← Lua.toboolean 1
-  Lua.liftIO $ do
+  applied ← Lua.liftIO $ do
       loading ← loadInProgress (loadStatusRef env)
       if loading ∧ not b
         then do
@@ -74,8 +83,12 @@ setPausedFn env = do
                 "setPaused(false) rejected: a load transaction is in \
                 \flight -- unpausing now could resume simulation before \
                 \it either publishes or fails"
-        else writeIORef (enginePausedRef env) b
-  return 0
+            pure False
+        else do
+            writeIORef (enginePausedRef env) b
+            pure True
+  Lua.pushboolean applied
+  return 1
 
 -- | engine.isPaused() → bool
 isPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

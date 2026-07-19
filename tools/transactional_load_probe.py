@@ -309,6 +309,19 @@ def main() -> int:
 
         # ── 2. Mutual exclusion: save/load never overlap ────────────────
         print("\n--- mutual exclusion (requirement 1) ---")
+        # Sync scripts.pause's own mirror (pause.paused) to the engine
+        # flag BEFORE requesting the load below: section 1 left it
+        # legitimately desynced (its own pause.set(false) calls succeed,
+        # since no load is in flight then, but the load request right
+        # below auto-pauses enginePausedRef DIRECTLY, bypassing
+        # scripts.pause entirely — a documented, pre-existing desync
+        # this module's own healing branch exists for, unrelated to
+        # this round's fix). Without this sync, the in-flight
+        # pause-rejection check further below would start from an
+        # already-desynced mirror and could never tell "the rejection
+        # left it alone" apart from "it was already wrong".
+        send(args.port, "require('scripts.pause').set(true); return 'ok'",
+             expect_result=False)
         loaded = send(args.port, f"return engine.loadSave('{slot_valid}')")
         chk.ok(loaded.strip() == "true", "valid load: engine.loadSave accepted")
         initial_status = load_status(args.port)
@@ -360,6 +373,36 @@ def main() -> int:
                    "engine.saveWorld rejected while a load is in flight")
             chk.ok(second_load.strip() == "false",
                    "a second engine.loadSave rejected while one is in flight")
+            # Round 16 rereview: scripts.pause.set(false) — the real
+            # module every actual unpause goes through, not the raw
+            # engine.setPaused binding — attempted while this load is
+            # still in flight must be a complete no-op. Previously
+            # pause.set applied its OWN side effects (the pause.paused
+            # mirror, world.setTimeScale) unconditionally, even when
+            # engine.setPaused itself rejected the flag flip — desyncing
+            # the module's mirror from the true (still-paused) engine
+            # state (and, on a load that goes on to FAIL rather than
+            # publish, corrupting the retained old session's stored time
+            # scale — a successful publish here would just overwrite
+            # 'alpha' outright, so that specific consequence isn't
+            # independently observable through this always-succeeds
+            # race window; the checks below instead verify the fix at
+            # its actual mechanism — pause.set skipping every side
+            # effect the instant engine.setPaused reports rejection —
+            # which is what protects the failing-load case too).
+            send(args.port, "require('scripts.pause').set(false); return 'ok'",
+                 expect_result=False)
+            still_paused = send(args.port, "return engine.isPaused()").strip()
+            mirror = send(args.port,
+                "return require('scripts.pause').paused").strip()
+            chk.ok(still_paused == "true",
+                   "scripts.pause.set(false) during an in-flight load "
+                   "leaves the engine paused")
+            chk.ok(mirror == "true",
+                   f"scripts.pause.set(false) during an in-flight load "
+                   f"does not desync pause.paused from the true "
+                   f"(still-paused) engine state (got pause.paused="
+                   f"{mirror!r})")
         else:
             # The race window closed before either racing call landed
             # (a very fast machine/small world) — the mutual-exclusion

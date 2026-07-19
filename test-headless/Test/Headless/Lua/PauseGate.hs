@@ -26,12 +26,17 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 -- | Call @setPausedFn env@ with the boolean argument HsLua's own
 --   @toboolean 1@ reads pushed onto the stack first, in a fresh
 --   'Lua.LuaE' run against the given backend's real 'Lua.State'.
-callSetPaused ∷ LuaBackendState → EngineEnv → Bool → IO ()
-callSetPaused ls env b = do
-    _ ← Lua.runWith (lbsLuaState ls) $ do
+--   Returns the function's own boolean result (round 16 rereview:
+--   'setPausedFn' now reports whether it actually applied the flag,
+--   which scripts/pause.lua's caller-side fix depends on).
+callSetPaused ∷ LuaBackendState → EngineEnv → Bool → IO Bool
+callSetPaused ls env b =
+    Lua.runWith (lbsLuaState ls) $ do
         Lua.pushboolean b
-        setPausedFn env
-    pure ()
+        _ ← setPausedFn env
+        applied ← Lua.toboolean (-1)
+        Lua.pop 1
+        pure applied
 
 spec ∷ SpecWith EngineEnv
 spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
@@ -45,7 +50,8 @@ spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
 
         Right reqId ← beginLoad (loadStatusRef env) "pausegate_probe"
 
-        callSetPaused ls env False
+        applied ← callSetPaused ls env False
+        applied `shouldBe` False
         stillPaused ← readIORef (enginePausedRef env)
         stillPaused `shouldBe` True
 
@@ -63,7 +69,8 @@ spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
 
         Right reqId ← beginLoad (loadStatusRef env) "pausegate_probe2"
 
-        callSetPaused ls env True
+        applied ← callSetPaused ls env True
+        applied `shouldBe` True
         nowPaused ← readIORef (enginePausedRef env)
         nowPaused `shouldBe` True
 
@@ -78,11 +85,13 @@ spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
         writeIORef (enginePausedRef env) True
 
         Right reqId ← beginLoad (loadStatusRef env) "pausegate_probe3"
-        callSetPaused ls env False
+        duringApplied ← callSetPaused ls env False
+        duringApplied `shouldBe` False
         stillPausedDuring ← readIORef (enginePausedRef env)
         stillPausedDuring `shouldBe` True
 
         failLoad (loadStatusRef env) reqId "test abort"
-        callSetPaused ls env False
+        afterApplied ← callSetPaused ls env False
+        afterApplied `shouldBe` True
         unpausedAfter ← readIORef (enginePausedRef env)
         unpausedAfter `shouldBe` False
