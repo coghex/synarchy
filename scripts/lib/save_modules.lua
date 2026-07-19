@@ -623,15 +623,31 @@ function saveModules.applyAll()
         end
     end
 
+    -- Round 3 review: a reset-hook failure used to report an error
+    -- without rolling back the persistent components applied just
+    -- above -- leaving the OLD Haskell session paired with the NEW
+    -- Lua singleton state for every one of them, exactly the
+    -- half-migrated outcome the apply-loop rollback exists to prevent.
+    -- A reset hook itself owns no durable state to roll back TO (that
+    -- is what makes it a reset hook rather than a component), but the
+    -- persistent components it runs after certainly do, via the SAME
+    -- `rollback` captures taken above -- so a reset-hook failure now
+    -- unwinds those too, making the whole call atomic: either every
+    -- persistent component AND every reset hook completes, or the live
+    -- Lua session is left exactly as it was found.
+    local function rollbackApplied(applied)
+        for i = #applied, 1, -1 do
+            local rid = applied[i]
+            pcall(saveModules.registry[rid].apply, rollback[rid])
+        end
+    end
+
     local applied = {}
     for _, id in ipairs(applyOrder) do
         if prepared[id] ~= nil then
             local ok, err = pcall(saveModules.registry[id].apply, prepared[id])
             if not ok then
-                for i = #applied, 1, -1 do
-                    local rid = applied[i]
-                    pcall(saveModules.registry[rid].apply, rollback[rid])
-                end
+                rollbackApplied(applied)
                 saveModules._pendingApply = nil
                 saveModules._loadActive = false
                 error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
@@ -642,20 +658,20 @@ function saveModules.applyAll()
         end
     end
 
-    -- Reset hooks run only once every real component has committed. A
-    -- hook owns no durable state of its own to roll back to (that's
-    -- the whole point of a reset hook), so a failure here is reported
-    -- but the already-applied components above are NOT unwound --
-    -- there is nothing meaningful to restore them to that they weren't
-    -- already at.
+    -- Reset hooks run only once every real component has committed.
+    -- Re-running an already-fired reset hook after a rollback is safe
+    -- by construction (a "no durable state" module's reset is
+    -- idempotent), so unwinding the components here and re-raising is
+    -- sufficient -- there's nothing hook-side left to compensate for.
     for _, id in ipairs(sortedIds(saveModules.resetHooks)) do
         local ok, err = pcall(saveModules.resetHooks[id])
         if not ok then
+            rollbackApplied(applied)
             saveModules._pendingApply = nil
             saveModules._loadActive = false
             error("saveModules.applyAll: reset hook '" .. id
-                .. "' failed after every component committed: "
-                .. tostring(err))
+                .. "' failed after every component committed, rolled back "
+                .. "every applied component: " .. tostring(err))
         end
     end
 

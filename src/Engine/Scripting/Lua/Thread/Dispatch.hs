@@ -308,8 +308,20 @@ processLuaMsg env ls stateRef msg = case msg of
 handleLoadStaged ∷ EngineEnv → LuaBackendState → Int → IO ()
 handleLoadStaged env ls requestId = do
     logger ← readIORef (loggerRef env)
-    started ← beginSave (saveBarrierRef env)
-        (Set.fromList [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation])
+    -- Round 3 review: SaveInput is omitted when the input thread was
+    -- never started (App.Headless boots without one — no GLFW window
+    -- to poll), so waitForOwners below never times out forever waiting
+    -- on an owner that can never acknowledge. See
+    -- Engine.Scripting.Lua.API.Save.saveOwnerSet — the identical
+    -- computation, duplicated rather than shared because the natural
+    -- home ("Engine.Save.Barrier") is what Engine.Core.State already
+    -- depends on for SaveBarrier itself, so importing EngineEnv there
+    -- would cycle.
+    inputActive ← readIORef (inputThreadActiveRef env)
+    let baseOwners = Set.fromList
+            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
+        owners = if inputActive then Set.insert SaveInput baseOwners else baseOwners
+    started ← beginSave (saveBarrierRef env) owners
     case started of
       Left err → do
         logWarn logger CatWorld $

@@ -4,7 +4,6 @@ import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
@@ -274,6 +273,16 @@ data EngineEnv = EngineEnv
   , saveBarrierRef     ∷ SaveBarrier
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
     -- and synchronization state, never part of 'SaveData'.
+  , inputThreadActiveRef ∷ IORef Bool
+    -- ^ Round 3 review (issue #763): True once 'Engine.Input.Thread
+    --   .startInputThread' has actually launched — headless boot
+    --   ('App.Headless') never calls it at all (no GLFW window to
+    --   poll), so SaveInput must not be a HARD requirement of every
+    --   save/load transaction's owner set; 'saveWorldFn'/
+    --   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged' consult
+    --   this to decide whether to include SaveInput, rather than
+    --   'waitForOwners' timing out forever waiting for an owner that
+    --   can never acknowledge. Runtime-only, never part of 'SaveData'.
     -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
     --   only when `enginePausedRef` is False. All gameplay timestamps
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,

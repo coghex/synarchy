@@ -64,6 +64,17 @@ data LoadStatus = LoadStatus
     , lsSaveName  ∷ !Text
     , lsPhase     ∷ !LoadPhase
     , lsOutcome   ∷ !(Maybe LoadOutcome)
+    , lsFailedAtPhase ∷ !(Maybe LoadPhase)
+        -- ^ Round 3 review: 'failLoad' unconditionally overwrites
+        --   'lsPhase' to the terminal 'LoadFailed' value, so whatever
+        --   phase the preceding 'advanceLoad' calls last recorded would
+        --   otherwise be lost the instant a load fails — defeating the
+        --   whole point of reporting real progress on failure. This
+        --   field captures that last-reached phase AT the moment of
+        --   failure and is never touched by 'advanceLoad'/'finishLoad',
+        --   so it survives 'lsPhase' becoming 'LoadFailed'. 'Nothing'
+        --   before any load has failed, or for a load that is still in
+        --   flight or that published successfully.
     } deriving (Eq, Show)
 
 data LoadStatusRef = LoadStatusRef !(IORef Int) !(IORef (Maybe LoadStatus))
@@ -89,7 +100,8 @@ beginLoad (LoadStatusRef nextR statusR) saveName = do
             n ← atomicModifyIORef' nextR (\i → (i + 1, i + 1))
             writeIORef statusR $ Just LoadStatus
                 { lsRequestId = n, lsSaveName = saveName
-                , lsPhase = LoadRequested, lsOutcome = Nothing }
+                , lsPhase = LoadRequested, lsOutcome = Nothing
+                , lsFailedAtPhase = Nothing }
             pure $ Right n
 
 -- | Advance the in-flight load to a new non-terminal phase. A no-op if
@@ -108,7 +120,8 @@ failLoad (LoadStatusRef _ statusR) n err =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
-               s { lsPhase = LoadFailed, lsOutcome = Just (LoadAborted err) }
+               s { lsPhase = LoadFailed, lsOutcome = Just (LoadAborted err)
+                 , lsFailedAtPhase = Just (lsPhase s) }
            | otherwise = s
 
 finishLoad ∷ LoadStatusRef → Int → IO ()

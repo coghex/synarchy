@@ -52,16 +52,34 @@ spec = describe "transactional load" $ do
             `shouldReturn` Left "a load transaction is already active"
 
     it "a failed load reaches a terminal, non-published outcome naming\
-       \ the reason" $ do
+       \ the reason, and retains the phase it failed at (round 3\
+       \ review)" $ do
         ref ← newLoadStatusRef
         Right n ← beginLoad ref "broken_save"
         advanceLoad ref n LoadPaused
+        advanceLoad ref n LoadSourceSelected
+        advanceLoad ref n LoadEnvelopeValidated
         failLoad ref n "envelope checksum mismatch"
         status ← readLoadStatus ref
         lsPhase <$> status `shouldBe` Just LoadFailed
         lsOutcome <$> status
             `shouldBe` Just (Just (LoadAborted "envelope checksum mismatch"))
+        -- 'lsPhase' itself is now the terminal 'LoadFailed' value, which
+        -- on its own would lose every phase 'advanceLoad' recorded --
+        -- 'lsFailedAtPhase' is what survives to say how far it got.
+        lsFailedAtPhase <$> status `shouldBe` Just (Just LoadEnvelopeValidated)
         loadInProgress ref `shouldReturn` False
+
+    it "lsFailedAtPhase stays Nothing for an in-flight or a\
+       \ successfully published load" $ do
+        ref ← newLoadStatusRef
+        Right n ← beginLoad ref "ok_save"
+        advanceLoad ref n LoadPaused
+        inflight ← readLoadStatus ref
+        lsFailedAtPhase <$> inflight `shouldBe` Just Nothing
+        finishLoad ref n
+        done ← readLoadStatus ref
+        lsFailedAtPhase <$> done `shouldBe` Just Nothing
 
     it "a terminal load frees the slot for the next one, with a fresh,\
        \ strictly increasing id" $ do

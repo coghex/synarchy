@@ -31,6 +31,9 @@ module World.Save.Types
     , MissingConstructDefRef(..)
     , renderMissingConstructDefRef
     , missingConstructDefReferences
+    , MissingMaterialRef(..)
+    , renderMissingMaterialRef
+    , missingMaterialReferences
     ) where
 
 import UPrelude
@@ -44,7 +47,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
-import World.Edit.Types (WorldEdits)
+import World.Edit.Types (WorldEdits, WorldEdit(..))
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types
     (ConstructDesignations, ConstructDesignation(..), ConstructTarget(..))
@@ -53,7 +56,8 @@ import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
-import World.Spoil.Types (SpoilPiles)
+import World.Spoil.Types (SpoilPiles, SpoilPile(..))
+import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.CropPlot (CropPlots)
 import Item.Ground (GroundItems(..), GroundItem(..))
@@ -1088,3 +1092,52 @@ missingConstructDefReferences buildingDefs pages =
     , (tile, cd) ← HM.toList (wpsConstructDesignations w)
     , CtBuilding defName ← [cdTarget cd]
     , not (HS.member defName buildingDefs) ]
+
+-- Material-id validation (issue #763 round-3 review) -----------------
+
+-- | A saved 'MaterialId' — from the edit log ('WeAddTile'/'WeSetCell')
+--   or a spoil pile — that this build's 'World.Material.MaterialRegistry'
+--   never registered. Unlike every other 'Missing*Ref' above,
+--   'MaterialId' is a numeric 'Word8' index that is ALWAYS a
+--   structurally valid slot (see 'World.Material.isKnownMaterial''s
+--   haddock), so this can only mean the material genuinely existed in
+--   the save's origin build's YAML data and was later removed from
+--   this one — same load-validation contract as every other missing
+--   reference (the issue's own acceptance criteria names "material"
+--   explicitly alongside unit/item/building/recipe).
+data MissingMaterialRef = MissingMaterialRef
+    { mmrSource ∷ !Text          -- ^ e.g. "edit log", "spoil pile"
+    , mmrPage   ∷ !WorldPageId
+    , mmrCoord  ∷ !(Int, Int)
+    , mmrMatId  ∷ !Word8
+    } deriving (Show, Eq)
+
+renderMissingMaterialRef ∷ MissingMaterialRef → Text
+renderMissingMaterialRef r =
+    mmrSource r <> " at " <> T.pack (show (mmrCoord r)) <> " on page '"
+        <> unWorldPageId (mmrPage r) <> "' references unknown material id "
+        <> T.pack (show (mmrMatId r))
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved material reference, across all pages, that does not
+--   resolve against the currently-registered material set. Empty ⇒
+--   every reference resolves and the load may proceed.
+missingMaterialReferences
+    ∷ MaterialRegistry
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingMaterialRef]
+missingMaterialReferences registry pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingMaterialRef "edit log" pid (gx, gy) (unMaterialId mat)
+        | edits ← HM.elems (wpsEdits w)
+        , edit ← edits
+        , (gx, gy, mat) ← editMaterialRef edit
+        , not (isKnownMaterial registry mat) ]
+        ⧺
+        [ MissingMaterialRef "spoil pile" pid coord (unMaterialId (spMat sp))
+        | (coord, sp) ← HM.toList (wpsSpoilPiles w)
+        , not (isKnownMaterial registry (spMat sp)) ]
+    editMaterialRef (WeAddTile gx gy mat)   = [(gx, gy, mat)]
+    editMaterialRef (WeSetCell gx gy _z mat) = [(gx, gy, mat)]
+    editMaterialRef _                        = []

@@ -30,7 +30,9 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingBillOutputItemReferences
                         , renderMissingBillOutputItemRef
                         , missingConstructDefReferences
-                        , renderMissingConstructDefRef)
+                        , renderMissingConstructDefRef
+                        , missingMaterialReferences
+                        , renderMissingMaterialRef)
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
@@ -43,7 +45,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Set as Set
 import Engine.Save.Barrier
 import Engine.Load.Status
-    ( LoadPhase(..), LoadStatus(..), LoadOutcome(..)
+    ( LoadPhase(..), LoadStatus(..)
     , beginLoad, advanceLoad, failLoad, readLoadStatus, loadInProgress )
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
@@ -142,7 +144,33 @@ loadStatusFn env = do
             forM_ (lsOutcome s) $ \outcome → do
                 Lua.pushstring . TE.encodeUtf8 . T.pack . show $ outcome
                 Lua.setfield (-2) "outcome"
+            -- Round 3 review: 'phase' above is 'LoadFailed' itself once
+            -- the transaction is terminal-and-aborted, which on its own
+            -- says nothing about how far the attempt actually got.
+            -- 'failedAtPhase' is the phase 'lsPhase' held immediately
+            -- BEFORE 'failLoad' overwrote it — present only on a failed
+            -- load.
+            forM_ (lsFailedAtPhase s) $ \phase → do
+                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ phase
+                Lua.setfield (-2) "failedAtPhase"
     pure 1
+
+-- | The full save/load-transaction owner set (round 3 review), minus
+--   'SaveInput' when the input thread was never started —
+--   'App.Headless' boots without one (no GLFW window to poll), so
+--   requiring it unconditionally would make 'waitForOwners' time out
+--   on every headless save/load waiting for an owner that can never
+--   acknowledge. Shared by 'saveWorldFn' here and
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged' (duplicated
+--   rather than factored into "Engine.Save.Barrier" itself, which
+--   'Engine.Core.State' already depends on for 'SaveBarrier' — the
+--   reverse import would cycle).
+saveOwnerSet ∷ EngineEnv → IO (Set.Set SaveOwner)
+saveOwnerSet env = do
+    inputActive ← readIORef (inputThreadActiveRef env)
+    let base = Set.fromList
+            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
+    pure $ if inputActive then Set.insert SaveInput base else base
 
 -- | engine.saveWorld(pageId, saveName). Validates the request
 --   synchronously (name, world-exists, gen-params present), then
@@ -216,11 +244,9 @@ saveWorldFn env = do
                                     -- cannot be acknowledged by another loop;
                                     -- it acknowledges only after the worker
                                     -- owners reached their tick boundary.
+                                    owners ← Lua.liftIO $ saveOwnerSet env
                                     started ← Lua.liftIO $ beginSave
-                                        (saveBarrierRef env)
-                                        (Set.fromList [SaveLua, SaveWorld,
-                                          SaveUnit, SaveBuilding, SaveCombat,
-                                          SaveSimulation])
+                                        (saveBarrierRef env) owners
                                     case started of
                                       Left err → do
                                         Lua.liftIO $ do
@@ -399,21 +425,25 @@ continueLoad env logger requestId saveName descriptors = do
                 , LoadComponentsDecoded, LoadComponentsMigrated
                 , LoadSnapshotAssembled ]
             -- #760 req. 9 (round 8 extends this to every gameplay
-            -- content reference, not just building/unit defs):
-            -- validate every saved content-definition reference against
-            -- the currently-registered defs BEFORE publishing ANY live
-            -- state. A missing gameplay DEFINITION rejects the COMPLETE
-            -- load with a clear error naming what's missing (requirement
-            -- 9: never silently prune affected entities). (Missing
-            -- visual ASSETS stay a soft fallback, not gated here — only
-            -- definitions. FloraId/location-overlay ids, MaterialId
-            -- references, and equipment slot-id keys all remain a
+            -- content reference, not just building/unit defs; issue
+            -- #763's round-3 review extends it again to material ids —
+            -- the approved issue's own acceptance criteria names
+            -- "material" explicitly alongside unit/item/building/
+            -- recipe): validate every saved content-definition
+            -- reference against the currently-registered defs BEFORE
+            -- publishing ANY live state. A missing gameplay DEFINITION
+            -- rejects the COMPLETE load with a clear error naming
+            -- what's missing (requirement 9: never silently prune
+            -- affected entities). (Missing visual ASSETS stay a soft
+            -- fallback, not gated here — only definitions. FloraId/
+            -- location-overlay ids and equipment slot-id keys remain a
             -- documented, pre-existing, out-of-scope gap per
             -- docs/persistence_state_inventory.md §9.)
             bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
             rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
+            matReg ← Lua.liftIO $ readIORef (materialRegistryRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
                 pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
                 missing = missingDefReferences
@@ -429,10 +459,13 @@ continueLoad env logger requestId saveName descriptors = do
                         (HM.keysSet (imDefs im)) pages
                 missingConstruct =
                     missingConstructDefReferences buildingDefs pages
+                missingMaterials =
+                    missingMaterialReferences matReg pages
                 allMissing = length missing + length missingItems
                     + length missingRecipes
                     + length missingBillOutputItems
                     + length missingConstruct
+                    + length missingMaterials
                 allMessages =
                     map renderMissingDefRef missing
                     ⧺ map renderMissingItemDefRef missingItems
@@ -440,6 +473,7 @@ continueLoad env logger requestId saveName descriptors = do
                     ⧺ map renderMissingBillOutputItemRef
                           missingBillOutputItems
                     ⧺ map renderMissingConstructDefRef missingConstruct
+                    ⧺ map renderMissingMaterialRef missingMaterials
             if allMissing > 0
               then do
                 let msg = T.pack (show allMissing)

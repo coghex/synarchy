@@ -487,6 +487,63 @@ def main() -> int:
                        "the save's PRIMARY page ('alpha') is active after load, "
                        "even though it was hidden (not 'beta') at save time")
 
+        # ── 10. Missing material reference rejects the load outright ────
+        # Runs LAST and deliberately mutates the live 'alpha' page with
+        # no attempt to clean it up afterward: world.setCell's edit-log
+        # entry is a permanent append (WorldEdits is a per-chunk HISTORY,
+        # never compacted at runtime) that a later engine.saveWorld('alpha',
+        # ...) would inherit and reject too, so this must run once every
+        # other section that still needs a clean 'alpha' has finished.
+        print("\n--- missing material reference rejects the load ---")
+        # Round 3 review: the issue's own acceptance criteria names
+        # "material" explicitly alongside unit/item/building/recipe as a
+        # definition kind whose absence must reject a load. Unlike those
+        # (Text-keyed, freely add/removable via YAML), a MaterialId is a
+        # Word8 index that's ALWAYS structurally valid, so there's no
+        # live API to "unregister" one the way missing-def above swaps
+        # in a def-light second process -- instead this injects a raw,
+        # never-registered id (200 -- confirmed absent from every
+        # data/materials/*.yaml entry) directly into a real edit via
+        # world.setCell's numeric-id path (Engine.Scripting.Lua.API
+        # .World.Edit.worldSetCellFn accepts any 0-255 value with no
+        # registry check), proving the SAME validation path
+        # (missingMaterialReferences) a genuinely older/incompatible
+        # save would hit.
+        send(args.port, "world.show('alpha'); return 'ok'")
+        wait_active(args.port, "alpha")
+        strip = find_flat_strip(args.port)
+        chk.ok(strip is not None, "setup: found a flat tile on alpha to "
+                                   "carve a bad material into")
+        if strip:
+            mgx, mgy, mz = strip
+            set_ok = send(args.port,
+                f"return world.setCell('alpha', {mgx}, {mgy}, {mz}, 200)")
+            chk.ok(set_ok.strip() == "true",
+                   "world.setCell accepts the raw (unregistered) id 200")
+            slot_badmat = f"{SAVE_PREFIX}badmat_{run_id}"
+            save_dirs.append(os.path.join("saves", slot_badmat))
+            do_save(args.port, "alpha", slot_badmat)
+            pre_active = send(args.port, "return world.getActiveWorldId()")
+            loaded = send(args.port,
+                f"return engine.loadSave('{slot_badmat}')")
+            chk.ok(loaded.strip() == "false",
+                   "load referencing an unregistered material id is "
+                   "rejected")
+            status = load_status(args.port)
+            outcome = str(status.get("outcome", "")) if isinstance(status, dict) else ""
+            chk.ok(isinstance(status, dict) and status.get("phase") == "LoadFailed"
+                   and "material" in outcome,
+                   f"missing-material load reports LoadFailed naming "
+                   f"'material' via getLoadStatus ({status})")
+            chk.ok(send(args.port, "return world.getActiveWorldId()")
+                   == pre_active,
+                   "the pre-load session (still alpha) is unaffected by "
+                   "the rejected load")
+            paused = send(args.port, "return engine.isPaused()")
+            chk.ok(paused.strip() == "true",
+                   "the pre-load session stays paused after the "
+                   "rejected load (requirement 3/15)")
+
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
               f"{chk.failed} check(s) failed")
         return 0 if chk.failed == 0 else 1

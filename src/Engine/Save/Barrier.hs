@@ -16,7 +16,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Control.Concurrent.STM
 
-data SaveOwner = SaveLua | SaveWorld | SaveUnit | SaveBuilding | SaveCombat | SaveSimulation
+data SaveOwner = SaveLua | SaveWorld | SaveUnit | SaveBuilding | SaveCombat
+               | SaveSimulation | SaveInput
     deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | 'SaveEncoding' (#758) is the window between "the snapshot is

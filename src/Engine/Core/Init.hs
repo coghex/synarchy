@@ -228,6 +228,7 @@ initializeEngineWith logBackend = do
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
   saveBarrierRef  ← newSaveBarrier
+  inputThreadActiveRef ← newIORef False
   -- Seeded to the POSIX epoch so the first save uses the real wall
   -- clock; subsequent saves clamp against it for monotonic, distinct
   -- timestamps (#98).
@@ -321,6 +322,7 @@ initializeEngineWith logBackend = do
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
         , saveBarrierRef    = saveBarrierRef
+        , inputThreadActiveRef = inputThreadActiveRef
         , lastSaveTimeRef   = lastSaveTimeRef
         , itemManagerRef    = itemManagerRef
         , equipmentClassManagerRef = equipmentClassManagerRef
