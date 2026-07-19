@@ -68,11 +68,20 @@ publishStagedSession env logger requestId staged = do
     -- not itself a SaveOwner (nothing quiesces it): it's a cheap,
     -- race-free flush (STM) that closes the "stale click/key still
     -- awaiting dispatch" case for whatever had already reached this
-    -- queue. The Lua engine-message queue is handled separately, on the
-    -- LUA THREAD itself (see 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') --
+    -- queue. The Lua engine-message queue ('luaQueue', engine → Lua) is
+    -- handled separately, on the LUA THREAD itself (see
+    -- 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') --
     -- flushing it from here would race the Lua thread's own recursive
     -- drain of messages that arrived during staging, which runs
-    -- immediately after 'applyLuaLoad' and would very likely win.
+    -- immediately after 'applyLuaLoad' and would very likely win. The
+    -- Lua-TO-engine queue ('luaToEngineQueue', drained by the main/
+    -- offscreen render thread's 'Engine.Scripting.Lua.Message.processLuaMessages')
+    -- is handled the same way, on ITS OWN consumer thread — see
+    -- 'Engine.Loop''s captureLocked gate — for the identical reason:
+    -- flushing it from here (round 15 review's original attempt) raced
+    -- that thread's own drain and, observed empirically, could leave a
+    -- load transaction's publish-side work permanently stuck instead of
+    -- merely losing one message.
     discardStaleQueues env logger
 
     oldMgr ← readIORef (worldManagerRef env)

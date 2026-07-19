@@ -1059,6 +1059,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Lua.DebugQueue
                    Test.Headless.Lua.PreviewGeneration
+                   Test.Headless.Lua.PauseGate
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers

@@ -20,6 +20,7 @@ import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
                           , updateCameraZoom)
+import Engine.Save.Barrier (captureLocked)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 
 mainLoop ∷ EngineM ε σ ()
@@ -65,6 +66,51 @@ handleEngineStarting env continue = do
     liftIO $ writeIORef (lifecycleRef env) EngineRunning
     continue
 
+-- | Gate camera updates and Lua-to-engine message processing on the
+--   save barrier's capture lock (round 15 review, issue #763; revised
+--   after the original fix's discard-side-effect turned out to belong
+--   here instead — see below). A load transaction's publish
+--   ("World.Load.Publish.publishStagedSession") writes cameraRef/
+--   worldQuadsRef/etc. entirely inside that window. This thread is not
+--   itself a save-barrier owner ('Engine.Save.Barrier.SaveOwner' has no
+--   main/render member), so it can only observe the lock
+--   opportunistically, per tick, via 'captureLocked' — unlike a real
+--   owner, merely SKIPPING this tick's work isn't enough on its own:
+--   anything already sitting in 'luaToEngineQueue' was queued against
+--   the session about to be replaced (or, if queued during the
+--   unlocked staging window before the lock even began, is stale the
+--   instant this publish lands) and would otherwise still be sitting
+--   there to run against the REPLACEMENT session on the next unlocked
+--   tick. Discarding it here — on this thread, the sole consumer of
+--   'luaToEngineQueue' via 'processLuaMessages' — closes that window
+--   without racing a foreign thread's flush of the same queue: the
+--   original round 15 fix put this discard on the WORLD thread instead
+--   (inside 'World.Load.Publish.discardStaleQueues'), which raced this
+--   thread's own drain and was observed to leave a load transaction's
+--   publish-side work permanently stuck rather than merely losing one
+--   message — see that module's haddock for the corrected division of
+--   labour. Camera updates are simply skipped: a held pan/drag computed
+--   against the pre-load camera/input state must not land moments
+--   after publish already wrote the replacement camera. 'drawFrame'
+--   still runs every tick regardless (called by both callers after
+--   this), so the window/offscreen target keeps presenting throughout.
+runGatedByCaptureLock ∷ EngineEnv → EngineM ε σ ()
+runGatedByCaptureLock env = do
+    locked ← liftIO $ captureLocked (saveBarrierRef env)
+    if locked
+        then do
+            stale ← liftIO $ Q.flushQueue (luaToEngineQueue env)
+            unless (null stale) $
+                logWarnM CatLua $
+                    "Save/load publish discarded " <> T.pack (show (length stale))
+                    <> " stale Lua-to-engine message(s) queued against the "
+                    <> "session being replaced"
+        else do
+            updateCameraPanning
+            updateCameraZoom
+            updateCameraMouseDrag
+            processLuaMessages
+
 handleEngineRunning ∷ EngineM ε σ ()
 handleEngineRunning = do
     state ← gets graphicsState
@@ -77,13 +123,10 @@ handleEngineRunning = do
     let Window glfwWin = window
 
     GLFW.pollEvents
-    updateCameraPanning
-    updateCameraZoom
-    updateCameraMouseDrag
-    processLuaMessages
+    env ← ask
+    runGatedByCaptureLock env
 
     shouldClose ← GLFW.windowShouldClose glfwWin
-    env ← ask
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
 
     if shouldClose ∨ lifecycle ≢ EngineRunning
@@ -97,12 +140,9 @@ handleEngineRunning = do
 
 handleEngineRunningOffscreen ∷ EngineM ε σ ()
 handleEngineRunningOffscreen = do
-    updateCameraPanning
-    updateCameraZoom
-    updateCameraMouseDrag
-    processLuaMessages
-
     env ← ask
+    runGatedByCaptureLock env
+
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
 
     if lifecycle ≢ EngineRunning

@@ -539,6 +539,16 @@ continueLoad env logger requestId saveName descriptors = do
                     ⧺ map renderMissingFloraRef missingFlora
                     ⧺ map renderMissingLocationRef missingLocations
                     ⧺ map renderMissingInfectionRef missingInfections
+            -- Round 15 review: advance to the content-validation
+            -- checkpoint BEFORE running the gate below, not only once it
+            -- succeeds — a failure inside it (any of the missing-*
+            -- checks folded into allMissing) previously left lsPhase at
+            -- whatever the PRIOR checkpoint was (LoadSnapshotAssembled),
+            -- so engine.getLoadStatus().failedAtPhase misreported a
+            -- content-validation failure as having happened one phase
+            -- earlier than it actually did. Both branches below now see
+            -- the phase already advanced.
+            Lua.liftIO $ advanceLoad (loadStatusRef env) requestId LoadContentValidated
             if allMissing > 0
               then do
                 let msg = T.pack (show allMissing)
@@ -569,8 +579,7 @@ continueLoad env logger requestId saveName descriptors = do
                         failLoad (loadStatusRef env) requestId err
                     Lua.pushboolean False
                   Right () → do
-                    Lua.liftIO $ do
-                        advanceLoad (loadStatusRef env) requestId LoadContentValidated
+                    Lua.liftIO $
                         -- Hand off the expensive per-page reconstruction
                         -- to the world thread (World.Load.Stage) — it
                         -- touches no live ref (requirement 6), so

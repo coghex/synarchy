@@ -22,6 +22,7 @@ import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (EngineConfig(..), bootProfileTag)
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
+import Engine.Load.Status (loadInProgress)
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -49,10 +50,31 @@ getFPSFn env = do
 -- | engine.setPaused(bool) — write the global pause flag.
 --   Side effects (timeScale, etc.) are handled Lua-side in
 --   scripts/pause.lua so the engine doesn't depend on world state.
+--
+--   Round 15 review (issue #763): an UNPAUSE (setPaused(false)) while a
+--   load transaction is in flight is rejected outright — staging runs
+--   BEFORE the save barrier's capture lock is ever entered, and the Lua
+--   thread's own tick loop keeps servicing debug/script work throughout
+--   that entire window (this function included), so an unpause landing
+--   there could resume the OLD, still-live session's simulation before
+--   the transaction either publishes or fails. A subsequent staging
+--   failure must leave the pre-load session's pause state exactly as it
+--   was, per the #763 "nothing changed" contract — so this holds it
+--   paused instead. A PAUSE (setPaused(true)) is never blocked: pausing
+--   an already-paused-or-not session can't violate that contract.
 setPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setPausedFn env = do
   b ← Lua.toboolean 1
-  Lua.liftIO $ writeIORef (enginePausedRef env) b
+  Lua.liftIO $ do
+      loading ← loadInProgress (loadStatusRef env)
+      if loading ∧ not b
+        then do
+            logger ← readIORef (loggerRef env)
+            logWarn logger CatLua
+                "setPaused(false) rejected: a load transaction is in \
+                \flight -- unpausing now could resume simulation before \
+                \it either publishes or fails"
+        else writeIORef (enginePausedRef env) b
   return 0
 
 -- | engine.isPaused() → bool
