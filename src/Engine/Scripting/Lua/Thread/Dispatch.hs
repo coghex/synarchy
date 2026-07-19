@@ -14,7 +14,6 @@ import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
 import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Types (ecHeadless)
 import Engine.Input.Types (keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
@@ -378,12 +377,10 @@ handleLoadStaged env ls requestId = do
     -- depends on for SaveBarrier itself, so importing EngineEnv there
     -- would cycle.
     --
-    -- Round 15 review, revised: SaveRender is included the same way,
-    -- for the same reason — a headless boot ('App.Headless') never
-    -- runs 'Engine.Loop.mainLoop'/'mainLoopOffscreen' at all, so
-    -- nothing would ever acknowledge it there. This is the fix for the
-    -- render/offscreen main thread's own camera updates and
-    -- Lua-to-engine message processing racing this publish
+    -- Round 15 review, revised twice: SaveRender is ALWAYS included
+    -- (unlike SaveInput above, never conditioned on a thread-active
+    -- flag) — this is the fix for a main-thread loop's camera updates
+    -- and Lua-to-engine message processing racing this publish
     -- ('World.Load.Publish.publishStagedSession' writes cameraRef and
     -- friends): a bare 'captureLocked' pre-check in that loop (the
     -- first attempt at this fix) is only a point-in-time read, not
@@ -395,13 +392,24 @@ handleLoadStaged env ls requestId = do
     -- 'reachSnapshot'/the publish can't happen — until that thread has
     -- already acknowledged the end of its OWN last unlocked tick,
     -- closing the window structurally instead of by timing.
+    --
+    -- The second review round caught that a headless boot ('App.Headless')
+    -- is NOT loop-free the way the first round assumed: it runs no
+    -- 'Engine.Loop.mainLoop'/'mainLoopOffscreen', but it DOES run
+    -- 'Engine.Loop.Headless.headlessLoop', which drains the exact same
+    -- 'luaToEngineQueue' via the same 'processLuaMessages' — so
+    -- excluding SaveRender there left that consumer outside the
+    -- publication boundary entirely, the same race this fix exists to
+    -- close. Every boot mode capable of reaching this function at all
+    -- (i.e. running a debug console that can accept 'engine.loadSave')
+    -- runs one of the three loops, and all three now participate as
+    -- SaveRender — '--dump' is the only loop-free mode, and it has no
+    -- debug console/Lua thread to ever call this in the first place.
     inputActive ← readIORef (inputThreadActiveRef env)
     let baseOwners = Set.fromList
             [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
         withInput = if inputActive then Set.insert SaveInput baseOwners else baseOwners
-        owners = if ecHeadless (engineConfig env)
-                     then withInput
-                     else Set.insert SaveRender withInput
+        owners = Set.insert SaveRender withInput
     started ← beginSave (saveBarrierRef env) owners
     case started of
       Left err → do
