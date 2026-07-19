@@ -487,6 +487,23 @@ function inputTab.create(params)
     local keyBtnUiscale = responsive.fitScale(naturalRowWidth, buttonAreaW, uiscale)
     local gap = math.floor(8 * keyBtnUiscale)
 
+    -- #748 round 9: reserving labelColW doesn't help if the LABEL
+    -- itself still renders at the tab's full uiscale — a long action
+    -- name ("Rotate Counter-Clockwise") at 4x can be far wider than
+    -- even labelColW, rendering over the key/plus buttons regardless
+    -- of how little room those need. Compute ONE effective, LOCAL
+    -- uiscale for every row label in this tab from whichever action
+    -- name is widest, fit against the SAME reserved label column
+    -- (mirrors graphics_tab.lua/create_world's settings_tab.lua
+    -- identical labelUiscale fix).
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, def in ipairs(inputTab.actions) do
+        local w = engine.getTextWidth(font, def.label, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(naturalLabelWidth, labelColW, uiscale)
+
     local rows = {}
 
     for i, def in ipairs(inputTab.actions) do
@@ -501,7 +518,7 @@ function inputTab.create(params)
             fontSize = base.fontSize,
             color    = {1.0, 1.0, 1.0, 1.0},
             page     = page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
         }))
         local lblHandle = label.getElementHandle(lblId)
         UI.addToPage(page, lblHandle, cx, rowY0 + s.fontSize)

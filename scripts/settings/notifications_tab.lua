@@ -90,28 +90,45 @@ function notificationsTab.create(params)
                    widgetSetPosition = nil, widgetSetVisible = nil } }
     end
 
-    -- #748 round 6: at a narrow content width and high uiscale (the
-    -- supported 800x2160@4x combination), the 3-column grid's own
-    -- fixed geometry (checkbox size + a same-uiscale-scaled inter-
-    -- column step, itself floored at cbSize+48*uiscale) can exceed the
-    -- tab's content width entirely on its own, well before any header/
-    -- category label text is considered. Compute ONE effective, LOCAL
-    -- uiscale for the grid — never the stored scale — from the
-    -- CHECKBOX-driven natural span alone (2 column steps + one
-    -- checkbox, using the checkbox+padding floor, not header text);
-    -- deliberately excludes header/"Pause" label text from this fit
-    -- target — the header labels are non-interactive, so letting them
-    -- stay comparatively large (and, in truly extreme cases, overhang
-    -- a little) is the lesser problem next to crushing the actually-
-    -- clickable checkboxes toward 0px by folding a 9-character header
-    -- string's full text width into the same shrink ratio. Shadows the
-    -- local `uiscale` so every computation below (and the checkbox.new
-    -- calls further down) picks it up automatically.
+    -- #748 round 9: the round-6/7 fit only constrained the CHECKBOX's
+    -- own geometry, then let colStep expand afterward to fit header
+    -- text (via the max() below) with no re-fit of the WHOLE grid —
+    -- so at a narrow content width and high uiscale, header text alone
+    -- could still push the 3-column grid's total span past the tab's
+    -- content width, sliding the Log column left into the Category
+    -- label's own region. Reserve a CATEGORY_LABEL_FRACTION-wide column
+    -- on the LEFT for the row/category labels (mirroring every other
+    -- settings tab's LABEL_COLUMN_FRACTION reservation) and fit the
+    -- grid's uiscale — using BOTH the checkbox-driven AND header-text-
+    -- driven components of colStep together, exactly matching what
+    -- colStep's own formula below will actually need — against the
+    -- REMAINING width, so the fitted grid's total span (2 column steps
+    -- + one checkbox + right padding) never exceeds it. The category
+    -- label column is fit separately, below, against its own reserved
+    -- width using the tab's ORIGINAL uiscale as a baseline (captured
+    -- here before this block reassigns the shared local).
+    local CATEGORY_LABEL_FRACTION = 0.30
+    local originalUiscale = uiscale
+    local gridMaxWidth = cw * (1 - CATEGORY_LABEL_FRACTION)
     do
         local naturalCbSize = math.floor(base.checkboxSize * uiscale)
-        local naturalCheckboxColStep = naturalCbSize + math.floor(48 * uiscale)
-        local naturalCheckboxTotalWidth = naturalCheckboxColStep * 2 + naturalCbSize
-        uiscale = responsive.fitScale(naturalCheckboxTotalWidth, cw, uiscale)
+        local naturalHeaderFontSizePx = math.floor(base.fontSize * uiscale)
+        local naturalMaxHeaderW = 0
+        for _, t in ipairs({ "Event Log", "Popup", "Pause" }) do
+            local w = engine.getTextWidth(font, t, naturalHeaderFontSizePx)
+            if w > naturalMaxHeaderW then naturalMaxHeaderW = w end
+        end
+        local naturalHeaderMinPad = math.floor(24 * uiscale)
+        local naturalColStep = math.max(
+            naturalCbSize + math.floor(48 * uiscale),
+            naturalMaxHeaderW + naturalHeaderMinPad)
+        local naturalPauseLabelW =
+            engine.getTextWidth(font, "Pause", naturalHeaderFontSizePx)
+        local naturalRightOverhang = math.max(0,
+            math.floor((naturalPauseLabelW - naturalCbSize) / 2))
+        local naturalRightPad = naturalRightOverhang + math.floor(8 * uiscale)
+        local naturalTotalWidth = naturalColStep * 2 + naturalCbSize + naturalRightPad
+        uiscale = responsive.fitScale(naturalTotalWidth, gridMaxWidth, uiscale)
     end
 
     -- Never let the checkbox collapse to an unclickable 0px, even if
@@ -151,6 +168,21 @@ function notificationsTab.create(params)
     local rightOverhang = math.max(0,
         math.floor((pauseLabelW - cbSize) / 2))
     local rightPad = rightOverhang + math.floor(8 * uiscale)
+
+    -- #748 round 9: fit the LEFT-side category/row label column
+    -- separately, against its own reserved width, from whichever of
+    -- "Category" or a category's own display name is widest — mirrors
+    -- every other settings tab's labelUiscale fix. Uses the ORIGINAL
+    -- (pre-grid-fit) uiscale as its baseline, since the category
+    -- column's own reservation is independent of the grid's fit.
+    local catLabelFontSizePx = math.floor(base.fontSize * originalUiscale)
+    local naturalCatLabelWidth = engine.getTextWidth(font, "Category", catLabelFontSizePx)
+    for _, cat in ipairs(cfg) do
+        local w = engine.getTextWidth(font, cat.displayName or cat.id, catLabelFontSizePx)
+        if w > naturalCatLabelWidth then naturalCatLabelWidth = w end
+    end
+    local catLabelUiscale = responsive.fitScale(
+        naturalCatLabelWidth, cw * CATEGORY_LABEL_FRACTION, originalUiscale)
 
     -- Helper: compute Y position for row N (0-based)
     local function rowY(n)
@@ -192,7 +224,7 @@ function notificationsTab.create(params)
         fontSize = headerFontSize,
         color    = headerColor,
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = catLabelUiscale,
     }))
     local catHeaderHandle = label.getElementHandle(catHeaderId)
     UI.addToPage(page, catHeaderHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -243,7 +275,7 @@ function notificationsTab.create(params)
             fontSize = base.fontSize,
             color    = catColor,
             page     = page,
-            uiscale  = uiscale,
+            uiscale  = catLabelUiscale,
         }))
         local rowLabelHandle = label.getElementHandle(rowLabelId)
         UI.addToPage(page, rowLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -263,8 +295,15 @@ function notificationsTab.create(params)
 
         local logCbId = params.trackCheckbox(checkbox.new({
             name     = "notif_" .. catId .. "_log",
-            size     = base.checkboxSize,
-            uiscale  = uiscale,
+            -- #748 round 9: pass the already-floored, final pixel size
+            -- (cbSize) with uiscale=1.0 rather than
+            -- (base.checkboxSize, uiscale) — checkbox.new's own
+            -- internal math.floor(size*uiscale) has no floor-to-1
+            -- protection of its own, so at an extreme fit ratio it
+            -- could independently round to 0 even though cbSize above
+            -- was already floored to at least 1.
+            size     = cbSize,
+            uiscale  = 1.0,
             page     = page,
             x        = logX,
             y        = rowY(rowIndex),
@@ -274,8 +313,15 @@ function notificationsTab.create(params)
         }))
         local popupCbId = params.trackCheckbox(checkbox.new({
             name     = "notif_" .. catId .. "_popup",
-            size     = base.checkboxSize,
-            uiscale  = uiscale,
+            -- #748 round 9: pass the already-floored, final pixel size
+            -- (cbSize) with uiscale=1.0 rather than
+            -- (base.checkboxSize, uiscale) — checkbox.new's own
+            -- internal math.floor(size*uiscale) has no floor-to-1
+            -- protection of its own, so at an extreme fit ratio it
+            -- could independently round to 0 even though cbSize above
+            -- was already floored to at least 1.
+            size     = cbSize,
+            uiscale  = 1.0,
             page     = page,
             x        = popupX,
             y        = rowY(rowIndex),
@@ -285,8 +331,15 @@ function notificationsTab.create(params)
         }))
         local pauseCbId = params.trackCheckbox(checkbox.new({
             name     = "notif_" .. catId .. "_pause",
-            size     = base.checkboxSize,
-            uiscale  = uiscale,
+            -- #748 round 9: pass the already-floored, final pixel size
+            -- (cbSize) with uiscale=1.0 rather than
+            -- (base.checkboxSize, uiscale) — checkbox.new's own
+            -- internal math.floor(size*uiscale) has no floor-to-1
+            -- protection of its own, so at an extreme fit ratio it
+            -- could independently round to 0 even though cbSize above
+            -- was already floored to at least 1.
+            size     = cbSize,
+            uiscale  = 1.0,
             page     = page,
             x        = pauseX,
             y        = rowY(rowIndex),

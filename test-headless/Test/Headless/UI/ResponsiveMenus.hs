@@ -1049,6 +1049,67 @@ spec = around withHeadlessEngine $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → wnpRightEdge p `shouldSatisfy` (>= wnpX p + 10)
 
+        -- #748 round 9: round 7's sweep covered graphics_tab.lua and
+        -- create-world's tabs but missed the Input and Notifications
+        -- tabs — their labels ALSO reserved a column (input_tab.lua's
+        -- labelColW, notifications_tab.lua's per-header measurement)
+        -- but still rendered at the tab's full uiscale.
+        it "input_tab.lua's action row: label ends before the (also-fitted) key/plus buttons begin at 800x2160@4x" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "UI.showPage(m.page);"
+                , "m.showTab('input');"
+                , "local it = require('scripts.settings.input_tab');"
+                , "local button = require('scripts.ui.button');"
+                , "local firstBtnInfo = UI.getElementInfo(button.getElementHandle(it.widgets.buttonIds[1]));"
+                , "local labelX = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name and e.name:match('^keybind_lbl_.*_text$') then labelX = e.x end;"
+                , "end;"
+                , "return {x = labelX, rightEdge = firstBtnInfo.x}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → wnpRightEdge p `shouldSatisfy` (>= wnpX p + 5)
+
+        it "notifications_tab.lua's Category column: row labels end before the Log column's checkboxes begin at 800x2160@4x" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "UI.showPage(m.page);"
+                , "m.showTab('notifications');"
+                , "local labelX, logX = nil, nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name and e.name:match('^notif_row_.*_text$') then labelX = e.x end;"
+                , "  if e.name and e.name:match('_log_sprite$') then logX = e.x end;"
+                , "end;"
+                , "return {x = labelX, rightEdge = logX}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → wnpRightEdge p `shouldSatisfy` (>= wnpX p + 5)
+
+        it "notifications_tab.lua's checkboxes stay nonzero-sized even when header text dominates the grid's fit at 800x2160@4x" $ \env → do
+            ls ← newBareLuaBackend env
+            size ← evalInt ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "m.showTab('notifications');"
+                , "local nt = require('scripts.settings.notifications_tab');"
+                , "local checkbox = require('scripts.ui.checkbox');"
+                , "local firstCat = nil;"
+                , "for k, _ in pairs(nt.checkboxes) do firstCat = k break end;"
+                , "local w, _ = checkbox.getSize(nt.checkboxes[firstCat].log);"
+                , "return w"
+                ]
+            size `shouldSatisfy` (> 0)
+
     describe "editable dropdowns preserve an in-progress (unsubmitted) filter edit across a resize (#748 round 7)" $ do
         it "settings menu's Resolution dropdown" $ \env → do
             ls ← newBareLuaBackend env

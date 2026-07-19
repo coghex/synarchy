@@ -779,6 +779,31 @@ for every one of them — the scale every configured resolution is fully
 supported at except 3840x2160, which is checked too, best-effort, at
 its own auto-detected 2.5x default.
 
+Review round 9 found the label/control-overlap sweep (round 7) had
+missed the Input and Notifications tabs. `input_tab.lua`'s action rows
+reserve a `labelColW` (42% of the tab's content width) for their action
+names, but the label itself still rendered at the tab's full uiscale —
+fixed with the same per-tab `labelUiscale` technique (widest action
+name, fit against `labelColW`). `notifications_tab.lua` had a deeper
+bug: its round-6/7 fit only constrained the CHECKBOX geometry, then let
+`colStep` expand afterward for header text with no re-fit of the WHOLE
+grid — so header text alone could still push the 3-column grid's total
+span past the tab's content width, sliding the Log column into the
+Category label's own region. Fixed by reserving a
+`CATEGORY_LABEL_FRACTION` (0.30) column on the left (mirroring every
+other tab's label reservation) and fitting the grid's uiscale using
+BOTH the checkbox-driven AND header-text-driven components together —
+exactly what `colStep`'s own formula needs — against the remaining
+width, so the grid's total span is guaranteed to fit; the category/row
+labels get their own separate `catLabelUiscale` fit against their
+reserved column. Fixing the grid fit this way re-exposed a checkbox-
+specific rounding bug: `checkbox.new`'s internal `math.floor(size *
+uiscale)` has no floor-to-1 protection of its own, so passing it
+`(base.checkboxSize, uiscale)` separately from the already-floored
+local `cbSize` could independently round to 0 even after `cbSize`
+itself was floored — fixed by passing the pre-floored `cbSize` directly
+as `size` with `uiscale = 1.0`.
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's
