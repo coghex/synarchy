@@ -243,17 +243,29 @@ spec = around withHeadlessEngine $ do
                     mpRestored p `shouldBe` True
 
     describe "state preservation across a mere resize rebuild" $ do
-        it "settings menu never discards unapplied (pending) settings on a resize" $ \env → do
+        it "settings menu never discards an unapplied (submitted) frame-limit edit on a resize, in the pending table AND the rebuilt widget's own displayed value" $ \env → do
             ls ← newBareLuaBackend env
-            preserved ← evalBool ls $ luaLines
+            r ← evalJSON ls $ luaLines
                 [ "local m = require('scripts.settings_menu');"
                 , "m.init(1,2,3,1280,720);"
-                , "local data = require('scripts.settings.data');"
-                , "data.pending.frameLimit = 111;"
+                , "local gt = require('scripts.settings.graphics_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "gt.onTextBoxSubmit('framelimit_input', '111');"
+                , "local pendingBefore = require('scripts.settings.data').pending.frameLimit;"
+                , "local widgetBefore = textbox.getNumericValue(gt.frameLimitTextBoxId);"
                 , "m.onFramebufferResize(1600, 900);"
-                , "return data.pending.frameLimit == 111"
+                , "local pendingAfter = require('scripts.settings.data').pending.frameLimit;"
+                , "local widgetAfter = textbox.getNumericValue(gt.frameLimitTextBoxId);"
+                , "return {pendingBefore=pendingBefore, widgetBefore=widgetBefore,"
+                    <> " pendingAfter=pendingAfter, widgetAfter=widgetAfter}"
                 ]
-            preserved `shouldBe` True
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe FrameLimitProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    flPendingBefore p `shouldBe` 111
+                    flWidgetBefore p `shouldBe` 111
+                    flPendingAfter p `shouldBe` 111
+                    flWidgetAfter p `shouldBe` 111
 
         it "settings menu's active tab and clamped scroll offset survive a resize" $ \env → do
             ls ← newBareLuaBackend env
@@ -357,6 +369,104 @@ spec = around withHeadlessEngine $ do
                     oepHasSave p `shouldBe` True
                     oepValidDims p `shouldBe` True
 
+    describe "fixed action bars avoid overlap and stay in-frame at the formal minimum (800x600@1x)" $ do
+        it "create-world's bottom button bar never overlaps in the idle or done set" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.create_world_menu');"
+                , "m.init(1,2,3,800,600);"
+                , "local button = require('scripts.ui.button');"
+                , "local function box(id)"
+                , "    local info = UI.getElementInfo(button.getElementHandle(id));"
+                , "    return info.x, info.y, info.width, info.height"
+                , "end;"
+                , "local function overlap(x1,w1,x2,w2) return x1 < x2+w2 and x2 < x1+w1 end;"
+                , "local bx,by,bw,bh = box(m.backButtonId);"
+                , "local dx,dy,dw,dh = box(m.defaultsButtonId);"
+                , "local gx,gy,gw,gh = box(m.generateButtonId);"
+                , "local idleOverlap = overlap(bx,bw,dx,dw) or overlap(bx,bw,gx,gw) or overlap(dx,dw,gx,gw);"
+                , "local idleInFrame = bx >= 0 and dx >= 0 and gx >= 0"
+                    <> " and (bx+bw) <= 800 and (dx+dw) <= 800 and (gx+gw) <= 800;"
+                , "m.buildButtonsDone();"
+                , "local bx2,by2,bw2,bh2 = box(m.backButtonId);"
+                , "local dx2,dy2,dw2,dh2 = box(m.defaultsButtonId);"
+                , "local rx2,ry2,rw2,rh2 = box(m.regenerateButtonId);"
+                , "local cx2,cy2,cw2,ch2 = box(m.continueButtonId);"
+                , "local doneOverlap = overlap(bx2,bw2,dx2,dw2) or overlap(bx2,bw2,rx2,rw2)"
+                    <> " or overlap(bx2,bw2,cx2,cw2) or overlap(dx2,dw2,rx2,rw2)"
+                    <> " or overlap(dx2,dw2,cx2,cw2) or overlap(rx2,rw2,cx2,cw2);"
+                , "local doneInFrame = bx2 >= 0 and dx2 >= 0 and rx2 >= 0 and cx2 >= 0"
+                    <> " and (bx2+bw2) <= 800 and (dx2+dw2) <= 800"
+                    <> " and (rx2+rw2) <= 800 and (cx2+cw2) <= 800;"
+                , "return {idleOverlap=idleOverlap, idleInFrame=idleInFrame,"
+                    <> " doneOverlap=doneOverlap, doneInFrame=doneInFrame}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ButtonBarProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    bbIdleOverlap p `shouldBe` False
+                    bbIdleInFrame p `shouldBe` True
+                    bbDoneOverlap p `shouldBe` False
+                    bbDoneInFrame p `shouldBe` True
+
+        it "save browser's Back button stays reachable within the framebuffer with a long (12-entry) save list" $ \env → do
+            ls ← newBareLuaBackend env
+            let saveList = T.intercalate ","
+                    [ "{name='s" <> tshow (i ∷ Int) <> "',timestamp='t'}" | i ← [1 .. 12] ]
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.save_browser');"
+                , "m.init(1,2,3,800,600);"
+                , "m.show({" <> saveList <> "}, function() end, function() end);"
+                , "local function findByName(name)"
+                , "    for _, e in ipairs(UI.getVisibleElements()) do"
+                , "        if e.name == name then return e.handle end"
+                , "    end"
+                , "    return nil"
+                , "end;"
+                , "local h = findByName('save_browser_back_box');"
+                , "local info = UI.getElementInfo(h);"
+                , "return {y = info.y, bottom = info.y + info.height}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe BackButtonProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    bbpY p `shouldSatisfy` (>= 0)
+                    bbpBottom p `shouldSatisfy` (<= 600)
+
+    describe "main/pause menu compact fallback keeps the panel + title in-frame at the maximum supported scale" $
+        forM_ [ ("main", "scripts.main_menu"), ("pause", "scripts.pause_menu") ] $ \(menuName, modulePath) →
+            it (menuName ⧺ " menu at 3840x2160@4 with its maximum item count") $ \env → do
+                ls ← newBareLuaBackend env
+                r ← evalJSON ls $ luaLines
+                    -- main_menu.buildMenuItems() overwrites mainMenu.saves
+                    -- from engine.listSaves() itself, so a fake save list
+                    -- has to go through that, not a direct field poke —
+                    -- two fake saves gives main_menu its maximum 5 items
+                    -- (Continue+Load Game+Create World+Settings+Quit).
+                    ([ "engine.setUIScale(4.0);"
+                     , "engine.listSaves = function() return {{name='a',timestamp='t'},{name='b',timestamp='t'}} end;"
+                     , "local m = require('" <> modulePath <> "');"
+                     , "m.init(1,2,3,4,3840,2160);"
+                     ]
+                     ⧺ (if modulePath ≡ "scripts.pause_menu"
+                           then [ "m.show({showSave=true});" ]  -- pause_menu's own max (4 items)
+                           else [])
+                     ⧺
+                    [ "local p = require('scripts.ui.panel');"
+                    , "local px, py = p.getPosition(m.panelId);"
+                    , "local pw, ph = p.getSize(m.panelId);"
+                    , "local panelInFrame = px >= 0 and py >= 0"
+                        <> " and (px+pw) <= 3840 and (py+ph) <= 2160;"
+                    , "local titleInfo = UI.getElementInfo("
+                        <> "require('scripts.ui.label').getElementHandle(m.titleLabelId));"
+                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y}"
+                    ])
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CompactFallbackProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        cfPanelInFrame p `shouldBe` True
+                        cfTitleY p `shouldSatisfy` (>= 0)
+
 -- * Boot helpers (synthetic texture/font handles — nothing renders
 --   headless, so their numeric values are never inspected)
 
@@ -428,6 +538,15 @@ instance FromJSON MinimizeProbe where
     parseJSON = withObject "MinimizeProbe" $ \o →
         MinimizeProbe <$> o .: "unchanged" <*> o .: "restored"
 
+data FrameLimitProbe = FrameLimitProbe
+    { flPendingBefore ∷ Int, flWidgetBefore ∷ Int
+    , flPendingAfter ∷ Int, flWidgetAfter ∷ Int
+    } deriving Show
+instance FromJSON FrameLimitProbe where
+    parseJSON = withObject "FrameLimitProbe" $ \o → FrameLimitProbe
+        <$> o .: "pendingBefore" <*> o .: "widgetBefore"
+        <*> o .: "pendingAfter" <*> o .: "widgetAfter"
+
 data ScrollProbe = ScrollProbe { spCanScroll ∷ Bool, spActiveTabOk ∷ Bool, spScrollOk ∷ Bool } deriving Show
 instance FromJSON ScrollProbe where
     parseJSON = withObject "ScrollProbe" $ \o → ScrollProbe
@@ -448,6 +567,26 @@ data OutsideEnvelopeProbe = OutsideEnvelopeProbe
 instance FromJSON OutsideEnvelopeProbe where
     parseJSON = withObject "OutsideEnvelopeProbe" $ \o → OutsideEnvelopeProbe
         <$> o .: "hasBack" <*> o .: "hasApply" <*> o .: "hasSave" <*> o .: "validDims"
+
+data ButtonBarProbe = ButtonBarProbe
+    { bbIdleOverlap ∷ Bool, bbIdleInFrame ∷ Bool
+    , bbDoneOverlap ∷ Bool, bbDoneInFrame ∷ Bool
+    } deriving Show
+instance FromJSON ButtonBarProbe where
+    parseJSON = withObject "ButtonBarProbe" $ \o → ButtonBarProbe
+        <$> o .: "idleOverlap" <*> o .: "idleInFrame"
+        <*> o .: "doneOverlap" <*> o .: "doneInFrame"
+
+data BackButtonProbe = BackButtonProbe { bbpY ∷ Double, bbpBottom ∷ Double } deriving Show
+instance FromJSON BackButtonProbe where
+    parseJSON = withObject "BackButtonProbe" $ \o →
+        BackButtonProbe <$> o .: "y" <*> o .: "bottom"
+
+data CompactFallbackProbe = CompactFallbackProbe
+    { cfPanelInFrame ∷ Bool, cfTitleY ∷ Double } deriving Show
+instance FromJSON CompactFallbackProbe where
+    parseJSON = withObject "CompactFallbackProbe" $ \o →
+        CompactFallbackProbe <$> o .: "panelInFrame" <*> o .: "titleY"
 
 -- * Lua backend + eval helpers (mirrors Test.Headless.UI.InputOwnership)
 

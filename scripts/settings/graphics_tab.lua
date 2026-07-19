@@ -159,7 +159,7 @@ function graphicsTab.create(params)
     UI.setZIndex(resLabelHandle, zContent)
 
     local currentRes = data.resolutionString(
-        data.current.width, data.current.height)
+        pending.width, pending.height)
 
     graphicsTab.resolutionDropdownId = params.trackDropdown(dropdown.new({
         name              = "resolution",
@@ -223,7 +223,7 @@ function graphicsTab.create(params)
     graphicsTab.windowModeDropdownId = params.trackDropdown(dropdown.new({
         name              = "window_mode",
         options           = data.windowModes,
-        default           = data.current.windowMode,
+        default           = pending.windowMode,
         font              = font,
         fontSize          = 24,
         height            = base.dropdownHeight,
@@ -282,7 +282,7 @@ function graphicsTab.create(params)
         page    = page,
         x       = cx + cw - cbSize,
         y       = rowY(rowIndex),
-        default = data.current.vsync,
+        default = pending.vsync,
         zIndex  = zWidgets,
         onChange = function(checked, id, name)
             pending.vsync = checked
@@ -332,7 +332,7 @@ function graphicsTab.create(params)
         uiscale  = uiscale,
         font     = font,
         fontSize = 24,
-        default  = tostring(data.current.frameLimit or 60),
+        default  = tostring(pending.frameLimit or 60),
         textType = textbox.Type.NUMBER,
         zIndex   = zWidgets,
     }))
@@ -371,7 +371,7 @@ function graphicsTab.create(params)
     graphicsTab.msaaDropdownId = params.trackDropdown(dropdown.new({
         name              = "msaa",
         options           = data.msaaOptions,
-        default           = data.msaaToString(data.current.msaa),
+        default           = data.msaaToString(pending.msaa),
         font              = font,
         fontSize          = 24,
         height            = base.dropdownHeight,
@@ -430,7 +430,7 @@ function graphicsTab.create(params)
         height   = base.sliderHeight or 24,
         min      = data.brightnessMin,
         max      = data.brightnessMax,
-        default  = data.current.brightness,
+        default  = pending.brightness,
         page     = page,
         x        = cx + cw - slW,
         y        = rowY(rowIndex),
@@ -487,7 +487,7 @@ function graphicsTab.create(params)
         uiscale  = uiscale,
         font     = font,
         fontSize = 24,
-        default  = tostring(data.current.uiScale),
+        default  = tostring(pending.uiScale),
         textType = textbox.Type.SCALE,
         zIndex   = zWidgets,
     }))
@@ -531,7 +531,7 @@ function graphicsTab.create(params)
         page    = page,
         x       = cx + cw - cbSize,
         y       = rowY(rowIndex),
-        default = data.current.pixelSnap,
+        default = pending.pixelSnap,
         zIndex  = zWidgets,
         onChange = function(checked, id, name)
             pending.pixelSnap = checked
@@ -577,7 +577,7 @@ function graphicsTab.create(params)
     graphicsTab.textureFilterDropdownId = params.trackDropdown(dropdown.new({
         name              = "texture_filter",
         options           = data.textureFilterOptions,
-        default           = data.current.textureFilter,
+        default           = pending.textureFilter,
         font              = font,
         fontSize          = 24,
         height            = base.dropdownHeight,
@@ -636,7 +636,7 @@ function graphicsTab.create(params)
         height   = base.sliderHeight or 24,
         min      = data.tooltipDwellMin,
         max      = data.tooltipDwellMax,
-        default  = data.current.tooltipDwellMs,
+        default  = pending.tooltipDwellMs,
         page     = page,
         x        = cx + cw - slW,
         y        = rowY(rowIndex),
@@ -689,7 +689,7 @@ function graphicsTab.create(params)
         height   = base.sliderHeight or 24,
         min      = data.tooltipHintDelayMin,
         max      = data.tooltipHintDelayMax,
-        default  = data.current.tooltipHintDelayMs,
+        default  = pending.tooltipHintDelayMs,
         page     = page,
         x        = cx + cw - slW,
         y        = rowY(rowIndex),

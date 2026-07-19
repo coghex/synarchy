@@ -139,8 +139,19 @@ function saveBrowser.createUI()
         })
     end
 
-    -- Panel sizing
-    local visibleCount = math.min(#listItems, saveBrowser.baseSizes.maxVisible)
+    -- Panel sizing (#748: derive the visible row count from the
+    -- available height FIRST, rather than clamping the panel's outer
+    -- height after sizing it for baseSizes.maxVisible rows unconditionally
+    -- — the old order left the list + Back button overflowing whatever
+    -- got clamped away, e.g. Back landing below the framebuffer at a
+    -- long save list on an 800x600 window).
+    local maxPanelHeight = math.floor(saveBrowser.fbH * 0.85)
+    local fixedOverhead = s.panelPadY * 2 + s.titleFontSize
+                        + s.btnSpacing * 2 + s.btnHeight
+    local heightVisibleCount = math.max(1,
+        math.floor((maxPanelHeight - fixedOverhead) / s.itemHeight))
+    local visibleCount = math.min(#listItems, saveBrowser.baseSizes.maxVisible,
+        heightVisibleCount)
     if visibleCount < 1 then visibleCount = 1 end
     local listHeight = visibleCount * s.itemHeight
 
@@ -148,8 +159,7 @@ function saveBrowser.createUI()
     local contentHeight = s.titleFontSize + s.btnSpacing
                         + listHeight + s.btnSpacing
                         + s.btnHeight
-    local panelHeight = s.panelPadY * 2 + contentHeight
-    panelHeight = math.min(panelHeight, math.floor(saveBrowser.fbH * 0.85))
+    local panelHeight = math.min(s.panelPadY * 2 + contentHeight, maxPanelHeight)
 
     local panelX = (saveBrowser.fbW - panelWidth) / 2
     local panelY = (saveBrowser.fbH - panelHeight) / 2
@@ -211,7 +221,11 @@ function saveBrowser.createUI()
             itemHeight     = saveBrowser.baseSizes.itemHeight,
             textPadding    = saveBrowser.baseSizes.textPadding,
             scrollButtonSize = saveBrowser.baseSizes.scrollBtnSize,
-            maxVisible     = saveBrowser.baseSizes.maxVisible,
+            -- #748: the height-constrained count, not the raw
+            -- baseSizes.maxVisible — otherwise the list widget could
+            -- render more rows than the panel/Back-button math budgeted
+            -- space for.
+            maxVisible     = visibleCount,
             uiscale        = uiscale,
             zIndex         = baseZ + 2,
             items          = listItems,

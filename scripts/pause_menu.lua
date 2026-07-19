@@ -1,5 +1,6 @@
 -- Pause Menu Module (in-game escape menu)
 local scale = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
 local panel = require("scripts.ui.panel")
 local label = require("scripts.ui.label")
 local pauseMenu = {}
@@ -113,6 +114,17 @@ function pauseMenu.createUI()
     local uiscale = scale.get()
     local s = scale.applyAll(pauseMenu.baseSizes)
 
+    -- #748: compact fallback — see main_menu.lua's identical comment.
+    -- Shrinks this menu's own effective scale only, never the stored
+    -- UI scale, so the panel + title stay in-frame regardless of item
+    -- count or configured scale.
+    local naturalMenuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
+                             + s.buttonSpacing + s.menuPaddingY
+    local maxMenuHeight = math.floor(pauseMenu.fbH * 0.9)
+    uiscale = responsive.fitScale(
+        naturalMenuHeight + s.titleOffset, maxMenuHeight, uiscale)
+    s = scale.applyAllWith(pauseMenu.baseSizes, uiscale)
+
     pauseMenu.page = UI.newPage("pause_menu", "modal")
 
     -- Calculate max text width for sizing
@@ -129,6 +141,9 @@ function pauseMenu.createUI()
 
     local menuX = (pauseMenu.fbW - menuWidth) / 2
     local menuY = (pauseMenu.fbH - menuHeight) / 2
+    -- Clamp so the title never goes off the top edge, even if the
+    -- compact fallback above still leaves things a little tight.
+    menuY = math.max(menuY, s.titleOffset + 4)
 
     -- Background panel
     pauseMenu.panelId = panel.new({

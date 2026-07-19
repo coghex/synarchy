@@ -8,6 +8,32 @@ local bar    = require("scripts.ui.bar")
 local bottomButtons = {}
 
 -----------------------------------------------------------
+-- #748: responsive width shrink
+--
+-- The button bar's base widths (btnWidth=270, generateBtnWidth=360)
+-- are sized for a typical desktop window; at the supported envelope's
+-- 800px-wide minimum, the "done" set (Back+Defaults+Regenerate+
+-- Continue, the widest of the three button sets) doesn't fit its
+-- natural single-row width — Idle's Generate button used to overlap
+-- Defaults there. Rather than reflowing to multiple rows (which would
+-- also need the panel's own bottom padding / content-height split to
+-- change), every button width shrinks by one uniform factor computed
+-- from the WIDEST set (done) so the bar always fits in one row and
+-- never jumps size when genState changes (idle/generating share the
+-- same factor as done, even though they need less room).
+-----------------------------------------------------------
+
+local function computeButtonScaleFactor(base, boundsWidth, uiscale)
+    local maxNeededBase = base.btnWidth * 3 + base.generateBtnWidth
+                         + base.btnSpacing * 3
+    local maxNeededPx = maxNeededBase * uiscale
+    if maxNeededPx <= 0 or maxNeededPx <= boundsWidth then
+        return 1.0
+    end
+    return boundsWidth / maxNeededPx
+end
+
+-----------------------------------------------------------
 -- Shared layout helper: computes btnY and left-side positions
 -----------------------------------------------------------
 
@@ -18,11 +44,15 @@ local function computeLayout(params)
     local menu    = params.menu
     local base    = params.baseSizes
 
+    local factor  = computeButtonScaleFactor(base, L.bounds.width, uiscale)
+    local btnW    = math.floor(base.btnWidth * factor)
+    local spacing = math.floor(s.btnSpacing * factor)
+
     -- Back button
     menu.backButtonId = params.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
-        width      = base.btnWidth,
+        width      = btnW,
         height     = base.btnHeight,
         fontSize   = base.fontSize,
         uiscale    = uiscale,
@@ -39,7 +69,7 @@ local function computeLayout(params)
     menu.defaultsButtonId = params.trackButton(button.new({
         name       = "defaults_btn",
         text       = "Defaults",
-        width      = base.btnWidth,
+        width      = btnW,
         height     = base.btnHeight,
         fontSize   = base.fontSize,
         uiscale    = uiscale,
@@ -60,7 +90,7 @@ local function computeLayout(params)
                + (bottomPad - backH) / 2
 
     local backX     = L.panelX + L.bounds.x
-    local defaultsX = backX + backW + s.btnSpacing
+    local defaultsX = backX + backW + spacing
 
     UI.setPosition(button.getElementHandle(menu.backButtonId),     backX,     btnY)
     UI.setPosition(button.getElementHandle(menu.defaultsButtonId), defaultsX, btnY)
@@ -73,6 +103,8 @@ local function computeLayout(params)
         backH      = backH,
         defaultsW  = defaultsW,
         defaultsX  = defaultsX,
+        factor     = factor,
+        spacing    = spacing,
     }
 end
 
@@ -89,11 +121,12 @@ function bottomButtons.buildIdle(params)
     local base    = params.baseSizes
 
     local layout = computeLayout(params)
+    local primaryW = math.floor(base.generateBtnWidth * layout.factor)
 
     menu.generateButtonId = params.trackButton(button.new({
         name       = "generate_btn",
         text       = "Generate World",
-        width      = base.generateBtnWidth,
+        width      = primaryW,
         height     = base.btnHeight,
         fontSize   = base.fontSize,
         uiscale    = uiscale,
@@ -126,11 +159,13 @@ function bottomButtons.buildGenerating(params)
     local base    = params.baseSizes
 
     local layout = computeLayout(params)
-
-    -- Progress bar in the same slot as the Generate/Continue button
-    local barWidth = base.generateBtnWidth
+    -- bar.new (like button.new) multiplies width by uiscale itself, so
+    -- barWidthBase is the UNSCALED value passed in; scaledBarW is only
+    -- for the X-position math here, matching button.getSize's contract
+    -- on the sibling Generate/Continue buttons.
+    local barWidthBase = math.floor(base.generateBtnWidth * layout.factor)
+    local scaledBarW = math.floor(barWidthBase * uiscale)
     local barHeight = base.btnHeight
-    local scaledBarW = math.floor(barWidth * uiscale)
     local barX = L.panelX + L.bounds.x + L.bounds.width - scaledBarW
     local barY = layout.btnY
 
@@ -139,7 +174,7 @@ function bottomButtons.buildGenerating(params)
         page           = params.page,
         x              = barX,
         y              = barY,
-        width          = barWidth,
+        width          = barWidthBase,
         height         = barHeight,
         capWidth       = 8,
         trackLeftTex   = params.barTextures.trackLeft,
@@ -168,16 +203,17 @@ function bottomButtons.buildDone(params)
 
     local L       = params.btnLayout
     local uiscale = L.uiscale
-    local s       = L.s
     local menu    = params.menu
     local base    = params.baseSizes
 
     local layout = computeLayout(params)
+    local btnW     = math.floor(base.btnWidth * layout.factor)
+    local primaryW = math.floor(base.generateBtnWidth * layout.factor)
 
     menu.regenerateButtonId = params.trackButton(button.new({
         name       = "regenerate_btn",
         text       = "Regenerate",
-        width      = base.btnWidth,
+        width      = btnW,
         height     = base.btnHeight,
         fontSize   = base.fontSize,
         uiscale    = uiscale,
@@ -193,7 +229,7 @@ function bottomButtons.buildDone(params)
     menu.continueButtonId = params.trackButton(button.new({
         name       = "continue_btn",
         text       = "Continue",
-        width      = base.generateBtnWidth,
+        width      = primaryW,
         height     = base.btnHeight,
         fontSize   = base.fontSize,
         uiscale    = uiscale,
@@ -209,7 +245,7 @@ function bottomButtons.buildDone(params)
     local regenW, _    = button.getSize(menu.regenerateButtonId)
     local contW, _     = button.getSize(menu.continueButtonId)
 
-    local regenX    = layout.defaultsX + layout.defaultsW + s.btnSpacing
+    local regenX    = layout.defaultsX + layout.defaultsW + layout.spacing
     local contX     = L.panelX + L.bounds.x + L.bounds.width - contW
 
     UI.setPosition(button.getElementHandle(menu.regenerateButtonId), regenX,    layout.btnY)

@@ -61,6 +61,28 @@ function responsive.isSupported(fbW, fbH, uiscale)
 end
 
 -----------------------------------------------------------
+-- Compact-fallback primitive
+--
+-- A menu whose natural size scales with item count x uiscale (main/
+-- pause's vertical button stack) can overflow the framebuffer at a
+-- high scale or with many items — main_menu's own panel going
+-- off-screen at 3840x2160@4x with 5 items is the concrete case this
+-- closes. `fitScale` returns an EFFECTIVE scale (<= the given uiscale)
+-- that keeps `naturalSizeAtUiscale` within `maxSize`, for a caller to
+-- re-derive its own scaled sizes from (e.g. via
+-- `scale.applyAllWith(baseSizes, responsive.fitScale(...))`) — never
+-- the stored/configured UI scale itself, only this one screen's own
+-- layout. Returns `uiscale` unchanged when it already fits.
+-----------------------------------------------------------
+
+function responsive.fitScale(naturalSizeAtUiscale, maxSize, uiscale)
+    if naturalSizeAtUiscale <= maxSize or naturalSizeAtUiscale <= 0 then
+        return uiscale
+    end
+    return uiscale * (maxSize / naturalSizeAtUiscale)
+end
+
+-----------------------------------------------------------
 -- Shared notification registry
 --
 -- A screen registers itself once (see scripts/ui_manager_boot.lua);

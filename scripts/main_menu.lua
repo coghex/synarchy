@@ -1,5 +1,6 @@
 -- Main Menu Module (pure module, no global callbacks)
 local scale = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
 local panel = require("scripts.ui.panel")
 local label = require("scripts.ui.label")
 local mainMenu = {}
@@ -142,6 +143,19 @@ function mainMenu.createUI()
     local uiscale = scale.get()
     local s = scale.applyAll(mainMenu.baseSizes)
 
+    -- #748: compact fallback — many items (Continue + Load Game both
+    -- present) at a high UI scale can stack taller than the
+    -- framebuffer; shrink this menu's OWN effective scale (never the
+    -- stored/configured UI scale) so the panel + title stay in-frame.
+    -- The budget includes titleOffset as headroom for the title, which
+    -- floats above the panel at `menuY - s.titleOffset`.
+    local naturalMenuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
+                             + s.buttonSpacing + s.menuPaddingY
+    local maxMenuHeight = math.floor(mainMenu.fbH * 0.9)
+    uiscale = responsive.fitScale(
+        naturalMenuHeight + s.titleOffset, maxMenuHeight, uiscale)
+    s = scale.applyAllWith(mainMenu.baseSizes, uiscale)
+
     engine.logDebug("Creating main menu with framebuffer size: "
         .. mainMenu.fbW .. " x " .. mainMenu.fbH
         .. ", scale: " .. uiscale
@@ -163,6 +177,10 @@ function mainMenu.createUI()
 
     local menuX = (mainMenu.fbW - menuWidth) / 2
     local menuY = (mainMenu.fbH - menuHeight) / 2
+    -- Clamp so the title (floats above the panel at
+    -- `menuY - s.titleOffset`) never goes off the top edge, even if
+    -- the compact fallback above still leaves things a little tight.
+    menuY = math.max(menuY, s.titleOffset + 4)
 
     -- Background panel
     mainMenu.panelId = panel.new({
