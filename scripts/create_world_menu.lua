@@ -399,6 +399,30 @@ function createWorldMenu.createUI(opts)
     local maxOverhead = 0.34 * createWorldMenu.fbW - CONTENT_MIN
     uiscale = responsive.fitScale(naturalOverhead, maxOverhead, uiscale)
 
+    -- #748: second refinement pass — the tab BAR itself (its three
+    -- "General"/"Geology"/"Timeline" buttons, each textWidth + 2*10px
+    -- padding per scripts/ui/tabbar.lua) must also fit within
+    -- leftBounds.width = 0.34*fbW - 60*uiscale (the same uiscale-
+    -- dependent padding chain, one step short of the extra tab-content
+    -- padding contentW itself subtracts). The per-control shrink above
+    -- only ever narrows CONTROLS inside the tab frame, never the tab
+    -- BAR's own buttons, which the previous fallback didn't account
+    -- for. Measures real tab-label width (0 headless, like every other
+    -- text-width-dependent check in this file — only meaningful with a
+    -- real font in a graphical boot) so the fallback only tightens
+    -- further when actual label metrics need it to.
+    do
+        local tabFontSize = math.floor(createWorldMenu.baseSizes.tabFontSize * uiscale)
+        local totalTabTextWidth = 0
+        for _, def in ipairs(tabDefs) do
+            totalTabTextWidth = totalTabTextWidth
+                + engine.getTextWidth(createWorldMenu.menuFont, def.name, tabFontSize)
+        end
+        local naturalTabOverhead = totalTabTextWidth + 120 * uiscale
+        local maxTabOverhead = 0.34 * createWorldMenu.fbW
+        uiscale = responsive.fitScale(naturalTabOverhead, maxTabOverhead, uiscale)
+    end
+
     local s = scale.applyAllWith(createWorldMenu.baseSizes, uiscale)
 
     createWorldMenu.page = UI.newPage("create_world_menu", "modal")

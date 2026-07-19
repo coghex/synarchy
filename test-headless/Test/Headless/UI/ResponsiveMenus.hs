@@ -573,7 +573,7 @@ spec = around withHeadlessEngine $ do
                     wnpX p `shouldSatisfy` (>= 0)
                     wnpRightEdge p `shouldSatisfy` (<= 800)
 
-    describe "main/pause menu compact fallback keeps the panel + title in-frame at the maximum supported scale" $
+    describe "main/pause menu compact fallback keeps the panel + title in-frame at the maximum supported scale" $ do
         forM_ [ ("main", "scripts.main_menu"), ("pause", "scripts.pause_menu") ] $ \(menuName, modulePath) →
             it (menuName ⧺ " menu at 3840x2160@4 with its maximum item count") $ \env → do
                 ls ← newBareLuaBackend env
@@ -607,7 +607,71 @@ spec = around withHeadlessEngine $ do
                         cfPanelInFrame p `shouldBe` True
                         cfTitleY p `shouldSatisfy` (>= 0)
 
-    describe "create-world's compact fallback keeps tab content in-frame at a narrow, high-scale supported combination" $
+        forM_ [ ("main", "scripts.main_menu"), ("pause", "scripts.pause_menu") ] $ \(menuName, modulePath) →
+            it (menuName ⧺ " menu at 800x2160@4 (narrow width, not just short height — fixed button/menu padding alone used to overflow horizontally)") $ \env → do
+                ls ← newBareLuaBackend env
+                r ← evalJSON ls $ luaLines
+                    ([ "engine.setUIScale(4.0);"
+                     , "local m = require('" <> modulePath <> "');"
+                     , "m.init(1,2,3,4,800,2160);"
+                     ]
+                     ⧺ (if modulePath ≡ "scripts.pause_menu"
+                           then [ "m.show({showSave=false});" ]
+                           else [])
+                     ⧺
+                    [ "local p = require('scripts.ui.panel');"
+                    , "local px, py = p.getPosition(m.panelId);"
+                    , "local pw, ph = p.getSize(m.panelId);"
+                    , "local panelInFrame = px >= 0 and py >= 0"
+                        <> " and (px+pw) <= 800 and (py+ph) <= 2160;"
+                    , "local titleInfo = UI.getElementInfo("
+                        <> "require('scripts.ui.label').getElementHandle(m.titleLabelId));"
+                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y}"
+                    ])
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CompactFallbackProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        cfPanelInFrame p `shouldBe` True
+                        cfTitleY p `shouldSatisfy` (>= 0)
+
+    describe "save browser stays in-frame at a narrow, high-scale supported combination" $
+        it "800x2160@4x (panel width is a fixed 0.6 fraction of the framebuffer that doesn't scale with uiscale, while its side padding does — bounds.width used to go to zero)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local m = require('scripts.save_browser');"
+                , "m.init(1,2,3,800,2160);"
+                , "m.show({{name='only',timestamp='t'}}, function() end, function() end);"
+                , "local p = require('scripts.ui.panel');"
+                , "local px, py = p.getPosition(m.panelId);"
+                , "local pw, ph = p.getSize(m.panelId);"
+                , "return {panelInFrame = (px >= 0 and py >= 0"
+                    <> " and (px+pw) <= 800 and (py+ph) <= 2160), validWidth = (pw > 0)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe SaveBrowserExtremeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    sbepPanelInFrame p `shouldBe` True
+                    sbepValidWidth p `shouldBe` True
+
+    describe "settings menu's tab content stays in-frame at a narrow, high-scale supported combination" $
+        it "800x2160@4x (the frame-limit textbox's unshrunk base width used to be positioned off the left edge)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , bootSettings 800 2160
+                , "local gt = require('scripts.settings.graphics_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local info = UI.getElementInfo(textbox.getElementHandle(gt.frameLimitTextBoxId));"
+                , "return {x = info.x, rightEdge = info.x + info.width}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    wnpX p `shouldSatisfy` (>= 0)
+                    wnpRightEdge p `shouldSatisfy` (<= 800)
+
+    describe "create-world's compact fallback keeps tab content in-frame at a narrow, high-scale supported combination" $ do
         it "800x2160@4x (fixed paddings alone used to drive contentW negative)" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -629,6 +693,25 @@ spec = around withHeadlessEngine $ do
                 Just p → do
                     cwepPanelInFrame p `shouldBe` True
                     cwepNameX p `shouldSatisfy` (>= 0)
+                    cwepNameRightEdge p `shouldSatisfy` (<= 800)
+
+        it "800x2160@4x keeps the tab BAR itself in-frame (tab label text width alone used to overflow the panel independent of the content-width fix)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , bootCreateWorld 800 2160
+                , "local tabbar = require('scripts.ui.tabbar');"
+                , "local tbx, tby, tbw, tbh = tabbar.getFrameBounds(m.tabBarId);"
+                , "local p = require('scripts.ui.panel');"
+                , "local px, py = p.getPosition(m.panelId);"
+                , "local pw, ph = p.getSize(m.panelId);"
+                , "return {panelInFrame = (tbx >= 0 and (tbx+tbw) <= 800 and tbw > 0),"
+                    <> " nameX = px, nameRightEdge = px + pw}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CreateWorldExtremeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cwepPanelInFrame p `shouldBe` True
                     cwepNameRightEdge p `shouldSatisfy` (<= 800)
 
     describe "keyboard control focus (#745) survives a resize rebuild" $ do
@@ -801,6 +884,12 @@ data CompactFallbackProbe = CompactFallbackProbe
 instance FromJSON CompactFallbackProbe where
     parseJSON = withObject "CompactFallbackProbe" $ \o →
         CompactFallbackProbe <$> o .: "panelInFrame" <*> o .: "titleY"
+
+data SaveBrowserExtremeProbe = SaveBrowserExtremeProbe
+    { sbepPanelInFrame ∷ Bool, sbepValidWidth ∷ Bool } deriving Show
+instance FromJSON SaveBrowserExtremeProbe where
+    parseJSON = withObject "SaveBrowserExtremeProbe" $ \o → SaveBrowserExtremeProbe
+        <$> o .: "panelInFrame" <*> o .: "validWidth"
 
 data TextboxStateProbe = TextboxStateProbe
     { tspText ∷ Text, tspCursor ∷ Int, tspFocused ∷ Bool } deriving Show

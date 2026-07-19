@@ -493,11 +493,22 @@ end
 -- Build the param table a tab's create() receives. Shared by the full
 -- build (createAllTabs) and the Input-tab-only refresh so both stay in
 -- sync. `ts` must already have contentX/contentY/contentW set.
-function settingsMenu.tabCreateParams(uiscale, s, ts)
+--
+-- #748: `contentBase` (falls back to settingsMenu.baseSizes when no
+-- shrink is needed) shrinks the tab-content-relevant width fields
+-- (textboxWidth/sliderWidth/checkboxSize) uniformly by one factor when
+-- the tab content area is too narrow for them — e.g. the supported
+-- 800x2160@4x combination, where the panel's own side padding alone
+-- leaves only ~80px of tab content width, far less than a slider's
+-- unshrunk 200px base width at 4x. Mirrors create_world_menu's
+-- identical technique for its own left-panel controls: a shallow-
+-- copied baseSizes table, so the tab modules themselves (which just
+-- read whatever `params.baseSizes` they're handed) need no changes.
+function settingsMenu.tabCreateParams(uiscale, s, ts, contentBase)
     return {
         page            = settingsMenu.page,
         font            = settingsMenu.menuFont,
-        baseSizes       = settingsMenu.baseSizes,
+        baseSizes       = contentBase or settingsMenu.baseSizes,
         uiscale         = uiscale,
         s               = s,
         contentX        = ts.contentX,
@@ -535,6 +546,20 @@ function settingsMenu.createAllTabs(s, uiscale)
 
     local maxVisibleRows = math.max(1, math.floor(contentH / s.rowSpacing))
 
+    -- #748: see tabCreateParams' comment above.
+    local base = settingsMenu.baseSizes
+    local widestControlBase = math.max(base.sliderWidth or 200, base.textboxWidth)
+    local naturalWidestControl = widestControlBase * uiscale
+    local contentBase = base
+    if naturalWidestControl > 0 and naturalWidestControl > contentW * 0.9 then
+        local factor = (contentW * 0.9) / naturalWidestControl
+        contentBase = {}
+        for k, v in pairs(base) do contentBase[k] = v end
+        contentBase.textboxWidth = base.textboxWidth * factor
+        contentBase.sliderWidth = (base.sliderWidth or 200) * factor
+        contentBase.checkboxSize = base.checkboxSize * factor
+    end
+
     for _, def in ipairs(tabDefs) do
         local ts      = settingsMenu.tabScroll[def.key]
         ts.contentX   = contentX
@@ -544,7 +569,7 @@ function settingsMenu.createAllTabs(s, uiscale)
         ts.scrollOffset = 0
 
         -- Call the tab's create function
-        ts.rowHandles = def.create(settingsMenu.tabCreateParams(uiscale, s, ts))
+        ts.rowHandles = def.create(settingsMenu.tabCreateParams(uiscale, s, ts, contentBase))
 
         -- Scrollbar if needed
         local totalRows = #ts.rowHandles

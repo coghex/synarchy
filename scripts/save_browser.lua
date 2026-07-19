@@ -123,21 +123,36 @@ function saveBrowser.createUI()
     local uiscale = scale.get()
     local s = scale.applyAllWith(saveBrowser.baseSizes, uiscale)
 
-    -- #748: compact fallback — at a high UI scale and a short
-    -- framebuffer (e.g. the outside-envelope 800x600@4x combination),
-    -- the FIXED chrome alone (padding + title + one button row) can
-    -- exceed the size cap before any list rows are even considered,
-    -- which the row-count-from-height fit below can't fix on its own
-    -- (it only ever reduces rows to a minimum of 1). Shrinks this
-    -- screen's own effective scale, never the stored UI scale, so Back
-    -- stays reachable in-frame.
+    -- #748: compact fallback — at a high UI scale and a short/narrow
+    -- framebuffer (e.g. the supported 800x2160@4x combination), the
+    -- FIXED chrome alone can exceed the size cap in either dimension
+    -- before any list rows are even considered, which the
+    -- row-count-from-height fit below can't fix on its own (it only
+    -- ever reduces rows to a minimum of 1, and doesn't touch width at
+    -- all). Shrinks this screen's own effective scale, never the
+    -- stored UI scale, against BOTH budgets — the panel's own WIDTH is
+    -- a fixed 0.6 fraction of the framebuffer that does NOT scale with
+    -- uiscale at all, while its side padding does, so a narrow
+    -- framebuffer at a high scale can drive bounds.width to zero or
+    -- negative independently of the height fit — taking whichever
+    -- constraint is tighter so Back and the list stay reachable and
+    -- in-frame.
     local maxPanelHeight = math.floor(saveBrowser.fbH * 0.85)
     local naturalFixedOverhead = (saveBrowser.baseSizes.panelPadY * 2
         + saveBrowser.baseSizes.titleFontSize
         + saveBrowser.baseSizes.btnSpacing * 2
         + saveBrowser.baseSizes.itemHeight
         + saveBrowser.baseSizes.btnHeight) * uiscale
-    uiscale = responsive.fitScale(naturalFixedOverhead, maxPanelHeight, uiscale)
+    local scaleForHeight = responsive.fitScale(naturalFixedOverhead, maxPanelHeight, uiscale)
+
+    local panelWidthNatural = math.floor(saveBrowser.fbW * 0.6)
+    local CONTENT_WIDTH_MIN = 200
+    local naturalHorizontalOverhead = saveBrowser.baseSizes.panelPadX * 2 * uiscale
+    local maxHorizontalOverhead = panelWidthNatural - CONTENT_WIDTH_MIN
+    local scaleForWidth = responsive.fitScale(
+        naturalHorizontalOverhead, maxHorizontalOverhead, uiscale)
+
+    uiscale = math.min(scaleForHeight, scaleForWidth)
     s = scale.applyAllWith(saveBrowser.baseSizes, uiscale)
 
     saveBrowser.page = UI.newPage("save_browser", "modal")

@@ -144,16 +144,36 @@ function mainMenu.createUI()
     local s = scale.applyAll(mainMenu.baseSizes)
 
     -- #748: compact fallback — many items (Continue + Load Game both
-    -- present) at a high UI scale can stack taller than the
-    -- framebuffer; shrink this menu's OWN effective scale (never the
-    -- stored/configured UI scale) so the panel + title stay in-frame.
-    -- The budget includes titleOffset as headroom for the title, which
-    -- floats above the panel at `menuY - s.titleOffset`.
+    -- present) at a high UI scale can overflow the framebuffer either
+    -- vertically (stacking taller than it) OR horizontally (fixed
+    -- button/menu padding alone, at a narrow width like the supported
+    -- 800x2160@4x combination, can already exceed the framebuffer
+    -- before any label text is even measured). Shrinks this menu's OWN
+    -- effective scale (never the stored/configured UI scale) against
+    -- BOTH budgets and takes whichever constraint is tighter, so the
+    -- panel + title always stay in-frame in both dimensions. The
+    -- height budget includes titleOffset as headroom for the title,
+    -- which floats above the panel at `menuY - s.titleOffset`.
+    local function measureMaxLabelWidth(fontSize)
+        local maxW = 0
+        for _, item in ipairs(menuItems) do
+            local w = engine.getTextWidth(mainMenu.menuFont, item.label, fontSize)
+            if w > maxW then maxW = w end
+        end
+        return maxW
+    end
+
     local naturalMenuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
                              + s.buttonSpacing + s.menuPaddingY
+    local naturalMenuWidth = measureMaxLabelWidth(s.fontSize)
+                            + s.buttonPaddingX + s.menuPaddingX
     local maxMenuHeight = math.floor(mainMenu.fbH * 0.9)
-    uiscale = responsive.fitScale(
+    local maxMenuWidth = math.floor(mainMenu.fbW * 0.9)
+    local scaleForHeight = responsive.fitScale(
         naturalMenuHeight + s.titleOffset, maxMenuHeight, uiscale)
+    local scaleForWidth = responsive.fitScale(
+        naturalMenuWidth, maxMenuWidth, uiscale)
+    uiscale = math.min(scaleForHeight, scaleForWidth)
     s = scale.applyAllWith(mainMenu.baseSizes, uiscale)
 
     engine.logDebug("Creating main menu with framebuffer size: "
@@ -163,12 +183,8 @@ function mainMenu.createUI()
 
     mainMenu.page = UI.newPage("main_menu", "menu")
 
-    -- Calculate max text width for sizing
-    local maxLabelWidth = 0
-    for _, item in ipairs(menuItems) do
-        local w = engine.getTextWidth(mainMenu.menuFont, item.label, s.fontSize)
-        if w > maxLabelWidth then maxLabelWidth = w end
-    end
+    -- Re-measure at the (possibly now-shrunk) final fontSize.
+    local maxLabelWidth = measureMaxLabelWidth(s.fontSize)
 
     local itemWidth  = maxLabelWidth + s.buttonPaddingX
     local menuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
@@ -177,9 +193,12 @@ function mainMenu.createUI()
 
     local menuX = (mainMenu.fbW - menuWidth) / 2
     local menuY = (mainMenu.fbH - menuHeight) / 2
-    -- Clamp so the title (floats above the panel at
-    -- `menuY - s.titleOffset`) never goes off the top edge, even if
-    -- the compact fallback above still leaves things a little tight.
+    -- Clamp so the panel's left edge, and the title (floats above the
+    -- panel at `menuY - s.titleOffset`), never go off-frame even if the
+    -- compact fallback above still leaves things a little tight (e.g.
+    -- real glyph metrics measuring wider than the estimate it shrank
+    -- against).
+    menuX = math.max(menuX, 0)
     menuY = math.max(menuY, s.titleOffset + 4)
 
     -- Background panel
