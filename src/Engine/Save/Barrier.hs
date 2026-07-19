@@ -17,7 +17,7 @@ import qualified Data.Text as T
 import Control.Concurrent.STM
 
 data SaveOwner = SaveLua | SaveWorld | SaveUnit | SaveBuilding | SaveCombat
-               | SaveSimulation | SaveInput
+               | SaveSimulation | SaveInput | SaveRender
     deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | 'SaveEncoding' (#758) is the window between "the snapshot is
@@ -65,11 +65,23 @@ beginSave (SaveBarrier next status) owners = atomically $ do
                 , ssOutcome = Nothing }
             pure $ Right n
 
+-- | An acknowledgment from an 'owner' that isn't a member of THIS
+--   transaction's own 'ssOwners' (round 15 review, issue #763: a
+--   conditionally-registered owner like 'SaveRender'/'SaveInput' may
+--   still be ticking and acking during a transaction that never
+--   included it — e.g. the render thread's per-tick ack during a plain
+--   save, which never lists 'SaveRender') is a no-op, not an insert:
+--   'Set.insert'ing it into 'ssAcknowledged' regardless of membership
+--   would permanently break the exact-set-equality check
+--   ('acks ≡ ssOwners s') this whole protocol is built on, wedging
+--   that transaction until 'waitForOwners' times out even once every
+--   REAL owner has acked.
 acknowledgeSave ∷ SaveBarrier → Int → SaveOwner → IO ()
 acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
     current ← readTVar status
     forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
-            ∧ ssPhase s ≠ SaveSnapshotBoundary ∧ ssPhase s ≠ SaveEncoding) $ do
+            ∧ ssPhase s ≠ SaveSnapshotBoundary ∧ ssPhase s ≠ SaveEncoding
+            ∧ Set.member owner (ssOwners s)) $ do
         let acks = Set.insert owner (ssAcknowledged s)
         if acks ≡ ssOwners s ∧ ssQuiescencePasses s + 1 < requiredQuiescencePasses
             -- One full drain is not a boundary: a command handled by the

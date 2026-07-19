@@ -14,6 +14,7 @@ import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
 import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Types (ecHeadless)
 import Engine.Input.Types (keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
@@ -376,10 +377,31 @@ handleLoadStaged env ls requestId = do
     -- home ("Engine.Save.Barrier") is what Engine.Core.State already
     -- depends on for SaveBarrier itself, so importing EngineEnv there
     -- would cycle.
+    --
+    -- Round 15 review, revised: SaveRender is included the same way,
+    -- for the same reason — a headless boot ('App.Headless') never
+    -- runs 'Engine.Loop.mainLoop'/'mainLoopOffscreen' at all, so
+    -- nothing would ever acknowledge it there. This is the fix for the
+    -- render/offscreen main thread's own camera updates and
+    -- Lua-to-engine message processing racing this publish
+    -- ('World.Load.Publish.publishStagedSession' writes cameraRef and
+    -- friends): a bare 'captureLocked' pre-check in that loop (the
+    -- first attempt at this fix) is only a point-in-time read, not
+    -- real quiescence — the barrier could reach the snapshot boundary
+    -- and publish between the check and the work it gates, since that
+    -- thread wasn't a real SaveOwner at all and nothing waited for it.
+    -- Making it a genuine owner (see 'Engine.Loop.runGatedByCaptureLock')
+    -- means 'waitForOwners' below cannot succeed — and therefore
+    -- 'reachSnapshot'/the publish can't happen — until that thread has
+    -- already acknowledged the end of its OWN last unlocked tick,
+    -- closing the window structurally instead of by timing.
     inputActive ← readIORef (inputThreadActiveRef env)
     let baseOwners = Set.fromList
             [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
-        owners = if inputActive then Set.insert SaveInput baseOwners else baseOwners
+        withInput = if inputActive then Set.insert SaveInput baseOwners else baseOwners
+        owners = if ecHeadless (engineConfig env)
+                     then withInput
+                     else Set.insert SaveRender withInput
     started ← beginSave (saveBarrierRef env) owners
     case started of
       Left err → do
