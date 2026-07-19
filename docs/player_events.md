@@ -650,7 +650,9 @@ Everything else stays:
 - `scripts/flora_loader.lua` / `scripts/building_loader.lua` logs — dev info, stays
 - `pause.lua` "Game paused/resumed" log — dev info, stays
 - `scripts/lib/save_modules.lua` pcall-warns — dev only, stays
-- `collectLuaBlobs` / `restoreLuaBlobs` warnings — dev only, stays
+- `collectLuaComponents` / `describeLuaComponents` / `prepareLuaLoad` /
+  `applyLuaLoad` warnings (`Engine.Scripting.Lua.API.Save`, issue #761 —
+  formerly `collectLuaBlobs` / `restoreLuaBlobs`) — dev only, stays
 - `listSaves` corrupt-save skips — dev only (Phase 2 may surface in log panel)
 - Orphan IDs on load (`Save.hs:275-279, 296-300`) — already uses
   `sendGenLog` for visible summary; that's fine, keep it

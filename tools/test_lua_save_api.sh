@@ -24,7 +24,8 @@ cleanup() {
         echo 'engine.quit()' | nc -w 2 localhost $PORT >/dev/null 2>&1 || true
         wait $HPID 2>/dev/null || true
     fi
-    rm -rf "saves/${TEST_SAVE_NAME}" "saves/${SECOND_SAVE_NAME}" 2>/dev/null
+    rm -rf "saves/${TEST_SAVE_NAME}" "saves/${SECOND_SAVE_NAME}" \
+        "saves/${TEST_SAVE_NAME}_broken" "saves/${TEST_SAVE_NAME}_recovered" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -304,6 +305,57 @@ assert_eq "activeLineCount is a function" "true" \
     "type(require('scripts.popup').activeLineCount) == 'function'"
 assert_eq "activeLastLineCount is a function" "true" \
     "type(require('scripts.popup').activeLastLineCount) == 'function'"
+
+echo "[22] a REQUIRED Lua save component's snapshot failure aborts the \
+whole save (issue #761 requirement 6)"
+# Step [8] already loaded '${TEST_SAVE_NAME}', which lands under
+# 'main_world' regardless of its original page name (documented
+# convention) -- the original 'test' page id is gone by this point, so
+# every saveWorld call below MUST target 'main_world', not 'test'
+# (targeting the now-nonexistent 'test' would make saveWorld return
+# false for "world not found" regardless of the injected failure,
+# silently never exercising this case at all).
+# Temporarily break unit_ai's registered snapshot function so
+# saveModules.snapshotAll() reports {ok=false}. engine.saveWorld must
+# then return false and never queue a WorldSave command -- no partial
+# save, no stale barrier. Stash the original in a Lua global so it
+# survives across separate debug-console connections.
+lua "engine.setPaused(false)" > /dev/null
+lua "local sm = require('scripts.lib.save_modules'); \
+     _G.__smoke_orig_snapshot = sm.registry.unit_ai.snapshot; \
+     sm.registry.unit_ai.snapshot = function() error('smoke-injected failure') end" > /dev/null
+assert_eq "save fails when a required component's snapshot throws" \
+    "false" "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_broken')"
+assert_eq "no save directory was created for the aborted save" \
+    "false" \
+    "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}_broken' then return true end end return false end)()"
+lua "local sm = require('scripts.lib.save_modules'); \
+     sm.registry.unit_ai.snapshot = _G.__smoke_orig_snapshot; \
+     _G.__smoke_orig_snapshot = nil" > /dev/null
+sleep 0.3
+assert_eq "a normal save still succeeds once restored" "true" \
+    "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_recovered')"
+# engine.saveWorld returns on enqueue -- poll listSaves (same idiom as
+# [7] above) until the recovery save has actually landed on disk, so
+# this proves the barrier genuinely recovered and completed a REAL
+# save, not merely that a command was queued. Written as an
+# immediately-invoked function expression (matching [7]'s own working
+# "newer save sorts first" query below) rather than a bare
+# local-then-return chunk: `lua()`/`assert_eq` always prepend an extra
+# "return ", and a chunk that already ends in its own top-level
+# `return` can't follow another `return` (nor does the debug console's
+# no-wrap fallback help, since the chunk still starts with `local`).
+RECOVERED_QUERY="(function() local list = engine.listSaves(); for _, s in ipairs(list) do if s.name == '${TEST_SAVE_NAME}_recovered' then return true end end return false end)()"
+RECOVERED_SEEN=false
+for _i in $(seq 1 40); do
+    if [ "$(lua "return ${RECOVERED_QUERY}")" = "true" ]; then
+        RECOVERED_SEEN=true
+        break
+    fi
+    sleep 0.25
+done
+assert_eq "the recovery save actually completed and is listed" "true" \
+    "$RECOVERED_SEEN"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""

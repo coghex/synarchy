@@ -65,8 +65,10 @@ import World.Save.Component.Entities
 --   on load, never merely written-and-ignored (the blocker this closes).
 --   The folds:
 --
---   - global components ('core-session'/'texture-palette'/'lua-state')
---     write the session-wide scalars/camera/palette/Lua blobs;
+--   - global components ('core-session'/'texture-palette') write the
+--     session-wide scalars/camera/palette (Lua-owned state is NOT here
+--     at all since #761 — see "World.Save.Component.Types"'s
+--     'luaComponentPrefix' haddock);
 --   - 'world-pages' installs the base 'PageSnapshot' map every page-scoped
 --     component then writes onto;
 --   - each page-scoped component overwrites its own slice of every page
@@ -83,8 +85,6 @@ saveComponentRegistry =
         (\_ d snap → Right (applyCoreSession d snap))
     , registerComponent texPaletteCodec
         (\_ d snap → Right (coreSessionTexPalette d snap))
-    , registerComponent luaStateCodec
-        (\_ d snap → Right (coreSessionLua d snap))
     , registerComponent worldPagesCodec
         (\_ d snap → Right snap { snapPages = basePageSnapshots d })
     , registerComponent worldEditsCodec
@@ -240,7 +240,6 @@ assembleSnapshot meta de = do
         , snapNextItemId     = 0
         , snapNextBuildingId = 0
         , snapNextUnitId     = 0
-        , snapLuaModules     = HM.empty
         , snapActivePage     = WorldPageId ""
         , snapVisiblePages   = []
         , snapLiveCamera     = LiveCameraSnapshot

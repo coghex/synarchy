@@ -20,6 +20,7 @@ import Test.Hspec
 import Control.Exception (finally, catch, SomeException)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Data.Either (isLeft)
@@ -109,7 +110,6 @@ minimalGlobals = SessionGlobals
     , sgNextItemId     = 1
     , sgNextBuildingId = 1
     , sgNextUnitId     = 1
-    , sgLuaModules     = HM.singleton "pause" "placeholder-blob"
     , sgActivePage     = page1
     , sgVisiblePages   = [page1]
     , sgLiveCamera     = LiveCameraSnapshot
@@ -135,7 +135,7 @@ buildEncoded ∷ Word64 → Text → Text → (SaveMetadata, BS.ByteString)
 buildEncoded seed name ts =
     let snap = snapshotWithSeed seed
         meta = snapshotSaveMetadata (SaveRequestMeta name ts) snap
-    in (meta, encodeSessionSnapshot meta snap)
+    in (meta, encodeSessionSnapshot meta snap [])
 
 -- | A STRUCTURALLY VALID, fully checksummed envelope (every checksum
 --   agrees — 'encodeSessionSnapshot' always computes real ones,
@@ -151,7 +151,7 @@ emptyPagesBytes ∷ BS.ByteString
 emptyPagesBytes =
     let snap = (snapshotWithSeed 1) { snapPages = HM.empty }
         meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-empty") snap
-    in encodeSessionSnapshot meta snap
+    in encodeSessionSnapshot meta snap []
 
 -- ---------------------------------------------------------------------
 -- Scratch directory
@@ -207,7 +207,7 @@ withTempSlotDir action = do
 publishOK ∷ FilePath → Text → Word64 → Text → Text → IO SaveMetadata
 publishOK dir slot seed name ts = do
     let (meta, bytes) = buildEncoded seed name ts
-    r ← publishGeneration dir slot meta bytes
+    r ← publishGeneration dir slot meta bytes HS.empty HS.empty
     case r of
         Right _warnings → pure meta
         Left failure    → do
@@ -274,7 +274,7 @@ spec = do
         it "publishes a first generation with no previous generation" $
             withTempSlotDir $ \dir → do
                 let (meta, bytes) = buildEncoded 1 "slot" "t1"
-                r ← publishGeneration dir "slot" meta bytes
+                r ← publishGeneration dir "slot" meta bytes HS.empty HS.empty
                 r `shouldBe` Right []
                 BS.readFile (authPath dir) `shouldReturn` bytes
                 doesFileExist (prevPath dir) `shouldReturn` False
@@ -287,7 +287,7 @@ spec = do
                 let (_, bytesA) = buildEncoded 1 "slot" "t1"
                     (metaB, bytesB) = buildEncoded 2 "slot" "t2"
                 _ ← publishOK dir "slot" 1 "slot" "t1"
-                r ← publishGeneration dir "slot" metaB bytesB
+                r ← publishGeneration dir "slot" metaB bytesB HS.empty HS.empty
                 r `shouldBe` Right []
                 BS.readFile (authPath dir) `shouldReturn` bytesB
                 BS.readFile (prevPath dir) `shouldReturn` bytesA
@@ -299,7 +299,7 @@ spec = do
                     (metaC, bytesC) = buildEncoded 3 "slot" "t3"
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 _ ← publishOK dir "slot" 2 "slot" "t2"
-                r ← publishGeneration dir "slot" metaC bytesC
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
                 r `shouldBe` Right []
                 BS.readFile (authPath dir) `shouldReturn` bytesC
                 BS.readFile (prevPath dir) `shouldReturn` bytesB
@@ -315,7 +315,7 @@ spec = do
             withTempSlotDir $ \dir → do
                 original ← publishOK dir "slot" 1 "slot" "t1"
                 origBytes ← BS.readFile (authPath dir)
-                r ← publishGeneration dir "slot" original (BS.pack [0,1,2,3,4])
+                r ← publishGeneration dir "slot" original (BS.pack [0,1,2,3,4]) HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateValidate
                     Right _ → expectationFailure "expected a validate failure"
@@ -327,7 +327,7 @@ spec = do
             withTempSlotDir $ \dir → do
                 let (rightMeta, bytes) = buildEncoded 1 "slot" "t1"
                     wrongMeta = rightMeta { smName = "different-slot" }
-                r ← publishGeneration dir "slot" wrongMeta bytes
+                r ← publishGeneration dir "slot" wrongMeta bytes HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateValidate
                     Right _ → expectationFailure "expected a validate failure"
@@ -340,7 +340,7 @@ spec = do
             withTempSlotDir $ \dir → do
                 let (rightMeta, bytes) = buildEncoded 1 "slot" "t1"
                     wrongMeta = rightMeta { smSeed = smSeed rightMeta + 1 }
-                r ← publishGeneration dir "slot" wrongMeta bytes
+                r ← publishGeneration dir "slot" wrongMeta bytes HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateValidate
                     Right _ → expectationFailure "expected a validate failure"
@@ -351,7 +351,7 @@ spec = do
             withTempSlotDir $ \dir → do
                 let (meta, bytes) = buildEncoded 1 "slot" "t1"
                 BS.writeFile dir "occupying this path with a plain file"
-                r ← publishGeneration dir "slot" meta bytes
+                r ← publishGeneration dir "slot" meta bytes HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseDirectoryCreate
                     Right _ → expectationFailure "expected a directory-create failure"
@@ -364,7 +364,7 @@ spec = do
                 let (meta, bytes) = buildEncoded 1 "slot" "t1"
                 createDirectoryIfMissing True dir
                 let failCreate _ _ = ioError (userError "injected create failure")
-                r ← publishGenerationWithCandidateCreator failCreate dir "slot" meta bytes
+                r ← publishGenerationWithCandidateCreator failCreate dir "slot" meta bytes HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateCreate
                     Right _ → expectationFailure "expected a candidate-create failure"
@@ -377,7 +377,7 @@ spec = do
                 createFileLink target dir
                 (`finally` (removeFile dir >> removeDirectoryRecursive target)) $ do
                     let (meta, bytes) = buildEncoded 1 "slot" "t1"
-                    r ← publishGeneration dir "slot" meta bytes
+                    r ← publishGeneration dir "slot" meta bytes HS.empty HS.empty
                     case r of
                         Left f  → pfPhase f `shouldBe` PhaseUnsafePath
                         Right _ → expectationFailure "expected an unsafe-path failure"
@@ -398,7 +398,7 @@ spec = do
                 (`finally` (removeFile savesLikeDir
                              >> removeDirectoryRecursive target)) $ do
                     let (meta, bytes) = buildEncoded 1 "slot" "t1"
-                    r ← publishGeneration dir "slot" meta bytes
+                    r ← publishGeneration dir "slot" meta bytes HS.empty HS.empty
                     case r of
                         Left f  → pfPhase f `shouldBe` PhaseUnsafePath
                         Right _ → expectationFailure "expected an unsafe-path failure"
@@ -420,7 +420,7 @@ spec = do
                 forceRemoveFile (authPath dir)
                 prevBefore ← BS.readFile (prevPath dir)
                 let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
-                r ← publishGeneration dir "slot" metaC bytesC
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
                 r `shouldBe` Right []
                 BS.readFile (authPath dir) `shouldReturn` bytesC
                 BS.readFile (prevPath dir) `shouldReturn` prevBefore
@@ -433,7 +433,7 @@ spec = do
                 origBytes ← BS.readFile (authPath dir)
                 createDirectoryIfMissing True (prevPath dir)
                 let (metaB, bytesB) = buildEncoded 2 "slot" "t2"
-                r ← publishGeneration dir "slot" metaB bytesB
+                r ← publishGeneration dir "slot" metaB bytesB HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseRotatePrevious
                     Right _ → expectationFailure "expected a rotate-previous failure"
@@ -446,7 +446,7 @@ spec = do
             withTempSlotDir $ \dir → do
                 let (meta, bytes) = buildEncoded 1 "slot" "t1"
                 createDirectoryIfMissing True (authPath dir)
-                r ← publishGeneration dir "slot" meta bytes
+                r ← publishGeneration dir "slot" meta bytes HS.empty HS.empty
                 case r of
                     Left f  → pfPhase f `shouldBe` PhasePublishRename
                     Right _ → expectationFailure "expected a publish-rename failure"
@@ -495,7 +495,7 @@ spec = do
             withTempSlotDir $ \dir → do
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 _ ← publishOK dir "slot" 2 "slot" "t2"
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s → do
                         lsSource s `shouldBe` FromAuthoritative
@@ -508,7 +508,7 @@ spec = do
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 forceRemoveFile (authPath dir)
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
@@ -522,7 +522,7 @@ spec = do
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 whole ← BS.readFile (authPath dir)
                 BS.writeFile (authPath dir) (BS.take (BS.length whole `div` 2) whole)
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
@@ -536,7 +536,7 @@ spec = do
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 whole ← BS.readFile (authPath dir)
                 BS.writeFile (authPath dir) (BS.cons 0x00 (BS.drop 1 whole))
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → lsSource s `shouldBe` FromPrevious
                     Left err → expectationFailure (T.unpack err)
@@ -548,7 +548,7 @@ spec = do
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 whole ← BS.readFile (authPath dir)
                 BS.writeFile (authPath dir) (flipByteAt (BS.length whole - 1) whole)
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → lsSource s `shouldBe` FromPrevious
                     Left err → expectationFailure (T.unpack err)
@@ -561,7 +561,7 @@ spec = do
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 whole ← BS.readFile (authPath dir)
                 BS.writeFile (authPath dir) (corruptEnvelopeVersion whole)
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → expectationFailure
                         ("expected no fallback, got " <> show (lsSource s))
@@ -576,7 +576,7 @@ spec = do
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 BS.writeFile (authPath dir) emptyPagesBytes
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → expectationFailure
                         ("expected no fallback, got " <> show (lsSource s))
@@ -588,7 +588,7 @@ spec = do
                 let target = dir <> "-target"
                 _ ← publishOK target "slot" 1 "slot" "t1"
                 createFileLink target dir
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                     `finally` (removeFile dir
                                 >> removeDirectoryRecursive target)
                 case sel of
@@ -608,7 +608,7 @@ spec = do
                 BS.writeFile decoy "not a real save"
                 removeFile (authPath dir)
                 createFileLink decoy (authPath dir)
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                     `finally` removeFile decoy
                 case sel of
                     Right s → do
@@ -627,7 +627,7 @@ spec = do
                 removeFile (prevPath dir)
                 createFileLink decoy (authPath dir)
                 createFileLink decoy (prevPath dir)
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                     `finally` removeFile decoy
                 sel `shouldSatisfy` isLeft
 
@@ -647,7 +647,7 @@ spec = do
                 staged ← BS.readFile (prevPath dir)
                 forceRemoveFile (prevPath dir)
                 BS.writeFile (dir </> "world-synworld-stale77777") staged
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s → do
                         lsSource s `shouldBe` FromAuthoritative
@@ -664,7 +664,7 @@ spec = do
            \generation is valid" $
             withTempSlotDir $ \dir → do
                 createDirectoryIfMissing True dir
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 sel `shouldSatisfy` isLeft
 
         it "is read-only: a recovered load never rewrites or promotes \
@@ -676,7 +676,7 @@ spec = do
                 let corrupt = flipByteAt (BS.length whole - 1) whole
                 BS.writeFile (authPath dir) corrupt
                 prevBefore ← BS.readFile (prevPath dir)
-                _ ← selectLoadGeneration dir "slot"
+                _ ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 BS.readFile (authPath dir) `shouldReturn` corrupt
                 BS.readFile (prevPath dir) `shouldReturn` prevBefore
                 entries ← listDirectory dir
@@ -690,7 +690,7 @@ spec = do
                 _ ← publishOK dir "slot" 1 "slot" "t1"
                 BS.writeFile (dir </> "world-synworld-tmp88888")
                     "an interrupted write, never fully validated"
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → lsSource s `shouldBe` FromAuthoritative
                     Left err → expectationFailure (T.unpack err)
@@ -704,7 +704,7 @@ spec = do
                 forceRemoveFile (authPath dir)
                 BS.writeFile (dir </> "world-synworld-tmp88888")
                     "an interrupted write, never fully validated"
-                sel ← selectLoadGeneration dir "slot"
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
@@ -722,7 +722,7 @@ spec = do
                 _ ← publishOK target "leaked" 1 "leaked" "t1"
                 createDirectoryIfMissing True savesDirectory
                 createFileLink target (savesDirectory </> "leaked")
-                saves ← listSaves logger
+                saves ← listSaves logger HS.empty
                 map slName saves `shouldNotContain` ["leaked"]
 
         it "never lists any slot when saves/ itself is a symlink" $
@@ -731,7 +731,7 @@ spec = do
                 let target = "leaked-target"
                 _ ← publishOK (target </> "leaked") "leaked" 1 "leaked" "t1"
                 createFileLink target savesDirectory
-                saves ← listSaves logger
+                saves ← listSaves logger HS.empty
                 saves `shouldBe` []
 
         it "never lists (or reads through) a legacy flat-file save \
@@ -742,7 +742,7 @@ spec = do
                 BS.writeFile decoy "not a real save"
                 createDirectoryIfMissing True savesDirectory
                 createFileLink decoy (savesDirectory </> "leaked.synworld")
-                saves ← listSaves logger
+                saves ← listSaves logger HS.empty
                 map slName saves `shouldNotContain` ["leaked"]
 
         it "loadWorld never reads through a legacy flat-file save whose \
@@ -753,7 +753,7 @@ spec = do
                 BS.writeFile decoy "not a real save"
                 createDirectoryIfMissing True savesDirectory
                 createFileLink decoy (savesDirectory </> "leaked2.synworld")
-                result ← loadWorld logger "leaked2"
+                result ← loadWorld logger "leaked2" HS.empty HS.empty
                 result `shouldSatisfy` isLeft
 
         it "falls back to the previous generation when listing, if the \
@@ -769,7 +769,7 @@ spec = do
                 BS.writeFile decoy "not a real save"
                 removeFile (authPath slot)
                 createFileLink decoy (authPath slot)
-                saves ← listSaves logger `finally` removeFile decoy
+                saves ← listSaves logger HS.empty `finally` removeFile decoy
                 case filter ((≡ "leaked") . slName) saves of
                     [entry] → do
                         slRecovered entry `shouldBe` True
@@ -791,5 +791,5 @@ spec = do
                 removeFile (prevPath slot)
                 createFileLink decoy (authPath slot)
                 createFileLink decoy (prevPath slot)
-                saves ← listSaves logger `finally` removeFile decoy
+                saves ← listSaves logger HS.empty `finally` removeFile decoy
                 map slName saves `shouldNotContain` ["leaked"]

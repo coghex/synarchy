@@ -11,6 +11,7 @@ module World.Save.Serialize
 
 import UPrelude
 import qualified Data.ByteString as BS
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Data.Char (isControl)
 import Data.List (sortBy)
@@ -92,12 +93,16 @@ saveExtension = ".synworld"
 --   "cleanup failure" case — the durability boundary has already
 --   completed by the time cleanup runs, so this never turns into an
 --   overall save failure).
-writeSaveFiles ∷ Text → SaveMetadata → BS.ByteString → IO (Either Text [Text])
-writeSaveFiles rawName meta encoded = case sanitizeSaveName rawName of
+writeSaveFiles
+    ∷ Text → SaveMetadata → BS.ByteString → HS.HashSet Text → HS.HashSet Text
+    → IO (Either Text [Text])
+writeSaveFiles rawName meta encoded luaKnownNames luaRequiredNames =
+    case sanitizeSaveName rawName of
     Left err   → return (Left ("Invalid save name: " <> err))
     Right name → do
         let saveDir = savesDirectory </> T.unpack name
         result ← Storage.publishGeneration saveDir name meta encoded
+                    luaKnownNames luaRequiredNames
         case result of
             Right warnings → return (Right warnings)
             Left failure   → return (Left (Storage.renderPublishFailure failure))
@@ -114,8 +119,11 @@ writeSaveFiles rawName meta encoded = case sanitizeSaveName rawName of
 --   A legacy flat file has no slot directory, so none of C1's
 --   generation/recovery machinery applies to it: it either decodes
 --   cleanly or is rejected outright, exactly as before #762.
-loadWorld ∷ LoggerState → Text → IO (Either Text SaveData)
-loadWorld logger rawName = case sanitizeSaveName rawName of
+loadWorld
+    ∷ LoggerState → Text → HS.HashSet Text → HS.HashSet Text
+    → IO (Either Text (SaveData, [(Text, Word32, BS.ByteString)]))
+loadWorld logger rawName luaKnownNames luaRequiredNames =
+    case sanitizeSaveName rawName of
     Left err   → return (Left ("Invalid save name: " <> err))
     Right name → do
         let dirPath    = savesDirectory </> T.unpack name
@@ -140,12 +148,13 @@ loadWorld logger rawName = case sanitizeSaveName rawName of
   where
     -- Validate sdWorlds cardinality (and every other load-bearing check)
     -- at DECODE time so the load API fails cleanly (Left → engine.loadSave
-    -- returns false) before it pauses the engine, restores Lua blobs, or
+    -- returns false) before it pauses the engine, restores Lua state, or
     -- marks the head world loading. Catching it only in the world-thread
     -- handler would wedge the session on the loading screen after those
     -- side effects.
     loadFromDirectory dirPath name = do
-        selection ← Storage.selectLoadGeneration dirPath name
+        selection ← Storage.selectLoadGeneration
+            luaKnownNames luaRequiredNames dirPath name
         case selection of
             Left err  → return (Left err)
             Right sel → do
@@ -160,7 +169,7 @@ loadWorld logger rawName = case sanitizeSaveName rawName of
                         logWarn logger CatWorld $
                             "loadWorld: '" <> name <> "': "
                                 <> Storage.lsDetail sel
-                return (Right (Storage.lsSaveData sel))
+                return (Right (Storage.lsSaveData sel, Storage.lsLuaComponents sel))
 
     -- Reconstruct the complete, cross-validated 'SessionSnapshot' from
     -- the component envelope (issue #760), then bridge it back into the
@@ -171,10 +180,12 @@ loadWorld logger rawName = case sanitizeSaveName rawName of
     decodeLegacyFile path = do
         bytes ← BS.readFile path
         return $ do
-            (meta, snap) ← decodeSessionEnvelope bytes
+            (meta, snap, luaComponents) ←
+                decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
             let req = SaveRequestMeta { srmSlotName  = smName meta
                                       , srmTimestamp = smTimestamp meta }
-            checkWorldCount (snapshotToSaveData req snap)
+            sd ← checkWorldCount (snapshotToSaveData req snap)
+            pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ])
 
 -- | One entry in 'listSaves''s result. 'slRecovered' is 'True' when the
 --   listed metadata came from a slot's PREVIOUS generation because its
@@ -221,8 +232,8 @@ data SaveListing = SaveListing
 --   predicting loadability during listing would mean decoding every
 --   component (buildings, units, world-pages, ...) for every listed
 --   save — the per-save cost #759 explicitly designed listing to avoid.
-listSaves ∷ LoggerState → IO [SaveListing]
-listSaves logger = do
+listSaves ∷ LoggerState → HS.HashSet Text → IO [SaveListing]
+listSaves logger luaKnownNames = do
     createDirectoryIfMissing True savesDirectory
     entries ← listDirectory savesDirectory
     results ← mapM tryEntry entries
@@ -279,7 +290,7 @@ listSaves logger = do
                                 -- the envelope version check and is
                                 -- skipped with a logged warning so the
                                 -- user has a chance of noticing.
-                                case decodeSaveEnvelopeMetadataClassified bytes of
+                                case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
                                     Right meta → return [mkListing name meta False]
                                     Left (GenerationIncompatible err) → do
                                         logWarn logger CatWorld $
@@ -311,7 +322,7 @@ listSaves logger = do
                 return []
             else do
                 bytes ← BS.readFile prevPath
-                case decodeSaveEnvelopeMetadataClassified bytes of
+                case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
                     Right meta → do
                         logWarn logger CatWorld $
                             "listSaves: '" <> name
@@ -342,7 +353,7 @@ listSaves logger = do
                 return []
             Right () → do
                 bytes ← BS.readFile path
-                case decodeSaveEnvelopeMetadata bytes of
+                case decodeSaveEnvelopeMetadata luaKnownNames bytes of
                     Left err → do
                         logWarn logger CatWorld $
                             "listSaves: skipping " <> T.pack path <> ": " <> err

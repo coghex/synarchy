@@ -304,7 +304,6 @@ field either has no cross-field dependency or is noted below:
 | `sdMetadata` | Persist exactly | — | none beyond type-correctness | `tools/multiworld_save_probe.py` |
 | `sdGameTime` | Persist exactly | — | none beyond type-correctness | `tools/save_pause_probe.py` |
 | `sdEnginePaused` | Persist exactly | — | authoritative over any Lua-side copy (contract, §7 `pause` module) | `tools/save_pause_probe.py` |
-| `sdLuaModules` | Persist exactly (opaque, Lua-owned) | restored engine-side (live unit/building ids) BEFORE Lua's `deserializeAll` reconciles per-id state against them | see §7 for per-module rules | see §7 |
 | `sdTexPalette` | Persist exactly | must restore before any page replays a `WeSetStructure` edit (palette-id → path resolution) | none beyond type-correctness | none yet |
 | `sdNextItemInstanceId` | Persist exactly | — | restored as `max(current, saved)`, never lowered (#67), so post-load item creation can't collide with a loaded id | `tools/item_instance_probe.py` |
 | `sdActivePage` | Persist as identity/reference | must name a page present in `sdWorlds` (falls back to the first page if not, per `activeWorldPage`) | resolves to a real restored page | `tools/multiworld_save_probe.py` |
@@ -394,7 +393,7 @@ one for documentation's sake.
 | `Combat.Thread`'s local `tick` counter | `src/Combat/Thread.hs:51` | global | Exclude | — | resets to 0 every restart, gates wound-tick rate only (contract §1: thread scheduling not persisted) | none yet |
 | `Sim.Thread`'s `simStateRef` (`SimState`) | `src/Sim/Thread.hs:62`, `src/Sim/State/Types.hs` | global — ONE `SimState` for the whole thread, containing a per-page `ssWorlds :: HashMap WorldPageId SimWorldState` map | Rebuild | loaded chunk tile/fluid data (`wsTilesRef`) | fresh `SimChunkState` derives from chunk tile/fluid data as each chunk reactivates post-load; settled results already live in `wsTilesRef`/`wsEditsRef`, this is pure active-simulation scratch space | `tools/world_check.py` (fluid settle behavior) |
 | `SimWorldState`/`SimChunkState` entries within `simStateRef` | `src/Sim/State/Types.hs` | per-page (`SimWorldState`) / per-chunk (`SimChunkState`, nested within a page's entry) | Rebuild | same as `simStateRef` | same reasoning, at finer granularity — a page/chunk not currently active simply has no entry, rebuilt on activation | `tools/world_check.py` |
-| `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | global (one Lua VM for the whole engine) | Rebuild | boot-time `loadScript` sequence, then §7's `saveModules.deserializeAll` | the VM CONTAINER itself is rebuilt fresh by re-running `loadScript` at boot — this single "Rebuild" classification is for that container, not a blanket claim about everything inside it. The specific durable SLICES of its global tables are separately classified, one label each: §7's four `saveModules`-registered modules are `Persist exactly`/`Reset to default` in their own right; everything else in the VM's global state is `Exclude` by omission (never touched by save/load). | `tools/lua_orphan_prune_probe.py` |
+| `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | global (one Lua VM for the whole engine) | Rebuild | boot-time `loadScript` sequence, then §7's `saveModules.prepareLoad`/`applyAll` | the VM CONTAINER itself is rebuilt fresh by re-running `loadScript` at boot — this single "Rebuild" classification is for that container, not a blanket claim about everything inside it. The specific durable SLICES of its global tables are separately classified, one label each: §7's two `saveModules`-registered persistent components are `Persist exactly` in their own right, its one `registerResetHook`-registered module is `Reset to default`; everything else in the VM's global state is `Exclude` by omission (never touched by save/load). | `tools/lua_orphan_prune_probe.py` |
 | `Lua.Thread`'s `lbsScripts` (registered scripts + tick schedule) | `src/Engine/Scripting/Lua/Types.hs:22` | global | Exclude | — | rebuilt by the boot-time `loadScript` sequence | none yet |
 | `Lua.Thread`'s `lbsNextScriptId` | `src/Engine/Scripting/Lua/Types.hs` | global | Exclude | — | rebuilt at boot | none yet |
 | `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | global | Exclude | — | no persistent thread-local state at all — local IORefs are recreated per-event inside handler scope, so "Exclude" here documents the absence rather than a specific field | none yet |
@@ -402,20 +401,34 @@ one for documentation's sake.
 
 ## 7. Lua persistence registry (`scripts/lib/save_modules.lua`)
 
-Exactly four modules call `saveMods.register(...)`. Each is a root
-state owner under the contract §2 definition; the audit scans
-`scripts/` for these call sites directly and checks each registered
-name against the classifications below.
+Since issue #761 (save-overhaul B3) this is a versioned, scoped,
+fail-fast COMPONENT registry, not an opaque `name -> blob` map: each
+persistent module declares a schema version, required/optional status,
+dependencies, and explicit snapshot/decode/validate/apply functions
+(`World.Save.Component.Types.ComponentCodec`'s contract, mirrored in
+Lua). Every registered persistent component rides as its own
+dynamically-added envelope component (`"lua.<module>"`), independent of
+any other Lua-owned or Haskell-owned component's checksum/version.
+Exactly two modules call `saveMods.register(...)`; each is a root state
+owner under the contract §2 definition, and the audit scans `scripts/`
+for these call sites directly and checks each registered name against
+the classifications below.
+
+A module with no durable state calls `saveMods.registerResetHook(id,
+resetFn)` instead (`unit_resources` below) — this is NOT a save
+component (no version, no envelope entry, not scanned by the audit),
+just a callback run on every load. `pause` no longer registers at all
+(neither `register` nor `registerResetHook`) — see its row below.
 
 ### Lua persistence registry
 
 | Module | Owner | Scope | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|---|---|
-| `unit_ai` | `scripts/unit_ai.lua:335` | global (per-id state keyed inside the blob) | Persist exactly (opaque blob) | live unit ids must already be restored (`umInstances`) | the pre-load-snapshot/restore dance (`unitAi._preLoadState`, #195/#191) must reconcile off-page units, not leak stale per-id state | `tools/lua_orphan_prune_probe.py` |
-| `unit_resources` | `scripts/unit_resources.lua:68` | global (per-id cache) | Reset to default | — | no serializer; `alerts.resetOnLoad()` must clear the per-unit alert-debounce cache on every load, including a load with no blob at all — deliberately never persisted so a reused unit id (post `umNextId` rewind) can't inherit stale suppression state | none yet |
-| `building_spawn` | `scripts/building_spawn.lua:274` | global (per-id state keyed inside the blob) | Persist exactly (opaque blob) | live building ids must already be restored (`bmInstances`) | same reconcile requirement as `unit_ai`; NOTE the roster-countdown itself is NOT here — it lives on `BuildingInstance` and is covered under `wpsBuildings` in §4 | none yet |
-| `pause` (`paused` field) | `scripts/pause.lua:127` | global | Exclude (already dead) | — | the blob's `paused` value is read but ignored at load; `enginePausedRef`/`sdEnginePaused` is authoritative (see §1) | `tools/save_pause_probe.py` |
-| `pause` (`prevTimeScale` field) | `scripts/pause.lua:127` | global | Exclude | — | **Implemented by #757** (contract §1, "the pre-save speed is not persisted"): `pause.lua`'s own `serializeAll` blob no longer writes `prevTimeScale` at all, and `onSaveLoaded`/deserialize always reset it to `1.0` regardless of what an older save's blob contains. | `tools/save_pause_probe.py` |
+| `unit_ai` | `scripts/unit_ai.lua` | global (per-id state keyed inside the component payload) | Persist exactly (versioned component, v1) | live unit ids must already be restored (`umInstances`) | component-local: payload must be a table keyed by positive-integer unit ids mapping to state tables; the pre-load-snapshot/restore dance (`unitAi._preLoadState`, #195/#191, kept as a temporary pre-C2 compatibility adapter) must reconcile off-page units, not leak stale per-id state | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
+| `building_spawn` | `scripts/building_spawn.lua` | global (per-id state keyed inside the component payload) | Persist exactly (versioned component, v1) | live building ids must already be restored (`bmInstances`) | same reconcile requirement as `unit_ai` (temporary pre-C2 compatibility adapter); NOTE the roster-countdown itself is NOT here — it lives on `BuildingInstance` and is covered under `wpsBuildings` in §4 | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
+| `unit_resources` | `scripts/unit_resources.lua` | global (per-id cache) | Reset to default | — | reset hook (`registerResetHook`, not a save component); `alerts.resetOnLoad()` must clear the per-unit alert-debounce cache on every load, including a load with no data for this module at all — deliberately never persisted so a reused unit id (post `umNextId` rewind) can't inherit stale suppression state | none yet |
+| `pause` (`paused` field) | `scripts/pause.lua` | global | Exclude | — | no registration of any kind (requirement 5) — `pause.paused` is an in-memory transition-detection hint only, never read for real logic; `enginePausedRef`/`sdEnginePaused` is authoritative (see §1) | `tools/save_pause_probe.py` |
+| `pause` (`prevTimeScale` field) | `scripts/pause.lua` | global | Exclude | — | `pause.onSaveLoaded` always resets it to `1.0` regardless of what an older save contained — a loaded session resumes at default speed (contract §1, "the pre-save speed is not persisted") | `tools/save_pause_probe.py` |
 
 ## 8. Camera / world-view / UI / tool / selection state
 
@@ -500,7 +513,6 @@ registration.
 | `SaveMetadata` (metadata component) | `metadata` | Persist exactly | Envelope — listing metadata, readable without decoding gameplay |
 | `CoreSessionDTO` | `core-session` | Persist exactly | the session — game time, active/visible page refs, live camera, GLOBAL item/building/unit allocators |
 | `TexPaletteDTO` | `texture-palette` | Persist exactly | renderer structure/edit layer — palette ids can't be rebuilt from content defs |
-| `LuaStateDTO` | `lua-state` | Persist exactly | Lua save-module registry — transitional opaque blob map (B3 replaces its contract) |
 | `WorldPagesDTO` | `world-pages` | Persist exactly | the world page — page-set authority: identity, gen params, dates/clocks, map mode, per-page camera |
 | `WorldEditsDTO` | `world-edits` | Persist exactly | world edit layer — per-page terrain + structure edit log |
 | `WorldActivityDTO` | `world-activity` | Persist exactly | mutable-world-activity layer — designations, flora harvests, crop plots, ground items, spoil |
@@ -509,6 +521,15 @@ registration.
 | `UnitSimDTO` | `unit-sim` | Persist exactly | `UnitThreadState` — per-page unit sim state (paths/targets/poses/deadlines) |
 | `CraftBillsDTO` | `craft-bills` | Persist exactly | `Craft.Bills` — per-page craft-bill queue |
 | `PowerNodesDTO` | `power-nodes` | Persist exactly | `Power.Types` — per-page power-node registry + stored charge |
+
+This table is the STATIC Haskell-owned component set only. Since issue
+#761 (save-overhaul B3) there is no `"lua-state"` transitional entry
+here at all: each module registered with
+`scripts/lib/save_modules.lua` is its OWN dynamically-added envelope
+component (`"lua.<module>"`, disjoint reserved namespace —
+`World.Save.Component.Types.luaComponentPrefix`), gathered from the
+live Lua registry at save/load time rather than declared statically in
+Haskell. See §7 for the Lua-owned component list.
 
 ---
 

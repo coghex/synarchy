@@ -262,17 +262,60 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 
+-- Component-local validator (issue #761): `data` must be a table keyed
+-- by positive-integer building ids, each mapping to a state table.
+local function validateBuildingSpawnData(data)
+    if type(data) ~= "table" then
+        return { "building_spawn: payload must be a table" }
+    end
+    local errs = {}
+    for bid, s in pairs(data) do
+        if type(bid) ~= "number" or bid ~= math.floor(bid) or bid < 1 then
+            errs[#errs + 1] = "building_spawn: invalid building id key "
+                .. tostring(bid)
+        elseif type(s) ~= "table" then
+            errs[#errs + 1] = "building_spawn: state for building "
+                .. tostring(bid) .. " is not a table"
+        end
+    end
+    if #errs > 0 then return errs end
+    return nil
+end
+
+-- Every reference this component carries (requirement 12) -- traversed
+-- for documentation/diagnostics; a dangling `lastUid` is tolerated
+-- (scrubbed at reconcile time by onSaveLoaded below), not rejected.
+local function buildingSpawnReferences(data)
+    local refs = {}
+    for bid, s in pairs(data) do
+        refs[#refs + 1] = { kind = "building", id = bid }
+        if s.lastUid ~= nil then
+            refs[#refs + 1] = { kind = "unit", id = s.lastUid }
+        end
+    end
+    return refs
+end
+
 function buildingSpawn.init(scriptId)
     engine.logInfo("Building spawn sequencer initializing...")
-    -- Save hook for per-building transient sequencer state
-    -- (lastUid/lastSpawnX/Y/lastSpawnedAt). The roster countdown
-    -- itself lives on the BuildingInstance and persists via the
-    -- building snapshot — this hook only covers the spawn-rate
-    -- gating data.
-    local saveLib  = require("scripts.lib.serialize")
+    -- Persistent save component (issue #761, save-overhaul B3) for
+    -- per-building transient sequencer state (lastUid/lastSpawnX/Y/
+    -- lastSpawnedAt). The roster countdown itself lives on the
+    -- BuildingInstance and persists via the buildings component — this
+    -- one only covers the spawn-rate gating data. Required: a missing/
+    -- invalid building_spawn component aborts the whole load.
     local saveMods = require("scripts.lib.save_modules")
-    saveMods.register("building_spawn",
-        function()
+    saveMods.register("building_spawn", {
+        version = 1,
+        inputVersions = { 1 },
+        required = true,
+        scope = "global",
+        -- Requirement 2 (round-8 review): buildingSpawnReferences above
+        -- declares "building" (the outer per-building key) and "unit"
+        -- (lastUid) -- the Haskell components that own those entity
+        -- kinds.
+        deps = { "buildings", "units" },
+        snapshot = function()
             -- Serialize only LIVE buildings' state. `state` is a global
             -- singleton that can retain entries for buildings destroyed
             -- before the save; persisting those is unsafe, since on a later
@@ -285,18 +328,26 @@ function buildingSpawn.init(scriptId)
             for bid, s in pairs(state) do
                 if building.getInfo(bid) then live[bid] = s end
             end
-            return saveLib.serialize(live)
+            return live
         end,
-        function(blob)
+        decode = function(_version, data)
+            return data or {}
+        end,
+        validate = validateBuildingSpawnData,
+        references = buildingSpawnReferences,
+        -- Temporary C2 compatibility adapter (issue #761, requirement 15)
+        -- -- see unit_ai.lua's identical note: clobber `state` wholesale,
+        -- onSaveLoaded below still does the #195/#191 reconciliation.
+        apply = function(data)
             -- Snapshot the pre-load singleton BEFORE clobbering, so
             -- onSaveLoaded can restore still-live OFF-PAGE buildings'
-            -- current state instead of the blob's stale copy (#195, #191).
+            -- current state instead of the payload's stale copy (#195, #191).
             buildingSpawn._preLoadState = {}
             for k, v in pairs(state) do buildingSpawn._preLoadState[k] = v end
-            local restored = saveLib.deserialize(blob) or {}
             for k in pairs(state) do state[k] = nil end
-            for k, v in pairs(restored) do state[k] = v end
-        end)
+            for k, v in pairs(data) do state[k] = v end
+        end,
+    })
 end
 
 -- Broadcast from the engine once a save has finished loading (#195).

@@ -56,17 +56,17 @@ package.loaded["scripts.unit_resources"] = unitResources
 -----------------------------------------------------------
 function unitResources.init(scriptId)
     engine.logInfo("Unit resources tick initializing...")
-    -- Save hook: this module (via unit_resource_alerts) keeps a
-    -- uid-keyed cache of transient per-unit alert-debounce state, with
-    -- nothing worth persisting, so we register NO serializer (no blob
-    -- is written into the save). The deserializer is what matters: a
-    -- load replaces unitManagerRef from the snapshot and can rewind
-    -- umNextId, so the same uid can be reused by a different unit.
-    -- Clearing the cache on every load (deserializeAll invokes
-    -- registered deserializers with a nil blob when no blob is present)
-    -- prevents stale suppression state from attaching to a reused id.
+    -- Reset hook, not a save component (issue #761, requirement 4):
+    -- this module (via unit_resource_alerts) keeps a uid-keyed cache of
+    -- transient per-unit alert-debounce state, with nothing worth
+    -- persisting. A load replaces unitManagerRef from the snapshot and
+    -- can rewind umNextId, so the same uid can be reused by a different
+    -- unit -- clearing the cache on every load (registerResetHook runs
+    -- its hook unconditionally on every applyAll, regardless of what
+    -- the save contains) prevents stale suppression state from
+    -- attaching to a reused id.
     local saveMods = require("scripts.lib.save_modules")
-    saveMods.register("unit_resources", nil, function(_blob)
+    saveMods.registerResetHook("unit_resources", function()
         alerts.resetOnLoad()
     end)
 end

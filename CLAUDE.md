@@ -1655,8 +1655,10 @@ GONE. Gameplay state now rides as a set of independently versioned,
 Haskell-owned components inside the SAME B1 envelope
 (`World.Save.Component.*`): `core-session` (game time, active/visible
 pages, live camera, the GLOBAL item/building/unit allocators),
-`texture-palette`, `lua-state` (the transitional opaque Lua blob map,
-until B3), `world-pages` (the page-set AUTHORITY: identity, gen params,
+`texture-palette`, `lua-state` (the transitional opaque Lua blob map —
+superseded by #761/B3's dynamic per-module `"lua.<module>"` components
+below; `lua-state` no longer exists in the codebase), `world-pages`
+(the page-set AUTHORITY: identity, gen params,
 dates/clocks, map mode, per-page camera), `world-edits`,
 `world-activity` (designations/flora/crops/ground/spoil), `buildings`,
 `units`, `unit-sim`, `craft-bills`, `power-nodes` — plus the unchanged
@@ -1870,6 +1872,126 @@ generation actually loaded), `engine.listSaves()`'s `recovered` flag, and
 a real disk-level write failure (the #758-established pre-occupied-path
 trick) reporting its `StoragePhase` through `engine.getSaveStatus()` with
 the barrier recovering for an immediate follow-up save.
+
+**Lua persistence components (#761, save-overhaul B3):** Lua-owned
+gameplay state (previously one opaque `snapLuaModules :: HashMap Text
+Text` blob map, carried as the transitional `"lua-state"` envelope
+component) is now a versioned, scoped, fail-fast COMPONENT per
+registered Lua module, mirroring the Haskell component contract
+("World.Save.Component.Types.ComponentCodec") but owned entirely in
+Lua. `scripts/lib/save_modules.lua`'s `saveModules.register(id, spec)`
+takes a declarative spec — `version`/`inputVersions`/`required`/
+`scope`/`deps` plus `snapshot`/`decode`/`validate`/`apply` functions
+(and `default` iff `required = false`) — validated at registration
+time (duplicate id, invalid id/version, a missing required callback,
+or an optional component missing `default()` all fail registration
+outright via `error()`, never silently overwrite or default).
+`saveModules.registerResetHook(id, resetFn)` is the separate, non-
+component path for a module with no durable state (`unit_resources`) —
+`resetFn` runs on every load, unconditionally, with no envelope entry
+at all. `pause` no longer registers anything: it isn't persistent
+(`pause.paused` was already dead — see `pause.onSaveLoaded`'s existing
+"resume at default speed" reset). `unit_ai`/`building_spawn` are the
+two real required components today.
+
+Each registered id rides in the SAME envelope manifest namespace as
+Haskell's components under a reserved, disjoint prefix —
+`"lua.<module>"` (`World.Save.Component.Types.luaComponentPrefix`,
+applied in exactly one place, `Engine.Scripting.Lua.API.Save`) — so
+`unit_ai` becomes envelope component `"lua.unit_ai"`, independently
+versioned/checksummed from every other component; a same-prefix
+collision is only possible Lua-to-Lua, and the generic envelope codec
+(#759/#760) already rejects that structurally as a duplicate id.
+Because the set of Lua components is dynamic (unknown to Haskell at
+compile time), `World.Save.Envelope`'s encode/decode functions take the
+CURRENT Lua registry's known/required NAMES as explicit parameters
+(gathered via `saveModules.describeAll()` by the one caller with Lua
+access, `Engine.Scripting.Lua.API.Save`) rather than a static set —
+`World.Save.Snapshot.SessionSnapshot` no longer has any Lua-shaped
+field at all; Lua state travels beside it, never through it
+(`World.Command.Types.WorldSave`'s 4th argument is now
+`[(Text, Word32, Bool, ByteString)]` — bare name/version/required/
+payload per component — not a blob map).
+
+Payloads are canonical, data-only bytes from `scripts/lib/data_codec.lua`
+(NOT the old `scripts/lib/serialize.lua`, removed entirely — it had no
+remaining callers): booleans, finite numbers, valid-UTF-8 strings, and
+tables built recursively from those as either a dense array or a
+string/integer-keyed map, encoded in canonical (numeric-then-string,
+ascending) key order for determinism. Decoding a payload NEVER compiles
+or executes it (no `load()`/`loadstring()` anywhere in the codec) —
+the old serializer's `load()`-based round trip is exactly the gap this
+closes. Rejected at encode time: functions, userdata, threads,
+metatable-carrying tables, cyclic tables, non-finite numbers (no
+current schema needs them), unsupported key types, and anything past
+the documented depth/entry/string/payload limits — every rejection
+names a data path (e.g. `root.claims[3].power`).
+
+Four entry points drive the registry from Haskell, all in
+`Engine.Scripting.Lua.API.Save`: `describeLuaComponents` (→
+`saveModules.describeAll()`, the known/required id sets), and — new
+replacements for the old `collectLuaBlobs`/`restoreLuaBlobs` —
+`collectLuaComponents` (→ `snapshotAll()`: a REQUIRED component's
+snapshot/encode failure aborts the WHOLE save transaction via
+`failSave`, before the `WorldSave` command is ever queued — no more
+"the engine save still proceeds, just without Lua blobs"),
+`prepareLuaLoad` (→ `prepareLoad(components)`: decode + migrate +
+component-locally-validate EVERY registered component with NO live
+mutation, requirement 11 — any failure, or a REQUIRED component
+missing from the save, aborts the load before touching any Lua
+state), and `applyLuaLoad` (→ `applyAll()`: apply the components
+`prepareLoad` already validated, in dependency order, then run every
+registered reset hook — only reachable after a successful
+`prepareLoad`). `loadSaveFn` calls `prepareLuaLoad` immediately after
+the existing #760 missing-content-definition check and before
+`loadValidatedSave` pauses the engine and calls `applyLuaLoad` —
+same ordering guarantee as before (Lua state lands before the
+world-thread restore is queued), just through the new contract.
+
+`unit_ai`/`building_spawn`'s `apply()` functions are a DELIBERATE,
+clearly-marked TEMPORARY C2 compatibility adapter (requirement 15):
+they clobber the module's live singleton wholesale from the decoded
+payload and snapshot pre-load state into `_preLoadState`, exactly like
+the pre-#761 deserializer bodies — the existing `onSaveLoaded`
+broadcast (#195/#191's off-page-unit/building state preservation +
+stale-nested-reference scrub) is untouched and still runs afterward,
+once the engine-side restore settles. A future C2 will replace this
+whole-singleton-clobber-then-reconcile dance with a real per-page/
+per-entity component model; until then this is explicitly the
+compatibility seam, not the final contract. `references()` (optional
+on a registration) documents/traverses a component's entity-id fields
+for diagnostics but does not itself hard-reject a dangling reference —
+per the landed #758 precedent (a demolished station's lingering craft
+bills are tolerated gameplay, not corruption), a target that legitimately
+died before the save boundary stays representable and is cleared at
+apply/reconcile time instead.
+
+Save version bumped to v91 (`sdLuaModules` removed from the legacy
+`SaveData` bridge — Lua state no longer rides through it at all).
+
+Turnkey coverage: **`Test.Headless.Lua.SaveModules`** (the "Lua
+persistence components" gate, `cabal test synarchy-test-headless
+--test-options='--match "Lua persistence components"'`) — a standalone
+Lua VM (no engine) driving `data_codec.lua` and `save_modules.lua`
+directly via HsLua's `Lua.dostring`: canonical round trips, canonical
+map key order, every rejected shape (functions/userdata/threads/
+metatables/cycles/depth/entries/key-types/non-finite numbers/malformed
+payloads, plus a proof that a code-shaped string decodes as inert data
+rather than executing), registration validation (duplicate id, invalid
+id/version, missing callback, optional-without-default), the
+persistent/reset-hook id-namespace split, canonical `describeAll`
+ordering, dependency ordering + cycle rejection, the full
+`snapshotAll`→`prepareLoad`→`applyAll` round trip including reset
+hooks, a required-component-missing-from-the-save load abort, a
+required-snapshot-failure save abort, and the registration-blocked-
+during-capture guard. **`tools/lua_orphan_prune_probe.py`** (updated
+for #761) still gates the #195 reconcile end to end through a REAL
+save/load, now driving `saveModules.snapshotAll()`/a component's own
+`decode`/`apply` directly instead of the retired `serializeAll`/
+`deserializeAll`/`sm.registry.X.deserialize`. **`tools/test_lua_save_api.sh`**
+gained a case proving a REQUIRED component's injected snapshot failure
+makes `engine.saveWorld` return `false` with no save directory created,
+and that a normal save still succeeds once restored.
 
 ```bash
 # From headless / debug console

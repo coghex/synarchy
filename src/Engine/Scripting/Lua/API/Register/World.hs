@@ -132,5 +132,6 @@ registerWorldAPI env = do
   registerLuaFunction "addCycleOverride" (floraAddCycleOverrideFn env)
   registerLuaFunction "addPhase" (floraAddPhaseFn env)
   registerLuaFunction "registerForWorldGen" (floraRegisterForWorldGenFn env)
+  registerLuaFunction "exists" (floraExistsFn env)
 
   Lua.setglobal (Lua.Name "flora")

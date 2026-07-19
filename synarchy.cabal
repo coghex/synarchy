@@ -1054,6 +1054,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.MapIcons
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
+                   Test.Headless.Lua.SaveModules
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers

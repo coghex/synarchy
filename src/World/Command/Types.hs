@@ -7,7 +7,7 @@ module World.Command.Types
     ) where
 
 import UPrelude
-import qualified Data.HashMap.Strict as HM
+import qualified Data.ByteString as BS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
@@ -223,16 +223,21 @@ data WorldCommand
         -- ^ Raise the column at (gx, gy) one z of the given material
         --   via the WeAddTile edit path (debug terrain placement —
         --   same machinery spoil promotion uses, so it persists).
-    | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
+    | WorldSave WorldPageId Text Text [(Text, Word32, Bool, BS.ByteString)]
         -- ^ pageId, save-name, request-timestamp (ISO 8601 microsecond
-        --   precision, monotonically clamped), Lua-module blobs. The
-        --   Lua side captures the
-        --   timestamp at request time (so two saves queued close
-        --   together get distinct timestamps reflecting when the
-        --   player asked, not whenever the world thread happened to
-        --   process them) and calls saveModules.serializeAll()
-        --   before queueing this command so the world thread can
-        --   stuff the blobs into SaveData.
+        --   precision, monotonically clamped), and every currently-
+        --   registered Lua save component (bare registry name, schema
+        --   version, required flag, already-encoded payload — issue
+        --   #761, save-overhaul B3, mirrors
+        --   "World.Save.Envelope.LuaComponentSpec" without importing
+        --   the whole Save/Envelope module graph into this one). The
+        --   Lua side captures the timestamp at request time (so two
+        --   saves queued close together get distinct timestamps
+        --   reflecting when the player asked, not whenever the world
+        --   thread happened to process them) and calls
+        --   @saveModules.snapshotAll()@ before queueing this command,
+        --   aborting the save entirely rather than enqueueing it if any
+        --   REQUIRED Lua component failed to snapshot.
     | WorldLoadSave WorldPageId SaveData
     | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
     | WorldSetFluidTile WorldPageId Int Int FluidType

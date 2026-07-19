@@ -143,9 +143,18 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 90  -- v90 (#759, save-overhaul B1): no layout change
+currentSaveVersion = 91  -- v91 (#761, save-overhaul B3): 'sdLuaModules'
+                         -- removed — Lua-owned state no longer rides
+                         -- through 'SaveData' at all; each registered Lua
+                         -- module is its own dynamically-added envelope
+                         -- component ("World.Save.Component.Types"'s
+                         -- 'luaComponentPrefix'), gathered/applied by
+                         -- "Engine.Scripting.Lua.API.Save" directly, never
+                         -- part of this transitional load-bridge shape.
+                         --
+                         -- v90 (#759, save-overhaul B1): no layout change
                          -- to SaveData/WorldPageSave themselves — this
-                         -- bump marks the transition to the tagged,
+                         -- bump marked the transition to the tagged,
                          -- checksummed envelope format
                          -- ("World.Save.Envelope"). 'SaveData' now rides
                          -- as the "session" component's payload inside
@@ -533,14 +542,13 @@ data SaveData = SaveData
     , sdGameTime     ∷ !Double   -- ^ gameTimeRef value (game-clock seconds).
     , sdEnginePaused ∷ !Bool     -- ^ enginePausedRef value. Auto-pause-on-save
                                   --   means this is always True for v2+ saves.
-    , sdLuaModules   ∷ !(HM.HashMap Text Text)
-        -- ^ Per-Lua-module opaque blobs. Each registered module
-        --   serializes its state to a string via the Lua
-        --   `saveModules.serializeAll()` registry; engine treats them
-        --   as opaque text. On load, Lua restores via
-        --   `saveModules.deserializeAll(blobs)` BEFORE the engine-side
-        --   restore happens, so AI memory + spawn-sequencer state
-        --   line up with the units/buildings the engine then writes.
+        -- Lua-owned state (issue #761, save-overhaul B3): no longer a
+        -- field here at all. Each registered Lua module is its own
+        -- dynamically-added envelope component (@"lua.<module>"@),
+        -- prepared and applied directly by
+        -- "Engine.Scripting.Lua.API.Save" — decode/validate BEFORE the
+        -- engine-side restore is queued, apply still ahead of it, same
+        -- ordering as before, just no longer routed through this record.
     , sdTexPalette ∷ !TexPalette
         -- ^ Texture path↔id palette. Structure edits in each page's edits
         --   store palette ids; this resolves them to paths → runtime

@@ -59,6 +59,10 @@ local pickup        = require("scripts.unit_ai_pickup")
 local medic         = require("scripts.unit_ai_medic")
 local sleepGoal     = require("scripts.unit_ai_sleep")
 local mentalAi      = require("scripts.unit_ai_mental")
+-- Persistent save-component registration (issue #761) + the raw-id
+-- reference field lists scrubStaleRefs below needs -- split out to
+-- stay under the #538 module line budget.
+local unitAiSave    = require("scripts.unit_ai_save")
 
 -----------------------------------------------------------
 -- Action registry per unit type
@@ -326,60 +330,8 @@ end
 -----------------------------------------------------------
 function unitAi.init(scriptId)
     engine.logInfo("Unit AI initializing...")
-    -- Save hook: persist aiState (knownWaterSources, commandedTask,
-    -- currentAction, source-drink phase, search-spiral progress, etc.).
-    -- Without this, units load with empty AI state and lose their
-    -- water memory + any in-flight player commands.
-    local saveLib  = require("scripts.lib.serialize")
-    local saveMods = require("scripts.lib.save_modules")
-    saveMods.register("unit_ai",
-        function()
-            -- Serialize only LIVE units' state. aiState is a global
-            -- singleton that accumulates entries and never drops them when
-            -- a unit is destroyed, so it leaks stale entries for
-            -- gone-before-save units. Persisting those is actively unsafe:
-            -- on a later cross-session load such an id can collide with a
-            -- live off-page entity, and onSaveLoaded then can't tell the
-            -- stale loaded-page leftover from legitimate off-page state
-            -- (the blob isn't page-keyed) — it would keep + misattribute
-            -- it. Dropping dead ids at the source means they never reach
-            -- the blob. unit.exists is GLOBAL, so live units on every page
-            -- are still saved (#195).
-            local live = {}
-            for uid, s in pairs(aiState) do
-                if unit.exists(uid) then live[uid] = s end
-            end
-            return saveLib.serialize(live)
-        end,
-        function(blob)
-            -- Snapshot the pre-load singleton BEFORE clobbering. The blob
-            -- holds save-time state for ALL pages, but a load should only
-            -- touch the loaded page; onSaveLoaded uses this snapshot to
-            -- restore still-live OFF-PAGE units' CURRENT state instead of
-            -- the blob's stale copy (#195, #191).
-            unitAi._preLoadState = {}
-            for k, v in pairs(aiState) do unitAi._preLoadState[k] = v end
-            local restored = saveLib.deserialize(blob) or {}
-            -- Replace in-place so the package.loaded singleton sees it
-            for k in pairs(aiState) do aiState[k] = nil end
-            for k, v in pairs(restored) do aiState[k] = v end
-        end)
+    unitAiSave.register(unitAi, aiState)
 end
-
--- aiState fields on a surviving entry that hold a direct reference to
--- another entity by raw id. After a load these can point at an id that did
--- NOT survive on the loaded page — a missing-def orphan, an entity already
--- gone before the save (its stale ref was still serialized), or an id that
--- now collides with a LIVE off-page entity. The per-tick validators
--- (unit.exists / unit.getInfo / building.getInfo) are GLOBAL raw lookups,
--- so for a collision they'd pass for the wrong off-page entity and the
--- survivor would resume targeting / delivering to it (#195). So any ref
--- whose target isn't in the surviving loaded-page set is scrubbed.
--- NB: any NEW aiState field that stores a unit/building id MUST be listed
--- here, or it silently reintroduces the stale-ref bug.
-local AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
-                                 "notifyTarget", "lungeTarget" }
-local AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
 
 -- Clear any ref that doesn't point at a surviving loaded-page entity out
 -- of one surviving state entry. Setting a field to nil is exactly the
@@ -389,11 +341,11 @@ local AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
 -- nil claim as "release"). Returns #fields cleared.
 local function scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
     local cleared = 0
-    for _, f in ipairs(AI_UNIT_REF_FIELDS) do
+    for _, f in ipairs(unitAiSave.AI_UNIT_REF_FIELDS) do
         local v = s[f]
         if v ~= nil and not liveUnitSet[v] then s[f] = nil; cleared = cleared + 1 end
     end
-    for _, f in ipairs(AI_BUILDING_REF_FIELDS) do
+    for _, f in ipairs(unitAiSave.AI_BUILDING_REF_FIELDS) do
         local v = s[f]
         if v ~= nil and not liveBuildingSet[v] then s[f] = nil; cleared = cleared + 1 end
     end

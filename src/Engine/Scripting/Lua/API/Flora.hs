@@ -6,6 +6,7 @@ module Engine.Scripting.Lua.API.Flora
     , floraAddCycleStageFn
     , floraAddCycleOverrideFn
     , floraRegisterForWorldGenFn
+    , floraExistsFn
     ) where
 
 import UPrelude
@@ -18,6 +19,32 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)
 import World.Flora.Types
 import World.Material (MaterialId(..), materialIdByName)
+
+-- * Query
+
+-- | flora.exists(name) → boolean. A static, boot-time-loaded registry
+--   query (like item.listDefs/craft.get/repair.get — independent of any
+--   world/page state), backed by the same 'findSpeciesByName' the
+--   world-thread plant designation handler
+--   ("World.Thread.Command.Cursor.Plant.handleWorldDesignatePlantCommand")
+--   already uses to resolve a crop name. Added (issue #761 round-5
+--   review) so a persisted plantJob.crop can be validated against the
+--   currently-registered species at load-prepare time, the same
+--   "reject before any live mutation" contract craftJob/repairJob's
+--   recipe/item checks already enforce -- unlike those, no per-tile
+--   world query works during prepareLoad (it runs before any world
+--   state is even restored), so this needed its own name-only lookup.
+floraExistsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+floraExistsFn env = do
+    nameArg ← Lua.tostring 1
+    case nameArg of
+        Just nameBS → do
+            cat ← Lua.liftIO $ readIORef (floraCatalogRef env)
+            let name = TE.decodeUtf8Lenient nameBS
+            Lua.pushboolean (maybe False (const True)
+                (findSpeciesByName name cat))
+        Nothing → Lua.pushboolean False
+    return 1
 
 -- * Registration
 
