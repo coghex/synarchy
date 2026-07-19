@@ -58,6 +58,7 @@ import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import World.Spoil.Types (SpoilPiles, SpoilPile(..))
 import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
+import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.CropPlot (CropPlots)
 import Item.Ground (GroundItems(..), GroundItem(..))
@@ -1095,18 +1096,19 @@ missingConstructDefReferences buildingDefs pages =
 
 -- Material-id validation (issue #763 round-3 review) -----------------
 
--- | A saved 'MaterialId' — from the edit log ('WeAddTile'/'WeSetCell')
---   or a spoil pile — that this build's 'World.Material.MaterialRegistry'
---   never registered. Unlike every other 'Missing*Ref' above,
---   'MaterialId' is a numeric 'Word8' index that is ALWAYS a
---   structurally valid slot (see 'World.Material.isKnownMaterial''s
---   haddock), so this can only mean the material genuinely existed in
---   the save's origin build's YAML data and was later removed from
---   this one — same load-validation contract as every other missing
---   reference (the issue's own acceptance criteria names "material"
---   explicitly alongside unit/item/building/recipe).
+-- | A saved 'MaterialId' — from the edit log ('WeAddTile'/'WeSetCell'),
+--   a spoil pile, or a worldgen tectonic plate's base material — that
+--   this build's 'World.Material.MaterialRegistry' never registered.
+--   Unlike every other 'Missing*Ref' above, 'MaterialId' is a numeric
+--   'Word8' index that is ALWAYS a structurally valid slot (see
+--   'World.Material.isKnownMaterial''s haddock), so this can only mean
+--   the material genuinely existed in the save's origin build's YAML
+--   data and was later removed from this one — same load-validation
+--   contract as every other missing reference (the issue's own
+--   acceptance criteria names "material" explicitly alongside
+--   unit/item/building/recipe).
 data MissingMaterialRef = MissingMaterialRef
-    { mmrSource ∷ !Text          -- ^ e.g. "edit log", "spoil pile"
+    { mmrSource ∷ !Text          -- ^ e.g. "edit log", "spoil pile", "tectonic plate"
     , mmrPage   ∷ !WorldPageId
     , mmrCoord  ∷ !(Int, Int)
     , mmrMatId  ∷ !Word8
@@ -1120,8 +1122,13 @@ renderMissingMaterialRef r =
   where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved material reference, across all pages, that does not
---   resolve against the currently-registered material set. Empty ⇒
---   every reference resolves and the load may proceed.
+--   resolve against the currently-registered material set. Covers the
+--   edit log, spoil piles, AND each page's worldgen plate data
+--   ('wgpPlates' — round 4 review: a plate's base material is
+--   persisted just like any other 'MaterialId' and staging would
+--   otherwise silently render it with 'defaultMaterialProps' instead
+--   of rejecting the load). Empty ⇒ every reference resolves and the
+--   load may proceed.
 missingMaterialReferences
     ∷ MaterialRegistry
     → [(WorldPageId, WorldPageSave)]
@@ -1138,6 +1145,12 @@ missingMaterialReferences registry pages = concatMap pageRefs pages
         [ MissingMaterialRef "spoil pile" pid coord (unMaterialId (spMat sp))
         | (coord, sp) ← HM.toList (wpsSpoilPiles w)
         , not (isKnownMaterial registry (spMat sp)) ]
+        ⧺
+        [ MissingMaterialRef "tectonic plate" pid
+              (plateCenterX plate, plateCenterY plate)
+              (unMaterialId (plateMaterial plate))
+        | plate ← wgpPlates (wpsGenParams w)
+        , not (isKnownMaterial registry (plateMaterial plate)) ]
     editMaterialRef (WeAddTile gx gy mat)   = [(gx, gy, mat)]
     editMaterialRef (WeSetCell gx gy _z mat) = [(gx, gy, mat)]
     editMaterialRef _                        = []
