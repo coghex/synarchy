@@ -322,10 +322,16 @@ function settingsMenu.createUI(opts)
     local preserveState = opts.preserveState or false
 
     local savedScroll = {}
+    local textboxSnap = nil
     if preserveState then
         for key, ts in pairs(settingsMenu.tabScroll) do
             savedScroll[key] = ts.scrollOffset
         end
+        -- Snapshot every textbox's raw (possibly unsubmitted) text,
+        -- cursor, and focus BEFORE destroyOwned() tears them down —
+        -- scoped to this page so a resize never captures another
+        -- screen's still-live textboxes.
+        textboxSnap = textbox.snapshotPage(settingsMenu.page)
     end
 
     -- Tear down owned elements only (not global destroyAll)
@@ -397,6 +403,10 @@ function settingsMenu.createUI(opts)
             local restored = math.max(0, math.min(savedScroll[key] or 0, maxOffset))
             settingsMenu.onTabScroll(key, restored)
         end
+        -- Restores raw text + cursor + focus onto the freshly rebuilt
+        -- textboxes (matched by name); a no-op for any name that no
+        -- longer has a live textbox (e.g. a hidden tab's control).
+        textbox.restoreAll(textboxSnap)
     end
 
     settingsMenu.showTab(settingsMenu.activeTab)
@@ -549,10 +559,24 @@ end
 
 function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
                                      bounds, s, uiscale)
+    -- #748: shrink all four bottom-action buttons uniformly if their
+    -- natural width would overflow the panel's content area (e.g. the
+    -- supported envelope's 800px-wide minimum, where the unshrunk row
+    -- used to push Back/Save off the panel/framebuffer) — mirrors
+    -- create_world/bottom_buttons.lua's identical technique.
+    local base = settingsMenu.baseSizes
+    local naturalWidth = base.btnWidth * 4 * uiscale + base.btnSpacing * 3 * uiscale
+    local factor = 1.0
+    if naturalWidth > 0 and naturalWidth > bounds.width then
+        factor = bounds.width / naturalWidth
+    end
+    local btnW = math.floor(base.btnWidth * factor)
+    local spacing = math.floor(s.btnSpacing * factor)
+
     settingsMenu.backButtonId = settingsMenu.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
         fontSize   = settingsMenu.baseSizes.fontSize,
         uiscale    = uiscale,
@@ -573,7 +597,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     settingsMenu.defaultsButtonId = settingsMenu.trackButton(button.new({
         name       = "defaults_btn",
         text       = "Defaults",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
         fontSize   = settingsMenu.baseSizes.fontSize,
         uiscale    = uiscale,
@@ -591,7 +615,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     settingsMenu.applyButtonId = settingsMenu.trackButton(button.new({
         name       = "apply_btn",
         text       = "Apply",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
         fontSize   = settingsMenu.baseSizes.fontSize,
         uiscale    = uiscale,
@@ -609,7 +633,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     settingsMenu.saveButtonId = settingsMenu.trackButton(button.new({
         name       = "save_btn",
         text       = "Save",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
         fontSize   = settingsMenu.baseSizes.fontSize,
         uiscale    = uiscale,
@@ -628,8 +652,8 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     local defaultsW, _   = button.getSize(settingsMenu.defaultsButtonId)
     local applyW, _      = button.getSize(settingsMenu.applyButtonId)
     local saveW, _       = button.getSize(settingsMenu.saveButtonId)
-    local totalBtnW      = backW + s.btnSpacing + defaultsW + s.btnSpacing 
-                           + applyW + s.btnSpacing + saveW
+    local totalBtnW      = backW + spacing + defaultsW + spacing
+                           + applyW + spacing + saveW
     local btnStartX      = panelX + bounds.x + (bounds.width - totalBtnW) / 2
     local bottomPad      = math.floor(100 * uiscale)
     local btnY           = panelY + panelHeight - bottomPad
@@ -641,12 +665,12 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     local saveH_   = button.getElementHandle(settingsMenu.saveButtonId)
 
     UI.setPosition(backH_,     btnStartX, btnY)
-    UI.setPosition(defaultsH_, btnStartX + backW + s.btnSpacing, btnY)
-    UI.setPosition(applyH_,    btnStartX + backW + s.btnSpacing 
-                               + defaultsW + s.btnSpacing, btnY)
-    UI.setPosition(saveH_,     btnStartX + backW + s.btnSpacing 
-                               + defaultsW + s.btnSpacing 
-                               + applyW + s.btnSpacing, btnY)
+    UI.setPosition(defaultsH_, btnStartX + backW + spacing, btnY)
+    UI.setPosition(applyH_,    btnStartX + backW + spacing
+                               + defaultsW + spacing, btnY)
+    UI.setPosition(saveH_,     btnStartX + backW + spacing
+                               + defaultsW + spacing
+                               + applyW + spacing, btnY)
     
     UI.setZIndex(backH_,     Z_BUTTONS)
     UI.setZIndex(defaultsH_, Z_BUTTONS)

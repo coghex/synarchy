@@ -327,6 +327,53 @@ spec = around withHeadlessEngine $ do
                     selValue p `shouldBe` "beta"
                     selCount p `shouldBe` 1
 
+        it "settings menu preserves an in-progress (unsubmitted) textbox edit, its cursor, and its keyboard focus across a resize" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local gt = require('scripts.settings.graphics_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                -- setText mirrors what live keystrokes do to the raw
+                -- text input BEFORE Enter/blur ever fires the real
+                -- onTextBoxSubmit — this value never reaches `pending`.
+                , "textbox.setText(gt.frameLimitTextBoxId, '9');"
+                , "textbox.focus(gt.frameLimitTextBoxId);"
+                , "textbox.setCursor(gt.frameLimitTextBoxId, 1);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local newId = gt.frameLimitTextBoxId;"
+                , "return {text=textbox.getText(newId), cursor=textbox.getCursor(newId),"
+                    <> " focused=textbox.isFocused(newId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TextboxStateProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tspText p `shouldBe` "9"
+                    tspCursor p `shouldBe` 1
+                    tspFocused p `shouldBe` True
+
+        it "create-world menu preserves an in-progress (unsubmitted) textbox edit across a resize, even though it never syncs to `pending` until Generate" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "local at = require('scripts.create_world.advanced_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "textbox.setText(at.plateCountTextBoxId, '7');"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local newId = at.plateCountTextBoxId;"
+                , "return {text=textbox.getText(newId), pendingUnchanged=(m.pending.plateCount == '10')}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PlateCountProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    pcText p `shouldBe` "7"
+                    -- The in-progress edit survives WITHOUT prematurely
+                    -- writing to `pending` (which only Generate does) —
+                    -- proving the fix restores the WIDGET, not by
+                    -- routing through pending like graphics_tab's
+                    -- submitted-value case.
+                    pcPendingUnchanged p `shouldBe` True
+
     describe "repeated resize never grows live UI state" $
         it "5 alternating-size resizes on the settings menu leave a stable element/page count" $ \env → do
             ls ← newBareLuaBackend env
@@ -433,6 +480,71 @@ spec = around withHeadlessEngine $ do
                     bbpY p `shouldSatisfy` (>= 0)
                     bbpBottom p `shouldSatisfy` (<= 600)
 
+        it "save browser's Back button stays reachable even at 800x600@4x (outside-envelope best-effort, where fixed chrome alone used to exceed the size cap)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local m = require('scripts.save_browser');"
+                , "m.init(1,2,3,800,600);"
+                , "m.show({{name='only',timestamp='t'}}, function() end, function() end);"
+                , "local function findByName(name)"
+                , "    for _, e in ipairs(UI.getVisibleElements()) do"
+                , "        if e.name == name then return e.handle end"
+                , "    end"
+                , "    return nil"
+                , "end;"
+                , "local h = findByName('save_browser_back_box');"
+                , "local info = UI.getElementInfo(h);"
+                , "return {y = info.y, bottom = info.y + info.height}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe BackButtonProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    bbpY p `shouldSatisfy` (>= 0)
+                    bbpBottom p `shouldSatisfy` (<= 600)
+
+        it "settings menu's four bottom-action buttons (Back/Defaults/Apply/Save) never overlap and stay in-frame" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,800,600);"
+                , "local button = require('scripts.ui.button');"
+                , "local function box(id)"
+                , "    local info = UI.getElementInfo(button.getElementHandle(id));"
+                , "    return info.x, info.y, info.width, info.height"
+                , "end;"
+                , "local function overlap(x1,w1,x2,w2) return x1 < x2+w2 and x2 < x1+w1 end;"
+                , "local bx,by,bw,bh = box(m.backButtonId);"
+                , "local dx,dy,dw,dh = box(m.defaultsButtonId);"
+                , "local ax,ay,aw,ah = box(m.applyButtonId);"
+                , "local sx,sy,sw,sh = box(m.saveButtonId);"
+                , "local anyOverlap = overlap(bx,bw,dx,dw) or overlap(bx,bw,ax,aw) or overlap(bx,bw,sx,sw)"
+                    <> " or overlap(dx,dw,ax,aw) or overlap(dx,dw,sx,sw) or overlap(ax,aw,sx,sw);"
+                , "local allInFrame = bx >= 0 and dx >= 0 and ax >= 0 and sx >= 0"
+                    <> " and (bx+bw) <= 800 and (dx+dw) <= 800 and (ax+aw) <= 800 and (sx+sw) <= 800;"
+                , "return {anyOverlap=anyOverlap, allInFrame=allInFrame}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe OverlapFrameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ofpAnyOverlap p `shouldBe` False
+                    ofpAllInFrame p `shouldBe` True
+
+        it "create-world's World Name control stays in-frame at the formal minimum, not off-screen to the left" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 800 600 <> ";"
+                , "local st = require('scripts.create_world.settings_tab');"
+                , "local randbox = require('scripts.ui.randbox');"
+                , "local info = UI.getElementInfo(randbox.getElementHandle(st.nameRandBoxId));"
+                , "return {x = info.x, rightEdge = info.x + info.width}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    wnpX p `shouldSatisfy` (>= 0)
+                    wnpRightEdge p `shouldSatisfy` (<= 800)
+
     describe "main/pause menu compact fallback keeps the panel + title in-frame at the maximum supported scale" $
         forM_ [ ("main", "scripts.main_menu"), ("pause", "scripts.pause_menu") ] $ \(menuName, modulePath) →
             it (menuName ⧺ " menu at 3840x2160@4 with its maximum item count") $ \env → do
@@ -473,7 +585,14 @@ spec = around withHeadlessEngine $ do
 bootMain, bootSettings, bootCreateWorld, bootPause, bootSaveBrowser ∷ Int → Int → Text
 bootMain w h = "local m = require('scripts.main_menu'); m.init(1,2,3,4," <> tshow w <> "," <> tshow h <> ")"
 bootSettings w h = "local m = require('scripts.settings_menu'); m.init(1,2,3," <> tshow w <> "," <> tshow h <> ")"
-bootCreateWorld w h = "local m = require('scripts.create_world_menu'); m.init(1,2,3," <> tshow w <> "," <> tshow h <> ")"
+-- randbox/textbox need their own .init() (shared box textures, module-
+-- level) that only ui_manager_boot.lua's real boot sequence normally
+-- calls — create_world_menu.lua itself never does, since production
+-- always reaches it through that boot. Skipped here (as this whole
+-- suite skips uiManager.init()), a widget's underlying box element
+-- silently gets a nil texture handle and UI.newBox returns no handle
+-- at all, rather than erroring.
+bootCreateWorld w h = "require('scripts.ui.randbox').init(); require('scripts.ui.textbox').init(); local m = require('scripts.create_world_menu'); m.init(1,2,3," <> tshow w <> "," <> tshow h <> ")"
 bootPause w h = "local m = require('scripts.pause_menu'); m.init(1,2,3,4," <> tshow w <> "," <> tshow h <> "); m.show({showSave=false})"
 bootSaveBrowser w h = luaLines
     [ "local m = require('scripts.save_browser');"
@@ -587,6 +706,30 @@ data CompactFallbackProbe = CompactFallbackProbe
 instance FromJSON CompactFallbackProbe where
     parseJSON = withObject "CompactFallbackProbe" $ \o →
         CompactFallbackProbe <$> o .: "panelInFrame" <*> o .: "titleY"
+
+data TextboxStateProbe = TextboxStateProbe
+    { tspText ∷ Text, tspCursor ∷ Int, tspFocused ∷ Bool } deriving Show
+instance FromJSON TextboxStateProbe where
+    parseJSON = withObject "TextboxStateProbe" $ \o → TextboxStateProbe
+        <$> o .: "text" <*> o .: "cursor" <*> o .: "focused"
+
+data PlateCountProbe = PlateCountProbe
+    { pcText ∷ Text, pcPendingUnchanged ∷ Bool } deriving Show
+instance FromJSON PlateCountProbe where
+    parseJSON = withObject "PlateCountProbe" $ \o →
+        PlateCountProbe <$> o .: "text" <*> o .: "pendingUnchanged"
+
+data OverlapFrameProbe = OverlapFrameProbe
+    { ofpAnyOverlap ∷ Bool, ofpAllInFrame ∷ Bool } deriving Show
+instance FromJSON OverlapFrameProbe where
+    parseJSON = withObject "OverlapFrameProbe" $ \o →
+        OverlapFrameProbe <$> o .: "anyOverlap" <*> o .: "allInFrame"
+
+data WorldNameProbe = WorldNameProbe
+    { wnpX ∷ Double, wnpRightEdge ∷ Double } deriving Show
+instance FromJSON WorldNameProbe where
+    parseJSON = withObject "WorldNameProbe" $ \o →
+        WorldNameProbe <$> o .: "x" <*> o .: "rightEdge"
 
 -- * Lua backend + eval helpers (mirrors Test.Headless.UI.InputOwnership)
 

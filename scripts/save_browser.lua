@@ -1,9 +1,10 @@
 -- Save Browser - lists saved worlds using the list widget
-local scale  = require("scripts.ui.scale")
-local panel  = require("scripts.ui.panel")
-local label  = require("scripts.ui.label")
-local button = require("scripts.ui.button")
-local list   = require("scripts.ui.list")
+local scale      = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
+local panel      = require("scripts.ui.panel")
+local label      = require("scripts.ui.label")
+local button     = require("scripts.ui.button")
+local list       = require("scripts.ui.list")
 
 local saveBrowser = {}
 
@@ -122,6 +123,23 @@ function saveBrowser.createUI()
     local uiscale = scale.get()
     local s = scale.applyAllWith(saveBrowser.baseSizes, uiscale)
 
+    -- #748: compact fallback — at a high UI scale and a short
+    -- framebuffer (e.g. the outside-envelope 800x600@4x combination),
+    -- the FIXED chrome alone (padding + title + one button row) can
+    -- exceed the size cap before any list rows are even considered,
+    -- which the row-count-from-height fit below can't fix on its own
+    -- (it only ever reduces rows to a minimum of 1). Shrinks this
+    -- screen's own effective scale, never the stored UI scale, so Back
+    -- stays reachable in-frame.
+    local maxPanelHeight = math.floor(saveBrowser.fbH * 0.85)
+    local naturalFixedOverhead = (saveBrowser.baseSizes.panelPadY * 2
+        + saveBrowser.baseSizes.titleFontSize
+        + saveBrowser.baseSizes.btnSpacing * 2
+        + saveBrowser.baseSizes.itemHeight
+        + saveBrowser.baseSizes.btnHeight) * uiscale
+    uiscale = responsive.fitScale(naturalFixedOverhead, maxPanelHeight, uiscale)
+    s = scale.applyAllWith(saveBrowser.baseSizes, uiscale)
+
     saveBrowser.page = UI.newPage("save_browser", "modal")
 
     local saves = saveBrowser.saves
@@ -145,7 +163,6 @@ function saveBrowser.createUI()
     -- — the old order left the list + Back button overflowing whatever
     -- got clamped away, e.g. Back landing below the framebuffer at a
     -- long save list on an 800x600 window).
-    local maxPanelHeight = math.floor(saveBrowser.fbH * 0.85)
     local fixedOverhead = s.panelPadY * 2 + s.titleFontSize
                         + s.btnSpacing * 2 + s.btnHeight
     local heightVisibleCount = math.max(1,

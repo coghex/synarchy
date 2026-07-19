@@ -323,13 +323,32 @@ end
 -- Full UI rebuild
 -----------------------------------------------------------
 
-function createWorldMenu.createUI()
+-- opts.preserveState (#748): defaults to true, since createWorldMenu's
+-- own `pending` table is already a persistent module field that only
+-- onDefaults ever resets — every OTHER rebuild (resize, a fresh
+-- preview image arriving mid-generation, re-entering the screen) wants
+-- to keep showing whatever the user has in progress, including RAW
+-- unsubmitted textbox edits that never made it into `pending` (Plate
+-- Count/timeline fields only sync to `pending` at Generate time).
+-- onDefaults explicitly passes preserveState=false, the one rebuild
+-- that must discard in-progress edits rather than restore them.
+function createWorldMenu.createUI(opts)
+    opts = opts or {}
+    local preserveState = (opts.preserveState == nil) and true or opts.preserveState
+
     -- #748: preserve the log's clamped scroll position and repaint its
     -- existing lines across a mere rebuild (resize, or a fresh preview
     -- image arriving mid-generation) — createWorldMenu.logLines itself
     -- is never touched here (only logPanelMod.clear does that), but the
     -- fresh label slots logPanelMod.create builds always start blank.
     local prevLogScrollOffset = createWorldMenu.logScrollOffset
+
+    -- Snapshot every textbox's raw (possibly unsubmitted) text, cursor,
+    -- and focus BEFORE destroyOwned() tears them down.
+    local textboxSnap = nil
+    if preserveState then
+        textboxSnap = textbox.snapshotPage(createWorldMenu.page)
+    end
 
     createWorldMenu.destroyOwned()
 
@@ -460,6 +479,10 @@ function createWorldMenu.createUI()
         createWorldMenu.buildButtonsIdle()
     end
 
+    if preserveState then
+        textbox.restoreAll(textboxSnap)
+    end
+
     createWorldMenu.uiCreated = true
 end
 
@@ -483,6 +506,33 @@ function createWorldMenu.createTitle(panelX, panelY, bounds, s, uiscale)
     local titleY = panelY + bounds.y + s.fontSize
     UI.addToPage(createWorldMenu.page, titleHandle, titleX, titleY)
     UI.setZIndex(titleHandle, Z_TITLE)
+end
+
+-----------------------------------------------------------
+-- #748: content-width shrink for the left (tabbed settings) panel
+--
+-- The left panel's share of the main panel is a fixed 40% split; at
+-- the supported envelope's 800px-wide minimum, its content area (~172px)
+-- is far narrower than the widest fixed-width control across every
+-- tab — World Name's randbox (nameBoxWidth=400 + its own dice-button
+-- width), which used to render partly off-screen to the left. Mirrors
+-- bottom_buttons.lua's button-bar shrink: one uniform factor, computed
+-- from the single widest control, applied to every tab's width-bearing
+-- base-size fields via a shallow-copied baseSizes table — the tab
+-- modules themselves need no changes, since they already just read
+-- whatever `params.baseSizes` they're handed. The dice-button width
+-- (randboxHeight) is treated as a fixed, unshrinkable part of that
+-- widest control's own total width when solving for the factor.
+-----------------------------------------------------------
+
+local function computeContentScaleFactor(base, availableWidth, uiscale)
+    local fixedPart = base.randboxHeight * uiscale
+    local shrinkablePart = base.nameBoxWidth * uiscale
+    if shrinkablePart <= 0 then return 1.0 end
+    local budget = availableWidth - fixedPart
+    if budget >= shrinkablePart then return 1.0 end
+    if budget <= 0 then return 0.1 end
+    return budget / shrinkablePart
 end
 
 -----------------------------------------------------------
@@ -544,15 +594,24 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
         tabbar.getFrameBounds(createWorldMenu.tabBarId)
     local pad = math.floor(20 * uiscale)
 
+    local contentW = frameW - pad * 2
+    local contentFactor = computeContentScaleFactor(
+        createWorldMenu.baseSizes, contentW, uiscale)
+    local contentBase = {}
+    for k, v in pairs(createWorldMenu.baseSizes) do contentBase[k] = v end
+    contentBase.nameBoxWidth = createWorldMenu.baseSizes.nameBoxWidth * contentFactor
+    contentBase.randboxWidth = createWorldMenu.baseSizes.randboxWidth * contentFactor
+    contentBase.textboxWidth = createWorldMenu.baseSizes.textboxWidth * contentFactor
+
     local tabParams = {
         page       = createWorldMenu.page,
         font       = createWorldMenu.menuFont,
-        baseSizes  = createWorldMenu.baseSizes,
+        baseSizes  = contentBase,
         uiscale    = uiscale,
         s          = s,
         contentX   = frameX + pad,
         contentY   = frameY + pad,
-        contentW   = frameW - pad * 2,
+        contentW   = contentW,
         zContent   = Z_CONTENT,
         zWidgets   = Z_WIDGETS,
         pending    = createWorldMenu.pending,
@@ -747,7 +806,10 @@ function createWorldMenu.onDefaults()
     createWorldMenu.loadDefaults()
     createWorldMenu.genState = generation.IDLE
     logPanelMod.clear(createWorldMenu)
-    createWorldMenu.createUI()
+    -- #748: the one rebuild that must discard in-progress edits
+    -- (the pending table was just reset above) rather than restore
+    -- them from the about-to-be-destroyed widgets.
+    createWorldMenu.createUI({ preserveState = false })
     if createWorldMenu.page then UI.showPage(createWorldMenu.page) end
 end
 

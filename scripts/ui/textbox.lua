@@ -438,6 +438,57 @@ function textbox.getFocusedId()
     return nil
 end
 
+-----------------------------------------------------------
+-- State preservation across a rebuild (#748)
+--
+-- A caller about to destroy every live textbox and recreate the SAME
+-- ones (by name) across a mere geometry/scale rebuild can snapshot
+-- every textbox's raw (possibly unsubmitted) text, cursor position,
+-- and focus state here, then restore it once the new widgets exist —
+-- keyed by name, since a destroy+recreate cycle always assigns fresh
+-- ids. Without this, a resize mid-edit silently reverts to whatever
+-- the rebuilt widget's `default` param says and drops keyboard focus
+-- entirely.
+-----------------------------------------------------------
+
+-- Scoped to one page (the caller's OWN page, captured before it's
+-- torn down) so a resize rebuild never snapshots another, unrelated
+-- screen's still-live-but-hidden textboxes.
+function textbox.snapshotPage(page)
+    local snap = {}
+    for id, tb in pairs(textboxes) do
+        if tb.page == page then
+            snap[tb.name] = {
+                text = textbox.getText(id),
+                cursor = textbox.getCursor(id),
+                focused = textbox.isFocused(id),
+            }
+        end
+    end
+    return snap
+end
+
+function textbox.restoreAll(snap)
+    if not snap then return end
+
+    local focusedId = nil
+    for id, tb in pairs(textboxes) do
+        local saved = snap[tb.name]
+        if saved then
+            textbox.setText(id, saved.text)
+            if saved.focused then focusedId = id end
+        end
+    end
+
+    if focusedId then
+        textbox.focus(focusedId)
+        local savedCursor = snap[textboxes[focusedId].name].cursor
+        if savedCursor then
+            textbox.setCursor(focusedId, savedCursor)
+        end
+    end
+end
+
 function textbox.getElementHandle(id)
     local tb = textboxes[id]
     if not tb then return nil end
