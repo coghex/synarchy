@@ -47,6 +47,15 @@ local function computeLayout(params)
     local factor  = computeButtonScaleFactor(base, L.bounds.width, uiscale)
     local btnW    = math.floor(base.btnWidth * factor)
     local spacing = math.floor(s.btnSpacing * factor)
+    -- #748 round 10: shrinking only the button BOX width left labels
+    -- rendering at the unshrunk base font size — at the supported
+    -- 800x600@1x combination the "done" set's boxes shrink to ~128-171px
+    -- but "Regenerate"/"Generate World" still rendered at the full
+    -- 24px font, overflowing into neighboring controls. Apply the SAME
+    -- factor to fontSize (mirrors settings_menu.createButtons' identical
+    -- round-6 fix) so button.new's own `fontSize * uiscale` internal
+    -- math shrinks both by the identical ratio.
+    local btnFontSize = base.fontSize * factor
 
     -- Back button
     menu.backButtonId = params.trackButton(button.new({
@@ -54,7 +63,7 @@ local function computeLayout(params)
         text       = "Back",
         width      = btnW,
         height     = base.btnHeight,
-        fontSize   = base.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = params.page,
         font       = params.menuFont,
@@ -71,7 +80,7 @@ local function computeLayout(params)
         text       = "Defaults",
         width      = btnW,
         height     = base.btnHeight,
-        fontSize   = base.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = params.page,
         font       = params.menuFont,
@@ -105,6 +114,7 @@ local function computeLayout(params)
         defaultsX  = defaultsX,
         factor     = factor,
         spacing    = spacing,
+        btnFontSize = btnFontSize,
     }
 end
 
@@ -128,7 +138,7 @@ function bottomButtons.buildIdle(params)
         text       = "Generate World",
         width      = primaryW,
         height     = base.btnHeight,
-        fontSize   = base.fontSize,
+        fontSize   = layout.btnFontSize,
         uiscale    = uiscale,
         page       = params.page,
         font       = params.menuFont,
@@ -185,7 +195,7 @@ function bottomButtons.buildGenerating(params)
         color          = {0.4, 0.4, 0.4, 1.0},
         fillColor      = {0.2, 0.7, 0.3, 1.0},
         font           = params.menuFont,
-        fontSize       = base.fontSize,
+        fontSize       = layout.btnFontSize,
         textColor      = {1.0, 0.2, 0.2, 1.0},
         uiscale        = uiscale,
         zIndex         = params.zButtons,
@@ -215,7 +225,7 @@ function bottomButtons.buildDone(params)
         text       = "Regenerate",
         width      = btnW,
         height     = base.btnHeight,
-        fontSize   = base.fontSize,
+        fontSize   = layout.btnFontSize,
         uiscale    = uiscale,
         page       = params.page,
         font       = params.menuFont,
@@ -231,7 +241,7 @@ function bottomButtons.buildDone(params)
         text       = "Continue",
         width      = primaryW,
         height     = base.btnHeight,
-        fontSize   = base.fontSize,
+        fontSize   = layout.btnFontSize,
         uiscale    = uiscale,
         page       = params.page,
         font       = params.menuFont,

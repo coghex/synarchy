@@ -804,6 +804,29 @@ local `cbSize` could independently round to 0 even after `cbSize`
 itself was floored — fixed by passing the pre-floored `cbSize` directly
 as `size` with `uiscale = 1.0`.
 
+Review round 10 found the LAST two gaps: `create_world/bottom_buttons.lua`
+had the exact button-label-font bug settings_menu's own bottom buttons
+had before round 6 — shrinking the button BOX width via
+`computeButtonScaleFactor`'s `factor` without shrinking `fontSize` by
+the same factor left every label (Back/Defaults/Generate/Regenerate/
+Continue, plus the progress bar) rendering at the unshrunk base size
+inside a shrunk box at the formal 800x600@1x minimum. Fixed identically
+to settings_menu's fix: `computeLayout` now returns a `btnFontSize =
+base.fontSize * factor` alongside the existing `btnW`, threaded into
+every button/bar creation call in the file.
+
+`scripts/shell.lua` still lacked a 0x0-minimize guard even after round
+7 deliberately un-registered it from `responsive.notifyResize` (to stop
+double-routing a real resize) — shell receives `LuaFramebufferResize`
+straight from the engine's own direct broadcast regardless of that
+registration, so a minimize still reached `onFramebufferResize`
+directly and rebuilt an already-visible shell against a degenerate 0x0
+framebuffer (`rebuildBox`/`rebuildHistoryDisplay` read
+`engine.getFramebufferSize()` directly). Fixed with a simple early
+return on non-positive width/height — `shellvisible` is untouched by a
+minimize, so the very next real-size resize rebuilds normally on its
+own with no separate "pending restore" bookkeeping needed.
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's

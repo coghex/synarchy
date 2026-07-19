@@ -1018,6 +1018,23 @@ function shell.onInterrupt(fid)
 end
 
 function shell.onFramebufferResize(width, height)
+    -- #748 round 10: shell receives LuaFramebufferResize straight from
+    -- the engine (Engine.Scripting.Lua.Thread.Dispatch broadcasts to
+    -- every loaded script directly), which is exactly why round 7
+    -- deliberately did NOT also route it through
+    -- responsive.notifyResize (that would double-fire this handler on
+    -- every real resize) — but it also means shell never got
+    -- notifyResize's 0x0-minimize guard. A minimize would otherwise
+    -- destroy+rebuild an already-visible shell against a degenerate
+    -- 0x0 framebuffer (rebuildBox/rebuildHistoryDisplay read
+    -- engine.getFramebufferSize() directly, producing negative/
+    -- off-frame geometry). Skip entirely on a non-positive size — the
+    -- very next real-size resize rebuilds normally on its own, since
+    -- shellvisible is untouched by a minimize.
+    if (width or 0) <= 0 or (height or 0) <= 0 then
+        return
+    end
+
     -- Reset max input width cache so it gets recalculated
     maxInputWidth = 0
 

@@ -511,6 +511,32 @@ spec = around withHeadlessEngine $ do
                     bbDoneOverlap p `shouldBe` False
                     bbDoneInFrame p `shouldBe` True
 
+        -- #748 round 10: shrinking only the button BOX left the label
+        -- rendering at the unshrunk base font size — the label's own
+        -- centering math (labelX = (btnWidth - labelWidth) / 2) goes
+        -- negative once labelWidth exceeds the shrunk box, meaning the
+        -- text starts to the LEFT of the box's own left edge. Mirrors
+        -- settings_menu's identical round-6 fix/test.
+        it "create-world's Done-set button labels (Regenerate/Continue) stay within their own (shrunk) box at the formal 800x600@1x minimum" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , "local m = require('scripts.create_world_menu');"
+                , "m.init(1,2,3,800,600);"
+                , "UI.showPage(m.page);"
+                , "m.buildButtonsDone();"
+                , "local button = require('scripts.ui.button');"
+                , "local boxInfo = UI.getElementInfo(button.getElementHandle(m.regenerateButtonId));"
+                , "local labelX = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name == 'regenerate_btn_label' then labelX = e.x end;"
+                , "end;"
+                , "return {boxX = boxInfo.x, labelX = labelX}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ButtonLabelFitProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → blfpLabelX p `shouldSatisfy` (>= blfpBoxX p)
+
         it "save browser's Back button stays reachable within the framebuffer with a long (12-entry) save list" $ \env → do
             ls ← newBareLuaBackend env
             let saveList = T.intercalate ","
@@ -1009,6 +1035,34 @@ spec = around withHeadlessEngine $ do
                 ]
             calls `shouldBe` 1
 
+        -- #748 round 10: shell receives LuaFramebufferResize straight
+        -- from the engine (never through responsive.notifyResize,
+        -- deliberately, to avoid double-routing a real resize — see
+        -- round 7's comment) — meaning it never got notifyResize's own
+        -- 0x0-minimize guard either. A minimize used to destroy+rebuild
+        -- an already-visible shell against a degenerate 0x0
+        -- framebuffer.
+        it "a 0x0 minimize never rebuilds an already-visible shell against degenerate geometry, and a real resize afterward rebuilds normally" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local shell = require('scripts.shell');"
+                , "shell.init(0);"
+                , "shell.show();"
+                , "local rebuilds = 0;"
+                , "local realRebuildBox = shell.rebuildBox;"
+                , "shell.rebuildBox = function(...) rebuilds = rebuilds + 1; return realRebuildBox(...) end;"
+                , "shell.onFramebufferResize(0, 0);"
+                , "local rebuildsAfterMinimize = rebuilds;"
+                , "shell.onFramebufferResize(1600, 900);"
+                , "local rebuildsAfterRestore = rebuilds;"
+                , "return {afterMinimize = rebuildsAfterMinimize, afterRestore = rebuildsAfterRestore}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RebuildCountsProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rcpAfterMinimize p `shouldBe` 0
+                    rcpAfterRestore p `shouldSatisfy` (> 0)
+
     describe "row labels never overlap their same-row control at a narrow, high-scale supported combination (#748 round 7)" $ do
         it "graphics_tab.lua's Resolution row: label ends before the (also-reserved) dropdown begins at 800x2160@4x" $ \env → do
             ls ← newBareLuaBackend env
@@ -1414,6 +1468,12 @@ data NotifCheckboxProbe = NotifCheckboxProbe
 instance FromJSON NotifCheckboxProbe where
     parseJSON = withObject "NotifCheckboxProbe" $ \o → NotifCheckboxProbe
         <$> o .: "checkboxSize" <*> o .: "x" <*> o .: "rightEdge"
+
+data RebuildCountsProbe = RebuildCountsProbe
+    { rcpAfterMinimize ∷ Int, rcpAfterRestore ∷ Int } deriving Show
+instance FromJSON RebuildCountsProbe where
+    parseJSON = withObject "RebuildCountsProbe" $ \o → RebuildCountsProbe
+        <$> o .: "afterMinimize" <*> o .: "afterRestore"
 
 data TextboxStateProbe = TextboxStateProbe
     { tspText ∷ Text, tspCursor ∷ Int, tspFocused ∷ Bool } deriving Show
