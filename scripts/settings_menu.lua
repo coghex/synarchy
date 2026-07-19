@@ -468,6 +468,15 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
     local tabFrameHeight = panelHeight - bounds.y - s.fontSize
         - math.floor(20 * uiscale) - s.tabHeight - s.btnHeight
         - math.floor(40 * uiscale) - bounds.y
+    -- #748 round 13: at an OUT-OF-ENVELOPE combination (the issue's own
+    -- 800x600@4x exemplar), the fixed panel height alone can be smaller
+    -- than the SUM of the scaled chrome subtracted above (title, tab
+    -- row, bottom button row, gaps) — driving tabFrameHeight negative,
+    -- which tabbar.new passes straight to UI.newBox as a real (invalid)
+    -- box height. This is best-effort territory (never crashing/
+    -- invalid, not "looks good" — see the envelope contract), so a
+    -- simple floor is the right fix here, not a full vertical reflow.
+    tabFrameHeight = math.max(20, tabFrameHeight)
 
     -- Build tabs array from tabDefs
     local tabList = {}

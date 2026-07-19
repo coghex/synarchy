@@ -479,8 +479,17 @@ spec = around withHeadlessEngine $ do
                 , "m.init(1,2,3,800,600);"
                 , "local p = require('scripts.ui.panel');"
                 , "local w,h = p.getSize(m.panelId);"
+                -- #748 round 13: the fixed 480px (0.8*600) panel height
+                -- alone can be smaller than the SUM of scaled chrome
+                -- (title, tab row, bottom button row, gaps) subtracted
+                -- from it — driving the tab bar's own frameHeight
+                -- negative, which tabbar.new passed straight to
+                -- UI.newBox as a real (invalid) box height.
+                , "local tabbar = require('scripts.ui.tabbar');"
+                , "local tbx, tby, tbw, tbh = tabbar.getFrameBounds(m.tabBarId);"
                 , "return {hasBack=(m.backButtonId ~= nil), hasApply=(m.applyButtonId ~= nil),"
-                    <> " hasSave=(m.saveButtonId ~= nil), validDims=(w > 0 and h > 0)}"
+                    <> " hasSave=(m.saveButtonId ~= nil), validDims=(w > 0 and h > 0),"
+                    <> " tabFrameValid=(tbw > 0 and tbh > 0)}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe OutsideEnvelopeProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
@@ -489,6 +498,7 @@ spec = around withHeadlessEngine $ do
                     oepHasApply p `shouldBe` True
                     oepHasSave p `shouldBe` True
                     oepValidDims p `shouldBe` True
+                    oepTabFrameValid p `shouldBe` True
 
     describe "fixed action bars avoid overlap and stay in-frame at the formal minimum (800x600@1x)" $ do
         it "create-world's bottom button bar never overlaps in the idle or done set" $ \env → do
@@ -1503,10 +1513,13 @@ instance FromJSON SelectProbe where
         SelectProbe <$> o .: "value" <*> o .: "count"
 
 data OutsideEnvelopeProbe = OutsideEnvelopeProbe
-    { oepHasBack ∷ Bool, oepHasApply ∷ Bool, oepHasSave ∷ Bool, oepValidDims ∷ Bool }    deriving Show
+    { oepHasBack ∷ Bool, oepHasApply ∷ Bool, oepHasSave ∷ Bool, oepValidDims ∷ Bool
+    , oepTabFrameValid ∷ Bool
+    } deriving Show
 instance FromJSON OutsideEnvelopeProbe where
     parseJSON = withObject "OutsideEnvelopeProbe" $ \o → OutsideEnvelopeProbe
         <$> o .: "hasBack" <*> o .: "hasApply" <*> o .: "hasSave" <*> o .: "validDims"
+        <*> o .: "tabFrameValid"
 
 data ButtonBarProbe = ButtonBarProbe
     { bbIdleOverlap ∷ Bool, bbIdleInFrame ∷ Bool

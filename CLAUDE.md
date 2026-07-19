@@ -855,6 +855,22 @@ fixed progress bar, via a new `barInFrameExpr` mirroring
 `panelInFrameExpr`) at 1x for every configured resolution (2.5x
 best-effort for 3840x2160, same as the other three screens).
 
+Review round 13 found an invalid-geometry gap at the issue's own
+OUT-OF-ENVELOPE exemplar (800x600@4x, outside the supported 800x600's
+0.5x-1x band): `settingsMenu.createTabBar`'s `tabFrameHeight` — the
+panel height minus several uiscale-scaled chrome terms (title, tab
+row, bottom button row, gaps) — went negative once the panel's own
+FIXED height (480px, `0.8*600`) was smaller than that scaled chrome sum
+alone, and `tabbar.new` passes it straight to `UI.newBox` as a real
+(invalid) box height. Since this is explicitly BEST-EFFORT territory
+(never crashing/invalid, not required to look good — see the envelope
+contract above), the fix is a simple floor rather than a full vertical
+reflow: `tabFrameHeight = math.max(20, tabFrameHeight)`. (The
+downstream `contentH`/`maxVisibleRows`/scrollbar `trackH` consumers
+were already safely floored via their own `math.max` calls — only the
+tab frame's own height, passed directly to `UI.newBox`, was
+unguarded.)
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's
