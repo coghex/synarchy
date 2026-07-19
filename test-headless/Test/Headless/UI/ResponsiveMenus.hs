@@ -1035,6 +1035,63 @@ spec = around withHeadlessEngine $ do
                 ]
             calls `shouldBe` 1
 
+        -- #748 round 11: onDefaults/onBack can ALSO change the live
+        -- UI scale (data.loadDefaults' auto 4K/1440p/1080p detection;
+        -- data.revert reverting an applied-but-unsaved change back to
+        -- the on-disk config) — previously only onApply/onSave fanned
+        -- that out. Stub data.loadDefaults/revert themselves (rather
+        -- than depending on real engine default-config/auto-detection
+        -- specifics) to deterministically force a scale change, then
+        -- verify the SAME fan-out (including the direct shell call)
+        -- now fires.
+        it "settingsMenu.onDefaults fans out a real scale change to shell" $ \env → do
+            ls ← newBareLuaBackend env
+            calls ← evalInt ls $ luaLines
+                [ "local shell = require('scripts.shell');"
+                , "local calls = 0;"
+                , "local realHandler = shell.onFramebufferResize;"
+                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local data = require('scripts.settings.data');"
+                , "data.loadDefaults = function() data.current.uiScale = data.current.uiScale + 1.0 end;"
+                , "m.onDefaults();"
+                , "return calls"
+                ]
+            calls `shouldSatisfy` (> 0)
+
+        it "settingsMenu.onBack fans out a real scale change (from data.revert) to shell" $ \env → do
+            ls ← newBareLuaBackend env
+            calls ← evalInt ls $ luaLines
+                [ "local shell = require('scripts.shell');"
+                , "local calls = 0;"
+                , "local realHandler = shell.onFramebufferResize;"
+                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local data = require('scripts.settings.data');"
+                , "data.revert = function() data.current.uiScale = data.current.uiScale + 1.0 end;"
+                , "m.onBack();"
+                , "return calls"
+                ]
+            calls `shouldSatisfy` (> 0)
+
+        it "settingsMenu.onDefaults does NOT fan out when the scale is unchanged" $ \env → do
+            ls ← newBareLuaBackend env
+            calls ← evalInt ls $ luaLines
+                [ "local shell = require('scripts.shell');"
+                , "local calls = 0;"
+                , "local realHandler = shell.onFramebufferResize;"
+                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local data = require('scripts.settings.data');"
+                , "data.loadDefaults = function() end;"  -- leaves data.current.uiScale untouched
+                , "m.onDefaults();"
+                , "return calls"
+                ]
+            calls `shouldBe` 0
+
         -- #748 round 10: shell receives LuaFramebufferResize straight
         -- from the engine (never through responsive.notifyResize,
         -- deliberately, to avoid double-routing a real resize — see

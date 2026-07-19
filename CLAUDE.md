@@ -827,6 +827,23 @@ return on non-positive width/height — `shellvisible` is untouched by a
 minimize, so the very next real-size resize rebuilds normally on its
 own with no separate "pending restore" bookkeeping needed.
 
+Review round 11 found the scale-change fan-out (`responsive.notifyResize`
++ the direct `shell.onFramebufferResize` call) was only wired into
+`onApply`/`onSave` — but Settings' Defaults and Back flows can ALSO
+change the live UI scale: `data.loadDefaults()` unconditionally calls
+`engine.setUIScale` (with its own auto 4K/1440p/1080p detection), and
+`data.revert()` conditionally does too (reverting an applied-but-
+unsaved scale change back to the on-disk config). Without the fan-out,
+every other already-initialized screen and the shell console kept
+stale geometry until another resize or reopen. `onDefaults`/`onBack`
+now capture `data.current.uiScale` before calling into `data`, compare
+after, and fan out identically to `onApply`/`onSave` when it actually
+changed. The Back BUTTON's own `onClick` used to inline a bare
+`data.revert()` call directly (a second, duplicate copy of the same
+"revert then navigate away" logic `onBack()` already encapsulated) —
+routed through `settingsMenu.onBack()` instead, so the fan-out fix
+lives in exactly one place rather than needing a third copy.
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's

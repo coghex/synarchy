@@ -147,6 +147,13 @@ end
 
 function settingsMenu.onDefaults()
     engine.logInfo("Loading defaults...")
+    -- #748 round 11: data.loadDefaults() unconditionally calls
+    -- engine.setUIScale (with auto 4K/1440p/1080p detection) — capture
+    -- the scale beforehand so a real change can fan out the same way
+    -- onApply/onSave do below, or every other already-initialized
+    -- screen (main menu, create-world, ...) and the shell debug
+    -- console keep stale geometry until another resize/reopen.
+    local uiScaleBefore = data.current.uiScale
     data.loadDefaults()
     -- Keybinds are write-through (no pending state), so the global
     -- Defaults reset restores factory bindings immediately and persists
@@ -158,6 +165,10 @@ function settingsMenu.onDefaults()
     end
     settingsMenu.createUI()
     if settingsMenu.page then UI.showPage(settingsMenu.page) end
+    if data.current.uiScale ~= uiScaleBefore then
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+    end
 end
 
 -----------------------------------------------------------
@@ -662,7 +673,10 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         textColor  = {0.0, 0.0, 0.0, 1.0},
         zIndex     = Z_BUTTONS,
         onClick = function(id, name)
-            data.revert()
+            -- #748 round 11: routes through onBack (not a bare
+            -- data.revert() call here) so the scale-change fan-out
+            -- lives in exactly one place.
+            settingsMenu.onBack()
             if settingsMenu.showMenuCallback then
                 settingsMenu.showMenuCallback("back")
             end
@@ -949,7 +963,20 @@ function settingsMenu.onSave()
 end
 
 function settingsMenu.onBack()
+    -- #748 round 11: data.revert() can ALSO change the live UI scale
+    -- (reverting an applied-but-unsaved change back to the on-disk
+    -- config) — fan it out the same way onApply/onSave do, or every
+    -- other already-initialized screen and the shell debug console
+    -- keep stale geometry. Settings itself is about to navigate away
+    -- (the caller shows a different menu right after), so only the
+    -- OTHER screens/shell matter here — but notifyResize is harmless
+    -- to call regardless of what's currently shown.
+    local uiScaleBefore = data.current.uiScale
     data.revert()
+    if data.current.uiScale ~= uiScaleBefore then
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+    end
 end
 
 -----------------------------------------------------------
