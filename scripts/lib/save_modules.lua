@@ -567,6 +567,23 @@ end
 -- replacement for modules with no durable state). Only reachable after
 -- `prepareLoad` returned {ok=true} -- errors loudly otherwise, since
 -- that is a caller bug, not a data problem.
+--
+-- Round 2 review: `apply()` mutates its module's live singleton
+-- wholesale (the C2 compatibility adapter documented on every
+-- registration) with no rollback of its own. Left unguarded, a LATER
+-- component's apply() throwing would abort the transaction with some
+-- earlier components already migrated to the new session and the rest
+-- still holding the old one -- a half-migrated Lua state paired with
+-- the OLD Haskell session, since WorldLoadPublish is only ever queued
+-- after this whole function returns successfully (see
+-- Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged). Every
+-- registered component's PRE-load live state is captured via its own
+-- `snapshot()` (the SAME function saveWorld uses, so this is exactly
+-- "what would be written if a save happened right now") before
+-- anything is mutated; a later failure restores every
+-- already-applied component from that capture, in reverse order,
+-- before re-raising -- the caller sees the same hard load-abort as
+-- before, but the live Lua session is left exactly as it was.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
@@ -574,27 +591,74 @@ function saveModules.applyAll()
         error("saveModules.applyAll: no prepared load (call prepareLoad \
               first and check its ok field)")
     end
+
+    local rollback = {}
+    for _, id in ipairs(sortedIds(saveModules.registry)) do
+        local ok, snapOrErr = pcall(saveModules.registry[id].snapshot)
+        if not ok then
+            saveModules._pendingApply = nil
+            saveModules._loadActive = false
+            error("saveModules.applyAll: could not capture a rollback "
+                .. "point for '" .. id .. "' -- aborting before any "
+                .. "state changed: " .. tostring(snapOrErr))
+        end
+        rollback[id] = snapOrErr
+    end
+
     local order = select(1, saveModules.dependencyOrder())
-    local applied = {}
+    local applyOrder = {}
+    local orderSeen = {}
     if order then
         for _, id in ipairs(order) do
-            if prepared[id] ~= nil then
-                applied[id] = true
-                saveModules.registry[id].apply(prepared[id])
-            end
+            applyOrder[#applyOrder + 1] = id
+            orderSeen[id] = true
         end
     end
     -- Defensive: apply anything dependencyOrder() didn't cover (should
     -- be unreachable -- prepareLoad already re-checked the registry is
     -- cycle-free -- but never silently drop a prepared component).
     for _, id in ipairs(sortedIds(saveModules.registry)) do
-        if prepared[id] ~= nil and not applied[id] then
-            saveModules.registry[id].apply(prepared[id])
+        if not orderSeen[id] then
+            applyOrder[#applyOrder + 1] = id
         end
     end
-    for _, id in ipairs(sortedIds(saveModules.resetHooks)) do
-        saveModules.resetHooks[id]()
+
+    local applied = {}
+    for _, id in ipairs(applyOrder) do
+        if prepared[id] ~= nil then
+            local ok, err = pcall(saveModules.registry[id].apply, prepared[id])
+            if not ok then
+                for i = #applied, 1, -1 do
+                    local rid = applied[i]
+                    pcall(saveModules.registry[rid].apply, rollback[rid])
+                end
+                saveModules._pendingApply = nil
+                saveModules._loadActive = false
+                error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
+                    .. "rolled back every already-applied component: "
+                    .. tostring(err))
+            end
+            applied[#applied + 1] = id
+        end
     end
+
+    -- Reset hooks run only once every real component has committed. A
+    -- hook owns no durable state of its own to roll back to (that's
+    -- the whole point of a reset hook), so a failure here is reported
+    -- but the already-applied components above are NOT unwound --
+    -- there is nothing meaningful to restore them to that they weren't
+    -- already at.
+    for _, id in ipairs(sortedIds(saveModules.resetHooks)) do
+        local ok, err = pcall(saveModules.resetHooks[id])
+        if not ok then
+            saveModules._pendingApply = nil
+            saveModules._loadActive = false
+            error("saveModules.applyAll: reset hook '" .. id
+                .. "' failed after every component committed: "
+                .. tostring(err))
+        end
+    end
+
     saveModules._pendingApply = nil
     saveModules._loadActive = false
 end

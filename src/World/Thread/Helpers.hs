@@ -20,16 +20,24 @@ sendGenLog ∷ EngineEnv → Text → IO ()
 sendGenLog env msg = Q.writeQueue (luaQueue env) (LuaWorldGenLog msg)
 
 -- | Signal Lua that a save finished loading, so per-id modules can
---   reconcile their global singleton state (#195). Carries the loaded
---   page's surviving unit + building ids. The Lua side rebuilds each
---   table as "survivors restored from the save blob + every other
---   still-live (off-page) entity's pre-load state", so a load replaces
---   only loaded-page state and other live pages are untouched. Emit only
---   after units + buildings have been written back.
-sendSaveLoaded ∷ EngineEnv → [Int] → [Int] → IO ()
-sendSaveLoaded env survivingUnitIds survivingBuildingIds =
+--   reconcile their global singleton state (#195). Carries the load
+--   transaction's own request id (round 2 review, requirement 9: the
+--   world thread's 'World.Load.Publish.publishStagedSession' has
+--   already swapped every live Haskell ref by the time this fires, but
+--   the transaction is not reported 'LoadPublished' until the Lua
+--   thread finishes reconciling THIS broadcast — see
+--   'Engine.Scripting.Lua.Thread.Dispatch' — so a headless caller
+--   polling 'engine.getLoadStatus()' never observes a published session
+--   whose off-page-survivor/stale-reference reconciliation hasn't run
+--   yet) plus the loaded page's surviving unit + building ids. The Lua
+--   side rebuilds each table as "survivors restored from the save blob
+--   + every other still-live (off-page) entity's pre-load state", so a
+--   load replaces only loaded-page state and other live pages are
+--   untouched. Emit only after units + buildings have been written back.
+sendSaveLoaded ∷ EngineEnv → Int → [Int] → [Int] → IO ()
+sendSaveLoaded env requestId survivingUnitIds survivingBuildingIds =
    Q.writeQueue (luaQueue env)
-       (LuaSaveLoaded survivingUnitIds survivingBuildingIds)
+       (LuaSaveLoaded requestId survivingUnitIds survivingBuildingIds)
 
 -- | Info message to lua's HUD, tagged with its SOURCE kind so the
 --   entity-info watchers can tell a zoomed-in tile selection ("tile")

@@ -167,7 +167,7 @@ spec = do
             -- the save exactly as stored.
             logger ← readIORef (loggerRef env)
             (sdA, _) ← loadWorld logger slotA HS.empty HS.empty ⌦ either
-                (\e → expectationFailure (T.unpack e)
+                (\(_, e) → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure
             sdActivePage sdA `shouldBe` WorldPageId "id_named_w8"

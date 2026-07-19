@@ -28,7 +28,7 @@ import Control.Concurrent.STM (readTVarIO)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
-import Engine.Load.Status (advanceLoad, failLoad, LoadPhase(..))
+import Engine.Load.Status (advanceLoad, failLoad, finishLoad, LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad)
 import World.Command.Types (WorldCommand(..))
 
@@ -254,10 +254,18 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
-  LuaSaveLoaded survUnitIds survBuildingIds →
+  LuaSaveLoaded requestId survUnitIds survBuildingIds → do
     broadcastToModules ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
       , intsToScriptArray survBuildingIds ]
+    -- Round 2 review, requirement 9: the transaction is reported
+    -- 'LoadPublished' only NOW, once this reconciliation broadcast has
+    -- actually run — not the instant the Haskell-side ref swap
+    -- happened (World.Load.Publish.publishStagedSession, well before
+    -- this message was even drained). 'broadcastToModules' never
+    -- throws (each module call is pcall-guarded internally), so this
+    -- always runs.
+    finishLoad (loadStatusRef env) requestId
   LuaHudLogInfo text1 text2 kind →
     broadcastToModules ls "onSetInfoText"
       [ScriptString text1, ScriptString text2, ScriptString kind]
@@ -341,7 +349,30 @@ handleLoadStaged env ls requestId = do
                     <> " failed applying Lua state: " <> err
                 failLoad (loadStatusRef env) requestId err
                 writeIORef (pendingLoadRef env) Nothing
-              Right () →
+              Right () → do
+                -- Round 2 review (requirement 12): every message that
+                -- reached this SAME queue while staging was in flight
+                -- (staging can take a while — worldgen chunk
+                -- regeneration is the dominant cost) is still sitting
+                -- behind the 'LuaLoadStaged' message that triggered
+                -- this whole function, since 'luaQueue' is FIFO and
+                -- this call runs synchronously to completion before
+                -- the Lua thread's own loop returns to draining it.
+                -- Discarding it here, still ON THE LUA THREAD and
+                -- still before 'WorldLoadPublish' is even queued,
+                -- closes that window — a stale queued UI click or
+                -- debug-console call must not fire against the
+                -- replacement session once the Lua thread's normal
+                -- loop resumes draining this queue right after this
+                -- function returns. (Flushing from the WORLD thread's
+                -- 'World.Load.Publish.publishStagedSession' instead
+                -- would race that same resumed drain and very likely
+                -- lose — see its haddock.)
+                stale ← Q.flushQueue (luaQueue env)
+                when (not (null stale)) $
+                    logWarn logger CatWorld $
+                        "Load publish discarded " <> T.pack (show (length stale))
+                        <> " stale Lua message(s) queued during staging"
                 Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.

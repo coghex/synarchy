@@ -200,7 +200,11 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   pre-load state", so a load touches only loaded-page state
               --   and other live pages are untouched (#191); nested refs are
               --   scrubbed against the survivor set.
-            | LuaSaveLoaded [Int] [Int]
+            | LuaSaveLoaded Int [Int] [Int]
+              -- ^ round 2 review: the leading 'Int' is the load
+              --   transaction's request id, so the dispatcher can
+              --   report 'Engine.Load.Status.LoadPublished' only once
+              --   THIS broadcast (below) actually completes.
             | LuaHudLogInfo Text Text Text
               -- ^ HUD info-panel push: basic, advanced, and a SOURCE
               -- kind ("tile" | "chunk"). The kind lets entity-info

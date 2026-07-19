@@ -378,10 +378,14 @@ continueLoad env logger requestId saveName descriptors = do
     result ← Lua.liftIO $
         loadWorld logger saveName luaKnownNames luaRequiredNames
     case result of
-        Left err → do
+        -- Round 2 review: retain whichever phase 'loadWorld' actually
+        -- reached before failing, rather than jumping straight from
+        -- 'LoadPaused' to 'LoadFailed' regardless of real progress.
+        Left (phase, err) → do
             Lua.liftIO $ do
                 logWarn logger CatWorld $
                     "loadSave failed for '" <> saveName <> "': " <> err
+                advanceLoad (loadStatusRef env) requestId phase
                 failLoad (loadStatusRef env) requestId err
             Lua.pushboolean False
         Right (saveData, luaComponents) → do

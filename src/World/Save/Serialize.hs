@@ -29,6 +29,7 @@ import World.Save.Envelope
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import qualified World.Save.Storage as Storage
 import Engine.Core.Log (LoggerState, LogCategory(..), logWarn)
+import Engine.Load.Status (LoadPhase(..))
 
 -- | Validate a user-supplied save name before it touches the filesystem.
 --   Returns 'Right' with the name unchanged when it's safe to use as a
@@ -119,12 +120,29 @@ writeSaveFiles rawName meta encoded luaKnownNames luaRequiredNames =
 --   A legacy flat file has no slot directory, so none of C1's
 --   generation/recovery machinery applies to it: it either decodes
 --   cleanly or is rejected outright, exactly as before #762.
+--
+--   Round 2 review (requirement 2/16): the failure case also names the
+--   'LoadPhase' the attempt actually reached before failing, so
+--   'engine.getLoadStatus()' can retain real progress instead of every
+--   failure collapsing straight from 'LoadPaused' to 'LoadFailed'. This
+--   is necessarily coarse — 'Storage.selectLoadGeneration' and
+--   'decodeSessionEnvelope' each perform envelope validation, component
+--   decode, migration, and snapshot assembly as ONE atomic, unobservable
+--   step (issues #759-#762), so there is no live checkpoint between
+--   them to report progress FROM mid-flight; this only distinguishes,
+--   after the fact, "never reached a structurally valid candidate at
+--   all" ('LoadPaused' — missing/truncated/corrupt/symlinked) from
+--   "reached a structurally valid, checksummed envelope that turned out
+--   to be schema/content-incompatible" ('LoadEnvelopeValidated' — the
+--   most conservative true claim for that case, since a version/content
+--   mismatch can in principle be caught as early as the envelope's own
+--   header).
 loadWorld
     ∷ LoggerState → Text → HS.HashSet Text → HS.HashSet Text
-    → IO (Either Text (SaveData, [(Text, Word32, BS.ByteString)]))
+    → IO (Either (LoadPhase, Text) (SaveData, [(Text, Word32, BS.ByteString)]))
 loadWorld logger rawName luaKnownNames luaRequiredNames =
     case sanitizeSaveName rawName of
-    Left err   → return (Left ("Invalid save name: " <> err))
+    Left err   → return (Left (LoadPaused, "Invalid save name: " <> err))
     Right name → do
         let dirPath    = savesDirectory </> T.unpack name
             legacyPath = savesDirectory </> T.unpack name <> saveExtension
@@ -134,7 +152,7 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
             else do
                 legacyExists ← doesFileExist legacyPath
                 if not legacyExists
-                    then return (Left $ "Save not found: " <> name)
+                    then return (Left (LoadPaused, "Save not found: " <> name))
                     else do
                         -- Requirement 12: the SAME containment check the
                         -- directory-format path gets via
@@ -143,9 +161,27 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                         -- symlink must not be silently followed and read.
                         safety ← Storage.rejectSymlinkedSlotDir legacyPath
                         case safety of
-                            Left reason → return (Left reason)
+                            Left reason → return (Left (LoadPaused, reason))
                             Right ()    → decodeLegacyFile legacyPath
   where
+    -- A structurally coherent but incompatible candidate (schema
+    -- version, unknown/missing required component, or a
+    -- content/assembly-validation failure) carries this exact,
+    -- deliberately worded marker — see the private @incompatibleMessage@
+    -- helper in 'World.Save.Storage.selectLoadGenerationUnsafe' —
+    -- distinct from every "never got a valid candidate at all" failure
+    -- (missing/truncated/checksum-corrupt/symlinked), which never
+    -- mentions it. A future change to that wording only degrades this
+    -- classification back to the conservative 'LoadPaused' default, it
+    -- can't misreport a real failure as further along than it was.
+    reachedEnvelope ∷ Text → Bool
+    reachedEnvelope = T.isInfixOf "incompatible with this build"
+
+    phaseFor ∷ Text → LoadPhase
+    phaseFor err
+        | reachedEnvelope err = LoadEnvelopeValidated
+        | otherwise            = LoadPaused
+
     -- Validate sdWorlds cardinality (and every other load-bearing check)
     -- at DECODE time so the load API fails cleanly (Left → engine.loadSave
     -- returns false) before it pauses the engine, restores Lua state, or
@@ -156,7 +192,7 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
         selection ← Storage.selectLoadGeneration
             luaKnownNames luaRequiredNames dirPath name
         case selection of
-            Left err  → return (Left err)
+            Left err  → return (Left (phaseFor err, err))
             Right sel → do
                 -- Requirement 7: report whether the authoritative or the
                 -- previous generation was selected, and why. A recovered
@@ -176,16 +212,22 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     -- transitional 'SaveData' shape the world-thread load path still
     -- consumes — using the AUTHORITATIVE metadata (name/timestamp) the
     -- metadata component carries, so a within-session re-load keys its
-    -- provenance under the same save name as before.
+    -- provenance under the same save name as before. A legacy file's
+    -- error text never carries the "incompatible with this build"
+    -- marker (it goes through 'decodeSessionEnvelope' directly, not
+    -- 'Storage.incompatibleMessage'), so this always reports the
+    -- conservative 'LoadPaused' default — genuinely all that's known
+    -- without deeper instrumentation of this rare, deprecated path.
     decodeLegacyFile path = do
         bytes ← BS.readFile path
-        return $ do
-            (meta, snap, luaComponents) ←
-                decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
-            let req = SaveRequestMeta { srmSlotName  = smName meta
-                                      , srmTimestamp = smTimestamp meta }
-            sd ← checkWorldCount (snapshotToSaveData req snap)
-            pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ])
+        let result = do
+                (meta, snap, luaComponents) ←
+                    decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
+                let req = SaveRequestMeta { srmSlotName  = smName meta
+                                          , srmTimestamp = smTimestamp meta }
+                sd ← checkWorldCount (snapshotToSaveData req snap)
+                pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ])
+        return $ either (\err → Left (LoadPaused, err)) Right result
 
 -- | One entry in 'listSaves''s result. 'slRecovered' is 'True' when the
 --   listed metadata came from a slot's PREVIOUS generation because its

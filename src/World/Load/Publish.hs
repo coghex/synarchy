@@ -27,12 +27,14 @@ import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (atomically, writeTVar)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Engine.Input.Types (defaultInputState)
 import UI.Focus (FocusManager(..))
+import UI.Manager (clearElementFocus, clearControlFocus)
+import UI.Types (UIPageManager(upmHovered))
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Blood.Teardown (enqueueBloodDisposalAll)
@@ -47,8 +49,32 @@ import Unit.Sim.Types (UnitThreadState(..))
 --   validated well before this ran), so the only work left is plain
 --   'Data.IORef.IORef' assignment plus queuing the deferred work each
 --   staged page collected.
-publishStagedSession ∷ EngineEnv → LoggerState → StagedSession → IO ()
-publishStagedSession env logger staged = do
+publishStagedSession ∷ EngineEnv → LoggerState → Int → StagedSession → IO ()
+publishStagedSession env logger requestId staged = do
+    -- Requirement 12 (round 2 review): every OTHER owner thread
+    -- (Unit/Building/Combat/Simulation) is quiesced for this function's
+    -- ENTIRE duration -- the same guarantee 'World.Thread.processAuthorizedSave'
+    -- relies on for the world queue -- but unlike the world queue,
+    -- nothing in THEIR queues is ever authorized to run inside the
+    -- lock, so the fix here is unconditional discard rather than
+    -- partition. Anything sitting there targeted the OLD session (a
+    -- unit/building/combat/sim command issued moments before the load)
+    -- and, left in place, would run against the REPLACEMENT session the
+    -- instant its owner resumes -- e.g. a stale UnitKill for an id the
+    -- new session's allocator happens to reuse. Done here, while every
+    -- owner is still locked out, so there is no window in which a
+    -- resumed owner could observe and act on a stale message. The raw
+    -- input queue is included for the same reason even though Input is
+    -- not itself a SaveOwner (nothing quiesces it): it's a cheap,
+    -- race-free flush (STM) that closes the "stale click/key still
+    -- awaiting dispatch" case for whatever had already reached this
+    -- queue. The Lua engine-message queue is handled separately, on the
+    -- LUA THREAD itself (see 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') --
+    -- flushing it from here would race the Lua thread's own recursive
+    -- drain of messages that arrived during staging, which runs
+    -- immediately after 'applyLuaLoad' and would very likely win.
+    discardStaleQueues env logger
+
     oldMgr ← readIORef (worldManagerRef env)
     let oldPageIds = map fst (wmWorlds oldMgr)
         newPageIds = map spPageId (ssPages staged)
@@ -134,12 +160,33 @@ publishStagedSession env logger staged = do
     -- new session is a survivor.
     let bIds = map (fromIntegral . unBuildingId) (HM.keys (bmInstances (ssBuildings staged)))
         uIds = map (fromIntegral . unUnitId) (HM.keys (umInstances (ssUnits staged)))
-    sendSaveLoaded env uIds bIds
+    sendSaveLoaded env requestId uIds bIds
     -- The one user-facing "done" toast for the whole transaction —
     -- staging deliberately never sends one (requirement 6: no live-queue
     -- work while staging), so this is the sole place a load reports
     -- completion via the ordinary gen-log toast channel.
     sendGenLog env "Save loaded"
+
+-- | Discard every stale message still sitting in an owner's queue at
+--   the moment a load publishes (requirement 12) — see the call site's
+--   haddock in 'publishStagedSession' for why this is unconditional
+--   discard rather than the world queue's authorized/deferred split.
+discardStaleQueues ∷ EngineEnv → LoggerState → IO ()
+discardStaleQueues env logger = do
+    discard "unit"      (unitQueue env)
+    discard "building"  (buildingQueue env)
+    discard "combat"    (combatQueue env)
+    discard "simulation" (simQueue env)
+    discard "input"     (inputQueue env)
+  where
+    discard ∷ Text → Q.Queue α → IO ()
+    discard label q = do
+        stale ← Q.flushQueue q
+        unless (null stale) $
+            logWarn logger CatWorld $
+                "Load publish discarded " <> T.pack (show (length stale))
+                <> " stale " <> label <> " message(s) queued before the \
+                   \whole-session replacement"
 
 -- | The first occurrence of each page id, in order — used to fold
 --   ssActivePage into ssVisiblePages without risking a duplicate head
@@ -167,12 +214,28 @@ dedupPageIds = go HS.empty
 --   transiently desync it from what's still on screen. Toolbar/
 --   selection reset is the pre-existing 'onSaveLoaded' Lua broadcast's
 --   job (see 'sendSaveLoaded' above), unchanged by this issue.
+--
+--   'uiManagerRef' additionally clears TEXT focus ('upmGlobalFocus'),
+--   keyboard CONTROL focus ('upmControlFocus'), and hover
+--   ('upmHovered') — round 2 review: a control that held keyboard
+--   focus before the load would otherwise still fire Enter/Space's
+--   'onClick' callback afterward, potentially against a closure that
+--   captured old-session state (e.g. a save-slot button, a build-tool
+--   ghost target). Unlike 'focusManagerRef', clearing these does not
+--   touch the UI TREE itself (elements/pages), only the two
+--   independent focus pointers and the hover pointer — the tree is
+--   Lua-owned and rebuilt/reconciled by the same 'sendSaveLoaded'
+--   broadcast as before.
 resetTransientState ∷ EngineEnv → IO ()
 resetTransientState env = do
     writeIORef (buildingGhostRef env) Nothing
     writeIORef (inputStateRef env) defaultInputState
     atomicModifyIORef' (focusManagerRef env) $ \fm →
         (fm { fmCurrentFocus = Nothing }, ())
+    atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        ( (clearControlFocus ∘ clearElementFocus)
+              (mgr { upmHovered = Nothing })
+        , () )
     writeIORef (combatEventsRef env) Seq.empty
     writeIORef (injuryEventsRef env) Seq.empty
     writeIORef (thoughtEventsRef env) Seq.empty

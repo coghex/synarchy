@@ -20,12 +20,13 @@ module World.Thread.Command.Save
 
 import UPrelude
 import qualified Data.Text as T
+import Control.Exception (SomeException, try)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import Engine.Load.Status (advanceLoad, failLoad, finishLoad, LoadPhase(..))
+import Engine.Load.Status (advanceLoad, failLoad, LoadPhase(..))
 import Engine.Save.Barrier
     (releaseCaptureLock, finishSave, failSave, readSaveStatus, ssRequestId)
 import World.Types (SaveData)
@@ -38,19 +39,38 @@ import World.Thread.Command.Save.WriteWorld (handleWorldSaveCommand)
 --   (requirement 6). Never touches 'worldManagerRef' or any other live
 --   ref; failure leaves the current session completely unaffected and
 --   still paused (requirement 15).
+--
+--   'stageSession' does substantial pure work (worldgen chunk
+--   regeneration, zoom-cache/atlas construction, ...) forced via
+--   'Control.Exception.evaluate' — a genuinely malformed save can throw
+--   a real Haskell exception there rather than returning a tidy 'Left'
+--   (round 2 review). Uncaught, that exception would propagate out of
+--   this handler, through 'World.Thread.handleWorldCommand'/
+--   'processAuthorizedSave', into 'World.Thread'\'s own top-level
+--   'Control.Exception.catch' — which treats ANY exception as fatal for
+--   the WHOLE world thread ('lifecycleRef' → 'CleaningUp'), crashing
+--   the still-live, still-paused OLD session over what should have
+--   been an ordinary failed load. 'try' here converts it into the same
+--   'failLoad' outcome as a normal staging 'Left', with the old session
+--   left completely untouched either way.
 handleWorldLoadTransactionCommand
     ∷ EngineEnv → LoggerState → Int → SaveData → IO ()
 handleWorldLoadTransactionCommand env logger requestId saveData = do
     logInfo logger CatWorld $
         "Staging load transaction #" <> tShow requestId
-    result ← stageSession env logger saveData
-    case result of
-        Left err → do
+    outcome ← try (stageSession env logger saveData)
+    case outcome of
+        Left (ex ∷ SomeException) → do
+            let msg = "internal error during staging: " <> T.pack (show ex)
+            logWarn logger CatWorld $
+                "Load transaction #" <> tShow requestId <> " staging crashed: " <> msg
+            failLoad (loadStatusRef env) requestId msg
+        Right (Left err) → do
             let msg = renderStageError err
             logWarn logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " staging failed: " <> msg
             failLoad (loadStatusRef env) requestId msg
-        Right staged → do
+        Right (Right staged) → do
             writeIORef (pendingLoadRef env) (Just (requestId, staged))
             advanceLoad (loadStatusRef env) requestId LoadStaged
             -- Hand off to the Lua thread, which drives the publish
@@ -65,16 +85,28 @@ handleWorldLoadTransactionCommand env logger requestId saveData = do
 --   state-owner thread is quiesced for the duration, so
 --   'World.Load.Publish.publishStagedSession' is the sole place any
 --   gameplay consumer's view of the session actually changes.
+--
+--   Deliberately does NOT call 'finishLoad' on success (round 2
+--   review, requirement 9): the Haskell-side session is fully live the
+--   instant 'publishStagedSession' returns, but the transaction is not
+--   reported 'LoadPublished' to 'engine.getLoadStatus()' until the Lua
+--   thread also finishes the 'LuaSaveLoaded' reconciliation broadcast
+--   this queues — see 'Engine.Scripting.Lua.Thread.Dispatch', which
+--   calls 'finishLoad' itself right after that broadcast completes.
+--   The save barrier's own completion ('completeSaveTransaction') is
+--   NOT deferred the same way: it only gates a NEW save/load request
+--   via 'Engine.Save.Barrier.saveInProgress', and 'loadInProgress'
+--   (still true until the deferred 'finishLoad' above runs) already
+--   covers that case on its own.
 handleWorldLoadPublishCommand ∷ EngineEnv → LoggerState → Int → IO ()
 handleWorldLoadPublishCommand env logger requestId = do
     pending ← readIORef (pendingLoadRef env)
     case pending of
         Just (rid, staged) | rid ≡ requestId → do
-            publishStagedSession env logger staged
+            publishStagedSession env logger requestId staged
             writeIORef (pendingLoadRef env) Nothing
             releaseCaptureLock' env
             completeSaveTransaction env
-            finishLoad (loadStatusRef env) requestId
             logInfo logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " published"
         _ → do
