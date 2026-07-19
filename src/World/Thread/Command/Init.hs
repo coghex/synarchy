@@ -235,8 +235,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env "Rendering world preview..."
     let preview = buildPreviewFromPixels params zoomCache chunkPixels
     _ ← evaluate (force preview)
+    -- Round 10 review: stamp with a fresh generation (see
+    -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
+    previewGen ← atomicModifyIORef' (worldPreviewGenerationRef env)
+                    (\g → (g + 1, g + 1))
     writeIORef (worldPreviewRef env) $
-        Just (piWidth preview, piHeight preview, piData preview)
+        Just (piWidth preview, piHeight preview, piData preview, previewGen)
     sendGenLog env "World preview ready."
     
     -- Step 6: Center chunk

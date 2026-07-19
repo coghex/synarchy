@@ -65,7 +65,7 @@ handleWorldPreview = do
     mPreview ← liftIO $ atomicModifyIORef' (worldPreviewRef env) $ \v → (Nothing, v)
     case mPreview of
         Nothing → pure ()
-        Just (w, h, rgbaData) → do
+        Just (w, h, rgbaData, myGen) → do
             logInfoM CatWorld $ "Creating world preview texture: "
                 <> T.pack (show w) <> "×" <> T.pack (show h)
 
@@ -145,19 +145,30 @@ handleWorldPreview = do
                     -- .publishStagedSession', which writes
                     -- 'worldPreviewRef' before swapping
                     -- 'worldManagerRef') can overtake an upload already
-                    -- in flight for the OLD session. Re-check
-                    -- 'worldPreviewRef' before announcing this handle
-                    -- to Lua: if something newer is already pending,
-                    -- this preview is stale — skip the broadcast and
-                    -- let the next poll (which dequeues the newer data)
-                    -- announce the right generation instead.
-                    stillCurrent ← liftIO $ readIORef (worldPreviewRef env)
-                    case stillCurrent of
-                        Just _ →
-                            logInfoM CatWorld
-                                "World preview upload superseded before \
-                                \publish — discarding stale generation"
-                        Nothing → do
+                    -- in flight for the OLD session.
+                    --
+                    -- Round 8's fix (re-reading 'worldPreviewRef' here
+                    -- and skipping the broadcast if something newer was
+                    -- ALREADY dequeued) was itself flagged round 9/10:
+                    -- a NEWER preview enqueued strictly BETWEEN that read
+                    -- and this point would still be missed, since this
+                    -- upload had already committed to announcing. Compare
+                    -- against 'worldPreviewGenerationRef' instead — a
+                    -- monotonic counter bumped once per enqueue and never
+                    -- read back down (see 'Engine.Core.State') — rather
+                    -- than re-reading 'worldPreviewRef' itself: if that
+                    -- counter still equals the generation this upload was
+                    -- dequeued under, NOTHING has been enqueued since,
+                    -- full stop; no window remains to race, and a plain
+                    -- 'readIORef' suffices since the comparison is a pure
+                    -- read against a value that only ever increases.
+                    latestGen ← liftIO $ readIORef (worldPreviewGenerationRef env)
+                    if myGen ≢ latestGen
+                      then
+                        logInfoM CatWorld
+                            "World preview upload superseded before \
+                            \publish — discarding stale generation"
+                      else do
                             let (TextureHandle h) = texHandle
                             liftIO $ Q.writeQueue (luaQueue env)
                                 (LuaWorldPreviewReady (fromIntegral h))

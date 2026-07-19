@@ -155,7 +155,20 @@ data EngineEnv = EngineEnv
   , pendingLoadRef      ∷ IORef (Maybe (Int, StagedSession))
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
-  , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
+  , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString, Word64))
+    -- ^ Pending world-preview pixel data for GPU upload, tagged with the
+    --   generation it was enqueued under (round 10 review, issue #763;
+    --   see 'worldPreviewGenerationRef').
+  , worldPreviewGenerationRef ∷ IORef Word64
+    -- ^ Monotonic counter bumped once per preview enqueue (never read
+    --   back down). The upload handler compares the generation it
+    --   dequeued against this counter's CURRENT value at delivery time
+    --   (round 10 review): if a newer preview has been enqueued since,
+    --   this counter has already moved past the dequeued generation, so
+    --   the in-flight (now-stale) upload can tell it must not announce
+    --   itself — no live-ref re-read of 'worldPreviewRef' itself is
+    --   needed, since the counter only ever increases and a plain read
+    --   of it is never torn.
   , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString, [WorldState]))
     -- ^ Pending zoom atlas pixel data for GPU upload, plus the EXACT
     --   'WorldState's it belongs to, captured at the moment it was

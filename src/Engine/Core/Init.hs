@@ -198,6 +198,7 @@ initializeEngineWith logBackend = do
   fontCache ← newIORef defaultFontCache
   sunAngleRef ← newIORef 0.25       -- start at noon
   worldPreviewRef ← newIORef Nothing
+  worldPreviewGenerationRef ← newIORef 0
   zoomAtlasDataRef ← newIORef Nothing
   worldQuadsRef ← newIORef emptyLayeredQuads
   textureSystemRef ← newIORef Nothing
@@ -292,6 +293,7 @@ initializeEngineWith logBackend = do
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
         , worldPreviewRef    = worldPreviewRef
+        , worldPreviewGenerationRef = worldPreviewGenerationRef
         , zoomAtlasDataRef   = zoomAtlasDataRef
         , screenshotRequestQueue = screenshotRequestQueue
         , worldQuadsRef      = worldQuadsRef

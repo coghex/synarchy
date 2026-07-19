@@ -25,11 +25,13 @@ import qualified HsLua as Lua
 import Data.List (find)
 import Data.IORef (IORef, readIORef, writeIORef)
 import Control.Concurrent.STM (readTVarIO)
+import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
 import Engine.Load.Status (advanceLoad, failLoad, finishLoad, LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
+import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
 import World.Command.Types (WorldCommand(..))
 
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
@@ -255,6 +257,34 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
   LuaSaveLoaded requestId survUnitIds survBuildingIds → do
+    -- Round 10 review (issue #763): the debug-console TCP server keeps
+    -- accepting commands onto 'lbsDebugQueue' regardless of the save
+    -- barrier's capture-lock state — while this load held the boundary
+    -- ('handleLoadStaged' through the world thread's matching publish),
+    -- any command that arrived is still sitting there, queued for a
+    -- session that no longer exists once this handler runs (this is
+    -- the FIRST point on the Lua thread reached after publish — see
+    -- 'Engine.Scripting.Lua.Thread.runLuaLoop's own comment on why
+    -- 'processLuaMsgs' drains 'LuaSaveLoaded' before 'processDebugCommands'
+    -- ever gets a chance to run again). Left alone, that later
+    -- 'processDebugCommands' call would execute every one of them
+    -- against the REPLACEMENT session — e.g. a queued
+    -- @world.setDate(pageId, ...)@ whose pageId the load happens to
+    -- reuse would silently mutate the new page. Cancel every command
+    -- still queued at this exact handoff instead, resolving its
+    -- waiting response MVar so the client (netcat, a script) doesn't
+    -- hang: none of them can possibly have been issued FOR the session
+    -- that's live from this point on.
+    let cancelStaleDebugCommands = do
+            mCmd ← pollDebugCommand (lbsDebugQueue ls)
+            case mCmd of
+                Nothing → pure ()
+                Just (DebugCommand _ mvar) → do
+                    _ ← tryPutMVar mvar
+                        "REJECTED: a load transaction replaced the \
+                        \session while this command was queued"
+                    cancelStaleDebugCommands
+    cancelStaleDebugCommands
     broadcastToModules ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
       , intsToScriptArray survBuildingIds ]

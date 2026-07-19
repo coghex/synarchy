@@ -4,6 +4,8 @@ module Engine.Scripting.Lua.Types where
 import UPrelude
 import Data.IORef (IORef)
 import Control.Concurrent.STM.TVar (TVar)
+import Control.Concurrent.STM.TQueue (TQueue)
+import Engine.Scripting.Lua.DebugServer (DebugCommand)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
@@ -44,6 +46,15 @@ data LuaBackendState = LuaBackendState
     -- ^ Engine logger, so 'callModuleFunction' can log Lua callback
     --   errors (now caught via pcall) without threading a logger
     --   through every broadcast call site.
+  , lbsDebugQueue   ∷ TQueue DebugCommand
+    -- ^ The debug-console command queue (round 10 review, issue #763):
+    --   reachable from 'ls' at every 'processLuaMsg' call site so the
+    --   'LuaSaveLoaded' handler can quarantine any command still queued
+    --   at that point (queued sometime during the now-replaced session,
+    --   since the debug server keeps accepting commands regardless of
+    --   the save-barrier's capture-lock state) without threading a new
+    --   parameter through 'processLuaMsg'/'processLuaMsgs' and their
+    --   several unrelated callers (input injection, headless tests).
   }
 
 data LuaLogLevel = LuaLogDebug

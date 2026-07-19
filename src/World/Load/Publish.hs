@@ -126,7 +126,15 @@ publishStagedSession env logger requestId staged = do
     let targetStates = map spWorldState (ssPages staged)
     forM_ (ssZoomAtlas staged) $ \(w, h, bytes) →
         writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, targetStates))
-    forM_ (ssPreview staged)   $ \preview   → writeIORef (worldPreviewRef env) (Just preview)
+    -- Round 10 review: stamp this preview with a fresh generation (see
+    -- 'Engine.Core.State.worldPreviewGenerationRef') so an in-flight
+    -- upload for an OLDER preview can tell — without re-reading
+    -- 'worldPreviewRef' itself — that it has been superseded and must
+    -- not announce its now-stale handle to Lua.
+    forM_ (ssPreview staged) $ \(w, h, bytes) → do
+        gen ← atomicModifyIORef' (worldPreviewGenerationRef env)
+                (\g → (g + 1, g + 1))
+        writeIORef (worldPreviewRef env) (Just (w, h, bytes, gen))
 
     -- Register every staged page under its OWN saved id (requirement 8:
     -- no remap, no collision suffix — a load replaces the complete

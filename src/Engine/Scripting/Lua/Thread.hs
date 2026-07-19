@@ -118,7 +118,19 @@ startLuaThread env = do
                         "Debug server failed to start on port "
                         <> T.pack (show port) <> ": " <> err
                     atomically newTQueue
-            tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue `finally` putMVar doneVar ()
+            -- Round 10 review (issue #763): the real debug queue only
+            -- exists once 'startDebugServer' above returns, but
+            -- 'backendState' was constructed earlier (so registerLuaAPI/
+            -- script init could run against it) with the throwaway
+            -- placeholder 'createLuaBackendState' makes internally.
+            -- Splice the real queue in now via record update so
+            -- 'Engine.Scripting.Lua.Thread.Dispatch's 'LuaSaveLoaded'
+            -- handler can reach it as 'lbsDebugQueue' — cheaper than
+            -- threading 'debugQueue' through 'createLuaBackendState'
+            -- and its dozen-plus test call sites, none of which
+            -- exercise real debug-command handling.
+            let backendState' = backendState { lbsDebugQueue = debugQueue }
+            tid ← forkIO $ runLuaLoop env backendState' stateRef debugQueue `finally` putMVar doneVar ()
             return tid
         )
         (\(e ∷ SomeException) → do
@@ -136,6 +148,12 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
   scriptIdRef ← newIORef 1
+  -- Placeholder — 'startLuaThread' splices in the REAL debug queue via
+  -- record update once one exists (round 10 review, issue #763); every
+  -- other caller (headless tests exercising unrelated Lua API surface)
+  -- never touches 'lbsDebugQueue' at all, so an inert, never-fed queue
+  -- here keeps their call sites unchanged.
+  placeholderDebugQueue ← atomically newTQueue
   return LuaBackendState
     { lbsLuaState     = lState
     , lbsScripts      = scriptsVar
@@ -145,6 +163,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
     , lbsNextObjectId = objIdRef
     , lbsInputState   = inputSRef
     , lbsLoggerRef    = loggerR
+    , lbsDebugQueue   = placeholderDebugQueue
     }
 
 runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl
