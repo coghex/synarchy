@@ -5,7 +5,8 @@
 # Coverage vs CLAUDE.md testing tiers:
 #   - tier 2 hspec:   cabal test synarchy-test-headless
 #   - tier 2 audit:   python3 tools/test_audit.py
-#   - tier 2 worldgen: tools/world_check.py --quick, a BLOCKING gate.
+#   - tier 2 worldgen: tools/world_check.py --quick, a blocking gate for
+#     worldgen-output PRs and every post-merge master push.
 #     Worldgen float math proved bit-stable across architectures on the
 #     first run (6/6 exact-match against the macOS/aarch64-captured
 #     baselines from #421, PR #449) — if it ever flakes cross-arch,
@@ -200,6 +201,24 @@ jobs:
           } > cabal.project.local
           cabal build all --dry-run
 
+      # Hspec is deliberately full and blocking on every PR. These two
+      # independent gates are path-selective on PRs, but always run after a
+      # merge so master retains the complete regression backstop.
+      - name: Select expensive path-relevant gates
+        id: expensive-gates
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+            git fetch --no-tags origin "$BASE"
+            CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          else
+            CHANGED="$(git ls-files)"
+          fi
+          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+            sed 's/^/worldgen=/' >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+            sed 's/^/graphical=/' >> "$GITHUB_OUTPUT"
+
       # plan.json exists after --dry-run; its hash keys the store cache.
       # The store path is static because the image pins CABAL_DIR (#671).
       - name: Restore dependency cache
@@ -245,7 +264,11 @@ jobs:
       - name: Build test suites
         run: |
           cabal build synarchy-test-headless
-          cabal build synarchy-test-graphical
+          if [ "${{ steps.expensive-gates.outputs.graphical }}" = true ]; then
+            cabal build synarchy-test-graphical
+          else
+            echo "Skipping graphical test-suite build: no graphics-facing paths changed."
+          fi
 
       - name: Headless test suite
         run: cabal test synarchy-test-headless --test-show-details=direct
@@ -291,13 +314,16 @@ jobs:
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
       - name: world_check --quick
+        if: steps.expensive-gates.outputs.worldgen == 'true'
         run: python3 tools/world_check.py --quick
 
       # Validate the path->probe mapping wiring on every run (cheap, no
       # engine) — a broken mapping would otherwise only surface when a PR
       # mis-selects.
       - name: ci_probes self-test
-        run: python3 tools/ci_probes.py --self-test
+        run: |
+          python3 tools/ci_probes.py --self-test
+          python3 tools/ci_expensive_gates.py --self-test
 
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the

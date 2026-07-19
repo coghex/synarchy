@@ -22,6 +22,7 @@ config/keybinds.local.yaml
 config/notifications.local.yaml
 saves/
 .claude/
+.codex/
 src/World/Hydrology/DESIGN.md
 soil
 stone
