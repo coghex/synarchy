@@ -29,7 +29,7 @@ import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
 import Engine.Load.Status (advanceLoad, failLoad, finishLoad, LoadPhase(..))
-import Engine.Scripting.Lua.API.Save (applyLuaLoad)
+import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import World.Command.Types (WorldCommand(..))
 
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
@@ -287,6 +287,9 @@ processLuaMsg env ls stateRef msg = case msg of
       , coordsToScriptValue mCoords
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
+  LuaLoadStagingFailed _requestId → do
+      logger ← readIORef (loggerRef env)
+      Lua.runWith (lbsLuaState ls) (abortLuaLoad logger)
 
 -- | Issue #763 (save-overhaul C2): a whole-session load transaction just
 --   finished STAGING (on the world thread, touching no live ref) and is
@@ -328,6 +331,11 @@ handleLoadStaged env ls requestId = do
             "load publish #" <> T.pack (show requestId)
             <> " could not begin the publish barrier: " <> err
         failLoad (loadStatusRef env) requestId err
+        -- Round 6 review: prepareLuaLoad already succeeded by the time
+        -- staging (and thus this dispatch) ever runs, leaving Lua's
+        -- registration guard (_loadActive) active until applyAll
+        -- commits it -- which never happens on this failure path.
+        Lua.runWith (lbsLuaState ls) (abortLuaLoad logger)
       Right barrierRequestId → do
         -- The Lua thread is the one driving this transaction and is
         -- therefore already quiescent for its own duration (mirrors
@@ -342,6 +350,9 @@ handleLoadStaged env ls requestId = do
                 <> " timed out waiting for state owners: " <> err
             failLoad (loadStatusRef env) requestId err
             writeIORef (pendingLoadRef env) Nothing
+            -- Round 6 review: same as the beginSave failure above --
+            -- abort the prepared-but-never-applied Lua load.
+            Lua.runWith (lbsLuaState ls) (abortLuaLoad logger)
           Right () → do
             reachSnapshot (saveBarrierRef env) barrierRequestId
             advanceLoad (loadStatusRef env) requestId LoadWaitingPublish

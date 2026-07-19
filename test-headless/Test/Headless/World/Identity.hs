@@ -188,7 +188,8 @@ spec = do
             -- pages, e.g. "id_unnamed_w8", ride along too), so this only
             -- asserts the two pages under test are present, not an
             -- exact page-set match.
-            staged ← stageSession env logger sdA ⌦ either
+            matReg ← readIORef (materialRegistryRef env)
+            staged ← stageSession env logger sdA matReg ⌦ either
                 (\e → expectationFailure (T.unpack (renderStageError e))
                         ≫ error "unreachable")
                 pure

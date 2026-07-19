@@ -14,6 +14,7 @@ import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
+import World.Material (MaterialRegistry)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -238,11 +239,21 @@ data WorldCommand
         --   @saveModules.snapshotAll()@ before queueing this command,
         --   aborting the save entirely rather than enqueueing it if any
         --   REQUIRED Lua component failed to snapshot.
-    | WorldLoadTransaction Int SaveData
-        -- ^ requestId, decoded + content-validated 'SaveData' (issue
-        --   #763, save-overhaul C2). Stages the complete replacement
-        --   session ("World.Load.Stage") without touching any live ref
-        --   (requirement 6) — the staged result lands in
+    | WorldLoadTransaction Int SaveData MaterialRegistry
+        -- ^ requestId, decoded + content-validated 'SaveData', and the
+        --   'MaterialRegistry' 'Engine.Scripting.Lua.API.Save.continueLoad'
+        --   already built (and validated the save's material references
+        --   against) off to the side, WITHOUT touching the live
+        --   'Engine.Core.State.materialRegistryRef' (issue #763, round 6
+        --   review: the registry is otherwise only populated by
+        --   @world.init@, so validating against a freshly-built one is
+        --   required — but writing it to the live ref before the load
+        --   is even known to succeed would discard any runtime/custom
+        --   material registrations the OLD, still-paused session had,
+        --   violating "no live mutation before commit" same as every
+        --   other piece of session state). Stages the complete
+        --   replacement session ("World.Load.Stage") without touching
+        --   any live ref (requirement 6) — the staged result lands in
         --   'Engine.Core.State.pendingLoadRef', keyed by requestId, and
         --   a 'LuaStagingComplete' message is posted so the Lua thread
         --   can drive the publish barrier

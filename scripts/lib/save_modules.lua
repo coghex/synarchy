@@ -562,6 +562,26 @@ function saveModules.prepareLoad(componentsList)
     return { ok = result.ok, errors = result.errors }
 end
 
+-- Round 6 review: a successful `prepareLoad` leaves `_loadActive` true
+-- (by design -- it stays active until `applyAll` commits it), which is
+-- exactly what makes `saveModules.register`/`registerResetHook` refuse
+-- to run mid-load. But `applyAll` is the ONLY other thing that ever
+-- clears it, and staging (World.Load.Stage, on the world thread) runs
+-- AFTER a successful prepareLoad and BEFORE applyAll ever gets called --
+-- a staging failure (a worldgen exception, an internal StageError) or a
+-- publish-barrier failure (Engine.Save.Barrier timing out waiting for
+-- other owners) previously left NEITHER called, wedging `_loadActive`
+-- true forever: every later save/load's own prepareLoad, and any
+-- ordinary saveModules.register call (e.g. a hot-reloaded script),
+-- would fail from that point on for the rest of the session. Call this
+-- from every such failure path to abort the prepared-but-never-applied
+-- load cleanly -- a no-op (but still safe to call) if nothing is
+-- pending.
+function saveModules.abortPreparedLoad()
+    saveModules._pendingApply = nil
+    saveModules._loadActive = false
+end
+
 -- Apply the load prepared by the most recent successful `prepareLoad`,
 -- in dependency order, then run every registered reset hook (session-
 -- replacement for modules with no durable state). Only reachable after

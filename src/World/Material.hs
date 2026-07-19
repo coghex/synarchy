@@ -240,6 +240,7 @@ materialIdByName (MaterialRegistry vec _) name =
 --   material's validity needs this separate set rather than an
 --   in-bounds check.
 data MaterialRegistry = MaterialRegistry !(V.Vector MaterialProps) !(HS.HashSet Word8)
+    deriving (Show)
 
 emptyMaterialRegistry ∷ MaterialRegistry
 emptyMaterialRegistry =

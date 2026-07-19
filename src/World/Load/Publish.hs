@@ -100,6 +100,12 @@ publishStagedSession env logger requestId staged = do
     -- this whole function — see the module haddock.
     writeIORef (gameTimeRef env) (ssGameTime staged)
     writeIORef (enginePausedRef env) True
+    -- Round 6 review: the SOLE point the off-session registry
+    -- "World.Load.Stage" staged against (and
+    -- "Engine.Scripting.Lua.API.Save.continueLoad" validated the save's
+    -- material references against) ever reaches the live ref — not at
+    -- validation time, when the load isn't yet known to succeed.
+    writeIORef (materialRegistryRef env) (ssMaterialRegistry staged)
     writeIORef (texPaletteRef env) (ssTexPalette staged)
     -- Runtime paletteId → texture handle table is session-local; clear it
     -- so Lua re-resolves every palette texture for this session.
@@ -226,10 +232,25 @@ dedupPageIds = go HS.empty
 --   independent focus pointers and the hover pointer — the tree is
 --   Lua-owned and rebuilt/reconciled by the same 'sendSaveLoaded'
 --   broadcast as before.
+--
+--   'hudActivePageRef' (round 6 review) additionally resets to
+--   'Nothing': 'World.Thread.Cursor.pollCursorInfo' compares the
+--   active page id against this ref to detect an active-WORLD switch
+--   and force a fresh HUD push even when the raw cursor selection
+--   fields look unchanged. A load that lands on the SAME page id the
+--   old session had active (reloading the same save, or a different
+--   save that happens to reuse the id) would otherwise leave this ref
+--   already matching post-publish, so the next poll sees
+--   'activeChanged = False' and never re-pushes — the HUD keeps
+--   showing whatever selected-tile/chunk text the OLD session's
+--   cursor last rendered, now describing entities that no longer
+--   exist. Resetting to 'Nothing' makes the very next poll unconditionally
+--   detect a "switch" regardless of whether the page id matches.
 resetTransientState ∷ EngineEnv → IO ()
 resetTransientState env = do
     writeIORef (buildingGhostRef env) Nothing
     writeIORef (inputStateRef env) defaultInputState
+    writeIORef (hudActivePageRef env) Nothing
     atomicModifyIORef' (focusManagerRef env) $ \fm →
         (fm { fmCurrentFocus = Nothing }, ())
     atomicModifyIORef' (uiManagerRef env) $ \mgr →

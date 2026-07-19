@@ -30,6 +30,7 @@ import Engine.Load.Status (advanceLoad, failLoad, LoadPhase(..))
 import Engine.Save.Barrier
     (releaseCaptureLock, finishSave, failSave, readSaveStatus, ssRequestId)
 import World.Types (SaveData)
+import World.Material (MaterialRegistry)
 import World.Load.Stage (stageSession, renderStageError)
 import World.Load.Publish (publishStagedSession)
 import World.Thread.Command.Save.WriteWorld (handleWorldSaveCommand)
@@ -54,22 +55,29 @@ import World.Thread.Command.Save.WriteWorld (handleWorldSaveCommand)
 --   'failLoad' outcome as a normal staging 'Left', with the old session
 --   left completely untouched either way.
 handleWorldLoadTransactionCommand
-    ∷ EngineEnv → LoggerState → Int → SaveData → IO ()
-handleWorldLoadTransactionCommand env logger requestId saveData = do
+    ∷ EngineEnv → LoggerState → Int → SaveData → MaterialRegistry → IO ()
+handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
     logInfo logger CatWorld $
         "Staging load transaction #" <> tShow requestId
-    outcome ← try (stageSession env logger saveData)
+    outcome ← try (stageSession env logger saveData matReg)
     case outcome of
         Left (ex ∷ SomeException) → do
             let msg = "internal error during staging: " <> T.pack (show ex)
             logWarn logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " staging crashed: " <> msg
             failLoad (loadStatusRef env) requestId msg
+            -- Round 6 review: prepareLuaLoad already succeeded by the
+            -- time staging ever runs, leaving Lua's registration guard
+            -- (_loadActive) active with no LuaLoadStaged ever coming to
+            -- drive applyAll — tell the Lua thread to abort it.
+            Q.writeQueue (luaQueue env) (LuaLoadStagingFailed requestId)
         Right (Left err) → do
             let msg = renderStageError err
             logWarn logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " staging failed: " <> msg
             failLoad (loadStatusRef env) requestId msg
+            -- Round 6 review: same as the exception case above.
+            Q.writeQueue (luaQueue env) (LuaLoadStagingFailed requestId)
         Right (Right staged) → do
             writeIORef (pendingLoadRef env) (Just (requestId, staged))
             advanceLoad (loadStatusRef env) requestId LoadStaged

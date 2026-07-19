@@ -86,18 +86,22 @@ data PageStageResult = PageStageResult
 --   content-validated 'SaveData'. Never touches a live 'EngineEnv' ref
 --   at all (requirement 6 — staging must not send work through a live
 --   queue either, so unlike the pre-#763 restore this never calls
---   'World.Thread.Helpers.sendGenLog'): 'env' is read ONLY for
---   registered (session-independent) content — the material registry,
---   flora catalog, and the currently-registered building/unit DEFS.
---   "World.Load.Publish" fires the one user-facing "Save loaded" toast
---   once the session actually publishes.
-stageSession ∷ EngineEnv → LoggerState → SaveData
+--   'World.Thread.Helpers.sendGenLog'): the material registry to stage
+--   against arrives as a PARAMETER — round 6 review: it's the SAME
+--   off-session registry 'Engine.Scripting.Lua.API.Save.continueLoad'
+--   already built and validated the save's material references
+--   against (never the live 'Engine.Core.State.materialRegistryRef',
+--   which "World.Load.Publish" only writes at actual commit) — while
+--   'env' is still read for the OTHER registered (session-independent)
+--   content: the flora catalog and the currently-registered
+--   building/unit DEFS. "World.Load.Publish" fires the one user-facing
+--   "Save loaded" toast once the session actually publishes.
+stageSession ∷ EngineEnv → LoggerState → SaveData → MaterialRegistry
              → IO (Either StageError StagedSession)
-stageSession env logger saveData = case sdWorlds saveData of
+stageSession env logger saveData registry = case sdWorlds saveData of
     [] → pure $ Left $ StageError
             "cannot stage: save contains no world pages"
     (firstWps : _) → do
-        registry ← readIORef (materialRegistryRef env)
         let !_ = registry `seq` ()
         palette ← buildColorPalette logger "data/materials" "data/vegetation"
         _ ← evaluate (force palette)
@@ -165,6 +169,7 @@ stageSession env logger saveData = case sdWorlds saveData of
                     , ssCamera        = camera
                     , ssZoomAtlas     = mZoomAtlas
                     , ssPreview       = mPreview
+                    , ssMaterialRegistry = registry
                     }
 
 -- | Stage one saved page: gen params + mutable game state (own fresh

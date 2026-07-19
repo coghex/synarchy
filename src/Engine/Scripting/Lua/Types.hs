@@ -233,6 +233,20 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   matching 'World.Command.Types.WorldLoadPublish' once
               --   every other state-owner thread has quiesced, mirroring
               --   how 'engine.saveWorld' drives the save barrier.
+            | LuaLoadStagingFailed Int
+              -- ^ Round 6 review: staging (the world thread, off to the
+              --   side of any live ref) FAILED for this request id
+              --   before ever reaching 'LuaLoadStaged' — a staging
+              --   exception or 'World.Load.Stage.StageError'. By this
+              --   point 'Engine.Scripting.Lua.API.Save.prepareLuaLoad'
+              --   already succeeded (staging only ever runs after it
+              --   does), leaving Lua's registration guard
+              --   (@saveModules._loadActive@) active with no
+              --   'LuaLoadStaged' ever coming to drive
+              --   'Engine.Scripting.Lua.API.Save.applyLuaLoad' (the only
+              --   other thing that clears it) — so this tells the Lua
+              --   thread to call
+              --   'Engine.Scripting.Lua.API.Save.abortLuaLoad' instead.
             deriving (Eq, Show)
 
 data LuaResult = LuaSuccess

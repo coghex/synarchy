@@ -6,6 +6,7 @@ module Engine.Scripting.Lua.API.Save
     , loadSaveFn
     , loadStatusFn
     , applyLuaLoad
+    , abortLuaLoad
     ) where
 
 import UPrelude
@@ -447,16 +448,24 @@ continueLoad env logger requestId saveName descriptors = do
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
             rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
-            -- Round 5 review fix: the material registry is otherwise
-            -- only populated by World.Thread.Command.Init's "Step 0.5"
-            -- (part of world.init) — a headless boot that goes straight
-            -- to engine.loadSave with no prior world.init in the SAME
+            -- Round 5/6 review: the material registry is otherwise only
+            -- populated by World.Thread.Command.Init's "Step 0.5" (part
+            -- of world.init) — a headless boot that goes straight to
+            -- engine.loadSave with no prior world.init in the SAME
             -- process would see an entirely empty registry here (every
-            -- id but air reporting as "unknown"). Idempotent, same as
-            -- world.init's own pass, so re-running it when a world is
-            -- already live just rewrites the same data.
+            -- id but air reporting as "unknown"). Built OFF TO THE
+            -- SIDE, never written to the live materialRegistryRef here
+            -- (round 6 review: this runs before the load is even known
+            -- to succeed — writing it live now would discard any
+            -- runtime/custom material registrations the OLD, still-
+            -- live session had if THIS load later gets rejected by one
+            -- of the OTHER missing-def checks below, or by staging
+            -- itself). Threaded through WorldLoadTransaction instead so
+            -- staging validates and builds against this exact registry,
+            -- and "World.Load.Publish" is the sole point it ever
+            -- reaches the live ref, same as every other piece of
+            -- session state.
             matReg ← Lua.liftIO $ loadPopulatedMaterialRegistry logger "data/materials"
-            Lua.liftIO $ writeIORef (materialRegistryRef env) matReg
             floraCat ← Lua.liftIO $ readIORef (floraCatalogRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
                 pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
@@ -529,7 +538,7 @@ continueLoad env logger requestId saveName descriptors = do
                         -- touches no live ref (requirement 6), so
                         -- nothing here needs to wait for it.
                         Q.writeQueue (worldQueue env)
-                            (WorldLoadTransaction requestId saveData)
+                            (WorldLoadTransaction requestId saveData matReg)
                     Lua.pushboolean True
 
 -- | Pop the Lua error message at the top of the stack and log it
@@ -831,3 +840,23 @@ applyLuaLoad logger = do
     ok ← callSaveModules0 logger "applyAll"
     return $ if ok then Right ()
              else Left "save_modules.applyAll() failed (see engine log)"
+
+-- | Call @saveModules.abortPreparedLoad()@ (round 6 review): every
+--   failure path that can occur AFTER a successful 'prepareLuaLoad' but
+--   BEFORE 'applyLuaLoad' ever runs (a staging exception/'StageError'
+--   on the world thread, or the publish barrier itself failing/timing
+--   out — see 'World.Thread.Command.Save.handleWorldLoadTransactionCommand'
+--   and 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') must
+--   call this so Lua's registry-mutation guard
+--   (@saveModules.register@/@registerResetHook@ refusing to run while
+--   @_loadActive@) doesn't stay wedged open for the rest of the
+--   session. Best-effort: a failure here is only logged, never
+--   propagated, since it always runs FROM an existing failure path that
+--   must still report ITS OWN error regardless.
+abortLuaLoad ∷ LoggerState → Lua.LuaE Lua.Exception ()
+abortLuaLoad logger = do
+    ok ← callSaveModules0 logger "abortPreparedLoad"
+    Lua.liftIO $ unless ok $
+        logWarn logger CatLua
+            "save_modules.abortPreparedLoad() failed (see engine log) -- \
+            \a prepared load may remain stuck active"

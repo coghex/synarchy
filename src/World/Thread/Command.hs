@@ -199,8 +199,8 @@ handleWorldCommand env logger (WorldSetWorldCursorHoverBgTexture pageId texHandl
   = handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSave pageId saveName ts luaComponents)
   = handleWorldSaveCommand env logger pageId saveName ts luaComponents
-handleWorldCommand env logger (WorldLoadTransaction requestId saveData)
-  = handleWorldLoadTransactionCommand env logger requestId saveData
+handleWorldCommand env logger (WorldLoadTransaction requestId saveData matReg)
+  = handleWorldLoadTransactionCommand env logger requestId saveData matReg
 handleWorldCommand env logger (WorldLoadPublish requestId)
   = handleWorldLoadPublishCommand env logger requestId
 handleWorldCommand env logger (WorldDeleteTile pageId gx gy)
