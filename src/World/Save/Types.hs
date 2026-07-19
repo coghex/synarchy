@@ -37,6 +37,9 @@ module World.Save.Types
     , MissingFloraRef(..)
     , renderMissingFloraRef
     , missingFloraReferences
+    , MissingLocationRef(..)
+    , renderMissingLocationRef
+    , missingLocationOverlayReferences
     ) where
 
 import UPrelude
@@ -65,6 +68,7 @@ import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.CropPlot (CropPlots, CropPlot(..))
 import World.Flora.Types (FloraId(..), FloraCatalog, lookupSpecies)
+import World.Chunk.Types (ChunkCoord(..))
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -1207,3 +1211,43 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
     editFloraRef (WePlaceFlora gx gy fid _day _grow) = [(gx, gy, fid)]
     editFloraRef _                                    = []
     unresolved fid = maybe True (const False) (lookupSpecies fid catalog)
+
+-- Location-overlay-id validation (issue #763 round-7 review) ---------
+
+-- | A saved location-overlay entry ('WorldGenParams.wgpLocationOverlay',
+--   one per stamped chunk) whose location id does not resolve against
+--   the currently-registered 'Location.Types.LocationRegistry'. Unlike
+--   'MaterialId'/'FloraId', this is a plain Text key — same shape as
+--   'MissingDefRef' — but it lives on 'WorldGenParams' rather than
+--   inside 'WorldPageSave' proper, which is why it needed its own
+--   validation function even though the check itself is a direct
+--   'HS.HashSet' membership test. A missing location definition would
+--   otherwise silently skip location discovery/placement-bounds
+--   checks for that chunk after publication instead of rejecting the
+--   load.
+data MissingLocationRef = MissingLocationRef
+    { mlrPage  ∷ !WorldPageId
+    , mlrCoord ∷ !(Int, Int)
+    , mlrLocId ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingLocationRef ∷ MissingLocationRef → Text
+renderMissingLocationRef r =
+    "location overlay chunk " <> T.pack (show (mlrCoord r)) <> " on page '"
+        <> unWorldPageId (mlrPage r) <> "' references unknown location id '"
+        <> mlrLocId r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved location-overlay reference, across all pages, that does
+--   not resolve against the currently-registered location definitions.
+--   Empty ⇒ every reference resolves and the load may proceed.
+missingLocationOverlayReferences
+    ∷ HS.HashSet Text                     -- ^ registered location def ids
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingLocationRef]
+missingLocationOverlayReferences locationDefs pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingLocationRef pid (cx, cy) locId
+        | (ChunkCoord cx cy, locId) ← HM.toList (wgpLocationOverlay (wpsGenParams w))
+        , not (HS.member locId locationDefs) ]

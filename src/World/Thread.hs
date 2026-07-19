@@ -75,15 +75,27 @@ worldLoop env stateRef lastTimeRef = do
                     then processAuthorizedSave env logger
                     else do
                         processAllCommands env logger
+                        -- Round 7 review: acknowledging BEFORE the rest
+                        -- of this tick's work (drainInitQueues/
+                        -- tickWorldTime/updateChunkLoading/pollCursorInfo,
+                        -- all of which can queue fresh Lua/HUD/sim
+                        -- messages) let this ack be the FINAL one a
+                        -- quiescence pass needed while this tick was
+                        -- still mid-flight producing more side effects —
+                        -- if the barrier then reached SaveSnapshotBoundary
+                        -- before this tick finished, that later work
+                        -- could straddle the publish boundary and land
+                        -- against the replacement session. Folded into
+                        -- this branch (all already unconditional on
+                        -- "not locked", since this whole branch only
+                        -- runs when locked is False) so the ack fires
+                        -- only once every side-effect-producing step
+                        -- below has actually completed.
+                        drainInitQueues env logger
+                        tickWorldTime env (realToFrac dt)
+                        updateChunkLoading env logger
+                        pollCursorInfo env
                         acknowledgeCurrent (saveBarrierRef env) SaveWorld
-
-                -- Drain initial chunk queues (progressive loading)
-                unless locked $ drainInitQueues env logger
-
-                unless locked $ do
-                    tickWorldTime env (realToFrac dt)
-                    updateChunkLoading env logger
-                    pollCursorInfo env
 
                 _camera ← readIORef (cameraRef env)
                 allQuads ← updateWorldTiles env

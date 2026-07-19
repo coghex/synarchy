@@ -36,7 +36,10 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingMaterialReferences
                         , renderMissingMaterialRef
                         , missingFloraReferences
-                        , renderMissingFloraRef)
+                        , renderMissingFloraRef
+                        , missingLocationOverlayReferences
+                        , renderMissingLocationRef)
+import Location.Types (LocationRegistry(..), LocationDef(..))
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
@@ -431,19 +434,20 @@ continueLoad env logger requestId saveName descriptors = do
             -- #760 req. 9 (round 8 extends this to every gameplay
             -- content reference, not just building/unit defs; issue
             -- #763's round-3 review extends it again to material ids,
-            -- and round-5 again to flora ids — the approved issue's
-            -- own acceptance criteria names "material" explicitly
-            -- alongside unit/item/building/recipe, and flora species
-            -- drive crop/foraging gameplay the same way): validate
-            -- every saved content-definition reference against the
-            -- currently-registered defs BEFORE publishing ANY live
-            -- state. A missing gameplay DEFINITION rejects the COMPLETE
-            -- load with a clear error naming what's missing (requirement
-            -- 9: never silently prune affected entities). (Missing
-            -- visual ASSETS stay a soft fallback, not gated here — only
-            -- definitions. Location-overlay ids and equipment slot-id
-            -- keys remain a documented, pre-existing, out-of-scope gap
-            -- per docs/persistence_state_inventory.md §9.)
+            -- round-5 to flora ids, and round-7 to location-overlay ids
+            -- — the approved issue's own acceptance criteria names
+            -- "material" explicitly alongside unit/item/building/
+            -- recipe, and flora species / placed locations drive
+            -- gameplay the same way): validate every saved content-
+            -- definition reference against the currently-registered
+            -- defs BEFORE publishing ANY live state. A missing gameplay
+            -- DEFINITION rejects the COMPLETE load with a clear error
+            -- naming what's missing (requirement 9: never silently
+            -- prune affected entities). (Missing visual ASSETS stay a
+            -- soft fallback, not gated here — only definitions.
+            -- Equipment slot-id keys remain a documented, pre-existing,
+            -- out-of-scope gap per docs/persistence_state_inventory.md
+            -- §9.)
             bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
@@ -467,7 +471,9 @@ continueLoad env logger requestId saveName descriptors = do
             -- session state.
             matReg ← Lua.liftIO $ loadPopulatedMaterialRegistry logger "data/materials"
             floraCat ← Lua.liftIO $ readIORef (floraCatalogRef env)
+            locReg ← Lua.liftIO $ readIORef (locationDefsRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
+                locationDefIds = HS.fromList (map ldId (lrDefs locReg))
                 pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
                 missing = missingDefReferences
                     buildingDefs (HM.keysSet (umDefs um))
@@ -486,12 +492,15 @@ continueLoad env logger requestId saveName descriptors = do
                     missingMaterialReferences matReg pages
                 missingFlora =
                     missingFloraReferences floraCat pages
+                missingLocations =
+                    missingLocationOverlayReferences locationDefIds pages
                 allMissing = length missing + length missingItems
                     + length missingRecipes
                     + length missingBillOutputItems
                     + length missingConstruct
                     + length missingMaterials
                     + length missingFlora
+                    + length missingLocations
                 allMessages =
                     map renderMissingDefRef missing
                     ⧺ map renderMissingItemDefRef missingItems
@@ -501,6 +510,7 @@ continueLoad env logger requestId saveName descriptors = do
                     ⧺ map renderMissingConstructDefRef missingConstruct
                     ⧺ map renderMissingMaterialRef missingMaterials
                     ⧺ map renderMissingFloraRef missingFlora
+                    ⧺ map renderMissingLocationRef missingLocations
             if allMissing > 0
               then do
                 let msg = T.pack (show allMissing)
