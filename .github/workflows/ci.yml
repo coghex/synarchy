@@ -169,6 +169,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The checkout is mounted from the hosted runner into this job's
+      # container, so it can be owned by a different UID than the shell
+      # running later steps. Trust this exact workspace before any direct
+      # Git invocation (path-selective gates and probes both need it).
+      - name: Trust checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       # The toolchain is baked into the CI image (#671, content-addressed
       # and resolved by resolve-image since #784) — no haskell-actions/
       # setup, no toolchain cache. (The previous cache never hit inside
@@ -344,7 +351,6 @@ jobs:
         run: |
           BASE='${{ github.event.pull_request.base.sha }}'
           echo "Diffing against base $BASE"
-          git config --global --add safe.directory "$PWD"
           git fetch --no-tags origin "$BASE"
           CHANGED="$(git diff --name-only "$BASE" HEAD)"
           echo "Changed files:"; echo "$CHANGED" | sed 's/^/  /'
