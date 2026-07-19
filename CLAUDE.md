@@ -761,6 +761,24 @@ at all; `settingsMenu.onApply`/`onSave` instead call
 the one case shell's own direct engine broadcast never covers (a
 scale-only change, same framebuffer size, no resize event at all).
 
+Review round 8 caught the one dropdown the round-7 label/control-
+overlap sweep missed: create-world's own World Size dropdown (`Row 3`
+of `settings_tab.lua`) still used the tab's unshrunk `uiscale` — unlike
+`graphics_tab.lua`'s four dropdowns, which got a `dropdownUiscale` fix
+in round 5. It now computes an equivalent local `sizeDropdownUiscale`
+(same `dropdown.lua` displayWidth+arrow formula, fit against the same
+reserved control column `cw*(1-LABEL_COLUMN_FRACTION)`), same as every
+other dropdown in this codebase.
+
+Round 8 also broadened the layout-matrix coverage: the existing
+"screen geometry stays in-frame" describe only sampled six hand-picked
+`(w, h, uiscale)` combinations. A new case loops over the REAL
+`scripts/settings/data.lua`'s `data.resolutions` list (16 entries)
+directly, asserting main/settings/create-world panel geometry at 1x
+for every one of them — the scale every configured resolution is fully
+supported at except 3840x2160, which is checked too, best-effort, at
+its own auto-detected 2.5x default.
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's

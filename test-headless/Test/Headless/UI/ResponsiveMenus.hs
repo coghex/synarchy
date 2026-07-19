@@ -175,7 +175,7 @@ spec = around withHeadlessEngine $ do
                     rpPendingWhileMinimized p `shouldBe` True
                     rpPendingAfterRestore p `shouldBe` False
 
-    describe "screen geometry stays in-frame across the supported envelope" $
+    describe "screen geometry stays in-frame across the supported envelope" $ do
         forM_ [ (800, 600, 1.0), (1280, 720, 1.0), (1920, 1080, 1.5)
               , (2560, 1440, 2.0), (3840, 2160, 2.5), (3440, 1440, 1.0)
               ] $ \(w, h, uiscale) →
@@ -186,6 +186,33 @@ spec = around withHeadlessEngine $ do
                 forM_ [ bootMain w h, bootSettings w h, bootCreateWorld w h ] $ \bootCode → do
                     inFrame ← evalBool ls (luaLines [bootCode, "return " <> panelInFrameExpr "m" w h])
                     inFrame `shouldBe` True
+
+        -- #748 round 8: every SETTINGS-configurable resolution
+        -- (scripts/settings/data.lua's data.resolutions, not just the
+        -- hand-picked sample above) must produce a reachable, in-frame
+        -- layout at 1x — the scale every one of them is fully
+        -- supported at (per the envelope-classification describe
+        -- above), so this is real layout/reachability coverage, not
+        -- just the classifier's own say-so. 3840x2160 is checked too,
+        -- best-effort, at 2.5x (its own auto-detected default scale,
+        -- since 1x falls outside its 1.5x-4x band).
+        it "every configured resolution (data.resolutions) at 1x — main/settings/create-world panels stay reachable and in-frame" $ \env → do
+            ls ← newBareLuaBackend env
+            resJson ← evalJSON ls
+                "local res = {}; for _, e in ipairs(require('scripts.settings.data').resolutions) do table.insert(res, {w=e.width, h=e.height}) end; return res"
+            case decode (BL.fromStrict (TE.encodeUtf8 resJson)) ∷ Maybe [ResDims] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack resJson)
+                Just rows → do
+                    rows `shouldSatisfy` (not ∘ null)
+                    forM_ rows $ \row → do
+                        let w = rdW row
+                            h = rdH row
+                            uiscale = if w ≡ 3840 ∧ h ≡ 2160 then 2.5 else 1.0
+                        ls2 ← newBareLuaBackend env
+                        _ ← eval ls2 (setScaleCall uiscale)
+                        forM_ [ bootMain w h, bootSettings w h, bootCreateWorld w h ] $ \bootCode → do
+                            inFrame ← evalBool ls2 (luaLines [bootCode, "return " <> panelInFrameExpr "m" w h])
+                            inFrame `shouldBe` True
 
     -- pause menu and save browser build differently (no single `.init`
     -- → auto-created page), so they're checked separately rather than
@@ -1226,6 +1253,10 @@ data ResSupport = ResSupport { rsW ∷ Int, rsH ∷ Int, rsSupported ∷ Bool } 
 instance FromJSON ResSupport where
     parseJSON = withObject "ResSupport" $ \o →
         ResSupport <$> o .: "w" <*> o .: "h" <*> o .: "supported"
+
+data ResDims = ResDims { rdW ∷ Int, rdH ∷ Int } deriving Show
+instance FromJSON ResDims where
+    parseJSON = withObject "ResDims" $ \o → ResDims <$> o .: "w" <*> o .: "h"
 
 data Classification = Classification { clsSupported ∷ Bool, clsReason ∷ Maybe Text } deriving Show
 instance FromJSON Classification where

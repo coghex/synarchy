@@ -106,6 +106,23 @@ function settingsTab.create(params)
     local labelUiscale = responsive.fitScale(
         naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
 
+    -- #748 round 8: World Size (below) is a dropdown — its width is
+    -- driven by OPTION TEXT metrics (dropdown.measureOptions) plus a
+    -- fixed minWidth floor, neither of which is touched by
+    -- computeContentScaleFactor's randbox/textbox-only shrink. Mirrors
+    -- graphics_tab.lua's identical dropdownUiscale fix: one effective,
+    -- LOCAL uiscale, mirroring dropdown.lua's own
+    -- displayWidth+arrowSize formula, fit against the SAME reserved
+    -- control column (cw*(1-LABEL_COLUMN_FRACTION)) the shrunk
+    -- randbox rows already target.
+    local sizeFontSizePx = math.floor(24 * uiscale)
+    local sizeDropHeight = math.floor(base.dropdownHeight * uiscale)
+    local naturalSizeDropdownWidth = math.max(
+        dropdown.measureOptions(settingsTab.worldSizeOptions, font, sizeFontSizePx),
+        math.floor(100 * uiscale)) + sizeDropHeight
+    local sizeDropdownUiscale = responsive.fitScale(
+        naturalSizeDropdownWidth, cw * (1 - LABEL_COLUMN_FRACTION), uiscale)
+
     ---------------------------------------------------------
     -- Row 1: World Name (randbox - wide)
     ---------------------------------------------------------
@@ -228,7 +245,7 @@ function settingsTab.create(params)
         page              = page,
         parent            = container,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = sizeDropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = settingsTab.sizeValidator,
         matchFn           = settingsTab.sizeMatcher,
