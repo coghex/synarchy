@@ -62,6 +62,8 @@ import World.Generate.Config (WorldGenConfig)
 import Unit.Pathing.Config (PathingConfig)
 import Sim.Command.Types (SimCommand)
 import Engine.Save.Barrier (SaveBarrier)
+import Engine.Load.Status (LoadStatusRef)
+import World.Load.Types (StagedSession)
 
 data EngineEnv = EngineEnv
   { engineConfig        ∷ EngineConfig
@@ -137,13 +139,21 @@ data EngineEnv = EngineEnv
   --   touching any cursor field, so the per-world snapshot alone can't
   --   detect the switch — issue #129).
   , hudActivePageRef    ∷ IORef (Maybe WorldPageId)
-  -- | Per-save provenance: save name → the restore ids that save's last load
-  --   registered. Re-loading the SAME save consults its own entry to reuse (and
-  --   thus replace) its collision-renamed synthetic pages instead of
-  --   accumulating new ones; loading a DIFFERENT save never owns another save's
-  --   synthetic pages, so they stay preserved as unrelated live pages (#214,
-  --   #191). Keyed by save name (SaveMetadata.smName).
-  , loadProvenanceRef   ∷ IORef (HM.HashMap Text (HS.HashSet WorldPageId))
+  -- | Runtime-only whole-session LOAD transaction status (issue #763,
+  --   save-overhaul C2) — the load-side counterpart to 'saveBarrierRef'.
+  --   Diagnostic and coordination state, never part of 'SaveData'. See
+  --   "Engine.Load.Status".
+  , loadStatusRef       ∷ LoadStatusRef
+  -- | Single-slot handoff for a fully-staged, not-yet-published load
+  --   (issue #763): written by the world thread once
+  --   'World.Command.Types.WorldLoadTransaction' finishes staging, read
+  --   (and cleared) by the world thread again when it processes the
+  --   matching 'World.Command.Types.WorldLoadPublish'. Keyed by request
+  --   id purely as a defensive cross-check — only one load is ever in
+  --   flight at a time (enforced by 'loadStatusRef'). Mirrors the
+  --   existing single-slot staging handoff pattern 'zoomAtlasDataRef' /
+  --   'worldPreviewRef' already use for the render thread.
+  , pendingLoadRef      ∷ IORef (Maybe (Int, StagedSession))
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))

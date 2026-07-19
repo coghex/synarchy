@@ -364,25 +364,26 @@ local function scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
     return cleared
 end
 
--- Broadcast from the engine once a save has finished loading (#195).
--- The Lua blob is a global singleton serialized WHOLESALE, so the restore
--- (deserializer above) clobbered aiState with save-time state for units on
--- EVERY page. But the engine load only restores the saved page and
--- PRESERVES other live pages' units (#191), so a load must touch only the
--- loaded page's AI state and leave other pages' state exactly as it was.
+-- Broadcast from the engine once a save has finished loading (#195). The
+-- Lua blob is a global singleton, clobbered wholesale by the C2-compat
+-- apply() adapter (issue #761/#763 — see unit_ai.lua's module header)
+-- with save-time state for every unit the save contained. Since issue
+-- #763 (save-overhaul C2), a load REPLACES THE COMPLETE SESSION: there is
+-- no more "other live page" concept to preserve (#191's off-page
+-- preservation is gone along with the merge-based load path it protected)
+-- — survUnitIds/survBuildingIds now name every unit/building in the whole
+-- new session, not just one loaded page's slice.
 --
--- survUnitIds are the loaded page's survivors. We rebuild aiState as:
---   * loaded-page survivor → its restored (blob) state — the save is
---     authoritative for the page it loaded;
---   * every other still-live unit → its PRE-LOAD state (the off-page
---     entity's CURRENT state, NOT the blob's stale snapshot). This both
---     stops an older save from rolling back live off-page AI memory, and
---     means any stale/dropped/colliding loaded-page id resolves to the
---     live entity's own state rather than the blob's — no misattribution;
+-- We still rebuild aiState defensively as:
+--   * survivor (now: every live unit) → its restored (blob) state;
+--   * any OTHER entry (dead code in normal operation post-#763, since
+--     nothing outside the survivor set can exist right after a publish —
+--     kept only as a defensive no-op rather than assuming the invariant
+--     always holds) → its pre-load state, IF that unit id still somehow
+--     exists live;
 --   * everything else (orphans, dead, gone-before-save) → dropped.
--- Nested refs are then scrubbed on loaded-page survivor entries against the
--- survivor set: a loaded-page unit can only validly reference a page-mate.
--- Off-page entries keep their pre-load refs (they weren't reloaded).
+-- Nested refs are then scrubbed on every survivor entry against the
+-- survivor set.
 function unitAi.onSaveLoaded(survUnitIds, survBuildingIds)
     local survUnitSet, survBuildingSet = {}, {}
     for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end

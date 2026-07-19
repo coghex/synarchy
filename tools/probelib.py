@@ -206,6 +206,37 @@ def poll_until(seconds: float, fn, interval: float = 0.3):
     return None
 
 
+def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2):
+    """Poll ``engine.getLoadStatus()`` (issue #763, save-overhaul C2)
+    until a whole-session load transaction reaches a terminal phase.
+
+    ``engine.loadSave`` only ACCEPTS the request synchronously — staging
+    (chunk gen, etc.) and publication run asynchronously on the world
+    thread, and nothing the save contains exists live (nor does
+    ``world.getActiveWorldId()``/``world.waitForInit`` resolve
+    meaningfully) until publication actually completes. Every probe that
+    drives a real ``engine.loadSave`` call must wait for this before
+    touching the loaded state.
+
+    Returns ``(published: bool, status: dict | None)`` — ``status`` is
+    the last observed ``engine.getLoadStatus()`` table (``None`` only if
+    the debug console never returned one at all).
+    """
+    deadline = time.time() + seconds
+    last = None
+    while time.time() < deadline:
+        status = send_json(port, "return engine.getLoadStatus()")
+        if isinstance(status, dict):
+            last = status
+            phase = status.get("phase")
+            if phase == "LoadPublished":
+                return True, status
+            if phase == "LoadFailed":
+                return False, status
+        time.sleep(interval)
+    return False, last
+
+
 # --------------------------------------------------------------------------
 # Common bootstrap: AI scripts, worlds, acolytes
 # --------------------------------------------------------------------------

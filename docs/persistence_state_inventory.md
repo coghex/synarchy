@@ -69,7 +69,8 @@ the affected fields as unclassified.
 | `focusManagerRef` | global | Exclude | — | rebuilt as UI rebuilds | none yet |
 | `worldManagerRef` | global | Rebuild | `SaveData.sdWorlds`, `sdActivePage`, `sdVisiblePages` | the container itself is rebuilt; each contained `WorldState` is restored per §3/§4 | `tools/multiworld_save_probe.py` |
 | `hudActivePageRef` | global | Exclude | `wmVisible` | reset from the active/visible page set post-load | none yet |
-| `loadProvenanceRef` | global | Reset to default | — | reset to empty at boot; session-scoped collision-remap bookkeeping, never itself written to the save file | `tools/multiworld_save_probe.py` (collision-remap paths) |
+| `loadStatusRef` | global | Exclude | — | Runtime-only whole-session load transaction diagnostics (#763), the load-side counterpart to `saveBarrierRef`; never serialized. | `Test.Headless.Load.Status`, `tools/transactional_load_probe.py` |
+| `pendingLoadRef` | global | Exclude | — | Runtime-only single-slot staged-session handoff (#763) between `WorldLoadTransaction` (staging) and `WorldLoadPublish` (the atomic swap); never serialized, and always cleared before/after use. | `tools/transactional_load_probe.py` |
 | `worldQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `sunAngleRef` | global | Rebuild | active page's world time | derived via `worldTimeToSunAngle` | none yet |
 | `worldPreviewRef` | global | Exclude | — | pending GPU upload payload | none yet |
@@ -139,17 +140,21 @@ classified in their own sections (§2, §3/§4, §5) rather than here.
 
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
-| `wmWorlds` | Rebuild | `SaveData.sdWorlds` | today's rebuild MERGES restored pages into whatever's live rather than replacing the session — see the divergence note below | `tools/multiworld_save_probe.py` |
+| `wmWorlds` | Rebuild | `SaveData.sdWorlds` | publication REPLACES the whole set (`World.Load.Publish.publishStagedSession`), never merges — see the resolved-divergence note below | `tools/multiworld_save_probe.py`, `tools/transactional_load_probe.py` |
 | `wmVisible` | Rebuild | `SaveData.sdVisiblePages` | none beyond type-correctness | `tools/multiworld_save_probe.py` |
 
-**Current v82 behavior diverges from the contract's target here**:
-`handleWorldLoadSaveCommand` (`src/World/Thread/Command/Save/LoadWorld.hs`,
-#191/#218) deliberately keeps any live page outside the set the load
-"owns" (restored pages + their saved original ids + a prior load's
-pages) rather than dropping it — a merge, not the whole-session
-replacement contract §1 requires. This PR does not change that; see
-`persistence_contract.md`'s "Divergence: current loading merges, it does
-not replace" for the full writeup and the responsible future child.
+**Resolved**: v82-era behavior diverged from the contract's target here —
+the pre-#763 `handleWorldLoadSaveCommand`
+(`src/World/Thread/Command/Save/LoadWorld.hs`, #191/#218, deleted)
+deliberately kept any live page outside the set the load "owned"
+(restored pages + their saved original ids + a prior load's pages)
+rather than dropping it, a merge rather than the whole-session
+replacement contract §1 requires. Issue #763 (save-overhaul C2)
+implemented the target: `World.Load.Publish.publishStagedSession`
+registers exactly the staged session's own pages under
+`worldManagerRef`, so a page that isn't part of the save being loaded
+does not survive publication. See `persistence_contract.md`'s "Resolved
+divergence: loading used to merge, not replace" for the full writeup.
 
 ### WorldState
 
@@ -261,7 +266,7 @@ prior fields (no cross-page ordering requirement):
 
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
-| `wpsPageId` | Persist as identity/reference | live page ids already in the session (`assignRestoreIds`) | restore-target id must be unique within the session after collision-renaming | `tools/multiworld_save_probe.py` |
+| `wpsPageId` | Persist as identity/reference | — | restored verbatim, unchanged (#763: no remap, no collision rename — `assignRestoreIds`/`RestoreIds.hs` are gone, since replacement never collides with anything) | `tools/multiworld_save_probe.py`, `tools/transactional_load_probe.py` |
 | `wpsGenParams` | Persist exactly | — | none beyond type-correctness (chunk regen is not re-validated against it at load) | `tools/multiworld_save_probe.py` |
 | `wpsCameraX` | Persist exactly | — | none beyond type-correctness | none yet |
 | `wpsCameraY` | Persist exactly | — | none beyond type-correctness | none yet |
@@ -424,7 +429,7 @@ just a callback run on every load. `pause` no longer registers at all
 
 | Module | Owner | Scope | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|---|---|
-| `unit_ai` | `scripts/unit_ai.lua` | global (per-id state keyed inside the component payload) | Persist exactly (versioned component, v1) | live unit ids must already be restored (`umInstances`) | component-local: payload must be a table keyed by positive-integer unit ids mapping to state tables; the pre-load-snapshot/restore dance (`unitAi._preLoadState`, #195/#191, kept as a temporary pre-C2 compatibility adapter) must reconcile off-page units, not leak stale per-id state | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
+| `unit_ai` | `scripts/unit_ai.lua` | global (per-id state keyed inside the component payload) | Persist exactly (versioned component, v1) | live unit ids must already be restored (`umInstances`) | component-local: payload must be a table keyed by positive-integer unit ids mapping to state tables; the pre-load-snapshot/restore dance (`unitAi._preLoadState`, #195/#191) reconciles per-id state against the survivor set — since #763 (C2) a load replaces the complete session, so `onSaveLoaded`'s survivor lists always name every live unit and the dance's off-page-preservation branch is dead code in normal operation, kept only as a defensive no-op | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
 | `building_spawn` | `scripts/building_spawn.lua` | global (per-id state keyed inside the component payload) | Persist exactly (versioned component, v1) | live building ids must already be restored (`bmInstances`) | same reconcile requirement as `unit_ai` (temporary pre-C2 compatibility adapter); NOTE the roster-countdown itself is NOT here — it lives on `BuildingInstance` and is covered under `wpsBuildings` in §4 | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
 | `unit_resources` | `scripts/unit_resources.lua` | global (per-id cache) | Reset to default | — | reset hook (`registerResetHook`, not a save component); `alerts.resetOnLoad()` must clear the per-unit alert-debounce cache on every load, including a load with no data for this module at all — deliberately never persisted so a reused unit id (post `umNextId` rewind) can't inherit stale suppression state | none yet |
 | `pause` (`paused` field) | `scripts/pause.lua` | global | Exclude | — | no registration of any kind (requirement 5) — `pause.paused` is an in-memory transition-detection hint only, never read for real logic; `enginePausedRef`/`sdEnginePaused` is authoritative (see §1) | `tools/save_pause_probe.py` |
@@ -552,14 +557,17 @@ four, none of them implemented by this issue (#756):
    `DefaultTool` fabrication is now the only source of the legacy
    field's value.
 4. `wmWorlds`/`wmVisible` (i.e. the load path as a whole) — v82's
-   `handleWorldLoadSaveCommand` deliberately MERGES a loaded save into
-   whatever's already live, preserving unrelated pages (#191/#218);
-   target is whole-session replacement (contract §1). This is the
+   `handleWorldLoadSaveCommand` deliberately MERGED a loaded save into
+   whatever was already live, preserving unrelated pages (#191/#218);
+   target was whole-session replacement (contract §1). This was the
    largest divergence of the four — a load-path behavior, not a single
-   field — see `persistence_contract.md`'s "Divergence: current loading
-   merges, it does not replace" for the full writeup, why #191 made this
-   choice deliberately, and the future child (A2) responsible for
-   reconciling it with the new contract.
+   field. **Implemented by #763** (save-overhaul C2): the whole
+   incrementally-mutating load path (`LoadWorld.hs`/`LoadPage.hs`/
+   `RestoreIds.hs`) was replaced by a staged transaction
+   (`World.Load.Stage` + `World.Load.Publish`) that publishes exactly
+   the saved session's own pages — see `persistence_contract.md`'s
+   "Resolved divergence: loading used to merge, not replace" for the
+   full writeup and why #191 made the old choice deliberately.
 
 Everything else documents v82's existing, unchanged behavior under the
 new taxonomy.

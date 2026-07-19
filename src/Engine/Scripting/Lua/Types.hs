@@ -219,6 +219,16 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --     7. optional (gx, gy) grid coords. When present the
               --        popup line is clickable (click pans the camera
               --        there); 'Nothing' leaves the line non-clickable.
+            | LuaLoadStaged Int
+              -- ^ Issue #763 (save-overhaul C2): the world thread just
+              --   finished STAGING a whole-session load transaction
+              --   (its request id) without touching any live ref. The
+              --   Lua thread is the one that drives the publish barrier
+              --   (see "Engine.Scripting.Lua.Thread.Dispatch") — it
+              --   applies the prepared Lua-side state and queues the
+              --   matching 'World.Command.Types.WorldLoadPublish' once
+              --   every other state-owner thread has quiesced, mirroring
+              --   how 'engine.saveWorld' drives the save barrier.
             deriving (Eq, Show)
 
 data LuaResult = LuaSuccess

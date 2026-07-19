@@ -352,6 +352,7 @@ end
 function mainMenu.loadAndShowSave(saveName)
     local worldView = require("scripts.world_view")
     local worldManager = require("scripts.world_manager")
+    local loadingScreen = require("scripts.loading_screen")
 
     -- Clear any sticky error from a previous attempt before retrying.
     mainMenu.lastError = nil
@@ -368,27 +369,42 @@ function mainMenu.loadAndShowSave(saveName)
         return
     end
 
-    worldManager.currentWorld = "main_world"
-    worldManager.active = true
+    -- Issue #763 (save-overhaul C2): engine.loadSave only ACCEPTS the
+    -- request here — the actual whole-session replacement (chunk gen,
+    -- etc.) runs asynchronously on the world thread, and the loaded page
+    -- keeps its OWN saved id (never remapped to "main_world"), so
+    -- nothing here can bind worldManager/worldView to a page yet. Defer
+    -- that to loadingScreen's "load" mode, which polls
+    -- engine.getLoadStatus() until the transaction actually publishes.
     worldView.loadedFromSave = true
 
-    worldView.sendTexturesToWorld("main_world")
+    loadingScreen.setOnLoadReady(function()
+        -- The loaded page is live and already the visible/active world
+        -- (World.Load.Publish already called world.show for it) — just
+        -- resolve which page that is and finish the Lua-side bind.
+        local activeId = world.getActiveWorldId()
+        worldManager.currentWorld = activeId
+        worldManager.active = true
+        worldView.sendTexturesToWorld(activeId)
+    end)
+    loadingScreen.setOnLoadFailed(function(reason)
+        engine.logError("Failed to load save: " .. saveName
+            .. (reason and (" (" .. tostring(reason) .. ")") or ""))
+        engine.emitEvent("save_load", "Failed to load save: " .. saveName)
+        mainMenu.lastError = "Failed to load save: " .. saveName
+        if mainMenu.showMenuCallback then
+            mainMenu.showMenuCallback("main")
+        end
+    end)
 
-    -- Arm the one-shot gen-complete structural rebind, exactly as
-    -- worldView.createWorld does. (#286) The quad cache no longer bakes a
-    -- volatile bindless slot — vertices carry stable texture-handle ids and
-    -- the shader resolves them at draw time — so structural textures that
-    -- finish loading after the cache is built are picked up automatically.
-    -- The old phase-3 structural re-bind one-shot is therefore gone; the
-    -- save-load texture handles are still sent via worldView.sendTexturesToWorld.
-
-    world.show("main_world")
-
-    -- Show loading screen instead of jumping straight to world_view.
-    -- The loading screen polls world.getInitProgress() and transitions
-    -- to world_view when all chunks are loaded.
+    -- Show loading screen instead of jumping straight to world_view. Its
+    -- "load" mode transitions to "worldgen" mode once the transaction
+    -- publishes (see loadingScreen.update), then to world_view once
+    -- every initial chunk around the loaded camera finishes loading,
+    -- exactly like the create-world flow.
     if mainMenu.showMenuCallback then
         mainMenu.showMenuCallback("loading", {
+            mode = "load",
             statusText = "Loading " .. saveName .. "...",
         })
     end

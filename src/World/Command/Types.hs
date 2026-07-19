@@ -238,7 +238,21 @@ data WorldCommand
         --   @saveModules.snapshotAll()@ before queueing this command,
         --   aborting the save entirely rather than enqueueing it if any
         --   REQUIRED Lua component failed to snapshot.
-    | WorldLoadSave WorldPageId SaveData
+    | WorldLoadTransaction Int SaveData
+        -- ^ requestId, decoded + content-validated 'SaveData' (issue
+        --   #763, save-overhaul C2). Stages the complete replacement
+        --   session ("World.Load.Stage") without touching any live ref
+        --   (requirement 6) — the staged result lands in
+        --   'Engine.Core.State.pendingLoadRef', keyed by requestId, and
+        --   a 'LuaStagingComplete' message is posted so the Lua thread
+        --   can drive the publish barrier
+        --   ("Engine.Scripting.Lua.Thread.Dispatch").
+    | WorldLoadPublish Int
+        -- ^ requestId. Atomically publishes the 'World.Load.Types.StagedSession'
+        --   the matching 'WorldLoadTransaction' produced
+        --   ("World.Load.Publish") — issued ONLY while the save
+        --   barrier's capture lock is held (mirrors 'WorldSave''s
+        --   authorized-command handling in "World.Thread").
     | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
     | WorldSetFluidTile WorldPageId Int Int FluidType
         -- ^ worldId, gx, gy, fluid kind. Sets one tile of fluid at

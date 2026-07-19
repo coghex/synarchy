@@ -36,6 +36,7 @@ import System.IO (stdout)
 import System.Directory (doesFileExist, copyFile)
 import Engine.Core.State
 import Engine.Save.Barrier (newSaveBarrier)
+import Engine.Load.Status (newLoadStatusRef)
 import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
@@ -190,7 +191,8 @@ initializeEngineWith logBackend = do
   uiManagerRef ← newIORef emptyUIPageManager
   worldManagerRef ← newIORef emptyWorldManager
   hudActivePageRef ← newIORef Nothing
-  loadProvenanceRef ← newIORef HM.empty
+  loadStatusRef ← newLoadStatusRef
+  pendingLoadRef ← newIORef Nothing
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
@@ -283,7 +285,8 @@ initializeEngineWith logBackend = do
         , uiManagerRef       = uiManagerRef
         , worldManagerRef    = worldManagerRef
         , hudActivePageRef   = hudActivePageRef
-        , loadProvenanceRef  = loadProvenanceRef
+        , loadStatusRef      = loadStatusRef
+        , pendingLoadRef     = pendingLoadRef
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef

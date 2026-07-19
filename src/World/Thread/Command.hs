@@ -62,7 +62,8 @@ import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
                                  , handleWorldSetTimeScaleCommand)
 import World.Thread.Command.Save (handleWorldSaveCommand
-                                 , handleWorldLoadSaveCommand)
+                                 , handleWorldLoadTransactionCommand
+                                 , handleWorldLoadPublishCommand)
 import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
                                , handleWorldSetMapModeCommand
                                , handleWorldSetToolModeCommand)
@@ -198,8 +199,10 @@ handleWorldCommand env logger (WorldSetWorldCursorHoverBgTexture pageId texHandl
   = handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSave pageId saveName ts luaComponents)
   = handleWorldSaveCommand env logger pageId saveName ts luaComponents
-handleWorldCommand env logger (WorldLoadSave pageId saveName)
-  = handleWorldLoadSaveCommand env logger pageId saveName
+handleWorldCommand env logger (WorldLoadTransaction requestId saveData)
+  = handleWorldLoadTransactionCommand env logger requestId saveData
+handleWorldCommand env logger (WorldLoadPublish requestId)
+  = handleWorldLoadPublishCommand env logger requestId
 handleWorldCommand env logger (WorldDeleteTile pageId gx gy)
   = handleWorldDeleteTileCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetFluidTile pageId gx gy fluidType)

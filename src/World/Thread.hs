@@ -112,15 +112,21 @@ processAllCommands env logger = do
             processAllCommands env logger
         Nothing → return ()
 
--- | The capture lock admits only its queued WorldSave command. All other
--- commands remain ordered for later processing, so they cannot leak into the
--- snapshot while still allowing the world owner to write it.
+-- | The capture lock admits only its queued WorldSave / WorldLoadPublish
+-- command. All other commands remain ordered for later processing, so they
+-- cannot leak into the snapshot (a save) or observe a partial swap (a load
+-- publish) while still allowing the world owner to write it. A load's
+-- WorldLoadPublish reaches this window only after every other state owner
+-- has already quiesced against the SAME save-barrier protocol a save uses
+-- (issue #763, save-overhaul C2 — see "Engine.Scripting.Lua.Thread.Dispatch"),
+-- so the two authorized command kinds never contend with each other either.
 processAuthorizedSave ∷ EngineEnv → LoggerState → IO ()
 processAuthorizedSave env logger = do
     commands ← Q.flushQueue (worldQueue env)
-    let (saves, deferred) = partition isSave commands
-    forM_ saves $ handleWorldCommand env logger
+    let (authorized, deferred) = partition isAuthorized commands
+    forM_ authorized $ handleWorldCommand env logger
     forM_ deferred $ Q.writeQueue (worldQueue env)
   where
-    isSave (WorldSave _ _ _ _) = True
-    isSave _                   = False
+    isAuthorized (WorldSave _ _ _ _)   = True
+    isAuthorized (WorldLoadPublish _)  = True
+    isAuthorized _                     = False

@@ -328,11 +328,13 @@ function saveModules.register(id, spec)
     -- structural invariant, not something a topological sort needs to
     -- enforce: every Lua component's apply() (saveModules.applyAll(),
     -- via Engine.Scripting.Lua.API.Save's applyLuaLoad) always runs
-    -- strictly BEFORE the Haskell-side world-thread restore is ever
-    -- queued (WorldLoadSave), for every load, with no exception. The
-    -- declaration still matters -- documenting a real cross-language
-    -- coupling, and rejecting a typo'd/nonexistent id outright, same as
-    -- a bad Lua-to-Lua dep.
+    -- strictly BEFORE the Haskell-side live session replacement is ever
+    -- queued (issue #763's WorldLoadPublish -- staging, WorldLoadTransaction,
+    -- touches no live state and may run before OR after this, since it
+    -- doesn't observe or mutate anything either side could disagree on),
+    -- for every load, with no exception. The declaration still matters --
+    -- documenting a real cross-language coupling, and rejecting a
+    -- typo'd/nonexistent id outright, same as a bad Lua-to-Lua dep.
     local deps = spec.deps
     if type(deps) ~= "table" or not isDenseArray(deps) then
         error("saveModules.register: '" .. id

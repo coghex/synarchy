@@ -101,6 +101,7 @@ import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.Barrier as SaveBarrier
+import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
@@ -170,6 +171,7 @@ main = hspec $ do
     describe "save components" SaveComponents.spec
     describe "atomic save storage" SaveStorage.spec
     describe "Save.Barrier" SaveBarrier.spec
+    describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
     describe "World.CursorInfo" CursorInfo.spec

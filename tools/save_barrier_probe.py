@@ -12,7 +12,7 @@ failure surfaces as a real SaveFailed outcome rather than crashing the
 world thread or wedging the barrier open forever."""
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time, uuid
-from probelib import boot, quit_engine, send
+from probelib import boot, quit_engine, send, wait_load_published
 
 SAVE = "probe_barrier_" + uuid.uuid4().hex[:12]
 RESAVE = SAVE + "_resave"
@@ -150,7 +150,12 @@ def main():
     p = boot(a.port, log="/tmp/save_barrier_probe_reload.log")
     try:
         if send(a.port, f'return engine.loadSave("{SAVE}")').strip() != "true": raise RuntimeError("load rejected")
-        send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("main_world")', expect_result=False); time.sleep(1)
+        # Issue #763: a load only ACCEPTS synchronously -- wait for the
+        # whole-session transaction to publish before the saved page
+        # ("barrier", its own id verbatim -- no more main_world remap)
+        # exists live at all.
+        if not wait_load_published(a.port, 300)[0]: raise RuntimeError("load transaction did not publish")
+        send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False); time.sleep(1)
         if send(a.port, "return engine.isPaused()").strip() != "true": raise RuntimeError("load was not paused")
         reloaded_spread = area_fluid().get(spread_coord)
         if reloaded_spread != spread_before:
@@ -174,7 +179,7 @@ def main():
                 f"at ({mx},{my}), got {loaded_far!r}"
             )
         first_size = os.path.getsize(os.path.join(path, "world.synworld"))
-        if send(a.port, f'return engine.saveWorld("main_world","{RESAVE}")').strip() != "true": raise RuntimeError("resave rejected")
+        if send(a.port, f'return engine.saveWorld("barrier","{RESAVE}")').strip() != "true": raise RuntimeError("resave rejected")
         wait(lambda: os.path.isfile(os.path.join(resave_path, "world.synworld")), "resave file")
         second_size = os.path.getsize(os.path.join(resave_path, "world.synworld"))
         if second_size > first_size + 1024:
@@ -189,7 +194,8 @@ def main():
         # The SECOND save -- taken AFTER the post-release mutation --
         # must capture it as its own distinct boundary.
         if send(a.port, f'return engine.loadSave("{SAVE2}")').strip() != "true": raise RuntimeError("second-save load rejected")
-        send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("main_world")', expect_result=False); time.sleep(1)
+        if not wait_load_published(a.port, 300)[0]: raise RuntimeError("second-save load transaction did not publish")
+        send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False); time.sleep(1)
         loaded_far2 = fluid_at(a.port, mx, my).get("type")
         if loaded_far2 != mutated_type:
             raise RuntimeError(

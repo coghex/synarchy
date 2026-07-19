@@ -20,9 +20,17 @@ import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import qualified HsLua as Lua
 import Data.List (find)
 import Data.IORef (IORef, readIORef, writeIORef)
 import Control.Concurrent.STM (readTVarIO)
+import Engine.Save.Barrier
+    ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
+    , reachSnapshot, failSave )
+import Engine.Load.Status (advanceLoad, failLoad, LoadPhase(..))
+import Engine.Scripting.Lua.API.Save (applyLuaLoad)
+import World.Command.Types (WorldCommand(..))
 
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 processLuaMsgs env ls stateRef = do
@@ -270,6 +278,71 @@ processLuaMsg env ls stateRef msg = case msg of
       , ScriptNumber (realToFrac a)
       , coordsToScriptValue mCoords
       ]
+  LuaLoadStaged requestId → handleLoadStaged env ls requestId
+
+-- | Issue #763 (save-overhaul C2): a whole-session load transaction just
+--   finished STAGING (on the world thread, touching no live ref) and is
+--   ready to publish. This is the Lua thread's turn to drive the SAME
+--   'Engine.Save.Barrier' owner-quiescence protocol 'engine.saveWorld'
+--   uses — reused as-is rather than duplicated, since "every other
+--   state-owner thread must briefly stop touching shared state" is
+--   identical plumbing regardless of WHY — so that Unit/Building/Combat/
+--   Simulation are all quiesced before either side of the publish
+--   becomes observable (requirement 10). Once quiesced, this function
+--   applies the ALREADY-VALIDATED prepared Lua state
+--   ('Engine.Scripting.Lua.API.Save.applyLuaLoad') itself (an HsLua call,
+--   so it must run here, on the Lua thread) and only then queues
+--   'WorldLoadPublish' for the world thread to perform the matching
+--   Haskell-side ref swap — satisfying requirement 11 (no Haskell state
+--   becomes observable while required Lua state can still fail: a Lua
+--   apply failure aborts here, before 'WorldLoadPublish' is ever queued,
+--   leaving the old session completely untouched).
+handleLoadStaged ∷ EngineEnv → LuaBackendState → Int → IO ()
+handleLoadStaged env ls requestId = do
+    logger ← readIORef (loggerRef env)
+    started ← beginSave (saveBarrierRef env)
+        (Set.fromList [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation])
+    case started of
+      Left err → do
+        logWarn logger CatWorld $
+            "load publish #" <> T.pack (show requestId)
+            <> " could not begin the publish barrier: " <> err
+        failLoad (loadStatusRef env) requestId err
+      Right barrierRequestId → do
+        -- The Lua thread is the one driving this transaction and is
+        -- therefore already quiescent for its own duration (mirrors
+        -- 'engine.saveWorld''s identical self-ack).
+        acknowledgeSave (saveBarrierRef env) barrierRequestId SaveLua
+        ready ← waitForOwners 5000000 (saveBarrierRef env) barrierRequestId
+        case ready of
+          Left err → do
+            failSave (saveBarrierRef env) barrierRequestId err
+            logWarn logger CatWorld $
+                "load publish #" <> T.pack (show requestId)
+                <> " timed out waiting for state owners: " <> err
+            failLoad (loadStatusRef env) requestId err
+            writeIORef (pendingLoadRef env) Nothing
+          Right () → do
+            reachSnapshot (saveBarrierRef env) barrierRequestId
+            advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
+            applied ← Lua.runWith (lbsLuaState ls) (applyLuaLoad logger)
+            case applied of
+              -- applyLuaLoad is only reachable after prepareLoad already
+              -- validated every component back in loadSaveFn, so this is
+              -- a genuine apply()/reset-hook bug, not a data problem —
+              -- but it must still abort (requirement 6: no required
+              -- failure may be partial). Failing here — BEFORE
+              -- WorldLoadPublish is ever queued — means the Haskell side
+              -- never changes at all.
+              Left err → do
+                failSave (saveBarrierRef env) barrierRequestId err
+                logWarn logger CatWorld $
+                    "load publish #" <> T.pack (show requestId)
+                    <> " failed applying Lua state: " <> err
+                failLoad (loadStatusRef env) requestId err
+                writeIORef (pendingLoadRef env) Nothing
+              Right () →
+                Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
 --   Used by 'LuaSaveLoaded' to hand the surviving loaded-page unit /

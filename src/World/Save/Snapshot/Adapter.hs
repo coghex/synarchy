@@ -7,7 +7,7 @@
 --   ONLY the in-memory LOAD-side bridge — 'World.Save.Serialize's
 --   decode path reconstructs a 'SessionSnapshot' from the envelope's
 --   components, then calls 'snapshotToSaveData' here to hand the
---   world-thread load path ('World.Thread.Command.Save.LoadPage' etc.)
+--   world-thread load path ('World.Load.Stage' etc.)
 --   the legacy shape it still consumes. Nothing here encodes to disk
 --   any more; 'World.Save.Types.currentSaveVersion' now only versions
 --   this in-memory bridge shape, not a wire contract.

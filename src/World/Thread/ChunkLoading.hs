@@ -4,6 +4,7 @@ module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
     , dispatchLocationStamps
+    , locationStampsFor
     , maxChunksPerTick
     ) where
 
@@ -171,15 +172,26 @@ updateChunkLoading env _logger = do
 dispatchLocationStamps ∷ EngineEnv → WorldGenParams → WorldPageId
                        → [LoadedChunk] → IO ()
 dispatchLocationStamps env params pageId chunks =
-    forM_ chunks $ \lc →
-        case HM.lookup (lcCoord lc) (wgpLocationOverlay params) of
-            Nothing  → return ()
-            Just lid →
-                let ChunkCoord cx cy = lcCoord lc
-                    gx = cx * chunkSize + chunkSize `div` 2
-                    gy = cy * chunkSize + chunkSize `div` 2
-                in Q.writeQueue (luaQueue env)
-                       (LuaStampLocation (unWorldPageId pageId) lid gx gy)
+    forM_ (locationStampsFor params chunks) $ \(lid, gx, gy) →
+        Q.writeQueue (luaQueue env)
+            (LuaStampLocation (unWorldPageId pageId) lid gx gy)
+
+-- | The pure lookup 'dispatchLocationStamps' drives: every (location id,
+--   global tile x, global tile y) triple among @chunks@ that carries a
+--   placed location per the overlay. Split out (issue #763) so
+--   "World.Load.Stage" can compute the SAME set during staging without
+--   sending it through the live 'luaQueue' — staging must not touch any
+--   live queue (requirement 6); "World.Load.Publish" dispatches the
+--   deferred triples once the staged page is actually live.
+locationStampsFor ∷ WorldGenParams → [LoadedChunk] → [(Text, Int, Int)]
+locationStampsFor params chunks =
+    [ (lid, gx, gy)
+    | lc ← chunks
+    , Just lid ← [HM.lookup (lcCoord lc) (wgpLocationOverlay params)]
+    , let ChunkCoord cx cy = lcCoord lc
+          gx = cx * chunkSize + chunkSize `div` 2
+          gy = cy * chunkSize + chunkSize `div` 2
+    ]
 
 partitionChunks ∷ [ChunkCoord] → WorldTileData → ([ChunkCoord], [ChunkCoord])
 partitionChunks coords tileData =
