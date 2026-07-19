@@ -187,16 +187,21 @@ spec = around withHeadlessEngine $ do
                     inFrame ← evalBool ls (luaLines [bootCode, "return " <> panelInFrameExpr "m" w h])
                     inFrame `shouldBe` True
 
-        -- #748 round 8: every SETTINGS-configurable resolution
-        -- (scripts/settings/data.lua's data.resolutions, not just the
-        -- hand-picked sample above) must produce a reachable, in-frame
-        -- layout at 1x — the scale every one of them is fully
-        -- supported at (per the envelope-classification describe
-        -- above), so this is real layout/reachability coverage, not
-        -- just the classifier's own say-so. 3840x2160 is checked too,
-        -- best-effort, at 2.5x (its own auto-detected default scale,
-        -- since 1x falls outside its 1.5x-4x band).
-        it "every configured resolution (data.resolutions) at 1x — main/settings/create-world panels stay reachable and in-frame" $ \env → do
+        -- #748 round 8 (extended round 12): every SETTINGS-configurable
+        -- resolution (scripts/settings/data.lua's data.resolutions, not
+        -- just a hand-picked sample) must produce a reachable, in-frame
+        -- layout at 1x for EVERY C2 screen this issue scopes — the
+        -- scale every one of them is fully supported at (per the
+        -- envelope-classification describe above), so this is real
+        -- layout/reachability coverage, not just the classifier's own
+        -- say-so. 3840x2160 is checked too, best-effort, at 2.5x (its
+        -- own auto-detected default scale, since 1x falls outside its
+        -- 1.5x-4x band). Round 12 extended this from main/settings/
+        -- create-world to ALSO cover pause/save-browser (their own
+        -- fixed panelId) and loading (its own fixed progress bar),
+        -- which the original round-8 pass left at just a 3-sample check
+        -- (800x600/1920x1080/3840x2160) below the full matrix.
+        it "every configured resolution (data.resolutions) at 1x — every C2 screen's fixed action stays reachable and in-frame" $ \env → do
             ls ← newBareLuaBackend env
             resJson ← evalJSON ls
                 "local res = {}; for _, e in ipairs(require('scripts.settings.data').resolutions) do table.insert(res, {w=e.width, h=e.height}) end; return res"
@@ -208,11 +213,32 @@ spec = around withHeadlessEngine $ do
                         let w = rdW row
                             h = rdH row
                             uiscale = if w ≡ 3840 ∧ h ≡ 2160 then 2.5 else 1.0
+
                         ls2 ← newBareLuaBackend env
                         _ ← eval ls2 (setScaleCall uiscale)
                         forM_ [ bootMain w h, bootSettings w h, bootCreateWorld w h ] $ \bootCode → do
                             inFrame ← evalBool ls2 (luaLines [bootCode, "return " <> panelInFrameExpr "m" w h])
                             inFrame `shouldBe` True
+
+                        -- Pause menu, save browser, and loading each
+                        -- build their own fresh page (no shared
+                        -- `.init` boot shape), so each gets its own
+                        -- backend instance per the existing per-screen
+                        -- tests' convention.
+                        lsPause ← newBareLuaBackend env
+                        _ ← eval lsPause (setScaleCall uiscale)
+                        pauseOk ← evalBool lsPause (luaLines [bootPause w h, "return " <> panelInFrameExpr "m" w h])
+                        pauseOk `shouldBe` True
+
+                        lsSave ← newBareLuaBackend env
+                        _ ← eval lsSave (setScaleCall uiscale)
+                        saveOk ← evalBool lsSave (luaLines [bootSaveBrowser w h, "return " <> panelInFrameExpr "m" w h])
+                        saveOk `shouldBe` True
+
+                        lsLoad ← newBareLuaBackend env
+                        _ ← eval lsLoad (setScaleCall uiscale)
+                        loadOk ← evalBool lsLoad (luaLines [bootLoading w h, "return " <> barInFrameExpr "m" w h])
+                        loadOk `shouldBe` True
 
     -- pause menu and save browser build differently (no single `.init`
     -- → auto-created page), so they're checked separately rather than
@@ -232,14 +258,7 @@ spec = around withHeadlessEngine $ do
         forM_ [ (800, 600 ∷ Int), (1920, 1080), (3840, 2160) ] $ \(w, h) →
             it ("at " ⧺ show w ⧺ "x" ⧺ show h) $ \env → do
                 ls ← newBareLuaBackend env
-                ok ← evalBool ls $ luaLines
-                    [ bootLoading w h
-                    , "local b = require('scripts.ui.bar');"
-                    , "local info = UI.getElementInfo(b.getElementHandle(m.barId));"
-                    , "return info.x >= 0 and info.y >= 0"
-                        <> " and (info.x + info.width) <= " <> tshow w
-                        <> " and (info.y + info.height) <= " <> tshow h
-                    ]
+                ok ← evalBool ls (luaLines [bootLoading w h, "return " <> barInFrameExpr "m" w h])
                 ok `shouldBe` True
 
         it "stays in-frame at a narrow, high-scale supported combination (800x2160@4x — bar width alone used to exceed the framebuffer)" $ \env → do
@@ -1403,6 +1422,19 @@ panelInFrameExpr mVar w h = luaLines
     , "local x, y = p.getPosition(" <> mVar <> ".panelId);"
     , "local pw, ph = p.getSize(" <> mVar <> ".panelId);"
     , "return x >= 0 and y >= 0 and (x + pw) <= " <> tshow w <> " and (y + ph) <= " <> tshow h
+    , "end)()"
+    ]
+
+-- | Loading screen has no panelId — its fixed action is the progress
+--   bar itself (m.barId via scripts/ui/bar.lua).
+barInFrameExpr ∷ Text → Int → Int → Text
+barInFrameExpr mVar w h = luaLines
+    [ "(function()"
+    , "local b = require('scripts.ui.bar');"
+    , "local info = UI.getElementInfo(b.getElementHandle(" <> mVar <> ".barId));"
+    , "return info.x >= 0 and info.y >= 0"
+        <> " and (info.x + info.width) <= " <> tshow w
+        <> " and (info.y + info.height) <= " <> tshow h
     , "end)()"
     ]
 

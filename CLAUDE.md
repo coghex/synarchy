@@ -844,6 +844,17 @@ changed. The Back BUTTON's own `onClick` used to inline a bare
 routed through `settingsMenu.onBack()` instead, so the fan-out fix
 lives in exactly one place rather than needing a third copy.
 
+Review round 12 extended the round-8 all-resolution layout matrix
+(`Test.Headless.UI.ResponsiveMenus`): it originally only looped
+main/settings/create-world across every configured resolution, leaving
+pause menu/save browser/loading at a 3-sample check
+(800x600/1920x1080/3840x2160) — not the full matrix the issue requires
+for every C2 screen. The same loop over `data.resolutions` now also
+drives pause/save-browser (their own `panelId`) and loading (its own
+fixed progress bar, via a new `barInFrameExpr` mirroring
+`panelInFrameExpr`) at 1x for every configured resolution (2.5x
+best-effort for 3840x2160, same as the other three screens).
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's
