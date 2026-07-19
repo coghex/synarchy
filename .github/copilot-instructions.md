@@ -6,7 +6,7 @@
 - Run the app with `cabal run synarchy`. **Never run it without `--dump` or `--headless`** — the plain form opens a graphical window that steals focus.
 - The day-to-day test suite is `synarchy-test-headless` (`cabal test synarchy-test-headless`), not `synarchy-test`/`synarchy-test-graphical` — that other suite boots a real GLFW window and Vulkan device, so it only runs in a graphics-capable local environment, not in most agent/CI contexts. Prefer the cheapest applicable tier:
   1. Iteration: `cabal test synarchy-test-headless --test-options='--match "<describe name>"'`, or `python3 tools/world_check.py --quick` for worldgen-output sanity.
-  2. Before reporting done: `cabal test synarchy-test-headless` + `python3 tools/world_check.py` + `python3 tools/test_audit.py`.
+  2. Before reporting done: run targeted tests plus only the relevant probes, audits, or worldgen checks; CI runs full Hspec on every PR.
   3. Worldgen-OUTPUT changes only: `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless`, then re-capture baselines with `python3 tools/world_baseline.py` and re-run `world_check.py`.
   4. `tools/*_probe.py` — opt-in headless behavior probes (combat anim, movement, construction, saves, physiology, ...); run only the ones relevant to what you touched.
   See `CLAUDE.md` for the full tier rationale and `tools/README.md` for the probe list.

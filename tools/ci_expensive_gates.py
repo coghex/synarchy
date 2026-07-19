@@ -16,8 +16,19 @@ import sys
 WORLDGEN_GLOBS = [
     "app/App/Dump.hs", "app/Main.hs",
     "src/Engine/Core/Init.hs", "src/Engine/Scripting/Lua/API/World/GenConfig*",
-    "src/World/Generate/*", "src/World/Geology/*", "src/World/Hydrology/*",
-    "src/World/Fluid/*", "src/World/Flora/*", "src/World/Climate/*",
+    # Generation-family subtrees use a `Name*` prefix (not `Name/*`) so each
+    # family's facade module (e.g. src/World/Generate.hs, src/World/Fluids.hs)
+    # matches alongside its directory. Deliberately NOT src/World/* wholesale:
+    # gameplay/plumbing subtrees there (Save, Command, Thread, designations,
+    # render-side Tile texturing, ...) cannot shift a bare --dump's
+    # terrain/material/fluid/ice/ore layers, and must not trigger the gate.
+    "src/World/Generate*", "src/World/Geology*", "src/World/Hydrology*",
+    "src/World/Fluid*", "src/World/Flora*", "src/World/Weather*",
+    "src/World/Ocean*", "src/World/River*", "src/World/Magma*",
+    "src/World/Material*", "src/World/Plate*", "src/World/Chunk*",
+    "src/World/Region*", "src/World/Tile/*", "src/World/Vegetation*",
+    "src/World/Grid.hs", "src/World/Scale.hs", "src/World/Constants.hs",
+    "src/World/Base.hs",
     "src/World/ZoomMap*", "src/World/Types*",
     "config/world_gen_default.yaml", "data/materials/*", "data/flora/*",
     "data/vegetation/*", "tools/world_*.py", "tools/baselines/*",
@@ -41,6 +52,20 @@ def selected(gate: str, changed_files: list[str]) -> bool:
 def self_test() -> int:
     cases = [
         ("worldgen", ["src/World/Geology/Timeline.hs"], True),
+        # Facade modules sitting NEXT to their directory must match too —
+        # the original `Name/*` globs silently missed these.
+        ("worldgen", ["src/World/Generate.hs"], True),
+        ("worldgen", ["src/World/Fluids.hs"], True),
+        ("worldgen", ["src/World/Plate.hs"], True),
+        ("worldgen", ["src/World/River/Graph.hs"], True),
+        ("worldgen", ["src/World/Magma/Pool.hs"], True),
+        ("worldgen", ["src/World/Material/Id.hs"], True),
+        ("worldgen", ["src/World/Weather.hs"], True),
+        # Non-generation src/World subtrees must NOT trigger the gate — a
+        # save/thread/designation change never shifts bare --dump output.
+        ("worldgen", ["src/World/Save/Storage.hs"], False),
+        ("worldgen", ["src/World/Thread/Command/Save.hs"], False),
+        ("worldgen", ["src/World/Mine/Types.hs"], False),
         ("worldgen", ["scripts/unit_ai.lua"], False),
         ("worldgen", ["data/materials/stone.yaml"], True),
         ("graphical", ["src/Engine/Graphics/Vulkan/Device.hs"], True),

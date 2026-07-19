@@ -6,11 +6,13 @@ engine instance.
 
 ## Pre-push gate: `ci-local.sh`
 
-`make ci` (repo root) runs `tools/ci-local.sh`, which mirrors the CI gate
-(`.github/workflows/ci.yml`) locally: a warning-clean (`-Werror`) build of
+`make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local
+CI gate: a warning-clean (`-Werror`) build of
 the library/exe + both test suites, the headless hspec suite,
-`test_audit.py`, and `world_check.py --quick`. A green `make ci` predicts a
-green CI run. It applies `-Werror` the same scoped way CI does and restores
+`test_audit.py`, and `world_check.py --quick`. PR CI is path-selective for
+the graphical test-suite build and quick worldgen check, while pushes to
+master run both; a green `make ci` remains a conservative CI prediction. It
+applies `-Werror` the same scoped way CI does and restores
 any pre-existing `cabal.project.local` on exit.
 
 ## World generation tools
@@ -135,7 +137,7 @@ same PR — the baseline diff is how reviewers see the intended drift. Never
 edit the baseline JSON by hand; always regenerate with `world_baseline.py`.
 
 CI (`.github/workflows/ci.yml`) runs `world_check.py --quick` as a blocking
-gate on every PR. Worldgen output is bit-identical across macOS/aarch64
+gate for worldgen-output PRs and every push to master. Worldgen output is bit-identical across macOS/aarch64
 (where baselines are typically captured) and Linux/x86_64 (where CI runs),
 so there is one set of baselines for all platforms — a worldgen-output PR
 that forgets to rebaseline fails CI.
@@ -344,6 +346,19 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
+### `ci_expensive_gates.py` — CI worldgen/graphical selection
+
+Selects the two expensive CI gates that are conditional on pull requests:
+quick worldgen-output regression checking and graphical test-suite
+compilation. Both run unconditionally after a merge to master. The mapping is
+intentionally explicit; add a relevant glob when introducing a new worldgen
+output or graphics entry point.
+
+```bash
+python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --gate worldgen
+python3 tools/ci_expensive_gates.py --self-test
+```
+
 ## Playtest harness (`playtest/`)
 
 `tools/playtest/` is the naive-player UX playtest harness (H1, #647 —
@@ -447,6 +462,7 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
+├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── language_report.py      (generated-language native-name report/check, #710)
