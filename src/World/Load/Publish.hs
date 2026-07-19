@@ -118,7 +118,14 @@ publishStagedSession env logger requestId staged = do
     writeIORef (unitManagerRef env) (ssUnits staged)
     writeIORef (utsRef env) (UnitThreadState { utsSimStates = ssUnitSimStates staged })
     writeIORef (cameraRef env) (ssCamera staged)
-    forM_ (ssZoomAtlas staged) $ \zoomAtlas → writeIORef (zoomAtlasDataRef env) (Just zoomAtlas)
+    -- Round 9 review: pair the atlas with the EXACT WorldStates it
+    -- belongs to (this publish's own pages) so the eventual GPU upload
+    -- (Engine.Scripting.Lua.Message.WorldTexture.handleZoomAtlasUpload)
+    -- never has to re-read worldManagerRef later and risk a NEWER
+    -- publish's pages having already replaced these by then.
+    let targetStates = map spWorldState (ssPages staged)
+    forM_ (ssZoomAtlas staged) $ \(w, h, bytes) →
+        writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, targetStates))
     forM_ (ssPreview staged)   $ \preview   → writeIORef (worldPreviewRef env) (Just preview)
 
     -- Register every staged page under its OWN saved id (requirement 8:

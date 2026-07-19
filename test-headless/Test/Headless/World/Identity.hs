@@ -32,6 +32,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import System.Directory (doesFileExist, removePathForcibly)
 import Data.List (find)
+import qualified Data.HashMap.Strict as HM
 import Engine.Core.State (EngineEnv(..))
 import Test.Headless.Harness
     (sendWorldCommand, waitForWorldInit)
@@ -39,6 +40,10 @@ import World.Types
 import World.Save.Serialize (loadWorld, sanitizeSaveName)
 import World.Load.Stage (stageSession, renderStageError)
 import World.Load.Types (StagedSession(..), StagedPage(..))
+import Building.Types (BuildingId(..))
+import Craft.Bills (addBill, emptyCraftBills, cbsBills)
+import Power.Types
+    (addPowerNode, emptyPowerNodes, pnsNodes, PowerRole(..))
 
 -- The primary page's display name deliberately contains '/' and ".."
 -- — text 'sanitizeSaveName' rejects outright — to prove identity text
@@ -200,6 +205,80 @@ spec = do
                 [WorldPageId "main_world"]
             stagedIdentity staged "id_named_w8" `shouldReturn` Just namedIdent
             stagedIdentity staged "main_world" `shouldReturn` Just colliderIdent
+
+    -- Round 9 review (issue #763): 'World.Load.Stage.stagePage' used to
+    -- call 'Craft.Bills.pruneToStations'/'Power.Types.pruneToBuildings'
+    -- on every staged page, silently dropping any craft bill/power node
+    -- whose station/building instance wasn't present in that SAME save's
+    -- building snapshot. That contradicts the documented, pre-existing
+    -- #758 persistence contract (see docs/persistence_state_inventory.md
+    -- and Craft.Bills's own 'cbStation' doc comment) that a demolished
+    -- station's bills "linger, visible + cancellable" rather than
+    -- vanish across a save/load round trip. This proves staging now
+    -- preserves such a dangling record verbatim instead of pruning it.
+    describe "dangling craft bills / power nodes survive staging \
+              \(issue #758 contract, round 9 review)" $
+        it "a craft bill and a power node whose station/building is \
+           \absent from the save's own building snapshot are NOT \
+           \pruned by stageSession" $ \env →
+            let slotB = "id_spec_dangling"
+                cleanup = do
+                    removePathForcibly ("saves/" <> slotB)
+                    writeIORef (enginePausedRef env) False
+            in (`finally` cleanup) $ do
+            removePathForcibly ("saves/" <> slotB)
+
+            sendWorldCommand env
+                (WorldInit (WorldPageId "id_dangling_w8") 33 8 3 Nothing)
+            _ ← waitForWorldInit env (WorldPageId "id_dangling_w8") 120
+
+            sendWorldCommand env
+                (WorldSave (WorldPageId "id_dangling_w8") slotB
+                           "2026-07-19T00:00:00.000000Z" [])
+            waitForFile ("saves/" <> slotB <> "/world.synworld")
+
+            logger ← readIORef (loggerRef env)
+            (sdB, _) ← loadWorld logger slotB HS.empty HS.empty ⌦ either
+                (\(_, e) → expectationFailure (T.unpack e)
+                        ≫ error "unreachable")
+                pure
+
+            -- Inject a craft bill and a power node riding on a building
+            -- id GUARANTEED absent from this freshly-generated page's
+            -- (empty) building snapshot -- simulating a station
+            -- demolished before the save was ever taken.
+            let danglingBuilding = BuildingId 999999
+                (dangledBills, danglingBillId) =
+                    addBill danglingBuilding "probe_recipe" 1 emptyCraftBills
+                (dangledNodes, danglingNodeId) =
+                    addPowerNode danglingBuilding PowerSource 100
+                        emptyPowerNodes
+                injectDangling w
+                    | wpsPageId w ≡ WorldPageId "id_dangling_w8" =
+                        w { wpsCraftBills = dangledBills
+                          , wpsPowerNodes = dangledNodes }
+                    | otherwise = w
+                sdB' = sdB { sdWorlds = map injectDangling (sdWorlds sdB) }
+
+            matReg ← readIORef (materialRegistryRef env)
+            staged ← stageSession env logger sdB' matReg ⌦ either
+                (\e → expectationFailure (T.unpack (renderStageError e))
+                        ≫ error "unreachable")
+                pure
+
+            case find ((≡ WorldPageId "id_dangling_w8") . spPageId)
+                      (ssPages staged) of
+                Nothing → expectationFailure
+                    "id_dangling_w8 missing from the staged session"
+                Just sp → do
+                    stagedBills ← readIORef
+                        (wsCraftBillsRef (spWorldState sp))
+                    stagedNodes ← readIORef
+                        (wsPowerNodesRef (spWorldState sp))
+                    HM.member danglingBillId (cbsBills stagedBills)
+                        `shouldBe` True
+                    HM.member danglingNodeId (pnsNodes stagedNodes)
+                        `shouldBe` True
 
     describe "arena pages" $ do
         -- Runs AFTER the save/load story so the arena page never rides

@@ -287,9 +287,15 @@ processLuaMsg env ls stateRef msg = case msg of
       , coordsToScriptValue mCoords
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
-  LuaLoadStagingFailed _requestId → do
+  LuaLoadStagingFailed requestId → do
+      -- Round 9 review: this message is QUEUED (not a direct call), so
+      -- it can be processed well after 'requestId' has already gone
+      -- terminal and a NEWER request has been accepted and prepared its
+      -- own Lua state. Passing 'requestId' through lets 'abortLuaLoad'
+      -- no-op instead of clearing state that belongs to that newer
+      -- request (see 'Engine.Scripting.Lua.API.Save.abortLuaLoad').
       logger ← readIORef (loggerRef env)
-      Lua.runWith (lbsLuaState ls) (abortLuaLoad logger)
+      Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
 
 -- | Issue #763 (save-overhaul C2): a whole-session load transaction just
 --   finished STAGING (on the world thread, touching no live ref) and is
@@ -335,7 +341,7 @@ handleLoadStaged env ls requestId = do
         -- staging (and thus this dispatch) ever runs, leaving Lua's
         -- registration guard (_loadActive) active until applyAll
         -- commits it -- which never happens on this failure path.
-        Lua.runWith (lbsLuaState ls) (abortLuaLoad logger)
+        Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
       Right barrierRequestId → do
         -- The Lua thread is the one driving this transaction and is
         -- therefore already quiescent for its own duration (mirrors
@@ -352,7 +358,7 @@ handleLoadStaged env ls requestId = do
             writeIORef (pendingLoadRef env) Nothing
             -- Round 6 review: same as the beginSave failure above --
             -- abort the prepared-but-never-applied Lua load.
-            Lua.runWith (lbsLuaState ls) (abortLuaLoad logger)
+            Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
           Right () → do
             reachSnapshot (saveBarrierRef env) barrierRequestId
             advanceLoad (loadStatusRef env) requestId LoadWaitingPublish

@@ -58,10 +58,15 @@
 --                              the WHOLE save (requirement 6); an OPTIONAL
 --                              one is omitted with a logged warning
 --                              (requirement 7)
---   prepareLoad(components) -- {ok=true} or {ok=false, errors={...}} --
---                              decode + migrate + component-local-
---                              validate EVERY component with NO live
---                              mutation (requirement 11); all-or-nothing
+--   prepareLoad(components, requestId) -- {ok=true} or {ok=false,
+--                              errors={...}} -- decode + migrate +
+--                              component-local-validate EVERY component
+--                              with NO live mutation (requirement 11);
+--                              all-or-nothing. requestId is stashed
+--                              alongside the prepared data so a later
+--                              abortPreparedLoad(requestId) can tell a
+--                              stale cleanup for an OLD request apart
+--                              from state a NEWER request just prepared.
 --   applyAll()              -- apply the prepared, already-validated
 --                              data (only reachable after prepareLoad
 --                              returned ok=true), then run every
@@ -81,8 +86,9 @@ package.loaded["scripts.lib.save_modules"] = saveModules
 saveModules.registry    = saveModules.registry or {}     -- id -> spec
 saveModules.resetHooks  = saveModules.resetHooks or {}    -- id -> fn
 saveModules._captureActive = false
-saveModules._loadActive    = false
-saveModules._pendingApply  = nil
+saveModules._loadActive     = false
+saveModules._pendingApply   = nil
+saveModules._pendingRequestId = nil
 
 local VALID_ID_PATTERN = "^[a-z][a-z0-9_]*$"
 
@@ -546,9 +552,10 @@ end
 -- following `applyAll()` call and returns {ok=true}; on any failure,
 -- returns {ok=false, errors={...}} and stashes nothing, so a caller
 -- that aborts the load can never accidentally apply a partial result.
-function saveModules.prepareLoad(componentsList)
+function saveModules.prepareLoad(componentsList, requestId)
     saveModules._loadActive = true
     saveModules._pendingApply = nil
+    saveModules._pendingRequestId = nil
     local ok, result = pcall(prepareLoadImpl, componentsList)
     if not ok then
         saveModules._loadActive = false
@@ -556,6 +563,7 @@ function saveModules.prepareLoad(componentsList)
     end
     if result.ok then
         saveModules._pendingApply = result.prepared
+        saveModules._pendingRequestId = requestId
     else
         saveModules._loadActive = false
     end
@@ -577,8 +585,28 @@ end
 -- from every such failure path to abort the prepared-but-never-applied
 -- load cleanly -- a no-op (but still safe to call) if nothing is
 -- pending.
-function saveModules.abortPreparedLoad()
+--
+-- Round 9 review: a staging failure is reported to the Lua thread as a
+-- QUEUED message (LuaLoadStagingFailed), not a direct call -- it can sit
+-- in the queue for a while after the failing request has already been
+-- made terminal on the world/engine side (Engine.Load.Status.failLoad).
+-- Terminal means the mutual-exclusion gate is open again, so a BRAND
+-- NEW request can be accepted and successfully run its own prepareLoad
+-- before that stale queued message is ever processed. If this function
+-- cleared unconditionally, the stale cleanup for the OLD request would
+-- wipe out the NEW request's already-prepared `_pendingApply`. Passing
+-- the requestId the caller believes it's aborting -- compared against
+-- whatever prepareLoad most recently stashed -- makes a stale abort a
+-- no-op instead: it only ever clears state that actually belongs to it.
+-- A nil requestId (a caller with no request in play, e.g. tests) always
+-- clears, matching the pre-#763-round-9 unconditional behavior.
+function saveModules.abortPreparedLoad(requestId)
+    if requestId ~= nil and saveModules._pendingRequestId ~= nil
+        and requestId ~= saveModules._pendingRequestId then
+        return
+    end
     saveModules._pendingApply = nil
+    saveModules._pendingRequestId = nil
     saveModules._loadActive = false
 end
 
@@ -617,6 +645,7 @@ function saveModules.applyAll()
         local ok, snapOrErr = pcall(saveModules.registry[id].snapshot)
         if not ok then
             saveModules._pendingApply = nil
+            saveModules._pendingRequestId = nil
             saveModules._loadActive = false
             error("saveModules.applyAll: could not capture a rollback "
                 .. "point for '" .. id .. "' -- aborting before any "
@@ -677,6 +706,7 @@ function saveModules.applyAll()
                 pcall(saveModules.registry[id].apply, rollback[id])
                 rollbackApplied(applied)
                 saveModules._pendingApply = nil
+                saveModules._pendingRequestId = nil
                 saveModules._loadActive = false
                 error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
                     .. "rolled back every already-applied component "
@@ -697,6 +727,7 @@ function saveModules.applyAll()
         if not ok then
             rollbackApplied(applied)
             saveModules._pendingApply = nil
+            saveModules._pendingRequestId = nil
             saveModules._loadActive = false
             error("saveModules.applyAll: reset hook '" .. id
                 .. "' failed after every component committed, rolled back "
@@ -705,6 +736,7 @@ function saveModules.applyAll()
     end
 
     saveModules._pendingApply = nil
+    saveModules._pendingRequestId = nil
     saveModules._loadActive = false
 end
 

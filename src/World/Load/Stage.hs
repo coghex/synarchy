@@ -53,8 +53,6 @@ import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
-import Craft.Bills (pruneToStations)
-import Power.Types (pruneToBuildings)
 import Building.Types (BuildingManager(..), BuildingId, BuildingDef)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Sim.Types (UnitSimState)
@@ -224,12 +222,27 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
     writeIORef (wsCropPlotsRef worldState) (wpsCropPlots wps)
     writeIORef (wsPlantDesignationsRef worldState) (wpsPlantDesignations wps)
-    writeIORef (wsCraftBillsRef worldState)
-        (pruneToStations (HM.keysSet (bsnInstances (wpsBuildings wps)))
-                         (wpsCraftBills wps))
-    writeIORef (wsPowerNodesRef worldState)
-        (pruneToBuildings (HM.keysSet (bsnInstances (wpsBuildings wps)))
-                          (wpsPowerNodes wps))
+    -- Round 9 review (issue #763): craft bills / power nodes are
+    -- restored VERBATIM, never pruned against the save's own building
+    -- snapshot. A bill/node whose station/building instance is absent
+    -- (demolished before the save was ever taken) is EXPLICITLY
+    -- documented, tolerated gameplay state per the #758-era contract —
+    -- "a demolished station's bills lingering, visible + cancellable"
+    -- (docs/persistence_state_inventory.md) — not corruption to clean
+    -- up. 'Craft.Bills.pruneToStations'/'Power.Types.pruneToBuildings'
+    -- exist for a DIFFERENT scenario their own doc comments name (a
+    -- station's building DEFINITION deregistered between sessions,
+    -- orphaning every instance of that type) — but that scenario is
+    -- already unreachable by the time staging runs at all: this
+    -- module's caller (Engine.Scripting.Lua.API.Save.continueLoad)
+    -- rejects the WHOLE load outright via missingDefReferences before
+    -- staging ever starts if any building instance references an
+    -- unregistered definition, so every wpsBuildings instance here is
+    -- already guaranteed to resolve. Applying the prune here only ever
+    -- catches the FIRST (tolerated) case, silently discarding bills/
+    -- nodes #763 requires to be restored.
+    writeIORef (wsCraftBillsRef worldState) (wpsCraftBills wps)
+    writeIORef (wsPowerNodesRef worldState) (wpsPowerNodes wps)
 
     (simSeeds, locStamps, mCamera, mZoomAtlas, mPreview) ←
       if isArenaParams params

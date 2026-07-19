@@ -35,7 +35,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture, unregiste
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Scripting.Lua.Types
 import World.Render.Zoom.Types (ZoomAtlasInfo(..), zoomTileSize)
-import World.State.Types (WorldManager(..), wsZoomAtlasRef)
+import World.State.Types (wsZoomAtlasRef)
 import Vulkan.Core10
 import Vulkan.Zero (zero)
 
@@ -178,7 +178,7 @@ handleZoomAtlasUpload = do
     mAtlas ← liftIO $ atomicModifyIORef' (zoomAtlasDataRef env) $ \v → (Nothing, v)
     case mAtlas of
         Nothing → pure ()
-        Just (w, h, rgbaData) → do
+        Just (w, h, rgbaData, targetStates) → do
             logInfoM CatWorld $ "Uploading zoom atlas texture: "
                 <> T.pack (show w) <> "×" <> T.pack (show h)
 
@@ -261,40 +261,29 @@ handleZoomAtlasUpload = do
                             , zaiChunksPerRow = chunksPerRow
                             }
 
-                    -- Round 8 review (issue #763): this upload is async
-                    -- and can take multiple frames (staging buffer +
-                    -- Vulkan copy above), so a LOAD's own atlas
-                    -- (World.Load.Publish.publishStagedSession, which
-                    -- writes 'zoomAtlasDataRef' before swapping
-                    -- 'worldManagerRef') can be queued and even
-                    -- overtake an upload that was ALREADY in flight for
-                    -- the OLD session. Re-check 'zoomAtlasDataRef'
-                    -- right before writing to every current world: if
-                    -- something newer is already pending, the atlas
-                    -- this call just finished uploading is stale —
-                    -- skip the write and let the NEXT poll (which will
-                    -- dequeue that newer data) do it instead, rather
-                    -- than momentarily pointing a freshly-published
-                    -- session's pages at the wrong generation's
-                    -- texture. 'zoomAtlasDataRef' is written strictly
-                    -- BEFORE 'worldManagerRef' is swapped at publish,
-                    -- so by the time 'worldManagerRef' shows the new
-                    -- pages, this ref is guaranteed to already be
-                    -- non-empty if a load raced this upload.
-                    stillCurrent ← liftIO $ readIORef (zoomAtlasDataRef env)
-                    case stillCurrent of
-                        Just _ →
-                            logInfoM CatWorld
-                                "Zoom atlas upload superseded before \
-                                \publish — discarding stale generation"
-                        Nothing → do
-                            worldManager ← liftIO $ readIORef (worldManagerRef env)
-                            forM_ (wmWorlds worldManager) $ \(_pageId, ws) →
-                                liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
+                    -- Round 8/9 review (issue #763): this upload is
+                    -- async and can take multiple frames (staging
+                    -- buffer + Vulkan copy above), so re-reading
+                    -- 'worldManagerRef' HERE to find "every current
+                    -- world" would race a load publish that swaps it
+                    -- in the meantime — a peek-then-act check on
+                    -- 'zoomAtlasDataRef' narrows that window but can't
+                    -- close it (round 8's attempt was itself flagged
+                    -- non-atomic in round 9). Writing to 'targetStates'
+                    -- — the EXACT 'WorldState's captured back when this
+                    -- atlas was enqueued (see 'EngineEnv.zoomAtlasDataRef'
+                    -- and 'World.Load.Publish'/'World.Thread.Command.Init')
+                    -- — needs no live ref re-read at all, so there is no
+                    -- window left to race: whichever session enqueued
+                    -- this atlas is exactly who receives it, regardless
+                    -- of what 'worldManagerRef' holds by the time the
+                    -- upload finishes.
+                    forM_ targetStates $ \ws →
+                        liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
 
-                            logInfoM CatWorld $ "Zoom atlas uploaded: handle="
-                                <> T.pack (show texHandle) <> ", chunksPerRow="
-                                <> T.pack (show chunksPerRow)
+                    logInfoM CatWorld $ "Zoom atlas uploaded: handle="
+                        <> T.pack (show texHandle) <> ", chunksPerRow="
+                        <> T.pack (show chunksPerRow)
 
                 _ → logWarnM CatWorld
                         "Cannot upload zoom atlas: Vulkan not ready"

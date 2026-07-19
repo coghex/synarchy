@@ -217,8 +217,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env "Assembling zoom texture atlas..."
     let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
     _ ← evaluate (force atlas)
+    -- Round 9 review (issue #763): pair the atlas with the EXACT
+    -- WorldState it belongs to (this init's own page), mirroring
+    -- World.Load.Publish's identical fix -- see EngineEnv.zoomAtlasDataRef.
     writeIORef (zoomAtlasDataRef env) $
-        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
+        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas, [worldState])
     -- Store atlas metadata (chunksPerRow) for UV computation during baking
     writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
     -- Store chunksPerRow for later use

@@ -539,7 +539,7 @@ continueLoad env logger requestId saveName descriptors = do
                 -- component before touching any live Lua state. Any
                 -- failure aborts the whole load (nothing has changed
                 -- yet), exactly like the def-reference check above.
-                prepared ← prepareLuaLoad logger luaComponents
+                prepared ← prepareLuaLoad logger requestId luaComponents
                 case prepared of
                   Left err → do
                     Lua.liftIO $ do
@@ -805,17 +805,21 @@ readErrorStringField = do
         then (TE.decodeUtf8Lenient ⊚) ⊚ Lua.tostring (-1)
         else return Nothing
 
--- | Call @saveModules.prepareLoad(components)@ (issue #761): decode +
---   migrate + component-locally-validate EVERY registered Lua component
---   with NO live mutation (requirement 11). Any failure — a require/call
---   failure, or a reported validation error — aborts the load; nothing
---   has touched live Lua state yet either way.
+-- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
+--   decode + migrate + component-locally-validate EVERY registered Lua
+--   component with NO live mutation (requirement 11). Any failure — a
+--   require/call failure, or a reported validation error — aborts the
+--   load; nothing has touched live Lua state yet either way. @requestId@
+--   is stashed on the Lua side alongside the prepared data so a later
+--   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (round
+--   9 review — see 'abortLuaLoad').
 prepareLuaLoad
-    ∷ LoggerState → [(Text, Word32, BS.ByteString)]
+    ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
     → Lua.LuaE Lua.Exception (Either Text ())
-prepareLuaLoad logger components = do
-    ok ← callSaveModules1 logger "prepareLoad" 1
-            (pushComponentsArray components)
+prepareLuaLoad logger requestId components = do
+    ok ← callSaveModules1 logger "prepareLoad" 2
+            (pushComponentsArray components
+                ≫ Lua.pushinteger (fromIntegral requestId))
     if not ok
       then return (Left "save_modules.prepareLoad() could not be called \
                          \(see engine log)")
@@ -859,9 +863,9 @@ applyLuaLoad logger = do
     return $ if ok then Right ()
              else Left "save_modules.applyAll() failed (see engine log)"
 
--- | Call @saveModules.abortPreparedLoad()@ (round 6 review): every
---   failure path that can occur AFTER a successful 'prepareLuaLoad' but
---   BEFORE 'applyLuaLoad' ever runs (a staging exception/'StageError'
+-- | Call @saveModules.abortPreparedLoad(requestId)@ (round 6 review):
+--   every failure path that can occur AFTER a successful 'prepareLuaLoad'
+--   but BEFORE 'applyLuaLoad' ever runs (a staging exception/'StageError'
 --   on the world thread, or the publish barrier itself failing/timing
 --   out — see 'World.Thread.Command.Save.handleWorldLoadTransactionCommand'
 --   and 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') must
@@ -871,10 +875,23 @@ applyLuaLoad logger = do
 --   session. Best-effort: a failure here is only logged, never
 --   propagated, since it always runs FROM an existing failure path that
 --   must still report ITS OWN error regardless.
-abortLuaLoad ∷ LoggerState → Lua.LuaE Lua.Exception ()
-abortLuaLoad logger = do
-    ok ← callSaveModules0 logger "abortPreparedLoad"
-    Lua.liftIO $ unless ok $
-        logWarn logger CatLua
+--
+--   Round 9 review: the world-thread-queued failure path
+--   ('LuaLoadStagingFailed') reaches its caller as a QUEUED Lua message,
+--   which can sit unprocessed for a while — long enough for the failing
+--   request to already be terminal
+--   ('Engine.Load.Status.failLoad') and a BRAND NEW request to have been
+--   accepted and successfully run its OWN 'prepareLuaLoad' before the
+--   stale message is finally handled. Passing @requestId@ through lets
+--   @save_modules.abortPreparedLoad@ compare it against whatever it most
+--   recently stashed and no-op when they don't match, so a stale abort
+--   can never clear a newer, still-in-flight request's prepared state.
+abortLuaLoad ∷ LoggerState → Int → Lua.LuaE Lua.Exception ()
+abortLuaLoad logger requestId = do
+    ok ← callSaveModules1 logger "abortPreparedLoad" 1
+            (Lua.pushinteger (fromIntegral requestId))
+    if ok
+      then Lua.pop 1  -- discard abortPreparedLoad()'s (nil) return value
+      else Lua.liftIO $ logWarn logger CatLua
             "save_modules.abortPreparedLoad() failed (see engine log) -- \
             \a prepared load may remain stuck active"

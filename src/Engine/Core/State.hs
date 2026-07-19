@@ -156,7 +156,15 @@ data EngineEnv = EngineEnv
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
-  , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString))  -- ^ Pending zoom atlas pixel data for GPU upload
+  , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString, [WorldState]))
+    -- ^ Pending zoom atlas pixel data for GPU upload, plus the EXACT
+    --   'WorldState's it belongs to, captured at the moment it was
+    --   enqueued (round 9 review, issue #763): the upload can take
+    --   multiple frames, and re-reading 'worldManagerRef' only once
+    --   the upload finishes would race a load publish that swaps it
+    --   in between — this closes that gap completely rather than
+    --   narrowing it, since nothing needs to be re-read from a live
+    --   ref at write time at all.
   , screenshotRequestQueue ∷ Q.Queue ScreenshotRequest
     -- ^ Pending debug.captureScreenshot requests (#643). The Lua
     --   thread enqueues; the render thread drains one per frame in

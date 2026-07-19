@@ -525,6 +525,54 @@ spec = do
             , "assert(called, 'references() must actually be invoked during prepareLoad')"
             ]
 
+        it "correlates abortPreparedLoad(requestId) with the request id \
+           \prepareLoad stashed, so a stale abort for an OLD, already- \
+           \superseded request cannot clear a NEWER requests prepared \
+           \state (round 9 review, issue #763): LuaLoadStagingFailed is a \
+           \queued message that can arrive after a new request has \
+           \already prepared" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "saveModules.register('reqid_c', " <> validSpecLua "reqid_c" <> ")"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, 'snapshotAll should succeed')"
+            , "local prep1 = saveModules.prepareLoad(snap.components, 1)"
+            , "assert(prep1.ok, 'first prepareLoad should succeed')"
+            , "-- Request 1 is superseded (e.g. it failed staging on the world"
+            , "-- thread) and request 2 is accepted and prepares its own state"
+            , "-- before request 1's stale abort message is ever processed."
+            , "local prep2 = saveModules.prepareLoad(snap.components, 2)"
+            , "assert(prep2.ok, 'second prepareLoad should succeed')"
+            , "-- A stale abort naming the OLD request id must be a no-op."
+            , "saveModules.abortPreparedLoad(1)"
+            , "assert(saveModules._pendingApply ~= nil, "
+              <> "'a stale abort for the old request must not clear the "
+              <> "newer requests prepared state')"
+            , "assert(saveModules._loadActive == true, "
+              <> "'loadActive must stay true for the still-prepared newer "
+              <> "request')"
+            , "-- An abort naming the CURRENT request id still works."
+            , "saveModules.abortPreparedLoad(2)"
+            , "assert(saveModules._pendingApply == nil, "
+              <> "'an abort for the current request id must clear it')"
+            , "assert(saveModules._loadActive == false)"
+            ]
+
+        it "abortPreparedLoad with no requestId (nil) always clears the \
+           \pending load unconditionally, matching pre-round-9 callers \
+           \with no request in play" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "saveModules.register('reqid_nil', " <> validSpecLua "reqid_nil" <> ")"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok)"
+            , "local prep = saveModules.prepareLoad(snap.components, 7)"
+            , "assert(prep.ok)"
+            , "saveModules.abortPreparedLoad()"
+            , "assert(saveModules._pendingApply == nil, "
+              <> "'a nil requestId must still clear a pending load')"
+            , "assert(saveModules._loadActive == false)"
+            ]
+
     describe "unit_ai save component (issue #761 requirements 13/14)" $ do
         it "strips every transient *Candidate scratch field from the \
            \persisted snapshot -- craftCandidate in particular embeds a \

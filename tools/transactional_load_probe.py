@@ -288,6 +288,8 @@ def main() -> int:
         print("\n--- mutual exclusion (requirement 1) ---")
         loaded = send(args.port, f"return engine.loadSave('{slot_valid}')")
         chk.ok(loaded.strip() == "true", "valid load: engine.loadSave accepted")
+        initial_status = load_status(args.port)
+        initial_id = initial_status.get("id") if isinstance(initial_status, dict) else None
 
         # Inject stale old-session work (requirement 12): staging builds
         # the replacement page entirely from the decoded save file, never
@@ -313,7 +315,21 @@ def main() -> int:
             f"return engine.saveWorld('alpha', '{SAVE_PREFIX}race_{run_id}')")
         second_load = send(args.port, f"return engine.loadSave('{slot_valid}')")
         mid_status = load_status(args.port)
+        # Round 9 review fallout (issue #763): on a fast machine/small
+        # world the FIRST load can finish (LoadPublished) in the gap
+        # between the two racing calls above -- in which case
+        # engine.loadSave's mutual-exclusion gate correctly ACCEPTS
+        # second_load as a brand-new transaction, and mid_status (polled
+        # after both calls) reports THAT new transaction's own, freshly-
+        # non-terminal status. Checking only "phase not terminal" then
+        # misreads a legitimately-accepted new load as "the original is
+        # still in flight, so second_load should have been rejected" --
+        # comparing mid_status's own request id against the ORIGINAL
+        # transaction's id (captured right after it was accepted) tells
+        # the two cases apart: only a MATCHING id means we're actually
+        # still observing the original, still-racing transaction.
         still_inflight = (isinstance(mid_status, dict)
+                          and mid_status.get("id") == initial_id
                           and mid_status.get("phase") not in
                           ("LoadPublished", "LoadFailed"))
         if still_inflight:
