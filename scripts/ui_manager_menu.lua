@@ -15,6 +15,7 @@ local mainMenu        = require("scripts.main_menu")
 local settingsMenu    = require("scripts.settings_menu")
 local createWorldMenu = require("scripts.create_world_menu")
 local worldView       = require("scripts.world_view")
+local worldManager    = require("scripts.world_manager")
 local saveBrowser     = require("scripts.save_browser")
 local hud             = require("scripts.hud")
 local loadingScreen   = require("scripts.loading_screen")
@@ -142,7 +143,29 @@ end
 -- arena→menu→load→world_view round-trip, where hud.worldId is stale
 -- ("test_arena") at load time and only rebinds to the loaded page
 -- later. (#103, updated for #763)
+-- Round 11 review, issue #763: main_menu.lua's loadAndShowSave binds
+-- worldManager.currentWorld/hud.worldId and resends textures itself,
+-- but only via loadingScreen's OWN poll of engine.getLoadStatus() --
+-- a load triggered any other way (the debug console's engine.loadSave,
+-- a future non-menu caller) while gameplay is already open never runs
+-- that path at all, leaving worldManager.currentWorld/hud.worldId bound
+-- to the now-replaced pre-load page and every subsequent gameplay
+-- action / texture bind targeting a page that no longer exists. This
+-- broadcast is the ONE hook every load reaches regardless of trigger
+-- (see the comment above), so it's the right common place to keep the
+-- Lua-side world/HUD binding in sync with whichever page
+-- world.getActiveWorldId() reports once publish has made it active —
+-- redundant but harmless for the menu-driven path, which does the same
+-- rebind moments later (sendTexturesToWorld is idempotent).
 function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
+    local activeId = world.getActiveWorldId()
+    if activeId then
+        worldManager.currentWorld = activeId
+        worldManager.active = true
+        hud.worldId = activeId
+        worldView.sendTexturesToWorld(activeId)
+    end
+
     if hud.markLoadedToolReset then
         hud.markLoadedToolReset()
     end

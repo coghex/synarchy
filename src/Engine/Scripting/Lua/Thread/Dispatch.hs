@@ -303,9 +303,29 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onSetWeatherInfo" [ScriptString text]
   LuaHudLogResourcesInfo text →
     broadcastToModules ls "onSetResourcesInfo" [ScriptString text]
-  LuaWorldPreviewReady handleInt →
-    broadcastToModules ls "onWorldPreviewReady"
-      [ScriptNumber (fromIntegral handleInt)]
+  LuaWorldPreviewReady handleInt gen → do
+    -- Round 11 review (issue #763): validated HERE, at delivery, not at
+    -- upload-completion time — see the long comment on
+    -- 'Engine.Scripting.Lua.Message.WorldTexture.handleWorldPreview'
+    -- for why upload-completion time can't decide this correctly. Every
+    -- 'LuaMsg' this dispatcher processes (this one included) only ever
+    -- runs while the save barrier's capture lock is open, and a load
+    -- transaction holds that lock for its entire duration — so by now,
+    -- any publish that could have superseded this preview has
+    -- unconditionally already run and bumped
+    -- 'worldPreviewGenerationRef' (on EVERY publish, whether or not
+    -- that publish carries its own new preview — see
+    -- 'World.Load.Publish.publishStagedSession').
+    latestGen ← readIORef (worldPreviewGenerationRef env)
+    if gen ≢ latestGen
+      then do
+        logger ← readIORef (loggerRef env)
+        logDebug logger CatLua
+            "World preview announcement superseded by a later publish \
+            \— discarding stale generation"
+      else
+        broadcastToModules ls "onWorldPreviewReady"
+          [ScriptNumber (fromIntegral handleInt)]
   LuaShowPopup category msg r g b a mCoords →
     broadcastToModules ls "onShowPopup"
       [ ScriptString category

@@ -224,7 +224,13 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               -- selection, which share this same broadcast (issue #133).
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text
-            | LuaWorldPreviewReady Int
+            | LuaWorldPreviewReady Int Word64
+              -- ^ handle, generation. Round 11 review, issue #763: the
+              -- generation is validated at DELIVERY time
+              -- ('Engine.Scripting.Lua.Thread.Dispatch', gated behind
+              -- the same captureLocked check every Lua-thread message
+              -- is), not at upload-completion time — see
+              -- 'Engine.Core.State.worldPreviewGenerationRef'.
             | LuaShowPopup Text Text Float Float Float Float
                            (Maybe (Int, Int))
               -- ^ Player-events popup. Fields, in order:

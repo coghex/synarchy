@@ -39,6 +39,7 @@ import Test.Headless.Harness
 import World.Types
 import World.Save.Serialize (loadWorld, sanitizeSaveName)
 import World.Load.Stage (stageSession, renderStageError)
+import World.Load.Publish (publishStagedSession)
 import World.Load.Types (StagedSession(..), StagedPage(..))
 import Building.Types (BuildingId(..))
 import Craft.Bills (addBill, emptyCraftBills, cbsBills)
@@ -289,6 +290,58 @@ spec = do
             ws ← waitForWorldInit env (WorldPageId "id_arena") 60
             ident ← readIORef (wsIdentityRef ws)
             ident `shouldBe` Nothing
+
+    -- Runs LAST (issue #763, round 11 review): 'publishStagedSession' is
+    -- a REAL publish -- it replaces the complete session, so nothing
+    -- after it in this file could assume any earlier page still exists.
+    describe "publishStagedSession invalidates in-flight preview uploads \
+             \on EVERY publish, even one with no preview data at all \
+             \(round 11 review, issue #763)" $
+        it "a staged session whose ssPreview is Nothing (the outcome of \
+           \World.Load.Stage's own isArenaParams branch) still bumps \
+           \worldPreviewGenerationRef -- a stale upload racing this \
+           \publish must never be able to see its own generation as \
+           \still current" $ \env →
+            let slotC = "id_spec_nopreview"
+                cleanup = do
+                    removePathForcibly ("saves/" <> slotC)
+                    writeIORef (enginePausedRef env) False
+            in (`finally` cleanup) $ do
+            removePathForcibly ("saves/" <> slotC)
+
+            sendWorldCommand env
+                (WorldInit (WorldPageId "id_nopreview_w8") 51 8 3 Nothing)
+            _ ← waitForWorldInit env (WorldPageId "id_nopreview_w8") 120
+
+            sendWorldCommand env
+                (WorldSave (WorldPageId "id_nopreview_w8") slotC
+                           "2026-07-19T00:00:00.000000Z" [])
+            waitForFile ("saves/" <> slotC <> "/world.synworld")
+
+            logger ← readIORef (loggerRef env)
+            (sdC, _) ← loadWorld logger slotC HS.empty HS.empty ⌦ either
+                (\(_, e) → expectationFailure (T.unpack e)
+                        ≫ error "unreachable")
+                pure
+
+            matReg ← readIORef (materialRegistryRef env)
+            staged ← stageSession env logger sdC matReg ⌦ either
+                (\e → expectationFailure (T.unpack (renderStageError e))
+                        ≫ error "unreachable")
+                pure
+
+            -- Force the no-preview outcome directly rather than driving
+            -- a real arena-page save (stageSession's own isArenaParams
+            -- branch is exercised elsewhere and isn't the thing under
+            -- test here) -- this isolates publishStagedSession's own
+            -- unconditional-bump contract from staging's decision about
+            -- when a preview exists at all.
+            let staged' = staged { ssPreview = Nothing }
+
+            genBefore ← readIORef (worldPreviewGenerationRef env)
+            publishStagedSession env logger 999999 staged'
+            genAfter ← readIORef (worldPreviewGenerationRef env)
+            genAfter `shouldSatisfy` (> genBefore)
 
 -- | The stored identity of the page saved under @pid@, or Nothing when
 --   the page is absent or unnamed.

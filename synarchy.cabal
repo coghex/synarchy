@@ -1058,6 +1058,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Lua.DebugQueue
+                   Test.Headless.Lua.PreviewGeneration
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers

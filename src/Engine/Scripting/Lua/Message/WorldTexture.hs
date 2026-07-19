@@ -139,42 +139,39 @@ handleWorldPreview = do
                             { previewTexture =
                                 Just (TransientTexture texHandle cleanupAll) } }
 
-                    -- Round 8 review: the same stale-generation window
-                    -- 'handleZoomAtlasUpload' guards against below — a
-                    -- load's own preview ('World.Load.Publish
-                    -- .publishStagedSession', which writes
-                    -- 'worldPreviewRef' before swapping
-                    -- 'worldManagerRef') can overtake an upload already
-                    -- in flight for the OLD session.
+                    -- Round 8/9/10 review: staleness here can NOT be
+                    -- decided at upload-completion time (this point).
+                    -- Round 8 re-read 'worldPreviewRef' and round 10
+                    -- compared 'worldPreviewGenerationRef' right here —
+                    -- both still race a publish that hasn't happened
+                    -- YET: 'World.Load.Publish.publishStagedSession'
+                    -- runs asynchronously on the WORLD thread, so this
+                    -- upload can reach this point and see nothing newer
+                    -- had been enqueued SO FAR, while the actual publish
+                    -- (which WILL invalidate it) is still in flight and
+                    -- lands moments later. There is no live-ref check at
+                    -- upload-completion time that can rule that out.
                     --
-                    -- Round 8's fix (re-reading 'worldPreviewRef' here
-                    -- and skipping the broadcast if something newer was
-                    -- ALREADY dequeued) was itself flagged round 9/10:
-                    -- a NEWER preview enqueued strictly BETWEEN that read
-                    -- and this point would still be missed, since this
-                    -- upload had already committed to announcing. Compare
-                    -- against 'worldPreviewGenerationRef' instead — a
-                    -- monotonic counter bumped once per enqueue and never
-                    -- read back down (see 'Engine.Core.State') — rather
-                    -- than re-reading 'worldPreviewRef' itself: if that
-                    -- counter still equals the generation this upload was
-                    -- dequeued under, NOTHING has been enqueued since,
-                    -- full stop; no window remains to race, and a plain
-                    -- 'readIORef' suffices since the comparison is a pure
-                    -- read against a value that only ever increases.
-                    latestGen ← liftIO $ readIORef (worldPreviewGenerationRef env)
-                    if myGen ≢ latestGen
-                      then
-                        logInfoM CatWorld
-                            "World preview upload superseded before \
-                            \publish — discarding stale generation"
-                      else do
-                            let (TextureHandle h) = texHandle
-                            liftIO $ Q.writeQueue (luaQueue env)
-                                (LuaWorldPreviewReady (fromIntegral h))
+                    -- Round 11 review: carry 'myGen' in the message
+                    -- itself and validate it at DELIVERY instead —
+                    -- 'Engine.Scripting.Lua.Thread.Dispatch's handling
+                    -- of every queued 'LuaMsg' (this one included) only
+                    -- ever runs while the save barrier's capture lock is
+                    -- open, which a load transaction holds for its ENTIRE
+                    -- duration (handleLoadStaged through the matching
+                    -- WorldLoadPublish) — so by the time this message is
+                    -- actually processed, ANY publish that was racing
+                    -- this upload has unconditionally already completed
+                    -- (see 'World.Load.Publish.publishStagedSession',
+                    -- which now bumps the generation on EVERY publish,
+                    -- not just one that carries its own new preview).
+                    -- Always enqueue; never decide staleness here.
+                    let (TextureHandle h) = texHandle
+                    liftIO $ Q.writeQueue (luaQueue env)
+                        (LuaWorldPreviewReady (fromIntegral h) myGen)
 
-                            logInfoM CatWorld $ "World preview texture created: handle="
-                                <> T.pack (show h)
+                    logInfoM CatWorld $ "World preview texture created: handle="
+                        <> T.pack (show h)
 
                 _ → logWarnM CatWorld
                         "Cannot create preview texture: Vulkan not ready"

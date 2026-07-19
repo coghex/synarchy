@@ -126,15 +126,21 @@ publishStagedSession env logger requestId staged = do
     let targetStates = map spWorldState (ssPages staged)
     forM_ (ssZoomAtlas staged) $ \(w, h, bytes) →
         writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, targetStates))
-    -- Round 10 review: stamp this preview with a fresh generation (see
-    -- 'Engine.Core.State.worldPreviewGenerationRef') so an in-flight
-    -- upload for an OLDER preview can tell — without re-reading
-    -- 'worldPreviewRef' itself — that it has been superseded and must
-    -- not announce its now-stale handle to Lua.
-    forM_ (ssPreview staged) $ \(w, h, bytes) → do
-        gen ← atomicModifyIORef' (worldPreviewGenerationRef env)
-                (\g → (g + 1, g + 1))
-        writeIORef (worldPreviewRef env) (Just (w, h, bytes, gen))
+    -- Round 10/11 review: bump the preview generation on EVERY publish,
+    -- unconditionally — never only inside the 'Just' branch below. A
+    -- page staged via the arena-reconstruction path
+    -- ('World.Load.Stage.stageSession', 'isArenaParams') carries no
+    -- preview at all ('ssPreview' is 'Nothing'), but this publish still
+    -- REPLACES the session exactly as any other load does, and MUST
+    -- still invalidate whatever preview upload was in flight for the
+    -- session it replaces — 'Engine.Scripting.Lua.Thread.Dispatch's
+    -- delivery-time check ('LuaWorldPreviewReady') and
+    -- 'Engine.Scripting.Lua.Message.WorldTexture.handleWorldPreview'
+    -- rely on this counter moving on every publish to detect that.
+    previewGen ← atomicModifyIORef' (worldPreviewGenerationRef env)
+                    (\g → (g + 1, g + 1))
+    forM_ (ssPreview staged) $ \(w, h, bytes) →
+        writeIORef (worldPreviewRef env) (Just (w, h, bytes, previewGen))
 
     -- Register every staged page under its OWN saved id (requirement 8:
     -- no remap, no collision suffix — a load replaces the complete
