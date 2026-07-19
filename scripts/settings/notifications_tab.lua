@@ -17,8 +17,9 @@
 -- "pending" state for this tab and no Apply/Cancel for notification
 -- changes (consistent with the user's choice on 2026-05-18).
 
-local label    = require("scripts.ui.label")
-local checkbox = require("scripts.ui.checkbox")
+local label      = require("scripts.ui.label")
+local checkbox   = require("scripts.ui.checkbox")
+local responsive = require("scripts.ui.responsive")
 
 local notificationsTab = {}
 
@@ -89,18 +90,52 @@ function notificationsTab.create(params)
                    widgetSetPosition = nil, widgetSetVisible = nil } }
     end
 
-    local cbSize = math.floor(base.checkboxSize * uiscale)
+    -- #748 round 6: at a narrow content width and high uiscale (the
+    -- supported 800x2160@4x combination), the 3-column grid's own
+    -- fixed geometry (checkbox size + a same-uiscale-scaled inter-
+    -- column step, itself floored at cbSize+48*uiscale) can exceed the
+    -- tab's content width entirely on its own, well before any header/
+    -- category label text is considered. Compute ONE effective, LOCAL
+    -- uiscale for the grid — never the stored scale — from the
+    -- CHECKBOX-driven natural span alone (2 column steps + one
+    -- checkbox, using the checkbox+padding floor, not header text);
+    -- deliberately excludes header/"Pause" label text from this fit
+    -- target — the header labels are non-interactive, so letting them
+    -- stay comparatively large (and, in truly extreme cases, overhang
+    -- a little) is the lesser problem next to crushing the actually-
+    -- clickable checkboxes toward 0px by folding a 9-character header
+    -- string's full text width into the same shrink ratio. Shadows the
+    -- local `uiscale` so every computation below (and the checkbox.new
+    -- calls further down) picks it up automatically.
+    do
+        local naturalCbSize = math.floor(base.checkboxSize * uiscale)
+        local naturalCheckboxColStep = naturalCbSize + math.floor(48 * uiscale)
+        local naturalCheckboxTotalWidth = naturalCheckboxColStep * 2 + naturalCbSize
+        uiscale = responsive.fitScale(naturalCheckboxTotalWidth, cw, uiscale)
+    end
+
+    -- Never let the checkbox collapse to an unclickable 0px, even if
+    -- the fit above still rounds it down at some future extreme.
+    local cbSize = math.max(1, math.floor(base.checkboxSize * uiscale))
     -- Step between columns: measure the actual header label widths so
     -- the longest one ("Event Log") still has visible gap to its
     -- neighbours. The 24-px pad is the minimum slack between adjacent
     -- centred labels; we additionally enforce a floor of cbSize + 48
     -- so columns never collapse below the original spacing on very
     -- short labels.
+    --
+    -- headerFontSize stays UNSCALED (fed to label.new, which applies
+    -- uiscale itself); headerFontSizePx is the matching RENDERED size
+    -- for getTextWidth measurement — round 6 fix: this used to pass
+    -- the unscaled base.fontSize straight to getTextWidth while the
+    -- label itself rendered at base.fontSize*uiscale, silently
+    -- under-measuring every header at any uiscale other than 1.
     local headerFontSize = base.fontSize
+    local headerFontSizePx = math.floor(base.fontSize * uiscale)
     local headerMinPad   = math.floor(24 * uiscale)
     local maxHeaderW = 0
     for _, t in ipairs({ "Event Log", "Popup", "Pause" }) do
-        local w = engine.getTextWidth(font, t, headerFontSize)
+        local w = engine.getTextWidth(font, t, headerFontSizePx)
         if w > maxHeaderW then maxHeaderW = w end
     end
     local colStep = math.max(cbSize + math.floor(48 * uiscale),
@@ -112,7 +147,7 @@ function notificationsTab.create(params)
     -- Without padding that overhang runs past the panel edge. Shift
     -- the columns left by exactly the overhang plus a small breathing
     -- gap so the rightmost label sits inside the content area.
-    local pauseLabelW   = engine.getTextWidth(font, "Pause", headerFontSize)
+    local pauseLabelW   = engine.getTextWidth(font, "Pause", headerFontSizePx)
     local rightOverhang = math.max(0,
         math.floor((pauseLabelW - cbSize) / 2))
     local rightPad = rightOverhang + math.floor(8 * uiscale)

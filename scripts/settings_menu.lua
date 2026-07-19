@@ -621,13 +621,21 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     end
     local btnW = math.floor(base.btnWidth * factor)
     local spacing = math.floor(s.btnSpacing * factor)
+    -- #748 round 6: button.new scales `fontSize` by `uiscale` internally
+    -- exactly like it scales `width` — shrinking only btnW while leaving
+    -- fontSize at the unshrunk base.fontSize left the label rendering at
+    -- full size inside a shrunk box (overflow/overlap at the supported
+    -- 800x2160@4x combination). Apply the SAME `factor` to the font size
+    -- base passed in, so button.new's own `* uiscale` multiplication
+    -- ends up shrinking both by the identical ratio.
+    local btnFontSize = base.fontSize * factor
 
     settingsMenu.backButtonId = settingsMenu.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
         width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -648,7 +656,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         text       = "Defaults",
         width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -666,7 +674,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         text       = "Apply",
         width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -684,7 +692,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         text       = "Save",
         width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,

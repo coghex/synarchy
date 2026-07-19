@@ -668,6 +668,48 @@ an equivalent local `tabBarUiscale` (real tab-name text width via
 `tabbar.new`'s own `uiscale`, mirroring `create_world_menu`'s pre-
 existing identical tab-bar fix for its own three tabs.
 
+Review round 6 closed the remaining fixed-size-widget gaps this same
+local-effective-scale technique hadn't yet reached: the Input tab's
+key/plus buttons (`KEY_BTN_W`/`PLUS_BTN_W`, scaled by uiscale directly,
+with no fit of their own) now compute ONE `keyBtnUiscale` fit against
+the WORST-CASE row (the action with the most currently-bound keys),
+applied uniformly so no row jumps size relative to another; the
+Notifications tab's 3-column checkbox grid computes an equivalent
+`uiscale` shadow fit against the CHECKBOX-driven natural width alone
+(2 column steps + one checkbox) — deliberately excluding header/
+`"Pause"`-label text from that fit target, since folding a 9-character
+header string's full width into the same shrink ratio crushed the
+actually-clickable checkboxes toward 0px; header text may still
+overhang a little in truly extreme cases, which is the lesser problem.
+`notifications_tab.lua` also had its own latent bug independent of any
+narrow-width case: `getTextWidth` was measuring headers at the
+UNSCALED `base.fontSize` while `label.new` rendered them at
+`base.fontSize * uiscale`, silently under-measuring every header at
+any uiscale other than 1 — fixed by introducing a separate
+`headerFontSizePx` (the real rendered size) for measurement only,
+leaving the unscaled value feeding `label.new` (which applies uiscale
+itself) untouched. Settings' own bottom-action buttons had a distinct
+bug: shrinking the button BOX width via `factor` without shrinking
+`fontSize` by the same `factor` left labels rendering at full size
+inside a shrunk box — `settingsMenu.createButtons` now computes
+`btnFontSize = base.fontSize * factor` alongside the existing `btnW`.
+
+Round 6 also closed two state-preservation gaps: World Name/Seed are
+`randbox` (not `textbox`) controls, so `create_world_menu`'s existing
+`textbox.snapshotPage`/`restoreAll` never covered them —
+`scripts/ui/randbox.lua` gained its own `getCursor`/`setCursor`/
+`snapshotPage`/`restoreAll`, mirroring textbox's exactly, wired into
+the same `preserveState` branch. And the shell debug console
+(`scripts/shell.lua`) was never registered with the shared
+`responsive.notifyResize` contract — a UI-scale Apply/Save (same
+framebuffer size, new scale) never reached it at all; it only
+rescaled lazily the next time `shell.show()` ran its own `rescale()`.
+`shell.onFramebufferResize` now also calls `rescale()` (previously it
+only rebuilt geometry when visible, never refreshing the cached scale
+values that geometry is computed FROM), and `ui_manager_boot.lua`
+registers it via `responsive.register("shell", shell)` — shell isn't a
+C2 menu screen, but shares the same live-scale-update need.
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's

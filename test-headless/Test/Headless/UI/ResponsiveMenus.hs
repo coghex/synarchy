@@ -558,6 +558,33 @@ spec = around withHeadlessEngine $ do
                     ofpAnyOverlap p `shouldBe` False
                     ofpAllInFrame p `shouldBe` True
 
+        -- #748 round 6: shrinking only the button BOX left the label
+        -- rendering at the unshrunk base font size — the label's own
+        -- centering math (labelX = (btnWidth - labelWidth) / 2) goes
+        -- negative once labelWidth exceeds the shrunk box, meaning the
+        -- text starts to the LEFT of the box's own left edge. Stub
+        -- engine.getTextWidth to realistic (nonzero) per-character
+        -- metrics so this actually exercises that overflow.
+        it "settings menu's bottom-action button labels stay within their own (shrunk) box at 800x2160@4x" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,800,2160);"
+                , "UI.showPage(m.page);"
+                , "local button = require('scripts.ui.button');"
+                , "local boxInfo = UI.getElementInfo(button.getElementHandle(m.backButtonId));"
+                , "local labelX = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name == 'back_btn_label' then labelX = e.x end"
+                , "end;"
+                , "return {boxX = boxInfo.x, labelX = labelX}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ButtonLabelFitProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → blfpLabelX p `shouldSatisfy` (>= blfpBoxX p)
+
         it "create-world's World Name control stays in-frame at the formal minimum, not off-screen to the left" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -813,6 +840,121 @@ spec = around withHeadlessEngine $ do
                 ]
             offsetsMatch `shouldBe` True
 
+    describe "settings menu's input (keybind) tab stays in-frame at a narrow, high-scale supported combination (#748 round 6)" $
+        it "800x2160@4x (fixed key/plus button widths alone used to exceed the content column before any key count was considered)" $ \env → do
+            ls ← newBareLuaBackend env
+            inFrame ← evalBool ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , bootSettings 800 2160
+                , "m.showTab('input');"
+                , "local it = require('scripts.settings.input_tab');"
+                , "local button = require('scripts.ui.button');"
+                , "local allInFrame = true;"
+                , "local sawAny = false;"
+                , "for _, bid in ipairs(it.widgets.buttonIds) do"
+                , "  sawAny = true;"
+                , "  local info = UI.getElementInfo(button.getElementHandle(bid));"
+                , "  if info.x < 0 or (info.x + info.width) > 800 then allInFrame = false end"
+                , "end;"
+                , "return allInFrame and sawAny"
+                ]
+            inFrame `shouldBe` True
+
+    describe "settings menu's notifications tab stays in-frame at a narrow, high-scale supported combination (#748 round 6)" $ do
+        it "800x2160@4x under realistic, nonzero text metrics: checkboxes stay nonzero-sized and in-frame (the 3-column grid's own floored geometry alone used to exceed the content width)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "m.showTab('notifications');"
+                , "local nt = require('scripts.settings.notifications_tab');"
+                , "local checkbox = require('scripts.ui.checkbox');"
+                , "local firstCat = nil;"
+                , "for k, _ in pairs(nt.checkboxes) do firstCat = k break end;"
+                , "local cw, ch = checkbox.getSize(nt.checkboxes[firstCat].pause);"
+                , "local info = UI.getElementInfo(checkbox.getElementHandle(nt.checkboxes[firstCat].pause));"
+                , "return {checkboxSize = cw, x = info.x, rightEdge = info.x + info.width}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe NotifCheckboxProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ncpCheckboxSize p `shouldSatisfy` (> 0)
+                    ncpX p `shouldSatisfy` (>= 0)
+                    ncpRightEdge p `shouldSatisfy` (<= 800)
+
+        it "800x2160@4x: the header measurement fix keeps 'Event Log'/'Pause' headers from under-measuring at uiscale != 1" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "UI.showPage(m.page);"
+                , "m.showTab('notifications');"
+                , "local logX, pauseX = nil, nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name == 'notif_header_log_text' then logX = e.x end;"
+                , "  if e.name == 'notif_header_pause_text' then pauseX = e.x end;"
+                , "end;"
+                , "return {x = logX, rightEdge = pauseX}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    wnpX p `shouldSatisfy` (>= 0)
+                    wnpRightEdge p `shouldSatisfy` (<= 800)
+
+    describe "create-world menu preserves an in-progress randbox (World Name/Seed) edit across a resize (#748 round 6)" $
+        it "text, cursor, and focus all survive a rebuild" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "local st = require('scripts.create_world.settings_tab');"
+                , "local randbox = require('scripts.ui.randbox');"
+                , "randbox.setValue(st.nameRandBoxId, 'MyWorld');"
+                , "randbox.focus(st.nameRandBoxId);"
+                , "randbox.setCursor(st.nameRandBoxId, 3);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local newId = st.nameRandBoxId;"
+                , "return {text = randbox.getValue(newId), cursor = randbox.getCursor(newId),"
+                    <> " focused = randbox.isFocused(newId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TextboxStateProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tspText p `shouldBe` "MyWorld"
+                    tspCursor p `shouldBe` 3
+                    tspFocused p `shouldBe` True
+
+    describe "shell debug console adopts the shared resize/scale contract (#748 round 6)" $
+        it "a live UI-scale notify (no framebuffer size change) updates an already-visible shell immediately, not just on next show()" $ \env → do
+            ls ← newBareLuaBackend env
+            noFurtherChangeNeeded ← evalBool ls $ luaLines
+                [ "local shell = require('scripts.shell');"
+                , "shell.init(0);"
+                , "shell.show();"
+                -- ui_manager_boot.lua (never loaded in this bare-lua-
+                -- backend suite) is what calls responsive.register at
+                -- module load time in production — register directly
+                -- here to exercise the same contract it wires up.
+                , "local responsive = require('scripts.ui.responsive');"
+                , "responsive.register('shell', shell);"
+                -- Prime the cache at scale 1.0 (init/show already ran
+                -- rescale once), then change scale and notify exactly
+                -- like settingsMenu.onApply/onSave does in production —
+                -- via the shared contract, not shell.show() again.
+                , "engine.setUIScale(2.0);"
+                , "responsive.notifyResize(1280, 720);"
+                -- If onFramebufferResize already called rescale()
+                -- internally, this second, direct rescale() call finds
+                -- nothing left to change (newScale == cached uiscale)
+                -- and returns false. Before the fix, the cache would
+                -- still read 1.0 here, so this would return true.
+                , "local changedAgain = shell.rescale();"
+                , "return not changedAgain"
+                ]
+            noFurtherChangeNeeded `shouldBe` True
+
     describe "keyboard control focus (#745) survives a resize rebuild" $ do
         it "settings menu restores focus onto the rebuilt control with the same name" $ \env → do
             ls ← newBareLuaBackend env
@@ -1057,6 +1199,18 @@ data ScrollRevealProbe = ScrollRevealProbe
 instance FromJSON ScrollRevealProbe where
     parseJSON = withObject "ScrollRevealProbe" $ \o → ScrollRevealProbe
         <$> o .: "clippedBefore" <*> o .: "visibleAfter"
+
+data ButtonLabelFitProbe = ButtonLabelFitProbe
+    { blfpBoxX ∷ Double, blfpLabelX ∷ Double } deriving Show
+instance FromJSON ButtonLabelFitProbe where
+    parseJSON = withObject "ButtonLabelFitProbe" $ \o → ButtonLabelFitProbe
+        <$> o .: "boxX" <*> o .: "labelX"
+
+data NotifCheckboxProbe = NotifCheckboxProbe
+    { ncpCheckboxSize ∷ Double, ncpX ∷ Double, ncpRightEdge ∷ Double } deriving Show
+instance FromJSON NotifCheckboxProbe where
+    parseJSON = withObject "NotifCheckboxProbe" $ \o → NotifCheckboxProbe
+        <$> o .: "checkboxSize" <*> o .: "x" <*> o .: "rightEdge"
 
 data TextboxStateProbe = TextboxStateProbe
     { tspText ∷ Text, tspCursor ∷ Int, tspFocused ∷ Bool } deriving Show

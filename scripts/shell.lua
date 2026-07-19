@@ -1020,7 +1020,15 @@ end
 function shell.onFramebufferResize(width, height)
     -- Reset max input width cache so it gets recalculated
     maxInputWidth = 0
-    
+
+    -- #748 round 6: shell was never registered with the shared
+    -- responsive.notifyResize contract — a UI-scale Apply/Save (same
+    -- framebuffer size, new scale) never reached it at all; it only
+    -- ever rescaled lazily the next time shell.show() ran rescale()
+    -- itself. Call rescale() here too so an already-visible shell
+    -- picks up a live scale change immediately, not just on next open.
+    shell.rescale()
+
     -- If visible, rebuild everything with new dimensions
     if shellvisible then
         shell.destroyAllElements()

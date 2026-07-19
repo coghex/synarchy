@@ -380,8 +380,14 @@ function createWorldMenu.createUI(opts)
     -- see onFramebufferResize — since restoring it needs the page
     -- already visible, which createUI() itself never makes it.)
     local textboxSnap = nil
+    -- #748 round 6: World Name/Seed are randbox (not textbox) controls
+    -- — snapshot/restore those too, or an in-progress edit there loses
+    -- its text/cursor/focus on a mere rebuild exactly like an unfixed
+    -- textbox would.
+    local randboxSnap = nil
     if preserveState then
         textboxSnap = textbox.snapshotPage(createWorldMenu.page)
+        randboxSnap = randbox.snapshotPage(createWorldMenu.page)
     end
 
     createWorldMenu.destroyOwned()
@@ -573,6 +579,7 @@ function createWorldMenu.createUI(opts)
 
     if preserveState then
         textbox.restoreAll(textboxSnap)
+        randbox.restoreAll(randboxSnap)
     end
 
     createWorldMenu.uiCreated = true
