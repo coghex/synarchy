@@ -40,7 +40,10 @@ local Z_LOG_TEXT      = 8
 local Z_LOG_SB_TRACK  = 9
 local Z_LOG_SB_BUTTON = 10
 local Z_LOG_SB_TAB    = 11
-local Z_BUTTONS       = 12
+local Z_TAB_SB_TRACK  = 12
+local Z_TAB_SB_BUTTON = 13
+local Z_TAB_SB_TAB    = 14
+local Z_BUTTONS       = 15
 
 -----------------------------------------------------------
 -- Base sizes (unscaled)
@@ -216,6 +219,14 @@ createWorldMenu.logStartY       = 0
 -- Per-tab element handles for show/hide
 createWorldMenu.tabElements = {}
 
+-- #748 round 5: per-tab scrollable-content state (key -> {scrollOffset,
+-- totalRows, maxVisibleRows, viewportId, scrollContentId, scrollbarId}).
+-- See createWorldMenu.createUI's tab-content build for how these are
+-- populated — a clipping viewport + a movable scroll-content anchor per
+-- tab, mirroring settings_menu's tab scrolling but via real clipping
+-- (#747) instead of manual per-row show/hide.
+createWorldMenu.tabScroll = {}
+
 -- Owned element IDs for cleanup
 createWorldMenu.ownedLabels     = {}
 createWorldMenu.ownedButtons    = {}
@@ -247,6 +258,18 @@ function createWorldMenu.destroyOwned()
         scrollbar.destroy(createWorldMenu.logScrollbarId)
         createWorldMenu.logScrollbarId = nil
     end
+
+    -- #748 round 5: each tab's scrollbar (scrollable tab content, below)
+    -- isn't tracked via the generic owned-lists — the viewport/scroll-
+    -- content elements themselves need no explicit cleanup (UI.deletePage
+    -- below recursively deletes every element it owns), but the
+    -- scrollbar widget module's own bookkeeping does.
+    if createWorldMenu.tabScroll then
+        for _, ts in pairs(createWorldMenu.tabScroll) do
+            if ts.scrollbarId then scrollbar.destroy(ts.scrollbarId) end
+        end
+    end
+    createWorldMenu.tabScroll = {}
 
     for _, id in ipairs(createWorldMenu.ownedLabels)    do label.destroy(id) end
     for _, id in ipairs(createWorldMenu.ownedButtons)   do button.destroy(id) end
@@ -343,6 +366,13 @@ function createWorldMenu.createUI(opts)
     -- is never touched here (only logPanelMod.clear does that), but the
     -- fresh label slots logPanelMod.create builds always start blank.
     local prevLogScrollOffset = createWorldMenu.logScrollOffset
+
+    -- #748 round 5: preserve each tab's clamped scroll position across
+    -- a mere rebuild too (destroyOwned() below wipes tabScroll).
+    local prevTabScrollOffsets = {}
+    for key, ts in pairs(createWorldMenu.tabScroll) do
+        prevTabScrollOffsets[key] = ts.scrollOffset
+    end
 
     -- Snapshot every textbox's raw (possibly unsubmitted) text, cursor,
     -- and focus BEFORE destroyOwned() tears them down. (Keyboard
@@ -463,6 +493,19 @@ function createWorldMenu.createUI(opts)
     -- Left panel (tabs)
     createWorldMenu.createLeftPanel(panelX, panelY, bounds,
         contentStartY, leftWidth, contentHeight, s, uiscale)
+
+    -- #748 round 5: restore each tab's scroll position (clamped against
+    -- the just-rebuilt content size) — mirrors the log scroll restore
+    -- below. setScrollOffset triggers the scrollbar's own onScroll ->
+    -- createWorldMenu.onTabScroll chain, so this both restores and
+    -- repositions the scroll-content anchor in one call.
+    if preserveState then
+        for key, ts in pairs(createWorldMenu.tabScroll) do
+            if ts.scrollbarId and prevTabScrollOffsets[key] then
+                scrollbar.setScrollOffset(ts.scrollbarId, prevTabScrollOffsets[key])
+            end
+        end
+    end
 
     -- Right panel (preview + log)
     local logResult = logPanelMod.create({
@@ -644,6 +687,7 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
     local pad = math.floor(20 * uiscale)
 
     local contentW = frameW - pad * 2
+    local contentH = frameH - pad * 2
     local contentFactor = computeContentScaleFactor(
         createWorldMenu.baseSizes, contentW, uiscale)
     local contentBase = {}
@@ -652,39 +696,90 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
     contentBase.randboxWidth = createWorldMenu.baseSizes.randboxWidth * contentFactor
     contentBase.textboxWidth = createWorldMenu.baseSizes.textboxWidth * contentFactor
 
-    local tabParams = {
-        page       = createWorldMenu.page,
-        font       = createWorldMenu.menuFont,
-        baseSizes  = contentBase,
-        uiscale    = uiscale,
-        s          = s,
-        contentX   = frameX + pad,
-        contentY   = frameY + pad,
-        contentW   = contentW,
-        zContent   = Z_CONTENT,
-        zWidgets   = Z_WIDGETS,
-        pending    = createWorldMenu.pending,
-        trackLabel    = createWorldMenu.trackLabel,
-        trackRandBox  = createWorldMenu.trackRandBox,
-        trackDropdown = createWorldMenu.trackDropdown,
-        trackTextBox  = createWorldMenu.trackTextBox,
-    }
+    -- #748 round 5: scrollable tab content. showTab previously only
+    -- toggled per-element visibility — with all rows root-mounted at
+    -- absolute positions and no clip/scroll of its own, a tab whose
+    -- rows exceed the frame's height (e.g. General's 5 rows at the
+    -- formal 800x600@1x minimum, well over its ~152px frame) rendered
+    -- rows outside the frame with no way to reach them. Each tab now
+    -- gets its own clipping viewport (fixed at the tab frame's bounds)
+    -- plus a movable scroll-content anchor as its child; every row
+    -- element is parented to that anchor (via each widget's #747
+    -- `parent` support) instead of the page root, so a row scrolled
+    -- outside the viewport is both visually clipped AND un-hittable
+    -- (UI.Clipping backs hit-testing too) with no manual per-row
+    -- show/hide needed — scrolling is just moving the anchor's Y.
+    local function buildTabViewport(key)
+        local viewportId = UI.newElement(
+            "cw_tab_" .. key .. "_viewport", contentW, contentH, createWorldMenu.page)
+        UI.addToPage(createWorldMenu.page, viewportId, frameX + pad, frameY + pad)
+        UI.setClipChildren(viewportId, true)
+        UI.setScrollCapture(viewportId, true)
+        UI.setZIndex(viewportId, Z_CONTENT)
 
-    -- General tab: name/seed/size plus the active calendar settings.
-    local settingsElems = settingsTab.create(tabParams)
+        local scrollContentId = UI.newElement(
+            "cw_tab_" .. key .. "_scroll", contentW, contentH, createWorldMenu.page)
+        UI.addChild(viewportId, scrollContentId, 0, 0)
+
+        createWorldMenu.tabScroll[key] = {
+            scrollOffset = 0, totalRows = 0, maxVisibleRows = 0,
+            viewportId = viewportId, scrollContentId = scrollContentId,
+            scrollbarId = nil, rowSpacing = s.rowSpacing,
+        }
+        return scrollContentId
+    end
+
+    local function tabParamsFor(key)
+        return {
+            page       = createWorldMenu.page,
+            font       = createWorldMenu.menuFont,
+            baseSizes  = contentBase,
+            uiscale    = uiscale,
+            s          = s,
+            contentX   = 0,
+            contentY   = 0,
+            contentW   = contentW,
+            zContent   = Z_CONTENT,
+            zWidgets   = Z_WIDGETS,
+            pending    = createWorldMenu.pending,
+            container  = buildTabViewport(key),
+            trackLabel    = createWorldMenu.trackLabel,
+            trackRandBox  = createWorldMenu.trackRandBox,
+            trackDropdown = createWorldMenu.trackDropdown,
+            trackTextBox  = createWorldMenu.trackTextBox,
+        }
+    end
+
+    -- General tab: name/seed/size plus the active calendar settings,
+    -- sharing ONE scrollable viewport (they render as a single combined
+    -- list under the "General" tab).
+    local settingsParams = tabParamsFor("settings")
+    local settingsElems, settingsRows = settingsTab.create(settingsParams)
     -- Offset the general tab content below the settings rows
     local generalParams = {}
-    for k, v in pairs(tabParams) do generalParams[k] = v end
-    generalParams.contentY = tabParams.contentY + s.rowSpacing * 3
-    local generalElems = generalTab.create(generalParams)
+    for k, v in pairs(settingsParams) do generalParams[k] = v end
+    generalParams.contentY = settingsParams.contentY + s.rowSpacing * 3
+    local generalElems, generalRows = generalTab.create(generalParams)
     -- Merge both element lists
     local combinedSettings = {}
     for _, e in ipairs(settingsElems) do table.insert(combinedSettings, e) end
     for _, e in ipairs(generalElems) do table.insert(combinedSettings, e) end
     createWorldMenu.tabElements["settings"] = combinedSettings
+    createWorldMenu.tabScroll["settings"].totalRows = settingsRows + generalRows
 
-    createWorldMenu.tabElements["advanced"] = advancedTab.create(tabParams)
-    createWorldMenu.tabElements["timeline"] = timelineTab.create(tabParams)
+    local advancedElems, advancedRows = advancedTab.create(tabParamsFor("advanced"))
+    createWorldMenu.tabElements["advanced"] = advancedElems
+    createWorldMenu.tabScroll["advanced"].totalRows = advancedRows
+
+    local timelineElems, timelineRows = timelineTab.create(tabParamsFor("timeline"))
+    createWorldMenu.tabElements["timeline"] = timelineElems
+    createWorldMenu.tabScroll["timeline"].totalRows = timelineRows
+
+    local maxVisibleRows = math.max(1, math.floor(contentH / s.rowSpacing))
+    for key, ts in pairs(createWorldMenu.tabScroll) do
+        ts.maxVisibleRows = maxVisibleRows
+        createWorldMenu.createTabScrollbar(key, frameX, frameY, frameW, frameH, uiscale)
+    end
 
     createWorldMenu.showTab(createWorldMenu.activeTab)
 end
@@ -704,6 +799,58 @@ function createWorldMenu.showTab(key)
             end
         end
     end
+
+    -- #748 round 5: toggle each tab's scrollable-content viewport +
+    -- scrollbar too (the per-element toggle above already handles
+    -- closing an open dropdown / clearing randbox state on hide — kept
+    -- unchanged rather than relying on ancestor-hiding alone for that).
+    -- Never resets scrollOffset on switch, so returning to a tab later
+    -- keeps its prior scroll position.
+    for tabKey, ts in pairs(createWorldMenu.tabScroll) do
+        local visible = (tabKey == key)
+        UI.setVisible(ts.viewportId, visible)
+        if ts.scrollbarId then scrollbar.setVisible(ts.scrollbarId, visible) end
+    end
+end
+
+-----------------------------------------------------------
+-- Tab content scrolling (#748 round 5)
+-----------------------------------------------------------
+
+function createWorldMenu.onTabScroll(key, offset)
+    local ts = createWorldMenu.tabScroll[key]
+    if not ts then return end
+    ts.scrollOffset = offset
+    UI.setPosition(ts.scrollContentId, 0, -offset * ts.rowSpacing)
+end
+
+function createWorldMenu.createTabScrollbar(key, frameX, frameY, frameW, frameH, uiscale)
+    local ts = createWorldMenu.tabScroll[key]
+    if not ts or ts.totalRows <= ts.maxVisibleRows then return end
+
+    local btnSize = math.floor(24 * uiscale)
+    local capH    = math.floor(4 * uiscale)
+    local trackH  = math.max(math.floor(20 * uiscale),
+                              frameH - btnSize * 2 - capH * 2)
+
+    ts.scrollbarId = scrollbar.new({
+        name         = "cw_tab_" .. key .. "_scrollbar",
+        page         = createWorldMenu.page,
+        x            = frameX + frameW,
+        y            = frameY,
+        buttonSize   = btnSize,
+        trackHeight  = trackH,
+        capHeight    = capH,
+        tileSize     = math.floor(8 * uiscale),
+        totalItems   = ts.totalRows,
+        visibleItems = ts.maxVisibleRows,
+        uiscale      = uiscale,
+        zIndex       = { track = Z_TAB_SB_TRACK, button = Z_TAB_SB_BUTTON,
+                         tab = Z_TAB_SB_TAB },
+        onScroll = function(offset, sbId, sbName)
+            createWorldMenu.onTabScroll(key, offset)
+        end,
+    })
 end
 
 -----------------------------------------------------------
@@ -770,7 +917,34 @@ end
 -- Scroll events (called from ui_manager)
 -----------------------------------------------------------
 
+-- #748 round 5: scroll routing for the active tab's scrollable content.
+-- The tab's own viewport is the element that actually captures the
+-- wheel event (#747, UI.setScrollCapture — routeScroll selects the
+-- topmost in-scope capturing surface regardless of which non-capturing
+-- row happens to be visually on top of it), so matching just the
+-- viewport handle (plus the scrollbar's own elements) is sufficient —
+-- mirrors settings_menu.onScroll's equivalent tab-frame-handle check.
+function createWorldMenu.tabScrollFor(elemHandle)
+    local ts = createWorldMenu.tabScroll[createWorldMenu.activeTab]
+    if not ts or not ts.scrollbarId then return nil end
+
+    if elemHandle == ts.viewportId then return ts end
+
+    local sbId, _ = scrollbar.findByElementHandle(elemHandle)
+    if sbId and sbId == ts.scrollbarId then return ts end
+
+    return nil
+end
+
 function createWorldMenu.onScroll(elemHandle, dx, dy)
+    local ts = createWorldMenu.tabScrollFor(elemHandle)
+    if ts then
+        if     dy > 0 then scrollbar.scrollUp(ts.scrollbarId)
+        elseif dy < 0 then scrollbar.scrollDown(ts.scrollbarId)
+        end
+        return true
+    end
+
     if not createWorldMenu.logScrollbarId then return false end
 
     local totalLines = #createWorldMenu.logLines
@@ -797,6 +971,17 @@ function createWorldMenu.onScroll(elemHandle, dx, dy)
 end
 
 function createWorldMenu.handleScrollCallback(callbackName, elemHandle)
+    local ts = createWorldMenu.tabScrollFor(elemHandle)
+    if ts then
+        if callbackName == "onScrollUp" then
+            scrollbar.scrollUp(ts.scrollbarId)
+            return true
+        elseif callbackName == "onScrollDown" then
+            scrollbar.scrollDown(ts.scrollbarId)
+            return true
+        end
+    end
+
     if not createWorldMenu.logScrollbarId then return false end
     local sbId, _ = scrollbar.findByElementHandle(elemHandle)
     if sbId and sbId == createWorldMenu.logScrollbarId then

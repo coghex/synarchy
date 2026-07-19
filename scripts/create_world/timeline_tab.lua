@@ -35,7 +35,7 @@ local function addLabel(params, elements, name, text, tooltip, cx, y)
         tooltip  = tooltip,
     }))
     local h = label.getElementHandle(id)
-    UI.addToPage(params.page, h, cx, y + params.s.fontSize)
+    UI.addChild(params.container, h, cx, y + params.s.fontSize)
     UI.setZIndex(h, params.zContent)
     table.insert(elements, { type = "label", handle = h })
 end
@@ -46,6 +46,7 @@ local function addBox(params, elements, name, x, y, default)
         width    = params.baseSizes.textboxWidth,
         height   = params.baseSizes.textboxHeight,
         page     = params.page,
+        parent   = params.container,
         x        = x,
         y        = y,
         uiscale  = params.uiscale,
@@ -107,7 +108,7 @@ function timelineTab.create(params)
     timelineTab.ageMinId = addBox(params, elements, "tl_amin_input", xMin, rowY(4), pending.ageMin)
     timelineTab.ageMaxId = addBox(params, elements, "tl_amax_input", xMax, rowY(4), pending.ageMax)
 
-    return elements
+    return elements, 5
 end
 
 -----------------------------------------------------------

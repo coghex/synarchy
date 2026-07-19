@@ -66,17 +66,18 @@ end
 -- }
 -- Returns: elements[] for show/hide
 function settingsTab.create(params)
-    local page     = params.page
-    local font     = params.font
-    local base     = params.baseSizes
-    local uiscale  = params.uiscale
-    local s        = params.s
-    local cx       = params.contentX
-    local cy       = params.contentY
-    local cw       = params.contentW
-    local zContent = params.zContent
-    local zWidgets = params.zWidgets
-    local pending  = params.pending
+    local page      = params.page
+    local font      = params.font
+    local base      = params.baseSizes
+    local uiscale   = params.uiscale
+    local s         = params.s
+    local cx        = params.contentX
+    local cy        = params.contentY
+    local cw        = params.contentW
+    local zContent  = params.zContent
+    local zWidgets  = params.zWidgets
+    local pending   = params.pending
+    local container = params.container
 
     local elements = {}
     local rowIndex = 0
@@ -98,8 +99,8 @@ function settingsTab.create(params)
         uiscale  = uiscale,
     }))
     local nameLabelHandle = label.getElementHandle(nameLabelId)
-    UI.addToPage(page, nameLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, nameLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(nameLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = nameLabelHandle })
 
@@ -112,6 +113,7 @@ function settingsTab.create(params)
         width    = base.nameBoxWidth,
         height   = base.randboxHeight,
         page     = page,
+        parent   = container,
         font     = font,
         fontSize = 24,
         uiscale  = uiscale,
@@ -144,8 +146,8 @@ function settingsTab.create(params)
         tooltip  = "Random seed for world generation. The same seed always produces the same world. Use the dice button to randomise.",
     }))
     local seedLabelHandle = label.getElementHandle(seedLabelId)
-    UI.addToPage(page, seedLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, seedLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(seedLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = seedLabelHandle })
 
@@ -158,6 +160,7 @@ function settingsTab.create(params)
         width    = base.randboxWidth,
         height   = base.randboxHeight,
         page     = page,
+        parent   = container,
         font     = font,
         fontSize = 24,
         uiscale  = uiscale,
@@ -190,8 +193,8 @@ function settingsTab.create(params)
         tooltip  = "World size in chunks. Larger worlds take significantly longer to generate and stream.",
     }))
     local sizeLabelHandle = label.getElementHandle(sizeLabelId)
-    UI.addToPage(page, sizeLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, sizeLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(sizeLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = sizeLabelHandle })
 
@@ -203,6 +206,7 @@ function settingsTab.create(params)
         fontSize          = 24,
         height            = base.dropdownHeight,
         page              = page,
+        parent            = container,
         x = 0, y = 0,
         uiscale           = uiscale,
         zIndex            = zWidgets,
@@ -220,7 +224,7 @@ function settingsTab.create(params)
     dropdown.setPosition(ddSizeId, cx + cw - ddSizeW, rowY(rowIndex))
     table.insert(elements, { type = "dropdown", id = ddSizeId })
 
-    return elements
+    return elements, 3
 end
 
 -----------------------------------------------------------

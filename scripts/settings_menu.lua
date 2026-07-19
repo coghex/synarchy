@@ -455,6 +455,27 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
         table.insert(tabList, { name = def.name, key = def.key })
     end
 
+    -- #748 round 5: the tab bar's own FRAME is correctly sized to
+    -- bounds.width (the panel's content bounds after scaled padding —
+    -- as narrow as ~240px at the supported 800x2160@4x combination),
+    -- but tabbar.lua lays each tab out at a width driven purely by its
+    -- OWN label text + scaled textPadding, left-to-right with no fit/
+    -- clip/scroll of its own — unrelated to bounds.width, and able to
+    -- overflow the framebuffer before any tab content is considered.
+    -- Shrink one effective, LOCAL uiscale for the tab bar only (never
+    -- the stored/configured scale, and never `s`/the rest of this
+    -- screen's layout), fit against bounds.width, mirroring
+    -- create_world_menu's identical tab-bar treatment for its own tabs.
+    local tabFontSize = math.floor(settingsMenu.baseSizes.tabFontSize * uiscale)
+    local textPadding = math.floor(10 * uiscale)
+    local naturalTabWidth = 0
+    for _, def in ipairs(tabDefs) do
+        naturalTabWidth = naturalTabWidth
+            + engine.getTextWidth(settingsMenu.menuFont, def.name, tabFontSize)
+            + textPadding * 2
+    end
+    local tabBarUiscale = responsive.fitScale(naturalTabWidth, bounds.width, uiscale)
+
     settingsMenu.tabBarId = settingsMenu.trackTabbar(tabbar.new({
         name              = "settings_tabs",
         page              = settingsMenu.page,
@@ -465,7 +486,7 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
         fontSize          = settingsMenu.baseSizes.tabFontSize,
         tabHeight         = settingsMenu.baseSizes.tabHeight,
         frameHeight       = tabFrameHeight,
-        uiscale           = uiscale,
+        uiscale           = tabBarUiscale,
         zIndex            = Z_TAB_FRAME,
         textColor         = {0.0, 0.0, 0.0, 1.0},
         selectedTextColor = {1.0, 1.0, 1.0, 1.0},

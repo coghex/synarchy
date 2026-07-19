@@ -18,6 +18,7 @@ local checkbox = require("scripts.ui.checkbox")
 local dropdown = require("scripts.ui.dropdown")
 local slider   = require("scripts.ui.slider")
 local data     = require("scripts.settings.data")
+local responsive = require("scripts.ui.responsive")
 
 local graphicsTab = {}
 
@@ -142,6 +143,34 @@ function graphicsTab.create(params)
     -- Checkbox size used by multiple rows
     local cbSize = math.floor(base.checkboxSize * uiscale)
 
+    -- #748 round 5: a dropdown's width is driven by its OPTION TEXT
+    -- metrics (dropdown.measureOptions) plus a fixed minWidth floor —
+    -- neither is a plain baseSizes field, so it can't be shrunk via
+    -- settings_menu's `contentBase` (which only covers textbox/slider/
+    -- checkbox widths). At a narrow content area and high uiscale (the
+    -- supported 800x2160@4x combination), the unshrunk floor alone
+    -- (100 * uiscale display width + a same-height arrow) already
+    -- exceeds `cw`, driving the right-aligned dropdown's x position
+    -- negative. Compute ONE effective, LOCAL uiscale for every dropdown
+    -- in this tab — never the stored/configured scale — from whichever
+    -- of the four option sets needs the most room at the tab's real
+    -- uiscale, mirroring dropdown.lua's own displayWidth+arrow formula
+    -- exactly so the fit is correct whether text metrics or the floor
+    -- dominate.
+    local dropFontSize = math.floor(24 * uiscale)
+    local dropHeight = math.floor(base.dropdownHeight * uiscale)
+    local naturalDropdownWidth = 0
+    for _, opts in ipairs({
+        data.resolutions, data.windowModes, data.msaaOptions, data.textureFilterOptions,
+    }) do
+        local displayW = math.max(
+            dropdown.measureOptions(opts, font, dropFontSize),
+            math.floor(100 * uiscale))
+        local totalW = displayW + dropHeight
+        if totalW > naturalDropdownWidth then naturalDropdownWidth = totalW end
+    end
+    local dropdownUiscale = responsive.fitScale(naturalDropdownWidth, cw, uiscale)
+
     ---------------------------------------------------------
     -- Row 1: Resolution (dropdown)
     ---------------------------------------------------------
@@ -170,7 +199,7 @@ function graphicsTab.create(params)
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = dropdown.resolutionValidator,
         matchFn           = dropdown.resolutionMatcher,
@@ -229,7 +258,7 @@ function graphicsTab.create(params)
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = graphicsTab.windowModeValidator,
         matchFn           = graphicsTab.windowModeMatcher,
@@ -377,7 +406,7 @@ function graphicsTab.create(params)
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = graphicsTab.msaaValidator,
         matchFn           = graphicsTab.msaaMatcher,
@@ -583,7 +612,7 @@ function graphicsTab.create(params)
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = graphicsTab.textureFilterValidator,
         matchFn           = graphicsTab.textureFilterMatcher,

@@ -357,7 +357,20 @@ function saveBrowser.onFramebufferResize(width, height)
         local prevValue = saveBrowser.listId
             and list.getSelectedValue(saveBrowser.listId)
 
+        -- #748 round 5: preserve keyboard CONTROL focus (#745) too,
+        -- mirroring settings_menu/create_world_menu/main_menu/pause_menu.
+        -- createUI() always deletes+recreates a fresh page (unlike those
+        -- other screens' teardown-only rebuild), so the restore must
+        -- wait until the fresh page is genuinely re-shown.
+        local wasVisible = UI.isPageVisible(saveBrowser.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+
         saveBrowser.createUI()
+
+        if wasVisible and saveBrowser.page then
+            UI.showPage(saveBrowser.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
 
         if prevValue and saveBrowser.listId then
             for idx, save in ipairs(saveBrowser.saves) do

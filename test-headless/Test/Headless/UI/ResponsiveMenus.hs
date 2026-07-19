@@ -654,7 +654,7 @@ spec = around withHeadlessEngine $ do
                     sbepPanelInFrame p `shouldBe` True
                     sbepValidWidth p `shouldBe` True
 
-    describe "settings menu's tab content stays in-frame at a narrow, high-scale supported combination" $
+    describe "settings menu's tab content stays in-frame at a narrow, high-scale supported combination" $ do
         it "800x2160@4x (the frame-limit textbox's unshrunk base width used to be positioned off the left edge)" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -670,6 +670,55 @@ spec = around withHeadlessEngine $ do
                 Just p → do
                     wnpX p `shouldSatisfy` (>= 0)
                     wnpRightEdge p `shouldSatisfy` (<= 800)
+
+        -- #748 round 5: a dropdown's width is driven by its OPTION TEXT
+        -- metrics (dropdown.measureOptions), not a plain baseSizes field
+        -- — stub engine.getTextWidth to realistic (nonzero) per-
+        -- character metrics so this actually exercises the text-driven
+        -- half of the fit (the floor-driven half alone was already
+        -- enough to overflow, but a real font's measured widths must
+        -- fit too).
+        it "800x2160@4x keeps the Resolution dropdown (+ its arrow) in-frame under realistic, nonzero text metrics" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "local gt = require('scripts.settings.graphics_tab');"
+                , "local dropdown = require('scripts.ui.dropdown');"
+                , "local dispInfo = UI.getElementInfo(dropdown.getElementHandle(gt.resolutionDropdownId));"
+                , "local arrowInfo = UI.getElementInfo(dropdown.getArrowHandle(gt.resolutionDropdownId));"
+                , "return {x = dispInfo.x, rightEdge = arrowInfo.x + arrowInfo.width}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    wnpX p `shouldSatisfy` (>= 0)
+                    wnpRightEdge p `shouldSatisfy` (<= 800)
+
+        -- #748 round 5: the tab bar's own FRAME is sized to bounds.width,
+        -- but each tab's clickable box is laid out at a width driven by
+        -- its OWN label text + padding, left-to-right with no fit/clip
+        -- of its own — stub engine.getTextWidth so this exercises real
+        -- (nonzero) label metrics rather than the headless-default zero.
+        it "800x2160@4x keeps every tab bar button in-frame under realistic, nonzero text metrics" $ \env → do
+            ls ← newBareLuaBackend env
+            inFrame ← evalBool ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "UI.showPage(m.page);"
+                , "local allInFrame = true;"
+                , "local sawAny = false;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name and e.name:match('^settings_tabs_tab_%d+$') then"
+                , "    sawAny = true;"
+                , "    if e.x < 0 or (e.x + e.width) > 800 then allInFrame = false end"
+                , "  end"
+                , "end;"
+                , "return allInFrame and sawAny"
+                ]
+            inFrame `shouldBe` True
 
     describe "create-world's compact fallback keeps tab content in-frame at a narrow, high-scale supported combination" $ do
         it "800x2160@4x (fixed paddings alone used to drive contentW negative)" $ \env → do
@@ -714,6 +763,56 @@ spec = around withHeadlessEngine $ do
                     cwepPanelInFrame p `shouldBe` True
                     cwepNameRightEdge p `shouldSatisfy` (<= 800)
 
+    describe "create-world's tab content scrolls when it overflows the tab frame (#748 round 5)" $ do
+        it "the General tab (5 rows) needs a scrollbar at the formal 800x600@1x minimum" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 800 600
+                , "local ts = m.tabScroll['settings'];"
+                , "return {totalRows = ts.totalRows, maxVisibleRows = ts.maxVisibleRows,"
+                    <> " hasScrollbar = (ts.scrollbarId ~= nil)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TabScrollProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tscpTotalRows p `shouldSatisfy` (> tscpMaxVisibleRows p)
+                    tscpHasScrollbar p `shouldBe` True
+
+        it "a row past the visible frame is clipped out, then reachable after scrolling" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 800 600
+                , "UI.showPage(m.page);"
+                , "local gt = require('scripts.create_world.general_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local handle = textbox.getElementHandle(gt.daysPerMonthId);"
+                , "local before = UI.getElementInfo(handle);"
+                , "local clippedBefore = before.y < before.effectiveClip.y"
+                    <> " or before.y >= (before.effectiveClip.y + before.effectiveClip.h);"
+                , "m.onTabScroll('settings', m.tabScroll['settings'].totalRows"
+                    <> " - m.tabScroll['settings'].maxVisibleRows);"
+                , "local after = UI.getElementInfo(handle);"
+                , "local visibleAfter = after.y >= after.effectiveClip.y"
+                    <> " and after.y < (after.effectiveClip.y + after.effectiveClip.h);"
+                , "return {clippedBefore = clippedBefore, visibleAfter = visibleAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ScrollRevealProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    srpClippedBefore p `shouldBe` True
+                    srpVisibleAfter p `shouldBe` True
+
+        it "switching tabs and back preserves each tab's own scroll offset" $ \env → do
+            ls ← newBareLuaBackend env
+            offsetsMatch ← evalBool ls $ luaLines
+                [ bootCreateWorld 800 600
+                , "m.onTabScroll('settings', 2);"
+                , "m.showTab('advanced');"
+                , "m.showTab('settings');"
+                , "return m.tabScroll['settings'].scrollOffset == 2"
+                ]
+            offsetsMatch `shouldBe` True
+
     describe "keyboard control focus (#745) survives a resize rebuild" $ do
         it "settings menu restores focus onto the rebuilt control with the same name" $ \env → do
             ls ← newBareLuaBackend env
@@ -749,6 +848,62 @@ spec = around withHeadlessEngine $ do
                 , "local hadFocusBefore = UI.hasControlFocus(button.getElementHandle(m.backButtonId));"
                 , "m.onFramebufferResize(1600, 900);"
                 , "local hasFocusAfter = UI.hasControlFocus(button.getElementHandle(m.backButtonId));"
+                , "return {hadFocusBefore=hadFocusBefore, hasFocusAfter=hasFocusAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ControlFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cfpHadFocusBefore p `shouldBe` True
+                    cfpHasFocusAfter p `shouldBe` True
+
+        -- #748 round 5: main_menu/pause_menu/save_browser previously
+        -- destroyed+recreated their clickable controls on resize with no
+        -- focus snapshot/restore at all (settings_menu/create_world_menu
+        -- were the only two screens covered above).
+        it "main menu restores focus onto the rebuilt control with the same name" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootMain 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "UI.setControlFocus(m.ownedBoxes[1]);"
+                , "local hadFocusBefore = UI.hasControlFocus(m.ownedBoxes[1]);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local hasFocusAfter = UI.hasControlFocus(m.ownedBoxes[1]);"
+                , "return {hadFocusBefore=hadFocusBefore, hasFocusAfter=hasFocusAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ControlFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cfpHadFocusBefore p `shouldBe` True
+                    cfpHasFocusAfter p `shouldBe` True
+
+        it "pause menu restores focus onto the rebuilt control with the same name" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootPause 1280 720 <> ";"
+                , "UI.setControlFocus(m.ownedBoxes[1]);"
+                , "local hadFocusBefore = UI.hasControlFocus(m.ownedBoxes[1]);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local hasFocusAfter = UI.hasControlFocus(m.ownedBoxes[1]);"
+                , "return {hadFocusBefore=hadFocusBefore, hasFocusAfter=hasFocusAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ControlFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cfpHadFocusBefore p `shouldBe` True
+                    cfpHasFocusAfter p `shouldBe` True
+
+        it "save browser restores focus onto the rebuilt Back button" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootSaveBrowser 1280 720 <> ";"
+                , "local button = require('scripts.ui.button');"
+                , "local backHandle = button.getElementHandle(m.ownedButtons[1]);"
+                , "UI.setControlFocus(backHandle);"
+                , "local hadFocusBefore = UI.hasControlFocus(backHandle);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local backHandleAfter = button.getElementHandle(m.ownedButtons[1]);"
+                , "local hasFocusAfter = UI.hasControlFocus(backHandleAfter);"
                 , "return {hadFocusBefore=hadFocusBefore, hasFocusAfter=hasFocusAfter}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ControlFocusProbe of
@@ -890,6 +1045,18 @@ data SaveBrowserExtremeProbe = SaveBrowserExtremeProbe
 instance FromJSON SaveBrowserExtremeProbe where
     parseJSON = withObject "SaveBrowserExtremeProbe" $ \o → SaveBrowserExtremeProbe
         <$> o .: "panelInFrame" <*> o .: "validWidth"
+
+data TabScrollProbe = TabScrollProbe
+    { tscpTotalRows ∷ Int, tscpMaxVisibleRows ∷ Int, tscpHasScrollbar ∷ Bool } deriving Show
+instance FromJSON TabScrollProbe where
+    parseJSON = withObject "TabScrollProbe" $ \o → TabScrollProbe
+        <$> o .: "totalRows" <*> o .: "maxVisibleRows" <*> o .: "hasScrollbar"
+
+data ScrollRevealProbe = ScrollRevealProbe
+    { srpClippedBefore ∷ Bool, srpVisibleAfter ∷ Bool } deriving Show
+instance FromJSON ScrollRevealProbe where
+    parseJSON = withObject "ScrollRevealProbe" $ \o → ScrollRevealProbe
+        <$> o .: "clippedBefore" <*> o .: "visibleAfter"
 
 data TextboxStateProbe = TextboxStateProbe
     { tspText ∷ Text, tspCursor ∷ Int, tspFocused ∷ Bool } deriving Show

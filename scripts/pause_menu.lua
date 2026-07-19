@@ -391,8 +391,12 @@ function pauseMenu.onFramebufferResize(width, height)
     pauseMenu.fbW = width
     pauseMenu.fbH = height
     if pauseMenu.uiCreated and pauseMenu.visible then
+        -- #748 round 5: preserve keyboard CONTROL focus (#745) across a
+        -- resize rebuild, mirroring settings_menu/create_world_menu/main_menu.
+        local controlFocusName = responsive.snapshotControlFocusName()
         pauseMenu.createUI()
         UI.showPage(pauseMenu.page)
+        responsive.restoreControlFocusName(controlFocusName)
     end
 end
 

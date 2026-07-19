@@ -454,7 +454,19 @@ function mainMenu.onFramebufferResize(width, height)
     mainMenu.fbW = width
     mainMenu.fbH = height
     if mainMenu.uiCreated then
+        -- #748 round 5: preserve keyboard CONTROL focus (#745) across a
+        -- resize rebuild, exactly like settings_menu/create_world_menu —
+        -- the menu-item boxes are eligible ueOnClick controls too.
+        -- Restoring needs the rebuilt page genuinely visible again
+        -- (UI.getVisibleElements() only considers visible pages), so
+        -- guard the re-show on wasVisible (queried before teardown).
+        local wasVisible = mainMenu.page and UI.isPageVisible(mainMenu.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
         mainMenu.createUI()
+        if wasVisible and mainMenu.page then
+            UI.showPage(mainMenu.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
     end
 end
 

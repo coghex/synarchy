@@ -17,17 +17,18 @@ generalTab.monthsPerYearId = nil
 -----------------------------------------------------------
 
 function generalTab.create(params)
-    local page     = params.page
-    local font     = params.font
-    local base     = params.baseSizes
-    local uiscale  = params.uiscale
-    local s        = params.s
-    local cx       = params.contentX
-    local cy       = params.contentY
-    local cw       = params.contentW
-    local zContent = params.zContent
-    local zWidgets = params.zWidgets
-    local pending  = params.pending
+    local page      = params.page
+    local font      = params.font
+    local base      = params.baseSizes
+    local uiscale   = params.uiscale
+    local s         = params.s
+    local cx        = params.contentX
+    local cy        = params.contentY
+    local cw        = params.contentW
+    local zContent  = params.zContent
+    local zWidgets  = params.zWidgets
+    local pending   = params.pending
+    local container = params.container
 
     local elements = {}
     local rowIndex = 0
@@ -48,7 +49,7 @@ function generalTab.create(params)
             tooltip  = tooltip,
         }))
         local lblHandle = label.getElementHandle(lblId)
-        UI.addToPage(page, lblHandle, cx, rowY(rowIndex) + s.fontSize)
+        UI.addChild(container, lblHandle, cx, rowY(rowIndex) + s.fontSize)
         UI.setZIndex(lblHandle, zContent)
         table.insert(elements, { type = "label", handle = lblHandle })
 
@@ -58,6 +59,7 @@ function generalTab.create(params)
             width    = base.textboxWidth,
             height   = base.textboxHeight,
             page     = page,
+            parent   = container,
             x        = cx + cw - tbW,
             y        = rowY(rowIndex),
             uiscale  = uiscale,
@@ -78,7 +80,7 @@ function generalTab.create(params)
     addRow("Months / Year",  "months_per_year",  "monthsPerYear",  textbox.Type.NUMBER,
         function(id) generalTab.monthsPerYearId = id end)
 
-    return elements
+    return elements, 2
 end
 
 -----------------------------------------------------------

@@ -572,13 +572,51 @@ not just whichever screen the change originated from, which is what
 `settingsMenu.onApply`/`onSave` now do instead of rebuilding only
 themselves.
 
-Settings and create-world already followed the fixed-nav/scrollable-
-content pattern the envelope needs (tab bar + bottom action buttons
-positioned once from the panel's own dimensions, tab/log content
-virtual-scrolled within a fixed frame) — C2 didn't have to invent it,
-only fix a real gap: a mere geometry rebuild (window resize, or a scale
-change forwarded via `notifyResize`) must preserve state a semantic
-re-entry (opening the menu fresh, Load Defaults) is allowed to reset.
+Settings already followed the fixed-nav/scrollable-content pattern the
+envelope needs (tab bar + bottom action buttons positioned once from
+the panel's own dimensions, tab content virtual-scrolled within a fixed
+frame via per-row show/hide) and create-world's LOG panel already
+scrolled the same way — but create-world's actual TAB content (General/
+Geology/Timeline) had no scroll or clip of its own at all: `showTab`
+only toggled each row's visibility, with every row root-mounted at an
+absolute position, so a tab whose rows exceeded the frame's height
+(General's 5 rows at the formal 800x600@1x minimum, well over its
+~152px frame) rendered rows outside the frame with no way to reach
+them — a real gap review round 5 caught and closed.
+
+create-world's tab content now scrolls via real clipping (#747) instead
+of settings_menu's older manual per-row show/hide: `createUI` builds
+ONE pair per tab key (`"settings"` — General, combining `settings_tab`+
+`general_tab` — `"advanced"` — Geology — and `"timeline"`) via
+`UI.newElement` — a stationary clipping VIEWPORT
+(`UI.setClipChildren(viewport, true)`, `UI.setScrollCapture(viewport,
+true)`, fixed at the tab frame's own bounds) holding a movable
+SCROLL-CONTENT anchor as its one child. Every row widget across
+`settings_tab.lua`/`general_tab.lua`/`advanced_tab.lua`/
+`timeline_tab.lua` is parented to that anchor via each widget's #747
+`parent` support (`label.new`/`randbox.new`/`dropdown.new`/
+`textbox.new` all accept `parent = params.container`, wired straight
+into `UI.addChild` inside the widget itself — the row-authoring code in
+each tab module is otherwise UNCHANGED, since `contentX`/`contentY`
+just become anchor-relative (0,0) instead of page-absolute
+(frameX+pad, frameY+pad)) — a row scrolled outside the viewport is both
+visually clipped AND un-hittable (`UI.Clipping` backs hit-testing too,
+see `UI.Manager.Query.isPointInElement`), so no manual per-row
+show/hide is needed; `createWorldMenu.onTabScroll(key, offset)` just
+moves the anchor's Y (`UI.setPosition(scrollContentId, 0, -offset *
+rowSpacing)`). Each tab module's `.create()` now returns a second value
+(its own fixed row count, e.g. `return elements, 5`) so
+`createWorldMenu` can size each tab's scrollbar
+(`createWorldMenu.createTabScrollbar`) without hand-counting rows at
+the call site. `showTab` still runs its existing per-element
+type-dispatch visibility toggle (closing an open dropdown, clearing
+randbox state) alongside the new per-tab viewport/scrollbar visibility
+toggle — ancestor-hiding alone would visually and hit-test-wise hide a
+row but wouldn't run a widget's own on-hide side effects.
+
+A mere geometry rebuild (window resize, or a scale change forwarded via
+`notifyResize`) must preserve state a semantic re-entry (opening the
+menu fresh, Load Defaults) is allowed to reset.
 `settingsMenu.createUI(opts)` takes `opts.preserveState` — `init`/
 `show`/`onDefaults` omit it (fresh pending + scroll, as before);
 `onFramebufferResize` and the scale-change notify path pass
@@ -589,14 +627,48 @@ clamped to the rebuilt content's new row count. `createWorldMenu`'s
 log scroll offset is likewise clamped-and-restored (and its lines
 repainted — `logPanelMod.create` always starts every slot blank)
 across every rebuild unconditionally, since nothing there ever wants a
-hard reset except `logPanelMod.clear()`'s own explicit call.
-`saveBrowser.onFramebufferResize` restores the previously-selected
-save via `list.setSelectedIndex` (`scripts/ui/list.lua`) rather than
-`list.selectItem` — the latter re-fires `onSelect`, which for the save
-list is a real, consequential action (loads the save and transitions
-the whole game), so restoring a highlight must never replay it.
-Genuine text reflow/wrapping and cross-rebuild keyboard-focus-position
-restoration are follow-ups, not covered by this pass.
+hard reset except `logPanelMod.clear()`'s own explicit call; its NEW
+per-tab scroll offsets (one per key) are preserved the same way, via
+`scrollbar.setScrollOffset` against each tab's freshly rebuilt
+scrollbar. `saveBrowser.onFramebufferResize` restores the
+previously-selected save via `list.setSelectedIndex`
+(`scripts/ui/list.lua`) rather than `list.selectItem` — the latter
+re-fires `onSelect`, which for the save list is a real, consequential
+action (loads the save and transitions the whole game), so restoring a
+highlight must never replay it.
+
+Keyboard CONTROL focus (#745) preservation across a resize rebuild
+(`responsive.snapshotControlFocusName`/`restoreControlFocusName`,
+matched by element NAME since handles don't survive a rebuild) was
+initially wired for settings_menu/create_world_menu only; review round
+5 extended the same wasVisible-guarded snapshot/restore to
+main_menu/pause_menu (their menu-item boxes are eligible `ueOnClick`
+controls too) and save_browser (whose `createUI()` always deletes and
+recreates a fresh page, unlike the other four screens' teardown-only
+rebuild — the restore still waits for the fresh page to be genuinely
+re-shown before searching `UI.getVisibleElements()`).
+
+A dropdown's width is driven by its OPTION TEXT metrics
+(`dropdown.measureOptions`) plus a fixed `minWidth` floor — neither is
+a plain `baseSizes` field, so it couldn't be shrunk via the
+`contentBase` shared shrink factor (which only ever covered textbox/
+slider/checkbox widths). `graphics_tab.lua`'s four dropdowns
+(Resolution/Window Mode/MSAA/Texture Filter) now compute ONE effective,
+LOCAL `dropdownUiscale` — mirroring `dropdown.new`'s own
+`displayWidth + arrowSize` formula exactly, fit via
+`responsive.fitScale` against the tab's real `contentW` — and use it in
+place of the tab's `uiscale` for every dropdown.new call, so the fit is
+correct whether the floor or real text metrics dominate.
+`settings_menu.lua`'s own tab BAR has the identical problem one level
+up: `tabbar.new`'s frame is correctly sized to `bounds.width`, but each
+tab's clickable box width is driven by its own label text + padding,
+laid out left-to-right with no fit of its own — `createTabBar` computes
+an equivalent local `tabBarUiscale` (real tab-name text width via
+`engine.getTextWidth`, fit against `bounds.width`) and passes it only to
+`tabbar.new`'s own `uiscale`, mirroring `create_world_menu`'s pre-
+existing identical tab-bar fix for its own three tabs.
+
+Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's
 own tracked panel id via `panel.getPosition`/`getSize`, `UI.

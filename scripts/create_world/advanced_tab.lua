@@ -28,17 +28,18 @@ advancedTab.waterfallQuantumTextBoxId = nil
 -- }
 -- Returns: elements[] for show/hide
 function advancedTab.create(params)
-    local page     = params.page
-    local font     = params.font
-    local base     = params.baseSizes
-    local uiscale  = params.uiscale
-    local s        = params.s
-    local cx       = params.contentX
-    local cy       = params.contentY
-    local cw       = params.contentW
-    local zContent = params.zContent
-    local zWidgets = params.zWidgets
-    local pending  = params.pending
+    local page      = params.page
+    local font      = params.font
+    local base      = params.baseSizes
+    local uiscale   = params.uiscale
+    local s         = params.s
+    local cx        = params.contentX
+    local cy        = params.contentY
+    local cw        = params.contentW
+    local zContent  = params.zContent
+    local zWidgets  = params.zWidgets
+    local pending   = params.pending
+    local container = params.container
 
     local elements = {}
     local rowIndex = 0
@@ -61,8 +62,8 @@ function advancedTab.create(params)
         tooltip  = "Number of tectonic plates the world starts with. Fewer plates produce larger continents and longer mountain ranges.",
     }))
     local plateLabelHandle = label.getElementHandle(plateLabelId)
-    UI.addToPage(page, plateLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, plateLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(plateLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = plateLabelHandle })
 
@@ -72,6 +73,7 @@ function advancedTab.create(params)
         width    = base.textboxWidth,
         height   = base.textboxHeight,
         page     = page,
+        parent   = container,
         x        = cx + cw - tbW,
         y        = rowY(rowIndex),
         uiscale  = uiscale,
@@ -99,8 +101,8 @@ function advancedTab.create(params)
         tooltip  = "How aggressively rivers and weathering wear down terrain. Higher values produce flatter, smoother landscapes.",
     }))
     local erosionLabelHandle = label.getElementHandle(erosionLabelId)
-    UI.addToPage(page, erosionLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, erosionLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(erosionLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = erosionLabelHandle })
 
@@ -109,6 +111,7 @@ function advancedTab.create(params)
         width    = base.textboxWidth,
         height   = base.textboxHeight,
         page     = page,
+        parent   = container,
         x        = cx + cw - tbW,
         y        = rowY(rowIndex),
         uiscale  = uiscale,
@@ -136,8 +139,8 @@ function advancedTab.create(params)
         tooltip  = "Frequency of volcanic uplift during geological evolution. Higher values create more mountain ranges and lava features.",
     }))
     local volcanicLabelHandle = label.getElementHandle(volcanicLabelId)
-    UI.addToPage(page, volcanicLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, volcanicLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(volcanicLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = volcanicLabelHandle })
 
@@ -146,6 +149,7 @@ function advancedTab.create(params)
         width    = base.textboxWidth,
         height   = base.textboxHeight,
         page     = page,
+        parent   = container,
         x        = cx + cw - tbW,
         y        = rowY(rowIndex),
         uiscale  = uiscale,
@@ -173,8 +177,8 @@ function advancedTab.create(params)
         tooltip  = "Tallest single water drop (in tiles) before a river carves a stepped gorge. Lower values give terraced cascades; higher values allow taller single waterfalls.",
     }))
     local waterfallLabelHandle = label.getElementHandle(waterfallLabelId)
-    UI.addToPage(page, waterfallLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, waterfallLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(waterfallLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = waterfallLabelHandle })
 
@@ -183,6 +187,7 @@ function advancedTab.create(params)
         width    = base.textboxWidth,
         height   = base.textboxHeight,
         page     = page,
+        parent   = container,
         x        = cx + cw - tbW,
         y        = rowY(rowIndex),
         uiscale  = uiscale,
@@ -194,7 +199,7 @@ function advancedTab.create(params)
     }))
     table.insert(elements, { type = "textbox", id = advancedTab.waterfallQuantumTextBoxId })
 
-    return elements
+    return elements, 4
 end
 
 -----------------------------------------------------------
