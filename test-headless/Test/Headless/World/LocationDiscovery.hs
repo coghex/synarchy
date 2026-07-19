@@ -21,6 +21,7 @@ import Data.IORef (writeIORef, readIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Load.Status (beginLoad, failLoad)
 import Engine.PlayerEvent (PlayerEvent(..))
 import Engine.PlayerEvent.Emit (readEventLog)
 import Location.Types
@@ -36,6 +37,7 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState)
 import World.Thread.Discovery (tickLocationDiscovery)
+import World.Thread.Time (tickWorldTime)
 
 -- * Fixtures — same ruin shape as Test.Headless.Location.Discovery:
 --   anchor (8,8), physical bounds (6,6)..(10,10), margin-6 expanded
@@ -180,3 +182,44 @@ spec = beforeAll initEnv $
             map peCoords evsActive `shouldBe` [Just (8, 8)]
             map peSourcePage evsHidden `shouldBe` [Just "disc_hidden"]
             map peCoords evsHidden `shouldBe` [Nothing]
+
+        -- Round 12 review (issue #763): World.Load.Stage.stageSession
+        -- runs on the world thread BEFORE the save barrier's capture
+        -- lock is ever entered, so an ordinary tickWorldTime landing
+        -- during that unlocked staging window used to mutate the LIVE,
+        -- still-current (pre-load) session's discovery state — a real,
+        -- persistent change the #763 contract says a failed/aborted
+        -- load must never leave behind. tickWorldTime now gates its own
+        -- call to tickLocationDiscovery on Engine.Load.Status.loadInProgress,
+        -- independent of the pause flag (which the existing tests above
+        -- deliberately never touch, since discovery firing "even while
+        -- paused" for a freshly loaded session is #780's own documented
+        -- contract, not something this fix should disturb).
+        it "a tick landing while a load transaction is in flight does \
+           \NOT discover a location a player-faction unit is already \
+           \standing in, even though the same tick would normally \
+           \discover it instantly; discovery resumes once the \
+           \transaction ends (simulated here as a failed/aborted load, \
+           \mirroring the #763 'nothing changed' contract)" $ \env → do
+            let pageId = WorldPageId "disc_loading"
+            ws ← newPage env pageId
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 401)
+                    (testUnit pageId "player" 8 8) }
+
+            Right reqId ← beginLoad (loadStatusRef env) "probe_load"
+            tickWorldTime env 1.0
+            mpDuring ← readIORef (wsGenParamsRef ws)
+            (wgpLocationDiscovered ⊚ mpDuring) `shouldBe` Just HS.empty
+            evsDuring ← eventsFor env 401
+            evsDuring `shouldBe` []
+
+            -- The transaction ends (failed, here) -- loadInProgress goes
+            -- false and discovery resumes on the very next tick.
+            failLoad (loadStatusRef env) reqId "test abort"
+            tickWorldTime env 1.0
+            mpAfter ← readIORef (wsGenParamsRef ws)
+            (wgpLocationDiscovered ⊚ mpAfter)
+                `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+            evsAfter ← eventsFor env 401
+            map peCategory evsAfter `shouldBe` ["location_discovery"]
