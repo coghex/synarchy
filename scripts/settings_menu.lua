@@ -17,6 +17,7 @@ local data           = require("scripts.settings.data")
 local graphicsTab      = require("scripts.settings.graphics_tab")
 local notificationsTab = require("scripts.settings.notifications_tab")
 local inputTab         = require("scripts.settings.input_tab")
+local shell            = require("scripts.shell")
 
 local settingsMenu = {}
 
@@ -323,6 +324,12 @@ function settingsMenu.createUI(opts)
 
     local savedScroll = {}
     local textboxSnap = nil
+    -- #748 round 7: dropdowns (Resolution/Window Mode/MSAA/Texture
+    -- Filter) are ALSO editable text inputs — dropdown.destroy
+    -- unfocuses and resets the raw display text back to the selected
+    -- option, silently discarding an in-progress (unsubmitted) filter
+    -- edit exactly like an unfixed textbox would.
+    local dropdownSnap = nil
     if preserveState then
         for key, ts in pairs(settingsMenu.tabScroll) do
             savedScroll[key] = ts.scrollOffset
@@ -335,6 +342,7 @@ function settingsMenu.createUI(opts)
         -- onFramebufferResize — since restoring it needs the page
         -- already visible, which createUI() itself never makes it.)
         textboxSnap = textbox.snapshotPage(settingsMenu.page)
+        dropdownSnap = dropdown.snapshotPage(settingsMenu.page)
     end
 
     -- Tear down owned elements only (not global destroyAll)
@@ -410,6 +418,7 @@ function settingsMenu.createUI(opts)
         -- textboxes (matched by name); a no-op for any name that no
         -- longer has a live textbox (e.g. a hidden tab's control).
         textbox.restoreAll(textboxSnap)
+        dropdown.restoreAll(dropdownSnap)
     end
 
     settingsMenu.showTab(settingsMenu.activeTab)
@@ -568,12 +577,21 @@ function settingsMenu.createAllTabs(s, uiscale)
     local maxVisibleRows = math.max(1, math.floor(contentH / s.rowSpacing))
 
     -- #748: see tabCreateParams' comment above.
+    -- #748 round 7: target contentW*(1-LABEL_COLUMN_FRACTION), not the
+    -- near-full contentW*0.9 — the row's label sits at the row's own
+    -- left edge while the shrunk control right-aligns at
+    -- contentX+contentW-controlWidth; letting the control's own fit
+    -- consume nearly the whole row left it landing back at ~contentX,
+    -- overlapping the label (mirrors create_world_menu's identical
+    -- reservation for its own randbox/textbox rows).
+    local LABEL_COLUMN_FRACTION = 0.35
     local base = settingsMenu.baseSizes
     local widestControlBase = math.max(base.sliderWidth or 200, base.textboxWidth)
     local naturalWidestControl = widestControlBase * uiscale
+    local maxControlWidth = contentW * (1 - LABEL_COLUMN_FRACTION)
     local contentBase = base
-    if naturalWidestControl > 0 and naturalWidestControl > contentW * 0.9 then
-        local factor = (contentW * 0.9) / naturalWidestControl
+    if naturalWidestControl > 0 and naturalWidestControl > maxControlWidth then
+        local factor = maxControlWidth / naturalWidestControl
         contentBase = {}
         for k, v in pairs(base) do contentBase[k] = v end
         contentBase.textboxWidth = base.textboxWidth * factor
@@ -907,6 +925,16 @@ function settingsMenu.onApply()
         -- visible, which it always is here (this IS the visible
         -- settings screen the user just clicked Apply on).
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        -- #748 round 7: the shell debug console is NOT registered
+        -- through responsive.register/notifyResize — the engine
+        -- already broadcasts a REAL framebuffer resize straight to
+        -- shell.lua directly (Engine.Scripting.Lua.Thread.Dispatch),
+        -- so routing it through the shared fan-out too would rebuild
+        -- an already-open shell TWICE per real resize. This scale-only
+        -- notify (same fbW/fbH, no resize event at all) is the one
+        -- case shell's own direct broadcast never covers, so call its
+        -- existing onFramebufferResize directly here instead.
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 
@@ -916,6 +944,7 @@ function settingsMenu.onSave()
     local result = data.save(vals)
     if result.scaleChanged then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 

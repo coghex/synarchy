@@ -1237,6 +1237,78 @@ function dropdown.getSelectedIndex(id)
     return dd.selectedIndex
 end
 
+-- Raw (possibly unsubmitted) filter text — distinct from getValue/
+-- getText, which report the currently SELECTED option, not whatever
+-- the user is mid-typing into the display box before it resolves to a
+-- selection. Mirrors textbox/randbox's own getCursor/setCursor.
+function dropdown.getRawText(id)
+    local dd = dropdowns[id]
+    if not dd then return "" end
+    return UI.getTextInput(dd.displayBoxId) or ""
+end
+
+function dropdown.setRawText(id, text)
+    local dd = dropdowns[id]
+    if not dd then return end
+    UI.setTextInput(dd.displayBoxId, text)
+    dropdown.updateDisplay(id)
+end
+
+function dropdown.getCursor(id)
+    local dd = dropdowns[id]
+    if not dd then return 0 end
+    return UI.getCursor(dd.displayBoxId) or 0
+end
+
+function dropdown.setCursor(id, pos)
+    local dd = dropdowns[id]
+    if not dd then return end
+    UI.setCursor(dd.displayBoxId, pos)
+    dropdown.updateDisplay(id)
+end
+
+-- #748 round 7: mirrors textbox/randbox's snapshotPage/restoreAll — a
+-- resize rebuild must preserve an in-progress (unsubmitted) FILTER
+-- edit, cursor, and keyboard focus too, not just the selected option.
+-- dropdown.destroy (called via the owning screen's destroyOwned,
+-- ahead of every rebuild) unfocuses and resets the raw display text
+-- back to the selected option, silently discarding an in-progress edit
+-- otherwise.
+function dropdown.snapshotPage(page)
+    local snap = {}
+    for id, dd in pairs(dropdowns) do
+        if dd.page == page then
+            snap[dd.name] = {
+                text = dropdown.getRawText(id),
+                cursor = dropdown.getCursor(id),
+                focused = dd.focused,
+            }
+        end
+    end
+    return snap
+end
+
+function dropdown.restoreAll(snap)
+    if not snap then return end
+
+    local focusedId = nil
+    for id, dd in pairs(dropdowns) do
+        local saved = snap[dd.name]
+        if saved then
+            dropdown.setRawText(id, saved.text)
+            if saved.focused then focusedId = id end
+        end
+    end
+
+    if focusedId then
+        dropdown.focus(focusedId)
+        local savedCursor = snap[dropdowns[focusedId].name].cursor
+        if savedCursor then
+            dropdown.setCursor(focusedId, savedCursor)
+        end
+    end
+end
+
 function dropdown.isOpen(id)
     local dd = dropdowns[id]
     if not dd then return false end

@@ -385,9 +385,14 @@ function createWorldMenu.createUI(opts)
     -- its text/cursor/focus on a mere rebuild exactly like an unfixed
     -- textbox would.
     local randboxSnap = nil
+    -- #748 round 7: World Size is a dropdown — also an editable text
+    -- input (its raw filter text is discarded back to the selected
+    -- option on destroy), so it needs the same preservation.
+    local dropdownSnap = nil
     if preserveState then
         textboxSnap = textbox.snapshotPage(createWorldMenu.page)
         randboxSnap = randbox.snapshotPage(createWorldMenu.page)
+        dropdownSnap = dropdown.snapshotPage(createWorldMenu.page)
     end
 
     createWorldMenu.destroyOwned()
@@ -580,6 +585,7 @@ function createWorldMenu.createUI(opts)
     if preserveState then
         textbox.restoreAll(textboxSnap)
         randbox.restoreAll(randboxSnap)
+        dropdown.restoreAll(dropdownSnap)
     end
 
     createWorldMenu.uiCreated = true
@@ -624,8 +630,18 @@ end
 -- widest control's own total width when solving for the factor.
 -----------------------------------------------------------
 
+-- #748 round 7: the row's LABEL (e.g. "Name") sits at the row's own
+-- left edge (cx), while the shrunk control right-aligns at
+-- cx+cw-controlWidth — if the control is allowed to shrink-fit the
+-- ENTIRE row width, it can still end up occupying nearly all of it,
+-- landing its own left edge back at ~cx and overlapping the label.
+-- Reserve a fixed fraction of availableWidth for the label column so
+-- the control's own fit target never eats the whole row.
+local LABEL_COLUMN_FRACTION = 0.35
+
 local function computeContentScaleFactor(base, availableWidth, uiscale)
     local fixedPart = base.randboxHeight * uiscale
+        + availableWidth * LABEL_COLUMN_FRACTION
     local shrinkablePart = base.nameBoxWidth * uiscale
     if shrinkablePart <= 0 then return 1.0 end
     local budget = availableWidth - fixedPart

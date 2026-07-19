@@ -4,8 +4,9 @@
 --
 -- Row order:
 --   1. Plate Count (textbox)
-local label   = require("scripts.ui.label")
-local textbox = require("scripts.ui.textbox")
+local label      = require("scripts.ui.label")
+local textbox    = require("scripts.ui.textbox")
+local responsive = require("scripts.ui.responsive")
 
 local advancedTab = {}
 
@@ -48,6 +49,22 @@ function advancedTab.create(params)
         return cy + s.rowSpacing * n
     end
 
+    -- #748 round 7: see settings_tab.lua's identical comment — the
+    -- control's shrink (via computeContentScaleFactor) already
+    -- reserves a label column, but the label itself still needs its
+    -- own effective uiscale to actually fit inside it.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs({
+        "Plate Count", "Erosion Intensity", "Volcanic Activity", "Waterfall Step",
+    }) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
+
     ---------------------------------------------------------
     -- Row 1: Plate Count (textbox)
     ---------------------------------------------------------
@@ -58,7 +75,7 @@ function advancedTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Number of tectonic plates the world starts with. Fewer plates produce larger continents and longer mountain ranges.",
     }))
     local plateLabelHandle = label.getElementHandle(plateLabelId)
@@ -97,7 +114,7 @@ function advancedTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "How aggressively rivers and weathering wear down terrain. Higher values produce flatter, smoother landscapes.",
     }))
     local erosionLabelHandle = label.getElementHandle(erosionLabelId)
@@ -135,7 +152,7 @@ function advancedTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Frequency of volcanic uplift during geological evolution. Higher values create more mountain ranges and lava features.",
     }))
     local volcanicLabelHandle = label.getElementHandle(volcanicLabelId)
@@ -173,7 +190,7 @@ function advancedTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Tallest single water drop (in tiles) before a river carves a stepped gorge. Lower values give terraced cascades; higher values allow taller single waterfalls.",
     }))
     local waterfallLabelHandle = label.getElementHandle(waterfallLabelId)

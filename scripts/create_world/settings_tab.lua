@@ -6,9 +6,10 @@
 --   1. Name       (randbox)
 --   2. Seed       (randbox)
 --   3. World Size (dropdown)
-local label    = require("scripts.ui.label")
-local randbox  = require("scripts.ui.randbox")
-local dropdown = require("scripts.ui.dropdown")
+local label      = require("scripts.ui.label")
+local randbox    = require("scripts.ui.randbox")
+local dropdown   = require("scripts.ui.dropdown")
+local responsive = require("scripts.ui.responsive")
 
 local settingsTab = {}
 
@@ -86,6 +87,25 @@ function settingsTab.create(params)
         return cy + s.rowSpacing * n
     end
 
+    -- #748 round 7: create_world_menu's computeContentScaleFactor
+    -- reserves a LABEL_COLUMN_FRACTION-wide column for this tab's row
+    -- labels (the shrunk control's own right-aligned left edge never
+    -- passes cx+cw*0.35) — but that reservation is useless if the
+    -- label itself still renders at the tab's full uiscale, which can
+    -- still be far wider than its own reserved column at an extreme
+    -- narrow width. Compute ONE effective, LOCAL uiscale for every row
+    -- label in this tab from whichever label text is widest, fit
+    -- against the SAME reserved column width.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs({ "Name", "Seed", "Size" }) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
+
     ---------------------------------------------------------
     -- Row 1: World Name (randbox - wide)
     ---------------------------------------------------------
@@ -96,7 +116,7 @@ function settingsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local nameLabelHandle = label.getElementHandle(nameLabelId)
     UI.addChild(container, nameLabelHandle,
@@ -142,7 +162,7 @@ function settingsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Random seed for world generation. The same seed always produces the same world. Use the dice button to randomise.",
     }))
     local seedLabelHandle = label.getElementHandle(seedLabelId)
@@ -189,7 +209,7 @@ function settingsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "World size in chunks. Larger worlds take significantly longer to generate and stream.",
     }))
     local sizeLabelHandle = label.getElementHandle(sizeLabelId)

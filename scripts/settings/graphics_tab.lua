@@ -169,7 +169,38 @@ function graphicsTab.create(params)
         local totalW = displayW + dropHeight
         if totalW > naturalDropdownWidth then naturalDropdownWidth = totalW end
     end
-    local dropdownUiscale = responsive.fitScale(naturalDropdownWidth, cw, uiscale)
+    -- #748 round 7: fit against a REDUCED target (not the full row
+    -- width cw) that reserves a label column — the row's label sits at
+    -- cx, the right-aligned dropdown at cx+cw-width; letting the
+    -- dropdown's own fit consume the whole row left it landing back at
+    -- ~cx too, overlapping the label. Mirrors create_world_menu's
+    -- identical LABEL_COLUMN_FRACTION reservation.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local dropdownUiscale = responsive.fitScale(
+        naturalDropdownWidth, cw * (1 - LABEL_COLUMN_FRACTION), uiscale)
+
+    -- #748 round 7: reserving a label column doesn't help if the LABEL
+    -- itself still renders at the tab's full uiscale — a long label
+    -- ("Tooltip Delay (ms)") at 4x can still be far wider than even a
+    -- 35%-of-cw column, extending into and overlapping the row's own
+    -- control regardless of how little room the control itself needs.
+    -- Compute ONE effective, LOCAL uiscale for every row LABEL in this
+    -- tab from whichever label text is widest, fit against the SAME
+    -- reserved label column width — applied uniformly so no row's
+    -- label jumps size relative to another.
+    local ROW_LABELS = {
+        "Resolution", "Window Mode", "VSync", "Frame Limit", "Anti-Aliasing",
+        "Brightness", "UI Scaling", "Pixel Snap", "Texture Filter",
+        "Tooltip Delay (ms)", "Hint Delay (ms)",
+    }
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs(ROW_LABELS) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
 
     ---------------------------------------------------------
     -- Row 1: Resolution (dropdown)
@@ -181,7 +212,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local resLabelHandle = label.getElementHandle(resLabelId)
     UI.addToPage(page, resLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -243,7 +274,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local wmLabelHandle = label.getElementHandle(wmLabelId)
     UI.addToPage(page, wmLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -298,7 +329,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local vsLabelHandle = label.getElementHandle(vsLabelId)
     UI.addToPage(page, vsLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -344,7 +375,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local flLabelHandle = label.getElementHandle(flLabelId)
     UI.addToPage(page, flLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -391,7 +422,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local msaaLabelHandle = label.getElementHandle(msaaLabelId)
     UI.addToPage(page, msaaLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -446,7 +477,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local brLabelHandle = label.getElementHandle(brLabelId)
     UI.addToPage(page, brLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -499,7 +530,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local scaleLabelHandle = label.getElementHandle(scaleLabelId)
     UI.addToPage(page, scaleLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -546,7 +577,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Snaps sprites to integer pixel positions for a sharper, retro look",
     }))
     local psLabelHandle = label.getElementHandle(psLabelId)
@@ -593,7 +624,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltipRich = {
             text = "How textures are sampled when scaled",
             hint = "Nearest: pixel-perfect, crisp art    Linear: smooth bilinear blur",
@@ -652,7 +683,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "How long the cursor must rest on an element before its tooltip appears",
     }))
     local tdLabelHandle = label.getElementHandle(tdLabelId)
@@ -705,7 +736,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Extra delay after the tooltip appears before the hint section transitions in",
     }))
     local hdLabelHandle = label.getElementHandle(hdLabelId)

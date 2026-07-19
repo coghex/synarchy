@@ -42,7 +42,6 @@ local hud             = require("scripts.hud")
 local testArena       = require("scripts.test_arena")
 local pauseMenu       = require("scripts.pause_menu")
 local buildToolRemoteWarning = require("scripts.build_tool_remote_warning")
-local shell           = require("scripts.shell")
 
 -- #748: the shared responsive lifecycle's notification contract covers
 -- exactly the menu-screen scope (main/pause/settings/create-world/
@@ -58,11 +57,6 @@ responsive.register("createWorldMenu", createWorldMenu)
 responsive.register("saveBrowser", saveBrowser)
 responsive.register("loadingScreen", loadingScreen)
 responsive.register("pauseMenu", pauseMenu)
--- #748 round 6: the shell debug console isn't a C2 menu screen, but a
--- UI-scale Apply/Save must still reach it live — it used to only
--- rescale lazily the next time shell.show() ran, so an already-open
--- shell kept its old scale until closed and reopened.
-responsive.register("shell", shell)
 
 local boxTexSet = nil
 local btnTexSet = nil

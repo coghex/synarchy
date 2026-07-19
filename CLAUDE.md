@@ -710,6 +710,57 @@ values that geometry is computed FROM), and `ui_manager_boot.lua`
 registers it via `responsive.register("shell", shell)` — shell isn't a
 C2 menu screen, but shares the same live-scale-update need.
 
+Review round 7 found that reserving a control's own fit target (round 6)
+doesn't prevent overlap on its own: a row's LABEL sits at the row's own
+left edge (`cx`) while the shrunk control right-aligns at
+`cx+cw-controlWidth` — even once the control is correctly bounded to
+`cw*(1-LABEL_COLUMN_FRACTION)`, the LABEL itself still rendered at the
+tab's full uiscale, and a long label ("Tooltip Delay (ms)",
+"Periods / era (min–max)") at 4x can be far wider than its own reserved
+column, extending into and overlapping the control regardless.
+`graphics_tab.lua` and all four create-world tab modules
+(`settings_tab`/`general_tab`/`advanced_tab`/`timeline_tab.lua`) now
+each compute ONE additional effective, LOCAL `labelUiscale` — mirroring
+`dropdownUiscale`/`keyBtnUiscale`'s technique — from whichever row
+label text in that tab is widest, fit via `responsive.fitScale` against
+the SAME reserved `LABEL_COLUMN_FRACTION` (0.35) column width, and use
+it for every row label's `label.new` call (leaving the actual CONTROL's
+own uiscale/fit untouched). `settings_menu.lua`'s `createAllTabs` and
+`create_world_menu.lua`'s `computeContentScaleFactor` both changed their
+own control-fit target from a near-full `contentW*0.9` to
+`contentW*(1-LABEL_COLUMN_FRACTION)` for the same reason, on the
+control side.
+
+Round 7 also closed a THIRD editable-text-input gap: dropdowns
+(Resolution/Window Mode/MSAA/Texture Filter in Settings, World Size in
+create-world) are ALSO editable filter inputs — `dropdown.destroy`
+(called via `destroyOwned`, ahead of every rebuild) unfocuses and
+resets the raw display text back to the selected option, silently
+discarding an in-progress (unsubmitted) filter edit exactly like an
+unfixed textbox/randbox would. `scripts/ui/dropdown.lua` gained
+`getRawText`/`setRawText`/`getCursor`/`setCursor`/`snapshotPage`/
+`restoreAll`, mirroring textbox/randbox's exactly (raw filter text via
+`UI.getTextInput`/`setTextInput` on the display box — distinct from
+`getValue`/`getText`, which report the currently SELECTED option, not
+whatever's mid-typing), wired into `settings_menu.lua`'s and
+`create_world_menu.lua`'s existing `preserveState` branch alongside
+textbox/randbox.
+
+Round 7's last fix reverted round 6's shell registration: registering
+`shell` through `responsive.register`/`notifyResize` turned out to
+DOUBLE-ROUTE a real framebuffer resize — the engine already broadcasts
+`LuaFramebufferResize` straight to every independently-loaded script
+(`Engine.Scripting.Lua.Thread.Dispatch`), including `scripts/shell.lua`
+directly, so `ui_manager_boot.lua`'s own `onFramebufferResize` calling
+`responsive.notifyResize` a second time rebuilt an already-open shell
+TWICE per real resize, and bypassed `notifyResize`'s 0x0-minimize guard
+for that second path. `ui_manager_boot.lua` no longer registers shell
+at all; `settingsMenu.onApply`/`onSave` instead call
+`shell.onFramebufferResize` DIRECTLY (alongside the unrelated
+`responsive.notifyResize` call for the other registered C2 screens) —
+the one case shell's own direct engine broadcast never covers (a
+scale-only change, same framebuffer size, no resize event at all).
+
 Genuine text reflow/wrapping is a follow-up, not covered by this pass.
 
 Geometry for headless introspection needs no new surface: a screen's

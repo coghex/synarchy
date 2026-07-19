@@ -4,8 +4,9 @@
 -- Row order:
 --   1. Days / Month      (textbox NUMBER)
 --   2. Months / Year     (textbox NUMBER)
-local label   = require("scripts.ui.label")
-local textbox = require("scripts.ui.textbox")
+local label      = require("scripts.ui.label")
+local textbox    = require("scripts.ui.textbox")
+local responsive = require("scripts.ui.responsive")
 
 local generalTab = {}
 
@@ -37,6 +38,20 @@ function generalTab.create(params)
         return cy + s.rowSpacing * n
     end
 
+    -- #748 round 7: see settings_tab.lua's identical comment — the
+    -- control's shrink (via computeContentScaleFactor) already
+    -- reserves a label column, but the label itself still needs its
+    -- own effective uiscale to actually fit inside it.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs({ "Days / Month", "Months / Year" }) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
+
     local function addRow(labelText, name, pendingKey, textType, widgetIdSetter, tooltip)
         local lblId = params.trackLabel(label.new({
             name     = name .. "_label",
@@ -45,7 +60,7 @@ function generalTab.create(params)
             fontSize = base.fontSize,
             color    = {1.0, 1.0, 1.0, 1.0},
             page     = page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
             tooltip  = tooltip,
         }))
         local lblHandle = label.getElementHandle(lblId)

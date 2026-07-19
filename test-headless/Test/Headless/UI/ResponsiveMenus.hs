@@ -926,34 +926,145 @@ spec = around withHeadlessEngine $ do
                     tspCursor p `shouldBe` 3
                     tspFocused p `shouldBe` True
 
-    describe "shell debug console adopts the shared resize/scale contract (#748 round 6)" $
-        it "a live UI-scale notify (no framebuffer size change) updates an already-visible shell immediately, not just on next show()" $ \env → do
+    describe "shell debug console adopts the shared resize/scale contract (#748 round 6)" $ do
+        it "a UI-scale Apply (no framebuffer size change) updates an already-visible shell immediately, not just on next show()" $ \env → do
             ls ← newBareLuaBackend env
             noFurtherChangeNeeded ← evalBool ls $ luaLines
                 [ "local shell = require('scripts.shell');"
                 , "shell.init(0);"
                 , "shell.show();"
-                -- ui_manager_boot.lua (never loaded in this bare-lua-
-                -- backend suite) is what calls responsive.register at
-                -- module load time in production — register directly
-                -- here to exercise the same contract it wires up.
-                , "local responsive = require('scripts.ui.responsive');"
-                , "responsive.register('shell', shell);"
-                -- Prime the cache at scale 1.0 (init/show already ran
-                -- rescale once), then change scale and notify exactly
-                -- like settingsMenu.onApply/onSave does in production —
-                -- via the shared contract, not shell.show() again.
-                , "engine.setUIScale(2.0);"
-                , "responsive.notifyResize(1280, 720);"
-                -- If onFramebufferResize already called rescale()
-                -- internally, this second, direct rescale() call finds
-                -- nothing left to change (newScale == cached uiscale)
-                -- and returns false. Before the fix, the cache would
-                -- still read 1.0 here, so this would return true.
+                -- #748 round 7: shell is deliberately NOT registered
+                -- through responsive.register/notifyResize (the engine
+                -- already broadcasts a REAL framebuffer resize straight
+                -- to shell.lua directly — routing it through the
+                -- shared fan-out too would rebuild an already-open
+                -- shell TWICE per real resize). settingsMenu.onApply/
+                -- onSave call shell.onFramebufferResize directly
+                -- instead, exactly the case exercised here. (Scale
+                -- starts at whatever m.init() below captures as
+                -- data.current.uiScale — NOT pre-set here, or Apply
+                -- would see no change at all.)
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local graphicsTab = require('scripts.settings.graphics_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local data = require('scripts.settings.data');"
+                , "local target = (data.current.uiScale >= 3.0) and 1.0 or (data.current.uiScale + 1.0);"
+                , "textbox.setText(graphicsTab.uiScaleTextBoxId, tostring(target));"
+                , "m.onApply();"
+                -- If onApply's direct shell.onFramebufferResize call
+                -- already ran rescale() internally, this second, direct
+                -- rescale() call finds nothing left to change (newScale
+                -- == cached uiscale) and returns false. Before the fix,
+                -- the cache would still read 1.0 here, so this would
+                -- return true.
                 , "local changedAgain = shell.rescale();"
                 , "return not changedAgain"
                 ]
             noFurtherChangeNeeded `shouldBe` True
+
+        it "settingsMenu.onApply calls shell's resize handler exactly once (not double-routed through the shared fan-out)" $ \env → do
+            ls ← newBareLuaBackend env
+            calls ← evalInt ls $ luaLines
+                [ "local shell = require('scripts.shell');"
+                , "local calls = 0;"
+                , "local realHandler = shell.onFramebufferResize;"
+                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local graphicsTab = require('scripts.settings.graphics_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local data = require('scripts.settings.data');"
+                , "local target = (data.current.uiScale >= 3.0) and 1.0 or (data.current.uiScale + 1.0);"
+                , "textbox.setText(graphicsTab.uiScaleTextBoxId, tostring(target));"
+                , "m.onApply();"
+                , "return calls"
+                ]
+            calls `shouldBe` 1
+
+    describe "row labels never overlap their same-row control at a narrow, high-scale supported combination (#748 round 7)" $ do
+        it "graphics_tab.lua's Resolution row: label ends before the (also-reserved) dropdown begins at 800x2160@4x" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootSettings 800 2160
+                , "UI.showPage(m.page);"
+                , "local gt = require('scripts.settings.graphics_tab');"
+                , "local dropdown = require('scripts.ui.dropdown');"
+                , "local dropdownInfo = UI.getElementInfo(dropdown.getElementHandle(gt.resolutionDropdownId));"
+                , "local labelX = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name == 'resolution_label_text' then labelX = e.x end;"
+                , "end;"
+                , "return {x = labelX, rightEdge = dropdownInfo.x}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → wnpRightEdge p `shouldSatisfy` (>= wnpX p + 10)
+
+        it "create-world's World Name row: label ends before the (also-reserved) randbox begins at the formal 800x600@1x minimum" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.getTextWidth = function(font, text, size) return #text * size * 0.6 end;"
+                , bootCreateWorld 800 600 <> ";"
+                , "UI.showPage(m.page);"
+                , "local st = require('scripts.create_world.settings_tab');"
+                , "local randbox = require('scripts.ui.randbox');"
+                , "local randboxInfo = UI.getElementInfo(randbox.getElementHandle(st.nameRandBoxId));"
+                , "local labelX = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name == 'world_name_label_text' then labelX = e.x end;"
+                , "end;"
+                , "return {x = labelX, rightEdge = randboxInfo.x}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WorldNameProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → wnpRightEdge p `shouldSatisfy` (>= wnpX p + 10)
+
+    describe "editable dropdowns preserve an in-progress (unsubmitted) filter edit across a resize (#748 round 7)" $ do
+        it "settings menu's Resolution dropdown" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local gt = require('scripts.settings.graphics_tab');"
+                , "local dropdown = require('scripts.ui.dropdown');"
+                , "dropdown.setRawText(gt.resolutionDropdownId, '19');"
+                , "dropdown.focus(gt.resolutionDropdownId);"
+                , "dropdown.setCursor(gt.resolutionDropdownId, 2);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local newId = require('scripts.settings.graphics_tab').resolutionDropdownId;"
+                , "return {text = dropdown.getRawText(newId), cursor = dropdown.getCursor(newId),"
+                    <> " focused = dropdown.isFocused(newId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TextboxStateProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tspText p `shouldBe` "19"
+                    tspCursor p `shouldBe` 2
+                    tspFocused p `shouldBe` True
+
+        it "create-world's World Size dropdown" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "local st = require('scripts.create_world.settings_tab');"
+                , "local dropdown = require('scripts.ui.dropdown');"
+                , "dropdown.setRawText(st.sizeDropdownId, '25');"
+                , "dropdown.focus(st.sizeDropdownId);"
+                , "dropdown.setCursor(st.sizeDropdownId, 1);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local newId = require('scripts.create_world.settings_tab').sizeDropdownId;"
+                , "return {text = dropdown.getRawText(newId), cursor = dropdown.getCursor(newId),"
+                    <> " focused = dropdown.isFocused(newId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TextboxStateProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tspText p `shouldBe` "25"
+                    tspCursor p `shouldBe` 1
+                    tspFocused p `shouldBe` True
 
     describe "keyboard control focus (#745) survives a resize rebuild" $ do
         it "settings menu restores focus onto the rebuilt control with the same name" $ \env → do
@@ -1067,7 +1178,7 @@ bootSettings w h = "local m = require('scripts.settings_menu'); m.init(1,2,3," <
 -- suite skips uiManager.init()), a widget's underlying box element
 -- silently gets a nil texture handle and UI.newBox returns no handle
 -- at all, rather than erroring.
-bootCreateWorld w h = "require('scripts.ui.randbox').init(); require('scripts.ui.textbox').init(); local m = require('scripts.create_world_menu'); m.init(1,2,3," <> tshow w <> "," <> tshow h <> ")"
+bootCreateWorld w h = "require('scripts.ui.randbox').init(); require('scripts.ui.textbox').init(); require('scripts.ui.dropdown').init(); local m = require('scripts.create_world_menu'); m.init(1,2,3," <> tshow w <> "," <> tshow h <> ")"
 bootPause w h = "local m = require('scripts.pause_menu'); m.init(1,2,3,4," <> tshow w <> "," <> tshow h <> "); m.show({showSave=false})"
 bootSaveBrowser w h = luaLines
     [ "local m = require('scripts.save_browser');"
