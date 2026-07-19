@@ -647,11 +647,20 @@ function saveModules.applyAll()
         if prepared[id] ~= nil then
             local ok, err = pcall(saveModules.registry[id].apply, prepared[id])
             if not ok then
+                -- Round 5 review: `apply` is ordinary Lua code, not
+                -- guaranteed all-or-nothing -- it may have mutated
+                -- PART of its own singleton before throwing, so `id`
+                -- itself is not yet in `applied` and rollbackApplied
+                -- alone would skip it, leaving that partial mutation
+                -- live. Restore its own pre-load snapshot first, then
+                -- unwind every component applied before it.
+                pcall(saveModules.registry[id].apply, rollback[id])
                 rollbackApplied(applied)
                 saveModules._pendingApply = nil
                 saveModules._loadActive = false
                 error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
-                    .. "rolled back every already-applied component: "
+                    .. "rolled back every already-applied component "
+                    .. "(including its own partial mutation): "
                     .. tostring(err))
             end
             applied[#applied + 1] = id

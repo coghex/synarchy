@@ -121,22 +121,18 @@ writeSaveFiles rawName meta encoded luaKnownNames luaRequiredNames =
 --   generation/recovery machinery applies to it: it either decodes
 --   cleanly or is rejected outright, exactly as before #762.
 --
---   Round 2 review (requirement 2/16): the failure case also names the
+--   Round 2/5 review (requirement 2/16): the failure case also names the
 --   'LoadPhase' the attempt actually reached before failing, so
 --   'engine.getLoadStatus()' can retain real progress instead of every
---   failure collapsing straight from 'LoadPaused' to 'LoadFailed'. This
---   is necessarily coarse — 'Storage.selectLoadGeneration' and
---   'decodeSessionEnvelope' each perform envelope validation, component
---   decode, migration, and snapshot assembly as ONE atomic, unobservable
---   step (issues #759-#762), so there is no live checkpoint between
---   them to report progress FROM mid-flight; this only distinguishes,
---   after the fact, "never reached a structurally valid candidate at
---   all" ('LoadPaused' — missing/truncated/corrupt/symlinked) from
---   "reached a structurally valid, checksummed envelope that turned out
---   to be schema/content-incompatible" ('LoadEnvelopeValidated' — the
---   most conservative true claim for that case, since a version/content
---   mismatch can in principle be caught as early as the envelope's own
---   header).
+--   failure collapsing straight from 'LoadPaused' to 'LoadFailed'.
+--   'Storage.selectLoadGeneration'/'decodeSessionEnvelope' still perform
+--   envelope validation, component decode, migration, and snapshot
+--   assembly as one atomic, unobservable-from-outside call (issues
+--   #759-#762) — there is no LIVE checkpoint to report progress FROM
+--   mid-flight — but a failure's rendered text already carries a real,
+--   structured phase tag ('World.Save.Component.Types.ComponentPhase',
+--   issue #760 requirement 6) naming which internal step failed; see
+--   'phaseFor' below for how that's read back out after the fact.
 loadWorld
     ∷ LoggerState → Text → HS.HashSet Text → HS.HashSet Text
     → IO (Either (LoadPhase, Text) (SaveData, [(Text, Word32, BS.ByteString)]))
@@ -177,10 +173,31 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     reachedEnvelope ∷ Text → Bool
     reachedEnvelope = T.isInfixOf "incompatible with this build"
 
+    -- Round 5 review: rather than collapsing every "coherent but
+    -- incompatible" failure into one bucket, this reads the SAME
+    -- per-component phase tag 'World.Save.Component.Types.ComponentPhase'
+    -- already carries for its own diagnostic purpose (issue #760
+    -- requirement 6: "an error names the failing phase, not just that
+    -- something broke") — 'renderComponentError' already renders it
+    -- inline (e.g. "[core-session v3 DecodePhase] ..."), so it survives
+    -- into 'Storage.selectLoadGeneration''s error text unchanged. This
+    -- reads that existing, already-structured signal rather than
+    -- inventing a new one, and needs no signature change to any of
+    -- Component/Envelope/Storage's well-tested decode machinery.
+    -- ValidatePhase and AssemblePhase both bottom out at the same
+    -- reported checkpoint ('LoadComponentsMigrated'): there is no
+    -- separate LoadPhase constructor between "every component migrated"
+    -- and "the whole session assembled", and a per-component ValidatePhase
+    -- failure or a cross-component/whole-session AssemblePhase failure
+    -- both mean every component individually got at least that far.
     phaseFor ∷ Text → LoadPhase
     phaseFor err
-        | reachedEnvelope err = LoadEnvelopeValidated
-        | otherwise            = LoadPaused
+        | "AssemblePhase" `T.isInfixOf` err = LoadComponentsMigrated
+        | "ValidatePhase" `T.isInfixOf` err = LoadComponentsMigrated
+        | "MigratePhase"  `T.isInfixOf` err = LoadComponentsDecoded
+        | "DecodePhase"   `T.isInfixOf` err = LoadEnvelopeValidated
+        | reachedEnvelope err                = LoadEnvelopeValidated
+        | otherwise                          = LoadPaused
 
     -- Validate sdWorlds cardinality (and every other load-bearing check)
     -- at DECODE time so the load API fails cleanly (Left → engine.loadSave

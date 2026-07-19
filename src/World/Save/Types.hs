@@ -34,6 +34,9 @@ module World.Save.Types
     , MissingMaterialRef(..)
     , renderMissingMaterialRef
     , missingMaterialReferences
+    , MissingFloraRef(..)
+    , renderMissingFloraRef
+    , missingFloraReferences
     ) where
 
 import UPrelude
@@ -60,7 +63,8 @@ import World.Spoil.Types (SpoilPiles, SpoilPile(..))
 import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
 import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests)
-import World.Flora.CropPlot (CropPlots)
+import World.Flora.CropPlot (CropPlots, CropPlot(..))
+import World.Flora.Types (FloraId(..), FloraCatalog, lookupSpecies)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -1154,3 +1158,52 @@ missingMaterialReferences registry pages = concatMap pageRefs pages
     editMaterialRef (WeAddTile gx gy mat)   = [(gx, gy, mat)]
     editMaterialRef (WeSetCell gx gy _z mat) = [(gx, gy, mat)]
     editMaterialRef _                        = []
+
+-- Flora-id validation (issue #763 round-5 review) --------------------
+
+-- | A saved 'FloraId' — from the edit log ('WePlaceFlora') or a crop
+--   plot's species — that this build's 'World.Flora.Types.FloraCatalog'
+--   does not resolve. Unlike 'MaterialId', a 'FloraId' genuinely CAN be
+--   invalid ('lookupSpecies' returns 'Maybe', no always-total vector
+--   slot to fall back on), so this is a direct existence check, no
+--   special-cased sentinel id needed. Flora species drive crop/foraging
+--   gameplay (growth stage, harvest yield, ...), so an unresolved one
+--   is exactly the same class of load-blocking problem as a missing
+--   unit/item/building/recipe/material definition.
+data MissingFloraRef = MissingFloraRef
+    { mfrSource ∷ !Text          -- ^ e.g. "edit log", "crop plot"
+    , mfrPage   ∷ !WorldPageId
+    , mfrCoord  ∷ !(Int, Int)
+    , mfrFloraId ∷ !Word16
+    } deriving (Show, Eq)
+
+renderMissingFloraRef ∷ MissingFloraRef → Text
+renderMissingFloraRef r =
+    mfrSource r <> " at " <> T.pack (show (mfrCoord r)) <> " on page '"
+        <> unWorldPageId (mfrPage r) <> "' references unknown flora id "
+        <> T.pack (show (mfrFloraId r))
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved flora-species reference, across all pages, that does
+--   not resolve against the currently-registered flora catalog. Covers
+--   the edit log ('WePlaceFlora') and crop plots ('cpSpecies'). Empty
+--   ⇒ every reference resolves and the load may proceed.
+missingFloraReferences
+    ∷ FloraCatalog
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingFloraRef]
+missingFloraReferences catalog pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingFloraRef "edit log" pid (gx, gy) (unFloraId fid)
+        | edits ← HM.elems (wpsEdits w)
+        , edit ← edits
+        , (gx, gy, fid) ← editFloraRef edit
+        , unresolved fid ]
+        ⧺
+        [ MissingFloraRef "crop plot" pid coord (unFloraId (cpSpecies cp))
+        | (coord, cp) ← HM.toList (wpsCropPlots w)
+        , unresolved (cpSpecies cp) ]
+    editFloraRef (WePlaceFlora gx gy fid _day _grow) = [(gx, gy, fid)]
+    editFloraRef _                                    = []
+    unresolved fid = maybe True (const False) (lookupSpecies fid catalog)

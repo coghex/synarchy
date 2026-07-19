@@ -12,6 +12,7 @@ module Engine.Asset.YamlTextures
       -- * Loading
     , loadMaterialYaml
     , loadMaterialDirectory
+    , loadPopulatedMaterialRegistry
     , loadVegetationYaml
       -- * Lookup
     , lookupTextureName
@@ -32,6 +33,8 @@ import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Log (LoggerState, logInfo, logWarn, logDebug, LogCategory(..))
+import World.Material
+    (MaterialRegistry, MaterialProps(..), registerMaterial, emptyMaterialRegistry)
 
 -- * Materials
 
@@ -171,6 +174,38 @@ loadMaterialDirectory logger dir = do
     return mats
   where
     isYaml f = takeExtension f ∈ [".yaml", ".yml"]
+
+-- | 'loadMaterialDirectory' plus the fold into a real
+--   'World.Material.MaterialRegistry' — the exact population pass
+--   'World.Thread.Command.Init' runs at "Step 0.5" of every
+--   @world.init@, extracted here (issue #763 round 5) so
+--   'Engine.Scripting.Lua.API.Save' can call the SAME logic on a
+--   whole-session LOAD: the registry is otherwise populated only by
+--   @world.init@, so a fresh headless boot that goes straight to
+--   @engine.loadSave@ with no prior @world.init@ in the SAME process
+--   would see an entirely empty registry (every id but air reporting
+--   as "unknown") when validating a save's material references.
+--   Idempotent, like the population pass it mirrors — safe to call
+--   even when a live world has already populated the registry.
+loadPopulatedMaterialRegistry ∷ LoggerState → FilePath → IO MaterialRegistry
+loadPopulatedMaterialRegistry logger dir = do
+    matDefs ← loadMaterialDirectory logger dir
+    pure $ foldl' (\r def →
+        registerMaterial (mdId def)
+            (MaterialProps (mdName def)
+                           (mdHardness def)
+                           (mdDensity def)
+                           (mdAlbedo def)
+                           (mdDrainage def)
+                           (mdPickSpeed def)
+                           (mdShovelSpeed def)
+                           (mdDigSpoil def)
+                           (mdDigBulking def)
+                           (mdDigChunk def)
+                           (mdDigGems def)
+                           (mdMoveCost def))
+            r
+        ) emptyMaterialRegistry matDefs
 
 loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
 loadVegetationYaml logger path = do

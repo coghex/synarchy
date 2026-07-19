@@ -21,6 +21,7 @@ import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
+import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
@@ -32,7 +33,9 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingConstructDefReferences
                         , renderMissingConstructDefRef
                         , missingMaterialReferences
-                        , renderMissingMaterialRef)
+                        , renderMissingMaterialRef
+                        , missingFloraReferences
+                        , renderMissingFloraRef)
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
@@ -426,24 +429,35 @@ continueLoad env logger requestId saveName descriptors = do
                 , LoadSnapshotAssembled ]
             -- #760 req. 9 (round 8 extends this to every gameplay
             -- content reference, not just building/unit defs; issue
-            -- #763's round-3 review extends it again to material ids —
-            -- the approved issue's own acceptance criteria names
-            -- "material" explicitly alongside unit/item/building/
-            -- recipe): validate every saved content-definition
-            -- reference against the currently-registered defs BEFORE
-            -- publishing ANY live state. A missing gameplay DEFINITION
-            -- rejects the COMPLETE load with a clear error naming
-            -- what's missing (requirement 9: never silently prune
-            -- affected entities). (Missing visual ASSETS stay a soft
-            -- fallback, not gated here — only definitions. FloraId/
-            -- location-overlay ids and equipment slot-id keys remain a
-            -- documented, pre-existing, out-of-scope gap per
-            -- docs/persistence_state_inventory.md §9.)
+            -- #763's round-3 review extends it again to material ids,
+            -- and round-5 again to flora ids — the approved issue's
+            -- own acceptance criteria names "material" explicitly
+            -- alongside unit/item/building/recipe, and flora species
+            -- drive crop/foraging gameplay the same way): validate
+            -- every saved content-definition reference against the
+            -- currently-registered defs BEFORE publishing ANY live
+            -- state. A missing gameplay DEFINITION rejects the COMPLETE
+            -- load with a clear error naming what's missing (requirement
+            -- 9: never silently prune affected entities). (Missing
+            -- visual ASSETS stay a soft fallback, not gated here — only
+            -- definitions. Location-overlay ids and equipment slot-id
+            -- keys remain a documented, pre-existing, out-of-scope gap
+            -- per docs/persistence_state_inventory.md §9.)
             bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
             rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
-            matReg ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            -- Round 5 review fix: the material registry is otherwise
+            -- only populated by World.Thread.Command.Init's "Step 0.5"
+            -- (part of world.init) — a headless boot that goes straight
+            -- to engine.loadSave with no prior world.init in the SAME
+            -- process would see an entirely empty registry here (every
+            -- id but air reporting as "unknown"). Idempotent, same as
+            -- world.init's own pass, so re-running it when a world is
+            -- already live just rewrites the same data.
+            matReg ← Lua.liftIO $ loadPopulatedMaterialRegistry logger "data/materials"
+            Lua.liftIO $ writeIORef (materialRegistryRef env) matReg
+            floraCat ← Lua.liftIO $ readIORef (floraCatalogRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
                 pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
                 missing = missingDefReferences
@@ -461,11 +475,14 @@ continueLoad env logger requestId saveName descriptors = do
                     missingConstructDefReferences buildingDefs pages
                 missingMaterials =
                     missingMaterialReferences matReg pages
+                missingFlora =
+                    missingFloraReferences floraCat pages
                 allMissing = length missing + length missingItems
                     + length missingRecipes
                     + length missingBillOutputItems
                     + length missingConstruct
                     + length missingMaterials
+                    + length missingFlora
                 allMessages =
                     map renderMissingDefRef missing
                     ⧺ map renderMissingItemDefRef missingItems
@@ -474,6 +491,7 @@ continueLoad env logger requestId saveName descriptors = do
                           missingBillOutputItems
                     ⧺ map renderMissingConstructDefRef missingConstruct
                     ⧺ map renderMissingMaterialRef missingMaterials
+                    ⧺ map renderMissingFloraRef missingFlora
             if allMissing > 0
               then do
                 let msg = T.pack (show allMissing)

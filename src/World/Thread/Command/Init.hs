@@ -16,13 +16,11 @@ import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import System.Random
-import Engine.Asset.YamlTextures (MaterialDef(..), loadMaterialDirectory)
+import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import World.Material (MaterialProps(..), registerMaterial
-                      , emptyMaterialRegistry)
 import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
@@ -105,24 +103,13 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- hardness/density/drainage), making per-material differentiation
     -- in erosion / water-table / etc. a no-op. Idempotent — reloading on
     -- successive world inits just rewrites the same data.
+    -- Shared with the whole-session LOAD path (issue #763 round 5) via
+    -- 'Engine.Asset.YamlTextures.loadPopulatedMaterialRegistry' — a
+    -- headless boot that goes straight to engine.loadSave with no prior
+    -- world.init in the same process needs this SAME population before
+    -- it can validate a save's material references.
     sendGenLog env "Loading material registry from data/materials..."
-    matDefs ← loadMaterialDirectory logger "data/materials"
-    let populatedReg = foldl' (\r def →
-            registerMaterial (mdId def)
-                (MaterialProps (mdName def)
-                               (mdHardness def)
-                               (mdDensity def)
-                               (mdAlbedo def)
-                               (mdDrainage def)
-                               (mdPickSpeed def)
-                               (mdShovelSpeed def)
-                               (mdDigSpoil def)
-                               (mdDigBulking def)
-                               (mdDigChunk def)
-                               (mdDigGems def)
-                               (mdMoveCost def))
-                r
-            ) emptyMaterialRegistry matDefs
+    populatedReg ← loadPopulatedMaterialRegistry logger "data/materials"
     writeIORef (materialRegistryRef env) populatedReg
 
     -- Step 1: Timeline (now co-evolves climate)
