@@ -201,7 +201,7 @@ spec = around withHeadlessEngine $ do
                 saveOk ← evalBool ls2 (luaLines [bootSaveBrowser w h, "return " <> panelInFrameExpr "m" w h])
                 saveOk `shouldBe` True
 
-    describe "loading screen stays in-frame" $
+    describe "loading screen stays in-frame" $ do
         forM_ [ (800, 600 ∷ Int), (1920, 1080), (3840, 2160) ] $ \(w, h) →
             it ("at " ⧺ show w ⧺ "x" ⧺ show h) $ \env → do
                 ls ← newBareLuaBackend env
@@ -214,6 +214,34 @@ spec = around withHeadlessEngine $ do
                         <> " and (info.y + info.height) <= " <> tshow h
                     ]
                 ok `shouldBe` True
+
+        it "stays in-frame at a narrow, high-scale supported combination (800x2160@4x — bar width alone used to exceed the framebuffer)" $ \env → do
+            ls ← newBareLuaBackend env
+            ok ← evalBool ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , bootLoading 800 2160
+                , "local b = require('scripts.ui.bar');"
+                , "local info = UI.getElementInfo(b.getElementHandle(m.barId));"
+                , "return info.x >= 0 and info.y >= 0"
+                    <> " and (info.x + info.width) <= 800"
+                    <> " and (info.y + info.height) <= 2160"
+                ]
+            ok `shouldBe` True
+
+        it "re-shows itself after a resize while genuinely visible (its own createUI() always starts a fresh page hidden)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootLoading 1280 720
+                , "local visibleBefore = UI.isPageVisible(m.page);"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local visibleAfter = UI.isPageVisible(m.page);"
+                , "return {visibleBefore=visibleBefore, visibleAfter=visibleAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe VisibilityProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    vpVisibleBefore p `shouldBe` True
+                    vpVisibleAfter p `shouldBe` True
 
     describe "0x0 minimize never builds invalid UI, and restore rebuilds in-frame" $
         it "settings menu keeps its last valid geometry through 0x0, then rebuilds cleanly on restore" $ \env → do
@@ -579,6 +607,73 @@ spec = around withHeadlessEngine $ do
                         cfPanelInFrame p `shouldBe` True
                         cfTitleY p `shouldSatisfy` (>= 0)
 
+    describe "create-world's compact fallback keeps tab content in-frame at a narrow, high-scale supported combination" $
+        it "800x2160@4x (fixed paddings alone used to drive contentW negative)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , bootCreateWorld 800 2160
+                , "local st = require('scripts.create_world.settings_tab');"
+                , "local randbox = require('scripts.ui.randbox');"
+                , "local p = require('scripts.ui.panel');"
+                , "local px, py = p.getPosition(m.panelId);"
+                , "local pw, ph = p.getSize(m.panelId);"
+                , "local panelInFrame = px >= 0 and py >= 0"
+                    <> " and (px+pw) <= 800 and (py+ph) <= 2160;"
+                , "local info = UI.getElementInfo(randbox.getElementHandle(st.nameRandBoxId));"
+                , "return {panelInFrame = panelInFrame, nameX = info.x,"
+                    <> " nameRightEdge = info.x + info.width}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CreateWorldExtremeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cwepPanelInFrame p `shouldBe` True
+                    cwepNameX p `shouldSatisfy` (>= 0)
+                    cwepNameRightEdge p `shouldSatisfy` (<= 800)
+
+    describe "keyboard control focus (#745) survives a resize rebuild" $ do
+        it "settings menu restores focus onto the rebuilt control with the same name" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                -- createUI() never shows its own page (some callers,
+                -- e.g. init(), deliberately want it built-but-hidden);
+                -- showing it here simulates the screen genuinely being
+                -- the one on-screen, which is what onFramebufferResize's
+                -- wasVisible guard checks for before restoring focus.
+                , "UI.showPage(m.page);"
+                , "local button = require('scripts.ui.button');"
+                , "UI.setControlFocus(button.getElementHandle(m.backButtonId));"
+                , "local hadFocusBefore = UI.hasControlFocus(button.getElementHandle(m.backButtonId));"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local hasFocusAfter = UI.hasControlFocus(button.getElementHandle(m.backButtonId));"
+                , "return {hadFocusBefore=hadFocusBefore, hasFocusAfter=hasFocusAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ControlFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cfpHadFocusBefore p `shouldBe` True
+                    cfpHasFocusAfter p `shouldBe` True
+
+        it "create-world menu restores focus onto the rebuilt control with the same name" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local button = require('scripts.ui.button');"
+                , "UI.setControlFocus(button.getElementHandle(m.backButtonId));"
+                , "local hadFocusBefore = UI.hasControlFocus(button.getElementHandle(m.backButtonId));"
+                , "m.onFramebufferResize(1600, 900);"
+                , "local hasFocusAfter = UI.hasControlFocus(button.getElementHandle(m.backButtonId));"
+                , "return {hadFocusBefore=hadFocusBefore, hasFocusAfter=hasFocusAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ControlFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cfpHadFocusBefore p `shouldBe` True
+                    cfpHasFocusAfter p `shouldBe` True
+
 -- * Boot helpers (synthetic texture/font handles — nothing renders
 --   headless, so their numeric values are never inspected)
 
@@ -730,6 +825,25 @@ data WorldNameProbe = WorldNameProbe
 instance FromJSON WorldNameProbe where
     parseJSON = withObject "WorldNameProbe" $ \o →
         WorldNameProbe <$> o .: "x" <*> o .: "rightEdge"
+
+data VisibilityProbe = VisibilityProbe
+    { vpVisibleBefore ∷ Bool, vpVisibleAfter ∷ Bool } deriving Show
+instance FromJSON VisibilityProbe where
+    parseJSON = withObject "VisibilityProbe" $ \o →
+        VisibilityProbe <$> o .: "visibleBefore" <*> o .: "visibleAfter"
+
+data CreateWorldExtremeProbe = CreateWorldExtremeProbe
+    { cwepPanelInFrame ∷ Bool, cwepNameX ∷ Double, cwepNameRightEdge ∷ Double
+    } deriving Show
+instance FromJSON CreateWorldExtremeProbe where
+    parseJSON = withObject "CreateWorldExtremeProbe" $ \o → CreateWorldExtremeProbe
+        <$> o .: "panelInFrame" <*> o .: "nameX" <*> o .: "nameRightEdge"
+
+data ControlFocusProbe = ControlFocusProbe
+    { cfpHadFocusBefore ∷ Bool, cfpHasFocusAfter ∷ Bool } deriving Show
+instance FromJSON ControlFocusProbe where
+    parseJSON = withObject "ControlFocusProbe" $ \o →
+        ControlFocusProbe <$> o .: "hadFocusBefore" <*> o .: "hasFocusAfter"
 
 -- * Lua backend + eval helpers (mirrors Test.Headless.UI.InputOwnership)
 

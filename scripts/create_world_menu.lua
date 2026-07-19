@@ -3,6 +3,7 @@
 -- and preview.  Delegates to sub-modules for tab content, log panel,
 -- bottom buttons, and generation logic.
 local scale          = require("scripts.ui.scale")
+local responsive     = require("scripts.ui.responsive")
 local panel          = require("scripts.ui.panel")
 local label          = require("scripts.ui.label")
 local button         = require("scripts.ui.button")
@@ -344,7 +345,10 @@ function createWorldMenu.createUI(opts)
     local prevLogScrollOffset = createWorldMenu.logScrollOffset
 
     -- Snapshot every textbox's raw (possibly unsubmitted) text, cursor,
-    -- and focus BEFORE destroyOwned() tears them down.
+    -- and focus BEFORE destroyOwned() tears them down. (Keyboard
+    -- CONTROL focus, #745, is captured/restored by the caller instead —
+    -- see onFramebufferResize — since restoring it needs the page
+    -- already visible, which createUI() itself never makes it.)
     local textboxSnap = nil
     if preserveState then
         textboxSnap = textbox.snapshotPage(createWorldMenu.page)
@@ -374,6 +378,27 @@ function createWorldMenu.createUI(opts)
     end
 
     local uiscale = scale.get()
+
+    -- #748: compact fallback — the left panel's content width is
+    -- derived by peeling off SEVERAL fixed-base paddings that all
+    -- scale with uiscale (main panel padding 2*50, left-panel padding
+    -- 2*10, tab content padding 2*20 — 100 units of uiscale total),
+    -- from a panel width that's a FIXED FRACTION of the framebuffer
+    -- (0.85 panel * 0.4 left-split = 0.34) that does NOT scale with
+    -- uiscale at all. At a narrow, high-scale supported combination
+    -- (e.g. 800x2160@4x) those paddings alone can exceed the whole
+    -- left column, driving contentW negative — the per-control shrink
+    -- below can't fix that on its own since it only ever narrows the
+    -- controls, not the paddings consuming the space around them.
+    -- Shrinks this menu's own effective scale (never the stored UI
+    -- scale) so the fixed overhead never eats the full budget, leaving
+    -- CONTENT_MIN px of real content width regardless of framebuffer
+    -- shape.
+    local CONTENT_MIN = 150
+    local naturalOverhead = 100 * uiscale
+    local maxOverhead = 0.34 * createWorldMenu.fbW - CONTENT_MIN
+    uiscale = responsive.fitScale(naturalOverhead, maxOverhead, uiscale)
+
     local s = scale.applyAllWith(createWorldMenu.baseSizes, uiscale)
 
     createWorldMenu.page = UI.newPage("create_world_menu", "modal")
@@ -886,7 +911,20 @@ end
 function createWorldMenu.onFramebufferResize(width, height)
     createWorldMenu.fbW = width
     createWorldMenu.fbH = height
-    if createWorldMenu.uiCreated then createWorldMenu.createUI() end
+    if createWorldMenu.uiCreated then
+        -- #748: keyboard CONTROL focus (#745) can only be restored once
+        -- the rebuilt page is genuinely visible again (see
+        -- settings_menu.onFramebufferResize's identical comment) — a
+        -- currently-hidden create-world menu must not suddenly pop up
+        -- over whichever menu the resize actually hit.
+        local wasVisible = createWorldMenu.page and UI.isPageVisible(createWorldMenu.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+        createWorldMenu.createUI()
+        if wasVisible and createWorldMenu.page then
+            UI.showPage(createWorldMenu.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
+    end
 end
 
 -----------------------------------------------------------

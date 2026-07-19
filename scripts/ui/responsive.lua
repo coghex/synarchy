@@ -72,14 +72,51 @@ end
 -- re-derive its own scaled sizes from (e.g. via
 -- `scale.applyAllWith(baseSizes, responsive.fitScale(...))`) — never
 -- the stored/configured UI scale itself, only this one screen's own
--- layout. Returns `uiscale` unchanged when it already fits.
+-- layout. Returns `uiscale` unchanged when it already fits. `maxSize`
+-- can be negative below the formal minimum framebuffer (a caller's own
+-- fixed overhead can exceed its available budget entirely down there);
+-- clamped to a small positive floor rather than ever returning a
+-- non-positive scale, since outside-envelope combinations only need to
+-- fail safely, not hit `maxSize` exactly.
 -----------------------------------------------------------
+
+local MIN_FIT_SCALE = 0.05
 
 function responsive.fitScale(naturalSizeAtUiscale, maxSize, uiscale)
     if naturalSizeAtUiscale <= maxSize or naturalSizeAtUiscale <= 0 then
         return uiscale
     end
-    return uiscale * (maxSize / naturalSizeAtUiscale)
+    return math.max(MIN_FIT_SCALE, uiscale * (maxSize / naturalSizeAtUiscale))
+end
+
+-----------------------------------------------------------
+-- Keyboard control-focus preservation across a rebuild
+--
+-- #745's keyboard CONTROL focus (Tab/Shift+Tab traversal, distinct
+-- from textbox.lua's own text-input focus — mutually exclusive with
+-- it by construction) is UI-manager-level, not owned by any one
+-- widget module. A screen about to destroy and recreate every control
+-- (by name) across a mere rebuild can snapshot which one currently
+-- holds it here, then restore it once the new widgets exist — the
+-- same by-name approach textbox.lua uses, since a destroy+recreate
+-- cycle always assigns fresh element handles.
+-----------------------------------------------------------
+
+function responsive.snapshotControlFocusName()
+    local handle = UI.getControlFocus()
+    if not handle then return nil end
+    local info = UI.getElementInfo(handle)
+    return info and info.name or nil
+end
+
+function responsive.restoreControlFocusName(name)
+    if not name then return end
+    for _, e in ipairs(UI.getVisibleElements()) do
+        if e.name == name then
+            UI.setControlFocus(e.handle)
+            return
+        end
+    end
 end
 
 -----------------------------------------------------------

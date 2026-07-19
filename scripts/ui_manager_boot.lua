@@ -348,6 +348,12 @@ function uiManager.onFramebufferResize(width, height)
         if hud.page then UI.showPage(hud.page) end
     elseif currentMenu == "save_browser" then
         if saveBrowser.page then UI.showPage(saveBrowser.page) end
+    elseif currentMenu == "loading" then
+        -- #748: loadingScreen.onFramebufferResize already re-shows
+        -- itself (its own createUI() always starts hidden); this
+        -- branch just keeps the dispatcher's coverage consistent with
+        -- every other currentMenu value.
+        if loadingScreen.page then UI.showPage(loadingScreen.page) end
     elseif currentMenu == "test_arena_view" then
         if testArena.page then UI.showPage(testArena.page) end
     end

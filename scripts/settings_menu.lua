@@ -330,7 +330,10 @@ function settingsMenu.createUI(opts)
         -- Snapshot every textbox's raw (possibly unsubmitted) text,
         -- cursor, and focus BEFORE destroyOwned() tears them down —
         -- scoped to this page so a resize never captures another
-        -- screen's still-live textboxes.
+        -- screen's still-live textboxes. (Keyboard CONTROL focus,
+        -- #745, is captured/restored by the caller instead — see
+        -- onFramebufferResize — since restoring it needs the page
+        -- already visible, which createUI() itself never makes it.)
         textboxSnap = textbox.snapshotPage(settingsMenu.page)
     end
 
@@ -845,8 +848,11 @@ function settingsMenu.onApply()
     local vals = graphicsTab.getWidgetValues()
     local result = data.apply(vals)
     if result.scaleChanged then
+        -- notifyResize -> settingsMenu.onFramebufferResize already
+        -- re-shows itself (and restores control focus) when it was
+        -- visible, which it always is here (this IS the visible
+        -- settings screen the user just clicked Apply on).
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
-        if settingsMenu.page then UI.showPage(settingsMenu.page) end
     end
 end
 
@@ -856,7 +862,6 @@ function settingsMenu.onSave()
     local result = data.save(vals)
     if result.scaleChanged then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
-        if settingsMenu.page then UI.showPage(settingsMenu.page) end
     end
 end
 
@@ -890,7 +895,23 @@ function settingsMenu.onFramebufferResize(width, height)
     settingsMenu.fbW = width
     settingsMenu.fbH = height
     if settingsMenu.uiCreated then
+        -- #748: keyboard CONTROL focus (#745) can only be restored
+        -- once the rebuilt page is genuinely visible again — the
+        -- engine's UI.getVisibleElements() (which restoreControlFocusName
+        -- searches) only ever considers visible pages, and createUI()
+        -- itself never shows the fresh page it builds (some callers,
+        -- e.g. init(), deliberately want it built-but-hidden). Guarding
+        -- the re-show on wasVisible (queried BEFORE teardown) mirrors
+        -- pause_menu's own visible-only rebuild — a currently-hidden
+        -- settings_menu (kept alive lazily in the background) must not
+        -- suddenly pop up over whichever menu the resize actually hit.
+        local wasVisible = settingsMenu.page and UI.isPageVisible(settingsMenu.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
         settingsMenu.createUI({ preserveState = true })
+        if wasVisible and settingsMenu.page then
+            UI.showPage(settingsMenu.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
     end
 end
 
