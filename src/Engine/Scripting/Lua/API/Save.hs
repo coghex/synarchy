@@ -23,6 +23,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
+import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
@@ -472,7 +473,26 @@ continueLoad env logger requestId saveName descriptors = do
             -- and "World.Load.Publish" is the sole point it ever
             -- reaches the live ref, same as every other piece of
             -- session state.
-            matReg ← Lua.liftIO $ loadPopulatedMaterialRegistry logger "data/materials"
+            --
+            -- Round 13 review: a from-disk-only rebuild silently
+            -- dropped whatever the LIVE session had ALREADY registered
+            -- at runtime — world.init's own base pass (irrelevant here,
+            -- since it registers the exact same data/materials set this
+            -- rebuild does) but ALSO any engine.loadMaterialYaml custom
+            -- registration, which lives ONLY in materialRegistryRef,
+            -- never on disk under data/materials. A save referencing a
+            -- valid custom material was rejected as "unknown", and even
+            -- a successful base-only load discarded the live
+            -- registrations on publish. Merge the current live registry
+            -- ON TOP of the freshly-rebuilt base one — live/custom
+            -- registrations win on any id collision (the same
+            -- "newest registration wins" rule loadMaterialYamlFn's own
+            -- live-registry fold already follows) — so validation sees
+            -- both, and a successful publish preserves the live
+            -- registrations exactly as they were.
+            baseMatReg ← Lua.liftIO $ loadPopulatedMaterialRegistry logger "data/materials"
+            liveMatReg ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            let matReg = mergeMaterialRegistry baseMatReg liveMatReg
             floraCat ← Lua.liftIO $ readIORef (floraCatalogRef env)
             locReg ← Lua.liftIO $ readIORef (locationDefsRef env)
             infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)

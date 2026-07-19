@@ -32,6 +32,7 @@ module World.Material
     , MaterialRegistry
     , emptyMaterialRegistry
     , registerMaterial
+    , mergeMaterialRegistry
     , getMaterialProps
     , defaultMaterialProps
     , materialIdByName
@@ -249,6 +250,24 @@ emptyMaterialRegistry =
 registerMaterial ∷ Word8 → MaterialProps → MaterialRegistry → MaterialRegistry
 registerMaterial idx props (MaterialRegistry vec known) =
     MaterialRegistry (vec V.// [(fromIntegral idx, props)]) (HS.insert idx known)
+
+-- | Overlay every explicitly-registered id from @overlay@ onto @base@,
+--   overlay's own properties winning on any id collision (issue #763
+--   round 13 review). Used to merge a freshly-loaded, off-session base
+--   registry (built straight from @data/materials/*.yaml@ — see
+--   'Engine.Asset.YamlTextures.loadPopulatedMaterialRegistry') with
+--   whatever the LIVE session has already registered at runtime
+--   (world.init's own base-materials pass, plus any
+--   @engine.loadMaterialYaml@ custom registrations): rebuilding a
+--   validation/publish registry from disk alone would otherwise
+--   silently reject a save referencing a valid custom material as
+--   "unknown", and discard the live registrations entirely on publish
+--   even for an otherwise-successful load.
+mergeMaterialRegistry ∷ MaterialRegistry → MaterialRegistry → MaterialRegistry
+mergeMaterialRegistry base (MaterialRegistry overlayVec overlayKnown) =
+    HS.foldl'
+        (\r idx → registerMaterial idx (overlayVec V.! fromIntegral idx) r)
+        base overlayKnown
 
 getMaterialProps ∷ MaterialRegistry → MaterialId → MaterialProps
 getMaterialProps (MaterialRegistry vec _) (MaterialId mid) =

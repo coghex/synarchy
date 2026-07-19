@@ -70,6 +70,29 @@ from probelib import boot, quit_engine, send, send_json, wait_load_published
 
 SAVE_PREFIX = "tload_probe_"
 
+# Round 13 review: a custom material registered at runtime via
+# engine.loadMaterialYaml (never present under data/materials/*.yaml)
+# must survive a save/load round trip -- id 210 is confirmed absent
+# from every shipped data/materials/*.yaml entry, distinct from id 200
+# (the OTHER probe section below, "missing material reference", uses
+# 200 for a deliberately UNREGISTERED id -- keeping the two apart avoids
+# any ambiguity about which check a given id is proving).
+TEST_MATERIAL_YAML = "/tmp/transactional_load_probe_material.yaml"
+TEST_MATERIAL_YAML_CONTENT = """\
+materials:
+  - id: 210
+    name: probe_custom_material
+    hardness: 0.5
+    density: 1.5
+    albedo: 0.2
+    drainage: 0.2
+    pick_speed: 1.0
+    shovel_speed: 1.0
+    tile: "assets/textures/utility/notexture.png"
+    zoom: "assets/textures/utility/notexture.png"
+    bg:   "assets/textures/utility/notexture.png"
+"""
+
 
 class Checks:
     def __init__(self) -> None:
@@ -503,7 +526,78 @@ def main() -> int:
                        "the save's PRIMARY page ('alpha') is active after load, "
                        "even though it was hidden (not 'beta') at save time")
 
-        # ── 10. Missing material reference rejects the load outright ────
+        # ── 10. A runtime-registered custom material survives a reload ──
+        # Round 13 review: continueLoad used to rebuild its validation/
+        # publish MaterialRegistry from data/materials/*.yaml alone,
+        # discarding whatever the LIVE session had ALREADY registered at
+        # runtime (engine.loadMaterialYaml, unlike the base pass, has no
+        # on-disk record continueLoad's rebuild could ever recover) --
+        # a save referencing a valid custom material was wrongly rejected
+        # as "unknown", and even a successful base-only load silently
+        # dropped the live registration on publish.
+        print("\n--- a custom material registered via loadMaterialYaml "
+              "survives a save/load round trip ---")
+        with open(TEST_MATERIAL_YAML, "w") as f:
+            f.write(TEST_MATERIAL_YAML_CONTENT)
+        loaded_count = as_int(send(
+            args.port, f"return engine.loadMaterialYaml('{TEST_MATERIAL_YAML}')"))
+        chk.ok(loaded_count is not None and loaded_count > 0,
+               f"engine.loadMaterialYaml registers the custom material "
+               f"(got {loaded_count!r})")
+
+        send(args.port, "world.show('alpha'); return 'ok'")
+        wait_active(args.port, "alpha")
+        strip = find_flat_strip(args.port)
+        chk.ok(strip is not None,
+               "setup: found a flat tile on alpha to carve the custom "
+               "material into")
+        if strip:
+            cgx, cgy, cz = strip
+            set_ok = send(args.port,
+                f"return world.setCell('alpha', {cgx}, {cgy}, {cz}, 210)")
+            chk.ok(set_ok.strip() == "true",
+                   "world.setCell accepts the custom (registered) id 210")
+            slot_custom = f"{SAVE_PREFIX}custommat_{run_id}"
+            save_dirs.append(os.path.join("saves", slot_custom))
+            do_save(args.port, "alpha", slot_custom)
+            loaded = send(args.port, f"return engine.loadSave('{slot_custom}')")
+            chk.ok(loaded.strip() == "true",
+                   "a load referencing the custom material id is accepted, "
+                   "not rejected as unknown")
+            published, status = wait_load_published(args.port, 180)
+            chk.ok(published,
+                   f"custom-material load transaction publishes ({status})")
+            if published:
+                send(args.port, "return world.waitForInit(180)", timeout=190)
+                # The registration must have survived the publish itself
+                # (not merely "validation saw it") -- prove it by using
+                # id 210 again post-load and saving successfully a SECOND
+                # time, which would fail validation on THIS save's own
+                # freshly-rebuilt registry if the merge only ever
+                # happened once, on the first load.
+                wait_active(args.port, "alpha")
+                strip2 = find_flat_strip(args.port)
+                if strip2:
+                    cgx2, cgy2, cz2 = strip2
+                    set_ok2 = send(args.port,
+                        f"return world.setCell('alpha', {cgx2}, {cgy2}, "
+                        f"{cz2}, 210)")
+                    chk.ok(set_ok2.strip() == "true",
+                           "id 210 still accepted by world.setCell after "
+                           "the reload")
+                    slot_custom2 = f"{SAVE_PREFIX}custommat2_{run_id}"
+                    save_dirs.append(os.path.join("saves", slot_custom2))
+                    do_save(args.port, "alpha", slot_custom2)
+                    loaded2 = send(args.port,
+                        f"return engine.loadSave('{slot_custom2}')")
+                    chk.ok(loaded2.strip() == "true",
+                           "a SECOND round trip through the custom "
+                           "material id also succeeds -- the merge is "
+                           "stable across repeated loads, not a one-off")
+                    wait_load_published(args.port, 180)
+                    send(args.port, "return world.waitForInit(180)", timeout=190)
+
+        # ── 11. Missing material reference rejects the load outright ────
         # Runs LAST and deliberately mutates the live 'alpha' page with
         # no attempt to clean it up afterward: world.setCell's edit-log
         # entry is a permanent append (WorldEdits is a per-chunk HISTORY,
