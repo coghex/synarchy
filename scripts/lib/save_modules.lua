@@ -52,21 +52,43 @@
 --                              persistent component, BEFORE encode/decode
 --                              (used to build the envelope's known/
 --                              required id sets, requirement 12/13)
---   snapshotAll()           -- {ok=true, components={{id,version,payload},..}}
+--   snapshotAll()           -- {ok=true, components={{id,version,payload},..},
+--                              references={{component=,kind=,id=,owner=,path=},..}}
 --                              or {ok=false, error=...} -- a REQUIRED
---                              component's snapshot/encode failure aborts
---                              the WHOLE save (requirement 6); an OPTIONAL
---                              one is omitted with a logged warning
+--                              component's snapshot/validate/encode
+--                              failure aborts the WHOLE save (requirement
+--                              6); an OPTIONAL one is omitted with a
+--                              logged warning. validate() (round-6
+--                              review, issue #764) runs here too, on the
+--                              SAME just-snapshotted data prepareLoad's
+--                              validate() call checks on the load side --
+--                              a malformed live state (a mutated
+--                              reference field, say) is now caught before
+--                              it can ever be written to disk, not only
+--                              discovered as a dropped/malformed edge on
+--                              a later load.
+--                              references (issue #764, save-overhaul C3)
+--                              is every reference edge collected the SAME
+--                              way prepareLoad's are -- the caller cross-
+--                              validates these against the just-captured
+--                              live snapshot.
 --                              (requirement 7)
---   prepareLoad(components, requestId) -- {ok=true} or {ok=false,
---                              errors={...}} -- decode + migrate +
---                              component-local-validate EVERY component
---                              with NO live mutation (requirement 11);
---                              all-or-nothing. requestId is stashed
---                              alongside the prepared data so a later
+--   prepareLoad(components, requestId) -- {ok=true, references={...}} or
+--                              {ok=false, errors={...}} -- decode +
+--                              migrate + component-local-validate EVERY
+--                              component with NO live mutation
+--                              (requirement 11); all-or-nothing.
+--                              requestId is stashed alongside the
+--                              prepared data so a later
 --                              abortPreparedLoad(requestId) can tell a
 --                              stale cleanup for an OLD request apart
 --                              from state a NEWER request just prepared.
+--                              references (issue #764, save-overhaul C3)
+--                              is every {component=,kind=,id=,owner=,path=}
+--                              edge every registered component's
+--                              references() hook reported, flattened --
+--                              the caller cross-validates these against
+--                              the loaded session's real entity sets.
 --   applyAll()              -- apply the prepared, already-validated
 --                              data (only reachable after prepareLoad
 --                              returned ok=true), then run every
@@ -413,9 +435,38 @@ local function snapshotAllImpl()
             .. table.concat(structErrs, "; ") }
     end
     local components = {}
+    -- Issue #764 (save-overhaul C3): collected the SAME way
+    -- prepareLoadImpl collects them on the load side -- save and load
+    -- cross-validate Lua references against one shared graph, not two
+    -- independently-decided ones (Engine.Scripting.Lua.API.Save /
+    -- World.Save.Integrity consume this on the Haskell side).
+    local referenceEdges = {}
     for _, id in ipairs(sortedIds(saveModules.registry)) do
         local reg = saveModules.registry[id]
         local ok, dataOrErr = pcall(reg.snapshot)
+        local validateErr = nil
+        if ok then
+            -- Round-6 review (issue #764): validate() used to run ONLY on
+            -- the load side (prepareLoadImpl below) -- a save never
+            -- checked its OWN freshly-snapshotted data against the same
+            -- rule the load path would reject it under. A live state
+            -- mutated into a malformed shape (e.g. attackTargetUid set to
+            -- a non-numeric value by some other bug) would snapshot,
+            -- encode, and WRITE to disk untouched -- only surfacing as a
+            -- silently-dropped reference edge on a LATER load, never as a
+            -- save-time failure. Runs on the SAME already-wrapped shape
+            -- validate() already expects (reg.snapshot() for unit_ai/
+            -- building_spawn returns wrapAiState(...)/wrapAllLastUid(...)
+            -- output, identical in shape to what decode() produces on the
+            -- load side), so no shape mismatch.
+            local vok, verrs = pcall(reg.validate, dataOrErr)
+            if not vok then
+                validateErr = "'" .. id .. "': validate crashed: " .. tostring(verrs)
+            elseif verrs ~= nil and #verrs > 0 then
+                validateErr = "'" .. id .. "' failed validation: "
+                    .. table.concat(verrs, "; ")
+            end
+        end
         if not ok then
             if reg.required then
                 return { ok = false, error = "'" .. id
@@ -424,6 +475,13 @@ local function snapshotAllImpl()
             engine.logWarn("saveModules: optional component '" .. id
                 .. "' snapshot failed, omitting from save: "
                 .. tostring(dataOrErr))
+        elseif validateErr ~= nil then
+            if reg.required then
+                return { ok = false, error = validateErr }
+            end
+            engine.logWarn("saveModules: optional component '" .. id
+                .. "' snapshot failed validation, omitting from save: "
+                .. validateErr)
         else
             local payload, encErr = dataCodec.encode(dataOrErr)
             if payload == nil then
@@ -437,10 +495,33 @@ local function snapshotAllImpl()
             else
                 components[#components + 1] = { id = id, version = reg.version,
                     required = reg.required, payload = payload }
+                if reg.references then
+                    local refsOk, refsOrErr = pcall(reg.references, dataOrErr)
+                    if not refsOk then
+                        if reg.required then
+                            return { ok = false, error = "'" .. id
+                                .. "': references() crashed: "
+                                .. tostring(refsOrErr) }
+                        end
+                        engine.logWarn("saveModules: optional component '"
+                            .. id .. "' references() crashed, omitting its "
+                            .. "edges: " .. tostring(refsOrErr))
+                    elseif type(refsOrErr) == "table" then
+                        for _, r in ipairs(refsOrErr) do
+                            if type(r) == "table" and r.kind ~= nil
+                                    and r.id ~= nil then
+                                referenceEdges[#referenceEdges + 1] =
+                                    { component = id, kind = r.kind,
+                                      id = r.id, owner = r.owner,
+                                      path = r.path }
+                            end
+                        end
+                    end
+                end
             end
         end
     end
-    return { ok = true, components = components }
+    return { ok = true, components = components, references = referenceEdges }
 end
 
 -- Snapshot every registered persistent component (requirement 6/10):
@@ -475,6 +556,15 @@ local function prepareLoadImpl(componentsList)
     end
     local errors = {}
     local prepared = {}
+    -- Issue #764 (save-overhaul C3): every reference a component's
+    -- references() hook reports is collected here (component id +
+    -- kind + id, flattened across every registered component) and
+    -- handed back to the caller, which cross-validates them against
+    -- the loaded session's real entity sets
+    -- (Engine.Scripting.Lua.API.Save / World.Save.Integrity) --
+    -- #761 only ever CALLED references() to catch a crash; the
+    -- returned list itself was discarded until now.
+    local referenceEdges = {}
     for _, id in ipairs(sortedIds(saveModules.registry)) do
         local reg = saveModules.registry[id]
         local entry = byId[id]
@@ -533,6 +623,17 @@ local function prepareLoadImpl(componentsList)
                                 .. "': references() crashed: " .. tostring(refsErr)
                         else
                             prepared[id] = decoded
+                            if reg.references and type(refsErr) == "table" then
+                                for _, r in ipairs(refsErr) do
+                                    if type(r) == "table" and r.kind ~= nil
+                                            and r.id ~= nil then
+                                        referenceEdges[#referenceEdges + 1] =
+                                            { component = id, kind = r.kind,
+                                              id = r.id, owner = r.owner,
+                                              path = r.path }
+                                    end
+                                end
+                            end
                         end
                     end
                 end
@@ -542,7 +643,7 @@ local function prepareLoadImpl(componentsList)
     if #errors > 0 then
         return { ok = false, errors = errors }
     end
-    return { ok = true, prepared = prepared }
+    return { ok = true, prepared = prepared, references = referenceEdges }
 end
 
 -- Decode + migrate + component-locally-validate EVERY registered
@@ -567,7 +668,7 @@ function saveModules.prepareLoad(componentsList, requestId)
     else
         saveModules._loadActive = false
     end
-    return { ok = result.ok, errors = result.errors }
+    return { ok = result.ok, errors = result.errors, references = result.references }
 end
 
 -- Round 6 review: a successful `prepareLoad` leaves `_loadActive` true

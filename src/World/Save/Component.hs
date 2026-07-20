@@ -31,6 +31,7 @@ module World.Save.Component
     , registryStaticErrors
     , assembleSnapshot
     , dependencyOrder
+    , capComponentErrors
     ) where
 
 import UPrelude
@@ -53,6 +54,8 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Integrity
+    (IntegrityError(..), sessionIntegrityErrors, integrityErrorCap)
 
 -- | Every Haskell-owned gameplay component, in a stable declaration
 --   order. The @"metadata"@ component is NOT here — it is owned by
@@ -199,9 +202,13 @@ assembleSnapshot meta de = do
                              <> T.intercalate " -> " (map cidText cyc)) ]
         Right o  → Right o
     -- 1. Decode + component-local-validate EVERY component (no live state),
-    --    collecting all failures (all-or-nothing).
+    --    collecting all failures (all-or-nothing). Round-3 review: capped
+    --    +sorted the SAME way every other boundary error list now is — a
+    --    corrupted/adversarial envelope can carry an unbounded number of
+    --    per-component decode failures just as easily as a cross-component
+    --    one.
     let decodeErrs = concatMap (`rcDecodeErrors` de) saveComponentRegistry
-    if not (null decodeErrs) then Left decodeErrs else do
+    if not (null decodeErrs) then Left (capComponentErrors decodeErrs) else do
         -- 2. Fold each component's contribution onto the skeleton, in
         --    dependency order. Page-set-mismatch errors are independent per
         --    component (they all check against the SAME base @"world-pages"@
@@ -213,7 +220,7 @@ assembleSnapshot meta de = do
             step (es, s) rc = case rcApply rc de s of
                 Left e   → (es <> e, s)
                 Right s' → (es, s')
-        if not (null applyErrs) then Left applyErrs else do
+        if not (null applyErrs) then Left (capComponentErrors applyErrs) else do
             -- 3. Cross-component invariants (requirement 6/9/12).
             --    'structureEditPaletteErrors' is called here rather than
             --    folded into 'validateSessionSnapshot' itself, since THIS
@@ -221,9 +228,24 @@ assembleSnapshot meta de = do
             --    cereal-decoded into fully concrete values) — see its
             --    haddock in "World.Save.Snapshot" for why that distinction
             --    matters (the capture-path "full-encode forcing" contract).
-            let crossErrs = map snapErr (validateSessionSnapshot snap)
+            --
+            --    Round-3 review: the 'sessionIntegrityErrors' portion used
+            --    to be capped via 'capIntegrityErrors' BEFORE joining the
+            --    other three raw sources, which then went through
+            --    'capComponentErrors' a second time — a double cap that
+            --    could badly under-report how many findings were actually
+            --    omitted (e.g. an inner cap already dropping 100 of them
+            --    down to a single trailer note, which the OUTER cap could
+            --    then itself report as "1 additional... omitted", losing
+            --    the true count entirely). Feed every source in RAW and
+            --    UNCAPPED and let the single outer 'capComponentErrors'
+            --    sort+cap+trailer the complete, real combined list exactly
+            --    once.
+            let crossErrs = capComponentErrors $
+                            map snapErr (validateSessionSnapshot snap)
                             ++ map snapErr (structureEditPaletteErrors snap)
                             ++ metadataErrors meta snap
+                            ++ map integrityErr (sessionIntegrityErrors snap)
             if null crossErrs then Right snap else Left crossErrs
   where
     cidText (ComponentId t) = t
@@ -254,6 +276,46 @@ assembleSnapshot meta de = do
 snapErr ∷ Show e ⇒ e → ComponentError
 snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase
                 (T.pack (show e))
+
+-- | Lift a "World.Save.Integrity" structural finding (issue #764,
+--   save-overhaul C3) into the existing per-component error shape —
+--   attributed to the component the finding actually names (a
+--   craft-bill/power-node wrong-page violation), at 'AssemblePhase'
+--   (a cross-component check, same phase every other whole-session
+--   invariant above reports at).
+integrityErr ∷ IntegrityError → ComponentError
+integrityErr e = ComponentError (ieComponent e) (ieVersion e) AssemblePhase
+    (iePath e <> ": " <> ieCode e <> ": " <> ieMessage e)
+
+-- | Sort + cap the FULL cross-component error list uniformly (round-2
+--   review, issue #764). Before this, only the
+--   'sessionIntegrityErrors' portion went through 'capIntegrityErrors'
+--   (sorted, capped at 'integrityErrorCap') before landing in
+--   'crossErrs' — 'validateSessionSnapshot'/'structureEditPaletteErrors'/
+--   'metadataErrors' fed in raw, so the FINAL combined list a caller
+--   actually sees was only partially deterministic-and-bounded, not
+--   uniformly so (requirement 10: "never an arbitrary first hash-map
+--   entry, always capped"). This applies the SAME cap to the complete,
+--   already-concatenated list, appending one trailer 'ComponentError'
+--   (attributed to @"core-session"@, the same cross-component-invariant
+--   owner every other whole-session assembly error above already uses)
+--   naming how many were omitted — mirroring 'renderIntegrityReport''s
+--   own never-silently-truncate contract at this outer boundary too.
+capComponentErrors ∷ [ComponentError] → [ComponentError]
+capComponentErrors errs =
+    let sorted  = L.sortOn sortKey errs
+        total   = length sorted
+        capped  = take integrityErrorCap sorted
+        omitted = max 0 (total - length capped)
+    in capped ++
+        [ ComponentError coreSessionComponentId 1 AssemblePhase
+            (T.pack (show omitted) <> " additional component finding(s) \
+             \omitted (see World.Save.Integrity.integrityErrorCap)")
+        | omitted > 0 ]
+  where
+    sortKey e = ( cidText (ceComponent e), ceVersion e
+                , T.pack (show (cePhase e)), ceMessage e )
+    cidText (ComponentId t) = t
 
 -- | Requirement 12: the manifest metadata must agree with the
 --   authoritative gameplay components. A mismatch invalidates the save

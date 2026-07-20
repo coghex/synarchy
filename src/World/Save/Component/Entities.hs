@@ -88,20 +88,40 @@ module World.Save.Component.Entities
     , fromUnitInstanceDTO
     , PageSimDTO(..)
     , UnitSimDTO(..)
+    , PageSimDTOv1(..)
+    , UnitSimDTOv1(..)
+    , migratePageSimDTOv1
+    , migrateUnitSimDTOv1
     , UnitSimStateDTO(..)
     , MoveTargetDTO(..)
     , PageCraftBillsDTO(..)
     , CraftBillsDTO(..)
     , CraftBillDTO(..)
     , BillQueueDTO(..)
+    , CraftBillDTOv1(..)
+    , BillQueueDTOv1(..)
+    , PageCraftBillsDTOv1(..)
+    , CraftBillsDTOv1(..)
+    , migrateCraftBillDTOv1
+    , migrateCraftBillsDTOv1
     , PagePowerNodesDTO(..)
     , PowerNodesDTO(..)
     , PowerNodeDTO(..)
     , NodeRegistryDTO(..)
+    , PowerNodeDTOv1(..)
+    , NodeRegistryDTOv1(..)
+    , PagePowerNodesDTOv1(..)
+    , PowerNodesDTOv1(..)
+    , migratePowerNodeDTOv1
+    , migratePowerNodesDTOv1
     , toUnitSimStateDTO
     , fromUnitSimStateDTO
+    , toCraftBillDTO
+    , fromCraftBillDTO
     , toBillQueueDTO
     , fromBillQueueDTO
+    , toPowerNodeDTO
+    , fromPowerNodeDTO
     , toNodeRegistryDTO
     , fromNodeRegistryDTO
     , applyBuildings
@@ -133,6 +153,8 @@ import World.Save.Component.Page
     ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO )
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 import World.Save.Component.Types
+import World.Save.Reference (SamePageRef(..))
+import qualified Data.Serialize as S
 
 orderedPages ∷ SessionSnapshot → [PageSnapshot]
 orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
@@ -581,42 +603,112 @@ fromUnitSimStateDTO d = UnitSimState
     , usMoveGrade        = simMoveGrade d
     }
 
+-- | Issue #764 (save-overhaul C3) round-3 review: @psSim@'s map KEY is a
+--   unit-simulation state's OWNING unit — a durable cross-component
+--   reference (this component's own dependency on @"units"@ exists
+--   precisely because of it) exactly like a craft bill's station or a
+--   power node's host building, just carried as a 'HM.HashMap' key
+--   rather than a field value. Typed the same way
+--   ("World.Save.Reference"'s 'SamePageRef', which derives 'Hashable'
+--   for exactly this use) rather than a bare 'UnitId' — a sim-state
+--   entry is always expected on the SAME page as the page slice
+--   carrying it (the live 'pgsUnitSimStates' this mirrors is itself
+--   page-scoped; "World.Save.Snapshot"'s @OrphanedUnitSimState@ check
+--   already enforces the SAME-page relationship this type now
+--   documents). Bumped this component to v2; v1 decodes via
+--   'migrateUnitSimDTOv1' below.
 data PageSimDTO = PageSimDTO
     { psPageId ∷ !WorldPageId
-    , psSim    ∷ !(HM.HashMap UnitId UnitSimStateDTO)
+    , psSim    ∷ !(HM.HashMap (SamePageRef UnitId) UnitSimStateDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitSimDTO = UnitSimDTO { usdPages ∷ [PageSimDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- | The FROZEN v1 shape, preserved verbatim for decode-only backward
+--   compatibility — @psSim@ here is keyed by the original bare
+--   'UnitId', exactly as it shipped. Never edited; a further schema
+--   change adds a v3 type instead (frozen-DTO boundary rule).
+data PageSimDTOv1 = PageSimDTOv1
+    { ps1PageId ∷ !WorldPageId
+    , ps1Sim    ∷ !(HM.HashMap UnitId UnitSimStateDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitSimDTOv1 = UnitSimDTOv1 { usd1Pages ∷ [PageSimDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+-- | Translate an unambiguous v1 page slice into v2: every v1 sim-state
+--   map key has always meant "this unit, on THIS page" (the live
+--   'pgsUnitSimStates' this mirrors is itself page-scoped — see
+--   'PageSimDTO' haddock above), so wrapping every key in 'SamePageRef'
+--   is total and never ambiguous (requirement 14).
+migratePageSimDTOv1 ∷ PageSimDTOv1 → PageSimDTO
+migratePageSimDTOv1 d = PageSimDTO
+    { psPageId = ps1PageId d
+    , psSim    = HM.mapKeys SamePageRef (ps1Sim d)
+    }
+
+migrateUnitSimDTOv1 ∷ UnitSimDTOv1 → UnitSimDTO
+migrateUnitSimDTOv1 (UnitSimDTOv1 ps) = UnitSimDTO (map migratePageSimDTOv1 ps)
+
+-- | Issue #764 (save-overhaul C3) round-3 review: hand-rolled
+--   'ComponentCodec' (mirrors 'craftBillsCodec'/'powerNodesCodec' —
+--   'serializeCodec' has no real multi-version dispatch) now that this
+--   component needs v1→v2 migration too.
 unitSimCodec ∷ ComponentCodec UnitSimDTO
-unitSimCodec = serializeCodec
-    unitSimComponentId 1 True [worldPagesComponentId, unitsComponentId]
-    (\snap → UnitSimDTO
-        [ PageSimDTO (pgsPageId p) (HM.map toUnitSimStateDTO (pgsUnitSimStates p))
+unitSimCodec = ComponentCodec
+    { ccId        = unitSimComponentId
+    , ccVersion   = 2
+    , ccInputVers = [1, 2]
+    , ccRequired  = True
+    , ccDeps      = [worldPagesComponentId, unitsComponentId]
+    , ccEncode    = \snap → S.encode (UnitSimDTO
+        [ PageSimDTO (pgsPageId p)
+            (HM.mapKeys SamePageRef (HM.map toUnitSimStateDTO (pgsUnitSimStates p)))
         | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+    , ccDecode    = \v bytes → case v of
+        2 → case S.decode bytes of
+              Left err → Left (ComponentError unitSimComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right d  → Right d
+        1 → case S.decode bytes of
+              Left err → Left (ComponentError unitSimComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right (d ∷ UnitSimDTOv1) → Right (migrateUnitSimDTOv1 d)
+        _ → Left (ComponentError unitSimComponentId v DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+    , ccValidate  = const []
+    }
 
 applyUnitSim
     ∷ Word32 → UnitSimDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
 applyUnitSim ver (UnitSimDTO slices) =
     applyPageSlices unitSimComponentId ver psPageId
-        (\s p → p { pgsUnitSimStates = HM.map fromUnitSimStateDTO (psSim s) })
+        (\s p → p { pgsUnitSimStates =
+            HM.mapKeys unSamePageRef (HM.map fromUnitSimStateDTO (psSim s)) })
         slices
 
 -- craft-bills -------------------------------------------------------
 
 -- | Frozen mirror of 'CraftBill' (a mutable runtime record appended to
 --   across #329/#590/#795). Reuses the stable 'BillId'/'BuildingId'/
---   'UnitId'/'BillMode' leaf types.
+--   'UnitId'/'BillMode' leaf types. Issue #764 (save-overhaul C3):
+--   'bilStation'/'bilClaimant' are typed as same-page persistent
+--   references ("World.Save.Reference"'s 'SamePageRef') rather than
+--   bare ids — a bill's station/claimant are always expected on the
+--   SAME page as the bill itself, a fact that used to live only in a
+--   comment (see "World.Save.Integrity"'s wrong-page check, which reads
+--   this declaration). Bumped this component to v2; v1 decodes via
+--   'migrateCraftBillDTOv1' below (requirement 12/14).
 data CraftBillDTO = CraftBillDTO
     { bilId         ∷ !BillId
-    , bilStation    ∷ !BuildingId
+    , bilStation    ∷ !(SamePageRef BuildingId)
     , bilRecipe     ∷ !Text
     , bilRemaining  ∷ !Int
-    , bilClaimant   ∷ !(Maybe UnitId)
+    , bilClaimant   ∷ !(Maybe (SamePageRef UnitId))
     , bilClaimedAt  ∷ !Double
     , bilProgress   ∷ !Float
     , bilSeq        ∷ !Int
@@ -627,6 +719,27 @@ data CraftBillDTO = CraftBillDTO
     , bilOutputItem ∷ !Text
     } deriving (Show, Eq, Generic, Serialize)
 
+-- | The FROZEN v1 shape (issue #760), preserved verbatim for decode-only
+--   backward compatibility — 'bilStation'/'bilClaimant' here are the
+--   original bare ids, exactly as they shipped. Never edited; a further
+--   schema change adds a v3 type instead (frozen-DTO boundary rule, see
+--   "World.Save.Component.Types").
+data CraftBillDTOv1 = CraftBillDTOv1
+    { bil1Id         ∷ !BillId
+    , bil1Station    ∷ !BuildingId
+    , bil1Recipe     ∷ !Text
+    , bil1Remaining  ∷ !Int
+    , bil1Claimant   ∷ !(Maybe UnitId)
+    , bil1ClaimedAt  ∷ !Double
+    , bil1Progress   ∷ !Float
+    , bil1Seq        ∷ !Int
+    , bil1Paused     ∷ !Bool
+    , bil1Working    ∷ !Bool
+    , bil1Mode       ∷ !BillMode
+    , bil1Target     ∷ !Int
+    , bil1OutputItem ∷ !Text
+    } deriving (Show, Eq, Generic, Serialize)
+
 -- | Frozen mirror of the 'CraftBills' queue (bills + its embedded id
 --   counter).
 data BillQueueDTO = BillQueueDTO
@@ -634,13 +747,44 @@ data BillQueueDTO = BillQueueDTO
     , bqNextId ∷ !Word32
     } deriving (Show, Eq, Generic, Serialize)
 
+data BillQueueDTOv1 = BillQueueDTOv1
+    { bq1Bills  ∷ !(HM.HashMap BillId CraftBillDTOv1)
+    , bq1NextId ∷ !Word32
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Translate an unambiguous v1 bill into v2: 'bil1Station' and
+--   'bil1Claimant' are already known, by construction, to be same-page
+--   references (v1 never carried anything else — every bill's station/
+--   claimant has always been resolved against its OWN page, see
+--   "World.Load.Stage"), so this is a total, never-ambiguous wrap
+--   (requirement 14: "translate only when kind and page can be
+--   determined unambiguously from the old component's owning context" —
+--   satisfied here since the OLD component's very shape only ever meant
+--   one thing).
+migrateCraftBillDTOv1 ∷ CraftBillDTOv1 → CraftBillDTO
+migrateCraftBillDTOv1 d = CraftBillDTO
+    { bilId         = bil1Id d
+    , bilStation    = SamePageRef (bil1Station d)
+    , bilRecipe     = bil1Recipe d
+    , bilRemaining  = bil1Remaining d
+    , bilClaimant   = SamePageRef <$> bil1Claimant d
+    , bilClaimedAt  = bil1ClaimedAt d
+    , bilProgress   = bil1Progress d
+    , bilSeq        = bil1Seq d
+    , bilPaused     = bil1Paused d
+    , bilWorking    = bil1Working d
+    , bilMode       = bil1Mode d
+    , bilTarget     = bil1Target d
+    , bilOutputItem = bil1OutputItem d
+    }
+
 toCraftBillDTO ∷ CraftBill → CraftBillDTO
 toCraftBillDTO b = CraftBillDTO
     { bilId         = cbId b
-    , bilStation    = cbStation b
+    , bilStation    = SamePageRef (cbStation b)
     , bilRecipe     = cbRecipe b
     , bilRemaining  = cbRemaining b
-    , bilClaimant   = cbClaimant b
+    , bilClaimant   = SamePageRef <$> cbClaimant b
     , bilClaimedAt  = cbClaimedAt b
     , bilProgress   = cbProgress b
     , bilSeq        = cbSeq b
@@ -654,10 +798,10 @@ toCraftBillDTO b = CraftBillDTO
 fromCraftBillDTO ∷ CraftBillDTO → CraftBill
 fromCraftBillDTO d = CraftBill
     { cbId         = bilId d
-    , cbStation    = bilStation d
+    , cbStation    = unSamePageRef (bilStation d)
     , cbRecipe     = bilRecipe d
     , cbRemaining  = bilRemaining d
-    , cbClaimant   = bilClaimant d
+    , cbClaimant   = unSamePageRef <$> bilClaimant d
     , cbClaimedAt  = bilClaimedAt d
     , cbProgress   = bilProgress d
     , cbSeq        = bilSeq d
@@ -681,9 +825,25 @@ data PageCraftBillsDTO = PageCraftBillsDTO
     , pcbBills  ∷ !BillQueueDTO
     } deriving (Show, Generic, Serialize)
 
+data PageCraftBillsDTOv1 = PageCraftBillsDTOv1
+    { pcb1PageId ∷ !WorldPageId
+    , pcb1Bills  ∷ !BillQueueDTOv1
+    } deriving (Show, Generic, Serialize)
+
 newtype CraftBillsDTO = CraftBillsDTO { cbdPages ∷ [PageCraftBillsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
+
+newtype CraftBillsDTOv1 = CraftBillsDTOv1 { cbd1Pages ∷ [PageCraftBillsDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+migrateCraftBillsDTOv1 ∷ CraftBillsDTOv1 → CraftBillsDTO
+migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
+    [ PageCraftBillsDTO (pcb1PageId p)
+        (BillQueueDTO (HM.map migrateCraftBillDTOv1 (bq1Bills (pcb1Bills p)))
+                      (bq1NextId (pcb1Bills p)))
+    | p ← ps ]
 
 -- | Component-local invariant (#760 round 8, mirrors
 --   "World.Save.Component.Page"'s @worldPagesCodec@ @validatePages@
@@ -707,23 +867,29 @@ newtype CraftBillsDTO = CraftBillsDTO { cbdPages ∷ [PageCraftBillsDTO] }
 --   bill's own 'cbId' field) would then disagree about which bill this
 --   is. Reject any entry where the two disagree.
 --
---   Deliberately OUT OF SCOPE here (round 9 opposite-brand review,
---   maintainer call): a dangling 'cbStation'/'cbClaimant' reference (a
---   station 'BuildingId'/claimant 'UnitId' absent from the loaded page's
---   @"buildings"@/@"units"@ components) is NOT hard-validated, and never
---   rejects the load. This is not an oversight — it would contradict an
---   existing, deliberate design decision from #758: "World.Save.Snapshot"
---   (~line 199-207) documents that a demolished station leaving its bills
---   "lingering, visible + cancellable" is tolerated gameplay behaviour,
---   not corruption, and hard-failing on it would reject otherwise-valid
---   saves. "World.Thread.Command.Save.LoadPage" (~line 172-181) already
---   implements the intended handling: it PRUNES bills/nodes whose station
---   building isn't present on the loaded page rather than rejecting the
---   whole load. Adding a hard cross-component reject here would fight
---   that pruning path, not complement it.
+--   Deliberately OUT OF SCOPE here (this component-local validator sees
+--   only ONE component's own DTO, never the assembled cross-component
+--   picture): a dangling 'cbStation'/'cbClaimant' reference (a station
+--   'BuildingId'/claimant 'UnitId' absent from the WHOLE session, not
+--   just this page) is NOT hard-validated here, and never rejects the
+--   load on that ground alone. This is not an oversight — it would
+--   contradict an existing, deliberate design decision from #758:
+--   "World.Save.Snapshot" (~line 199-207) documents that a demolished
+--   station leaving its bills "lingering, visible + cancellable" is
+--   tolerated gameplay behaviour, not corruption, and hard-failing on
+--   it would reject otherwise-valid saves. "World.Load.Stage" restores
+--   bills/nodes VERBATIM (never prunes them, issue #763 round 9) —
+--   exactly the "do not drop the source record" contract requirement 11
+--   asks for. Issue #764 (save-overhaul C3) adds the cross-component
+--   check this component-local validator structurally cannot:
+--   "World.Save.Integrity".'World.Save.Integrity.sessionIntegrityErrors'
+--   runs once the WHOLE session is assembled and DOES hard-reject a
+--   station/claimant that resolves on a DIFFERENT page than the bill
+--   itself (a genuine wrong-page violation, never legitimate) while
+--   still tolerating one absent from the entire session.
 validateCraftBills ∷ CraftBillsDTO → [ComponentError]
 validateCraftBills (CraftBillsDTO slices) = concat
-    [ [ ComponentError craftBillsComponentId 1 ValidatePhase
+    [ [ ComponentError craftBillsComponentId 2 ValidatePhase
           ("page '" <> tshow (pcbPageId s) <> "': bill #"
            <> tshow (unBillId bid) <> " is not below the page's bill \
               \allocator (" <> tshow (bqNextId (pcbBills s)) <> ")")
@@ -731,7 +897,7 @@ validateCraftBills (CraftBillsDTO slices) = concat
       , bid ← HM.keys (bqBills (pcbBills s))
       , unBillId bid ≥ bqNextId (pcbBills s)
       ]
-    , [ ComponentError craftBillsComponentId 1 ValidatePhase
+    , [ ComponentError craftBillsComponentId 2 ValidatePhase
           ("page '" <> tshow (pcbPageId s) <> "': bill map key #"
            <> tshow (unBillId k) <> " holds a bill whose own id is #"
            <> tshow (unBillId (bilId v)))
@@ -741,13 +907,38 @@ validateCraftBills (CraftBillsDTO slices) = concat
       ]
     ]
 
+-- | Issue #764 (save-overhaul C3): the current schema is v2
+--   (typed 'SamePageRef' station/claimant, see 'CraftBillDTO'). A
+--   hand-rolled 'ComponentCodec' rather than 'serializeCodec' — that
+--   helper only ever accepted its own current version, with no real
+--   multi-version dispatch wired up despite the seam being documented
+--   ("World.Save.Component.Types"'s @ccInputVers@ haddock); this is the
+--   first component to actually need it. v1 decodes via
+--   'migrateCraftBillsDTOv1'; encoding always writes the current v2
+--   shape.
 craftBillsCodec ∷ ComponentCodec CraftBillsDTO
-craftBillsCodec = serializeCodec
-    craftBillsComponentId 1 True [worldPagesComponentId, buildingsComponentId]
-    (\snap → CraftBillsDTO
+craftBillsCodec = ComponentCodec
+    { ccId        = craftBillsComponentId
+    , ccVersion   = 2
+    , ccInputVers = [1, 2]
+    , ccRequired  = True
+    , ccDeps      = [worldPagesComponentId, buildingsComponentId]
+    , ccEncode    = \snap → S.encode (CraftBillsDTO
         [ PageCraftBillsDTO (pgsPageId p) (toBillQueueDTO (pgsCraftBills p))
         | p ← orderedPages snap ])
-    (\_ d → Right d) validateCraftBills
+    , ccDecode    = \v bytes → case v of
+        2 → case S.decode bytes of
+              Left err → Left (ComponentError craftBillsComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right d  → Right d
+        1 → case S.decode bytes of
+              Left err → Left (ComponentError craftBillsComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right (d ∷ CraftBillsDTOv1) → Right (migrateCraftBillsDTOv1 d)
+        _ → Left (ComponentError craftBillsComponentId v DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+    , ccValidate  = validateCraftBills
+    }
 
 applyCraftBills
     ∷ Word32 → CraftBillsDTO → HM.HashMap WorldPageId PageSnapshot
@@ -760,14 +951,30 @@ applyCraftBills ver (CraftBillsDTO slices) =
 
 -- | Frozen mirror of 'PowerNode' (a mutable runtime record appended to
 --   across #358/#360). Reuses the stable 'PowerNodeId'/'BuildingId'/
---   'PowerRole' leaf types.
+--   'PowerRole' leaf types. Issue #764 (save-overhaul C3): 'nodBuilding'
+--   is typed as a same-page persistent reference ("World.Save.Reference"'s
+--   'SamePageRef') rather than a bare id — a node's host building is
+--   always expected on the SAME page as the node itself (see
+--   'CraftBillDTO''s identical reasoning). Bumped this component to v2;
+--   v1 decodes via 'migratePowerNodeDTOv1' below.
 data PowerNodeDTO = PowerNodeDTO
     { nodId         ∷ !PowerNodeId
-    , nodBuilding   ∷ !BuildingId
+    , nodBuilding   ∷ !(SamePageRef BuildingId)
     , nodRole       ∷ !PowerRole
     , nodPeakWatts  ∷ !Float
     , nodCapacityWh ∷ !Float
     , nodStoredWh   ∷ !Float
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN v1 shape (issue #760), preserved verbatim for decode-only
+--   backward compatibility.
+data PowerNodeDTOv1 = PowerNodeDTOv1
+    { nod1Id         ∷ !PowerNodeId
+    , nod1Building   ∷ !BuildingId
+    , nod1Role       ∷ !PowerRole
+    , nod1PeakWatts  ∷ !Float
+    , nod1CapacityWh ∷ !Float
+    , nod1StoredWh   ∷ !Float
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Frozen mirror of the 'PowerNodes' registry (nodes + its embedded id
@@ -777,10 +984,29 @@ data NodeRegistryDTO = NodeRegistryDTO
     , regNextId ∷ !Word32
     } deriving (Show, Eq, Generic, Serialize)
 
+data NodeRegistryDTOv1 = NodeRegistryDTOv1
+    { reg1Nodes  ∷ !(HM.HashMap PowerNodeId PowerNodeDTOv1)
+    , reg1NextId ∷ !Word32
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Unambiguous v1→v2 translation, same reasoning as
+--   'migrateCraftBillDTOv1': v1's 'nod1Building' has always meant "the
+--   host building on THIS node's own page" (see "World.Load.Stage"), so
+--   wrapping it in 'SamePageRef' never guesses (requirement 14).
+migratePowerNodeDTOv1 ∷ PowerNodeDTOv1 → PowerNodeDTO
+migratePowerNodeDTOv1 d = PowerNodeDTO
+    { nodId         = nod1Id d
+    , nodBuilding   = SamePageRef (nod1Building d)
+    , nodRole       = nod1Role d
+    , nodPeakWatts  = nod1PeakWatts d
+    , nodCapacityWh = nod1CapacityWh d
+    , nodStoredWh   = nod1StoredWh d
+    }
+
 toPowerNodeDTO ∷ PowerNode → PowerNodeDTO
 toPowerNodeDTO n = PowerNodeDTO
     { nodId         = pnId n
-    , nodBuilding   = pnBuilding n
+    , nodBuilding   = SamePageRef (pnBuilding n)
     , nodRole       = pnRole n
     , nodPeakWatts  = pnPeakWatts n
     , nodCapacityWh = pnCapacityWh n
@@ -790,7 +1016,7 @@ toPowerNodeDTO n = PowerNodeDTO
 fromPowerNodeDTO ∷ PowerNodeDTO → PowerNode
 fromPowerNodeDTO d = PowerNode
     { pnId         = nodId d
-    , pnBuilding   = nodBuilding d
+    , pnBuilding   = unSamePageRef (nodBuilding d)
     , pnRole       = nodRole d
     , pnPeakWatts  = nodPeakWatts d
     , pnCapacityWh = nodCapacityWh d
@@ -805,14 +1031,33 @@ fromNodeRegistryDTO ∷ NodeRegistryDTO → PowerNodes
 fromNodeRegistryDTO d = PowerNodes
     { pnsNodes = HM.map fromPowerNodeDTO (regNodes d), pnsNextId = regNextId d }
 
+migrateNodeRegistryDTOv1 ∷ NodeRegistryDTOv1 → NodeRegistryDTO
+migrateNodeRegistryDTOv1 d = NodeRegistryDTO
+    { regNodes = HM.map migratePowerNodeDTOv1 (reg1Nodes d)
+    , regNextId = reg1NextId d }
+
 data PagePowerNodesDTO = PagePowerNodesDTO
     { ppnPageId ∷ !WorldPageId
     , ppnNodes  ∷ !NodeRegistryDTO
     } deriving (Show, Generic, Serialize)
 
+data PagePowerNodesDTOv1 = PagePowerNodesDTOv1
+    { ppn1PageId ∷ !WorldPageId
+    , ppn1Nodes  ∷ !NodeRegistryDTOv1
+    } deriving (Show, Generic, Serialize)
+
 newtype PowerNodesDTO = PowerNodesDTO { pndPages ∷ [PagePowerNodesDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
+
+newtype PowerNodesDTOv1 = PowerNodesDTOv1 { pnd1Pages ∷ [PagePowerNodesDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+migratePowerNodesDTOv1 ∷ PowerNodesDTOv1 → PowerNodesDTO
+migratePowerNodesDTOv1 (PowerNodesDTOv1 ps) = PowerNodesDTO
+    [ PagePowerNodesDTO (ppn1PageId p) (migrateNodeRegistryDTOv1 (ppn1Nodes p))
+    | p ← ps ]
 
 -- | Component-local invariant (#760 round 8), same shape as
 --   'validateCraftBills': every node's own id must sit below that
@@ -827,17 +1072,18 @@ newtype PowerNodesDTO = PowerNodesDTO { pndPages ∷ [PagePowerNodesDTO] }
 --   otherwise pass the allocator check yet leave runtime APIs (which key
 --   off both identities) disagreeing about which node this is.
 --
---   Deliberately OUT OF SCOPE here (round 9 opposite-brand review,
---   maintainer call, same reasoning as 'validateCraftBills' above): a
---   dangling 'pnBuilding' reference (a host building absent from the
---   loaded page's @"buildings"@ component) is NOT hard-validated. See
---   "World.Save.Snapshot" (~line 199-207) and
---   "World.Thread.Command.Save.LoadPage" (~line 172-181) — the latter
---   already prunes a power node whose host building isn't present on the
---   loaded page, rather than rejecting the whole load.
+--   Deliberately OUT OF SCOPE here (same component-local-vs-cross-
+--   component reasoning as 'validateCraftBills' above): a dangling
+--   'pnBuilding' reference (a host building absent from the WHOLE
+--   session) is NOT hard-validated here. See "World.Save.Snapshot"
+--   (~line 199-207) and "World.Save.Integrity"'s
+--   'World.Save.Integrity.sessionIntegrityErrors' (issue #764) — the
+--   latter DOES hard-reject a host building that resolves on a
+--   DIFFERENT page than the node itself, once the whole session is
+--   assembled and cross-component checking is actually possible.
 validatePowerNodes ∷ PowerNodesDTO → [ComponentError]
 validatePowerNodes (PowerNodesDTO slices) = concat
-    [ [ ComponentError powerNodesComponentId 1 ValidatePhase
+    [ [ ComponentError powerNodesComponentId 2 ValidatePhase
           ("page '" <> tshow (ppnPageId s) <> "': power node #"
            <> tshow (unPowerNodeId nid) <> " is not below the page's node \
               \allocator (" <> tshow (regNextId (ppnNodes s)) <> ")")
@@ -845,7 +1091,7 @@ validatePowerNodes (PowerNodesDTO slices) = concat
       , nid ← HM.keys (regNodes (ppnNodes s))
       , unPowerNodeId nid ≥ regNextId (ppnNodes s)
       ]
-    , [ ComponentError powerNodesComponentId 1 ValidatePhase
+    , [ ComponentError powerNodesComponentId 2 ValidatePhase
           ("page '" <> tshow (ppnPageId s) <> "': power node map key #"
            <> tshow (unPowerNodeId k) <> " holds a node whose own id is #"
            <> tshow (unPowerNodeId (nodId v)))
@@ -855,13 +1101,33 @@ validatePowerNodes (PowerNodesDTO slices) = concat
       ]
     ]
 
+-- | Same reasoning as 'craftBillsCodec': hand-rolled for real
+--   multi-version decode. Current schema is v2 (typed 'SamePageRef'
+--   host building, see 'PowerNodeDTO'); v1 decodes via
+--   'migratePowerNodesDTOv1'.
 powerNodesCodec ∷ ComponentCodec PowerNodesDTO
-powerNodesCodec = serializeCodec
-    powerNodesComponentId 1 True [worldPagesComponentId, buildingsComponentId]
-    (\snap → PowerNodesDTO
+powerNodesCodec = ComponentCodec
+    { ccId        = powerNodesComponentId
+    , ccVersion   = 2
+    , ccInputVers = [1, 2]
+    , ccRequired  = True
+    , ccDeps      = [worldPagesComponentId, buildingsComponentId]
+    , ccEncode    = \snap → S.encode (PowerNodesDTO
         [ PagePowerNodesDTO (pgsPageId p) (toNodeRegistryDTO (pgsPowerNodes p))
         | p ← orderedPages snap ])
-    (\_ d → Right d) validatePowerNodes
+    , ccDecode    = \v bytes → case v of
+        2 → case S.decode bytes of
+              Left err → Left (ComponentError powerNodesComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right d  → Right d
+        1 → case S.decode bytes of
+              Left err → Left (ComponentError powerNodesComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right (d ∷ PowerNodesDTOv1) → Right (migratePowerNodesDTOv1 d)
+        _ → Left (ComponentError powerNodesComponentId v DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+    , ccValidate  = validatePowerNodes
+    }
 
 applyPowerNodes
     ∷ Word32 → PowerNodesDTO → HM.HashMap WorldPageId PageSnapshot

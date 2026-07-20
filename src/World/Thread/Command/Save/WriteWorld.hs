@@ -18,6 +18,7 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Control.Exception (SomeException, evaluate, try)
@@ -29,6 +30,10 @@ import World.Types
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
+import World.Save.Integrity
+    (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
+    , IntegrityReport(..), buildKnownEntities, LuaRefEdge(..)
+    , luaReferenceErrors, integrityErrorCap)
 import Unit.Types (UnitManager(..), unitsOnPage)
 import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
@@ -47,8 +52,10 @@ import World.Generate.Coordinates (chunkToGlobal)
 --   'encodeSessionSnapshot' below rather than through 'SessionGlobals'
 --   at all — Lua-owned state is no longer part of 'SessionSnapshot'.
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
-                       → Text → [(Text, Word32, Bool, BS.ByteString)] → IO ()
-handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents = do
+                       → Text → [(Text, Word32, Bool, BS.ByteString)]
+                       → [(Text, Text, Int, Maybe Int, Text)] → IO ()
+handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
+                        luaRefs = do
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
     -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
@@ -205,88 +212,144 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents = d
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do
-                            let msg = "session snapshot failed validation: "
-                                    <> T.intercalate "; " (map (T.pack ∘ show) errs)
+                            -- Round-2 review (issue #764): sort + cap this
+                            -- list too, at the SAME 'integrityErrorCap' the
+                            -- rest of the integrity graph uses, rather than
+                            -- rendering a raw, uncapped, insertion-order
+                            -- list — the same "never an arbitrary first
+                            -- hash-map entry, always bounded" contract
+                            -- 'capComponentErrors'/'capIntegrityErrors'
+                            -- already enforce at the other boundaries.
+                            let rendered = L.sort (map (T.pack ∘ show) errs)
+                                total    = length rendered
+                                capped   = take integrityErrorCap rendered
+                                omitted  = max 0 (total - length capped)
+                                trailer  =
+                                    [ T.pack (show omitted)
+                                        <> " additional snapshot finding(s) \
+                                           \omitted (see \
+                                           \World.Save.Integrity.integrityErrorCap)"
+                                    | omitted > 0 ]
+                                msg = "session snapshot failed validation: "
+                                    <> T.intercalate "; " (capped ⧺ trailer)
                             logWarn logger CatWorld msg
                             failTransaction env msg
-                          Right snap → do
-                            -- UTC ISO 8601 microsecond precision, captured and
-                            -- monotonically clamped at the API request time
-                            -- (see saveWorldFn) — NOT here, so two saves
-                            -- queued back-to-back don't get the same
-                            -- wall-second timestamp from world-thread
-                            -- processing latency. Lexicographic sort by this
-                            -- fixed-width string is chronologically correct,
-                            -- so the Lua-side `a.timestamp > b.timestamp` in
-                            -- main_menu works without further wrapping.
-                            let req = SaveRequestMeta
-                                    { srmSlotName  = saveName
-                                    , srmTimestamp = timestampTxt
-                                    }
-                                meta = snapshotSaveMetadata req snap
-                            -- Force the FULL encoding now, while the capture
-                            -- lock is STILL held (#758 requirement 7): every
-                            -- component's cereal encode must visit every
-                            -- field, so this either succeeds completely right
-                            -- here or throws right here — never partway
-                            -- through the disk write below, after other owners
-                            -- have already resumed. Anything
-                            -- 'World.Save.Snapshot' left as an unevaluated
-                            -- thunk (its record fields are only forced to
-                            -- WHNF, not deeply) gets touched here.
-                            -- A thrown exception is a capture failure, not a
-                            -- disk failure: fail the transaction directly
-                            -- and skip the release entirely — failSave's own
-                            -- phase transition already unblocks
-                            -- 'captureLocked' for every other owner.
-                            encodedOrErr ← try (evaluate
-                                (encodeSessionSnapshot meta snap luaComponents))
-                            case encodedOrErr of
-                              Left (e ∷ SomeException) → do
-                                let msg = "session snapshot failed to encode: "
-                                        <> T.pack (show e)
-                                logWarn logger CatWorld msg
-                                failTransaction env msg
-                              Right encoded → do
-                                -- Every state owner may resume as soon as the
-                                -- snapshot is fully captured, validated, AND
-                                -- encoded (#758 requirement 10) — but the
-                                -- save TRANSACTION stays open (non-terminal
-                                -- 'SaveEncoding') until the disk write below
-                                -- actually resolves, so a write failure still
-                                -- surfaces as a real 'SaveFailed' outcome
-                                -- instead of the barrier having already
-                                -- declared success. 'encoded'/'sd' are
-                                -- already-computed immutable values — never
-                                -- live state again — so a mutation the
-                                -- instant after release can never change
-                                -- what gets written.
-                                releaseCaptureLock' env
-                                let luaKnownNames =
-                                        HS.fromList [ n | (n,_,_,_) ← luaComponents ]
-                                    luaRequiredNames =
-                                        HS.fromList [ n | (n,_,req,_) ← luaComponents, req ]
-                                result ← writeSaveFiles saveName meta encoded
-                                            luaKnownNames luaRequiredNames
-                                case result of
-                                  Right warnings →
-                                    do
-                                        completeTransaction env
-                                        forM_ warnings $ \w →
-                                            logWarn logger CatWorld $
-                                                "World saved with a cleanup \
-                                                \warning: " <> w
-                                        logInfo logger CatWorld $
-                                            "World saved successfully: " <> saveName
-                                        emitEvent env "save_load" "World.Save" $
-                                            "Game saved: " <> saveName
-                                  Left err →
-                                    do
-                                        failTransaction env err
-                                        logError logger CatWorld $
-                                            "Failed to save world: " <> err
-                                        emitEvent env "save_load" "World.Save" $
-                                            "Save failed: " <> err
+                          Right snap → case capIntegrityErrors
+                                              (sessionIntegrityErrors snap) of
+                            report | not (null (irErrors report)) → do
+                              let msg = "session snapshot failed integrity \
+                                        \validation: " <> T.intercalate "; "
+                                        (renderIntegrityReport report)
+                              logWarn logger CatWorld msg
+                              failTransaction env msg
+                            _ → do
+                                -- Issue #764 (save-overhaul C3): cross-validate
+                                -- every Lua-declared reference (gathered on the
+                                -- SAME live snapshot saveModules.snapshotAll()
+                                -- just captured) against the same known-entity
+                                -- graph the load boundary uses — save and load
+                                -- share one complete integrity picture, not two
+                                -- independently-decided ones. Never load/save-
+                                -- blocking (the #761-established tolerated-
+                                -- dangling-reference contract) — logged as
+                                -- diagnostics only (requirement 16).
+                                let knownLua = buildKnownEntities snap
+                                    luaEdges = [ LuaRefEdge c k i o p
+                                               | (c, k, i, o, p) ← luaRefs ]
+                                    -- componentVersions (round-2 review,
+                                    -- issue #764): luaComponents already
+                                    -- carries each component's just-
+                                    -- snapshotted schema version, so this
+                                    -- diagnostic reports the version the
+                                    -- edge was actually collected against
+                                    -- rather than a hardcoded placeholder.
+                                    componentVersions = HM.fromList
+                                        [ (cid, ver)
+                                        | (cid, ver, _, _) ← luaComponents ]
+                                    luaReport = capIntegrityErrors
+                                        (luaReferenceErrors
+                                            componentVersions knownLua luaEdges)
+                                forM_ (renderIntegrityReport luaReport) $ \m →
+                                    logWarn logger CatWorld $
+                                        "saveWorld '" <> saveName
+                                        <> "': integrity diagnostic: " <> m
+                                -- UTC ISO 8601 microsecond precision, captured and
+                                -- monotonically clamped at the API request time
+                                -- (see saveWorldFn) — NOT here, so two saves
+                                -- queued back-to-back don't get the same
+                                -- wall-second timestamp from world-thread
+                                -- processing latency. Lexicographic sort by this
+                                -- fixed-width string is chronologically correct,
+                                -- so the Lua-side `a.timestamp > b.timestamp` in
+                                -- main_menu works without further wrapping.
+                                let req = SaveRequestMeta
+                                        { srmSlotName  = saveName
+                                        , srmTimestamp = timestampTxt
+                                        }
+                                    meta = snapshotSaveMetadata req snap
+                                -- Force the FULL encoding now, while the capture
+                                -- lock is STILL held (#758 requirement 7): every
+                                -- component's cereal encode must visit every
+                                -- field, so this either succeeds completely right
+                                -- here or throws right here — never partway
+                                -- through the disk write below, after other owners
+                                -- have already resumed. Anything
+                                -- 'World.Save.Snapshot' left as an unevaluated
+                                -- thunk (its record fields are only forced to
+                                -- WHNF, not deeply) gets touched here.
+                                -- A thrown exception is a capture failure, not a
+                                -- disk failure: fail the transaction directly
+                                -- and skip the release entirely — failSave's own
+                                -- phase transition already unblocks
+                                -- 'captureLocked' for every other owner.
+                                encodedOrErr ← try (evaluate
+                                    (encodeSessionSnapshot meta snap luaComponents))
+                                case encodedOrErr of
+                                  Left (e ∷ SomeException) → do
+                                    let msg = "session snapshot failed to encode: "
+                                            <> T.pack (show e)
+                                    logWarn logger CatWorld msg
+                                    failTransaction env msg
+                                  Right encoded → do
+                                    -- Every state owner may resume as soon as the
+                                    -- snapshot is fully captured, validated, AND
+                                    -- encoded (#758 requirement 10) — but the
+                                    -- save TRANSACTION stays open (non-terminal
+                                    -- 'SaveEncoding') until the disk write below
+                                    -- actually resolves, so a write failure still
+                                    -- surfaces as a real 'SaveFailed' outcome
+                                    -- instead of the barrier having already
+                                    -- declared success. 'encoded'/'sd' are
+                                    -- already-computed immutable values — never
+                                    -- live state again — so a mutation the
+                                    -- instant after release can never change
+                                    -- what gets written.
+                                    releaseCaptureLock' env
+                                    let luaKnownNames =
+                                            HS.fromList [ n | (n,_,_,_) ← luaComponents ]
+                                        luaRequiredNames =
+                                            HS.fromList [ n | (n,_,req,_) ← luaComponents, req ]
+                                    result ← writeSaveFiles saveName meta encoded
+                                                luaKnownNames luaRequiredNames
+                                    case result of
+                                      Right warnings →
+                                        do
+                                            completeTransaction env
+                                            forM_ warnings $ \w →
+                                                logWarn logger CatWorld $
+                                                    "World saved with a cleanup \
+                                                    \warning: " <> w
+                                            logInfo logger CatWorld $
+                                                "World saved successfully: " <> saveName
+                                            emitEvent env "save_load" "World.Save" $
+                                                "Game saved: " <> saveName
+                                      Left err →
+                                        do
+                                            failTransaction env err
+                                            logError logger CatWorld $
+                                                "Failed to save world: " <> err
+                                            emitEvent env "save_load" "World.Save" $
+                                                "Save failed: " <> err
 
 -- | #758: release the barrier so state owners resume WITHOUT declaring
 --   the transaction terminally complete yet — see 'releaseCaptureLock'.

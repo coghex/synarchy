@@ -761,6 +761,164 @@ def extract_lua_registered_modules(
     return found
 
 
+# Typed persistent reference fields (issue #764, save-overhaul C3):
+# a DTO field typed with a "World.Save.Reference" wrapper
+# (SamePageRef/CrossPageRef) declares a durable cross-component
+# reference's scope at the TYPE level (requirement 2). Requirement 15's
+# persistence-reference audit: a newly introduced one without a
+# documented target kind/scope/validation/migration decision fails
+# here, exactly the way an unclassified root-owner field or Lua save
+# module already does above -- reusing parse_classified_names' existing
+# generic "### Owner" + "Classification" table parser (no new doc-
+# parsing machinery needed; see docs/persistence_state_inventory.md's
+# "### Typed persistent references" heading).
+#
+# Matches the wrapper ANYWHERE on the field's declaration line after the
+# `∷`/`::` separator (round-3 review, issue #764) -- not just when it's
+# the outermost type constructor. A field like
+# `psSim ∷ !(HM.HashMap (SamePageRef UnitId) UnitSimStateDTO)` types a
+# reference nested inside a HashMap KEY, not as the field's own top-level
+# type, which the original front-anchored pattern couldn't see. This
+# codebase's one-field-per-line style (already relied on by
+# `_extract_fields_from_brace_block`) keeps the match scoped to a single
+# field's own declaration rather than spilling into a sibling field.
+REFERENCE_FIELD_RE = re.compile(
+    r"^\s*,?\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)[^\n]*"
+    r"\b(?:SamePageRef|CrossPageRef)\b",
+    re.MULTILINE,
+)
+REFERENCE_FIELD_OWNER = "Typed persistent references"
+
+
+def find_typed_reference_fields(
+        component_sources: dict[str, str]) -> list[tuple[str, str]]:
+    """(fieldName, relpath) for every DTO field in `component_sources`
+    typed as a SamePageRef/CrossPageRef wrapper. Scans each whole file
+    (comment-stripped) rather than parsing individual record
+    boundaries -- these wrapper types are only ever used on a durable
+    reference field, so a bare textual match is unambiguous without
+    needing to know which specific record a field belongs to.
+    """
+    out: list[tuple[str, str]] = []
+    for relpath, source in sorted(component_sources.items()):
+        text = _strip_haskell_comments(source)
+        for m in REFERENCE_FIELD_RE.finditer(text):
+            out.append((m.group(1), relpath))
+    return out
+
+
+# Lua reference kinds (issue #764): the controlled `kind = "..."`
+# vocabulary a save component's `references()` hook reports
+# (scripts/unit_ai_save_refs.lua / scripts/building_spawn.lua). Scoped to
+# any file that registers a `references = <something>` spec field at
+# all -- either an inline `references = function(data) ... end` or (the
+# form both real registrations actually use) a named function reference
+# `references = unitAiReferences` -- not to the hook's own function
+# BODY specifically, since reliably finding a Lua function's matching
+# `end` (distinct from every nested `if`/`for`/`while`'s own `end`)
+# needs real block-structure parsing this regex-based audit doesn't
+# otherwise do anywhere. A same-file `kind = "..."` used for an
+# unrelated purpose would only ever cause over-inclusion (one more
+# string requiring a documented vocabulary entry), never a silently-
+# missed reference kind -- the same fail-safe direction this audit
+# already takes elsewhere (see the module docstring's "anything this
+# mapping can't classify" philosophy in tools/ci_probes.py, which this
+# mirrors).
+# Two established call shapes report a kind string (both real
+# registrations use one or the other): a direct table-constructor
+# literal (`{ kind = "building", id = bid }`, building_spawn.lua) and a
+# same-file `addRef(kind, id)`-style helper invoked with a literal
+# first argument (`addRef("unit", uid)`, unit_ai_save_refs.lua -- the
+# helper's OWN table constructor is `{ kind = kind, id = id }`, a
+# variable, not a literal, so only the CALL SITE's literal argument is
+# textually findable).
+LUA_REFERENCE_KIND_RES = (
+    re.compile(r'kind\s*=\s*"([a-z_]+)"'),
+    re.compile(r'addRef(?:List)?\(\s*"([a-z_]+)"'),
+)
+LUA_REFERENCE_KIND_OWNER = "Lua reference kinds"
+_LUA_REFERENCES_SPEC_FIELD_RE = re.compile(r"\breferences\s*=")
+
+# Round-5 review (issue #764): a REGISTRATION site can delegate its
+# `references = ` spec field to an imported helper module
+# (`references = refsMod.references`, unit_ai_save.lua) rather than
+# defining the hook inline or as a same-file named function
+# (`references = buildingSpawnReferences`, building_spawn.lua -- the
+# latter already worked under the original per-file gate, since the
+# kind literals AND the `references =` text share one file). The
+# former case only worked before by ACCIDENT: unit_ai_save_refs.lua
+# happens to independently satisfy the gate itself, via its own
+# internal `M.references = unitAiReferences` re-export line -- true
+# today, but not a structural guarantee (a differently-named re-export,
+# or a helper module split that never re-exports under that literal
+# name at all, would silently stop being scanned). These two regexes
+# instead trace the REAL relationship: which `require()`d module a
+# registration's `references = <var>.<field>` delegation actually
+# points at.
+_LUA_REQUIRE_LOCAL_RE = re.compile(
+    r"""\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*require\(\s*"""
+    r"""["']([\w.]+)["']\s*\)""")
+_LUA_REFERENCES_DELEGATE_RE = re.compile(
+    r"\breferences\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def _delegated_reference_module_paths(cleaned_text: str) -> set[str]:
+    """relpaths of every `require()`d module a `references = <var>.<field>`
+    delegation in `cleaned_text` resolves to -- e.g. `references =
+    refsMod.references` alongside `local refsMod =
+    require("scripts.unit_ai_save_refs")` resolves to
+    "scripts/unit_ai_save_refs.lua". A delegation whose variable was
+    never `require()`d in the same file (or whose require target isn't
+    a real, present script) resolves to nothing -- this only ever
+    WIDENS which files get scanned for kind literals, it can't narrow
+    the existing per-file gate below.
+    """
+    delegated_vars = {
+        m.group(1) for m in _LUA_REFERENCES_DELEGATE_RE.finditer(cleaned_text)
+    }
+    if not delegated_vars:
+        return set()
+    paths: set[str] = set()
+    for m in _LUA_REQUIRE_LOCAL_RE.finditer(cleaned_text):
+        varname, module = m.group(1), m.group(2)
+        if varname in delegated_vars:
+            paths.add(module.replace(".", "/") + ".lua")
+    return paths
+
+
+def find_lua_reference_kinds(
+        scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
+    """(kind, relpath) for every distinct reference-kind literal in a
+    file that registers a `references()` hook, OR in a helper module a
+    registration site `require()`s and delegates its `references = `
+    spec field to (see LUA_REFERENCE_KIND_RES for the two kind-literal
+    call shapes recognised, and `_delegated_reference_module_paths` for
+    the delegation-following that closes the round-5 review gap)."""
+    cleaned_by_file = {
+        relpath: _strip_lua_comments(text)
+        for relpath, text in scripts_text_by_file.items()
+    }
+    scannable: set[str] = set()
+    for relpath, cleaned in cleaned_by_file.items():
+        if _LUA_REFERENCES_SPEC_FIELD_RE.search(cleaned):
+            scannable.add(relpath)
+        for delegated in _delegated_reference_module_paths(cleaned):
+            if delegated in scripts_text_by_file:
+                scannable.add(delegated)
+
+    out: list[tuple[str, str]] = []
+    for relpath in sorted(scannable):
+        cleaned = cleaned_by_file[relpath]
+        seen: set[str] = set()
+        for pattern in LUA_REFERENCE_KIND_RES:
+            for m in pattern.finditer(cleaned):
+                kind = m.group(1)
+                if kind not in seen:
+                    seen.add(kind)
+                    out.append((kind, relpath))
+    return out
+
+
 def _string_literal_spans(text: str) -> list[tuple[int, int]]:
     """[start, end) ranges of Lua string literals (delimiters included)
     in comment-stripped Lua text: quoted ('...'/"...") AND long-bracket
@@ -1285,7 +1443,8 @@ def find_component_registration_violations(
 def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
           inventory_text: str,
           root_records: list[tuple[str, str, str]] | None = None,
-          registered_ids: set[str] | None = None) -> list[str]:
+          registered_ids: set[str] | None = None,
+          component_sources: dict[str, str] | None = None) -> list[str]:
     """Pure audit core. Returns a list of human-readable violations."""
     if root_records is None:
         root_records = ROOT_RECORDS
@@ -1364,10 +1523,44 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
         violations.extend(
             find_component_registration_violations(inventory_text, registered_ids))
 
+    # Issue #764 requirement 15: a new typed-reference DTO field or Lua
+    # reference kind with no documented classification fails the audit,
+    # the same way a new root-owner field or Lua save module already does.
+    if component_sources is not None:
+        classified_refs = classified.get(REFERENCE_FIELD_OWNER, {})
+        for field, relpath in find_typed_reference_fields(component_sources):
+            if field not in classified_refs:
+                violations.append(
+                    f'Typed persistent reference field "{field}" ({relpath}) '
+                    f"has no classification under the "
+                    f"'### {REFERENCE_FIELD_OWNER}' heading in "
+                    f"{INVENTORY_PATH.name}")
+            elif not _is_valid_classification(classified_refs[field]):
+                violations.append(
+                    f'Typed persistent reference field "{field}" ({relpath})\'s '
+                    f"classification {classified_refs[field]!r} under the "
+                    f"'### {REFERENCE_FIELD_OWNER}' heading in "
+                    f"{INVENTORY_PATH.name} is not one of {VALID_CLASSIFICATIONS}")
+
+    classified_kinds = classified.get(LUA_REFERENCE_KIND_OWNER, {})
+    for kind, relpath in find_lua_reference_kinds(scripts_text_by_file):
+        if kind not in classified_kinds:
+            violations.append(
+                f'Lua reference kind "{kind}" (used in {relpath}) has no '
+                f"classification under the '### {LUA_REFERENCE_KIND_OWNER}' "
+                f"heading in {INVENTORY_PATH.name}")
+        elif not _is_valid_classification(classified_kinds[kind]):
+            violations.append(
+                f'Lua reference kind "{kind}" (used in {relpath})\'s '
+                f"classification {classified_kinds[kind]!r} under the "
+                f"'### {LUA_REFERENCE_KIND_OWNER}' heading in "
+                f"{INVENTORY_PATH.name} is not one of {VALID_CLASSIFICATIONS}")
+
     return violations
 
 
-def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, set[str]]:
+def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, set[str],
+                                 dict[str, str]]:
     record_sources: dict[str, str] = {}
     for _, relpath, _ in ROOT_RECORDS:
         if relpath not in record_sources:
@@ -1379,22 +1572,26 @@ def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, set[str]]:
     inventory_text = INVENTORY_PATH.read_text(encoding="utf-8")
     registry_list_source = (REPO_ROOT / COMPONENT_REGISTRY_LIST_FILE).read_text(
         encoding="utf-8")
-    codec_source = "\n".join(
-        (REPO_ROOT / f).read_text(encoding="utf-8") for f in COMPONENT_CODEC_FILES)
+    component_sources: dict[str, str] = {
+        f: (REPO_ROOT / f).read_text(encoding="utf-8") for f in COMPONENT_CODEC_FILES
+    }
+    codec_source = "\n".join(component_sources[f] for f in COMPONENT_CODEC_FILES)
     id_types_source = (REPO_ROOT / COMPONENT_ID_TYPES_FILE).read_text(
         encoding="utf-8")
     envelope_source = (REPO_ROOT / COMPONENT_ENVELOPE_FILE).read_text(
         encoding="utf-8")
     registered_ids = derive_registered_component_ids(
         registry_list_source, codec_source, id_types_source, envelope_source)
-    return record_sources, scripts_text_by_file, inventory_text, registered_ids
+    return (record_sources, scripts_text_by_file, inventory_text, registered_ids,
+            component_sources)
 
 
 def main() -> int:
-    record_sources, scripts_text_by_file, inventory_text, registered_ids = \
-        _load_repo_state()
+    record_sources, scripts_text_by_file, inventory_text, registered_ids, \
+        component_sources = _load_repo_state()
     violations = audit(record_sources, scripts_text_by_file, inventory_text,
-                       registered_ids=registered_ids)
+                       registered_ids=registered_ids,
+                       component_sources=component_sources)
     if violations:
         print(f"{len(violations)} persistence-inventory violation(s):")
         for v in violations:
@@ -1408,8 +1605,11 @@ def main() -> int:
         len(extract_record_fields(record_sources[relpath], pattern))
         for _, relpath, pattern in ROOT_RECORDS)
     total_lua = len(extract_lua_registered_modules(scripts_text_by_file))
+    total_refs = len(find_typed_reference_fields(component_sources))
+    total_kinds = len(find_lua_reference_kinds(scripts_text_by_file))
     print(f"persistence-inventory audit: {total_fields} root-owner fields + "
-          f"{total_lua} Lua save module(s) all classified")
+          f"{total_lua} Lua save module(s) + {total_refs} typed reference "
+          f"field(s) + {total_kinds} Lua reference kind(s) all classified")
     return 0
 
 

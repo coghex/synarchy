@@ -43,10 +43,18 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingInfectionReferences
                         , renderMissingInfectionRef)
 import Location.Types (LocationRegistry(..), LocationDef(..))
-import Building.Types (BuildingManager(..))
-import Unit.Types (UnitManager(..))
-import Item.Types (ItemManager(..))
+import Building.Types (BuildingManager(..), BuildingId(..))
+import Unit.Types (UnitManager(..), UnitId(..))
+import Item.Types (ItemManager(..), ItemInstance(..))
 import Craft.Types (RecipeManager(..))
+import Craft.Bills (CraftBills(..), BillId(..))
+import Item.Ground (GroundItems(..), GroundItem(..))
+import World.Save.Types
+    ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
+    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
+import World.Save.Integrity
+    ( KnownEntities(..), LuaRefEdge(..), luaReferenceErrors
+    , capIntegrityErrors, renderIntegrityReport )
 import World.Types
     (WorldCommand(..), WorldManager(wmWorlds), WorldState(wsGenParamsRef))
 import World.Page.Types (WorldPageId(..))
@@ -294,7 +302,7 @@ saveWorldFn env = do
                                                     emitEvent env "save_load" "World.Save" $
                                                         "Save failed: " <> err
                                                 Lua.pushboolean False
-                                              Right components → do
+                                              Right (components, luaRefs) → do
                                     -- Capture the timestamp at API
                                     -- (request) time so two saves
                                     -- queued back-to-back get distinct
@@ -327,7 +335,8 @@ saveWorldFn env = do
                                                         defaultTimeLocale "%FT%T%6QZ" ts
                                                 Lua.liftIO $ Q.writeQueue
                                                     (worldQueue env)
-                                                    (WorldSave pageId name nowText components)
+                                                    (WorldSave pageId name nowText
+                                                        components luaRefs)
                                                 Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
@@ -399,6 +408,64 @@ loadSaveFn env = do
                         Right descriptors →
                             continueLoad env logger requestId saveName descriptors
                 return 1
+
+-- | Every item-instance id reachable from one 'ItemInstance', including
+--   ones nested (recursively) in 'iiContents' — mirrors
+--   "World.Save.Snapshot"'s 'World.Save.Snapshot.allItemInstanceIds',
+--   just over the legacy 'SaveData'/'WorldPageSave' shape this module
+--   still works with rather than a 'World.Save.Snapshot.SessionSnapshot'.
+flattenItemInstanceIds' ∷ ItemInstance → [Word64]
+flattenItemInstanceIds' i =
+    iiInstanceId i : concatMap flattenItemInstanceIds' (iiContents i)
+
+-- | The known-entity id sets (issue #764, save-overhaul C3) every
+--   Lua-declared reference is cross-validated against — see
+--   "World.Save.Integrity"'s 'KnownEntities' haddock for why
+--   @craft_bill@/@ground_item@ are tracked PER PAGE (per-page
+--   allocators) while unit/building/item-instance stay session-wide
+--   (global allocators). Built once per load from the SAME decoded
+--   'SaveData' the existing missing-def-reference ladder already reads
+--   (below), never from live state.
+knownEntitiesFromSaveData ∷ SaveData → KnownEntities
+knownEntitiesFromSaveData sd = KnownEntities
+    { keUnits = HS.fromList
+        [ fromIntegral (unUnitId uid)
+        | w ← pages, uid ← HM.keys (usnInstances (wpsUnits w)) ]
+    , keBuildings = HS.fromList
+        [ fromIntegral (unBuildingId bid)
+        | w ← pages, bid ← HM.keys (bsnInstances (wpsBuildings w)) ]
+    , keBillsByPage = HM.fromList
+        [ (wpsPageId w, HS.fromList
+              [ fromIntegral (unBillId bid)
+              | bid ← HM.keys (cbsBills (wpsCraftBills w)) ])
+        | w ← pages ]
+    , keItemInstances = HS.fromList (map fromIntegral (concatMap pageItemIds pages))
+    , keGroundItemsByPage = HM.fromList
+        [ (wpsPageId w, HS.fromList (HM.keys (gisItems (wpsGroundItems w))))
+        | w ← pages ]
+    , keUnitPage = HM.fromList
+        [ (fromIntegral (unUnitId uid), wpsPageId w)
+        | w ← pages, uid ← HM.keys (usnInstances (wpsUnits w)) ]
+    , keNextUnitId = maybe 0 (fromIntegral . usnNextId . wpsUnits) (listToMaybe pages)
+    , keNextBuildingId =
+        maybe 0 (fromIntegral . bsnNextId . wpsBuildings) (listToMaybe pages)
+    , keNextItemId = fromIntegral (sdNextItemInstanceId sd)
+    }
+  where
+    pages = sdWorlds sd
+    pageItemIds w =
+        concatMap (flattenItemInstanceIds' . giInst)
+                  (HM.elems (gisItems (wpsGroundItems w)))
+        ⧺ concatMap unitItemIds (HM.elems (usnInstances (wpsUnits w)))
+        ⧺ concatMap buildingItemIds (HM.elems (bsnInstances (wpsBuildings w)))
+    unitItemIds u =
+        concatMap flattenItemInstanceIds' (uisInventory u)
+        ⧺ concatMap flattenItemInstanceIds' (HM.elems (uisEquipped u))
+        ⧺ concatMap flattenItemInstanceIds' (uisAccessories u)
+    buildingItemIds b =
+        concatMap (concatMap flattenItemInstanceIds')
+                  (HM.elems (bisMaterialsDelivered b))
+        ⧺ concatMap flattenItemInstanceIds' (bisStorage b)
 
 -- | Continue 'loadSaveFn' once the current Lua registry's component
 --   descriptors are known (issue #761 round-4 review): split out so a
@@ -578,8 +645,33 @@ continueLoad env logger requestId saveName descriptors = do
                             <> "': " <> err
                         failLoad (loadStatusRef env) requestId err
                     Lua.pushboolean False
-                  Right () → do
-                    Lua.liftIO $
+                  Right luaRefs → do
+                    Lua.liftIO $ do
+                        -- Issue #764 (save-overhaul C3): cross-validate
+                        -- every Lua-declared reference against this
+                        -- load's real entity sets. Never load-blocking
+                        -- (the #761-established tolerated-dangling-
+                        -- reference contract — see
+                        -- "World.Save.Integrity"'s haddock) — logged as
+                        -- diagnostics only (requirement 16).
+                        let known = knownEntitiesFromSaveData saveData
+                            edges = [ LuaRefEdge c k i o p
+                                    | (c, k, i, o, p) ← luaRefs ]
+                            -- componentVersions (round-2 review, issue
+                            -- #764): 'descriptors' is this SAME load's
+                            -- current Lua registry ({id,version,required}),
+                            -- already threaded into 'continueLoad' above --
+                            -- reused here rather than re-deriving it, so
+                            -- each diagnostic's version matches the reader
+                            -- that actually decoded its edge.
+                            componentVersions = HM.fromList
+                                [ (n, v) | (n, v, _) ← descriptors ]
+                            report = capIntegrityErrors
+                                (luaReferenceErrors componentVersions known edges)
+                        forM_ (renderIntegrityReport report) $ \msg →
+                            logWarn logger CatWorld $
+                                "loadSave '" <> saveName
+                                <> "': integrity diagnostic: " <> msg
                         -- Hand off the expensive per-page reconstruction
                         -- to the world thread (World.Load.Stage) — it
                         -- touches no live ref (requirement 6), so
@@ -772,10 +864,15 @@ readSnapshotComponentField = do
 --   anything is queued to the world thread, rather than silently
 --   continuing with partial Lua state the way the pre-#761 blob map
 --   used to (the engine save no longer "still proceeds, just without
---   Lua blobs").
+--   Lua blobs"). On success, also returns every reference edge
+--   ('readReferenceEdgeField') collected on the SAME live snapshot
+--   (issue #764) — the caller cross-validates these the same way the
+--   load boundary does, so save and load share one integrity graph.
 collectLuaComponents
     ∷ LoggerState
-    → Lua.LuaE Lua.Exception (Either Text [(Text, Word32, Bool, BS.ByteString)])
+    → Lua.LuaE Lua.Exception
+        (Either Text ( [(Text, Word32, Bool, BS.ByteString)]
+                     , [(Text, Text, Int, Maybe Int, Text)] ))
 collectLuaComponents logger = do
     ok ← callSaveModules1 logger "snapshotAll" 0 (return ())
     if not ok
@@ -791,16 +888,20 @@ collectLuaComponents logger = do
                 _ ← Lua.getfield (-1) "components"
                 arrResult ← readLuaArrayAt readSnapshotComponentField
                 Lua.pop 1  -- components array
-                return $ case arrResult of
-                    Right xs → Right xs
+                case arrResult of
                     -- round-4 review "fail closed": a component record
                     -- HsLua can't fully read (e.g. an out-of-range
                     -- version) must abort the save, not vanish from
                     -- the list — dropping it here is indistinguishable
                     -- from that REQUIRED component never having
                     -- existed at all.
-                    Left err → Left ("save_modules.snapshotAll() returned "
-                        <> "a malformed component record: " <> err)
+                    Left err → return (Left ("save_modules.snapshotAll() \
+                        \returned a malformed component record: " <> err))
+                    Right xs → do
+                        _ ← Lua.getfield (-1) "references"
+                        refResult ← readLuaArrayAt readReferenceEdgeField
+                        Lua.pop 1  -- references array
+                        return (Right (xs, either (const []) id refResult))
               else do
                 _ ← Lua.getfield (-1) "error"
                 merr ← Lua.tostring (-1)
@@ -834,6 +935,42 @@ readErrorStringField = do
         then (TE.decodeUtf8Lenient ⊚) ⊚ Lua.tostring (-1)
         else return Nothing
 
+-- | Read {component=string, kind=string, id=number, owner=number|nil,
+--   path=string|nil} from the table at the top of the stack — one entry
+--   of @save_modules.lua@'s @prepareLoad@/@snapshotAll@ @references@
+--   result array (issue #764, save-overhaul C3): a single reference edge
+--   a Lua component's @references()@ hook reported. @owner@ (the owning
+--   unit id, when the hook supplied one) and @path@ (the source field
+--   path, round-2 review — e.g. "unit[7].attackTargetUid") are both
+--   optional diagnostics-only fields: 'Nothing'/empty when absent or
+--   not the expected type, never a reason to drop the whole edge the
+--   way a malformed @component@/@kind@/@id@ does.
+readReferenceEdgeField
+    ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int, Text))
+readReferenceEdgeField = do
+    _ ← Lua.getfield (-1) "component"
+    mcompB ← Lua.tostring (-1)
+    Lua.pop 1
+    _ ← Lua.getfield (-1) "kind"
+    mkindB ← Lua.tostring (-1)
+    Lua.pop 1
+    _ ← Lua.getfield (-1) "id"
+    mid ← Lua.tointeger (-1)
+    Lua.pop 1
+    _ ← Lua.getfield (-1) "owner"
+    mowner ← Lua.tointeger (-1)
+    Lua.pop 1
+    _ ← Lua.getfield (-1) "path"
+    mpathB ← Lua.tostring (-1)
+    Lua.pop 1
+    case (mcompB, mkindB, mid) of
+        (Just compB, Just kindB, Just i) →
+            return (Just ( TE.decodeUtf8Lenient compB
+                         , TE.decodeUtf8Lenient kindB, fromIntegral i
+                         , fromIntegral ⊚ mowner
+                         , maybe "" TE.decodeUtf8Lenient mpathB ))
+        _ → return Nothing
+
 -- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
 --   decode + migrate + component-locally-validate EVERY registered Lua
 --   component with NO live mutation (requirement 11). Any failure — a
@@ -842,9 +979,15 @@ readErrorStringField = do
 --   is stashed on the Lua side alongside the prepared data so a later
 --   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (round
 --   9 review — see 'abortLuaLoad').
+-- | On success, also returns every reference edge
+--   ('readReferenceEdgeField') the just-prepared components' @references()@
+--   hooks reported (issue #764) — @continueLoad@ cross-validates these
+--   against the loaded session's real entity sets. A malformed entry in
+--   that array degrades to being dropped (best-effort diagnostics only;
+--   this never gates the load — see "World.Save.Integrity"'s haddock).
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
-    → Lua.LuaE Lua.Exception (Either Text ())
+    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text)])
 prepareLuaLoad logger requestId components = do
     ok ← callSaveModules1 logger "prepareLoad" 2
             (pushComponentsArray components
@@ -858,7 +1001,11 @@ prepareLuaLoad logger requestId components = do
         Lua.pop 1
         result ←
             if isOk
-              then return (Right ())
+              then do
+                _ ← Lua.getfield (-1) "references"
+                refResult ← readLuaArrayAt readReferenceEdgeField
+                Lua.pop 1  -- references array
+                return (Right (either (const []) id refResult))
               else do
                 _ ← Lua.getfield (-1) "errors"
                 -- Purely a diagnostic message list here — the load is

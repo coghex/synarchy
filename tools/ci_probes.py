@@ -186,6 +186,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),
     "flora_growth": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),
     "multiworld_save": (SLOW_WORLDGEN, "generates two real world pages"),
+    "persistence_integrity": (SLOW_WORLDGEN, "generates a real world page and boots "
+                              "three engines (build+save, dangling-reference load, "
+                              "corrupted-load-vs-live-session) (#764)"),
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
     "portal_location": (SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small to test starting-building exclusion against (#778)"),
