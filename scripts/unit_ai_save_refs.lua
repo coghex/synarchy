@@ -281,9 +281,18 @@ M.references = unitAiReferences
 -- (Engine.Scripting.Lua.API.Save's readReferenceEdgeField, which
 -- Lua.tointeger()s the id) silently drop that edge from every
 -- diagnostic entirely rather than reporting it as malformed. Also
--- reject a non-integer or non-positive id here -- the same "positive
--- integer" contract validateUnitAiData already enforces on the OUTER
--- per-unit key.
+-- reject a non-integer id here -- the same "well-formed integer"
+-- contract validateUnitAiData already enforces on the OUTER per-unit
+-- key. The minimum differs by kind: unit/building/craft_bill/
+-- item_instance allocators all start at 1 (Unit.Types.umNextId,
+-- Building.Types.bmNextId, Craft.Bills.emptyCraftBills,
+-- Engine.Core.Init's nextItemInstanceIdRef), so 0 can never be a real
+-- id for those -- but Item.Ground's ground-item allocator is
+-- ZERO-based (emptyGroundItems starts gisNextId at 0, so the very
+-- first spawned ground item legitimately has gid=0). Round-3 review
+-- itself caught this: a blanket "id >= 1" incorrectly rejected a valid
+-- ground_item reference of 0.
+local GROUND_ITEM_KIND = "ground_item"
 local function checkRefTag(v, expectedKind, uid, path, errs)
     if v == nil then return end
     if type(v) ~= "table" or v.__ref == nil then
@@ -298,7 +307,8 @@ local function checkRefTag(v, expectedKind, uid, path, errs)
             .. "' (expected '" .. expectedKind .. "')"
         return
     end
-    if type(v.id) ~= "number" or v.id ~= math.floor(v.id) or v.id < 1 then
+    local minId = (expectedKind == GROUND_ITEM_KIND) and 0 or 1
+    if type(v.id) ~= "number" or v.id ~= math.floor(v.id) or v.id < minId then
         errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
             .. " has a non-numeric or invalid id (" .. tostring(v.id) .. ")"
     end

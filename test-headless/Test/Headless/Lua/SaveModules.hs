@@ -965,6 +965,41 @@ spec = do
             , "assert(not prep3.ok, 'a fractional id must reject the load')"
             ]
 
+        it "accepts a ground_item reference id of 0 (round-4 review, issue \
+           \#764) -- Item.Ground's ground-item allocator is ZERO-based \
+           \(emptyGroundItems starts gisNextId at 0), unlike unit/building/ \
+           \craft_bill/item_instance's allocators, which all start at 1; a \
+           \blanket 'id >= 1' minimum incorrectly rejected the very first \
+           \ground item a save could ever legitimately reference" $
+            runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "craft = { get = function(_id) return nil end }"
+            , "item = { listDefs = function() return {} end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local fakeAiState = {}"
+            , "local fakeUnitAi = {}"
+            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local zeroGid = { [7] = {"
+            , "  pickupOrder = { gid = { __ref = 'ground_item', id = 0 } },"
+            , "} }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(zeroGid) },"
+            , "})"
+            , "assert(prep.ok, 'a ground_item id of 0 must be accepted: '"
+            , "  .. table.concat(prep.errors or {}, '; '))"
+            , "-- A negative ground_item id is still invalid -- the fix"
+            , "-- widens the floor to 0, it doesn't remove it."
+            , "local negGid = { [7] = {"
+            , "  pickupOrder = { gid = { __ref = 'ground_item', id = -1 } },"
+            , "} }"
+            , "local prep2 = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(negGid) },"
+            , "})"
+            , "assert(not prep2.ok, 'a negative ground_item id must still reject the load')"
+            ]
+
         it "rejects a v2 building_spawn payload whose lastUid has the \
            \RIGHT __ref kind but a non-numeric id (round-3 review, \
            \issue #764) -- mirrors the unit_ai id-type check" $
