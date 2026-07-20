@@ -1058,6 +1058,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Lua.DebugQueue
+                   Test.Headless.Lua.RenderQueue
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
     build-depends: base >=4.20 && <5

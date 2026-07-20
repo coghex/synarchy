@@ -54,6 +54,7 @@ import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
+import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.Input.LayerA as InputLayerA
@@ -138,6 +139,7 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
         describe "Lua.PauseGate" LuaPauseGate.spec
         -- Same technique as Input.Followup above: F4 (#730) Layer A's

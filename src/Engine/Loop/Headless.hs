@@ -5,13 +5,14 @@ module Engine.Loop.Headless
 import UPrelude
 import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef)
+import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
-import Engine.Scripting.Lua.Message (processLuaMessages)
+import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
 
 -- | Headless main loop: processes messages without rendering. Lua
 --   messages are dispatched through the SAME 'processLuaMessages' as the
@@ -45,7 +46,13 @@ headlessLoop = do
             headlessLoop
         EngineRunning → do
             locked ← liftIO $ captureLocked (saveBarrierRef env)
-            unless locked processLuaMessages
+            if locked
+                then do
+                    discarded ← liftIO $ discardLuaMessagesForActiveLoad env
+                    when (discarded > 0) $
+                        logWarnM CatLua $ "Load publication discarded "
+                            <> (T.pack (show discarded) <> " stale Lua-to-engine message(s)")
+                else processLuaMessages
             liftIO $ acknowledgeCurrent (saveBarrierRef env) SaveRender
             lifecycle' ← liftIO $ readIORef (lifecycleRef env)
             if lifecycle' ≡ EngineRunning

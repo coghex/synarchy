@@ -21,7 +21,7 @@ import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
                           , updateCameraZoom)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
-import Engine.Scripting.Lua.Message (processLuaMessages)
+import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
 
 mainLoop ∷ EngineM ε σ ()
 mainLoop = do
@@ -106,11 +106,17 @@ handleEngineStarting env continue = do
 runGatedByCaptureLock ∷ EngineEnv → EngineM ε σ ()
 runGatedByCaptureLock env = do
     locked ← liftIO $ captureLocked (saveBarrierRef env)
-    unless locked $ do
-        updateCameraPanning
-        updateCameraZoom
-        updateCameraMouseDrag
-        processLuaMessages
+    if locked
+        then do
+            discarded ← liftIO $ discardLuaMessagesForActiveLoad env
+            when (discarded > 0) $
+                logWarnM CatLua $ "Load publication discarded "
+                    <> T.pack (show discarded) <> " stale Lua-to-engine message(s)"
+        else do
+            updateCameraPanning
+            updateCameraZoom
+            updateCameraMouseDrag
+            processLuaMessages
     liftIO $ acknowledgeCurrent (saveBarrierRef env) SaveRender
 
 handleEngineRunning ∷ EngineM ε σ ()
