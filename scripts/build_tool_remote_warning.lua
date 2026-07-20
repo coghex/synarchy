@@ -134,6 +134,16 @@ local function createUI(distance, thresholdTiles)
     local panelHeight = s.panelPaddingY * 2 + titleH + s.titleGap + msgH
         + s.messageGap + s.buttonHeight
 
+    -- #750 round-6 review: cap against the actual framebuffer, same
+    -- best-effort-degrade pattern as popup.lua/unit_info_v2.lua's
+    -- earlier fixes for the identical class of gap. PANEL_W_BASE (560,
+    -- deliberately NOT scaled by uiscale) plus the scaled button row/
+    -- padding can still exceed a narrow, high-scale, still-C2-supported
+    -- framebuffer (e.g. 800x2160@4x), leaving this modal's own
+    -- Establish/Cancel buttons off-screen.
+    panelWidth  = math.min(panelWidth, buildToolRemoteWarning.fbW)
+    panelHeight = math.min(panelHeight, buildToolRemoteWarning.fbH)
+
     local panelX = (buildToolRemoteWarning.fbW - panelWidth) / 2
     local panelY = (buildToolRemoteWarning.fbH - panelHeight) / 2
 

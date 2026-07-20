@@ -54,40 +54,57 @@ luaLines = T.intercalate " "
 tshow ∷ Show a ⇒ a → Text
 tshow = T.pack ∘ show
 
--- #750 round-5 review: share ONE booted headless engine across every
--- case in this module (aroundAll, not around) per the issue's own cost
--- guardrail spec addition — each 'it' still gets its own FRESH Lua VM
--- via 'newBareLuaBackend' (so Lua-side module state — hud.lua's
--- hud.world_page, popup.lua's popup.active, etc. — is already isolated
--- per case regardless), but the shared engine's own UIPageManager
--- (Haskell-side page/element tree) would otherwise accumulate handles
--- across all 36+ cases. 'resetUI' clears it back to empty at the start
--- of every case so accumulated state from an earlier case can never
--- leak into a later one; every case already asserts on freshly-created
--- handles or RELATIVE counts (never a hardcoded absolute handle number
--- or page/element count), so this reset composes safely with all of
--- them. The engine-level event/combat/injury log ring buffers are NOT
--- reset (no such reset primitive is exposed to a test) — every case
--- that touches them already asserts existence/relative-preservation
--- rather than an exact count, so cross-case accumulation there is
--- inert by construction.
-resetUI ∷ EngineEnv → IO ()
-resetUI env = do
+-- #750 round-6 review: share ONE booted headless engine AND ONE Lua VM
+-- across every case in this module, per the issue's own cost guardrail
+-- spec addition read literally ("share one booted headless engine + Lua
+-- environment across cases") — round 5 only shared the engine, giving
+-- each case its own fresh 'newBareLuaBackend' Lua VM. 'withSharedFixture'
+-- boots both exactly once for the whole module; 'resetFixture' (called
+-- first in every case) resets whatever either could have accumulated
+-- from an earlier case:
+--   * The shared engine's own UIPageManager (Haskell-side page/element
+--     tree) — cleared back to empty. Every case asserts on freshly-
+--     created handles or RELATIVE counts (never a hardcoded absolute
+--     handle number or page/element count), so this composes safely.
+--   * engine.setUIScale's target (videoConfigRef's vcUIScale) — several
+--     cases call it for a band-boundary/out-of-envelope exemplar; reset
+--     to 1.0, preserving every other VideoConfig field as-is.
+--   * The shared Lua VM's OWN module cache (package.loaded) — with the
+--     Lua VM itself now shared, require('scripts.hud') etc. would
+--     otherwise keep returning whichever EARLIER case's already-
+--     initialized module table (hud.uiCreated=true, a selected tool,
+--     popup.active entries, ...) instead of a pristine one. Wiped
+--     entirely so every case's own require() calls re-execute each
+--     .lua file from scratch — verified against a real running engine
+--     (not just this suite) that this reproduces an identical fresh-
+--     module state to a brand new Lua VM. The native UI/engine/world
+--     API tables are untouched: they're plain Lua globals registered by
+--     registerLuaAPI, never entries in package.loaded, so wiping the
+--     module cache can't disturb them.
+-- The engine-level event/combat/injury log ring buffers are NOT reset
+-- (no such reset primitive is exposed to a test) — every case that
+-- touches them already asserts existence/relative-preservation rather
+-- than an exact count, so cross-case accumulation there is inert by
+-- construction.
+withSharedFixture ∷ ((EngineEnv, LuaBackendState) → IO ()) → IO ()
+withSharedFixture action = withHeadlessEngine $ \env → do
+    ls ← newBareLuaBackend env
+    action (env, ls)
+
+resetFixture ∷ EngineEnv → LuaBackendState → IO ()
+resetFixture env ls = do
     writeIORef (uiManagerRef env) emptyUIPageManager
-    -- Several cases call engine.setUIScale (band-boundary/out-of-
-    -- envelope exemplars), which writes videoConfigRef's vcUIScale —
-    -- an ENGINE-level (not per-Lua-VM) setting a later case would
-    -- otherwise inherit under a randomized test order. Reset to 1.0,
-    -- preserving every other VideoConfig field as-is.
     atomicModifyIORef' (videoConfigRef env) $ \c → (c { vcUIScale = 1.0 }, ())
+    cleared ← evalOk ls
+        "for k, _ in pairs(package.loaded) do package.loaded[k] = nil end; return true"
+    cleared `shouldBe` "true"
 
 spec ∷ Spec
-spec = aroundAll withHeadlessEngine $ do
+spec = aroundAll withSharedFixture $ do
 
     describe "hud.getToolbarRects() (#750) — the reserved 'required controls'" $ do
-        it "every configured resolution (1x) produces exactly 3 real, in-frame toolbar clusters" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "every configured resolution (1x) produces exactly 3 real, in-frame toolbar clusters" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local data = require('scripts.settings.data');"
                 , "local hud = require('scripts.hud');"
@@ -115,9 +132,8 @@ spec = aroundAll withHeadlessEngine $ do
                         trCount row `shouldBe` 3
                         trAllIn row `shouldBe` True
 
-        it "stays in-frame at every C2 band-boundary scale and the automatic high-DPI/ultrawide scales" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "stays in-frame at every C2 band-boundary scale and the automatic high-DPI/ultrawide scales" $ \(env, ls) → do
+            resetFixture env ls
             let cases ∷ [(Int, Int, Double)]
                 cases =
                     -- band boundaries (scripts/ui/responsive.lua's own table —
@@ -149,9 +165,8 @@ spec = aroundAll withHeadlessEngine $ do
                     ]
                 allIn `shouldBe` True
 
-        it "the issue's own out-of-envelope exemplar (800x600@4x) still produces valid, non-degenerate rects" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "the issue's own out-of-envelope exemplar (800x600@4x) still produces valid, non-degenerate rects" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(4.0);"
                 , "local hud = require('scripts.hud');"
@@ -185,9 +200,8 @@ spec = aroundAll withHeadlessEngine $ do
         -- called directly with (0,0) — bypassing the guard — hud.lua
         -- itself never crashes, and a subsequent real resize still
         -- recovers valid, in-frame geometry.
-        it "hud.createUI() never crashes on degenerate geometry, and a subsequent real resize recovers valid in-frame geometry" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "hud.createUI() never crashes on degenerate geometry, and a subsequent real resize recovers valid in-frame geometry" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -214,9 +228,8 @@ spec = aroundAll withHeadlessEngine $ do
                     zmAfterRestoreCount p `shouldBe` 3
                     zmRestoredIn p `shouldBe` True
 
-        it "popup/event_log/combat_log/injury_log_panel/unit_log/unit_info_v2/debug all no-op cleanly on (0,0)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "popup/event_log/combat_log/injury_log_panel/unit_log/unit_info_v2/debug all no-op cleanly on (0,0)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local mods = {"
                 , "  'scripts.popup', 'scripts.event_log', 'scripts.combat_log',"
@@ -232,9 +245,8 @@ spec = aroundAll withHeadlessEngine $ do
                 ]
             r `shouldNotSatisfy` isLuaError
 
-        it "popup never stores a 0x0 framebuffer (a card created right after minimize would size against it)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "popup never stores a 0x0 framebuffer (a card created right after minimize would size against it)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local p = require('scripts.popup');"
                 , "p.bootstrap(1,2,3,1920,1080);"
@@ -248,9 +260,8 @@ spec = aroundAll withHeadlessEngine $ do
                     fsH s `shouldBe` 1080
 
     describe "hud.createUI() preserves visibility state and toolbar selection across a rebuild (#750 round-1 review)" $ do
-        it "a resize while the HUD is hidden never resurrects the world/zoom page over whatever is now on screen" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize while the HUD is hidden never resurrects the world/zoom page over whatever is now on screen" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -269,9 +280,8 @@ spec = aroundAll withHeadlessEngine $ do
                     hrpZoomPageVisible p `shouldBe` False
                     hrpWorldPageVisible p `shouldBe` False
 
-        it "a resize while the HUD is visible keeps global_page (the log toggle) visible too" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize while the HUD is visible keeps global_page (the log toggle) visible too" $ \(env, ls) → do
+            resetFixture env ls
             visible ← evalBool ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -282,9 +292,8 @@ spec = aroundAll withHeadlessEngine $ do
                 ]
             visible `shouldBe` True
 
-        it "a resize preserves the visually selected tool, without re-firing world.setToolMode" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize preserves the visually selected tool, without re-firing world.setToolMode" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -307,9 +316,8 @@ spec = aroundAll withHeadlessEngine $ do
                     tppCallsAfterSelect p `shouldBe` 1
                     tppCallsAfterResize p `shouldBe` 1
 
-        it "a resize preserves the visually selected map mode" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize preserves the visually selected map mode" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -323,9 +331,8 @@ spec = aroundAll withHeadlessEngine $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just names → names `shouldBe` ["map_temp"]
 
-        it "a resize preserves a SWAPPED alternative's identity, not just the slot index (round-2 review)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize preserves a SWAPPED alternative's identity, not just the slot index (round-2 review)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -349,9 +356,8 @@ spec = aroundAll withHeadlessEngine $ do
                     spSelected p `shouldBe` ["map_pressure"]
                     spIdxUnchanged p `shouldBe` True
 
-        it "does not re-fire onOptionSelect/onChange when silently restoring a swapped identity" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "does not re-fire onOptionSelect/onChange when silently restoring a swapped identity" $ \(env, ls) → do
+            resetFixture env ls
             n ← evalInt ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -368,9 +374,8 @@ spec = aroundAll withHeadlessEngine $ do
             n `shouldBe` 0
 
     describe "event_log preserves its active tab and scroll position across a resize (#750 round-4 review)" $ do
-        it "a resize keeps the active (non-default) tab selected, both logically and on the tabbar widget itself" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize keeps the active (non-default) tab selected, both logically and on the tabbar widget itself" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.emitEvent('unit_event', 'e1');"
                 , "local el = require('scripts.event_log');"
@@ -388,9 +393,8 @@ spec = aroundAll withHeadlessEngine $ do
                     tpActiveTabKey p `shouldBe` "unit_event"
                     tpTabbarKey p `shouldBe` "unit_event"
 
-        it "a resize preserves a nonzero scroll offset instead of forcing it back to 0" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize preserves a nonzero scroll offset instead of forcing it back to 0" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "for i = 1, 300 do engine.emitEvent('unit_event', 'event ' .. i) end;"
                 , "local el = require('scripts.event_log');"
@@ -408,9 +412,8 @@ spec = aroundAll withHeadlessEngine $ do
                     sppBefore p `shouldSatisfy` (> 0)
                     sppAfter p `shouldBe` sppBefore p
 
-        it "eventLog.show() still resets to the 'All' tab on a genuine fresh open" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "eventLog.show() still resets to the 'All' tab on a genuine fresh open" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.emitEvent('unit_event', 'e1');"
                 , "local el = require('scripts.event_log');"
@@ -430,9 +433,8 @@ spec = aroundAll withHeadlessEngine $ do
                     tpTabbarKey p `shouldBe` "all"
 
     describe "resize-safe teardown (#750) — scripts/ui/view_teardown.lua's new \"resize\" transition" $ do
-        it "hud.createUI() runs the 'resize' sweep before deleting world_page, reaching every registered world_page-mounted widget" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "hud.createUI() runs the 'resize' sweep before deleting world_page, reaching every registered world_page-mounted widget" $ \(env, ls) → do
+            resetFixture env ls
             n ← evalInt ls $ luaLines
                 [ "_G.__n = 0;"
                 , "local function spy() _G.__n = _G.__n + 1 end;"
@@ -447,9 +449,8 @@ spec = aroundAll withHeadlessEngine $ do
                 ]
             n `shouldBe` 6
 
-        it "a failing hook is pcall-isolated — the sweep still reaches every other hook and hud.createUI() still succeeds" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a failing hook is pcall-isolated — the sweep still reaches every other hook and hud.createUI() still succeeds" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "_G.__n = 0;"
                 , "local function noop() end;"
@@ -475,9 +476,8 @@ spec = aroundAll withHeadlessEngine $ do
                     fhpOk p `shouldBe` True
                     fhpN p `shouldBe` 5
 
-        it "build_tool's placement ghost (a committed two-click anchor) is deliberately NOT torn down by a resize" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "build_tool's placement ghost (a committed two-click anchor) is deliberately NOT torn down by a resize" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalOk ls
                 "return require('scripts.ui.view_teardown')"
             -- Structural proof, not a behavior probe (build_tool.enterPlacement
@@ -491,9 +491,8 @@ spec = aroundAll withHeadlessEngine $ do
             r `shouldNotSatisfy` isLuaError
 
     describe "repeated resize never grows live UI state (#750)" $ do
-        it "five consecutive hud.createUI() calls leave a bounded element/page count, not a monotonically growing one" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "five consecutive hud.createUI() calls leave a bounded element/page count, not a monotonically growing one" $ \(env, ls) → do
+            resetFixture env ls
             setup ← evalOk ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -516,9 +515,8 @@ spec = aroundAll withHeadlessEngine $ do
             pagesAfter `shouldBe` pagesBefore
 
     describe "uiManager.notifyGameplayRescale (#750) — the scale-only Settings Apply/Save/Back path" $ do
-        it "fans out to every gameplay surface directly (no automatic broadcast exists for a synthetic, non-resize change)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "fans out to every gameplay surface directly (no automatic broadcast exists for a synthetic, non-resize change)" $ \(env, ls) → do
+            resetFixture env ls
             n ← evalInt ls $ luaLines
                 [ "_G.__n = 0;"
                 , "local function spy(w, h) _G.__n = _G.__n + 1 end;"
@@ -552,9 +550,8 @@ spec = aroundAll withHeadlessEngine $ do
             -- unit_info_v2: 1 (reflow only). Total 12.
             n `shouldBe` 12
 
-        it "calls hud.onFramebufferResize before popup.reflow()/unitInfoV2.reflow(), so both see the NEW hud geometry" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "calls hud.onFramebufferResize before popup.reflow()/unitInfoV2.reflow(), so both see the NEW hud geometry" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "_G.__order = {};"
                 , "local hudStub = { onFramebufferResize = function() table.insert(_G.__order, 'hud') end };"
@@ -592,9 +589,8 @@ spec = aroundAll withHeadlessEngine $ do
                             Nothing → expectationFailure (T.unpack name ⧺ " never ran")
                             Just idx → idx `shouldSatisfy` (> hudIdx)
 
-        it "does nothing on a non-positive size (defends the same 0x0 invariant as a real resize)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "does nothing on a non-positive size (defends the same 0x0 invariant as a real resize)" $ \(env, ls) → do
+            resetFixture env ls
             n ← evalInt ls $ luaLines
                 [ "_G.__n = 0;"
                 , "local stub = { onFramebufferResize = function() _G.__n = _G.__n + 1 end };"
@@ -614,9 +610,8 @@ spec = aroundAll withHeadlessEngine $ do
     -- every case below shares ONE newBareLuaBackend/engine instead of
     -- one per assertion.
     describe "scripts/ui/reserved_regions.lua (#750) — the collision/priority contract" $
-        it "rectsOverlap, checkViolations, avoidReserved, and findEscapes all behave correctly on one shared backend" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "rectsOverlap, checkViolations, avoidReserved, and findEscapes all behave correctly on one shared backend" $ \(env, ls) → do
+            resetFixture env ls
 
             do  yes ← evalBool ls
                     "return require('scripts.ui.reserved_regions').rectsOverlap({x=0,y=0,w=10,h=10},{x=5,y=5,w=10,h=10})"
@@ -703,9 +698,8 @@ spec = aroundAll withHeadlessEngine $ do
                         mwpW2 p `shouldBe` 1000
 
     describe "popup.lua reflows active cards on resize (#750 round-1 review)" $ do
-        it "a card's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a card's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(4.0);"
                 , "local p = require('scripts.popup');"
@@ -721,9 +715,8 @@ spec = aroundAll withHeadlessEngine $ do
                     wcpInFrame p `shouldBe` True
                     wcpW p `shouldSatisfy` (≤ 800)
 
-        it "a card never overlaps a tall reserved column even when the framebuffer cap alone isn't enough to clear it (round-4 review)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a card never overlaps a tall reserved column even when the framebuffer cap alone isn't enough to clear it (round-4 review)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(2.0);"
                 , "local hud = require('scripts.hud');"
@@ -747,9 +740,8 @@ spec = aroundAll withHeadlessEngine $ do
                     opOverlapsAny p `shouldBe` False
                     opInFrame p `shouldBe` True
 
-        it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local p = require('scripts.popup');"
                 , "p.bootstrap(1,2,3,1920,1080);"
@@ -765,9 +757,8 @@ spec = aroundAll withHeadlessEngine $ do
                 Just p → do
                     (rpAfterX p, rpAfterY p) `shouldBe` (rpBeforeX p, rpBeforeY p)
 
-        it "p.reflow() recenters a card to the current framebuffer instead of leaving it stale or off-screen after a shrink" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "p.reflow() recenters a card to the current framebuffer instead of leaving it stale or off-screen after a shrink" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local p = require('scripts.popup');"
                 , "p.bootstrap(1,2,3,1920,1080);"
@@ -787,9 +778,8 @@ spec = aroundAll withHeadlessEngine $ do
                     (rpAfterX p, rpAfterY p) `shouldNotBe` (rpBeforeX p, rpBeforeY p)
 
     describe "popup.lua avoids the reserved toolbar regions (#750) — \"notifications avoid required controls\"" $ do
-        it "renderPopup calls reserved_regions.avoidReserved against the real hud toolbar rects" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "renderPopup calls reserved_regions.avoidReserved against the real hud toolbar rects" $ \(env, ls) → do
+            resetFixture env ls
             called ← evalBool ls $ luaLines
                 [ "local rr = require('scripts.ui.reserved_regions');"
                 , "local origAvoid = rr.avoidReserved;"
@@ -809,9 +799,8 @@ spec = aroundAll withHeadlessEngine $ do
                 ]
             called `shouldBe` True
 
-        it "a card forced to overlap a reserved rect ends up moved clear of it" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a card forced to overlap a reserved rect ends up moved clear of it" $ \(env, ls) → do
+            resetFixture env ls
             ok ← evalBool ls $ luaLines
                 [ "local rr = require('scripts.ui.reserved_regions');"
                 , "local origAvoid = rr.avoidReserved;"
@@ -840,9 +829,8 @@ spec = aroundAll withHeadlessEngine $ do
             ok `shouldBe` True
 
     describe "event/combat/injury/unit log panels migrate their scrollable content to real #747 clipping (round-2 review)" $ do
-        it "event_log: a rendered row is a real child of a clipsChildren viewport, and its absolute bounds resolve inside the clip" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "event_log: a rendered row is a real child of a clipsChildren viewport, and its absolute bounds resolve inside the clip" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.emitEvent('unit_event', 'hello world');"
                 , "local el = require('scripts.event_log');"
@@ -866,9 +854,8 @@ spec = aroundAll withHeadlessEngine $ do
                     lcpRowInsideClip p `shouldBe` True
                     lcpRowEffectiveClipMatchesViewport p `shouldBe` True
 
-        it "combat_log/injury_log_panel/unit_log each create a clipsChildren content viewport, and their empty-state label is a real descendant" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "combat_log/injury_log_panel/unit_log each create a clipsChildren content viewport, and their empty-state label is a real descendant" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local out = {};"
                 , "local specs = {"
@@ -891,9 +878,8 @@ spec = aroundAll withHeadlessEngine $ do
                     length rows `shouldBe` 3
                     forM_ rows $ \row → lvrClipsChildren row `shouldBe` True
 
-        it "a resize while a log panel is visible rebuilds its viewport with clipsChildren still true (no regression to page-attached content)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "a resize while a log panel is visible rebuilds its viewport with clipsChildren still true (no regression to page-attached content)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local el = require('scripts.event_log');"
                 , "el.bootstrap(1,2,3,1920,1080);"
@@ -908,9 +894,8 @@ spec = aroundAll withHeadlessEngine $ do
                     rcpOk p `shouldBe` True
                     rcpClipsChildren p `shouldBe` True
 
-        it "the clip viewport's own zIndex stays 0 so a reparented row's effective paint position is unchanged (round-3 review: zIndex accumulates through parents)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "the clip viewport's own zIndex stays 0 so a reparented row's effective paint position is unchanged (round-3 review: zIndex accumulates through parents)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.emitEvent('unit_event', 'hello world');"
                 , "local el = require('scripts.event_log');"
@@ -938,9 +923,8 @@ spec = aroundAll withHeadlessEngine $ do
                     zipRowPaintKey p `shouldBe` zipRefPaintKey p
 
     describe "\"unit info reserves right edge and suppresses conflicting info\" (#750 introspection over pre-existing behavior)" $ do
-        it "unitInfoV2.getBounds() mirrors the real flush-right column, and is nil while not visible" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "unitInfoV2.getBounds() mirrors the real flush-right column, and is nil while not visible" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -960,9 +944,8 @@ spec = aroundAll withHeadlessEngine $ do
                     uibpW p `shouldBe` 340
                     uibpH p `shouldBe` 1080
 
-        it "the flush-right column's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "the flush-right column's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(4.0);"
                 , "local hud = require('scripts.hud');"
@@ -979,9 +962,8 @@ spec = aroundAll withHeadlessEngine $ do
                     wcpInFrame p `shouldBe` True
                     wcpW p `shouldSatisfy` (≤ 800)
 
-        it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \env → do
-            resetUI env
-            ls ← newBareLuaBackend env
+        it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \(env, ls) → do
+            resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
@@ -1004,6 +986,43 @@ spec = aroundAll withHeadlessEngine $ do
                     spSuppressed p `shouldBe` False
                     spBoundsNil p `shouldBe` True
                     spAfter p `shouldBe` True
+
+    describe "build_tool_remote_warning.lua stays in-frame at a narrow, high-scale, still-C2-supported combination (round-6 review)" $ do
+        it "the modal panel is capped to the framebuffer instead of pushing Establish/Cancel off-screen" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,800,2160);"
+                , "w.open('acolyte_portal', 5, 5, 100, 50);"
+                , "local p = require('scripts.ui.panel');"
+                , "local x, y = p.getPosition(w.panelId);"
+                , "local pw, ph = p.getSize(w.panelId);"
+                , "return {x = x, y = y, w = pw, h = ph,"
+                , "        inFrame = (x >= 0 and y >= 0 and (x+pw) <= 800 and (y+ph) <= 2160)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RemoteWarningProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rwpInFrame p `shouldBe` True
+                    rwpW p `shouldSatisfy` (≤ 800)
+                    rwpH p `shouldSatisfy` (≤ 2160)
+
+        it "a normal resolution still gets its natural, unshrunk panel size" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(1.0);"
+                , "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,1920,1080);"
+                , "w.open('acolyte_portal', 5, 5, 100, 50);"
+                , "local p = require('scripts.ui.panel');"
+                , "local x, y = p.getPosition(w.panelId);"
+                , "local pw, ph = p.getSize(w.panelId);"
+                , "return {x = x, y = y, w = pw, h = ph, inFrame = true}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RemoteWarningProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → rwpW p `shouldBe` 560
 
 -- * FromJSON row types
 
@@ -1099,6 +1118,12 @@ data ScrollPreserveProbe = ScrollPreserveProbe
 instance FromJSON ScrollPreserveProbe where
     parseJSON = withObject "ScrollPreserveProbe" $ \o →
         ScrollPreserveProbe <$> o .: "before" <*> o .: "after"
+
+data RemoteWarningProbe = RemoteWarningProbe
+    { rwpW ∷ Int, rwpH ∷ Int, rwpInFrame ∷ Bool } deriving Show
+instance FromJSON RemoteWarningProbe where
+    parseJSON = withObject "RemoteWarningProbe" $ \o →
+        RemoteWarningProbe <$> o .: "w" <*> o .: "h" <*> o .: "inFrame"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

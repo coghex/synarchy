@@ -1138,6 +1138,39 @@ preservation, never an exact count, so cross-case accumulation there is
 inert by the same construction. Verified stable across multiple runs
 with different random seeds before landing.
 
+Round-6 review found two more gaps. First, `build_tool_remote_warning.lua`
+(#779's remote-settlement confirmation modal) joins popup.lua/
+unit_info_v2.lua's round-3 list: `panelWidth`
+(`math.max(PANEL_W_BASE=560, contentWidth + s.panelPaddingX*2)` —
+`PANEL_W_BASE` itself deliberately NOT scaled by uiscale, but the
+padding/button-row terms feeding `contentWidth` are) could still exceed
+a narrow, high-scale, still-C2-supported framebuffer (confirmed with
+real output at 800x2160@4x: 832px wide on an 800px-wide screen), pushing
+its own Establish/Cancel buttons off-screen. Same fix, same best-effort-
+degrade contract: `panelWidth`/`panelHeight` capped to `fbW`/`fbH`.
+
+Second: round-5's `aroundAll` only shared the ENGINE — each case still
+got its own fresh `newBareLuaBackend` Lua VM. Reading the guardrail
+literally ("share one booted headless engine + Lua environment across
+cases"), round-6 shares BOTH: `withSharedFixture` boots one engine and
+one Lua VM for the entire module; every case receives `(EngineEnv,
+LuaBackendState)` instead of just `EngineEnv`. With the Lua VM itself
+now shared, `require('scripts.hud')` etc. would otherwise keep
+returning whichever EARLIER case's already-initialized module table
+(`hud.uiCreated=true`, a tool already selected, `popup.active` entries,
+...) — Lua's `package.loaded` is a process-wide cache, and a shared VM
+means a shared cache. `resetFixture` (called first in every case, in
+place of round-5's `resetUI`) wipes `package.loaded` ENTIRELY before
+each case — verified against a real running engine that this reproduces
+an identical fresh-module state to a genuinely new Lua VM (every field
+back to its file-scope literal initializer, since the next `require`
+re-executes the whole `.lua` file) — alongside the same `UIPageManager`/
+`vcUIScale` resets round 5 already established. The native `UI`/
+`engine`/`world` API surface is untouched by the wipe: those are plain
+Lua globals `registerLuaAPI` installs once at Lua-VM-construction time,
+never entries in `package.loaded` to begin with. Verified stable across
+10 consecutive runs with different random seeds before landing.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
