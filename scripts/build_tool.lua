@@ -433,7 +433,6 @@ local function buildTabStrip(cats, stripX, stripY, contentW)
 
     local cursorX = stripX
     for i, cat in ipairs(cats) do
-        local labelW = labelWidths[i]
         local tabW   = math.max(20, math.floor(naturalTabWidths[i] * shrink))
         local active = (cat == buildTool.state.activeCategory)
         local bg     = active and TAB_BG_ACTIVE   or TAB_BG_INACTIVE
@@ -451,6 +450,20 @@ local function buildTabStrip(cats, stripX, stripY, contentW)
         UI.setClickable(boxId, true)
         UI.setOnClick(boxId, "onBuildMenuTabClick")
 
+        -- #750 round-12 review: shrinking the BOX (tabW) alone left the
+        -- label rendering at the full uiscale — with enough categories
+        -- compressing tabs hard, the (unclipped, page-root) label text
+        -- stayed wider than its own box, overlapping neighbouring tabs.
+        -- Scale the label's OWN effective uiscale by the SAME `shrink`
+        -- factor the box used (mirrors cargo_inventory_panel.lua's
+        -- identical fix, and the "reserve a column, fit text to it via a
+        -- locally-computed effective uiscale" technique this codebase
+        -- already uses elsewhere — see CLAUDE.md's responsive-menu-
+        -- lifecycle notes) — at shrink == 1.0 (the common case) this is
+        -- identical to the old behavior. Re-measure the label's actual
+        -- (post-shrink) width for centering rather than reusing the
+        -- pre-shrink labelWidths[i].
+        local labelUiscale = uiscale * shrink
         local labelId = label.new({
             name     = "build_tool_tab_label_" .. cat,
             text     = cat,
@@ -458,12 +471,13 @@ local function buildTabStrip(cats, stripX, stripY, contentW)
             fontSize = TAB_FONT_SIZE,
             color    = fg,
             page     = h.world_page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
         })
         local labelHandle = label.getElementHandle(labelId)
+        local shrunkLabelW = select(1, label.getSize(labelId))
         -- Centre the label inside the box. UI text positioned at its
         -- baseline → push down by ~0.7 of fontSize.
-        local lblX = cursorX + math.floor((tabW - labelW) / 2)
+        local lblX = cursorX + math.floor((tabW - shrunkLabelW) / 2)
         local lblY = stripY  + math.floor((tabH + fontPx) / 2) - math.floor(fontPx * 0.15)
         UI.addToPage(h.world_page, labelHandle, lblX, lblY)
         UI.setZIndex(labelHandle, 123)

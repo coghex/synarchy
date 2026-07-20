@@ -670,6 +670,39 @@ spec = aroundAll withSharedFixture $ do
                 ]
             n `shouldBe` 0
 
+        it "forwards to test_arena when moduleReady, gated exactly like every other surface here (round-12 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-12 review: test_arena was omitted from this
+            -- scale-only fan-out entirely (and from the real-resize
+            -- forward set in ui_manager_boot.lua, which can't be driven
+            -- headless at all — see this file's own docstring on
+            -- uiManager.onFramebufferResize's `initialized` gate — so
+            -- that half is verified against a real running engine
+            -- instead). Mirrors the existing hud-stub pattern exactly.
+            n ← evalInt ls $ luaLines
+                [ "_G.__n = 0;"
+                , "local stub = { onFramebufferResize = function() _G.__n = _G.__n + 1 end };"
+                , "package.loaded['scripts.test_arena'] = stub;"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "uiManager.moduleReady.testArena = true;"
+                , "uiManager.notifyGameplayRescale(1920, 1080);"
+                , "return _G.__n"
+                ]
+            n `shouldBe` 1
+
+        it "does NOT forward to test_arena when it isn't moduleReady (never initialized this session)" $ \(env, ls) → do
+            resetFixture env ls
+            n ← evalInt ls $ luaLines
+                [ "_G.__n = 0;"
+                , "local stub = { onFramebufferResize = function() _G.__n = _G.__n + 1 end };"
+                , "package.loaded['scripts.test_arena'] = stub;"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "uiManager.moduleReady.testArena = false;"
+                , "uiManager.notifyGameplayRescale(1920, 1080);"
+                , "return _G.__n"
+                ]
+            n `shouldBe` 0
+
         it "settingsMenu.onDefaults() reaches the REAL gameplay HUD when data.loadDefaults() changes the UI scale (round-11 review)" $ \(env, ls) → do
             resetFixture env ls
             -- #750 round-11 review: every other case in this describe
@@ -1280,6 +1313,54 @@ spec = aroundAll withSharedFixture $ do
                         rrW rc `shouldSatisfy` (≥ 20)
                         (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
 
+        it "cargo_inventory_panel: a heavily-shrunk tab's label renders smaller than an unshrunk one, not at a fixed full-uiscale size (round-12 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-12 review: shrinking the tab BOX alone left the
+            -- label rendering at the full uiscale, unclipped and
+            -- page-rooted — wider than its own compressed box, bleeding
+            -- into neighbours. engine.getTextWidth (and so label WIDTH)
+            -- always measures 0 in this suite's synthetic boot (see the
+            -- module docstring), so this can't assert on rendered pixel
+            -- overlap directly — but label.lua's own HEIGHT is derived
+            -- straight from `fontSize * uiscale` (scripts/ui/label.lua's
+            -- label.new), independent of any real text metrics. A fixed,
+            -- unshrunk uiscale would report the SAME height regardless of
+            -- category count; the fix (labelUiscale = uiscale * shrink)
+            -- makes a heavily-shrunk tab's label measurably smaller than
+            -- one that needed no shrink at all.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "local label = require('scripts.ui.label');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1' } } end;"
+                , "local pg1 = UI.newPage('cargo_lbl_test_1', 'overlay');"
+                , "cip.setup({page = pg1, fbW = 800, fbH = 2160, boxTexSet = 1});"
+                , "cip.openFor(1, 400, 400);"
+                , "local _, unshunkH = label.getSize(cip.state.tabs[1].labelId);"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
+                , "    { defName='i3', category='Cat3' }, { defName='i4', category='Cat4' },"
+                , "    { defName='i5', category='Cat5' }, { defName='i6', category='Cat6' },"
+                , "    { defName='i7', category='Cat7' }, { defName='i8', category='Cat8' },"
+                , "} end;"
+                , "local pg2 = UI.newPage('cargo_lbl_test_2', 'overlay');"
+                , "cip.setup({page = pg2, fbW = 800, fbH = 2160, boxTexSet = 1});"
+                , "cip.openFor(1, 400, 400);"
+                , "local _, shrunkH = label.getSize(cip.state.tabs[2].labelId);"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return {unshrunkH = unshunkH, shrunkH = shrunkH}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ShrinkHeightProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    shpShrunkH p `shouldSatisfy` (> 0)
+                    shpShrunkH p `shouldSatisfy` (< shpUnshrunkH p)
+
         it "item_contents_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1410,6 +1491,60 @@ spec = aroundAll withSharedFixture $ do
                         rrX rc `shouldSatisfy` (≥ 0)
                         rrW rc `shouldSatisfy` (≥ 20)
                         (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
+
+        it "a heavily-shrunk tab's label renders smaller than an unshrunk one, not at a fixed full-uiscale size (round-12 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- Same reasoning as cargo_inventory_panel's identical round-12
+            -- test: engine.getTextWidth always measures 0 in this suite's
+            -- synthetic boot, so label WIDTH can't prove overlap directly,
+            -- but label.lua's HEIGHT is derived straight from
+            -- `fontSize * uiscale`, independent of real text metrics — a
+            -- fixed, unshrunk uiscale would report the SAME height
+            -- regardless of category count.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local orig = building.listDefs;"
+                , "local label = require('scripts.ui.label');"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local bt = require('scripts.build_tool');"
+                , "bt.setup({hud = hud});"
+                , "building.listDefs = function() return {"
+                , "    { name='u1', displayName='U1', category='Solo', isStarting=true },"
+                , "} end;"
+                , "local ok1 = pcall(function() bt.showPicker() end);"
+                , "local unshrunkH = 0;"
+                , "if ok1 and bt.state.mode == 'picker' and bt.state.tabIds[1] then"
+                , "    local _, h = label.getSize(bt.state.tabIds[1].labelId);"
+                , "    unshrunkH = h;"
+                , "end;"
+                , "bt.hidePicker();"
+                , "building.listDefs = function() return {"
+                , "    { name='t1', displayName='A1', category='Cat1', isStarting=true },"
+                , "    { name='t2', displayName='A2', category='Cat2', isStarting=true },"
+                , "    { name='t3', displayName='A3', category='Cat3', isStarting=true },"
+                , "    { name='t4', displayName='A4', category='Cat4', isStarting=true },"
+                , "    { name='t5', displayName='A5', category='Cat5', isStarting=true },"
+                , "    { name='t6', displayName='A6', category='Cat6', isStarting=true },"
+                , "    { name='t7', displayName='A7', category='Cat7', isStarting=true },"
+                , "    { name='t8', displayName='A8', category='Cat8', isStarting=true },"
+                , "} end;"
+                , "local ok2 = pcall(function() bt.showPicker() end);"
+                , "local shrunkH = 0;"
+                , "local skipped = not (ok1 and ok2 and bt.state.mode == 'picker');"
+                , "if ok2 and bt.state.mode == 'picker' and bt.state.tabIds[2] then"
+                , "    local _, h = label.getSize(bt.state.tabIds[2].labelId);"
+                , "    shrunkH = h;"
+                , "end;"
+                , "building.listDefs = orig;"
+                , "return {skipped = skipped, unshrunkH = unshrunkH, shrunkH = shrunkH}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ShrinkHeightSkipProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → when (not (shspSkipped p)) $ do
+                    shspShrunkH p `shouldSatisfy` (> 0)
+                    shspShrunkH p `shouldSatisfy` (< shspUnshrunkH p)
 
         it "the icon grid is vertically compacted so a many-entry single-column category doesn't run off the framebuffer (round-9 review)" $ \(env, ls) → do
             resetFixture env ls
@@ -1591,6 +1726,18 @@ data LabeledOkRow = LabeledOkRow { lorLabel ∷ Text, lorOk ∷ Bool } deriving 
 instance FromJSON LabeledOkRow where
     parseJSON = withObject "LabeledOkRow" $ \o →
         LabeledOkRow <$> o .: "label" <*> o .: "ok"
+
+data ShrinkHeightProbe = ShrinkHeightProbe
+    { shpUnshrunkH ∷ Double, shpShrunkH ∷ Double } deriving Show
+instance FromJSON ShrinkHeightProbe where
+    parseJSON = withObject "ShrinkHeightProbe" $ \o →
+        ShrinkHeightProbe <$> o .: "unshrunkH" <*> o .: "shrunkH"
+
+data ShrinkHeightSkipProbe = ShrinkHeightSkipProbe
+    { shspSkipped ∷ Bool, shspUnshrunkH ∷ Double, shspShrunkH ∷ Double } deriving Show
+instance FromJSON ShrinkHeightSkipProbe where
+    parseJSON = withObject "ShrinkHeightSkipProbe" $ \o →
+        ShrinkHeightSkipProbe <$> o .: "skipped" <*> o .: "unshrunkH" <*> o .: "shrunkH"
 
 data DefaultsRescaleProbe = DefaultsRescaleProbe
     { drpScaleChanged ∷ Bool, drpHudFbW ∷ Int, drpHudFbH ∷ Int

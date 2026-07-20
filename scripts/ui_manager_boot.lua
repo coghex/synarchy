@@ -343,6 +343,14 @@ function uiManager.onFramebufferResize(width, height)
         if uiManager.moduleReady.buildToolRemoteWarning then
             buildToolRemoteWarning.onFramebufferResize(width, height)
         end
+        -- #750 round-12 review: test_arena (the "testArena" dev-only
+        -- world view, #741's own explicit scope) was omitted from this
+        -- forward set entirely — its stored fbW/fbH went stale after a
+        -- real resize despite exposing the identical onFramebufferResize
+        -- contract every other gameplay surface here does.
+        if uiManager.moduleReady.testArena then
+            testArena.onFramebufferResize(width, height)
+        end
         -- #750: popup/unit_info_v2 already updated their OWN state via
         -- the engine's automatic broadcast (both loadScript'd with an
         -- earlier script id than this module, so it already ran before

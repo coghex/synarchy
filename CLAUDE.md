@@ -1416,6 +1416,57 @@ running engine too: `hud.fbW`/`fbH` picked up `settingsMenu`'s
 `settingsMenu.onDefaults()`, with no direct call into `hud` anywhere in
 the test.
 
+Round-12 review found three more gaps. First and second:
+`cargo_inventory_panel.lua`'s and `build_tool.lua`'s picker tab strips
+(round-8's shrink-to-fit fix) only shrank the tab BOX — the label kept
+rendering at the full `uiscale`, unclipped and page-rooted, so at a
+narrow, high-scale, many-category combination the text stayed wider
+than its own compressed box and bled into neighbouring tabs. Fixed by
+scaling the label's OWN effective `uiscale` by the SAME `shrink` factor
+the box used (`labelUiscale = uiscale * shrink`, identical to the
+`dropdownUiscale`/`keyBtnUiscale`/`labelUiscale` "reserve a column, fit
+text to it via a locally-computed effective uiscale" technique already
+used elsewhere in this codebase) — at `shrink == 1.0` (the common case)
+this is identical to the old behavior. `build_tool.lua`'s picker also
+re-measures the label's actual post-shrink width for horizontal
+centering instead of reusing the pre-shrink `labelWidths[i]`. Headless
+regression coverage can't assert on real overlap directly
+(`engine.getTextWidth` always measures 0 in this suite's synthetic
+boot — see the module's own docstring caveat), so both new tests
+instead compare `label.lua`'s own HEIGHT (`fontSize * uiscale`,
+independent of any real text metrics) between an unshrunk single-tab
+case and a heavily-shrunk eight-tab case — a fixed, unshrunk `uiscale`
+would report the identical height regardless of category count; the
+fix makes the shrunk one measurably smaller. Verified with REAL font
+metrics too, via a real `--offscreen` engine session (GPU-on/window-off,
+so `engine.getTextWidth` returns real glyph widths instead of the
+headless-suite's synthetic 0): every tab's `labelW <= boxW` in both
+panels at the reviewer's own narrow/high-scale/many-category scenario,
+confirmed via `label.getSize`/`UI.getElementInfo` read back over the
+debug console.
+
+Third: `scripts/test_arena.lua` (the dev-only arena world view, in
+#741's own explicit C4 scope) was missing from BOTH gameplay resize
+paths entirely — `ui_manager_boot.lua`'s real-resize manual-forward set
+and `ui_manager_resize.lua`'s `notifyGameplayRescale` scale-only
+fan-out — despite exposing the identical `onFramebufferResize`
+contract every other surface in both lists already gets. Fixed by
+adding the same `if uiManager.moduleReady.testArena then
+testArena.onFramebufferResize(width, height) end` forward to both,
+gated on its own `moduleReady` flag exactly like `worldView`/`hud`/
+`buildToolRemoteWarning` already are. The scale-only path is covered by
+a headless regression test (mirrors the existing hud-stub pattern:
+forwards when `moduleReady.testArena` is true, doesn't when false); the
+real-resize path can't be driven headless at all (this suite's own
+docstring: `uiManager.onFramebufferResize`'s meaningful body only runs
+once the boot-only `initialized` flag flips true, which needs
+`fontsReady` — a GPU font atlas `--headless` never has) — verified
+instead against a real `--offscreen` session: `uiManager.ensureTestArena()`
+then a real `uiManager.onFramebufferResize(1600, 900)` call updated
+`testArena.fbW`/`fbH` from their initial `1280×720` to `1600×900`, and a
+separate `notifyGameplayRescale(1920, 1080)` call updated them again —
+proving both paths reach it end to end.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

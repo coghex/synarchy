@@ -15,6 +15,7 @@ local injuryLog = require("scripts.injury_log_panel")
 local unitLog = require("scripts.unit_log")
 local unitInfoV2 = require("scripts.unit_info_v2")
 local debugOverlay = require("scripts.debug")
+local testArena = require("scripts.test_arena")
 
 -- A UI-scale-only Settings Apply/Save/Back (same framebuffer size, new
 -- engine.getUIScale()) never reached gameplay — responsive.notifyResize
@@ -35,6 +36,13 @@ function uiManager.notifyGameplayRescale(width, height)
     contextMenu.onFramebufferResize(width, height)
     if uiManager.moduleReady.buildToolRemoteWarning then
         buildToolRemoteWarning.onFramebufferResize(width, height)
+    end
+    -- #750 round-12 review: test_arena was missing from this scale-only
+    -- fan-out too — a Settings scale change left its stored fbW/fbH
+    -- stale exactly like the real-resize forward set did (see
+    -- ui_manager_boot.lua's identical fix).
+    if uiManager.moduleReady.testArena then
+        testArena.onFramebufferResize(width, height)
     end
     if uiManager.moduleReady.popupsAndLogs then
         popup.onFramebufferResize(width, height)

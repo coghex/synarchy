@@ -353,6 +353,18 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
         UI.setClickable(bgId, true)
         UI.setOnClick(bgId, "onCargoInventoryTabClick")
 
+        -- #750 round-12 review: shrinking the BOX (tabW) alone left the
+        -- label rendering at the full uiscale — with enough categories
+        -- compressing tabs hard, the (unclipped, page-root) label text
+        -- stayed wider than its own box, overlapping neighbouring tabs.
+        -- Scale the label's OWN effective uiscale by the SAME `shrink`
+        -- factor the box used (the "reserve a column, fit text to it via
+        -- a locally-computed effective uiscale" technique this codebase
+        -- already uses elsewhere — see CLAUDE.md's responsive-menu-
+        -- lifecycle notes on graphics_tab.lua/input_tab.lua's
+        -- dropdownUiscale/keyBtnUiscale/labelUiscale) — at shrink == 1.0
+        -- (the common case) this is identical to the old behavior.
+        local labelUiscale = uiscale * shrink
         local lblId = label.new({
             name     = "cargo_inv_tab_lbl_" .. i,
             text     = text,
@@ -360,7 +372,7 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
             fontSize = TAB_FONT,
             color    = txtCol,
             page     = h.page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
         })
         local lh = label.getElementHandle(lblId)
         local lw = select(1, label.getSize(lblId))
