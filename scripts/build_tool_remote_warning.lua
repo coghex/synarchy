@@ -128,6 +128,7 @@ local function createUI(distance, thresholdTiles)
     buildToolRemoteWarning.page = UI.newPage("build_tool_remote_warning", "modal")
 
     local message = formatMessage(distance, thresholdTiles)
+    local titleText = "Establish Colony Remotely?"
 
     local establishLabel = "Establish Here"
     local cancelLabel    = "Choose Another Site"
@@ -139,9 +140,11 @@ local function createUI(distance, thresholdTiles)
         + s.buttonPaddingX
     local buttonsRowWidth = establishW + cancelW + s.buttonSpacing
 
+    local titleW = engine.getTextWidth(
+        buildToolRemoteWarning.titleFont, titleText, s.titleFontSize)
     local msgW = engine.getTextWidth(
         buildToolRemoteWarning.bodyFont, message, s.bodyFontSize)
-    local contentWidth = math.max(buttonsRowWidth, msgW)
+    local contentWidth = math.max(buttonsRowWidth, msgW, titleW)
     local panelWidth = math.max(PANEL_W_BASE, contentWidth + s.panelPaddingX * 2)
 
     local titleH = s.titleFontSize
@@ -158,6 +161,21 @@ local function createUI(distance, thresholdTiles)
     -- Establish/Cancel buttons off-screen.
     panelWidth  = math.min(panelWidth, buildToolRemoteWarning.fbW)
     panelHeight = math.min(panelHeight, buildToolRemoteWarning.fbH)
+
+    -- #750 round-20 review: fit the title/message labels to the panel's
+    -- actual (possibly fbW-capped) content width — mirrors the button
+    -- row's own round-7 fit below, via the responsive.fitScale idiom
+    -- used throughout this codebase for the identical class of gap.
+    -- Each label's OWN uiscale shrinks independently (never the panel/
+    -- button geometry); the re-measured width feeds panel.place below,
+    -- which needs the label's REAL rendered size to center it correctly.
+    local availableContentW = panelWidth - 2 * s.panelPaddingX
+    local titleUiscale = responsive.fitScale(titleW, availableContentW, uiscale)
+    local msgUiscale = responsive.fitScale(msgW, availableContentW, uiscale)
+    local titleScaledW = engine.getTextWidth(buildToolRemoteWarning.titleFont,
+        titleText, math.floor(baseSizes.titleFontSize * titleUiscale))
+    local msgScaledW = engine.getTextWidth(buildToolRemoteWarning.bodyFont,
+        message, math.floor(baseSizes.bodyFontSize * msgUiscale))
 
     -- #750 round-7 review: capping the PANEL alone isn't enough — the
     -- Establish/Cancel button row's own width (establishW/cancelW,
@@ -199,17 +217,23 @@ local function createUI(distance, thresholdTiles)
 
     local titleId = label.new({
         name     = "build_tool_remote_warning_title",
-        text     = "Establish Colony Remotely?",
+        text     = titleText,
         font     = buildToolRemoteWarning.titleFont,
         fontSize = baseSizes.titleFontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = buildToolRemoteWarning.page,
-        uiscale  = uiscale,
+        uiscale  = titleUiscale,
     })
     table.insert(buildToolRemoteWarning.ownedLabels, titleId)
+    -- #750 round-20 review: width/height=0 here meant panel.place's
+    -- "top-center" origin offset by ZERO regardless of origin — the
+    -- label was never actually centered at all (it started at the
+    -- panel midpoint and ran rightward). Passing the label's REAL
+    -- (possibly fitted) rendered size lets the origin math center it
+    -- properly and keeps it inside the available content width.
     panel.place(buildToolRemoteWarning.panelId, label.getElementHandle(titleId), {
         x = "50%", y = 0, origin = "top-center",
-        width = 0, height = 0,
+        width = titleScaledW, height = titleH,
     })
 
     local msgId = label.new({
@@ -219,12 +243,12 @@ local function createUI(distance, thresholdTiles)
         fontSize = baseSizes.bodyFontSize,
         color    = {0.85, 0.85, 0.85, 1.0},
         page     = buildToolRemoteWarning.page,
-        uiscale  = uiscale,
+        uiscale  = msgUiscale,
     })
     table.insert(buildToolRemoteWarning.ownedLabels, msgId)
     panel.place(buildToolRemoteWarning.panelId, label.getElementHandle(msgId), {
         x = "50%", y = titleH + s.titleGap, origin = "top-center",
-        width = 0, height = 0,
+        width = msgScaledW, height = msgH,
     })
 
     local buttonsY = titleH + s.titleGap + msgH + s.messageGap

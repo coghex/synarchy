@@ -1901,6 +1901,64 @@ passes again); full `UI.ResponsiveGameplay` suite (71 examples) and
 the broader `UI`-tagged headless suite (398 examples) both pass;
 `lua_module_budget.py` clean (`popup.lua` isn't a budgeted module).
 
+Round-20 review found a gap in `build_tool_remote_warning.lua`'s
+(#779) title/message labels: `panel.place`'s `width = 0, height = 0`
+options meant a `"top-center"` origin's offset (`origin.x * elemWidth`)
+was always zero regardless of the label's REAL size — neither label
+was actually centered at all; both started at the panel's content
+midpoint and ran rightward, overflowing a narrow, high-scale, still-
+supported framebuffer (800×2160@4x) even before accounting for the
+panel's own fbW cap shrinking the available width further. Fixed two
+ways: (1) `panel.place` for both labels now passes their REAL rendered
+width/height instead of `0`, so the origin math actually centers them;
+(2) each label's own `uiscale` (previously always the full outer
+`uiscale`) is now fit via `responsive.fitScale` against the panel's
+actual (possibly fbW-capped) content width — mirrors the button row's
+own round-7 fit, and the identical technique used throughout this PR.
+`contentWidth` (which sizes the panel itself) also now includes the
+title's own natural width, not just the message and button row — a
+latent gap since the title was never accounted for at all before this
+round, even though the SAME `width=0` bug applied to it too.
+
+Testing this needed a new technique for this test file: `panel.place`
+positions ANY element by treating it as if it starts at its OWN
+top-left origin then subtracts `origin.x * elemWidth`/`origin.y *
+elemHeight` — so a bug that always passes `elemWidth=0` still leaves
+the element's X coordinate technically non-negative and inside the
+panel (the un-shifted "top-center" position IS the panel's own
+horizontal center), meaning a first attempt at this test that only
+checked `label.x >= panel.x` passed on both the buggy AND fixed code
+identically — a false-negative that would have shipped a non-catching
+regression test. The right check is `label.x + REAL width <= panel
+edge`, using label.lua's own `getSize` (an independent record of the
+real width, sourced from the same `engine.getTextWidth` call as the
+fix itself) rather than `UI.getElementInfo(...).width`, which is
+ALWAYS zero for a raw `UI.newText` element regardless of any bug or
+fix (label.lua's own comment on this fact, already relied on by the
+existing round-13 button-font test in this same describe block).
+Confirmed this catches the regression with a two-round check: the
+first version of the new test passed unchanged on both the reverted
+and fixed code (the false-negative above); rewritten to use
+`label.getSize` + a real (stubbed) `engine.getTextWidth` measurement,
+it now fails on the reverted code and passes on the fix.
+
+This suite's synthetic font handles make `engine.getTextWidth` always
+return 0 (this module's own header comment) — with the OLD, buggy
+code that measures identically as "fits" regardless of the bug. The
+new test stubs `engine.getTextWidth` with a real, deterministic,
+length-proportional measurement for its own duration only (save orig,
+override, restore immediately after `w.open()` — the same monkeypatch
+convention this whole test file already uses pervasively for other
+real API functions), so the centering math and the new width-fit are
+both genuinely exercised rather than trivially vacuous.
+
+Verified against a real running engine: loaded
+`build_tool_remote_warning.lua` via `engine.loadScript` under a real
+`--headless` boot with no errors. Full `UI.ResponsiveGameplay` suite
+(72 examples) and the broader `UI`-tagged headless suite (399
+examples) both pass; `lua_module_budget.py` clean (this file isn't a
+budgeted module).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

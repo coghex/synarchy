@@ -1840,6 +1840,60 @@ spec = aroundAll withSharedFixture $ do
                     or (zipWith (<) (fscpShrunkSizes p) (fscpUnshrunkSizes p))
                         `shouldBe` True
 
+        it "the title/message labels stay within the panel instead of overflowing from a zero-width center origin (round-20 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-20 review: panel.place's width=0/height=0 meant
+            -- a "top-center" origin offset by ZERO regardless of the
+            -- label's real size — the title/message text was never
+            -- actually centered at all, starting at the panel's content
+            -- midpoint and running rightward off the edge. This suite's
+            -- synthetic font handles make engine.getTextWidth always
+            -- return 0 (see this module's own header comment), which
+            -- would make both the old bug AND the fix look identical (0
+            -- offset either way) — stubs it with a real, deterministic,
+            -- length-proportional measurement for this one test so the
+            -- centering math (and the width-fit it now feeds) is
+            -- actually exercised, restored immediately after use.
+            -- UI.getElementInfo always reports a zero-sized bounding box
+            -- for a raw UI.newText element (label.lua's own comment on
+            -- the same fact, also relied on by the round-13 button-font
+            -- test above) — label.getSize(id) is label.lua's own cached
+            -- REAL width (from the same engine.getTextWidth call), read
+            -- via w.ownedLabels[1]/[2] (title/message, in the order
+            -- createUI() inserts them — the only handle a caller outside
+            -- createUI() has to the label ids at all).
+            r ← evalJSON ls $ luaLines
+                [ "local origGTW = engine.getTextWidth;"
+                , "engine.getTextWidth = function(font, text, size) return #text * size end;"
+                , "engine.setUIScale(4.0);"
+                , "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,800,2160);"
+                , "w.open('acolyte_portal', 5, 5, 987654321, 30);"
+                , "engine.getTextWidth = origGTW;"
+                , "local label = require('scripts.ui.label');"
+                , "local panelMod = require('scripts.ui.panel');"
+                , "local px, py = panelMod.getPosition(w.panelId);"
+                , "local pw, ph = panelMod.getSize(w.panelId);"
+                , "local titleId, msgId = w.ownedLabels[1], w.ownedLabels[2];"
+                , "local titleW = label.getSize(titleId);"
+                , "local msgW = label.getSize(msgId);"
+                , "local titleInfo = UI.getElementInfo(label.getElementHandle(titleId));"
+                , "local msgInfo = UI.getElementInfo(label.getElementHandle(msgId));"
+                , "return {hasMsg = (msgInfo ~= nil), hasTitle = (titleInfo ~= nil),"
+                , "        panelX = px, panelRight = px + pw,"
+                , "        msgX = msgInfo.x, msgRight = msgInfo.x + msgW,"
+                , "        titleX = titleInfo.x, titleRight = titleInfo.x + titleW}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RemoteWarningTextFitProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rwtfHasMsg p `shouldBe` True
+                    rwtfHasTitle p `shouldBe` True
+                    rwtfMsgX p `shouldSatisfy` (≥ rwtfPanelX p)
+                    rwtfMsgRight p `shouldSatisfy` (≤ rwtfPanelRight p)
+                    rwtfTitleX p `shouldSatisfy` (≥ rwtfPanelX p)
+                    rwtfTitleRight p `shouldSatisfy` (≤ rwtfPanelRight p)
+
     describe "cargo_inventory_panel.lua / item_contents_panel.lua stay in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $ do
         it "cargo_inventory_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
@@ -2439,6 +2493,18 @@ instance FromJSON UnitInfoVerticalProbe where
     parseJSON = withObject "UnitInfoVerticalProbe" $ \o →
         UnitInfoVerticalProbe <$> o .: "ok" <*> o .: "hasInvRect" <*> o .: "invH"
                                <*> o .: "equipBottom" <*> o .: "statsBottom" <*> o .: "invBottom"
+
+data RemoteWarningTextFitProbe = RemoteWarningTextFitProbe
+    { rwtfHasMsg ∷ Bool, rwtfHasTitle ∷ Bool
+    , rwtfPanelX ∷ Double, rwtfPanelRight ∷ Double
+    , rwtfMsgX ∷ Double, rwtfMsgRight ∷ Double
+    , rwtfTitleX ∷ Double, rwtfTitleRight ∷ Double } deriving Show
+instance FromJSON RemoteWarningTextFitProbe where
+    parseJSON = withObject "RemoteWarningTextFitProbe" $ \o →
+        RemoteWarningTextFitProbe <$> o .: "hasMsg" <*> o .: "hasTitle"
+                                    <*> o .: "panelX" <*> o .: "panelRight"
+                                    <*> o .: "msgX" <*> o .: "msgRight"
+                                    <*> o .: "titleX" <*> o .: "titleRight"
 
 data PopupLineOverflowProbe = PopupLineOverflowProbe
     { plopLineCount ∷ Int, plopPanelInFrame ∷ Bool, plopLastLineBottom ∷ Double
