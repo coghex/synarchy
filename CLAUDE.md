@@ -1106,11 +1106,37 @@ always starts a fresh tabbar at hardcoded index 1 — without re-firing
 the new `UI.ResponsiveGameplay` suite's `around withHeadlessEngine`
 (a fresh engine per `it`, the same convention `UI.ResponsiveMenus`/
 `UI.InputOwnership` already established) drew a cost-guardrail review
-comment; `scripts/ui/reserved_regions.lua`'s own functions are pure and
-independent of each other, so its whole test group was consolidated
-into one `it` sharing a single engine/backend, cutting a meaningful
-slice of the suite's total engine-boot count without touching the
-stateful HUD/log-panel tests that genuinely need per-case isolation.
+comment; round-4's response consolidated `scripts/ui/reserved_regions.lua`'s
+own pure, state-independent test group into one shared-backend `it`,
+but left the rest on `around`.
+
+Round-5 review pushed for the FULL shared-engine conversion the
+guardrail literally asks for, and it landed: `spec = aroundAll
+withHeadlessEngine` now boots exactly ONE engine for the whole 36+-case
+module. Each `it` still gets its own fresh `newBareLuaBackend` (a
+genuinely new Lua VM per case), so Lua-side module state (`hud.lua`'s
+`hud.world_page`, `popup.lua`'s `popup.active`, etc.) was ALREADY
+case-isolated regardless — what a shared engine actually risks
+leaking between cases is the HASKELL-side state living in `EngineEnv`
+itself, independent of any Lua VM. Two such leaks surfaced immediately
+under a shared engine with Hspec's default randomized case order: the
+`UIPageManager` (`uiManagerRef`) accumulating every prior case's pages/
+elements, and `engine.setUIScale`'s target (`videoConfigRef`'s
+`vcUIScale`) persisting from whichever earlier case last set it — several
+cases call `engine.setUIScale` for a band-boundary/out-of-envelope
+exemplar, and a later case's toolbar-rect/panel-width assertions
+silently used that STALE scale instead of the 1x it assumed, failing
+under some random orderings but not others. `resetUI env` (called as
+the first line of every `it`) resets both back to a known baseline
+before each case runs. No case asserts on a hardcoded absolute element/
+page handle or count (only relative growth or freshly-fetched handles),
+so the shared `UIPageManager`'s otherwise-still-growing handle counter
+across cases is inert. The engine-level event/combat/injury log ring
+buffers are deliberately NOT reset (no reset primitive is exposed to a
+test) — every case touching them asserts existence or relative
+preservation, never an exact count, so cross-case accumulation there is
+inert by the same construction. Verified stable across multiple runs
+with different random seeds before landing.
 
 ## Project Layout
 
