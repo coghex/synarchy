@@ -1,5 +1,6 @@
 -- Pause Menu Module (in-game escape menu)
 local scale = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
 local panel = require("scripts.ui.panel")
 local label = require("scripts.ui.label")
 local pauseMenu = {}
@@ -113,14 +114,38 @@ function pauseMenu.createUI()
     local uiscale = scale.get()
     local s = scale.applyAll(pauseMenu.baseSizes)
 
+    -- #748: compact fallback — see main_menu.lua's identical comment.
+    -- Shrinks this menu's own effective scale only, never the stored
+    -- UI scale, against BOTH the height and width budgets (fixed
+    -- button/menu padding alone can overflow a narrow framebuffer like
+    -- the supported 800x2160@4x combination before any label text is
+    -- even measured), taking whichever constraint is tighter.
+    local function measureMaxLabelWidth(fontSize)
+        local maxW = 0
+        for _, item in ipairs(menuItems) do
+            local w = engine.getTextWidth(pauseMenu.menuFont, item.label, fontSize)
+            if w > maxW then maxW = w end
+        end
+        return maxW
+    end
+
+    local naturalMenuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
+                             + s.buttonSpacing + s.menuPaddingY
+    local naturalMenuWidth = measureMaxLabelWidth(s.fontSize)
+                            + s.buttonPaddingX + s.menuPaddingX
+    local maxMenuHeight = math.floor(pauseMenu.fbH * 0.9)
+    local maxMenuWidth = math.floor(pauseMenu.fbW * 0.9)
+    local scaleForHeight = responsive.fitScale(
+        naturalMenuHeight + s.titleOffset, maxMenuHeight, uiscale)
+    local scaleForWidth = responsive.fitScale(
+        naturalMenuWidth, maxMenuWidth, uiscale)
+    uiscale = math.min(scaleForHeight, scaleForWidth)
+    s = scale.applyAllWith(pauseMenu.baseSizes, uiscale)
+
     pauseMenu.page = UI.newPage("pause_menu", "modal")
 
-    -- Calculate max text width for sizing
-    local maxLabelWidth = 0
-    for _, item in ipairs(menuItems) do
-        local w = engine.getTextWidth(pauseMenu.menuFont, item.label, s.fontSize)
-        if w > maxLabelWidth then maxLabelWidth = w end
-    end
+    -- Re-measure at the (possibly now-shrunk) final fontSize.
+    local maxLabelWidth = measureMaxLabelWidth(s.fontSize)
 
     local itemWidth  = maxLabelWidth + s.buttonPaddingX
     local menuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
@@ -129,6 +154,11 @@ function pauseMenu.createUI()
 
     local menuX = (pauseMenu.fbW - menuWidth) / 2
     local menuY = (pauseMenu.fbH - menuHeight) / 2
+    -- Clamp so the panel's left edge, and the title, never go
+    -- off-frame even if the compact fallback above still leaves
+    -- things a little tight.
+    menuX = math.max(menuX, 0)
+    menuY = math.max(menuY, s.titleOffset + 4)
 
     -- Background panel
     pauseMenu.panelId = panel.new({
@@ -361,8 +391,12 @@ function pauseMenu.onFramebufferResize(width, height)
     pauseMenu.fbW = width
     pauseMenu.fbH = height
     if pauseMenu.uiCreated and pauseMenu.visible then
+        -- #748 round 5: preserve keyboard CONTROL focus (#745) across a
+        -- resize rebuild, mirroring settings_menu/create_world_menu/main_menu.
+        local controlFocusName = responsive.snapshotControlFocusName()
         pauseMenu.createUI()
         UI.showPage(pauseMenu.page)
+        responsive.restoreControlFocusName(controlFocusName)
     end
 end
 

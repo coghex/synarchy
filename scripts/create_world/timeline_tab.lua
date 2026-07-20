@@ -4,8 +4,9 @@
 -- and Age are min–max ranges (a uniform random count is rolled per
 -- parent). Fewer Ages ⇒ much faster worldgen (less per-tile erosion
 -- replay). Returns element handles for show/hide tab switching.
-local label   = require("scripts.ui.label")
-local textbox = require("scripts.ui.textbox")
+local label      = require("scripts.ui.label")
+local textbox    = require("scripts.ui.textbox")
+local responsive = require("scripts.ui.responsive")
 
 local timelineTab = {}
 
@@ -23,7 +24,7 @@ timelineTab.ageMaxId    = nil
 -- Row helpers
 -----------------------------------------------------------
 
-local function addLabel(params, elements, name, text, tooltip, cx, y)
+local function addLabel(params, elements, name, text, tooltip, cx, y, labelUiscale)
     local id = params.trackLabel(label.new({
         name     = name,
         text     = text,
@@ -31,11 +32,11 @@ local function addLabel(params, elements, name, text, tooltip, cx, y)
         fontSize = params.baseSizes.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = params.page,
-        uiscale  = params.uiscale,
+        uiscale  = labelUiscale or params.uiscale,
         tooltip  = tooltip,
     }))
     local h = label.getElementHandle(id)
-    UI.addToPage(params.page, h, cx, y + params.s.fontSize)
+    UI.addChild(params.container, h, cx, y + params.s.fontSize)
     UI.setZIndex(h, params.zContent)
     table.insert(elements, { type = "label", handle = h })
 end
@@ -46,6 +47,7 @@ local function addBox(params, elements, name, x, y, default)
         width    = params.baseSizes.textboxWidth,
         height   = params.baseSizes.textboxHeight,
         page     = params.page,
+        parent   = params.container,
         x        = x,
         y        = y,
         uiscale  = params.uiscale,
@@ -76,26 +78,44 @@ function timelineTab.create(params)
     local xMax = cx + cw - tbW            -- right-aligned (single box / max box)
     local xMin = cx + cw - 2 * tbW - gap  -- min box (left of max)
 
+    -- #748 round 7: see settings_tab.lua's identical comment — the
+    -- control's shrink (via computeContentScaleFactor) already
+    -- reserves a label column, but the label itself still needs its
+    -- own effective uiscale to actually fit inside it. This tab's
+    -- labels are the longest of the four create-world tab modules.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local labelFontSizePx = math.floor(params.baseSizes.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs({
+        "Eons", "Eras / eon", "Periods / era  (min–max)",
+        "Epochs / period  (min–max)", "Ages / epoch  (min–max)",
+    }) do
+        local w = engine.getTextWidth(params.font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
+
     -- Row 0: Eons (single box)
     addLabel(params, elements, "timeline_eon_label", "Eons",
         "How many eons (full planetary lifecycles). Each eon re-bombards the planet "
-        .. "(atmosphere lost and regained between eons).", cx, rowY(0))
+        .. "(atmosphere lost and regained between eons).", cx, rowY(0), labelUiscale)
     timelineTab.eonId = addBox(params, elements, "tl_eon_input", xMax, rowY(0), pending.timelineEon)
 
     -- Row 1: Eras per eon (single box)
     addLabel(params, elements, "timeline_era_label", "Eras / eon",
-        "Number of eras per eon (fixed count).", cx, rowY(1))
+        "Number of eras per eon (fixed count).", cx, rowY(1), labelUiscale)
     timelineTab.eraId = addBox(params, elements, "tl_era_input", xMax, rowY(1), pending.timelineEra)
 
     -- Row 2: Periods per era (min–max)
     addLabel(params, elements, "timeline_period_label", "Periods / era  (min–max)",
-        "Periods per era: a uniform random count in this range.", cx, rowY(2))
+        "Periods per era: a uniform random count in this range.", cx, rowY(2), labelUiscale)
     timelineTab.periodMinId = addBox(params, elements, "tl_pmin_input", xMin, rowY(2), pending.periodMin)
     timelineTab.periodMaxId = addBox(params, elements, "tl_pmax_input", xMax, rowY(2), pending.periodMax)
 
     -- Row 3: Epochs per period (min–max)
     addLabel(params, elements, "timeline_epoch_label", "Epochs / period  (min–max)",
-        "Epochs per period: a uniform random count in this range.", cx, rowY(3))
+        "Epochs per period: a uniform random count in this range.", cx, rowY(3), labelUiscale)
     timelineTab.epochMinId = addBox(params, elements, "tl_emin_input", xMin, rowY(3), pending.epochMin)
     timelineTab.epochMaxId = addBox(params, elements, "tl_emax_input", xMax, rowY(3), pending.epochMax)
 
@@ -103,11 +123,11 @@ function timelineTab.create(params)
     addLabel(params, elements, "timeline_age_label", "Ages / epoch  (min–max)",
         "Ages per epoch: a uniform random count in this range. Ages dominate worldgen "
         .. "cost — fewer ages generate much faster (but with less erosion, so terrain "
-        .. "may be more dramatic).", cx, rowY(4))
+        .. "may be more dramatic).", cx, rowY(4), labelUiscale)
     timelineTab.ageMinId = addBox(params, elements, "tl_amin_input", xMin, rowY(4), pending.ageMin)
     timelineTab.ageMaxId = addBox(params, elements, "tl_amax_input", xMax, rowY(4), pending.ageMax)
 
-    return elements
+    return elements, 5
 end
 
 -----------------------------------------------------------

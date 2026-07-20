@@ -18,6 +18,7 @@ local checkbox = require("scripts.ui.checkbox")
 local dropdown = require("scripts.ui.dropdown")
 local slider   = require("scripts.ui.slider")
 local data     = require("scripts.settings.data")
+local responsive = require("scripts.ui.responsive")
 
 local graphicsTab = {}
 
@@ -142,6 +143,65 @@ function graphicsTab.create(params)
     -- Checkbox size used by multiple rows
     local cbSize = math.floor(base.checkboxSize * uiscale)
 
+    -- #748 round 5: a dropdown's width is driven by its OPTION TEXT
+    -- metrics (dropdown.measureOptions) plus a fixed minWidth floor —
+    -- neither is a plain baseSizes field, so it can't be shrunk via
+    -- settings_menu's `contentBase` (which only covers textbox/slider/
+    -- checkbox widths). At a narrow content area and high uiscale (the
+    -- supported 800x2160@4x combination), the unshrunk floor alone
+    -- (100 * uiscale display width + a same-height arrow) already
+    -- exceeds `cw`, driving the right-aligned dropdown's x position
+    -- negative. Compute ONE effective, LOCAL uiscale for every dropdown
+    -- in this tab — never the stored/configured scale — from whichever
+    -- of the four option sets needs the most room at the tab's real
+    -- uiscale, mirroring dropdown.lua's own displayWidth+arrow formula
+    -- exactly so the fit is correct whether text metrics or the floor
+    -- dominate.
+    local dropFontSize = math.floor(24 * uiscale)
+    local dropHeight = math.floor(base.dropdownHeight * uiscale)
+    local naturalDropdownWidth = 0
+    for _, opts in ipairs({
+        data.resolutions, data.windowModes, data.msaaOptions, data.textureFilterOptions,
+    }) do
+        local displayW = math.max(
+            dropdown.measureOptions(opts, font, dropFontSize),
+            math.floor(100 * uiscale))
+        local totalW = displayW + dropHeight
+        if totalW > naturalDropdownWidth then naturalDropdownWidth = totalW end
+    end
+    -- #748 round 7: fit against a REDUCED target (not the full row
+    -- width cw) that reserves a label column — the row's label sits at
+    -- cx, the right-aligned dropdown at cx+cw-width; letting the
+    -- dropdown's own fit consume the whole row left it landing back at
+    -- ~cx too, overlapping the label. Mirrors create_world_menu's
+    -- identical LABEL_COLUMN_FRACTION reservation.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local dropdownUiscale = responsive.fitScale(
+        naturalDropdownWidth, cw * (1 - LABEL_COLUMN_FRACTION), uiscale)
+
+    -- #748 round 7: reserving a label column doesn't help if the LABEL
+    -- itself still renders at the tab's full uiscale — a long label
+    -- ("Tooltip Delay (ms)") at 4x can still be far wider than even a
+    -- 35%-of-cw column, extending into and overlapping the row's own
+    -- control regardless of how little room the control itself needs.
+    -- Compute ONE effective, LOCAL uiscale for every row LABEL in this
+    -- tab from whichever label text is widest, fit against the SAME
+    -- reserved label column width — applied uniformly so no row's
+    -- label jumps size relative to another.
+    local ROW_LABELS = {
+        "Resolution", "Window Mode", "VSync", "Frame Limit", "Anti-Aliasing",
+        "Brightness", "UI Scaling", "Pixel Snap", "Texture Filter",
+        "Tooltip Delay (ms)", "Hint Delay (ms)",
+    }
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs(ROW_LABELS) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
+
     ---------------------------------------------------------
     -- Row 1: Resolution (dropdown)
     ---------------------------------------------------------
@@ -152,14 +212,14 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local resLabelHandle = label.getElementHandle(resLabelId)
     UI.addToPage(page, resLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(resLabelHandle, zContent)
 
     local currentRes = data.resolutionString(
-        data.current.width, data.current.height)
+        pending.width, pending.height)
 
     graphicsTab.resolutionDropdownId = params.trackDropdown(dropdown.new({
         name              = "resolution",
@@ -170,7 +230,7 @@ function graphicsTab.create(params)
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = dropdown.resolutionValidator,
         matchFn           = dropdown.resolutionMatcher,
@@ -214,7 +274,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local wmLabelHandle = label.getElementHandle(wmLabelId)
     UI.addToPage(page, wmLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -223,13 +283,13 @@ function graphicsTab.create(params)
     graphicsTab.windowModeDropdownId = params.trackDropdown(dropdown.new({
         name              = "window_mode",
         options           = data.windowModes,
-        default           = data.current.windowMode,
+        default           = pending.windowMode,
         font              = font,
         fontSize          = 24,
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = graphicsTab.windowModeValidator,
         matchFn           = graphicsTab.windowModeMatcher,
@@ -269,7 +329,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local vsLabelHandle = label.getElementHandle(vsLabelId)
     UI.addToPage(page, vsLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -282,7 +342,7 @@ function graphicsTab.create(params)
         page    = page,
         x       = cx + cw - cbSize,
         y       = rowY(rowIndex),
-        default = data.current.vsync,
+        default = pending.vsync,
         zIndex  = zWidgets,
         onChange = function(checked, id, name)
             pending.vsync = checked
@@ -315,7 +375,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local flLabelHandle = label.getElementHandle(flLabelId)
     UI.addToPage(page, flLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -332,7 +392,7 @@ function graphicsTab.create(params)
         uiscale  = uiscale,
         font     = font,
         fontSize = 24,
-        default  = tostring(data.current.frameLimit or 60),
+        default  = tostring(pending.frameLimit or 60),
         textType = textbox.Type.NUMBER,
         zIndex   = zWidgets,
     }))
@@ -362,7 +422,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local msaaLabelHandle = label.getElementHandle(msaaLabelId)
     UI.addToPage(page, msaaLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -371,13 +431,13 @@ function graphicsTab.create(params)
     graphicsTab.msaaDropdownId = params.trackDropdown(dropdown.new({
         name              = "msaa",
         options           = data.msaaOptions,
-        default           = data.msaaToString(data.current.msaa),
+        default           = data.msaaToString(pending.msaa),
         font              = font,
         fontSize          = 24,
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = graphicsTab.msaaValidator,
         matchFn           = graphicsTab.msaaMatcher,
@@ -417,7 +477,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local brLabelHandle = label.getElementHandle(brLabelId)
     UI.addToPage(page, brLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -430,7 +490,7 @@ function graphicsTab.create(params)
         height   = base.sliderHeight or 24,
         min      = data.brightnessMin,
         max      = data.brightnessMax,
-        default  = data.current.brightness,
+        default  = pending.brightness,
         page     = page,
         x        = cx + cw - slW,
         y        = rowY(rowIndex),
@@ -470,7 +530,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local scaleLabelHandle = label.getElementHandle(scaleLabelId)
     UI.addToPage(page, scaleLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -487,7 +547,7 @@ function graphicsTab.create(params)
         uiscale  = uiscale,
         font     = font,
         fontSize = 24,
-        default  = tostring(data.current.uiScale),
+        default  = tostring(pending.uiScale),
         textType = textbox.Type.SCALE,
         zIndex   = zWidgets,
     }))
@@ -517,7 +577,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Snaps sprites to integer pixel positions for a sharper, retro look",
     }))
     local psLabelHandle = label.getElementHandle(psLabelId)
@@ -531,7 +591,7 @@ function graphicsTab.create(params)
         page    = page,
         x       = cx + cw - cbSize,
         y       = rowY(rowIndex),
-        default = data.current.pixelSnap,
+        default = pending.pixelSnap,
         zIndex  = zWidgets,
         onChange = function(checked, id, name)
             pending.pixelSnap = checked
@@ -564,7 +624,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltipRich = {
             text = "How textures are sampled when scaled",
             hint = "Nearest: pixel-perfect, crisp art    Linear: smooth bilinear blur",
@@ -577,13 +637,13 @@ function graphicsTab.create(params)
     graphicsTab.textureFilterDropdownId = params.trackDropdown(dropdown.new({
         name              = "texture_filter",
         options           = data.textureFilterOptions,
-        default           = data.current.textureFilter,
+        default           = pending.textureFilter,
         font              = font,
         fontSize          = 24,
         height            = base.dropdownHeight,
         page              = page,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = dropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = graphicsTab.textureFilterValidator,
         matchFn           = graphicsTab.textureFilterMatcher,
@@ -623,7 +683,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "How long the cursor must rest on an element before its tooltip appears",
     }))
     local tdLabelHandle = label.getElementHandle(tdLabelId)
@@ -636,7 +696,7 @@ function graphicsTab.create(params)
         height   = base.sliderHeight or 24,
         min      = data.tooltipDwellMin,
         max      = data.tooltipDwellMax,
-        default  = data.current.tooltipDwellMs,
+        default  = pending.tooltipDwellMs,
         page     = page,
         x        = cx + cw - slW,
         y        = rowY(rowIndex),
@@ -676,7 +736,7 @@ function graphicsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Extra delay after the tooltip appears before the hint section transitions in",
     }))
     local hdLabelHandle = label.getElementHandle(hdLabelId)
@@ -689,7 +749,7 @@ function graphicsTab.create(params)
         height   = base.sliderHeight or 24,
         min      = data.tooltipHintDelayMin,
         max      = data.tooltipHintDelayMax,
-        default  = data.current.tooltipHintDelayMs,
+        default  = pending.tooltipHintDelayMs,
         page     = page,
         x        = cx + cw - slW,
         y        = rowY(rowIndex),

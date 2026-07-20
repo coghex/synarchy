@@ -6,9 +6,10 @@
 --   1. Name       (randbox)
 --   2. Seed       (randbox)
 --   3. World Size (dropdown)
-local label    = require("scripts.ui.label")
-local randbox  = require("scripts.ui.randbox")
-local dropdown = require("scripts.ui.dropdown")
+local label      = require("scripts.ui.label")
+local randbox    = require("scripts.ui.randbox")
+local dropdown   = require("scripts.ui.dropdown")
+local responsive = require("scripts.ui.responsive")
 
 local settingsTab = {}
 
@@ -66,17 +67,18 @@ end
 -- }
 -- Returns: elements[] for show/hide
 function settingsTab.create(params)
-    local page     = params.page
-    local font     = params.font
-    local base     = params.baseSizes
-    local uiscale  = params.uiscale
-    local s        = params.s
-    local cx       = params.contentX
-    local cy       = params.contentY
-    local cw       = params.contentW
-    local zContent = params.zContent
-    local zWidgets = params.zWidgets
-    local pending  = params.pending
+    local page      = params.page
+    local font      = params.font
+    local base      = params.baseSizes
+    local uiscale   = params.uiscale
+    local s         = params.s
+    local cx        = params.contentX
+    local cy        = params.contentY
+    local cw        = params.contentW
+    local zContent  = params.zContent
+    local zWidgets  = params.zWidgets
+    local pending   = params.pending
+    local container = params.container
 
     local elements = {}
     local rowIndex = 0
@@ -84,6 +86,42 @@ function settingsTab.create(params)
     local function rowY(n)
         return cy + s.rowSpacing * n
     end
+
+    -- #748 round 7: create_world_menu's computeContentScaleFactor
+    -- reserves a LABEL_COLUMN_FRACTION-wide column for this tab's row
+    -- labels (the shrunk control's own right-aligned left edge never
+    -- passes cx+cw*0.35) — but that reservation is useless if the
+    -- label itself still renders at the tab's full uiscale, which can
+    -- still be far wider than its own reserved column at an extreme
+    -- narrow width. Compute ONE effective, LOCAL uiscale for every row
+    -- label in this tab from whichever label text is widest, fit
+    -- against the SAME reserved column width.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs({ "Name", "Seed", "Size" }) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
+
+    -- #748 round 8: World Size (below) is a dropdown — its width is
+    -- driven by OPTION TEXT metrics (dropdown.measureOptions) plus a
+    -- fixed minWidth floor, neither of which is touched by
+    -- computeContentScaleFactor's randbox/textbox-only shrink. Mirrors
+    -- graphics_tab.lua's identical dropdownUiscale fix: one effective,
+    -- LOCAL uiscale, mirroring dropdown.lua's own
+    -- displayWidth+arrowSize formula, fit against the SAME reserved
+    -- control column (cw*(1-LABEL_COLUMN_FRACTION)) the shrunk
+    -- randbox rows already target.
+    local sizeFontSizePx = math.floor(24 * uiscale)
+    local sizeDropHeight = math.floor(base.dropdownHeight * uiscale)
+    local naturalSizeDropdownWidth = math.max(
+        dropdown.measureOptions(settingsTab.worldSizeOptions, font, sizeFontSizePx),
+        math.floor(100 * uiscale)) + sizeDropHeight
+    local sizeDropdownUiscale = responsive.fitScale(
+        naturalSizeDropdownWidth, cw * (1 - LABEL_COLUMN_FRACTION), uiscale)
 
     ---------------------------------------------------------
     -- Row 1: World Name (randbox - wide)
@@ -95,11 +133,11 @@ function settingsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
     }))
     local nameLabelHandle = label.getElementHandle(nameLabelId)
-    UI.addToPage(page, nameLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, nameLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(nameLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = nameLabelHandle })
 
@@ -112,6 +150,7 @@ function settingsTab.create(params)
         width    = base.nameBoxWidth,
         height   = base.randboxHeight,
         page     = page,
+        parent   = container,
         font     = font,
         fontSize = 24,
         uiscale  = uiscale,
@@ -140,12 +179,12 @@ function settingsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "Random seed for world generation. The same seed always produces the same world. Use the dice button to randomise.",
     }))
     local seedLabelHandle = label.getElementHandle(seedLabelId)
-    UI.addToPage(page, seedLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, seedLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(seedLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = seedLabelHandle })
 
@@ -158,6 +197,7 @@ function settingsTab.create(params)
         width    = base.randboxWidth,
         height   = base.randboxHeight,
         page     = page,
+        parent   = container,
         font     = font,
         fontSize = 24,
         uiscale  = uiscale,
@@ -186,12 +226,12 @@ function settingsTab.create(params)
         fontSize = base.fontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
-        uiscale  = uiscale,
+        uiscale  = labelUiscale,
         tooltip  = "World size in chunks. Larger worlds take significantly longer to generate and stream.",
     }))
     local sizeLabelHandle = label.getElementHandle(sizeLabelId)
-    UI.addToPage(page, sizeLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
+    UI.addChild(container, sizeLabelHandle,
+                cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(sizeLabelHandle, zContent)
     table.insert(elements, { type = "label", handle = sizeLabelHandle })
 
@@ -203,8 +243,9 @@ function settingsTab.create(params)
         fontSize          = 24,
         height            = base.dropdownHeight,
         page              = page,
+        parent            = container,
         x = 0, y = 0,
-        uiscale           = uiscale,
+        uiscale           = sizeDropdownUiscale,
         zIndex            = zWidgets,
         validateChar      = settingsTab.sizeValidator,
         matchFn           = settingsTab.sizeMatcher,
@@ -220,7 +261,7 @@ function settingsTab.create(params)
     dropdown.setPosition(ddSizeId, cx + cw - ddSizeW, rowY(rowIndex))
     table.insert(elements, { type = "dropdown", id = ddSizeId })
 
-    return elements
+    return elements, 3
 end
 
 -----------------------------------------------------------

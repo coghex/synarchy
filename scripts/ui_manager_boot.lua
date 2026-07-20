@@ -10,6 +10,7 @@
 -- private to this file.
 local uiManager = package.loaded["scripts.ui_manager"]
 
+local responsive = require("scripts.ui.responsive")
 local boxTextures = require("scripts.ui.box_textures")
 local textbox   = require("scripts.ui.textbox")
 local checkbox  = require("scripts.ui.checkbox")
@@ -41,6 +42,21 @@ local hud             = require("scripts.hud")
 local testArena       = require("scripts.test_arena")
 local pauseMenu       = require("scripts.pause_menu")
 local buildToolRemoteWarning = require("scripts.build_tool_remote_warning")
+
+-- #748: the shared responsive lifecycle's notification contract covers
+-- exactly the menu-screen scope (main/pause/settings/create-world/
+-- save-browser/loading) — gameplay surfaces (worldView, hud, popups/
+-- logs, context menu, buildToolRemoteWarning) are C4 and stay on their
+-- own explicit forwarding below. Registering here (module load time) is
+-- safe even before a screen's own init() ever runs — every one of these
+-- six onFramebufferResize functions only touches its own module fields
+-- and no-ops its rebuild while uiCreated is still false.
+responsive.register("mainMenu", mainMenu)
+responsive.register("settingsMenu", settingsMenu)
+responsive.register("createWorldMenu", createWorldMenu)
+responsive.register("saveBrowser", saveBrowser)
+responsive.register("loadingScreen", loadingScreen)
+responsive.register("pauseMenu", pauseMenu)
 
 local boxTexSet = nil
 local btnTexSet = nil
@@ -295,13 +311,15 @@ function uiManager.onFramebufferResize(width, height)
         return
     end
 
-    if uiManager.moduleReady.mainMenu then mainMenu.onFramebufferResize(width, height) end
-    if uiManager.moduleReady.settingsMenu then settingsMenu.onFramebufferResize(width, height) end
-    if uiManager.moduleReady.createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
+    -- #748: main/settings/create-world/save-browser/loading/pause share
+    -- one notification contract (scripts/ui/responsive.lua) instead of
+    -- each being hand-listed here; it also 0x0-minimize-guards them
+    -- uniformly (never rebuilds degenerate geometry, restores cleanly
+    -- once a real size arrives).
+    responsive.notifyResize(width, height)
+
     if uiManager.moduleReady.worldView then worldView.onFramebufferResize(width, height) end
     if uiManager.moduleReady.hud then hud.onFramebufferResize(width, height) end
-    if uiManager.moduleReady.saveBrowser then saveBrowser.onFramebufferResize(width, height) end
-    if uiManager.moduleReady.loadingScreen then loadingScreen.onFramebufferResize(width, height) end
     if uiManager.moduleReady.popupsAndLogs then
         popup.onFramebufferResize(width, height)
         eventLog.onFramebufferResize(width, height)
@@ -314,7 +332,6 @@ function uiManager.onFramebufferResize(width, height)
     -- cm.show) — a no-op when nothing is open, so it's always safe to
     -- forward.
     contextMenu.onFramebufferResize(width, height)
-    if uiManager.moduleReady.pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     if uiManager.moduleReady.buildToolRemoteWarning then
         buildToolRemoteWarning.onFramebufferResize(width, height)
     end
@@ -331,6 +348,12 @@ function uiManager.onFramebufferResize(width, height)
         if hud.page then UI.showPage(hud.page) end
     elseif currentMenu == "save_browser" then
         if saveBrowser.page then UI.showPage(saveBrowser.page) end
+    elseif currentMenu == "loading" then
+        -- #748: loadingScreen.onFramebufferResize already re-shows
+        -- itself (its own createUI() always starts hidden); this
+        -- branch just keeps the dispatcher's coverage consistent with
+        -- every other currentMenu value.
+        if loadingScreen.page then UI.showPage(loadingScreen.page) end
     elseif currentMenu == "test_arena_view" then
         if testArena.page then UI.showPage(testArena.page) end
     end

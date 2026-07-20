@@ -25,9 +25,10 @@
 -- edits through the add/remove/save API. Escape and Grave are engine-
 -- reserved and the API refuses them, so they can never be captured here.
 
-local label  = require("scripts.ui.label")
-local button = require("scripts.ui.button")
-local panel  = require("scripts.ui.panel")
+local label      = require("scripts.ui.label")
+local button     = require("scripts.ui.button")
+local panel      = require("scripts.ui.panel")
+local responsive = require("scripts.ui.responsive")
 
 local inputTab = {}
 
@@ -463,7 +464,45 @@ function inputTab.create(params)
     -- Buttons begin after a fixed label column.
     local labelColW = math.floor(cw * 0.42)
     local buttonsX  = cx + labelColW
-    local gap       = math.floor(8 * uiscale)
+
+    -- #748 round 6: each key/plus button's fixed base width
+    -- (KEY_BTN_W=96/PLUS_BTN_W=40, scaled by uiscale) alone can exceed
+    -- the button column's available width at a narrow content area and
+    -- high uiscale (the supported 800x2160@4x combination) — even a
+    -- SINGLE bound key overflows before the row's actual key count is
+    -- considered. Compute ONE effective, LOCAL uiscale for every key/
+    -- plus button in this tab — never the stored scale — fit against
+    -- the WORST-CASE row (the action with the most currently-bound
+    -- keys), applied uniformly so no row jumps size relative to another
+    -- (mirrors create_world/bottom_buttons.lua's widest-row technique).
+    local buttonAreaW = cw - labelColW
+    local gapNatural = math.floor(8 * uiscale)
+    local maxButtonCount = 1
+    for _, def in ipairs(inputTab.actions) do
+        local n = #(binds[def.action] or {}) + 1  -- +1 for the "+" button
+        if n > maxButtonCount then maxButtonCount = n end
+    end
+    local naturalRowWidth = (maxButtonCount - 1) * (KEY_BTN_W * uiscale + gapNatural)
+        + PLUS_BTN_W * uiscale
+    local keyBtnUiscale = responsive.fitScale(naturalRowWidth, buttonAreaW, uiscale)
+    local gap = math.floor(8 * keyBtnUiscale)
+
+    -- #748 round 9: reserving labelColW doesn't help if the LABEL
+    -- itself still renders at the tab's full uiscale — a long action
+    -- name ("Rotate Counter-Clockwise") at 4x can be far wider than
+    -- even labelColW, rendering over the key/plus buttons regardless
+    -- of how little room those need. Compute ONE effective, LOCAL
+    -- uiscale for every row label in this tab from whichever action
+    -- name is widest, fit against the SAME reserved label column
+    -- (mirrors graphics_tab.lua/create_world's settings_tab.lua
+    -- identical labelUiscale fix).
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, def in ipairs(inputTab.actions) do
+        local w = engine.getTextWidth(font, def.label, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(naturalLabelWidth, labelColW, uiscale)
 
     local rows = {}
 
@@ -479,7 +518,7 @@ function inputTab.create(params)
             fontSize = base.fontSize,
             color    = {1.0, 1.0, 1.0, 1.0},
             page     = page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
         }))
         local lblHandle = label.getElementHandle(lblId)
         UI.addToPage(page, lblHandle, cx, rowY0 + s.fontSize)
@@ -495,7 +534,7 @@ function inputTab.create(params)
                 name       = "keybind_" .. action .. "_" .. k,
                 text       = k,
                 width      = KEY_BTN_W, height = BTN_H, fontSize = BTN_FONT,
-                uiscale    = uiscale,
+                uiscale    = keyBtnUiscale,
                 page       = page,
                 font       = font,
                 textureSet = inputTab.ctx.buttonTexSet,
@@ -516,7 +555,7 @@ function inputTab.create(params)
             name       = "keybind_" .. action .. "_add",
             text       = "+",
             width      = PLUS_BTN_W, height = BTN_H, fontSize = BTN_FONT,
-            uiscale    = uiscale,
+            uiscale    = keyBtnUiscale,
             page       = page,
             font       = font,
             textureSet = inputTab.ctx.buttonTexSet,

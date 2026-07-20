@@ -723,6 +723,59 @@ function randbox.getSize(id)
     return rb.width, rb.height
 end
 
+function randbox.getCursor(id)
+    local rb = randboxes[id]
+    if not rb then return 0 end
+    return UI.getCursor(rb.boxId) or 0
+end
+
+function randbox.setCursor(id, pos)
+    local rb = randboxes[id]
+    if not rb then return end
+    UI.setCursor(rb.boxId, pos)
+    randbox.updateDisplay(id)
+end
+
+-- #748 round 6: mirrors textbox.snapshotPage/restoreAll exactly — a
+-- resize rebuild must preserve an in-progress (unsubmitted) edit,
+-- cursor, and keyboard focus for World Name/Seed too, not just plain
+-- textboxes. setValue's onChange fire is harmless here: it re-sets
+-- `pending` to the same value it should already hold.
+function randbox.snapshotPage(page)
+    local snap = {}
+    for id, rb in pairs(randboxes) do
+        if rb.page == page then
+            snap[rb.name] = {
+                text = randbox.getValue(id),
+                cursor = randbox.getCursor(id),
+                focused = rb.focused,
+            }
+        end
+    end
+    return snap
+end
+
+function randbox.restoreAll(snap)
+    if not snap then return end
+
+    local focusedId = nil
+    for id, rb in pairs(randboxes) do
+        local saved = snap[rb.name]
+        if saved then
+            randbox.setValue(id, saved.text)
+            if saved.focused then focusedId = id end
+        end
+    end
+
+    if focusedId then
+        randbox.focus(focusedId)
+        local savedCursor = snap[randboxes[focusedId].name].cursor
+        if savedCursor then
+            randbox.setCursor(focusedId, savedCursor)
+        end
+    end
+end
+
 function randbox.getElementHandle(id)
     local rb = randboxes[id]
     if not rb then return nil end

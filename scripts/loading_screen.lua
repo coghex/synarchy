@@ -9,10 +9,11 @@
 --
 -- Phase 1 maps to 0%–50% of the bar (synchronous setup work).
 -- Phase 2 maps to 50%–100% of the bar (chunk generation).
-local scale = require("scripts.ui.scale")
-local panel = require("scripts.ui.panel")
-local label = require("scripts.ui.label")
-local bar   = require("scripts.ui.bar")
+local scale      = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
+local panel      = require("scripts.ui.panel")
+local label      = require("scripts.ui.label")
+local bar        = require("scripts.ui.bar")
 
 local loadingScreen = {}
 
@@ -166,6 +167,16 @@ function loadingScreen.createUI()
 
     local uiscale = scale.get()
     local s = scale.applyAllWith(loadingScreen.baseSizes, uiscale)
+
+    -- #748: compact fallback — a narrow, high-scale supported
+    -- combination (e.g. 800x2160@4x, inside the 1601-2160@1.5-4x band)
+    -- can scale the bar wider than the framebuffer itself (barWidth=500
+    -- base * 4 = 2000 on an 800px-wide window), centering it off-frame.
+    -- Shrinks this screen's own effective scale, never the stored UI
+    -- scale, so the bar/status/percent stack stays in-frame.
+    local maxBarWidth = math.floor(loadingScreen.fbW * 0.9)
+    uiscale = responsive.fitScale(s.barWidth, maxBarWidth, uiscale)
+    s = scale.applyAllWith(loadingScreen.baseSizes, uiscale)
 
     loadingScreen.page = UI.newPage("loading_screen", "modal")
 
@@ -458,7 +469,18 @@ function loadingScreen.onFramebufferResize(width, height)
     loadingScreen.fbW = width
     loadingScreen.fbH = height
     if loadingScreen.uiCreated and loadingScreen.page then
+        -- #748: createUI() always deletes and recreates the page (via
+        -- UI.newPage, which starts hidden), so a resize while the
+        -- loading screen is genuinely on-screen used to blank it until
+        -- the next phase transition. Mirrors pause_menu's own
+        -- self-contained re-show (loadingScreen.phase is this screen's
+        -- own visibility proxy — "loading" while shown, "idle"/"done"
+        -- once hidden).
+        local wasVisible = loadingScreen.phase == "loading"
         loadingScreen.createUI()
+        if wasVisible and loadingScreen.page then
+            UI.showPage(loadingScreen.page)
+        end
     end
 end
 

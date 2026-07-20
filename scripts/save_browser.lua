@@ -1,9 +1,10 @@
 -- Save Browser - lists saved worlds using the list widget
-local scale  = require("scripts.ui.scale")
-local panel  = require("scripts.ui.panel")
-local label  = require("scripts.ui.label")
-local button = require("scripts.ui.button")
-local list   = require("scripts.ui.list")
+local scale      = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
+local panel      = require("scripts.ui.panel")
+local label      = require("scripts.ui.label")
+local button     = require("scripts.ui.button")
+local list       = require("scripts.ui.list")
 
 local saveBrowser = {}
 
@@ -122,6 +123,38 @@ function saveBrowser.createUI()
     local uiscale = scale.get()
     local s = scale.applyAllWith(saveBrowser.baseSizes, uiscale)
 
+    -- #748: compact fallback — at a high UI scale and a short/narrow
+    -- framebuffer (e.g. the supported 800x2160@4x combination), the
+    -- FIXED chrome alone can exceed the size cap in either dimension
+    -- before any list rows are even considered, which the
+    -- row-count-from-height fit below can't fix on its own (it only
+    -- ever reduces rows to a minimum of 1, and doesn't touch width at
+    -- all). Shrinks this screen's own effective scale, never the
+    -- stored UI scale, against BOTH budgets — the panel's own WIDTH is
+    -- a fixed 0.6 fraction of the framebuffer that does NOT scale with
+    -- uiscale at all, while its side padding does, so a narrow
+    -- framebuffer at a high scale can drive bounds.width to zero or
+    -- negative independently of the height fit — taking whichever
+    -- constraint is tighter so Back and the list stay reachable and
+    -- in-frame.
+    local maxPanelHeight = math.floor(saveBrowser.fbH * 0.85)
+    local naturalFixedOverhead = (saveBrowser.baseSizes.panelPadY * 2
+        + saveBrowser.baseSizes.titleFontSize
+        + saveBrowser.baseSizes.btnSpacing * 2
+        + saveBrowser.baseSizes.itemHeight
+        + saveBrowser.baseSizes.btnHeight) * uiscale
+    local scaleForHeight = responsive.fitScale(naturalFixedOverhead, maxPanelHeight, uiscale)
+
+    local panelWidthNatural = math.floor(saveBrowser.fbW * 0.6)
+    local CONTENT_WIDTH_MIN = 200
+    local naturalHorizontalOverhead = saveBrowser.baseSizes.panelPadX * 2 * uiscale
+    local maxHorizontalOverhead = panelWidthNatural - CONTENT_WIDTH_MIN
+    local scaleForWidth = responsive.fitScale(
+        naturalHorizontalOverhead, maxHorizontalOverhead, uiscale)
+
+    uiscale = math.min(scaleForHeight, scaleForWidth)
+    s = scale.applyAllWith(saveBrowser.baseSizes, uiscale)
+
     saveBrowser.page = UI.newPage("save_browser", "modal")
 
     local saves = saveBrowser.saves
@@ -139,8 +172,18 @@ function saveBrowser.createUI()
         })
     end
 
-    -- Panel sizing
-    local visibleCount = math.min(#listItems, saveBrowser.baseSizes.maxVisible)
+    -- Panel sizing (#748: derive the visible row count from the
+    -- available height FIRST, rather than clamping the panel's outer
+    -- height after sizing it for baseSizes.maxVisible rows unconditionally
+    -- — the old order left the list + Back button overflowing whatever
+    -- got clamped away, e.g. Back landing below the framebuffer at a
+    -- long save list on an 800x600 window).
+    local fixedOverhead = s.panelPadY * 2 + s.titleFontSize
+                        + s.btnSpacing * 2 + s.btnHeight
+    local heightVisibleCount = math.max(1,
+        math.floor((maxPanelHeight - fixedOverhead) / s.itemHeight))
+    local visibleCount = math.min(#listItems, saveBrowser.baseSizes.maxVisible,
+        heightVisibleCount)
     if visibleCount < 1 then visibleCount = 1 end
     local listHeight = visibleCount * s.itemHeight
 
@@ -148,8 +191,7 @@ function saveBrowser.createUI()
     local contentHeight = s.titleFontSize + s.btnSpacing
                         + listHeight + s.btnSpacing
                         + s.btnHeight
-    local panelHeight = s.panelPadY * 2 + contentHeight
-    panelHeight = math.min(panelHeight, math.floor(saveBrowser.fbH * 0.85))
+    local panelHeight = math.min(s.panelPadY * 2 + contentHeight, maxPanelHeight)
 
     local panelX = (saveBrowser.fbW - panelWidth) / 2
     local panelY = (saveBrowser.fbH - panelHeight) / 2
@@ -211,7 +253,11 @@ function saveBrowser.createUI()
             itemHeight     = saveBrowser.baseSizes.itemHeight,
             textPadding    = saveBrowser.baseSizes.textPadding,
             scrollButtonSize = saveBrowser.baseSizes.scrollBtnSize,
-            maxVisible     = saveBrowser.baseSizes.maxVisible,
+            -- #748: the height-constrained count, not the raw
+            -- baseSizes.maxVisible — otherwise the list widget could
+            -- render more rows than the panel/Back-button math budgeted
+            -- space for.
+            maxVisible     = visibleCount,
             uiscale        = uiscale,
             zIndex         = baseZ + 2,
             items          = listItems,
@@ -304,7 +350,39 @@ function saveBrowser.onFramebufferResize(width, height)
     saveBrowser.fbW = width
     saveBrowser.fbH = height
     if saveBrowser.uiCreated and saveBrowser.page then
+        -- #748: preserve the selected save across a mere geometry
+        -- rebuild — list.new() always starts with no selection, so
+        -- without this a resize would silently deselect whatever the
+        -- player had picked.
+        local prevValue = saveBrowser.listId
+            and list.getSelectedValue(saveBrowser.listId)
+
+        -- #748 round 5: preserve keyboard CONTROL focus (#745) too,
+        -- mirroring settings_menu/create_world_menu/main_menu/pause_menu.
+        -- createUI() always deletes+recreates a fresh page (unlike those
+        -- other screens' teardown-only rebuild), so the restore must
+        -- wait until the fresh page is genuinely re-shown.
+        local wasVisible = UI.isPageVisible(saveBrowser.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+
         saveBrowser.createUI()
+
+        if wasVisible and saveBrowser.page then
+            UI.showPage(saveBrowser.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
+
+        if prevValue and saveBrowser.listId then
+            for idx, save in ipairs(saveBrowser.saves) do
+                if save.name == prevValue then
+                    -- setSelectedIndex, not selectItem: restoring the
+                    -- highlight must not re-fire onSelect (which loads
+                    -- the save and transitions the whole game).
+                    list.setSelectedIndex(saveBrowser.listId, idx)
+                    break
+                end
+            end
+        end
     end
 end
 

@@ -4,8 +4,9 @@
 -- Row order:
 --   1. Days / Month      (textbox NUMBER)
 --   2. Months / Year     (textbox NUMBER)
-local label   = require("scripts.ui.label")
-local textbox = require("scripts.ui.textbox")
+local label      = require("scripts.ui.label")
+local textbox    = require("scripts.ui.textbox")
+local responsive = require("scripts.ui.responsive")
 
 local generalTab = {}
 
@@ -17,17 +18,18 @@ generalTab.monthsPerYearId = nil
 -----------------------------------------------------------
 
 function generalTab.create(params)
-    local page     = params.page
-    local font     = params.font
-    local base     = params.baseSizes
-    local uiscale  = params.uiscale
-    local s        = params.s
-    local cx       = params.contentX
-    local cy       = params.contentY
-    local cw       = params.contentW
-    local zContent = params.zContent
-    local zWidgets = params.zWidgets
-    local pending  = params.pending
+    local page      = params.page
+    local font      = params.font
+    local base      = params.baseSizes
+    local uiscale   = params.uiscale
+    local s         = params.s
+    local cx        = params.contentX
+    local cy        = params.contentY
+    local cw        = params.contentW
+    local zContent  = params.zContent
+    local zWidgets  = params.zWidgets
+    local pending   = params.pending
+    local container = params.container
 
     local elements = {}
     local rowIndex = 0
@@ -35,6 +37,20 @@ function generalTab.create(params)
     local function rowY(n)
         return cy + s.rowSpacing * n
     end
+
+    -- #748 round 7: see settings_tab.lua's identical comment — the
+    -- control's shrink (via computeContentScaleFactor) already
+    -- reserves a label column, but the label itself still needs its
+    -- own effective uiscale to actually fit inside it.
+    local LABEL_COLUMN_FRACTION = 0.35
+    local labelFontSizePx = math.floor(base.fontSize * uiscale)
+    local naturalLabelWidth = 0
+    for _, t in ipairs({ "Days / Month", "Months / Year" }) do
+        local w = engine.getTextWidth(font, t, labelFontSizePx)
+        if w > naturalLabelWidth then naturalLabelWidth = w end
+    end
+    local labelUiscale = responsive.fitScale(
+        naturalLabelWidth, cw * LABEL_COLUMN_FRACTION, uiscale)
 
     local function addRow(labelText, name, pendingKey, textType, widgetIdSetter, tooltip)
         local lblId = params.trackLabel(label.new({
@@ -44,11 +60,11 @@ function generalTab.create(params)
             fontSize = base.fontSize,
             color    = {1.0, 1.0, 1.0, 1.0},
             page     = page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
             tooltip  = tooltip,
         }))
         local lblHandle = label.getElementHandle(lblId)
-        UI.addToPage(page, lblHandle, cx, rowY(rowIndex) + s.fontSize)
+        UI.addChild(container, lblHandle, cx, rowY(rowIndex) + s.fontSize)
         UI.setZIndex(lblHandle, zContent)
         table.insert(elements, { type = "label", handle = lblHandle })
 
@@ -58,6 +74,7 @@ function generalTab.create(params)
             width    = base.textboxWidth,
             height   = base.textboxHeight,
             page     = page,
+            parent   = container,
             x        = cx + cw - tbW,
             y        = rowY(rowIndex),
             uiscale  = uiscale,
@@ -78,7 +95,7 @@ function generalTab.create(params)
     addRow("Months / Year",  "months_per_year",  "monthsPerYear",  textbox.Type.NUMBER,
         function(id) generalTab.monthsPerYearId = id end)
 
-    return elements
+    return elements, 2
 end
 
 -----------------------------------------------------------

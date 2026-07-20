@@ -3,6 +3,7 @@
 -- scroll infrastructure. Delegates tab content to tab modules and
 -- settings state to data module.
 local scale          = require("scripts.ui.scale")
+local responsive     = require("scripts.ui.responsive")
 local panel          = require("scripts.ui.panel")
 local label          = require("scripts.ui.label")
 local textbox        = require("scripts.ui.textbox")
@@ -16,6 +17,7 @@ local data           = require("scripts.settings.data")
 local graphicsTab      = require("scripts.settings.graphics_tab")
 local notificationsTab = require("scripts.settings.notifications_tab")
 local inputTab         = require("scripts.settings.input_tab")
+local shell            = require("scripts.shell")
 
 local settingsMenu = {}
 
@@ -145,6 +147,13 @@ end
 
 function settingsMenu.onDefaults()
     engine.logInfo("Loading defaults...")
+    -- #748 round 11: data.loadDefaults() unconditionally calls
+    -- engine.setUIScale (with auto 4K/1440p/1080p detection) — capture
+    -- the scale beforehand so a real change can fan out the same way
+    -- onApply/onSave do below, or every other already-initialized
+    -- screen (main menu, create-world, ...) and the shell debug
+    -- console keep stale geometry until another resize/reopen.
+    local uiScaleBefore = data.current.uiScale
     data.loadDefaults()
     -- Keybinds are write-through (no pending state), so the global
     -- Defaults reset restores factory bindings immediately and persists
@@ -156,6 +165,10 @@ function settingsMenu.onDefaults()
     end
     settingsMenu.createUI()
     if settingsMenu.page then UI.showPage(settingsMenu.page) end
+    if data.current.uiScale ~= uiScaleBefore then
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+    end
 end
 
 -----------------------------------------------------------
@@ -306,9 +319,43 @@ end
 
 -----------------------------------------------------------
 -- Full UI rebuild
+--
+-- opts.preserveState (#748): true for a mere geometry/scale-notification
+-- rebuild (window resize, or another screen picking up a UI-scale change
+-- someone else applied) as opposed to a semantic re-entry (init/show/
+-- Defaults) — preserves unapplied pending settings and each tab's
+-- clamped scroll offset instead of discarding them. Active tab is
+-- always preserved (createUI never touches settingsMenu.activeTab)
+-- regardless of opts.
 -----------------------------------------------------------
 
-function settingsMenu.createUI()
+function settingsMenu.createUI(opts)
+    opts = opts or {}
+    local preserveState = opts.preserveState or false
+
+    local savedScroll = {}
+    local textboxSnap = nil
+    -- #748 round 7: dropdowns (Resolution/Window Mode/MSAA/Texture
+    -- Filter) are ALSO editable text inputs — dropdown.destroy
+    -- unfocuses and resets the raw display text back to the selected
+    -- option, silently discarding an in-progress (unsubmitted) filter
+    -- edit exactly like an unfixed textbox would.
+    local dropdownSnap = nil
+    if preserveState then
+        for key, ts in pairs(settingsMenu.tabScroll) do
+            savedScroll[key] = ts.scrollOffset
+        end
+        -- Snapshot every textbox's raw (possibly unsubmitted) text,
+        -- cursor, and focus BEFORE destroyOwned() tears them down —
+        -- scoped to this page so a resize never captures another
+        -- screen's still-live textboxes. (Keyboard CONTROL focus,
+        -- #745, is captured/restored by the caller instead — see
+        -- onFramebufferResize — since restoring it needs the page
+        -- already visible, which createUI() itself never makes it.)
+        textboxSnap = textbox.snapshotPage(settingsMenu.page)
+        dropdownSnap = dropdown.snapshotPage(settingsMenu.page)
+    end
+
     -- Tear down owned elements only (not global destroyAll)
     settingsMenu.destroyOwned()
 
@@ -328,7 +375,9 @@ function settingsMenu.createUI()
         UI.deletePage(settingsMenu.page)
     end
 
-    data.resetPending()
+    if not preserveState then
+        data.resetPending()
+    end
 
     local uiscale = data.current.uiScale
     local s = scale.applyAllWith(settingsMenu.baseSizes, uiscale)
@@ -370,6 +419,19 @@ function settingsMenu.createUI()
     settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         bounds, s, uiscale)
 
+    if preserveState then
+        for key, ts in pairs(settingsMenu.tabScroll) do
+            local maxOffset = math.max(0, ts.totalRows - ts.maxVisibleRows)
+            local restored = math.max(0, math.min(savedScroll[key] or 0, maxOffset))
+            settingsMenu.onTabScroll(key, restored)
+        end
+        -- Restores raw text + cursor + focus onto the freshly rebuilt
+        -- textboxes (matched by name); a no-op for any name that no
+        -- longer has a live textbox (e.g. a hidden tab's control).
+        textbox.restoreAll(textboxSnap)
+        dropdown.restoreAll(dropdownSnap)
+    end
+
     settingsMenu.showTab(settingsMenu.activeTab)
     settingsMenu.uiCreated = true
 end
@@ -406,12 +468,42 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
     local tabFrameHeight = panelHeight - bounds.y - s.fontSize
         - math.floor(20 * uiscale) - s.tabHeight - s.btnHeight
         - math.floor(40 * uiscale) - bounds.y
+    -- #748 round 13: at an OUT-OF-ENVELOPE combination (the issue's own
+    -- 800x600@4x exemplar), the fixed panel height alone can be smaller
+    -- than the SUM of the scaled chrome subtracted above (title, tab
+    -- row, bottom button row, gaps) — driving tabFrameHeight negative,
+    -- which tabbar.new passes straight to UI.newBox as a real (invalid)
+    -- box height. This is best-effort territory (never crashing/
+    -- invalid, not "looks good" — see the envelope contract), so a
+    -- simple floor is the right fix here, not a full vertical reflow.
+    tabFrameHeight = math.max(20, tabFrameHeight)
 
     -- Build tabs array from tabDefs
     local tabList = {}
     for _, def in ipairs(tabDefs) do
         table.insert(tabList, { name = def.name, key = def.key })
     end
+
+    -- #748 round 5: the tab bar's own FRAME is correctly sized to
+    -- bounds.width (the panel's content bounds after scaled padding —
+    -- as narrow as ~240px at the supported 800x2160@4x combination),
+    -- but tabbar.lua lays each tab out at a width driven purely by its
+    -- OWN label text + scaled textPadding, left-to-right with no fit/
+    -- clip/scroll of its own — unrelated to bounds.width, and able to
+    -- overflow the framebuffer before any tab content is considered.
+    -- Shrink one effective, LOCAL uiscale for the tab bar only (never
+    -- the stored/configured scale, and never `s`/the rest of this
+    -- screen's layout), fit against bounds.width, mirroring
+    -- create_world_menu's identical tab-bar treatment for its own tabs.
+    local tabFontSize = math.floor(settingsMenu.baseSizes.tabFontSize * uiscale)
+    local textPadding = math.floor(10 * uiscale)
+    local naturalTabWidth = 0
+    for _, def in ipairs(tabDefs) do
+        naturalTabWidth = naturalTabWidth
+            + engine.getTextWidth(settingsMenu.menuFont, def.name, tabFontSize)
+            + textPadding * 2
+    end
+    local tabBarUiscale = responsive.fitScale(naturalTabWidth, bounds.width, uiscale)
 
     settingsMenu.tabBarId = settingsMenu.trackTabbar(tabbar.new({
         name              = "settings_tabs",
@@ -423,7 +515,7 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
         fontSize          = settingsMenu.baseSizes.tabFontSize,
         tabHeight         = settingsMenu.baseSizes.tabHeight,
         frameHeight       = tabFrameHeight,
-        uiscale           = uiscale,
+        uiscale           = tabBarUiscale,
         zIndex            = Z_TAB_FRAME,
         textColor         = {0.0, 0.0, 0.0, 1.0},
         selectedTextColor = {1.0, 1.0, 1.0, 1.0},
@@ -451,11 +543,22 @@ end
 -- Build the param table a tab's create() receives. Shared by the full
 -- build (createAllTabs) and the Input-tab-only refresh so both stay in
 -- sync. `ts` must already have contentX/contentY/contentW set.
-function settingsMenu.tabCreateParams(uiscale, s, ts)
+--
+-- #748: `contentBase` (falls back to settingsMenu.baseSizes when no
+-- shrink is needed) shrinks the tab-content-relevant width fields
+-- (textboxWidth/sliderWidth/checkboxSize) uniformly by one factor when
+-- the tab content area is too narrow for them — e.g. the supported
+-- 800x2160@4x combination, where the panel's own side padding alone
+-- leaves only ~80px of tab content width, far less than a slider's
+-- unshrunk 200px base width at 4x. Mirrors create_world_menu's
+-- identical technique for its own left-panel controls: a shallow-
+-- copied baseSizes table, so the tab modules themselves (which just
+-- read whatever `params.baseSizes` they're handed) need no changes.
+function settingsMenu.tabCreateParams(uiscale, s, ts, contentBase)
     return {
         page            = settingsMenu.page,
         font            = settingsMenu.menuFont,
-        baseSizes       = settingsMenu.baseSizes,
+        baseSizes       = contentBase or settingsMenu.baseSizes,
         uiscale         = uiscale,
         s               = s,
         contentX        = ts.contentX,
@@ -493,6 +596,29 @@ function settingsMenu.createAllTabs(s, uiscale)
 
     local maxVisibleRows = math.max(1, math.floor(contentH / s.rowSpacing))
 
+    -- #748: see tabCreateParams' comment above.
+    -- #748 round 7: target contentW*(1-LABEL_COLUMN_FRACTION), not the
+    -- near-full contentW*0.9 — the row's label sits at the row's own
+    -- left edge while the shrunk control right-aligns at
+    -- contentX+contentW-controlWidth; letting the control's own fit
+    -- consume nearly the whole row left it landing back at ~contentX,
+    -- overlapping the label (mirrors create_world_menu's identical
+    -- reservation for its own randbox/textbox rows).
+    local LABEL_COLUMN_FRACTION = 0.35
+    local base = settingsMenu.baseSizes
+    local widestControlBase = math.max(base.sliderWidth or 200, base.textboxWidth)
+    local naturalWidestControl = widestControlBase * uiscale
+    local maxControlWidth = contentW * (1 - LABEL_COLUMN_FRACTION)
+    local contentBase = base
+    if naturalWidestControl > 0 and naturalWidestControl > maxControlWidth then
+        local factor = maxControlWidth / naturalWidestControl
+        contentBase = {}
+        for k, v in pairs(base) do contentBase[k] = v end
+        contentBase.textboxWidth = base.textboxWidth * factor
+        contentBase.sliderWidth = (base.sliderWidth or 200) * factor
+        contentBase.checkboxSize = base.checkboxSize * factor
+    end
+
     for _, def in ipairs(tabDefs) do
         local ts      = settingsMenu.tabScroll[def.key]
         ts.contentX   = contentX
@@ -502,7 +628,7 @@ function settingsMenu.createAllTabs(s, uiscale)
         ts.scrollOffset = 0
 
         -- Call the tab's create function
-        ts.rowHandles = def.create(settingsMenu.tabCreateParams(uiscale, s, ts))
+        ts.rowHandles = def.create(settingsMenu.tabCreateParams(uiscale, s, ts, contentBase))
 
         -- Scrollbar if needed
         local totalRows = #ts.rowHandles
@@ -520,12 +646,34 @@ end
 
 function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
                                      bounds, s, uiscale)
+    -- #748: shrink all four bottom-action buttons uniformly if their
+    -- natural width would overflow the panel's content area (e.g. the
+    -- supported envelope's 800px-wide minimum, where the unshrunk row
+    -- used to push Back/Save off the panel/framebuffer) — mirrors
+    -- create_world/bottom_buttons.lua's identical technique.
+    local base = settingsMenu.baseSizes
+    local naturalWidth = base.btnWidth * 4 * uiscale + base.btnSpacing * 3 * uiscale
+    local factor = 1.0
+    if naturalWidth > 0 and naturalWidth > bounds.width then
+        factor = bounds.width / naturalWidth
+    end
+    local btnW = math.floor(base.btnWidth * factor)
+    local spacing = math.floor(s.btnSpacing * factor)
+    -- #748 round 6: button.new scales `fontSize` by `uiscale` internally
+    -- exactly like it scales `width` — shrinking only btnW while leaving
+    -- fontSize at the unshrunk base.fontSize left the label rendering at
+    -- full size inside a shrunk box (overflow/overlap at the supported
+    -- 800x2160@4x combination). Apply the SAME `factor` to the font size
+    -- base passed in, so button.new's own `* uiscale` multiplication
+    -- ends up shrinking both by the identical ratio.
+    local btnFontSize = base.fontSize * factor
+
     settingsMenu.backButtonId = settingsMenu.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -534,7 +682,10 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         textColor  = {0.0, 0.0, 0.0, 1.0},
         zIndex     = Z_BUTTONS,
         onClick = function(id, name)
-            data.revert()
+            -- #748 round 11: routes through onBack (not a bare
+            -- data.revert() call here) so the scale-change fan-out
+            -- lives in exactly one place.
+            settingsMenu.onBack()
             if settingsMenu.showMenuCallback then
                 settingsMenu.showMenuCallback("back")
             end
@@ -544,9 +695,9 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     settingsMenu.defaultsButtonId = settingsMenu.trackButton(button.new({
         name       = "defaults_btn",
         text       = "Defaults",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -562,9 +713,9 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     settingsMenu.applyButtonId = settingsMenu.trackButton(button.new({
         name       = "apply_btn",
         text       = "Apply",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -580,9 +731,9 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     settingsMenu.saveButtonId = settingsMenu.trackButton(button.new({
         name       = "save_btn",
         text       = "Save",
-        width      = settingsMenu.baseSizes.btnWidth,
+        width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,
-        fontSize   = settingsMenu.baseSizes.fontSize,
+        fontSize   = btnFontSize,
         uiscale    = uiscale,
         page       = settingsMenu.page,
         font       = settingsMenu.menuFont,
@@ -599,8 +750,8 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     local defaultsW, _   = button.getSize(settingsMenu.defaultsButtonId)
     local applyW, _      = button.getSize(settingsMenu.applyButtonId)
     local saveW, _       = button.getSize(settingsMenu.saveButtonId)
-    local totalBtnW      = backW + s.btnSpacing + defaultsW + s.btnSpacing 
-                           + applyW + s.btnSpacing + saveW
+    local totalBtnW      = backW + spacing + defaultsW + spacing
+                           + applyW + spacing + saveW
     local btnStartX      = panelX + bounds.x + (bounds.width - totalBtnW) / 2
     local bottomPad      = math.floor(100 * uiscale)
     local btnY           = panelY + panelHeight - bottomPad
@@ -612,12 +763,12 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     local saveH_   = button.getElementHandle(settingsMenu.saveButtonId)
 
     UI.setPosition(backH_,     btnStartX, btnY)
-    UI.setPosition(defaultsH_, btnStartX + backW + s.btnSpacing, btnY)
-    UI.setPosition(applyH_,    btnStartX + backW + s.btnSpacing 
-                               + defaultsW + s.btnSpacing, btnY)
-    UI.setPosition(saveH_,     btnStartX + backW + s.btnSpacing 
-                               + defaultsW + s.btnSpacing 
-                               + applyW + s.btnSpacing, btnY)
+    UI.setPosition(defaultsH_, btnStartX + backW + spacing, btnY)
+    UI.setPosition(applyH_,    btnStartX + backW + spacing
+                               + defaultsW + spacing, btnY)
+    UI.setPosition(saveH_,     btnStartX + backW + spacing
+                               + defaultsW + spacing
+                               + applyW + spacing, btnY)
     
     UI.setZIndex(backH_,     Z_BUTTONS)
     UI.setZIndex(defaultsH_, Z_BUTTONS)
@@ -782,13 +933,31 @@ end
 -- Apply / Save / Back
 -----------------------------------------------------------
 
+-- #748: a scale change fans out through the shared notification
+-- contract instead of settings_menu rebuilding only itself — every
+-- other already-initialized screen (main menu, create-world, ...)
+-- picks up the new scale immediately too, not just on its next own
+-- show(). Reuses the current fbW/fbH (only the scale changed).
 function settingsMenu.onApply()
     engine.logInfo("Applying settings...")
     local vals = graphicsTab.getWidgetValues()
     local result = data.apply(vals)
     if result.scaleChanged then
-        settingsMenu.createUI()
-        settingsMenu.show()
+        -- notifyResize -> settingsMenu.onFramebufferResize already
+        -- re-shows itself (and restores control focus) when it was
+        -- visible, which it always is here (this IS the visible
+        -- settings screen the user just clicked Apply on).
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        -- #748 round 7: the shell debug console is NOT registered
+        -- through responsive.register/notifyResize — the engine
+        -- already broadcasts a REAL framebuffer resize straight to
+        -- shell.lua directly (Engine.Scripting.Lua.Thread.Dispatch),
+        -- so routing it through the shared fan-out too would rebuild
+        -- an already-open shell TWICE per real resize. This scale-only
+        -- notify (same fbW/fbH, no resize event at all) is the one
+        -- case shell's own direct broadcast never covers, so call its
+        -- existing onFramebufferResize directly here instead.
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 
@@ -797,13 +966,26 @@ function settingsMenu.onSave()
     local vals = graphicsTab.getWidgetValues()
     local result = data.save(vals)
     if result.scaleChanged then
-        settingsMenu.createUI()
-        settingsMenu.show()
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 
 function settingsMenu.onBack()
+    -- #748 round 11: data.revert() can ALSO change the live UI scale
+    -- (reverting an applied-but-unsaved change back to the on-disk
+    -- config) — fan it out the same way onApply/onSave do, or every
+    -- other already-initialized screen and the shell debug console
+    -- keep stale geometry. Settings itself is about to navigate away
+    -- (the caller shows a different menu right after), so only the
+    -- OTHER screens/shell matter here — but notifyResize is harmless
+    -- to call regardless of what's currently shown.
+    local uiScaleBefore = data.current.uiScale
     data.revert()
+    if data.current.uiScale ~= uiScaleBefore then
+        responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
+        shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+    end
 end
 
 -----------------------------------------------------------
@@ -831,7 +1013,25 @@ end
 function settingsMenu.onFramebufferResize(width, height)
     settingsMenu.fbW = width
     settingsMenu.fbH = height
-    if settingsMenu.uiCreated then settingsMenu.createUI() end
+    if settingsMenu.uiCreated then
+        -- #748: keyboard CONTROL focus (#745) can only be restored
+        -- once the rebuilt page is genuinely visible again — the
+        -- engine's UI.getVisibleElements() (which restoreControlFocusName
+        -- searches) only ever considers visible pages, and createUI()
+        -- itself never shows the fresh page it builds (some callers,
+        -- e.g. init(), deliberately want it built-but-hidden). Guarding
+        -- the re-show on wasVisible (queried BEFORE teardown) mirrors
+        -- pause_menu's own visible-only rebuild — a currently-hidden
+        -- settings_menu (kept alive lazily in the background) must not
+        -- suddenly pop up over whichever menu the resize actually hit.
+        local wasVisible = settingsMenu.page and UI.isPageVisible(settingsMenu.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+        settingsMenu.createUI({ preserveState = true })
+        if wasVisible and settingsMenu.page then
+            UI.showPage(settingsMenu.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
+    end
 end
 
 -----------------------------------------------------------

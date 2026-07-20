@@ -528,6 +528,362 @@ there is horizontal. Tooltip placement (`UI.Tooltip.Layout`/`Render`)
 deliberately stays on its own separate cursor-relative clamp,
 untouched by this change.
 
+**Responsive menu lifecycle** (#748, Phase C child C2, see
+`Test.Headless.UI.ResponsiveMenus`): `scripts/ui/responsive.lua` is the
+one shared framebuffer/UI-scale notification contract every C2 menu
+screen (main, pause, settings, create-world, save browser, loading)
+adopts, replacing the per-screen copies that used to exist —
+`ui_manager_boot`'s hand-listed `onFramebufferResize` fan-out and
+`settings_menu`'s own scaleChanged-only self-rebuild. Gameplay surfaces
+(HUD/overlays) are C4 and still use their own explicit forwarding in
+`ui_manager_boot.lua`; the contract is ready for C4 to adopt without
+duplicating it.
+
+The supported envelope (`responsive.bands`, inclusive on both ends,
+contiguous, non-overlapping): 600-900px framebuffer height at
+0.5x-1x UI scale; 901-1200 at 0.75x-2x; 1201-1600 at 1x-3x; 1601-2160
+at 1.5x-4x. Formal minimum framebuffer: 800x600 (`responsive.MIN_WIDTH`/
+`MIN_HEIGHT`). `responsive.classify(fbW, fbH, uiscale)` is pure
+introspection only — it never clamps or mutates anything, so an
+out-of-envelope combination (e.g. 800x600@4x, or any resolution below
+900px height driven by loadDefaults' `1x` at 4K, which itself falls
+outside its own 1.5x-4x band) stays fully explorable; screens degrade
+best-effort (no crash, no invalid geometry, fixed actions stay
+reachable) rather than being blocked or having their stored scale
+silently rewritten.
+
+`responsive.register(name, screenModule)` (called once per screen, at
+`ui_manager_boot.lua` load time — safe even before a screen's own
+`init()` ever runs, since every registered screen's
+`onFramebufferResize` only touches its own module fields and no-ops
+its rebuild while `uiCreated` is still false) and
+`responsive.notifyResize(fbW, fbH)` (the fan-out call, using the
+engine's live `engine.getUIScale()`) are the whole contract. It
+0x0-minimize-guards uniformly: a zero/negative dimension is never
+forwarded to a registered screen's own resize handler (never rebuilds
+degenerate geometry), only remembered via
+`responsive.getGeometry(name).pendingRestore`; the next call with a
+real size rebuilds normally, since every screen's own
+`onFramebufferResize` already rebuilds unconditionally off whatever
+real size it's given. Re-invoking `notifyResize` with the SAME
+dimensions (a UI-scale-only change, e.g. Settings Apply/Save) makes
+every already-initialized screen pick up the new scale immediately —
+not just whichever screen the change originated from, which is what
+`settingsMenu.onApply`/`onSave` now do instead of rebuilding only
+themselves.
+
+Settings already followed the fixed-nav/scrollable-content pattern the
+envelope needs (tab bar + bottom action buttons positioned once from
+the panel's own dimensions, tab content virtual-scrolled within a fixed
+frame via per-row show/hide) and create-world's LOG panel already
+scrolled the same way — but create-world's actual TAB content (General/
+Geology/Timeline) had no scroll or clip of its own at all: `showTab`
+only toggled each row's visibility, with every row root-mounted at an
+absolute position, so a tab whose rows exceeded the frame's height
+(General's 5 rows at the formal 800x600@1x minimum, well over its
+~152px frame) rendered rows outside the frame with no way to reach
+them — a real gap review round 5 caught and closed.
+
+create-world's tab content now scrolls via real clipping (#747) instead
+of settings_menu's older manual per-row show/hide: `createUI` builds
+ONE pair per tab key (`"settings"` — General, combining `settings_tab`+
+`general_tab` — `"advanced"` — Geology — and `"timeline"`) via
+`UI.newElement` — a stationary clipping VIEWPORT
+(`UI.setClipChildren(viewport, true)`, `UI.setScrollCapture(viewport,
+true)`, fixed at the tab frame's own bounds) holding a movable
+SCROLL-CONTENT anchor as its one child. Every row widget across
+`settings_tab.lua`/`general_tab.lua`/`advanced_tab.lua`/
+`timeline_tab.lua` is parented to that anchor via each widget's #747
+`parent` support (`label.new`/`randbox.new`/`dropdown.new`/
+`textbox.new` all accept `parent = params.container`, wired straight
+into `UI.addChild` inside the widget itself — the row-authoring code in
+each tab module is otherwise UNCHANGED, since `contentX`/`contentY`
+just become anchor-relative (0,0) instead of page-absolute
+(frameX+pad, frameY+pad)) — a row scrolled outside the viewport is both
+visually clipped AND un-hittable (`UI.Clipping` backs hit-testing too,
+see `UI.Manager.Query.isPointInElement`), so no manual per-row
+show/hide is needed; `createWorldMenu.onTabScroll(key, offset)` just
+moves the anchor's Y (`UI.setPosition(scrollContentId, 0, -offset *
+rowSpacing)`). Each tab module's `.create()` now returns a second value
+(its own fixed row count, e.g. `return elements, 5`) so
+`createWorldMenu` can size each tab's scrollbar
+(`createWorldMenu.createTabScrollbar`) without hand-counting rows at
+the call site. `showTab` still runs its existing per-element
+type-dispatch visibility toggle (closing an open dropdown, clearing
+randbox state) alongside the new per-tab viewport/scrollbar visibility
+toggle — ancestor-hiding alone would visually and hit-test-wise hide a
+row but wouldn't run a widget's own on-hide side effects.
+
+A mere geometry rebuild (window resize, or a scale change forwarded via
+`notifyResize`) must preserve state a semantic re-entry (opening the
+menu fresh, Load Defaults) is allowed to reset.
+`settingsMenu.createUI(opts)` takes `opts.preserveState` — `init`/
+`show`/`onDefaults` omit it (fresh pending + scroll, as before);
+`onFramebufferResize` and the scale-change notify path pass
+`preserveState = true`, which skips `data.resetPending()` (the
+concrete bug this closed — a resize used to silently discard
+unapplied Settings edits) and restores each tab's scroll offset
+clamped to the rebuilt content's new row count. `createWorldMenu`'s
+log scroll offset is likewise clamped-and-restored (and its lines
+repainted — `logPanelMod.create` always starts every slot blank)
+across every rebuild unconditionally, since nothing there ever wants a
+hard reset except `logPanelMod.clear()`'s own explicit call; its NEW
+per-tab scroll offsets (one per key) are preserved the same way, via
+`scrollbar.setScrollOffset` against each tab's freshly rebuilt
+scrollbar. `saveBrowser.onFramebufferResize` restores the
+previously-selected save via `list.setSelectedIndex`
+(`scripts/ui/list.lua`) rather than `list.selectItem` — the latter
+re-fires `onSelect`, which for the save list is a real, consequential
+action (loads the save and transitions the whole game), so restoring a
+highlight must never replay it.
+
+Keyboard CONTROL focus (#745) preservation across a resize rebuild
+(`responsive.snapshotControlFocusName`/`restoreControlFocusName`,
+matched by element NAME since handles don't survive a rebuild) was
+initially wired for settings_menu/create_world_menu only; review round
+5 extended the same wasVisible-guarded snapshot/restore to
+main_menu/pause_menu (their menu-item boxes are eligible `ueOnClick`
+controls too) and save_browser (whose `createUI()` always deletes and
+recreates a fresh page, unlike the other four screens' teardown-only
+rebuild — the restore still waits for the fresh page to be genuinely
+re-shown before searching `UI.getVisibleElements()`).
+
+A dropdown's width is driven by its OPTION TEXT metrics
+(`dropdown.measureOptions`) plus a fixed `minWidth` floor — neither is
+a plain `baseSizes` field, so it couldn't be shrunk via the
+`contentBase` shared shrink factor (which only ever covered textbox/
+slider/checkbox widths). `graphics_tab.lua`'s four dropdowns
+(Resolution/Window Mode/MSAA/Texture Filter) now compute ONE effective,
+LOCAL `dropdownUiscale` — mirroring `dropdown.new`'s own
+`displayWidth + arrowSize` formula exactly, fit via
+`responsive.fitScale` against the tab's real `contentW` — and use it in
+place of the tab's `uiscale` for every dropdown.new call, so the fit is
+correct whether the floor or real text metrics dominate.
+`settings_menu.lua`'s own tab BAR has the identical problem one level
+up: `tabbar.new`'s frame is correctly sized to `bounds.width`, but each
+tab's clickable box width is driven by its own label text + padding,
+laid out left-to-right with no fit of its own — `createTabBar` computes
+an equivalent local `tabBarUiscale` (real tab-name text width via
+`engine.getTextWidth`, fit against `bounds.width`) and passes it only to
+`tabbar.new`'s own `uiscale`, mirroring `create_world_menu`'s pre-
+existing identical tab-bar fix for its own three tabs.
+
+Review round 6 closed the remaining fixed-size-widget gaps this same
+local-effective-scale technique hadn't yet reached: the Input tab's
+key/plus buttons (`KEY_BTN_W`/`PLUS_BTN_W`, scaled by uiscale directly,
+with no fit of their own) now compute ONE `keyBtnUiscale` fit against
+the WORST-CASE row (the action with the most currently-bound keys),
+applied uniformly so no row jumps size relative to another; the
+Notifications tab's 3-column checkbox grid computes an equivalent
+`uiscale` shadow fit against the CHECKBOX-driven natural width alone
+(2 column steps + one checkbox) — deliberately excluding header/
+`"Pause"`-label text from that fit target, since folding a 9-character
+header string's full width into the same shrink ratio crushed the
+actually-clickable checkboxes toward 0px; header text may still
+overhang a little in truly extreme cases, which is the lesser problem.
+`notifications_tab.lua` also had its own latent bug independent of any
+narrow-width case: `getTextWidth` was measuring headers at the
+UNSCALED `base.fontSize` while `label.new` rendered them at
+`base.fontSize * uiscale`, silently under-measuring every header at
+any uiscale other than 1 — fixed by introducing a separate
+`headerFontSizePx` (the real rendered size) for measurement only,
+leaving the unscaled value feeding `label.new` (which applies uiscale
+itself) untouched. Settings' own bottom-action buttons had a distinct
+bug: shrinking the button BOX width via `factor` without shrinking
+`fontSize` by the same `factor` left labels rendering at full size
+inside a shrunk box — `settingsMenu.createButtons` now computes
+`btnFontSize = base.fontSize * factor` alongside the existing `btnW`.
+
+Round 6 also closed two state-preservation gaps: World Name/Seed are
+`randbox` (not `textbox`) controls, so `create_world_menu`'s existing
+`textbox.snapshotPage`/`restoreAll` never covered them —
+`scripts/ui/randbox.lua` gained its own `getCursor`/`setCursor`/
+`snapshotPage`/`restoreAll`, mirroring textbox's exactly, wired into
+the same `preserveState` branch. And the shell debug console
+(`scripts/shell.lua`) was never registered with the shared
+`responsive.notifyResize` contract — a UI-scale Apply/Save (same
+framebuffer size, new scale) never reached it at all; it only
+rescaled lazily the next time `shell.show()` ran its own `rescale()`.
+`shell.onFramebufferResize` now also calls `rescale()` (previously it
+only rebuilt geometry when visible, never refreshing the cached scale
+values that geometry is computed FROM), and `ui_manager_boot.lua`
+registers it via `responsive.register("shell", shell)` — shell isn't a
+C2 menu screen, but shares the same live-scale-update need.
+
+Review round 7 found that reserving a control's own fit target (round 6)
+doesn't prevent overlap on its own: a row's LABEL sits at the row's own
+left edge (`cx`) while the shrunk control right-aligns at
+`cx+cw-controlWidth` — even once the control is correctly bounded to
+`cw*(1-LABEL_COLUMN_FRACTION)`, the LABEL itself still rendered at the
+tab's full uiscale, and a long label ("Tooltip Delay (ms)",
+"Periods / era (min–max)") at 4x can be far wider than its own reserved
+column, extending into and overlapping the control regardless.
+`graphics_tab.lua` and all four create-world tab modules
+(`settings_tab`/`general_tab`/`advanced_tab`/`timeline_tab.lua`) now
+each compute ONE additional effective, LOCAL `labelUiscale` — mirroring
+`dropdownUiscale`/`keyBtnUiscale`'s technique — from whichever row
+label text in that tab is widest, fit via `responsive.fitScale` against
+the SAME reserved `LABEL_COLUMN_FRACTION` (0.35) column width, and use
+it for every row label's `label.new` call (leaving the actual CONTROL's
+own uiscale/fit untouched). `settings_menu.lua`'s `createAllTabs` and
+`create_world_menu.lua`'s `computeContentScaleFactor` both changed their
+own control-fit target from a near-full `contentW*0.9` to
+`contentW*(1-LABEL_COLUMN_FRACTION)` for the same reason, on the
+control side.
+
+Round 7 also closed a THIRD editable-text-input gap: dropdowns
+(Resolution/Window Mode/MSAA/Texture Filter in Settings, World Size in
+create-world) are ALSO editable filter inputs — `dropdown.destroy`
+(called via `destroyOwned`, ahead of every rebuild) unfocuses and
+resets the raw display text back to the selected option, silently
+discarding an in-progress (unsubmitted) filter edit exactly like an
+unfixed textbox/randbox would. `scripts/ui/dropdown.lua` gained
+`getRawText`/`setRawText`/`getCursor`/`setCursor`/`snapshotPage`/
+`restoreAll`, mirroring textbox/randbox's exactly (raw filter text via
+`UI.getTextInput`/`setTextInput` on the display box — distinct from
+`getValue`/`getText`, which report the currently SELECTED option, not
+whatever's mid-typing), wired into `settings_menu.lua`'s and
+`create_world_menu.lua`'s existing `preserveState` branch alongside
+textbox/randbox.
+
+Round 7's last fix reverted round 6's shell registration: registering
+`shell` through `responsive.register`/`notifyResize` turned out to
+DOUBLE-ROUTE a real framebuffer resize — the engine already broadcasts
+`LuaFramebufferResize` straight to every independently-loaded script
+(`Engine.Scripting.Lua.Thread.Dispatch`), including `scripts/shell.lua`
+directly, so `ui_manager_boot.lua`'s own `onFramebufferResize` calling
+`responsive.notifyResize` a second time rebuilt an already-open shell
+TWICE per real resize, and bypassed `notifyResize`'s 0x0-minimize guard
+for that second path. `ui_manager_boot.lua` no longer registers shell
+at all; `settingsMenu.onApply`/`onSave` instead call
+`shell.onFramebufferResize` DIRECTLY (alongside the unrelated
+`responsive.notifyResize` call for the other registered C2 screens) —
+the one case shell's own direct engine broadcast never covers (a
+scale-only change, same framebuffer size, no resize event at all).
+
+Review round 8 caught the one dropdown the round-7 label/control-
+overlap sweep missed: create-world's own World Size dropdown (`Row 3`
+of `settings_tab.lua`) still used the tab's unshrunk `uiscale` — unlike
+`graphics_tab.lua`'s four dropdowns, which got a `dropdownUiscale` fix
+in round 5. It now computes an equivalent local `sizeDropdownUiscale`
+(same `dropdown.lua` displayWidth+arrow formula, fit against the same
+reserved control column `cw*(1-LABEL_COLUMN_FRACTION)`), same as every
+other dropdown in this codebase.
+
+Round 8 also broadened the layout-matrix coverage: the existing
+"screen geometry stays in-frame" describe only sampled six hand-picked
+`(w, h, uiscale)` combinations. A new case loops over the REAL
+`scripts/settings/data.lua`'s `data.resolutions` list (16 entries)
+directly, asserting main/settings/create-world panel geometry at 1x
+for every one of them — the scale every configured resolution is fully
+supported at except 3840x2160, which is checked too, best-effort, at
+its own auto-detected 2.5x default.
+
+Review round 9 found the label/control-overlap sweep (round 7) had
+missed the Input and Notifications tabs. `input_tab.lua`'s action rows
+reserve a `labelColW` (42% of the tab's content width) for their action
+names, but the label itself still rendered at the tab's full uiscale —
+fixed with the same per-tab `labelUiscale` technique (widest action
+name, fit against `labelColW`). `notifications_tab.lua` had a deeper
+bug: its round-6/7 fit only constrained the CHECKBOX geometry, then let
+`colStep` expand afterward for header text with no re-fit of the WHOLE
+grid — so header text alone could still push the 3-column grid's total
+span past the tab's content width, sliding the Log column into the
+Category label's own region. Fixed by reserving a
+`CATEGORY_LABEL_FRACTION` (0.30) column on the left (mirroring every
+other tab's label reservation) and fitting the grid's uiscale using
+BOTH the checkbox-driven AND header-text-driven components together —
+exactly what `colStep`'s own formula needs — against the remaining
+width, so the grid's total span is guaranteed to fit; the category/row
+labels get their own separate `catLabelUiscale` fit against their
+reserved column. Fixing the grid fit this way re-exposed a checkbox-
+specific rounding bug: `checkbox.new`'s internal `math.floor(size *
+uiscale)` has no floor-to-1 protection of its own, so passing it
+`(base.checkboxSize, uiscale)` separately from the already-floored
+local `cbSize` could independently round to 0 even after `cbSize`
+itself was floored — fixed by passing the pre-floored `cbSize` directly
+as `size` with `uiscale = 1.0`.
+
+Review round 10 found the LAST two gaps: `create_world/bottom_buttons.lua`
+had the exact button-label-font bug settings_menu's own bottom buttons
+had before round 6 — shrinking the button BOX width via
+`computeButtonScaleFactor`'s `factor` without shrinking `fontSize` by
+the same factor left every label (Back/Defaults/Generate/Regenerate/
+Continue, plus the progress bar) rendering at the unshrunk base size
+inside a shrunk box at the formal 800x600@1x minimum. Fixed identically
+to settings_menu's fix: `computeLayout` now returns a `btnFontSize =
+base.fontSize * factor` alongside the existing `btnW`, threaded into
+every button/bar creation call in the file.
+
+`scripts/shell.lua` still lacked a 0x0-minimize guard even after round
+7 deliberately un-registered it from `responsive.notifyResize` (to stop
+double-routing a real resize) — shell receives `LuaFramebufferResize`
+straight from the engine's own direct broadcast regardless of that
+registration, so a minimize still reached `onFramebufferResize`
+directly and rebuilt an already-visible shell against a degenerate 0x0
+framebuffer (`rebuildBox`/`rebuildHistoryDisplay` read
+`engine.getFramebufferSize()` directly). Fixed with a simple early
+return on non-positive width/height — `shellvisible` is untouched by a
+minimize, so the very next real-size resize rebuilds normally on its
+own with no separate "pending restore" bookkeeping needed.
+
+Review round 11 found the scale-change fan-out (`responsive.notifyResize`
++ the direct `shell.onFramebufferResize` call) was only wired into
+`onApply`/`onSave` — but Settings' Defaults and Back flows can ALSO
+change the live UI scale: `data.loadDefaults()` unconditionally calls
+`engine.setUIScale` (with its own auto 4K/1440p/1080p detection), and
+`data.revert()` conditionally does too (reverting an applied-but-
+unsaved scale change back to the on-disk config). Without the fan-out,
+every other already-initialized screen and the shell console kept
+stale geometry until another resize or reopen. `onDefaults`/`onBack`
+now capture `data.current.uiScale` before calling into `data`, compare
+after, and fan out identically to `onApply`/`onSave` when it actually
+changed. The Back BUTTON's own `onClick` used to inline a bare
+`data.revert()` call directly (a second, duplicate copy of the same
+"revert then navigate away" logic `onBack()` already encapsulated) —
+routed through `settingsMenu.onBack()` instead, so the fan-out fix
+lives in exactly one place rather than needing a third copy.
+
+Review round 12 extended the round-8 all-resolution layout matrix
+(`Test.Headless.UI.ResponsiveMenus`): it originally only looped
+main/settings/create-world across every configured resolution, leaving
+pause menu/save browser/loading at a 3-sample check
+(800x600/1920x1080/3840x2160) — not the full matrix the issue requires
+for every C2 screen. The same loop over `data.resolutions` now also
+drives pause/save-browser (their own `panelId`) and loading (its own
+fixed progress bar, via a new `barInFrameExpr` mirroring
+`panelInFrameExpr`) at 1x for every configured resolution (2.5x
+best-effort for 3840x2160, same as the other three screens).
+
+Review round 13 found an invalid-geometry gap at the issue's own
+OUT-OF-ENVELOPE exemplar (800x600@4x, outside the supported 800x600's
+0.5x-1x band): `settingsMenu.createTabBar`'s `tabFrameHeight` — the
+panel height minus several uiscale-scaled chrome terms (title, tab
+row, bottom button row, gaps) — went negative once the panel's own
+FIXED height (480px, `0.8*600`) was smaller than that scaled chrome sum
+alone, and `tabbar.new` passes it straight to `UI.newBox` as a real
+(invalid) box height. Since this is explicitly BEST-EFFORT territory
+(never crashing/invalid, not required to look good — see the envelope
+contract above), the fix is a simple floor rather than a full vertical
+reflow: `tabFrameHeight = math.max(20, tabFrameHeight)`. (The
+downstream `contentH`/`maxVisibleRows`/scrollbar `trackH` consumers
+were already safely floored via their own `math.max` calls — only the
+tab frame's own height, passed directly to `UI.newBox`, was
+unguarded.)
+
+Genuine text reflow/wrapping is a follow-up, not covered by this pass.
+
+Geometry for headless introspection needs no new surface: a screen's
+own tracked panel id via `panel.getPosition`/`getSize`, `UI.
+getElementInfo` on any element handle, and `responsive.dump()`/
+`getGeometry(name)` for the notification contract's own state are
+sufficient — see `Test.Headless.UI.ResponsiveMenus` for the pattern
+(bare Lua backend + synthetic texture/font handles, since the full
+`ui_manager` boot never reaches menu construction headless — it gates
+on `fontsReady`, which needs real font rasterization, gated behind
+`Engine.Scripting.Lua.Message`'s `whenGraphical` and so never true
+without a GPU).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

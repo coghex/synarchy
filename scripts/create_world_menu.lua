@@ -3,6 +3,7 @@
 -- and preview.  Delegates to sub-modules for tab content, log panel,
 -- bottom buttons, and generation logic.
 local scale          = require("scripts.ui.scale")
+local responsive     = require("scripts.ui.responsive")
 local panel          = require("scripts.ui.panel")
 local label          = require("scripts.ui.label")
 local button         = require("scripts.ui.button")
@@ -39,7 +40,10 @@ local Z_LOG_TEXT      = 8
 local Z_LOG_SB_TRACK  = 9
 local Z_LOG_SB_BUTTON = 10
 local Z_LOG_SB_TAB    = 11
-local Z_BUTTONS       = 12
+local Z_TAB_SB_TRACK  = 12
+local Z_TAB_SB_BUTTON = 13
+local Z_TAB_SB_TAB    = 14
+local Z_BUTTONS       = 15
 
 -----------------------------------------------------------
 -- Base sizes (unscaled)
@@ -215,6 +219,14 @@ createWorldMenu.logStartY       = 0
 -- Per-tab element handles for show/hide
 createWorldMenu.tabElements = {}
 
+-- #748 round 5: per-tab scrollable-content state (key -> {scrollOffset,
+-- totalRows, maxVisibleRows, viewportId, scrollContentId, scrollbarId}).
+-- See createWorldMenu.createUI's tab-content build for how these are
+-- populated — a clipping viewport + a movable scroll-content anchor per
+-- tab, mirroring settings_menu's tab scrolling but via real clipping
+-- (#747) instead of manual per-row show/hide.
+createWorldMenu.tabScroll = {}
+
 -- Owned element IDs for cleanup
 createWorldMenu.ownedLabels     = {}
 createWorldMenu.ownedButtons    = {}
@@ -246,6 +258,18 @@ function createWorldMenu.destroyOwned()
         scrollbar.destroy(createWorldMenu.logScrollbarId)
         createWorldMenu.logScrollbarId = nil
     end
+
+    -- #748 round 5: each tab's scrollbar (scrollable tab content, below)
+    -- isn't tracked via the generic owned-lists — the viewport/scroll-
+    -- content elements themselves need no explicit cleanup (UI.deletePage
+    -- below recursively deletes every element it owns), but the
+    -- scrollbar widget module's own bookkeeping does.
+    if createWorldMenu.tabScroll then
+        for _, ts in pairs(createWorldMenu.tabScroll) do
+            if ts.scrollbarId then scrollbar.destroy(ts.scrollbarId) end
+        end
+    end
+    createWorldMenu.tabScroll = {}
 
     for _, id in ipairs(createWorldMenu.ownedLabels)    do label.destroy(id) end
     for _, id in ipairs(createWorldMenu.ownedButtons)   do button.destroy(id) end
@@ -323,7 +347,54 @@ end
 -- Full UI rebuild
 -----------------------------------------------------------
 
-function createWorldMenu.createUI()
+-- opts.preserveState (#748): defaults to true, since createWorldMenu's
+-- own `pending` table is already a persistent module field that only
+-- onDefaults ever resets — every OTHER rebuild (resize, a fresh
+-- preview image arriving mid-generation, re-entering the screen) wants
+-- to keep showing whatever the user has in progress, including RAW
+-- unsubmitted textbox edits that never made it into `pending` (Plate
+-- Count/timeline fields only sync to `pending` at Generate time).
+-- onDefaults explicitly passes preserveState=false, the one rebuild
+-- that must discard in-progress edits rather than restore them.
+function createWorldMenu.createUI(opts)
+    opts = opts or {}
+    local preserveState = (opts.preserveState == nil) and true or opts.preserveState
+
+    -- #748: preserve the log's clamped scroll position and repaint its
+    -- existing lines across a mere rebuild (resize, or a fresh preview
+    -- image arriving mid-generation) — createWorldMenu.logLines itself
+    -- is never touched here (only logPanelMod.clear does that), but the
+    -- fresh label slots logPanelMod.create builds always start blank.
+    local prevLogScrollOffset = createWorldMenu.logScrollOffset
+
+    -- #748 round 5: preserve each tab's clamped scroll position across
+    -- a mere rebuild too (destroyOwned() below wipes tabScroll).
+    local prevTabScrollOffsets = {}
+    for key, ts in pairs(createWorldMenu.tabScroll) do
+        prevTabScrollOffsets[key] = ts.scrollOffset
+    end
+
+    -- Snapshot every textbox's raw (possibly unsubmitted) text, cursor,
+    -- and focus BEFORE destroyOwned() tears them down. (Keyboard
+    -- CONTROL focus, #745, is captured/restored by the caller instead —
+    -- see onFramebufferResize — since restoring it needs the page
+    -- already visible, which createUI() itself never makes it.)
+    local textboxSnap = nil
+    -- #748 round 6: World Name/Seed are randbox (not textbox) controls
+    -- — snapshot/restore those too, or an in-progress edit there loses
+    -- its text/cursor/focus on a mere rebuild exactly like an unfixed
+    -- textbox would.
+    local randboxSnap = nil
+    -- #748 round 7: World Size is a dropdown — also an editable text
+    -- input (its raw filter text is discarded back to the selected
+    -- option on destroy), so it needs the same preservation.
+    local dropdownSnap = nil
+    if preserveState then
+        textboxSnap = textbox.snapshotPage(createWorldMenu.page)
+        randboxSnap = randbox.snapshotPage(createWorldMenu.page)
+        dropdownSnap = dropdown.snapshotPage(createWorldMenu.page)
+    end
+
     createWorldMenu.destroyOwned()
 
     createWorldMenu.backButtonId       = nil
@@ -348,6 +419,51 @@ function createWorldMenu.createUI()
     end
 
     local uiscale = scale.get()
+
+    -- #748: compact fallback — the left panel's content width is
+    -- derived by peeling off SEVERAL fixed-base paddings that all
+    -- scale with uiscale (main panel padding 2*50, left-panel padding
+    -- 2*10, tab content padding 2*20 — 100 units of uiscale total),
+    -- from a panel width that's a FIXED FRACTION of the framebuffer
+    -- (0.85 panel * 0.4 left-split = 0.34) that does NOT scale with
+    -- uiscale at all. At a narrow, high-scale supported combination
+    -- (e.g. 800x2160@4x) those paddings alone can exceed the whole
+    -- left column, driving contentW negative — the per-control shrink
+    -- below can't fix that on its own since it only ever narrows the
+    -- controls, not the paddings consuming the space around them.
+    -- Shrinks this menu's own effective scale (never the stored UI
+    -- scale) so the fixed overhead never eats the full budget, leaving
+    -- CONTENT_MIN px of real content width regardless of framebuffer
+    -- shape.
+    local CONTENT_MIN = 150
+    local naturalOverhead = 100 * uiscale
+    local maxOverhead = 0.34 * createWorldMenu.fbW - CONTENT_MIN
+    uiscale = responsive.fitScale(naturalOverhead, maxOverhead, uiscale)
+
+    -- #748: second refinement pass — the tab BAR itself (its three
+    -- "General"/"Geology"/"Timeline" buttons, each textWidth + 2*10px
+    -- padding per scripts/ui/tabbar.lua) must also fit within
+    -- leftBounds.width = 0.34*fbW - 60*uiscale (the same uiscale-
+    -- dependent padding chain, one step short of the extra tab-content
+    -- padding contentW itself subtracts). The per-control shrink above
+    -- only ever narrows CONTROLS inside the tab frame, never the tab
+    -- BAR's own buttons, which the previous fallback didn't account
+    -- for. Measures real tab-label width (0 headless, like every other
+    -- text-width-dependent check in this file — only meaningful with a
+    -- real font in a graphical boot) so the fallback only tightens
+    -- further when actual label metrics need it to.
+    do
+        local tabFontSize = math.floor(createWorldMenu.baseSizes.tabFontSize * uiscale)
+        local totalTabTextWidth = 0
+        for _, def in ipairs(tabDefs) do
+            totalTabTextWidth = totalTabTextWidth
+                + engine.getTextWidth(createWorldMenu.menuFont, def.name, tabFontSize)
+        end
+        local naturalTabOverhead = totalTabTextWidth + 120 * uiscale
+        local maxTabOverhead = 0.34 * createWorldMenu.fbW
+        uiscale = responsive.fitScale(naturalTabOverhead, maxTabOverhead, uiscale)
+    end
+
     local s = scale.applyAllWith(createWorldMenu.baseSizes, uiscale)
 
     createWorldMenu.page = UI.newPage("create_world_menu", "modal")
@@ -389,6 +505,19 @@ function createWorldMenu.createUI()
     createWorldMenu.createLeftPanel(panelX, panelY, bounds,
         contentStartY, leftWidth, contentHeight, s, uiscale)
 
+    -- #748 round 5: restore each tab's scroll position (clamped against
+    -- the just-rebuilt content size) — mirrors the log scroll restore
+    -- below. setScrollOffset triggers the scrollbar's own onScroll ->
+    -- createWorldMenu.onTabScroll chain, so this both restores and
+    -- repositions the scroll-content anchor in one call.
+    if preserveState then
+        for key, ts in pairs(createWorldMenu.tabScroll) do
+            if ts.scrollbarId and prevTabScrollOffsets[key] then
+                scrollbar.setScrollOffset(ts.scrollbarId, prevTabScrollOffsets[key])
+            end
+        end
+    end
+
     -- Right panel (preview + log)
     local logResult = logPanelMod.create({
         page       = createWorldMenu.page,
@@ -428,6 +557,16 @@ function createWorldMenu.createUI()
     createWorldMenu.logX           = logResult.logX
     createWorldMenu.logStartY      = logResult.logStartY
 
+    if createWorldMenu.logScrollbarId then
+        logPanelMod.updateScrollbar(createWorldMenu)
+        -- setScrollOffset clamps against the just-updated content size
+        -- and repaints via its onScroll -> onLogScroll -> refreshDisplay
+        -- chain, so this both restores and redraws in one call.
+        scrollbar.setScrollOffset(createWorldMenu.logScrollbarId, prevLogScrollOffset)
+    else
+        logPanelMod.refreshDisplay(createWorldMenu)
+    end
+
     -- Bottom buttons
     createWorldMenu.btnLayout = {
         panelX = panelX, panelY = panelY,
@@ -441,6 +580,12 @@ function createWorldMenu.createUI()
         createWorldMenu.buildButtonsDone()
     else
         createWorldMenu.buildButtonsIdle()
+    end
+
+    if preserveState then
+        textbox.restoreAll(textboxSnap)
+        randbox.restoreAll(randboxSnap)
+        dropdown.restoreAll(dropdownSnap)
     end
 
     createWorldMenu.uiCreated = true
@@ -466,6 +611,43 @@ function createWorldMenu.createTitle(panelX, panelY, bounds, s, uiscale)
     local titleY = panelY + bounds.y + s.fontSize
     UI.addToPage(createWorldMenu.page, titleHandle, titleX, titleY)
     UI.setZIndex(titleHandle, Z_TITLE)
+end
+
+-----------------------------------------------------------
+-- #748: content-width shrink for the left (tabbed settings) panel
+--
+-- The left panel's share of the main panel is a fixed 40% split; at
+-- the supported envelope's 800px-wide minimum, its content area (~172px)
+-- is far narrower than the widest fixed-width control across every
+-- tab — World Name's randbox (nameBoxWidth=400 + its own dice-button
+-- width), which used to render partly off-screen to the left. Mirrors
+-- bottom_buttons.lua's button-bar shrink: one uniform factor, computed
+-- from the single widest control, applied to every tab's width-bearing
+-- base-size fields via a shallow-copied baseSizes table — the tab
+-- modules themselves need no changes, since they already just read
+-- whatever `params.baseSizes` they're handed. The dice-button width
+-- (randboxHeight) is treated as a fixed, unshrinkable part of that
+-- widest control's own total width when solving for the factor.
+-----------------------------------------------------------
+
+-- #748 round 7: the row's LABEL (e.g. "Name") sits at the row's own
+-- left edge (cx), while the shrunk control right-aligns at
+-- cx+cw-controlWidth — if the control is allowed to shrink-fit the
+-- ENTIRE row width, it can still end up occupying nearly all of it,
+-- landing its own left edge back at ~cx and overlapping the label.
+-- Reserve a fixed fraction of availableWidth for the label column so
+-- the control's own fit target never eats the whole row.
+local LABEL_COLUMN_FRACTION = 0.35
+
+local function computeContentScaleFactor(base, availableWidth, uiscale)
+    local fixedPart = base.randboxHeight * uiscale
+        + availableWidth * LABEL_COLUMN_FRACTION
+    local shrinkablePart = base.nameBoxWidth * uiscale
+    if shrinkablePart <= 0 then return 1.0 end
+    local budget = availableWidth - fixedPart
+    if budget >= shrinkablePart then return 1.0 end
+    if budget <= 0 then return 0.1 end
+    return budget / shrinkablePart
 end
 
 -----------------------------------------------------------
@@ -527,39 +709,100 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
         tabbar.getFrameBounds(createWorldMenu.tabBarId)
     local pad = math.floor(20 * uiscale)
 
-    local tabParams = {
-        page       = createWorldMenu.page,
-        font       = createWorldMenu.menuFont,
-        baseSizes  = createWorldMenu.baseSizes,
-        uiscale    = uiscale,
-        s          = s,
-        contentX   = frameX + pad,
-        contentY   = frameY + pad,
-        contentW   = frameW - pad * 2,
-        zContent   = Z_CONTENT,
-        zWidgets   = Z_WIDGETS,
-        pending    = createWorldMenu.pending,
-        trackLabel    = createWorldMenu.trackLabel,
-        trackRandBox  = createWorldMenu.trackRandBox,
-        trackDropdown = createWorldMenu.trackDropdown,
-        trackTextBox  = createWorldMenu.trackTextBox,
-    }
+    local contentW = frameW - pad * 2
+    local contentH = frameH - pad * 2
+    local contentFactor = computeContentScaleFactor(
+        createWorldMenu.baseSizes, contentW, uiscale)
+    local contentBase = {}
+    for k, v in pairs(createWorldMenu.baseSizes) do contentBase[k] = v end
+    contentBase.nameBoxWidth = createWorldMenu.baseSizes.nameBoxWidth * contentFactor
+    contentBase.randboxWidth = createWorldMenu.baseSizes.randboxWidth * contentFactor
+    contentBase.textboxWidth = createWorldMenu.baseSizes.textboxWidth * contentFactor
 
-    -- General tab: name/seed/size plus the active calendar settings.
-    local settingsElems = settingsTab.create(tabParams)
+    -- #748 round 5: scrollable tab content. showTab previously only
+    -- toggled per-element visibility — with all rows root-mounted at
+    -- absolute positions and no clip/scroll of its own, a tab whose
+    -- rows exceed the frame's height (e.g. General's 5 rows at the
+    -- formal 800x600@1x minimum, well over its ~152px frame) rendered
+    -- rows outside the frame with no way to reach them. Each tab now
+    -- gets its own clipping viewport (fixed at the tab frame's bounds)
+    -- plus a movable scroll-content anchor as its child; every row
+    -- element is parented to that anchor (via each widget's #747
+    -- `parent` support) instead of the page root, so a row scrolled
+    -- outside the viewport is both visually clipped AND un-hittable
+    -- (UI.Clipping backs hit-testing too) with no manual per-row
+    -- show/hide needed — scrolling is just moving the anchor's Y.
+    local function buildTabViewport(key)
+        local viewportId = UI.newElement(
+            "cw_tab_" .. key .. "_viewport", contentW, contentH, createWorldMenu.page)
+        UI.addToPage(createWorldMenu.page, viewportId, frameX + pad, frameY + pad)
+        UI.setClipChildren(viewportId, true)
+        UI.setScrollCapture(viewportId, true)
+        UI.setZIndex(viewportId, Z_CONTENT)
+
+        local scrollContentId = UI.newElement(
+            "cw_tab_" .. key .. "_scroll", contentW, contentH, createWorldMenu.page)
+        UI.addChild(viewportId, scrollContentId, 0, 0)
+
+        createWorldMenu.tabScroll[key] = {
+            scrollOffset = 0, totalRows = 0, maxVisibleRows = 0,
+            viewportId = viewportId, scrollContentId = scrollContentId,
+            scrollbarId = nil, rowSpacing = s.rowSpacing,
+        }
+        return scrollContentId
+    end
+
+    local function tabParamsFor(key)
+        return {
+            page       = createWorldMenu.page,
+            font       = createWorldMenu.menuFont,
+            baseSizes  = contentBase,
+            uiscale    = uiscale,
+            s          = s,
+            contentX   = 0,
+            contentY   = 0,
+            contentW   = contentW,
+            zContent   = Z_CONTENT,
+            zWidgets   = Z_WIDGETS,
+            pending    = createWorldMenu.pending,
+            container  = buildTabViewport(key),
+            trackLabel    = createWorldMenu.trackLabel,
+            trackRandBox  = createWorldMenu.trackRandBox,
+            trackDropdown = createWorldMenu.trackDropdown,
+            trackTextBox  = createWorldMenu.trackTextBox,
+        }
+    end
+
+    -- General tab: name/seed/size plus the active calendar settings,
+    -- sharing ONE scrollable viewport (they render as a single combined
+    -- list under the "General" tab).
+    local settingsParams = tabParamsFor("settings")
+    local settingsElems, settingsRows = settingsTab.create(settingsParams)
     -- Offset the general tab content below the settings rows
     local generalParams = {}
-    for k, v in pairs(tabParams) do generalParams[k] = v end
-    generalParams.contentY = tabParams.contentY + s.rowSpacing * 3
-    local generalElems = generalTab.create(generalParams)
+    for k, v in pairs(settingsParams) do generalParams[k] = v end
+    generalParams.contentY = settingsParams.contentY + s.rowSpacing * 3
+    local generalElems, generalRows = generalTab.create(generalParams)
     -- Merge both element lists
     local combinedSettings = {}
     for _, e in ipairs(settingsElems) do table.insert(combinedSettings, e) end
     for _, e in ipairs(generalElems) do table.insert(combinedSettings, e) end
     createWorldMenu.tabElements["settings"] = combinedSettings
+    createWorldMenu.tabScroll["settings"].totalRows = settingsRows + generalRows
 
-    createWorldMenu.tabElements["advanced"] = advancedTab.create(tabParams)
-    createWorldMenu.tabElements["timeline"] = timelineTab.create(tabParams)
+    local advancedElems, advancedRows = advancedTab.create(tabParamsFor("advanced"))
+    createWorldMenu.tabElements["advanced"] = advancedElems
+    createWorldMenu.tabScroll["advanced"].totalRows = advancedRows
+
+    local timelineElems, timelineRows = timelineTab.create(tabParamsFor("timeline"))
+    createWorldMenu.tabElements["timeline"] = timelineElems
+    createWorldMenu.tabScroll["timeline"].totalRows = timelineRows
+
+    local maxVisibleRows = math.max(1, math.floor(contentH / s.rowSpacing))
+    for key, ts in pairs(createWorldMenu.tabScroll) do
+        ts.maxVisibleRows = maxVisibleRows
+        createWorldMenu.createTabScrollbar(key, frameX, frameY, frameW, frameH, uiscale)
+    end
 
     createWorldMenu.showTab(createWorldMenu.activeTab)
 end
@@ -579,6 +822,58 @@ function createWorldMenu.showTab(key)
             end
         end
     end
+
+    -- #748 round 5: toggle each tab's scrollable-content viewport +
+    -- scrollbar too (the per-element toggle above already handles
+    -- closing an open dropdown / clearing randbox state on hide — kept
+    -- unchanged rather than relying on ancestor-hiding alone for that).
+    -- Never resets scrollOffset on switch, so returning to a tab later
+    -- keeps its prior scroll position.
+    for tabKey, ts in pairs(createWorldMenu.tabScroll) do
+        local visible = (tabKey == key)
+        UI.setVisible(ts.viewportId, visible)
+        if ts.scrollbarId then scrollbar.setVisible(ts.scrollbarId, visible) end
+    end
+end
+
+-----------------------------------------------------------
+-- Tab content scrolling (#748 round 5)
+-----------------------------------------------------------
+
+function createWorldMenu.onTabScroll(key, offset)
+    local ts = createWorldMenu.tabScroll[key]
+    if not ts then return end
+    ts.scrollOffset = offset
+    UI.setPosition(ts.scrollContentId, 0, -offset * ts.rowSpacing)
+end
+
+function createWorldMenu.createTabScrollbar(key, frameX, frameY, frameW, frameH, uiscale)
+    local ts = createWorldMenu.tabScroll[key]
+    if not ts or ts.totalRows <= ts.maxVisibleRows then return end
+
+    local btnSize = math.floor(24 * uiscale)
+    local capH    = math.floor(4 * uiscale)
+    local trackH  = math.max(math.floor(20 * uiscale),
+                              frameH - btnSize * 2 - capH * 2)
+
+    ts.scrollbarId = scrollbar.new({
+        name         = "cw_tab_" .. key .. "_scrollbar",
+        page         = createWorldMenu.page,
+        x            = frameX + frameW,
+        y            = frameY,
+        buttonSize   = btnSize,
+        trackHeight  = trackH,
+        capHeight    = capH,
+        tileSize     = math.floor(8 * uiscale),
+        totalItems   = ts.totalRows,
+        visibleItems = ts.maxVisibleRows,
+        uiscale      = uiscale,
+        zIndex       = { track = Z_TAB_SB_TRACK, button = Z_TAB_SB_BUTTON,
+                         tab = Z_TAB_SB_TAB },
+        onScroll = function(offset, sbId, sbName)
+            createWorldMenu.onTabScroll(key, offset)
+        end,
+    })
 end
 
 -----------------------------------------------------------
@@ -645,7 +940,34 @@ end
 -- Scroll events (called from ui_manager)
 -----------------------------------------------------------
 
+-- #748 round 5: scroll routing for the active tab's scrollable content.
+-- The tab's own viewport is the element that actually captures the
+-- wheel event (#747, UI.setScrollCapture — routeScroll selects the
+-- topmost in-scope capturing surface regardless of which non-capturing
+-- row happens to be visually on top of it), so matching just the
+-- viewport handle (plus the scrollbar's own elements) is sufficient —
+-- mirrors settings_menu.onScroll's equivalent tab-frame-handle check.
+function createWorldMenu.tabScrollFor(elemHandle)
+    local ts = createWorldMenu.tabScroll[createWorldMenu.activeTab]
+    if not ts or not ts.scrollbarId then return nil end
+
+    if elemHandle == ts.viewportId then return ts end
+
+    local sbId, _ = scrollbar.findByElementHandle(elemHandle)
+    if sbId and sbId == ts.scrollbarId then return ts end
+
+    return nil
+end
+
 function createWorldMenu.onScroll(elemHandle, dx, dy)
+    local ts = createWorldMenu.tabScrollFor(elemHandle)
+    if ts then
+        if     dy > 0 then scrollbar.scrollUp(ts.scrollbarId)
+        elseif dy < 0 then scrollbar.scrollDown(ts.scrollbarId)
+        end
+        return true
+    end
+
     if not createWorldMenu.logScrollbarId then return false end
 
     local totalLines = #createWorldMenu.logLines
@@ -672,6 +994,17 @@ function createWorldMenu.onScroll(elemHandle, dx, dy)
 end
 
 function createWorldMenu.handleScrollCallback(callbackName, elemHandle)
+    local ts = createWorldMenu.tabScrollFor(elemHandle)
+    if ts then
+        if callbackName == "onScrollUp" then
+            scrollbar.scrollUp(ts.scrollbarId)
+            return true
+        elseif callbackName == "onScrollDown" then
+            scrollbar.scrollDown(ts.scrollbarId)
+            return true
+        end
+    end
+
     if not createWorldMenu.logScrollbarId then return false end
     local sbId, _ = scrollbar.findByElementHandle(elemHandle)
     if sbId and sbId == createWorldMenu.logScrollbarId then
@@ -730,7 +1063,10 @@ function createWorldMenu.onDefaults()
     createWorldMenu.loadDefaults()
     createWorldMenu.genState = generation.IDLE
     logPanelMod.clear(createWorldMenu)
-    createWorldMenu.createUI()
+    -- #748: the one rebuild that must discard in-progress edits
+    -- (the pending table was just reset above) rather than restore
+    -- them from the about-to-be-destroyed widgets.
+    createWorldMenu.createUI({ preserveState = false })
     if createWorldMenu.page then UI.showPage(createWorldMenu.page) end
 end
 
@@ -807,7 +1143,20 @@ end
 function createWorldMenu.onFramebufferResize(width, height)
     createWorldMenu.fbW = width
     createWorldMenu.fbH = height
-    if createWorldMenu.uiCreated then createWorldMenu.createUI() end
+    if createWorldMenu.uiCreated then
+        -- #748: keyboard CONTROL focus (#745) can only be restored once
+        -- the rebuilt page is genuinely visible again (see
+        -- settings_menu.onFramebufferResize's identical comment) — a
+        -- currently-hidden create-world menu must not suddenly pop up
+        -- over whichever menu the resize actually hit.
+        local wasVisible = createWorldMenu.page and UI.isPageVisible(createWorldMenu.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+        createWorldMenu.createUI()
+        if wasVisible and createWorldMenu.page then
+            UI.showPage(createWorldMenu.page)
+            responsive.restoreControlFocusName(controlFocusName)
+        end
+    end
 end
 
 -----------------------------------------------------------
