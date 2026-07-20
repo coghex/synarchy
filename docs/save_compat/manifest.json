@@ -154,6 +154,15 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/lua-building-spawn-v1.expected.json"
         },
         {
+          "id": "b3-lua-versioned-session-v1",
+          "path": "test-headless/data/save-compat/b3-lua-versioned-session-v1.bin",
+          "kind": "complete-session",
+          "sha256": "87b6a08be723d5c7d551ffa00945e761bea0330ffd4c3483bba076daf63ab5eb",
+          "sizeBytes": 296577,
+          "provenance": "Generated through the real codec (round-3 review: a component-focused Lua fixture alone left the manifest-driven hspec gate and the fresh-process migration probe both skipping legacy Lua coverage entirely): docs/save_compat/manifest.json's c3-typed-reference-v1-minimal fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot) -- the same real cargo_hold_S building (id 1) and acolyte unit (id 1) -- then re-encoded via World.Save.Envelope.encodeSessionSnapshot with its lua.unit_ai/lua.building_spawn components replaced by v1-shaped payloads ({[1]={buildTarget=1}} / {[1]={lastUid=1}}, referencing that SAME real building/unit id) encoded through scripts/lib/data_codec.lua's M.encode via a genuine HsLua VM, mirroring lua-unit-ai-v1/lua-building-spawn-v1's generation above. This is a full complete-session envelope, not a lone component payload, so it is picked up automatically by BOTH Test.Headless.World.Save.Compat's manifest-driven \"manifest-declared fixtures\" gate (proving the Haskell envelope layer preserves a v1-tagged Lua component through decode/re-encode) and tools/save_compat_migration_probe.py's real-engine load->publish->resave->restart->reload round trip (proving saveModules.prepareLoad's real v1->v3 Lua migration fires inside a genuine engine boot, for a session the real content-reference validator also accepts).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/b3-lua-versioned-session-v1.expected.json"
+        },
+        {
           "id": "b3-lua-versioned-hspec-coverage",
           "path": "test-headless/Test/Headless/Lua/SaveModules.hs",
           "kind": "component-focused",

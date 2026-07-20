@@ -20,15 +20,21 @@ through explicit migrations -- against silent drift:
     editor must consciously re-run --add-baseline (or acknowledge the
     change) rather than silently altering historical bytes.
   - Every baseline's declared components[] cross-checks against the REAL
-    current Haskell (World.Save.Component.*'s ccVersion/ccInputVers) and
-    Lua (scripts/unit_ai_save.lua's/scripts/building_spawn.lua's version/
-    inputVersions) registries (see real_component_registry() /
-    audit_component_versions()): a declared component/version must still
-    exist and still be an accepted input version (catches a decoder
-    silently dropped), and every component with more than one accepted
-    input version must have its OLDEST one tracked by some baseline
-    (catches a version bump that shipped with no compatibility fixture
-    ever validating the historical shape it migrates from).
+    current Haskell (World.Save.Component.*'s ccVersion/ccInputVers/
+    ccRequired) and Lua (scripts/unit_ai_save.lua's/scripts/
+    building_spawn.lua's version/inputVersions/required) registries (see
+    real_component_registry() / audit_component_versions()): a declared
+    component/version must still exist and still be an accepted input
+    version (catches a decoder silently dropped); every REQUIRED
+    component -- regardless of how many versions it accepts -- must be
+    tracked by at least one baseline (catches a brand-new required
+    component shipping with no baseline ever proving it has an accounted
+    default/migration policy, which a version-count-only check can never
+    see for a component that has only ever had one version); and every
+    component with more than one accepted input version must additionally
+    have its OLDEST one tracked by some baseline (catches a version bump
+    that shipped with no compatibility fixture ever validating the
+    historical shape it migrates from).
 
 This is a static presence/fingerprint check, not itself a proof that a
 fixture migrates correctly -- that real decode/migrate/assemble/
@@ -84,6 +90,34 @@ Usage:
   _finalize_manifest_write's docstring) and needs its own hand-written
   hspec test instead.
 
+  # GENERATE a brand-new CURRENT-format complete-session fixture through
+  # the real codec end to end (requirement 21: a real generation mode,
+  # not just validation of already-hand-built bytes) -- boots an actual
+  # headless engine, inits a world, optionally spawns ONE building and/
+  # or ONE unit, calls engine.saveWorld (the SAME production save path
+  # real gameplay uses), then derives its canonical summary DIRECTLY
+  # from the real decoded snapshot (see dump_canonical_summary) rather
+  # than hand-transcribing values -- then registers + validates exactly
+  # like --add-baseline above (this literally delegates to it once the
+  # bytes/summary exist):
+  python3 tools/save_compat_audit.py --generate-session \\
+      --baseline-id my-new-baseline --fixture-id my-fixture \\
+      --path test-headless/data/save-compat/my-fixture.bin \\
+      --summary test-headless/data/save-compat/my-fixture.expected.json \\
+      --seed 42 --world-size 8 --plate-count 3 \\
+      --spawn-building cargo_hold_S --spawn-unit acolyte \\
+      --description "..." --migration-target current \\
+      --migrated-by "..." --components '[...]'
+
+  This can only ever produce a fixture at the CURRENT wire format -- a
+  live engine never writes a historical shape. A baseline documenting an
+  OLDER version (a frozen legacy DTO, or a component spliced back to an
+  earlier ccInputVers) is inherently a distinct, bespoke operation (there
+  is no "generate a v1 payload" button in the live game either), and
+  stays the manual decode/splice-then---add-baseline workflow this
+  manifest's own fixtures' "provenance" fields document (see
+  b3-lua-versioned-session-v1 for the most recent worked example).
+
 Exit codes: 0 = every declared fixture/fingerprint is intact,
 1 = one or more violations (see printed detail).
 """
@@ -92,9 +126,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -127,10 +165,11 @@ SERIALIZE_CODEC_RE = re.compile(
     r"(\w+)\s*=\s*serializeCodec\s*\n?\s*(\w+)\s+(\d+)\s+(True|False)")
 RECORD_CODEC_RE = re.compile(
     r"ccId\s*=\s*(\w+)\s*\n\s*,\s*ccVersion\s*=\s*(\d+)\s*\n\s*,\s*"
-    r"ccInputVers\s*=\s*\[([^\]]*)\]")
+    r"ccInputVers\s*=\s*\[([^\]]*)\]\s*\n\s*,\s*ccRequired\s*=\s*(True|False)")
 LUA_MODULE_VERSION_RE = re.compile(r"\bversion\s*=\s*(\d+)")
 LUA_MODULE_INPUT_VERSIONS_RE = re.compile(
     r"\binputVersions\s*=\s*\{([^}]*)\}")
+LUA_MODULE_REQUIRED_RE = re.compile(r"\brequired\s*=\s*(true|false)")
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict:
@@ -172,11 +211,12 @@ def current_envelope_version(path: Path = ENVELOPE_SOURCE_PATH) -> int:
 
 def real_component_registry() -> dict[str, dict]:
     """Every save component this build's REAL source currently declares,
-    id -> {"currentVersion": int, "inputVersions": [int, ...]} -- parsed
-    directly from the Haskell/Lua source, not hand-maintained here,
-    so a schema bump or a removed historical decoder shows up the next
-    time this runs, not only when someone remembers to update this
-    tool too (requirement 19's version cross-check).
+    id -> {"currentVersion": int, "inputVersions": [int, ...],
+    "required": bool} -- parsed directly from the Haskell/Lua source, not
+    hand-maintained here, so a schema bump, a removed historical decoder,
+    or a newly required component shows up the next time this runs, not
+    only when someone remembers to update this tool too (requirement 19's
+    version cross-check).
 
     Raises if a source file's expected declarations can't be found at
     all (the parser itself is stale, e.g. after a real rename) -- that
@@ -188,21 +228,26 @@ def real_component_registry() -> dict[str, dict]:
     if not m:
         raise ValueError(
             f"could not find metadataComponentVersion in {ENVELOPE_SOURCE_PATH}")
+    # metadata is unconditionally required -- every envelope carries it
+    # (World.Save.Envelope's own decode refuses one that doesn't).
     registry["metadata"] = {
-        "currentVersion": int(m.group(1)), "inputVersions": [int(m.group(1))]}
+        "currentVersion": int(m.group(1)), "inputVersions": [int(m.group(1))],
+        "required": True}
 
     # "session" is the ONE frozen legacy component (World.Save.Compat.
     # SessionV90) -- its current version is its only ever version; a
     # further schema change adds a new frozen type instead of bumping
     # this one (the frozen-DTO boundary rule), so inputVersions is
-    # always the singleton [currentVersion].
+    # always the singleton [currentVersion]. Unconditionally required --
+    # it IS the whole legacy envelope's one gameplay component.
     session_text = SESSION_V90_SOURCE_PATH.read_text(encoding="utf-8")
     m = SESSION_COMPONENT_VERSION_RE.search(session_text)
     if not m:
         raise ValueError(
             f"could not find sessionComponentVersion in {SESSION_V90_SOURCE_PATH}")
     registry["session"] = {
-        "currentVersion": int(m.group(1)), "inputVersions": [int(m.group(1))]}
+        "currentVersion": int(m.group(1)), "inputVersions": [int(m.group(1))],
+        "required": True}
 
     id_literals: dict[str, str] = {}
     for path in HASKELL_COMPONENT_SOURCE_PATHS:
@@ -212,7 +257,7 @@ def real_component_registry() -> dict[str, dict]:
 
     for path in HASKELL_COMPONENT_SOURCE_PATHS:
         text = path.read_text(encoding="utf-8")
-        for _codec_name, cid_ident, ver, _req in SERIALIZE_CODEC_RE.findall(text):
+        for _codec_name, cid_ident, ver, req in SERIALIZE_CODEC_RE.findall(text):
             sid = id_literals.get(cid_ident)
             if sid is None:
                 raise ValueError(
@@ -220,8 +265,9 @@ def real_component_registry() -> dict[str, dict]:
                     f"id identifier '{cid_ident}' -- did a ComponentId "
                     f"binding get renamed without updating this parser?")
             registry[sid] = {
-                "currentVersion": int(ver), "inputVersions": [int(ver)]}
-        for cid_ident, ver, vers_str in RECORD_CODEC_RE.findall(text):
+                "currentVersion": int(ver), "inputVersions": [int(ver)],
+                "required": req == "True"}
+        for cid_ident, ver, vers_str, req in RECORD_CODEC_RE.findall(text):
             sid = id_literals.get(cid_ident)
             if sid is None:
                 raise ValueError(
@@ -230,22 +276,25 @@ def real_component_registry() -> dict[str, dict]:
             input_versions = [int(v.strip()) for v in vers_str.split(",")
                                if v.strip()]
             registry[sid] = {
-                "currentVersion": int(ver), "inputVersions": input_versions}
+                "currentVersion": int(ver), "inputVersions": input_versions,
+                "required": req == "True"}
 
     for path, lua_id in [(LUA_UNIT_AI_SOURCE_PATH, "unit_ai"),
                           (LUA_BUILDING_SPAWN_SOURCE_PATH, "building_spawn")]:
         text = path.read_text(encoding="utf-8")
         vm = LUA_MODULE_VERSION_RE.search(text)
         ivm = LUA_MODULE_INPUT_VERSIONS_RE.search(text)
-        if not vm or not ivm:
+        rm = LUA_MODULE_REQUIRED_RE.search(text)
+        if not vm or not ivm or not rm:
             raise ValueError(
-                f"could not find version/inputVersions in {path} -- did "
-                f"saveMods.register('{lua_id}', {{...}})'s declaration "
-                f"shape change?")
+                f"could not find version/inputVersions/required in {path} "
+                f"-- did saveMods.register('{lua_id}', {{...}})'s "
+                f"declaration shape change?")
         input_versions = [int(v.strip()) for v in ivm.group(1).split(",")
                            if v.strip()]
         registry[f"lua.{lua_id}"] = {
-            "currentVersion": int(vm.group(1)), "inputVersions": input_versions}
+            "currentVersion": int(vm.group(1)), "inputVersions": input_versions,
+            "required": rm.group(1) == "true"}
 
     return registry
 
@@ -261,6 +310,19 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
         accepted input versions (catches "removal of a declared
         decoder" -- ccInputVers/inputVersions shrinking out from under
         a tracked historical fixture);
+      - every REQUIRED component (round-3 review: reads ccRequired/Lua's
+        required flag, not just version counts) must be tracked by AT
+        LEAST ONE baseline's components[], regardless of how many
+        input versions it accepts -- a brand-new required component
+        with a single input version was previously invisible to this
+        audit entirely (it never has ">1 input version", the ONLY case
+        the prior check looked at), so it could ship with genuinely NO
+        baseline ever proving it has an accounted default/migration
+        policy for a session that predates it, while this audit still
+        passed. An OPTIONAL component has no such obligation -- a
+        legacy save legitimately lacking it is exactly requirement 9's
+        "unknown/absent optional component" case, not a compatibility
+        gap;
       - every component with more than one accepted input version (a
         real migration exists) must have its OLDEST accepted version
         tracked by at least one baseline's components[] -- proving
@@ -294,10 +356,22 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
                     f"updating this baseline")
 
     for comp_id, real in real_registry.items():
+        tracked = tracked_versions.get(comp_id, set())
+        if real.get("required") and not tracked:
+            violations.append(
+                f"component '{comp_id}' is REQUIRED (accepted input "
+                f"versions {sorted(real['inputVersions'])}) but is not "
+                f"tracked by ANY manifest baseline's components[] -- a "
+                f"required component with no baseline exercising it has "
+                f"no proof its default/migration policy for a session "
+                f"predating it was ever considered; add it to some "
+                f"baseline's components[] (backed by a fixture covering "
+                f"it) before this gap ships")
+            continue
         if len(real["inputVersions"]) <= 1:
             continue
         oldest = min(real["inputVersions"])
-        if oldest not in tracked_versions.get(comp_id, set()):
+        if oldest not in tracked:
             violations.append(
                 f"component '{comp_id}' accepts input versions "
                 f"{sorted(real['inputVersions'])} (a migration exists from "
@@ -534,6 +608,315 @@ def _finalize_manifest_write(
     return 1
 
 
+class GenerationError(Exception):
+    """A real-engine fixture-generation step failed (requirement 21)."""
+
+
+def _make_isolated_gen_root(base: str) -> str:
+    """A throwaway resource root: real scripts/assets/data/config
+    (symlinked -- read-only content, safe to share) plus its OWN empty
+    saves/ directory -- mirrors tools/save_compat_migration_probe.py's
+    make_isolated_root/tools/save_storage_probe.py's own helper, so a
+    generated fixture never touches a real player's saves."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO_ROOT, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def _bootstrap_gen_defs(send, port: int) -> None:
+    """Load the defs a headless boot skips (no loading screen) but
+    engine.saveWorld's own content still needs to resolve real
+    building/unit/recipe names -- mirrors tools/multiworld_save_probe.py/
+    tools/save_compat_migration_probe.py's identical helper. Only needed
+    when actually spawning something (an entity-free session never
+    references any def at all)."""
+    import glob
+    loaders = [
+        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
+        ("data/items/*.yaml",      "engine.loadItemYaml"),
+        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
+        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
+        ("data/units/*.yaml",      "engine.loadUnitYaml"),
+        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
+        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
+    ]
+    for pattern, fn in loaders:
+        for path in sorted(glob.glob(pattern)):
+            send(port, f"{fn}('{path}'); return 'ok'")
+
+
+def generate_current_format_session(
+        port: int, page_id: str, seed: int, world_size: int, plate_count: int,
+        spawn_building: str, spawn_unit: str, out_path: Path) -> None:
+    """Boot a REAL headless engine (isolated resource root -- see
+    _make_isolated_gen_root), init a world, optionally spawn ONE building
+    and/or ONE unit through the SAME engine.saveWorld/building.spawn/
+    unit.spawn verbs every other probe in this repo already uses, then
+    save it -- producing genuine CURRENT-format envelope bytes through
+    the real World.Save.Storage/Envelope.Codec production path (the
+    exact same one an ordinary player save takes), not a hand-built or
+    spliced value. Raises GenerationError on any rejected step.
+
+    This can only ever produce a fixture at the CURRENT wire format -- a
+    live engine never writes a historical shape (see this module's own
+    docstring for why a historical baseline stays a manual operation)."""
+    from probelib import boot, send, quit_engine
+    tmpdir = tempfile.mkdtemp(prefix="save_compat_gen_")
+    slot = "generated"
+    proc = None
+    try:
+        root = _make_isolated_gen_root(tmpdir)
+        proc = boot(port, log=f"/tmp/save_compat_gen_{page_id}.log",
+                    args=["--resource-root", root], ready_timeout=180)
+        if spawn_building or spawn_unit:
+            _bootstrap_gen_defs(send, port)
+        inited = send(port, f"world.init('{page_id}', {seed}, {world_size}, "
+                             f"{plate_count}); return 'ok'")
+        if "ok" not in inited:
+            raise GenerationError(f"world.init failed: {inited!r}")
+        time.sleep(1.0)  # let generation settle before saving/spawning
+
+        # world.show (not just world.init) puts the page in wmVisible --
+        # mirrors tools/multiworld_save_probe.py's identical note: without
+        # it, building.spawn/canPlaceAt's snapshotVisibleWorldTiles read
+        # can reject a spawn, and the saved snapshot's own visiblePages/
+        # live-camera-owner-page would come out empty/null instead of
+        # matching an ordinary player session's shape.
+        send(port, f"world.show('{page_id}'); return 'ok'")
+        active_deadline = time.time() + 10.0
+        while time.time() < active_deadline:
+            if send(port, "return world.getActiveWorldId()").strip('"') == page_id:
+                break
+            time.sleep(0.2)
+        else:
+            raise GenerationError(f"'{page_id}' never became the active world")
+
+        def as_int(s: str):
+            try:
+                return int(float(s))
+            except (TypeError, ValueError):
+                return None
+
+        # unit.spawn/building.spawn return the new entity's id (a
+        # non-negative integer, as a string) on success, not a boolean --
+        # mirrors tools/multiworld_save_probe.py's as_int/bid<0 convention.
+        if spawn_building:
+            r = send(port, f"return building.spawn('{spawn_building}', 0, 0)")
+            bid = as_int(r)
+            if bid is None or bid < 0:
+                raise GenerationError(
+                    f"building.spawn('{spawn_building}') rejected: {r!r}")
+        if spawn_unit:
+            r = send(port, f"return unit.spawn('{spawn_unit}', 0, 0, 0, 'player')")
+            uid = as_int(r)
+            if uid is None or uid < 0:
+                raise GenerationError(
+                    f"unit.spawn('{spawn_unit}') rejected: {r!r}")
+        saved = send(port, f"return engine.saveWorld('{page_id}', '{slot}')")
+        if saved.strip() != "true":
+            raise GenerationError(f"engine.saveWorld failed: {saved!r}")
+        saved_path = os.path.join(root, "saves", slot, "world.synworld")
+        for _ in range(100):
+            if os.path.isfile(saved_path):
+                break
+            time.sleep(0.1)
+        if not os.path.isfile(saved_path):
+            raise GenerationError(f"saved file never appeared at {saved_path}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(saved_path, out_path)
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# A small, permanent GHCi program (run via `cabal repl` subprocess) that
+# derives a fixture's canonical-summary JSON DIRECTLY from its real,
+# decoded SessionSnapshot/SaveMetadata -- not from live engine queries,
+# several of which (hour/minute of day, in particular) have no debug-
+# console verb to read at all. Mirrors EXACTLY the schema
+# test-headless/Test/Headless/World/Save/Compat.hs's ExpectedSummary/
+# ExpectedPage/Expected* Aeson types parse -- the two must be kept in
+# sync by hand if that schema ever grows a field.
+GHCI_DUMP_SUMMARY_TEMPLATE = r"""
+:set -XOverloadedStrings -XTypeApplications
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Aeson as Aeson
+import Data.Aeson ((.=))
+import qualified Data.Text as T
+import Data.List (sortOn)
+import World.Save.Envelope (decodeSessionEnvelope)
+import World.Save.Snapshot
+import World.Save.Types
+import World.Page.Types (WorldPageId(..))
+import Building.Types (BuildingId(..))
+import Unit.Types (UnitId(..))
+import Unit.Sim.Types (UnitSimState(..))
+import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
+import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
+import Item.Ground (GroundItems(..))
+
+bytes <- BS.readFile "{fixture_path}"
+
+:{{
+let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+    decoded = decodeSessionEnvelope luaNames luaNames bytes
+:}}
+
+:{{
+case decoded of
+  Left err -> putStrLn ("DUMP_FAILED: decode: " ++ T.unpack err)
+  Right (meta, snap, luaComponents, isMig) -> do
+    let dumpBuilding (bid, b) = Aeson.object
+          [ "id" .= unBuildingId bid, "defName" .= bisDefName b
+          , "anchorX" .= bisAnchorX b, "anchorY" .= bisAnchorY b
+          , "gridZ" .= bisGridZ b, "buildProgress" .= bisBuildProgress b ]
+        dumpUnit (uid, u) = Aeson.object
+          [ "id" .= unUnitId uid, "defName" .= uisDefName u
+          , "gridX" .= uisGridX u, "gridY" .= uisGridY u
+          , "gridZ" .= uisGridZ u, "facing" .= T.pack (show (uisFacing u))
+          , "activity" .= uisActivity u, "pose" .= uisPose u ]
+        dumpSim (uid, s) = Aeson.object
+          [ "unitId" .= unUnitId uid, "realX" .= usRealX s, "realY" .= usRealY s
+          , "gridZ" .= usGridZ s, "pose" .= T.pack (show (usPose s))
+          , "state" .= T.pack (show (usState s))
+          , "facing" .= T.pack (show (usFacing s)) ]
+        dumpBill b = Aeson.object
+          [ "id" .= unBillId (cbId b), "station" .= unBuildingId (cbStation b)
+          , "recipe" .= cbRecipe b, "remaining" .= cbRemaining b
+          , "claimant" .= fmap unUnitId (cbClaimant b)
+          , "mode" .= T.pack (show (cbMode b)) ]
+        dumpNode n = Aeson.object
+          [ "id" .= unPowerNodeId (pnId n), "building" .= unBuildingId (pnBuilding n)
+          , "role" .= T.pack (show (pnRole n)), "peakWatts" .= pnPeakWatts n
+          , "capacityWh" .= pnCapacityWh n, "storedWh" .= pnStoredWh n ]
+        dumpPage (WorldPageId pid, page) = Aeson.object
+          [ "pageId" .= pid
+          , "buildingCount" .= HM.size (bsnInstances (pgsBuildings page))
+          , "unitCount" .= HM.size (usnInstances (pgsUnits page))
+          , "unitSimStateCount" .= HM.size (pgsUnitSimStates page)
+          , "craftBillCount" .= HM.size (cbsBills (pgsCraftBills page))
+          , "powerNodeCount" .= HM.size (pnsNodes (pgsPowerNodes page))
+          , "groundItemCount" .= HM.size (gisItems (pgsGroundItems page))
+          , "timeHour" .= pgsTimeHour page, "timeMinute" .= pgsTimeMinute page
+          , "dateYear" .= pgsDateYear page, "dateMonth" .= pgsDateMonth page
+          , "dateDay" .= pgsDateDay page
+          , "mapMode" .= T.pack (show (pgsMapMode page))
+          , "buildings" .= map dumpBuilding
+              (sortOn (unBuildingId . fst)
+                 (HM.toList (bsnInstances (pgsBuildings page))))
+          , "units" .= map dumpUnit
+              (sortOn (unUnitId . fst) (HM.toList (usnInstances (pgsUnits page))))
+          , "unitSimStates" .= map dumpSim
+              (sortOn (unUnitId . fst) (HM.toList (pgsUnitSimStates page)))
+          , "craftBills" .= map dumpBill
+              (sortOn cbId (HM.elems (cbsBills (pgsCraftBills page))))
+          , "powerNodes" .= map dumpNode
+              (sortOn pnId (HM.elems (pnsNodes (pgsPowerNodes page))))
+          ]
+        cam = snapLiveCamera snap
+        WorldPageId activePageText = snapActivePage snap
+        summary = Aeson.object
+          [ "metadata" .= Aeson.object
+              [ "seed" .= smSeed meta, "worldSize" .= smWorldSize meta
+              , "plateCount" .= smPlateCount meta, "worldName" .= smWorldName meta
+              , "worldGloss" .= smWorldGloss meta ]
+          , "gameTime" .= snapGameTime snap
+          , "nextItemId" .= snapNextItemId snap
+          , "nextBuildingId" .= snapNextBuildingId snap
+          , "nextUnitId" .= snapNextUnitId snap
+          , "camera" .= Aeson.object
+              [ "ownerPage" .= fmap (\(WorldPageId p) -> p) (lcsOwnerPage cam)
+              , "x" .= lcsX cam, "y" .= lcsY cam, "zoom" .= lcsZoom cam
+              , "facing" .= T.pack (show (lcsFacing cam)) ]
+          , "activePage" .= activePageText
+          , "visiblePages" .= map (\(WorldPageId p) -> p) (snapVisiblePages snap)
+          , "pages" .= map dumpPage (HM.toList (snapPages snap))
+          , "luaComponentCount" .= length luaComponents
+          , "isMigratedLegacyBaseline" .= isMig
+          ]
+    BSL.writeFile "{output_path}" (Aeson.encode summary)
+    putStrLn "DUMP_OK"
+:}}
+"""
+
+
+def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool, str]:
+    """Run GHCI_DUMP_SUMMARY_TEMPLATE via a `cabal repl` subprocess to
+    derive fixture_path's canonical summary and write it to output_path.
+    Returns (ok, diagnostic-tail-on-failure)."""
+    script = GHCI_DUMP_SUMMARY_TEMPLATE.format(
+        fixture_path=str(fixture_path), output_path=str(output_path))
+    try:
+        proc = subprocess.run(
+            ["cabal", "repl", "test:synarchy-test-headless"],
+            input=script, cwd=REPO_ROOT, capture_output=True, text=True,
+            timeout=1800)
+    except FileNotFoundError:
+        return False, "'cabal' was not found on PATH"
+    output = (proc.stdout or "") + (proc.stderr or "")
+    if "DUMP_OK" not in output or not output_path.exists():
+        return False, "\n".join(output.splitlines()[-60:])
+    return True, ""
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    """--generate-session: produce a brand-new CURRENT-format complete-
+    session fixture through the real engine + real codec end to end,
+    then delegate straight to cmd_add_baseline for the SAME atomic
+    registration + real-codec validation --add-baseline already does
+    (this only ever produces a "complete-session" fixture, so args.kind
+    is fixed here rather than asked for)."""
+    fixture_path = REPO_ROOT / args.path
+    summary_path = REPO_ROOT / args.summary
+    if fixture_path.exists() and not args.force:
+        print(f"refusing to overwrite existing file '{args.path}' -- "
+              f"pass --force if this is deliberate", file=sys.stderr)
+        return 1
+
+    try:
+        generate_current_format_session(
+            port=args.port, page_id=args.page_id, seed=args.seed,
+            world_size=args.world_size, plate_count=args.plate_count,
+            spawn_building=args.spawn_building, spawn_unit=args.spawn_unit,
+            out_path=fixture_path)
+    except GenerationError as e:
+        print(f"fixture generation failed: {e}", file=sys.stderr)
+        return 1
+
+    ok, tail = dump_canonical_summary(fixture_path, summary_path)
+    if not ok:
+        fixture_path.unlink(missing_ok=True)
+        print(f"canonical-summary derivation failed (generated fixture "
+              f"bytes discarded): {tail}", file=sys.stderr)
+        return 1
+
+    args.kind = "complete-session"
+    if not args.provenance:
+        args.provenance = (
+            f"Generated through the real codec (tools/save_compat_audit.py "
+            f"--generate-session): a real headless engine booted in an "
+            f"isolated resource root, world.init('{args.page_id}', "
+            f"{args.seed}, {args.world_size}, {args.plate_count})"
+            + (f", building.spawn('{args.spawn_building}', 0, 0)"
+               if args.spawn_building else "")
+            + (f", unit.spawn('{args.spawn_unit}', 0, 0, 0, 'player')"
+               if args.spawn_unit else "")
+            + f", then engine.saveWorld -- the exact production save path "
+              f"an ordinary player save takes. Its canonical summary was "
+              f"derived directly from the real decoded SessionSnapshot "
+              f"(dump_canonical_summary), not hand-transcribed.")
+    return cmd_add_baseline(args)
+
+
 def cmd_add_baseline(args: argparse.Namespace) -> int:
     manifest = load_manifest(MANIFEST_PATH)
     existing_baseline = next(
@@ -612,6 +995,28 @@ def main() -> int:
     ap.add_argument("--add-baseline", action="store_true",
                      help="atomically register a fixture (and, if new, its "
                           "whole baseline entry) instead of auditing")
+    ap.add_argument("--generate-session", action="store_true",
+                     help="generate a brand-new CURRENT-format complete-"
+                          "session fixture through a real headless engine, "
+                          "then register it exactly like --add-baseline "
+                          "(requirement 21's real generation mode)")
+    ap.add_argument("--seed", type=int, default=42,
+                     help="--generate-session only, default 42")
+    ap.add_argument("--world-size", type=int, default=8,
+                     help="--generate-session only, default 8")
+    ap.add_argument("--plate-count", type=int, default=3,
+                     help="--generate-session only, default 3")
+    ap.add_argument("--page-id", default="generated_page",
+                     help="--generate-session only, default 'generated_page'")
+    ap.add_argument("--spawn-building", default=None,
+                     help="--generate-session only: a real building def "
+                          "name to spawn at (0,0), e.g. cargo_hold_S")
+    ap.add_argument("--spawn-unit", default=None,
+                     help="--generate-session only: a real unit def name "
+                          "to spawn at (0,0), e.g. acolyte")
+    ap.add_argument("--port", type=int, default=9280,
+                     help="--generate-session only: debug-console port "
+                          "for the generation engine boot")
     ap.add_argument("--baseline-id", help="baseline id (new or existing)")
     ap.add_argument("--fixture-id", help="fixture id within that baseline")
     ap.add_argument("--path", help="fixture file path, repo-relative -- "
@@ -643,6 +1048,12 @@ def main() -> int:
                           "cabal toolchain; the checked-in CI gate still "
                           "catches a bad fixture on the next push")
     args = ap.parse_args()
+    if args.generate_session:
+        if not args.baseline_id or not args.fixture_id or not args.path \
+                or not args.summary:
+            ap.error("--generate-session requires --baseline-id, "
+                     "--fixture-id, --path, and --summary")
+        return cmd_generate(args)
     if args.add_baseline:
         if not args.baseline_id or not args.fixture_id or not args.path or not args.kind:
             ap.error("--add-baseline requires --baseline-id, --fixture-id, "

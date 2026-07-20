@@ -32,7 +32,7 @@ module Test.Headless.World.Save.Compat (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.Aeson as Aeson
-import Data.Aeson ((.:), (.:?))
+import Data.Aeson ((.:), (.:?), (.!=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.HashMap.Strict as HM
@@ -49,14 +49,18 @@ import World.Save.Envelope.Codec (decodeEnvelope, encodeEnvelope, dePayloads)
 import World.Save.Envelope.Types (defaultEnvelopeLimits, ComponentId(..))
 import World.Save.Compat.SessionV90
 import World.Save.Types
-    ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..) )
+    ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
+    , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..) )
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import World.Save.Component.Page (fromWorldGenParamsDTO)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
-import Craft.Bills (CraftBills(..))
-import Power.Types (PowerNodes(..))
+import Building.Types (BuildingId(..))
+import Unit.Types (UnitId(..))
+import Unit.Sim.Types (UnitSimState(..))
+import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
+import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 
 hexDecode ∷ String → BS.ByteString
@@ -133,6 +137,65 @@ instance Aeson.FromJSON ExpectedCamera where
         <$> o .: "ownerPage" <*> o .: "x" <*> o .: "y"
         <*> o .: "zoom" <*> o .: "facing"
 
+-- | Entity-level canonical values (round-3 review): the aggregate
+--   counts above prove nothing about a migration that maps a valid
+--   entity/job/reference to the WRONG value -- re-encode/fresh-decode
+--   equivalence only proves the ALREADY-PRODUCED snapshot is self-
+--   consistent, not that it's the value the fixture's own real content
+--   actually means. These optional lists (default @[]@ via '.:?'/'.!=',
+--   never required -- b1's fixture has no entities at all) let a
+--   fixture's expected-summary pin down specific entities by id and
+--   compare their real field values, not just how many exist.
+data ExpectedBuilding = ExpectedBuilding
+    { ebId ∷ !Word32, ebDefName ∷ !Text, ebAnchorX ∷ !Int, ebAnchorY ∷ !Int
+    , ebGridZ ∷ !Int, ebBuildProgress ∷ !Float
+    }
+
+instance Aeson.FromJSON ExpectedBuilding where
+    parseJSON = Aeson.withObject "building" $ \o → ExpectedBuilding
+        <$> o .: "id" <*> o .: "defName" <*> o .: "anchorX" <*> o .: "anchorY"
+        <*> o .: "gridZ" <*> o .: "buildProgress"
+
+data ExpectedUnit = ExpectedUnit
+    { euId ∷ !Word32, euDefName ∷ !Text, euGridX ∷ !Float, euGridY ∷ !Float
+    , euGridZ ∷ !Int, euFacing ∷ !Text, euActivity ∷ !Text, euPose ∷ !Text
+    }
+
+instance Aeson.FromJSON ExpectedUnit where
+    parseJSON = Aeson.withObject "unit" $ \o → ExpectedUnit
+        <$> o .: "id" <*> o .: "defName" <*> o .: "gridX" <*> o .: "gridY"
+        <*> o .: "gridZ" <*> o .: "facing" <*> o .: "activity" <*> o .: "pose"
+
+data ExpectedUnitSimState = ExpectedUnitSimState
+    { eusUnitId ∷ !Word32, eusRealX ∷ !Float, eusRealY ∷ !Float
+    , eusGridZ ∷ !Int, eusPose ∷ !Text, eusState ∷ !Text, eusFacing ∷ !Text
+    }
+
+instance Aeson.FromJSON ExpectedUnitSimState where
+    parseJSON = Aeson.withObject "unitSimState" $ \o → ExpectedUnitSimState
+        <$> o .: "unitId" <*> o .: "realX" <*> o .: "realY" <*> o .: "gridZ"
+        <*> o .: "pose" <*> o .: "state" <*> o .: "facing"
+
+data ExpectedCraftBill = ExpectedCraftBill
+    { ecbId ∷ !Word32, ecbStation ∷ !Word32, ecbRecipe ∷ !Text
+    , ecbRemaining ∷ !Int, ecbClaimant ∷ !(Maybe Word32), ecbMode ∷ !Text
+    }
+
+instance Aeson.FromJSON ExpectedCraftBill where
+    parseJSON = Aeson.withObject "craftBill" $ \o → ExpectedCraftBill
+        <$> o .: "id" <*> o .: "station" <*> o .: "recipe"
+        <*> o .: "remaining" <*> o .: "claimant" <*> o .: "mode"
+
+data ExpectedPowerNode = ExpectedPowerNode
+    { epnId ∷ !Word32, epnBuilding ∷ !Word32, epnRole ∷ !Text
+    , epnPeakWatts ∷ !Float, epnCapacityWh ∷ !Float, epnStoredWh ∷ !Float
+    }
+
+instance Aeson.FromJSON ExpectedPowerNode where
+    parseJSON = Aeson.withObject "powerNode" $ \o → ExpectedPowerNode
+        <$> o .: "id" <*> o .: "building" <*> o .: "role"
+        <*> o .: "peakWatts" <*> o .: "capacityWh" <*> o .: "storedWh"
+
 data ExpectedPage = ExpectedPage
     { epPageId ∷ !Text, epBuildingCount ∷ !Int, epUnitCount ∷ !Int
     , epUnitSimStateCount ∷ !Int, epCraftBillCount ∷ !Int
@@ -140,6 +203,11 @@ data ExpectedPage = ExpectedPage
     , epTimeHour ∷ !Int, epTimeMinute ∷ !Int
     , epDateYear ∷ !Int, epDateMonth ∷ !Int, epDateDay ∷ !Int
     , epMapMode ∷ !Text
+    , epBuildings ∷ ![ExpectedBuilding]
+    , epUnits ∷ ![ExpectedUnit]
+    , epUnitSimStates ∷ ![ExpectedUnitSimState]
+    , epCraftBills ∷ ![ExpectedCraftBill]
+    , epPowerNodes ∷ ![ExpectedPowerNode]
     }
 
 instance Aeson.FromJSON ExpectedPage where
@@ -150,6 +218,11 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .: "timeHour" <*> o .: "timeMinute"
         <*> o .: "dateYear" <*> o .: "dateMonth" <*> o .: "dateDay"
         <*> o .: "mapMode"
+        <*> o .:? "buildings" .!= []
+        <*> o .:? "units" .!= []
+        <*> o .:? "unitSimStates" .!= []
+        <*> o .:? "craftBills" .!= []
+        <*> o .:? "powerNodes" .!= []
 
 data ExpectedSummary = ExpectedSummary
     { esMeta ∷ !ExpectedMeta
@@ -264,6 +337,82 @@ spec = do
                                     pgsDateDay page `shouldBe` epDateDay ep
                                     T.pack (show (pgsMapMode page))
                                         `shouldBe` epMapMode ep
+
+                                    -- Entity-level values (round-3 review):
+                                    -- an aggregate count can't catch a
+                                    -- migration that maps a valid entity/
+                                    -- job/reference to the WRONG value --
+                                    -- look each declared entity up by its
+                                    -- OWN id and compare real field values,
+                                    -- not merely "one exists".
+                                    forM_ (epBuildings ep) $ \eb →
+                                        case HM.lookup (BuildingId (ebId eb))
+                                                 (bsnInstances (pgsBuildings page)) of
+                                            Nothing → expectationFailure
+                                                ("building #" <> show (ebId eb)
+                                                 <> " missing from migrated page")
+                                            Just b → do
+                                                bisDefName b `shouldBe` ebDefName eb
+                                                bisAnchorX b `shouldBe` ebAnchorX eb
+                                                bisAnchorY b `shouldBe` ebAnchorY eb
+                                                bisGridZ b `shouldBe` ebGridZ eb
+                                                bisBuildProgress b `shouldBe` ebBuildProgress eb
+
+                                    forM_ (epUnits ep) $ \eu →
+                                        case HM.lookup (UnitId (euId eu))
+                                                 (usnInstances (pgsUnits page)) of
+                                            Nothing → expectationFailure
+                                                ("unit #" <> show (euId eu)
+                                                 <> " missing from migrated page")
+                                            Just u → do
+                                                uisDefName u `shouldBe` euDefName eu
+                                                uisGridX u `shouldBe` euGridX eu
+                                                uisGridY u `shouldBe` euGridY eu
+                                                uisGridZ u `shouldBe` euGridZ eu
+                                                T.pack (show (uisFacing u)) `shouldBe` euFacing eu
+                                                uisActivity u `shouldBe` euActivity eu
+                                                uisPose u `shouldBe` euPose eu
+
+                                    forM_ (epUnitSimStates ep) $ \eus →
+                                        case HM.lookup (UnitId (eusUnitId eus))
+                                                 (pgsUnitSimStates page) of
+                                            Nothing → expectationFailure
+                                                ("unit-sim state for unit #"
+                                                 <> show (eusUnitId eus)
+                                                 <> " missing from migrated page")
+                                            Just s → do
+                                                usRealX s `shouldBe` eusRealX eus
+                                                usRealY s `shouldBe` eusRealY eus
+                                                usGridZ s `shouldBe` eusGridZ eus
+                                                T.pack (show (usPose s)) `shouldBe` eusPose eus
+                                                T.pack (show (usState s)) `shouldBe` eusState eus
+                                                T.pack (show (usFacing s)) `shouldBe` eusFacing eus
+
+                                    forM_ (epCraftBills ep) $ \ecb →
+                                        case HM.lookup (BillId (ecbId ecb))
+                                                 (cbsBills (pgsCraftBills page)) of
+                                            Nothing → expectationFailure
+                                                ("craft bill #" <> show (ecbId ecb)
+                                                 <> " missing from migrated page")
+                                            Just b → do
+                                                unBuildingId (cbStation b) `shouldBe` ecbStation ecb
+                                                cbRecipe b `shouldBe` ecbRecipe ecb
+                                                cbRemaining b `shouldBe` ecbRemaining ecb
+                                                fmap unUnitId (cbClaimant b) `shouldBe` ecbClaimant ecb
+                                                T.pack (show (cbMode b)) `shouldBe` ecbMode ecb
+
+                                    forM_ (epPowerNodes ep) $ \epn →
+                                        case HM.lookup (PowerNodeId (epnId epn))
+                                                 (pnsNodes (pgsPowerNodes page)) of
+                                            Nothing → expectationFailure
+                                                ("power node #" <> show (epnId epn)
+                                                 <> " missing from migrated page")
+                                            Just n → do
+                                                unBuildingId (pnBuilding n) `shouldBe` epnBuilding epn
+                                                T.pack (show (pnRole n)) `shouldBe` epnRole epn
+                                                pnPeakWatts n `shouldBe` epnPeakWatts epn
+                                                pnCapacityWh n `shouldBe` epnCapacityWh epn
+                                                pnStoredWh n `shouldBe` epnStoredWh epn
 
                         -- Re-encode/fresh-decode equivalence: the migrated
                         -- snapshot, run back through the SAME current-format
