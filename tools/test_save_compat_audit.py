@@ -204,6 +204,128 @@ def test_frozen_dto_fingerprint_changes_on_field_reorder() -> None:
                "expected fingerprint to change on field reorder")
 
 
+class _Args:
+    """A minimal stand-in for argparse.Namespace -- only the attributes
+    cmd_add_baseline/_build_fixture_entry actually read."""
+    def __init__(self, **kwargs) -> None:
+        defaults = dict(
+            baseline_id=None, fixture_id=None, path=None, kind=None,
+            summary=None, provenance=None, description=None,
+            migration_target=None, migrated_by=None, components=None,
+            declared_at=None, declared_by_issue=766, force=False)
+        defaults.update(kwargs)
+        self.__dict__.update(defaults)
+
+
+def test_add_baseline_creates_a_new_baseline_and_fixture_atomically() -> None:
+    print("--add-baseline creates a whole new baseline entry")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fixture = make_fixture(tmp, "new.bin", b"new fixture bytes")
+        summary = tmp / "new.expected.json"
+        summary.write_text('{"ok": true}')
+        manifest_path = tmp / "manifest.json"
+        manifest_path.write_text(json.dumps({"baselines": []}))
+        old_path = sca.MANIFEST_PATH
+        sca.MANIFEST_PATH = manifest_path
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="new-baseline", fixture_id="new-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                summary=str(summary.relative_to(sca.REPO_ROOT)),
+                description="a test baseline", migration_target="current",
+                migrated_by="test", components='[{"id":"metadata","version":1,"required":true}]'))
+            expect(rc == 0, f"expected success, got exit code {rc}")
+            written = json.loads(manifest_path.read_text())
+            baselines = written.get("baselines", [])
+            expect(len(baselines) == 1 and baselines[0]["id"] == "new-baseline",
+                   f"expected exactly the new baseline, got {baselines}")
+            if baselines:
+                fixtures = baselines[0]["fixtures"]
+                expect(len(fixtures) == 1 and fixtures[0]["id"] == "new-fixture"
+                       and fixtures[0]["sha256"] == hashlib.sha256(b"new fixture bytes").hexdigest(),
+                       f"expected the new fixture registered with a real checksum, got {fixtures}")
+        finally:
+            sca.MANIFEST_PATH = old_path
+
+
+def test_add_baseline_refuses_new_baseline_missing_required_fields() -> None:
+    print("--add-baseline refuses to create a new baseline missing description/migration-target/etc.")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fixture = make_fixture(tmp, "new.bin", b"new fixture bytes")
+        summary = tmp / "new.expected.json"
+        summary.write_text('{"ok": true}')
+        manifest_path = tmp / "manifest.json"
+        manifest_path.write_text(json.dumps({"baselines": []}))
+        old_path = sca.MANIFEST_PATH
+        sca.MANIFEST_PATH = manifest_path
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="incomplete-baseline", fixture_id="new-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                summary=str(summary.relative_to(sca.REPO_ROOT))))
+            expect(rc == 1, f"expected refusal (missing baseline fields), got exit code {rc}")
+            written = json.loads(manifest_path.read_text())
+            expect(written.get("baselines", []) == [],
+                   "expected the manifest to stay untouched on refusal")
+        finally:
+            sca.MANIFEST_PATH = old_path
+
+
+def test_add_baseline_refuses_to_overwrite_without_force() -> None:
+    print("--add-baseline refuses to silently overwrite an already-registered fixture")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        original = b"original bytes"
+        fixture = make_fixture(tmp, "f.bin", original)
+        summary = tmp / "f.expected.json"
+        summary.write_text('{"ok": true}')
+        manifest_path = tmp / "manifest.json"
+        manifest_path.write_text(json.dumps(base_manifest(tmp, fixture, original)))
+        tampered = b"tampered bytes -- someone hand-regenerated without --force"
+        fixture.write_bytes(tampered)
+        old_path = sca.MANIFEST_PATH
+        sca.MANIFEST_PATH = manifest_path
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="test-baseline", fixture_id="test-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                summary=str(summary.relative_to(sca.REPO_ROOT))))
+            expect(rc == 1, f"expected refusal without --force, got exit code {rc}")
+            rc2 = sca.cmd_add_baseline(_Args(
+                baseline_id="test-baseline", fixture_id="test-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                summary=str(summary.relative_to(sca.REPO_ROOT)), force=True))
+            expect(rc2 == 0, f"expected --force to succeed, got exit code {rc2}")
+            written = json.loads(manifest_path.read_text())
+            expect(written["baselines"][0]["fixtures"][0]["sha256"]
+                   == hashlib.sha256(tampered).hexdigest(),
+                   "expected --force to record the NEW checksum")
+        finally:
+            sca.MANIFEST_PATH = old_path
+
+
+def test_add_baseline_requires_summary_for_complete_session() -> None:
+    print("--add-baseline refuses a complete-session fixture with no --summary")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fixture = make_fixture(tmp, "f.bin", b"bytes")
+        manifest_path = tmp / "manifest.json"
+        manifest_path.write_text(json.dumps({"baselines": []}))
+        old_path = sca.MANIFEST_PATH
+        sca.MANIFEST_PATH = manifest_path
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="b", fixture_id="f",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                description="d", migration_target="current", migrated_by="m",
+                components="[]"))
+            expect(rc == 1, f"expected refusal (no --summary), got exit code {rc}")
+        finally:
+            sca.MANIFEST_PATH = old_path
+
+
 def test_real_manifest_passes_the_audit() -> None:
     print("the real, checked-in manifest currently passes (regression guard)")
     manifest = sca.load_manifest()
@@ -224,6 +346,10 @@ def main() -> int:
         test_detects_baseline_with_no_fixtures,
         test_frozen_dto_fingerprint_is_comment_insensitive,
         test_frozen_dto_fingerprint_changes_on_field_reorder,
+        test_add_baseline_creates_a_new_baseline_and_fixture_atomically,
+        test_add_baseline_refuses_new_baseline_missing_required_fields,
+        test_add_baseline_refuses_to_overwrite_without_force,
+        test_add_baseline_requires_summary_for_complete_session,
         test_real_manifest_passes_the_audit,
     ]:
         fn()

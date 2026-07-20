@@ -20,20 +20,43 @@ through explicit migrations -- against silent drift:
     editor must consciously re-run --add-baseline (or acknowledge the
     change) rather than silently altering historical bytes.
 
-This is a static presence/fingerprint check, not a proof that a fixture
-actually migrates correctly -- see test-headless's "save components" /
-"save compatibility" hspec gates and tools/save_compat_migration_probe.py
-for the real decode/migrate/assemble/integrity coverage this audit does
-not replicate.
+This is a static presence/fingerprint check, not itself a proof that a
+fixture migrates correctly -- that real decode/migrate/assemble/
+canonical-result cross-check (requirement 14) lives in test-headless's
+"save migrations" hspec gate ("manifest-declared fixtures decode and
+migrate to their expected canonical result", which reads this SAME
+manifest and every fixture/expectedCanonicalSummary it declares), backed
+by tools/save_compat_migration_probe.py's real-engine round trip. Run:
+cabal test synarchy-test-headless --test-options='--match "save migrations"'
 
 Usage:
   python3 tools/save_compat_audit.py                # blocking audit (CI)
+
+  # Register a fixture on an EXISTING baseline (checksum + summary,
+  # atomically):
   python3 tools/save_compat_audit.py --add-baseline \\
-      --id my-fixture --path path/to/fixture.bin     # register a NEW
-                                                        fixture's checksum
-                                                        (refuses to
-                                                        overwrite an
-                                                        existing id)
+      --baseline-id b1-initial-session --fixture-id my-fixture \\
+      --path test-headless/data/save-compat/my-fixture.bin \\
+      --kind complete-session \\
+      --summary test-headless/data/save-compat/my-fixture.expected.json
+
+  # Register a fixture AND create its baseline entry together (id not
+  # yet declared):
+  python3 tools/save_compat_audit.py --add-baseline \\
+      --baseline-id my-new-baseline --fixture-id my-fixture \\
+      --path test-headless/data/save-compat/my-fixture.bin \\
+      --kind complete-session \\
+      --summary test-headless/data/save-compat/my-fixture.expected.json \\
+      --description "..." --migration-target current \\
+      --migrated-by "World.Save.Compat.SessionV90.migrateSessionV90" \\
+      --components '[{"id":"metadata","version":1,"required":true}, ...]'
+
+  Either form refuses to overwrite an already-registered fixture id
+  without --force. The raw fixture BYTES and --summary JSON must already
+  exist (generated through the real codec -- see the manifest's own
+  "provenance" fields for worked examples); this command only performs
+  the atomic bookkeeping (checksum, size, manifest/summary wiring), since
+  only Haskell can run the cereal codec that produces them.
 
 Exit codes: 0 = every declared fixture/fingerprint is intact,
 1 = one or more violations (see printed detail).
@@ -177,7 +200,7 @@ def audit(manifest: dict) -> list[str]:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    manifest = load_manifest()
+    manifest = load_manifest(MANIFEST_PATH)
     violations = audit(manifest)
     if violations:
         print(f"{len(violations)} save-compatibility violation(s):")
@@ -191,50 +214,160 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_manifest_atomically(manifest: dict, manifest_path: Path = MANIFEST_PATH) -> None:
+    """Write the manifest via a same-directory temp file + atomic rename,
+    so a crash/interruption mid-write can never leave a half-written,
+    unparseable manifest.json behind."""
+    tmp = manifest_path.with_name(manifest_path.name + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(manifest_path)
+
+
+def _build_fixture_entry(args: argparse.Namespace) -> dict:
+    fpath = REPO_ROOT / args.path
+    if not fpath.exists():
+        raise SystemExit(f"path '{args.path}' does not exist -- generate the "
+                          f"fixture through the real codec FIRST (see "
+                          f"docs/save_compat/manifest.json's own "
+                          f"'provenance' fields for worked examples), then "
+                          f"run this command to register it")
+    data = fpath.read_bytes()
+    entry = {
+        "id": args.fixture_id,
+        "path": args.path,
+        "kind": args.kind,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sizeBytes": len(data),
+        "provenance": args.provenance or "(fill in: how was this fixture generated?)",
+        "expectedCanonicalSummary": None,
+    }
+    if args.summary:
+        summary_path = REPO_ROOT / args.summary
+        if not summary_path.exists():
+            raise SystemExit(f"--summary path '{args.summary}' does not "
+                              f"exist -- author the expected-canonical-"
+                              f"summary JSON first (see an existing "
+                              f"*.expected.json for the schema), then "
+                              f"register together")
+        try:
+            json.loads(summary_path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise SystemExit(f"--summary path '{args.summary}' is not valid "
+                              f"JSON: {e}")
+        entry["expectedCanonicalSummary"] = args.summary
+    elif args.kind == "complete-session":
+        raise SystemExit("a 'complete-session' fixture needs --summary "
+                          "(requirement 12/14: every complete-session "
+                          "fixture must have an expected canonical result "
+                          "to validate against)")
+    return entry
+
+
 def cmd_add_baseline(args: argparse.Namespace) -> int:
-    manifest_path = MANIFEST_PATH
-    manifest = load_manifest(manifest_path)
-    for _, fixture in _iter_fixtures(manifest):
-        if fixture.get("id") == args.id:
-            if not args.force:
-                print(f"refusing to overwrite existing fixture '{args.id}' "
-                      f"-- pass --force if this is a deliberate re-registration "
-                      f"(e.g. after regenerating through the real codec)",
-                      file=sys.stderr)
-                return 1
-            fpath = REPO_ROOT / args.path
-            if not fpath.exists():
-                print(f"path '{args.path}' does not exist", file=sys.stderr)
-                return 1
-            data = fpath.read_bytes()
-            fixture["sha256"] = hashlib.sha256(data).hexdigest()
-            fixture["sizeBytes"] = len(data)
-            manifest_path.write_text(
-                json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-            print(f"updated fixture '{args.id}': sha256={fixture['sha256']} "
-                  f"sizeBytes={fixture['sizeBytes']}")
-            return 0
-    print(f"fixture id '{args.id}' is not declared in any baseline in "
-          f"{manifest_path} yet -- add its manifest entry (baseline id, "
-          f"components, description) by hand first, THEN run --add-baseline "
-          f"to compute and record its checksum. This tool never invents a "
-          f"new baseline's identity on its own.", file=sys.stderr)
-    return 1
+    manifest = load_manifest(MANIFEST_PATH)
+    existing_baseline = next(
+        (b for b in manifest.get("baselines", []) if b.get("id") == args.baseline_id),
+        None)
+
+    try:
+        new_fixture = _build_fixture_entry(args)
+    except SystemExit as e:
+        print(e, file=sys.stderr)
+        return 1
+
+    if existing_baseline is None:
+        # A brand new baseline: requires the full descriptor so the
+        # manifest entry is complete on creation, never a bare fixture
+        # with no declared components/migration target to check it
+        # against.
+        missing = [flag for flag, val in
+                   [("--description", args.description),
+                    ("--migration-target", args.migration_target),
+                    ("--migrated-by", args.migrated_by),
+                    ("--components", args.components)]
+                   if not val]
+        if missing:
+            print(f"baseline '{args.baseline_id}' does not exist yet -- "
+                  f"creating a NEW baseline also requires: {', '.join(missing)}",
+                  file=sys.stderr)
+            return 1
+        try:
+            components = json.loads(args.components)
+        except ValueError as e:
+            print(f"--components is not valid JSON: {e}", file=sys.stderr)
+            return 1
+        manifest.setdefault("baselines", []).append({
+            "id": args.baseline_id,
+            "description": args.description,
+            "declaredAt": args.declared_at or "(fill in: YYYY-MM-DD)",
+            "declaredByIssue": args.declared_by_issue,
+            "supportStatus": "supported",
+            "migrationTarget": args.migration_target,
+            "migratedBy": args.migrated_by,
+            "components": components,
+            "fixtures": [new_fixture],
+        })
+        _write_manifest_atomically(manifest, MANIFEST_PATH)
+        print(f"created baseline '{args.baseline_id}' with fixture "
+              f"'{args.fixture_id}': sha256={new_fixture['sha256']} "
+              f"sizeBytes={new_fixture['sizeBytes']}")
+        return 0
+
+    existing_fixture = next(
+        (f for f in existing_baseline.get("fixtures", [])
+         if f.get("id") == args.fixture_id), None)
+    if existing_fixture is not None and not args.force:
+        print(f"refusing to overwrite existing fixture '{args.fixture_id}' "
+              f"on baseline '{args.baseline_id}' -- pass --force if this is "
+              f"a deliberate re-registration (e.g. after regenerating "
+              f"through the real codec)", file=sys.stderr)
+        return 1
+    if existing_fixture is not None:
+        existing_baseline["fixtures"] = [
+            new_fixture if f.get("id") == args.fixture_id else f
+            for f in existing_baseline["fixtures"]]
+    else:
+        existing_baseline.setdefault("fixtures", []).append(new_fixture)
+    _write_manifest_atomically(manifest, MANIFEST_PATH)
+    print(f"registered fixture '{args.fixture_id}' on baseline "
+          f"'{args.baseline_id}': sha256={new_fixture['sha256']} "
+          f"sizeBytes={new_fixture['sizeBytes']}")
+    return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--add-baseline", action="store_true",
-                     help="record a fixture's checksum instead of auditing")
-    ap.add_argument("--id", help="fixture id (with --add-baseline)")
-    ap.add_argument("--path", help="fixture file path, repo-relative (with --add-baseline)")
+                     help="atomically register a fixture (and, if new, its "
+                          "whole baseline entry) instead of auditing")
+    ap.add_argument("--baseline-id", help="baseline id (new or existing)")
+    ap.add_argument("--fixture-id", help="fixture id within that baseline")
+    ap.add_argument("--path", help="fixture file path, repo-relative -- "
+                                    "already generated through the real codec")
+    ap.add_argument("--kind", choices=["complete-session", "component-focused"],
+                     help="fixture kind (requirement 11)")
+    ap.add_argument("--summary", help="expected-canonical-summary JSON path, "
+                                        "repo-relative (required for "
+                                        "complete-session fixtures)")
+    ap.add_argument("--provenance", help="how this fixture was generated "
+                                           "(free text, recorded verbatim)")
+    ap.add_argument("--description", help="baseline description (new baseline only)")
+    ap.add_argument("--migration-target", help="e.g. 'current' (new baseline only)")
+    ap.add_argument("--migrated-by", help="the migration function/codec path "
+                                            "(new baseline only)")
+    ap.add_argument("--components", help="JSON array of {id,version,required} "
+                                           "(new baseline only)")
+    ap.add_argument("--declared-at", help="YYYY-MM-DD (new baseline only)")
+    ap.add_argument("--declared-by-issue", type=int, default=766,
+                     help="new baseline only, default 766")
     ap.add_argument("--force", action="store_true",
                      help="allow re-registering an already-recorded fixture id")
     args = ap.parse_args()
     if args.add_baseline:
-        if not args.id or not args.path:
-            ap.error("--add-baseline requires --id and --path")
+        if not args.baseline_id or not args.fixture_id or not args.path or not args.kind:
+            ap.error("--add-baseline requires --baseline-id, --fixture-id, "
+                     "--path, and --kind")
         return cmd_add_baseline(args)
     return cmd_audit(args)
 

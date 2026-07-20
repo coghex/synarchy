@@ -230,6 +230,25 @@ decodeSessionV90 bytes = case S.decode bytes of
 migrateSessionV90
     ∷ SaveMetadata → SaveDataV90 → Either [ComponentError] SessionSnapshot
 migrateSessionV90 meta sd = do
+    -- Requirement 7: a NON-EMPTY legacy Lua blob map means this B1 save
+    -- carried real persisted AI/spawn-sequencer state — the old
+    -- deserializer that could interpret it (scripts/lib/serialize.lua)
+    -- was removed by #761, so there is no honest translation left.
+    -- Silently proceeding would discard that state on the very next
+    -- save with no record it ever existed (exactly the "lossy
+    -- migration/component salvage" this issue rules out of scope) — an
+    -- EMPTY map (the common real case: most B1 saves predate any
+    -- registered Lua module actually persisting non-trivial state, and
+    -- this migration's own generated fixtures always start empty) has
+    -- nothing to lose, so it proceeds.
+    when (not (HM.null (sd90LuaModules sd))) $
+        Left [ComponentError sessionComponentId sessionComponentVersion
+                MigratePhase
+                ("legacy save carries " <> T.pack (show (HM.size (sd90LuaModules sd)))
+                 <> " non-empty Lua module blob(s) (" <> luaModuleNames sd
+                 <> ") that this build can no longer interpret (the pre-#761 \
+                    \Lua deserializer was removed) -- refusing to migrate \
+                    \rather than silently discard persisted Lua state")]
     let ps = sd90Worlds sd
         base = basePageSnapshots (WorldPagesDTO (map toPageCoreV90 ps))
     afterEdits ← applyWorldEdits 1
@@ -292,6 +311,12 @@ deriveLiveCamera sd = case active of
         []    → case sd90Worlds sd of
                     (p:_) → Just p
                     []    → Nothing
+
+-- | A short, bounded preview of which legacy Lua modules carried
+--   unmigratable state, for the rejection message above -- never the
+--   blob CONTENTS (opaque, and irrelevant to naming what's affected).
+luaModuleNames ∷ SaveDataV90 → Text
+luaModuleNames sd = T.intercalate ", " (take 5 (HM.keys (sd90LuaModules sd)))
 
 snapErr ∷ Show e ⇒ e → ComponentError
 snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase (T.pack (show e))

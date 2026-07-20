@@ -1,0 +1,25 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's c3-typed-reference-v1-minimal fixture (issue #766/#764). Proves the ALREADY-EXISTING per-component v1->v2 raw-to-typed-reference dispatch (World.Save.Component.Entities' craftBillsCodec/powerNodesCodec/unitSimCodec ccInputVers=[1,2]) without any new migration code -- this fixture goes through the ORDINARY modern registry-driven decode path (isMigratedLegacyBaseline=false), just with three components encoded at their historical v1 (bare-id) shape. Cross-checked by Test.Headless.World.Save.Compat's manifest-driven gate.",
+  "metadata": {
+    "seed": 123456,
+    "worldSize": 128,
+    "plateCount": 10,
+    "worldName": "Rich World",
+    "worldGloss": "a gloss"
+  },
+  "activePage": "page1",
+  "visiblePages": ["page1"],
+  "pages": [
+    {
+      "pageId": "page1",
+      "buildingCount": 1,
+      "unitCount": 1,
+      "unitSimStateCount": 1,
+      "craftBillCount": 1,
+      "powerNodeCount": 1,
+      "groundItemCount": 1
+    }
+  ],
+  "luaComponentCount": 0,
+  "isMigratedLegacyBaseline": false
+}

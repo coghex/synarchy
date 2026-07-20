@@ -1,5 +1,5 @@
 {
-  "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py and tools/save_compat_fixtures.py.",
+  "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py (--add-baseline registers a fixture's checksum/summary together).",
   "envelopeFramingVersion": 1,
   "frozenDtoFingerprint": "30ae5c8d1f615fde815b4ca839722925444efcf2591d2169f187da46836fdcf0",
   "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs",
@@ -14,8 +14,16 @@
       "migrationTarget": "current",
       "migratedBy": "World.Save.Compat.SessionV90.migrateSessionV90",
       "components": [
-        {"id": "metadata", "version": 1, "required": true},
-        {"id": "session", "version": 90, "required": true}
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "session",
+          "version": 90,
+          "required": true
+        }
       ],
       "fixtures": [
         {
@@ -30,6 +38,115 @@
       ]
     },
     {
+      "id": "c3-raw-reference-v1",
+      "description": "The raw-to-typed persistent-reference transition (issue #764, save-overhaul C3): craft-bills/power-nodes/unit-sim were bumped from v1 (bare BuildingId/UnitId references) to v2 (SamePageRef-typed references), each with an explicit v1->v2 migration (migrateCraftBillDTOv1/migratePowerNodesDTOv1/migrateUnitSimDTOv1). This baseline needs NO new migration code from this issue -- the existing ccInputVers=[1,2]-dispatched decode in World.Save.Component.Entities already fully supports it; this entry exists so removing that v1 decode support (or the migration functions) fails the compatibility audit, and so the fixture proves the dispatch through the REAL envelope/registry path, not just the isolated migrate* unit tests.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Entities.craftBillsCodec/powerNodesCodec/unitSimCodec (ccInputVers=[1,2], already existing since issue #764)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 1,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "c3-typed-reference-v1-minimal",
+          "path": "test-headless/data/save-compat/c3-typed-reference-v1.bin",
+          "kind": "complete-session",
+          "sha256": "e373ec75c640ffb3f76a1f60ecf81351358bf88a32f3ee8ebd91e9ba5d81f07f",
+          "sizeBytes": 2434,
+          "provenance": "Generated through the real codec: Test.Headless.World.Save.Components' existing fullSnapshot fixture (one page, one building, one unit, one unit-sim state, one craft bill, one power node -- already used by the 'round-trips a session populating EVERY component's data' hspec gate) encoded via World.Save.Component.encodeComponentSpecs, with craft-bills/power-nodes/unit-sim's payloads swapped for their historical v1 (bare-id) DTOs (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1, already exported by World.Save.Component.Entities) before being wrapped in the envelope alongside the metadata component.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "b3-lua-versioned",
+      "description": "The first versioned Lua persistence components (issue #761, save-overhaul B3): each registered persistent Lua module (unit_ai, building_spawn) became its own dynamically-added envelope component with an explicit version/inputVersions/decode/validate contract, mirroring the Haskell registry. Issue #764 (save-overhaul C3) then added a v1->v3 reference-typing migration on TOP of that same Lua contract (wrapUnitState/addOwnerToAiState etc. in scripts/unit_ai_save_refs.lua). This baseline is documentation-only in THIS manifest: Lua-side persistence versioning lives entirely in scripts/lib/save_modules.lua's own registry, not the Haskell envelope's component-version dispatch this manifest otherwise tracks, and its real decode/migrate/validate coverage already exists as a comprehensive, already-blocking hspec gate (see fixtures below) rather than a tracked binary fixture in this repo's format -- registering it here satisfies requirement 2's 'so existing decoders cannot be removed without the compatibility gate failing' without duplicating that coverage in a second fixture format.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported (documentation-only entry; see description)",
+      "migrationTarget": "current",
+      "migratedBy": "scripts/unit_ai_save.lua / scripts/building_spawn.lua's decode() (v1/v2/v3), scripts/unit_ai_save_refs.lua's wrapUnitState/addOwnerToAiState",
+      "components": [
+        {
+          "id": "lua.unit_ai",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "b3-lua-versioned-hspec-coverage",
+          "path": "test-headless/Test/Headless/Lua/SaveModules.hs",
+          "kind": "component-focused",
+          "sha256": null,
+          "sizeBytes": null,
+          "provenance": "Not a tracked binary fixture -- this points at the existing, already-blocking hspec gate (\"Lua persistence components\", part of cabal test synarchy-test-headless) that exercises unit_ai/building_spawn's v1/v2/v3 decode+migrate+validate contract directly through a standalone Lua VM (HsLua), synthesizing each historical payload shape rather than reading a tracked binary. Removing that coverage, or the v1/v2 decode branches it tests, fails the SAME cabal test synarchy-test-headless gate this manifest's own fixtures run under.",
+          "expectedCanonicalSummary": null
+        }
+      ]
+    },
+    {
       "id": "historical-b1-session-recovered",
       "description": "A REAL B1-era envelope recovered from git history (commit 988c2727, the tracked fixture Test.Headless.World.Save.Envelope carried before #760 replaced it) -- proves World.Save.Compat.SessionV90's frozen DTO decodes genuine pre-#760 bytes, not merely this codebase's own encoder output. This fixture's own \"metadata\" component was hand-picked independently of its gameplay gen params by the original test author (world size 64 / plate count 3, vs. the page's real defaultWorldGenParams 128 / 10) -- B1 predates requirement 12's manifest/gameplay agreement check entirely, so the FULL migration (decodeSessionEnvelope) correctly rejects it on that pre-existing mismatch. It is tracked as decode-only evidence, not as a fixture the full migration pipeline must accept.",
       "declaredAt": "2026-07-20",
@@ -38,8 +155,16 @@
       "migrationTarget": "n/a (frozen-DTO byte-compatibility evidence only)",
       "migratedBy": "World.Save.Compat.SessionV90.decodeSessionV90",
       "components": [
-        {"id": "metadata", "version": 1, "required": true},
-        {"id": "session", "version": 90, "required": true}
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "session",
+          "version": 90,
+          "required": true
+        }
       ],
       "fixtures": [
         {

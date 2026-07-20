@@ -1052,6 +1052,19 @@ spec = do
                     isMigrated `shouldBe` True
                     snapActivePage snap `shouldBe` WorldPageId "main_world"
 
+        it "refuses to migrate a B1 session carrying non-empty legacy Lua \
+           \module state, rather than silently discarding it (requirement \
+           \7: the pre-#761 Lua deserializer that could interpret it is \
+           \gone, so there is no honest translation left)" $ do
+            let luaSd = minimalSaveDataV90
+                    { sd90LuaModules = HM.singleton "unit_ai" "opaque legacy blob" }
+            case migrateSessionV90 minimalSaveMetadataV90 luaSd of
+                Right _   → expectationFailure
+                    "expected non-empty legacy Lua state to be rejected"
+                Left errs → do
+                    errs `shouldSatisfy` (not . null)
+                    map cePhase errs `shouldSatisfy` all (≡ MigratePhase)
+
     -- #760 requirement 9: a saved building/unit whose content DEFINITION
     -- is no longer registered must be a LOAD-VALIDATION FAILURE (the
     -- complete load is rejected before any live state is published), not

@@ -277,9 +277,15 @@ dropping the in-progress stamp.
   raw-to-typed-reference transition (issue #764, save-overhaul C3;
   `craft-bills`/`power-nodes`/`unit-sim` components v1→v2) is the first
   real example of this machinery in the modern, already-split component
-  set — `docs/save_compat/manifest.json` documents it as already
-  supported without a new migration function, since the existing
-  `ccInputVers`-dispatched decode already handles it.
+  set — `docs/save_compat/manifest.json`'s `c3-raw-reference-v1` baseline
+  documents it as already supported without a new migration function
+  (the existing `ccInputVers`-dispatched decode already handles it),
+  backed by a tracked fixture proving the v1 payloads decode through the
+  real envelope/registry path. The first versioned Lua components
+  (issue #761, save-overhaul B3) are likewise documented as a
+  `b3-lua-versioned` manifest entry, pointing at the existing, already-
+  blocking `test-headless/Test/Headless/Lua/SaveModules.hs` hspec gate
+  rather than a second tracked-fixture format for Lua's own versioning.
 - An unsupported or malformed save must fail clearly (a readable error
   naming the expected vs. found version, mirroring the existing
   `currentSaveVersion` mismatch behavior) without partially modifying

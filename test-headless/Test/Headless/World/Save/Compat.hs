@@ -31,7 +31,10 @@ module Test.Headless.World.Save.Compat (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.Aeson as Aeson
+import Data.Aeson ((.:), (.:?))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
@@ -42,10 +45,15 @@ import World.Save.Envelope
 import World.Save.Envelope.Codec (decodeEnvelope, dePayloads)
 import World.Save.Envelope.Types (defaultEnvelopeLimits, ComponentId(..))
 import World.Save.Compat.SessionV90
-import World.Save.Types (SaveMetadata(..))
+import World.Save.Types
+    ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..) )
+import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 import World.Save.Component.Page (fromWorldGenParamsDTO)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
+import Craft.Bills (CraftBills(..))
+import Power.Types (PowerNodes(..))
+import Item.Ground (GroundItems(..))
 
 hexDecode ∷ String → BS.ByteString
 hexDecode = BS.pack . go
@@ -71,8 +79,136 @@ extractSessionPayload bytes =
             Just p  → p
             Nothing → error "test setup: session payload missing"
 
+-- Manifest / canonical-summary parsing (requirement 14: the blocking
+-- audit must actually decode/migrate/validate a declared fixture, not
+-- merely check its checksum -- tools/save_compat_audit.py's own docstring
+-- names this hspec gate as where that real cross-check lives, since only
+-- Haskell can run the codec).
+
+data ManifestFixtureRef = ManifestFixtureRef
+    { mfrPath            ∷ !FilePath
+    , mfrKind            ∷ !Text
+    , mfrSha256          ∷ !(Maybe Text)
+    , mfrExpectedSummary ∷ !(Maybe FilePath)
+    }
+
+instance Aeson.FromJSON ManifestFixtureRef where
+    parseJSON = Aeson.withObject "fixture" $ \o → ManifestFixtureRef
+        <$> o .: "path" <*> o .: "kind" <*> o .:? "sha256"
+        <*> o .:? "expectedCanonicalSummary"
+
+data ManifestBaseline = ManifestBaseline
+    { mbId ∷ !Text, mbFixtures ∷ ![ManifestFixtureRef] }
+
+instance Aeson.FromJSON ManifestBaseline where
+    parseJSON = Aeson.withObject "baseline" $ \o →
+        ManifestBaseline <$> o .: "id" <*> o .: "fixtures"
+
+newtype Manifest = Manifest { mBaselines ∷ [ManifestBaseline] }
+
+instance Aeson.FromJSON Manifest where
+    parseJSON = Aeson.withObject "manifest" $ \o → Manifest <$> o .: "baselines"
+
+data ExpectedMeta = ExpectedMeta
+    { emSeed ∷ !Word64, emWorldSize ∷ !Int, emPlateCount ∷ !Int
+    , emWorldName ∷ !(Maybe Text), emWorldGloss ∷ !(Maybe Text)
+    }
+
+instance Aeson.FromJSON ExpectedMeta where
+    parseJSON = Aeson.withObject "metadata" $ \o → ExpectedMeta
+        <$> o .: "seed" <*> o .: "worldSize" <*> o .: "plateCount"
+        <*> o .: "worldName" <*> o .: "worldGloss"
+
+data ExpectedPage = ExpectedPage
+    { epPageId ∷ !Text, epBuildingCount ∷ !Int, epUnitCount ∷ !Int
+    , epUnitSimStateCount ∷ !Int, epCraftBillCount ∷ !Int
+    , epPowerNodeCount ∷ !Int, epGroundItemCount ∷ !Int
+    }
+
+instance Aeson.FromJSON ExpectedPage where
+    parseJSON = Aeson.withObject "page" $ \o → ExpectedPage
+        <$> o .: "pageId" <*> o .: "buildingCount" <*> o .: "unitCount"
+        <*> o .: "unitSimStateCount" <*> o .: "craftBillCount"
+        <*> o .: "powerNodeCount" <*> o .: "groundItemCount"
+
+data ExpectedSummary = ExpectedSummary
+    { esMeta ∷ !ExpectedMeta
+    , esActivePage ∷ !Text
+    , esVisiblePages ∷ ![Text]
+    , esPages ∷ ![ExpectedPage]
+    , esLuaComponentCount ∷ !Int
+    , esIsMigratedLegacyBaseline ∷ !Bool
+    }
+
+instance Aeson.FromJSON ExpectedSummary where
+    parseJSON = Aeson.withObject "expected summary" $ \o → ExpectedSummary
+        <$> o .: "metadata" <*> o .: "activePage" <*> o .: "visiblePages"
+        <*> o .: "pages" <*> o .: "luaComponentCount"
+        <*> o .: "isMigratedLegacyBaseline"
+
+decodeJSONFile ∷ Aeson.FromJSON a ⇒ FilePath → IO (Either String a)
+decodeJSONFile path = Aeson.eitherDecode <$> BSL.readFile path
+
 spec ∷ Spec
 spec = do
+    describe "manifest-declared fixtures decode and migrate to their \
+             \expected canonical result (requirement 14)" $
+        it "every complete-session fixture with a tracked checksum \
+           \matches docs/save_compat/manifest.json's own expected \
+           \canonical summary" $ do
+            manifestResult ← decodeJSONFile "docs/save_compat/manifest.json"
+            manifest ← either
+                (\err → expectationFailure ("manifest parse failed: " <> err)
+                        >> fail "unreachable") pure manifestResult
+            let checkable =
+                    [ f | b ← mBaselines manifest, f ← mbFixtures b
+                    , mfrKind f ≡ "complete-session"
+                    , Just _ ← [mfrSha256 f] ]
+            null checkable `shouldBe` False
+            forM_ checkable $ \fixture → do
+                bytes ← BS.readFile (mfrPath fixture)
+                summaryPath ← maybe
+                    (fail (mfrPath fixture <> ": complete-session fixture \
+                                             \has no expectedCanonicalSummary"))
+                    pure (mfrExpectedSummary fixture)
+                summaryResult ← decodeJSONFile summaryPath
+                expected ← either
+                    (\err → expectationFailure (summaryPath <> ": " <> err)
+                            >> fail "unreachable") pure summaryResult
+                case decodeSessionEnvelope HS.empty HS.empty bytes of
+                    Left err → expectationFailure
+                        (mfrPath fixture <> ": " <> T.unpack err)
+                    Right (meta, snap, luaComponents, isMigrated) → do
+                        let em = esMeta expected
+                        smSeed meta `shouldBe` emSeed em
+                        smWorldSize meta `shouldBe` emWorldSize em
+                        smPlateCount meta `shouldBe` emPlateCount em
+                        smWorldName meta `shouldBe` emWorldName em
+                        smWorldGloss meta `shouldBe` emWorldGloss em
+                        snapActivePage snap `shouldBe` WorldPageId (esActivePage expected)
+                        snapVisiblePages snap
+                            `shouldBe` map WorldPageId (esVisiblePages expected)
+                        length luaComponents `shouldBe` esLuaComponentCount expected
+                        isMigrated `shouldBe` esIsMigratedLegacyBaseline expected
+                        forM_ (esPages expected) $ \ep →
+                            case HM.lookup (WorldPageId (epPageId ep)) (snapPages snap) of
+                                Nothing → expectationFailure
+                                    (T.unpack (epPageId ep) <> ": page missing \
+                                              \from migrated snapshot")
+                                Just page → do
+                                    HM.size (bsnInstances (pgsBuildings page))
+                                        `shouldBe` epBuildingCount ep
+                                    HM.size (usnInstances (pgsUnits page))
+                                        `shouldBe` epUnitCount ep
+                                    HM.size (pgsUnitSimStates page)
+                                        `shouldBe` epUnitSimStateCount ep
+                                    HM.size (cbsBills (pgsCraftBills page))
+                                        `shouldBe` epCraftBillCount ep
+                                    HM.size (pnsNodes (pgsPowerNodes page))
+                                        `shouldBe` epPowerNodeCount ep
+                                    HM.size (gisItems (pgsGroundItems page))
+                                        `shouldBe` epGroundItemCount ep
+
     describe "frozen v90 DTO (issue #766, save-overhaul C4)" $ do
         it "decodes the real, tracked B1 envelope fixture's metadata \
            \component (not merely this test's own encoder output)" $
