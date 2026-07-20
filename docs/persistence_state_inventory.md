@@ -75,6 +75,7 @@ the affected fields as unclassified.
 | `worldQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `sunAngleRef` | global | Rebuild | active page's world time | derived via `worldTimeToSunAngle` | none yet |
 | `worldPreviewRef` | global | Exclude | — | pending GPU upload payload | none yet |
+| `worldPreviewGenerationRef` | global | Exclude | — | runtime-only monotonic generation token used to suppress stale world-preview upload announcements; never serialized | `Test.Headless.Lua.PreviewGeneration` |
 | `zoomAtlasDataRef` | global | Exclude | — | pending GPU upload payload | none yet |
 | `screenshotRequestQueue` | global | Exclude | — | debug-only transport queue; see contract §3 | none yet |
 | `worldQuadsRef` | global | Rebuild | loaded chunk data | render cache | none yet |
