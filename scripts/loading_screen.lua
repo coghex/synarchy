@@ -31,8 +31,21 @@ loadingScreen.showMenuCallback = nil
 
 -- Tracking
 loadingScreen.phase           = "idle"  -- "idle", "loading", "done"
-loadingScreen.mode            = "worldgen"  -- "worldgen" | "startup"
+loadingScreen.mode            = "worldgen"  -- "worldgen" | "startup" | "load"
 loadingScreen.statusText      = "Loading..."
+
+-- issue #763: fired once a whole-session engine.loadSave transaction
+-- reaches LoadPublished ("load" mode only) — the loaded page now exists
+-- and is visible, so the callback is where a caller resolves
+-- world.getActiveWorldId() and finishes binding worldManager/worldView
+-- to it (a load no longer always targets "main_world"). Fired at most
+-- once per load, then cleared.
+loadingScreen.onLoadReady  = nil
+-- Fired once a "load" mode transaction reaches LoadFailed, with the raw
+-- engine.getLoadStatus().outcome string (diagnostic only — see the
+-- engine log for the real reason). Fired at most once per load, then
+-- cleared.
+loadingScreen.onLoadFailed = nil
 
 -- Texture handles for bar (loaded once)
 loadingScreen.barTextures = {
@@ -75,6 +88,28 @@ local phase1Labels = {
 }
 
 -----------------------------------------------------------
+-- Whole-session load transaction phases (issue #763,
+-- save-overhaul C2) — mirrors Engine.Load.Status.LoadPhase's Show
+-- output. Maps to 0%-90%; the remaining 10%-100% is the ordinary
+-- per-chunk "worldgen" bar this mode hands off to once published (the
+-- loaded page's own remaining init-queue chunks).
+-----------------------------------------------------------
+local loadPhaseInfo = {
+    LoadRequested          = {0.02, "Preparing to load..."},
+    LoadPaused             = {0.04, "Preparing to load..."},
+    LoadSourceSelected     = {0.10, "Reading save file..."},
+    LoadEnvelopeValidated  = {0.15, "Validating save file..."},
+    LoadComponentsDecoded  = {0.25, "Decoding save data..."},
+    LoadComponentsMigrated = {0.30, "Migrating save data..."},
+    LoadSnapshotAssembled  = {0.35, "Assembling session..."},
+    LoadContentValidated   = {0.40, "Validating content..."},
+    LoadStaged             = {0.70, "Rebuilding world..."},
+    LoadWaitingPublish     = {0.90, "Finalizing..."},
+    LoadPublished          = {1.00, "Complete!"},
+    LoadFailed             = {0.00, "Load failed"},
+}
+
+-----------------------------------------------------------
 -- Init (called once from ui_manager.checkReady)
 -----------------------------------------------------------
 
@@ -93,6 +128,15 @@ end
 
 function loadingScreen.setShowMenuCallback(callback)
     loadingScreen.showMenuCallback = callback
+end
+
+-- issue #763: see loadingScreen.onLoadReady's declaration above.
+function loadingScreen.setOnLoadReady(callback)
+    loadingScreen.onLoadReady = callback
+end
+
+function loadingScreen.setOnLoadFailed(callback)
+    loadingScreen.onLoadFailed = callback
 end
 
 -----------------------------------------------------------
@@ -287,6 +331,54 @@ function loadingScreen.update(dt)
         if startupLoader.isDone() then
             loadingScreen.phase = "done"
             engine.logInfo("Startup loader complete")
+        end
+        return
+    end
+
+    -- Whole-session load mode (issue #763): the loaded page doesn't
+    -- exist at all yet — world.getInitProgress() would either see
+    -- nothing or a stale PREVIOUS session's progress — so this polls
+    -- engine.getLoadStatus() until the transaction actually publishes,
+    -- then hands off to the ordinary "worldgen" per-chunk bar below
+    -- (world.getInitProgress() resolves correctly from here on, since
+    -- publish already made the loaded page visible).
+    if loadingScreen.mode == "load" then
+        local status = engine.getLoadStatus()
+        local phase = status and status.phase or nil
+        local info = phase and loadPhaseInfo[phase]
+        local progress = info and info[1] or 0
+        local barText = info and info[2] or "Loading..."
+
+        if loadingScreen.barId then
+            bar.setProgress(loadingScreen.barId, progress)
+            bar.setText(loadingScreen.barId, "")
+        end
+        if loadingScreen.percentLabelId then
+            label.setText(loadingScreen.percentLabelId,
+                tostring(math.floor(progress * 100)) .. "%")
+        end
+        if loadingScreen.statusLabelId then
+            label.setText(loadingScreen.statusLabelId, barText)
+        end
+
+        if phase == "LoadFailed" then
+            local reason = status and status.outcome or nil
+            local onFailed = loadingScreen.onLoadFailed
+            loadingScreen.onLoadReady  = nil
+            loadingScreen.onLoadFailed = nil
+            loadingScreen.phase = "idle"
+            if onFailed then onFailed(reason) end
+            return
+        end
+
+        if phase == "LoadPublished" then
+            local onReady = loadingScreen.onLoadReady
+            loadingScreen.onLoadReady  = nil
+            loadingScreen.onLoadFailed = nil
+            if onReady then onReady() end
+            -- The loaded page is now live; fall through to the ordinary
+            -- per-chunk progress bar for its remaining init-queue chunks.
+            loadingScreen.mode = "worldgen"
         end
         return
     end

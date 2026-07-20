@@ -2,12 +2,27 @@
 """Headless regression probe for #195 — Lua per-id state surviving a load.
 
 Lua save-module blobs (unit_ai aiState, building_spawn state) are
-restored BEFORE the engine load path, which can drop units/buildings
-whose defs are no longer registered. The Lua side used to keep state for
-those dropped ids, so a later id reuse could inherit stale AI/spawn
-state. The fix has the engine emit a post-load signal (LuaSaveLoaded →
-broadcast `onSaveLoaded`); the modules reconcile their per-id state
+restored BEFORE the engine load path settles. A unit destroyed before a
+save is never in that save's survivor set, so its stale Lua-side AI/spawn
+state must not linger past the load (a later id reuse could otherwise
+inherit it). The fix has the engine emit a post-load signal (LuaSaveLoaded
+→ broadcast `onSaveLoaded`); the modules reconcile their per-id state
 against live entities (unit.exists / building.getInfo, both GLOBAL).
+
+Issue #763 (save-overhaul C2) replaced the incrementally-merging load path
+this reconcile was originally built against: a load now REPLACES THE
+COMPLETE SESSION, so `onSaveLoaded`'s survivor lists always name every
+unit/building in the whole new session — there is no more "off-page"
+subset. Its defensive off-page-preservation branch (part (ii) below) is
+therefore dead code in normal operation now (kept only so a direct,
+non-engine call with a partial survivor set — the shape this test still
+exercises — still degrades safely); the destroy-before-save leak (parts
+1-5) and the nested-ref scrub on survivors (part (i)) remain exactly as
+live as before. Separately, #763 also changed a MISSING GAMEPLAY
+DEFINITION (unlike a destroyed unit, which is simply absent from the
+save) from "silently pruned" to "rejects the whole load, old session
+untouched" — that scenario is covered by
+tools/transactional_load_probe.py instead, not here.
 
 This probe reproduces the leak with a REAL save/load and asserts the
 post-load reconcile prunes it:
@@ -35,7 +50,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/orphan_prune_engine.log"
 # Unique per run, deleted on exit. A fixed name could clobber a real save
@@ -207,11 +222,19 @@ def main() -> int:
             print("FAIL: loadSave did not pause the engine; script update()s "
                   "can race the load reconcile")
             ok = False
+        # Issue #763: loadSave only ACCEPTS synchronously -- the saved page
+        # ("arena", its own id verbatim -- no more main_world remap)
+        # doesn't exist live until the transaction publishes.
+        published, status = wait_load_published(args.port, 180)
+        print(f"load transaction published -> {published} ({status})")
+        if not published:
+            print(f"FAIL: load transaction did not publish: {status}")
+            return 1
         # Block on init, then let the load settle past LoadDone (the world
         # thread restores units, then enqueues the LuaSaveLoaded broadcast).
         send(args.port, "return world.waitForInit(180)", timeout=190)
         time.sleep(2.0)
-        send(args.port, "world.show('main_world'); return 'ok'", expect_result=False)
+        send(args.port, "world.show('arena'); return 'ok'", expect_result=False)
 
         # Poll until the reconcile has run (aiState[A] pruned) or timeout.
         pruned = False

@@ -120,6 +120,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "save_barrier": (SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),
     "save_storage": (SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
                                      "atomic storage transaction's restart-and-select fallback"),
+    "transactional_load": (SCENARIO_HEAVY, "three real engine boots, three real world pages, "
+                                            "a mutual-exclusion race, and a repeated-load loop "
+                                            "(#763)"),
     # --- targeted: useful regression probes, but too narrow for the default
     # PR gate. Run them when touching the named feature. ---
     "collapse_crawl": (TARGETED, "narrow #304 collapse/crawl hysteresis regression"),
@@ -218,6 +221,7 @@ SKIP_GLOBS = [
 CORE_GLOBS = [
     "src/Engine/Core/*", "src/Engine/Monad*",
     "src/Unit/*", "src/World/Thread/*", "src/World/Save/*",
+    "src/World/Load/*", "src/Engine/Load/*", "src/Engine/Save/*",
     "scripts/unit_ai.lua", "scripts/unit_ai_*.lua",
     "scripts/unit_resources.lua", "scripts/unit_stats.lua",
     "scripts/movement_arena.lua",

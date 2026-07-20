@@ -211,10 +211,17 @@ def main() -> int:
             quit_engine(args.port, proc)
             return report(shots)
 
-        # Re-derive the ruin's bounds on the loaded page (main_world) —
-        # never trust phase 1's page id, just its content, which the
-        # save/load round-trip must preserve unchanged.
-        located = send_json(args.port, "return world.listPlacedLocations('main_world')")
+        # Re-derive the ruin's bounds on the loaded page — issue #763
+        # replaced the old "every load lands under main_world" remap
+        # with saved-page-id-preserving replacement, so the loaded page
+        # is still 'pw' (the id it was saved under above), not
+        # 'main_world'. Query the live active page rather than
+        # hardcoding either id, so this stays correct regardless: only
+        # its CONTENT (the ruin overlay entry), not its page id, is what
+        # the save/load round-trip must preserve unchanged.
+        active_page = send(args.port, "return world.getActiveWorldId()").strip().strip('"')
+        located = send_json(args.port,
+            f"return world.listPlacedLocations('{active_page}')")
         located = located if isinstance(located, list) else []
         ruins2 = [e for e in located if e.get("id") == "ruin_small" and "bounds" in e]
         if not check("ruin_small still known from the overlay after load",

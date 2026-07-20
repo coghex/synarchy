@@ -20,7 +20,8 @@ import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
                           , updateCameraZoom)
-import Engine.Scripting.Lua.Message (processLuaMessages)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
+import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
 
 mainLoop ∷ EngineM ε σ ()
 mainLoop = do
@@ -65,6 +66,59 @@ handleEngineStarting env continue = do
     liftIO $ writeIORef (lifecycleRef env) EngineRunning
     continue
 
+-- | Gate camera updates and Lua-to-engine message processing on the
+--   save barrier's capture lock, and genuinely PARTICIPATE in the
+--   barrier as a 'SaveRender' owner (round 15 review, issue #763,
+--   revised twice — see below). A load transaction's publish
+--   ("World.Load.Publish.publishStagedSession") writes cameraRef/
+--   worldQuadsRef/etc. entirely inside that window, so a held pan/drag
+--   computed against the pre-load camera/input state must not land
+--   moments after publish already wrote the replacement camera, and a
+--   stale Lua-to-engine message (scene mutations, sprite/text changes,
+--   destroys) must not run against the freshly-published session.
+--
+--   The first attempt at this fix only READ 'captureLocked' as a
+--   point-in-time pre-check, skipping this tick's work when locked —
+--   but this thread was not a real 'Engine.Save.Barrier.SaveOwner' at
+--   all, so nothing ever waited for it: the barrier could reach the
+--   snapshot boundary and publish in the gap between the check and the
+--   camera/message work it gated, exactly the race a real owner
+--   (Unit/Building/Combat/Simulation, see e.g. 'Unit.Thread') never has
+--   — those threads' own per-tick 'acknowledgeCurrent' calls are what
+--   'waitForOwners' blocks on before the barrier is ever allowed to
+--   reach the snapshot boundary in the first place. Adding 'SaveRender'
+--   as a genuine owner (acknowledged unconditionally below, mirroring
+--   'Unit.Thread'\'s "check locked, do unlocked work if not locked,
+--   always ack" shape) closes the window structurally instead of by
+--   timing: the publish literally cannot happen until this thread has
+--   already acknowledged the end of its own last unlocked tick, so its
+--   camera/message work can never be concurrent with the ref swap.
+--   'SaveRender' is included in a load's owner set only when a render
+--   loop is actually running (see
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged' — headless
+--   boots run neither 'mainLoop' nor 'mainLoopOffscreen' at all, so
+--   nothing would ever acknowledge it there); 'acknowledgeCurrent' is a
+--   no-op when the current transaction's owner set doesn't include
+--   'SaveRender' (a plain save, or a headless load), so this call is
+--   safe unconditionally. 'drawFrame' still runs every tick regardless
+--   (called by both callers after this), so the window/offscreen
+--   target keeps presenting throughout.
+runGatedByCaptureLock ∷ EngineEnv → EngineM ε σ ()
+runGatedByCaptureLock env = do
+    locked ← liftIO $ captureLocked (saveBarrierRef env)
+    if locked
+        then do
+            discarded ← liftIO $ discardLuaMessagesForActiveLoad env
+            when (discarded > 0) $
+                logWarnM CatLua $ "Load publication discarded "
+                    <> T.pack (show discarded) <> " stale Lua-to-engine message(s)"
+        else do
+            updateCameraPanning
+            updateCameraZoom
+            updateCameraMouseDrag
+            processLuaMessages
+    liftIO $ acknowledgeCurrent (saveBarrierRef env) SaveRender
+
 handleEngineRunning ∷ EngineM ε σ ()
 handleEngineRunning = do
     state ← gets graphicsState
@@ -77,13 +131,10 @@ handleEngineRunning = do
     let Window glfwWin = window
 
     GLFW.pollEvents
-    updateCameraPanning
-    updateCameraZoom
-    updateCameraMouseDrag
-    processLuaMessages
+    env ← ask
+    runGatedByCaptureLock env
 
     shouldClose ← GLFW.windowShouldClose glfwWin
-    env ← ask
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
 
     if shouldClose ∨ lifecycle ≢ EngineRunning
@@ -97,12 +148,9 @@ handleEngineRunning = do
 
 handleEngineRunningOffscreen ∷ EngineM ε σ ()
 handleEngineRunningOffscreen = do
-    updateCameraPanning
-    updateCameraZoom
-    updateCameraMouseDrag
-    processLuaMessages
-
     env ← ask
+    runGatedByCaptureLock env
+
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
 
     if lifecycle ≢ EngineRunning

@@ -32,7 +32,7 @@ Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
 
@@ -367,9 +367,12 @@ def main():
         send(port, "engine.saveWorld('probe', 'flora_growth_check'); return 'ok'")
         time.sleep(3.0)
         send(port, "engine.loadSave('flora_growth_check'); return 'ok'")
-        time.sleep(15.0)
-        send(port, "world.show('main_world'); return 'ok'")
-        d5 = jget(port, "return world.getDate('main_world')")
+        published, load_status = wait_load_published(port, 200)
+        if not published:
+            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            return 1
+        send(port, "world.show('probe'); return 'ok'")
+        d5 = jget(port, "return world.getDate('probe')")
         ok5 = isinstance(d5, dict) and d5.get("year") == 3 \
             and d5.get("month") == 2 and d5.get("day") == 10
         passed &= ok5

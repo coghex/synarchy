@@ -31,6 +31,18 @@ module World.Save.Types
     , MissingConstructDefRef(..)
     , renderMissingConstructDefRef
     , missingConstructDefReferences
+    , MissingMaterialRef(..)
+    , renderMissingMaterialRef
+    , missingMaterialReferences
+    , MissingFloraRef(..)
+    , renderMissingFloraRef
+    , missingFloraReferences
+    , MissingLocationRef(..)
+    , renderMissingLocationRef
+    , missingLocationOverlayReferences
+    , MissingInfectionRef(..)
+    , renderMissingInfectionRef
+    , missingInfectionReferences
     ) where
 
 import UPrelude
@@ -44,7 +56,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
-import World.Edit.Types (WorldEdits)
+import World.Edit.Types (WorldEdits, WorldEdit(..))
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types
     (ConstructDesignations, ConstructDesignation(..), ConstructTarget(..))
@@ -53,9 +65,14 @@ import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
-import World.Spoil.Types (SpoilPiles)
+import World.Spoil.Types (SpoilPiles, SpoilPile(..))
+import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
+import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests)
-import World.Flora.CropPlot (CropPlots)
+import World.Flora.CropPlot (CropPlots, CropPlot(..))
+import World.Flora.Types (FloraId(..), FloraCatalog, lookupSpecies)
+import World.Chunk.Types (ChunkCoord(..))
+import Infection.Types (InfectionManager, lookupInfection)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -1088,3 +1105,201 @@ missingConstructDefReferences buildingDefs pages =
     , (tile, cd) ← HM.toList (wpsConstructDesignations w)
     , CtBuilding defName ← [cdTarget cd]
     , not (HS.member defName buildingDefs) ]
+
+-- Material-id validation (issue #763 round-3 review) -----------------
+
+-- | A saved 'MaterialId' — from the edit log ('WeAddTile'/'WeSetCell'),
+--   a spoil pile, or a worldgen tectonic plate's base material — that
+--   this build's 'World.Material.MaterialRegistry' never registered.
+--   Unlike every other 'Missing*Ref' above, 'MaterialId' is a numeric
+--   'Word8' index that is ALWAYS a structurally valid slot (see
+--   'World.Material.isKnownMaterial''s haddock), so this can only mean
+--   the material genuinely existed in the save's origin build's YAML
+--   data and was later removed from this one — same load-validation
+--   contract as every other missing reference (the issue's own
+--   acceptance criteria names "material" explicitly alongside
+--   unit/item/building/recipe).
+data MissingMaterialRef = MissingMaterialRef
+    { mmrSource ∷ !Text          -- ^ e.g. "edit log", "spoil pile", "tectonic plate"
+    , mmrPage   ∷ !WorldPageId
+    , mmrCoord  ∷ !(Int, Int)
+    , mmrMatId  ∷ !Word8
+    } deriving (Show, Eq)
+
+renderMissingMaterialRef ∷ MissingMaterialRef → Text
+renderMissingMaterialRef r =
+    mmrSource r <> " at " <> T.pack (show (mmrCoord r)) <> " on page '"
+        <> unWorldPageId (mmrPage r) <> "' references unknown material id "
+        <> T.pack (show (mmrMatId r))
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved material reference, across all pages, that does not
+--   resolve against the currently-registered material set. Covers the
+--   edit log, spoil piles, AND each page's worldgen plate data
+--   ('wgpPlates' — round 4 review: a plate's base material is
+--   persisted just like any other 'MaterialId' and staging would
+--   otherwise silently render it with 'defaultMaterialProps' instead
+--   of rejecting the load). Empty ⇒ every reference resolves and the
+--   load may proceed.
+missingMaterialReferences
+    ∷ MaterialRegistry
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingMaterialRef]
+missingMaterialReferences registry pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingMaterialRef "edit log" pid (gx, gy) (unMaterialId mat)
+        | edits ← HM.elems (wpsEdits w)
+        , edit ← edits
+        , (gx, gy, mat) ← editMaterialRef edit
+        , not (isKnownMaterial registry mat) ]
+        ⧺
+        [ MissingMaterialRef "spoil pile" pid coord (unMaterialId (spMat sp))
+        | (coord, sp) ← HM.toList (wpsSpoilPiles w)
+        , not (isKnownMaterial registry (spMat sp)) ]
+        ⧺
+        [ MissingMaterialRef "tectonic plate" pid
+              (plateCenterX plate, plateCenterY plate)
+              (unMaterialId (plateMaterial plate))
+        | plate ← wgpPlates (wpsGenParams w)
+        , not (isKnownMaterial registry (plateMaterial plate)) ]
+    editMaterialRef (WeAddTile gx gy mat)   = [(gx, gy, mat)]
+    editMaterialRef (WeSetCell gx gy _z mat) = [(gx, gy, mat)]
+    editMaterialRef _                        = []
+
+-- Flora-id validation (issue #763 round-5 review) --------------------
+
+-- | A saved 'FloraId' — from the edit log ('WePlaceFlora') or a crop
+--   plot's species — that this build's 'World.Flora.Types.FloraCatalog'
+--   does not resolve. Unlike 'MaterialId', a 'FloraId' genuinely CAN be
+--   invalid ('lookupSpecies' returns 'Maybe', no always-total vector
+--   slot to fall back on), so this is a direct existence check, no
+--   special-cased sentinel id needed. Flora species drive crop/foraging
+--   gameplay (growth stage, harvest yield, ...), so an unresolved one
+--   is exactly the same class of load-blocking problem as a missing
+--   unit/item/building/recipe/material definition.
+data MissingFloraRef = MissingFloraRef
+    { mfrSource ∷ !Text          -- ^ e.g. "edit log", "crop plot"
+    , mfrPage   ∷ !WorldPageId
+    , mfrCoord  ∷ !(Int, Int)
+    , mfrFloraId ∷ !Word16
+    } deriving (Show, Eq)
+
+renderMissingFloraRef ∷ MissingFloraRef → Text
+renderMissingFloraRef r =
+    mfrSource r <> " at " <> T.pack (show (mfrCoord r)) <> " on page '"
+        <> unWorldPageId (mfrPage r) <> "' references unknown flora id "
+        <> T.pack (show (mfrFloraId r))
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved flora-species reference, across all pages, that does
+--   not resolve against the currently-registered flora catalog. Covers
+--   the edit log ('WePlaceFlora') and crop plots ('cpSpecies'). Empty
+--   ⇒ every reference resolves and the load may proceed.
+missingFloraReferences
+    ∷ FloraCatalog
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingFloraRef]
+missingFloraReferences catalog pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingFloraRef "edit log" pid (gx, gy) (unFloraId fid)
+        | edits ← HM.elems (wpsEdits w)
+        , edit ← edits
+        , (gx, gy, fid) ← editFloraRef edit
+        , unresolved fid ]
+        ⧺
+        [ MissingFloraRef "crop plot" pid coord (unFloraId (cpSpecies cp))
+        | (coord, cp) ← HM.toList (wpsCropPlots w)
+        , unresolved (cpSpecies cp) ]
+    editFloraRef (WePlaceFlora gx gy fid _day _grow) = [(gx, gy, fid)]
+    editFloraRef _                                    = []
+    unresolved fid = maybe True (const False) (lookupSpecies fid catalog)
+
+-- Location-overlay-id validation (issue #763 round-7 review) ---------
+
+-- | A saved location-overlay entry ('WorldGenParams.wgpLocationOverlay',
+--   one per stamped chunk) whose location id does not resolve against
+--   the currently-registered 'Location.Types.LocationRegistry'. Unlike
+--   'MaterialId'/'FloraId', this is a plain Text key — same shape as
+--   'MissingDefRef' — but it lives on 'WorldGenParams' rather than
+--   inside 'WorldPageSave' proper, which is why it needed its own
+--   validation function even though the check itself is a direct
+--   'HS.HashSet' membership test. A missing location definition would
+--   otherwise silently skip location discovery/placement-bounds
+--   checks for that chunk after publication instead of rejecting the
+--   load.
+data MissingLocationRef = MissingLocationRef
+    { mlrPage  ∷ !WorldPageId
+    , mlrCoord ∷ !(Int, Int)
+    , mlrLocId ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingLocationRef ∷ MissingLocationRef → Text
+renderMissingLocationRef r =
+    "location overlay chunk " <> T.pack (show (mlrCoord r)) <> " on page '"
+        <> unWorldPageId (mlrPage r) <> "' references unknown location id '"
+        <> mlrLocId r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved location-overlay reference, across all pages, that does
+--   not resolve against the currently-registered location definitions.
+--   Empty ⇒ every reference resolves and the load may proceed.
+missingLocationOverlayReferences
+    ∷ HS.HashSet Text                     -- ^ registered location def ids
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingLocationRef]
+missingLocationOverlayReferences locationDefs pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingLocationRef pid (cx, cy) locId
+        | (ChunkCoord cx cy, locId) ← HM.toList (wgpLocationOverlay (wpsGenParams w))
+        , not (HS.member locId locationDefs) ]
+
+-- Infection-definition validation (issue #763 round-8 review) --------
+
+-- | A saved 'Wound' whose 'woundInfectionType' does not resolve against
+--   the currently-registered 'Infection.Types.InfectionManager'. Empty
+--   string is the documented "no infection" sentinel (every wound
+--   starts this way; see 'Combat.Resolution'/'Combat.Wounds.Sever') and
+--   is deliberately excluded, mirroring 'World.Material.isKnownMaterial'\'s
+--   own air (id 0) exclusion — same shape of problem, a real sentinel
+--   value that must never be treated as "missing". A genuinely
+--   unresolved infection type is a required-content gap of the same
+--   kind as a missing unit/item/building/recipe/material/location
+--   definition: 'Engine.Scripting.Lua.API.Units.Combat.lookupInfection'
+--   drives the actual gameplay treatment/progression path off it, so
+--   loading with a fallback here would silently change the wound's
+--   behavior after publication rather than rejecting the load.
+data MissingInfectionRef = MissingInfectionRef
+    { mirPage    ∷ !WorldPageId
+    , mirUnitId  ∷ !Word32
+    , mirWoundPart ∷ !Text
+    , mirInfType ∷ !Text
+    } deriving (Show, Eq)
+
+renderMissingInfectionRef ∷ MissingInfectionRef → Text
+renderMissingInfectionRef r =
+    "unit #" <> T.pack (show (mirUnitId r)) <> " wound (" <> mirWoundPart r
+        <> ") on page '" <> unWorldPageId (mirPage r)
+        <> "' references unknown infection id '" <> mirInfType r <> "'"
+  where unWorldPageId (WorldPageId t) = t
+
+-- | Every saved wound-infection reference, across all pages, that does
+--   not resolve against the currently-registered infection catalogue.
+--   Empty ⇒ every reference resolves and the load may proceed.
+missingInfectionReferences
+    ∷ InfectionManager
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingInfectionRef]
+missingInfectionReferences infMgr pages = concatMap pageRefs pages
+  where
+    pageRefs (pid, w) =
+        [ MissingInfectionRef pid (unUnitId uid) (woundPart wd) infType
+        | (uid, u) ← HM.toList (usnInstances (wpsUnits w))
+        , wd ← uisWounds u
+        , let infType = woundInfectionType wd
+        , not (T.null infType)
+        , not (isJust (lookupInfection infType infMgr)) ]
+    isJust (Just _) = True
+    isJust Nothing  = False

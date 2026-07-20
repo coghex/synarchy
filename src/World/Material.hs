@@ -32,13 +32,16 @@ module World.Material
     , MaterialRegistry
     , emptyMaterialRegistry
     , registerMaterial
+    , mergeMaterialRegistry
     , getMaterialProps
     , defaultMaterialProps
     , materialIdByName
+    , isKnownMaterial
     ) where
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.HashSet as HS
 -- MaterialId (+ its Unbox instance) lives in the NON-Strict
 -- World.Material.Id — see the note there for why the derivingUnbox
 -- splice must not be compiled under {-# LANGUAGE Strict #-}.
@@ -225,20 +228,64 @@ defaultMaterialProps =
 -- | Find a material's id by its registered yaml name. Linear scan of
 --   the 256-slot registry — called at dig frequency, not per-frame.
 materialIdByName ∷ MaterialRegistry → Text → Maybe MaterialId
-materialIdByName (MaterialRegistry vec) name =
+materialIdByName (MaterialRegistry vec _) name =
     MaterialId ∘ fromIntegral
         <$> V.findIndex (\p → mpName p ≡ name) vec
 
--- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by YAML.
-newtype MaterialRegistry = MaterialRegistry (V.Vector MaterialProps)
+-- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by
+--   YAML. 'mrKnown' tracks exactly which ids were explicitly
+--   registered (as opposed to merely defaulted) — issue #763 round-3
+--   review: every 'MaterialId' 0-255 is a structurally valid index
+--   into the vector (so 'getMaterialProps' can never fail the way a
+--   Text-keyed def lookup can), which is exactly why a saved
+--   material's validity needs this separate set rather than an
+--   in-bounds check.
+data MaterialRegistry = MaterialRegistry !(V.Vector MaterialProps) !(HS.HashSet Word8)
+    deriving (Show)
 
 emptyMaterialRegistry ∷ MaterialRegistry
-emptyMaterialRegistry = MaterialRegistry (V.replicate 256 defaultMaterialProps)
+emptyMaterialRegistry =
+    MaterialRegistry (V.replicate 256 defaultMaterialProps) HS.empty
 
 registerMaterial ∷ Word8 → MaterialProps → MaterialRegistry → MaterialRegistry
-registerMaterial idx props (MaterialRegistry vec) =
-    MaterialRegistry (vec V.// [(fromIntegral idx, props)])
+registerMaterial idx props (MaterialRegistry vec known) =
+    MaterialRegistry (vec V.// [(fromIntegral idx, props)]) (HS.insert idx known)
+
+-- | Overlay every explicitly-registered id from @overlay@ onto @base@,
+--   overlay's own properties winning on any id collision (issue #763
+--   round 13 review). Used to merge a freshly-loaded, off-session base
+--   registry (built straight from @data/materials/*.yaml@ — see
+--   'Engine.Asset.YamlTextures.loadPopulatedMaterialRegistry') with
+--   whatever the LIVE session has already registered at runtime
+--   (world.init's own base-materials pass, plus any
+--   @engine.loadMaterialYaml@ custom registrations): rebuilding a
+--   validation/publish registry from disk alone would otherwise
+--   silently reject a save referencing a valid custom material as
+--   "unknown", and discard the live registrations entirely on publish
+--   even for an otherwise-successful load.
+mergeMaterialRegistry ∷ MaterialRegistry → MaterialRegistry → MaterialRegistry
+mergeMaterialRegistry base (MaterialRegistry overlayVec overlayKnown) =
+    HS.foldl'
+        (\r idx → registerMaterial idx (overlayVec V.! fromIntegral idx) r)
+        base overlayKnown
 
 getMaterialProps ∷ MaterialRegistry → MaterialId → MaterialProps
-getMaterialProps (MaterialRegistry vec) (MaterialId mid) =
+getMaterialProps (MaterialRegistry vec _) (MaterialId mid) =
     vec V.! fromIntegral mid
+
+-- | True iff a saved 'MaterialId' resolves against this registry: it
+--   was explicitly registered from @data/materials/*.yaml@, OR it is
+--   'matAir' (id 0) — the one material id deliberately left
+--   unregistered by design (it always resolves to
+--   'defaultMaterialProps') yet legitimately persisted: the locations
+--   carving primitive ('World.Thread.Command.Edit.Terrain
+--   .handleWorldSetCellCommand') writes id-0 'WeSetCell' edits for
+--   interior air, walls, ceilings, and staircases, so treating it as
+--   "missing" would reject nearly every save with a placed structure.
+--   Used to reject a load whose saved edit log or spoil piles
+--   reference a material this build never registered (e.g. removed
+--   from the YAML data since the save was made) — see
+--   'World.Save.Types.missingMaterialReferences'.
+isKnownMaterial ∷ MaterialRegistry → MaterialId → Bool
+isKnownMaterial (MaterialRegistry _ known) (MaterialId mid) =
+    mid ≡ 0 ∨ HS.member mid known

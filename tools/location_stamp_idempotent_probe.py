@@ -39,7 +39,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/location_stamp_idempotent_engine.log"
 LOCATION_YAML = "/tmp/location_stamp_idempotent_probe_loc.yaml"
@@ -220,8 +220,12 @@ def main() -> int:
         try:
             load_defs(args.port)
             send(args.port, "engine.loadSave('stamp_idempotent_probe'); return 'queued'")
-            time.sleep(6.0)
-            send(args.port, "world.show('main_world'); return 'ok'")
+            # Issue #763: the saved page ("sa", its own id verbatim -- no
+            # more main_world remap) doesn't exist live until published.
+            published, load_status = wait_load_published(args.port, 60)
+            if not published:
+                failures.append(f"load transaction did not publish: {load_status}")
+            send(args.port, "world.show('sa'); return 'ok'")
             time.sleep(1.0)
             load_chunk(args.port, cx, cy)
             time.sleep(2.0)
@@ -287,8 +291,12 @@ def main() -> int:
         try:
             load_defs(args.port)
             send(args.port, "engine.loadSave('stamp_idempotent_probe_fresh'); return 'queued'")
-            time.sleep(6.0)
-            send(args.port, "world.show('main_world'); return 'ok'")
+            # Issue #763: the saved page ("sb", its own id verbatim -- no
+            # more main_world remap) doesn't exist live until published.
+            published, load_status = wait_load_published(args.port, 60)
+            if not published:
+                failures.append(f"load transaction did not publish: {load_status}")
+            send(args.port, "world.show('sb'); return 'ok'")
             time.sleep(1.0)
             load_chunk(args.port, cx2, cy2)
             if wait_floor(args.port, gx2, gy2):

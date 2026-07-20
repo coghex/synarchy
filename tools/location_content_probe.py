@@ -48,7 +48,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/location_content_engine.log"
 
@@ -460,8 +460,13 @@ def main() -> int:
         try:
             load_defs(args.port)
             send(args.port, "engine.loadSave('loc_content_probe'); return 'queued'")
-            time.sleep(6.0)
-            send(args.port, "world.show('main_world'); return 'ok'")
+            # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
+            # saved page ("wa", its own id verbatim -- no more main_world
+            # remap) doesn't exist live until the transaction publishes.
+            published, load_status = wait_load_published(args.port, 60)
+            if not published:
+                failures.append(f"load transaction did not publish: {load_status}")
+            send(args.port, "world.show('wa'); return 'ok'")
             time.sleep(1.0)
             for e in ruins:
                 load_chunk(args.port, e["cx"], e["cy"])
@@ -480,7 +485,7 @@ def main() -> int:
             # load; the event itself does NOT (player events are
             # per-session, never saved), so a fresh process reloading an
             # already-discovered location must emit zero events for it.
-            disc_reload = discovered_flags(args.port, "main_world")
+            disc_reload = discovered_flags(args.port, "wa")
             if disc_reload.get(r0key) is True:
                 print("PASS: discovered state survived save -> quit -> restart -> load")
             else:

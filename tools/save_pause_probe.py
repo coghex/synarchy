@@ -42,7 +42,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/save_pause_probe_engine.log"
 # Unique per run. Saves overwrite in place (World.Save.Serialize), and this
@@ -176,16 +176,24 @@ def main() -> int:
             failures.append(f"save file for '{SAVE_NAME}' never appeared on disk")
         load_ok = send(args.port, f'return engine.loadSave("{SAVE_NAME}")')
         print(f"[load     ] engine.loadSave -> {load_ok}")
-        print(f"[load     ] waitForInit -> {wait_for_init(args.port)}")
-        time.sleep(3.0)  # let the load settle past LoadDone
-        send(args.port, 'world.show("main_world")', expect_result=False)
-        paused, ts = wait_paused_and_frozen(args.port, "main_world")
+        # Issue #763: engine.loadSave only ACCEPTS the request — the saved
+        # page ("pausetest", its own id verbatim, never remapped to
+        # "main_world") doesn't exist live until the transaction actually
+        # publishes. Wait for that before touching anything it names.
+        published, status = wait_load_published(args.port)
+        print(f"[load     ] load transaction published -> {published} ({status})")
+        if not published:
+            failures.append(f"load transaction never published: {status}")
+        active_page = send(args.port, "return world.getActiveWorldId()").strip('"')
+        print(f"[load     ] active page after publish -> {active_page}")
+        send(args.port, f'world.show("{active_page}")', expect_result=False)
+        paused, ts = wait_paused_and_frozen(args.port, active_page)
         print(f"[post-load] isPaused={paused} timeScale={ts}")
         if not (paused and ts == 0.0):
             failures.append(
                 f"after load: expected isPaused=True & timeScale=0, "
                 f"got isPaused={paused} timeScale={ts}")
-        ok, rp, rt = stays_frozen_under_race(args.port, "main_world")
+        ok, rp, rt = stays_frozen_under_race(args.port, active_page)
         print(f"[load-race] stray setTimeScale while paused -> "
               f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
         if not ok:

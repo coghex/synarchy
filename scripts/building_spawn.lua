@@ -356,19 +356,21 @@ end
 -- registered. The restored state still holds entries for those dropped
 -- ids, so a reused bid could inherit stale spawn-rate state.
 --
--- `state` is a global singleton serialized WHOLESALE; the restore clobbered
--- it with save-time state for buildings on EVERY page, but the engine load
--- only restores the saved page and preserves other live pages' buildings
--- (#191). So a load must touch only the loaded page. We rebuild `state` as:
---   * loaded-page survivor → its restored (blob) state;
---   * every other still-live building → its PRE-LOAD state (the off-page
---     building's CURRENT state, not the blob's stale snapshot) — so an
---     older save can't roll back live off-page spawn-spacing state, and a
---     stale/colliding bid resolves to the live building's own state;
+-- `state` is a global singleton, clobbered wholesale by the restore with
+-- save-time state for every building the save contained. Since issue #763
+-- (save-overhaul C2), a load REPLACES THE COMPLETE SESSION — there is no
+-- more "other live page" to preserve (#191's off-page preservation is gone
+-- along with the merge-based load path it protected); survBuildingIds now
+-- names every building in the whole new session. We still rebuild `state`
+-- defensively as:
+--   * survivor (now: every live building) → its restored (blob) state;
+--   * any OTHER entry (dead code in normal operation post-#763 — kept only
+--     as a defensive no-op) → its pre-load state, IF that bid still
+--     somehow exists live;
 --   * everything else (orphans, dead, gone-before-save) → dropped.
--- The nested s.lastUid (last unit spawned) is scrubbed on loaded-page
--- survivor entries against the surviving unit set, so a stale/colliding uid
--- can't gate spawning. Off-page entries keep their pre-load state.
+-- The nested s.lastUid (last unit spawned) is scrubbed on every survivor
+-- entry against the surviving unit set, so a stale/colliding uid can't gate
+-- spawning.
 function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds)
     local survUnitSet, survBuildingSet = {}, {}
     for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end

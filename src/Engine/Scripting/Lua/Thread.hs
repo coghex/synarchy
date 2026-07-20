@@ -31,6 +31,7 @@ import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (EngineConfig(..))
+import Engine.Save.Barrier (captureLocked)
 import Engine.Input.Types (InputState)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -117,7 +118,19 @@ startLuaThread env = do
                         "Debug server failed to start on port "
                         <> T.pack (show port) <> ": " <> err
                     atomically newTQueue
-            tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue `finally` putMVar doneVar ()
+            -- Round 10 review (issue #763): the real debug queue only
+            -- exists once 'startDebugServer' above returns, but
+            -- 'backendState' was constructed earlier (so registerLuaAPI/
+            -- script init could run against it) with the throwaway
+            -- placeholder 'createLuaBackendState' makes internally.
+            -- Splice the real queue in now via record update so
+            -- 'Engine.Scripting.Lua.Thread.Dispatch's 'LuaSaveLoaded'
+            -- handler can reach it as 'lbsDebugQueue' — cheaper than
+            -- threading 'debugQueue' through 'createLuaBackendState'
+            -- and its dozen-plus test call sites, none of which
+            -- exercise real debug-command handling.
+            let backendState' = backendState { lbsDebugQueue = debugQueue }
+            tid ← forkIO $ runLuaLoop env backendState' stateRef debugQueue `finally` putMVar doneVar ()
             return tid
         )
         (\(e ∷ SomeException) → do
@@ -135,6 +148,12 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
   scriptIdRef ← newIORef 1
+  -- Placeholder — 'startLuaThread' splices in the REAL debug queue via
+  -- record update once one exists (round 10 review, issue #763); every
+  -- other caller (headless tests exercising unrelated Lua API surface)
+  -- never touches 'lbsDebugQueue' at all, so an inert, never-fed queue
+  -- here keeps their call sites unchanged.
+  placeholderDebugQueue ← atomically newTQueue
   return LuaBackendState
     { lbsLuaState     = lState
     , lbsScripts      = scriptsVar
@@ -144,6 +163,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
     , lbsNextObjectId = objIdRef
     , lbsInputState   = inputSRef
     , lbsLoggerRef    = loggerR
+    , lbsDebugQueue   = placeholderDebugQueue
     }
 
 runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl
@@ -177,43 +197,118 @@ runLuaLoop env ls stateRef debugQueue = do
             -- frame that never pops (unbounded stack growth).
             ok ← catch
               (do
-                processDebugCommands (lbsLuaState ls) debugQueue
+                -- Round 5 review (issue #763): the Lua thread is the
+                -- one thread the save barrier never actually gated --
+                -- SaveLua's own self-ack (in saveWorldFn/handleLoadStaged)
+                -- persists across every later quiescence pass by
+                -- design (Engine.Save.Barrier.acknowledgeSave's special
+                -- casing), so this loop never needed a per-tick
+                -- acknowledgeCurrent the way Unit/Combat/Simulation/
+                -- Input do -- but that also meant nothing stopped THIS
+                -- loop's own NEXT tick from processing debug commands,
+                -- queued Lua messages, or script updates while
+                -- captureLocked was still True. Concretely: once
+                -- handleLoadStaged (dispatched from a PRIOR tick's
+                -- message processing, below) applies the required Lua
+                -- components and queues WorldLoadPublish, THIS tick
+                -- completes and the loop recurses -- and the very next
+                -- tick would resume normal processing even though the
+                -- world thread hasn't swapped the Haskell-side session
+                -- yet, letting a debug command or script observe the
+                -- new Lua singletons against the still-old Haskell
+                -- state. Checked fresh every tick (never cached), so
+                -- the SAME tick that dispatches LuaLoadStaged always
+                -- starts unlocked (the transaction only reaches
+                -- SaveSnapshotBoundary partway through
+                -- handleLoadStaged, by which point this tick has
+                -- already passed the gate) and normal processing
+                -- resumes on the first tick after the world thread
+                -- calls releaseCaptureLock.
+                locked ← captureLocked (saveBarrierRef env)
+                if locked
+                  then threadDelay 1000 >> pure True
+                  else do
+                    -- Round 8 review: releaseCaptureLock (world thread,
+                    -- right after publishStagedSession) flips
+                    -- captureLocked False the INSTANT publish
+                    -- completes -- but LuaSaveLoaded was already queued
+                    -- onto luaQueue by publishStagedSession itself,
+                    -- strictly BEFORE that release. Processing debug
+                    -- commands first (as this branch used to, unconditionally)
+                    -- let an ALREADY-queued debug command run against
+                    -- the freshly-published session before the required
+                    -- onSaveLoaded reconciliation (off-page-survivor
+                    -- pruning, stale nested-reference scrub, UI reset)
+                    -- ever got a chance to. Draining whatever's already
+                    -- in luaQueue first closes that ordering gap without
+                    -- disturbing the blocking-wait-based sleep below,
+                    -- which only ever blocks on genuinely NEW messages;
+                    -- nothing here double-processes since each queue
+                    -- read removes what it reads.
+                    processLuaMsgs env ls stateRef
 
-                currentSecs ← nowSeconds
-                scriptsMap ← readTVarIO (lbsScripts ls)
-                let scripts = Map.elems scriptsMap
-                    -- Paused scripts never advance their nextTick;
-                    -- including them would pin sleeptime at the floor
-                    -- and busy-spin the loop at ~1 kHz.
-                    nextWakeTimes = map scriptNextTick
-                                        (filter (not ∘ scriptPaused) scripts)
-                    nextWakeTime = if null nextWakeTimes
-                                   then currentSecs + 1.0
-                                   else minimum nextWakeTimes
-                    sleeptime = max 0.001 (nextWakeTime - currentSecs)
-                let maxSleepMicros = min 16666 (floor (sleeptime * 1000000))
-                    (_, etlq) = lbsMsgQueues ls
-                -- readQueueTimeout, NOT System.Timeout around readQueue:
-                -- the timeout exception can land after the STM dequeue
-                -- commits, silently dropping the message.
-                mMsg ← Q.readQueueTimeout maxSleepMicros etlq
-                case mMsg of
-                  Just msg → do
-                      processLuaMsg env ls stateRef msg
-                      processLuaMsgs env ls stateRef
-                      pure True
-                  Nothing → do
-                      currentSecs' ← nowSeconds
-                      scriptsMap' ← readTVarIO (lbsScripts ls)
-                      forM_ (Map.toList scriptsMap') $ \(sid, script) → do
-                        when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
-                          when (isValidRef (scriptModuleRef script)) $ do
-                            let dt = scriptTickRate script
-                            _ ← callModuleFunction ls (scriptModuleRef script) "update" [ScriptNumber dt]
-                            return ()
-                          atomically $ modifyTVar' (lbsScripts ls) $
-                            Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
-                      pure True
+                    -- Round 12 review (issue #763): 'processLuaMsgs' just
+                    -- above can itself dispatch 'LuaLoadStaged' —
+                    -- 'handleLoadStaged' applies the prepared Lua state
+                    -- (unit_ai/building_spawn singletons overwritten with
+                    -- the NEW session's data) and enters the capture lock
+                    -- (beginSave) SYNCHRONOUSLY, all inside this same call,
+                    -- before 'WorldLoadPublish' is ever queued for the
+                    -- world thread. The 'locked' value read at the top of
+                    -- this tick is now stale: continuing on to
+                    -- 'processDebugCommands'/script updates/the blocking
+                    -- queue read below with THAT stale value would let an
+                    -- already-queued debug command or a script's own
+                    -- "update" callback run against the freshly-applied
+                    -- Lua singletons while Haskell still exposes the OLD
+                    -- session (WorldLoadPublish hasn't been processed by
+                    -- the world thread yet) — exactly the mixed-state
+                    -- window the ORIGINAL 'locked' check exists to keep
+                    -- shut. Re-checking here and skipping the rest of
+                    -- THIS tick's unlocked work the instant it flips
+                    -- closes that window without needing to wait for the
+                    -- next tick's own (correctly gated) iteration.
+                    lockedAfterMsgs ← captureLocked (saveBarrierRef env)
+                    if lockedAfterMsgs
+                      then pure True
+                      else do
+                        processDebugCommands (lbsLuaState ls) debugQueue
+
+                        currentSecs ← nowSeconds
+                        scriptsMap ← readTVarIO (lbsScripts ls)
+                        let scripts = Map.elems scriptsMap
+                            -- Paused scripts never advance their nextTick;
+                            -- including them would pin sleeptime at the floor
+                            -- and busy-spin the loop at ~1 kHz.
+                            nextWakeTimes = map scriptNextTick
+                                                (filter (not ∘ scriptPaused) scripts)
+                            nextWakeTime = if null nextWakeTimes
+                                           then currentSecs + 1.0
+                                           else minimum nextWakeTimes
+                            sleeptime = max 0.001 (nextWakeTime - currentSecs)
+                        let maxSleepMicros = min 16666 (floor (sleeptime * 1000000))
+                            (_, etlq) = lbsMsgQueues ls
+                        -- readQueueTimeout, NOT System.Timeout around readQueue:
+                        -- the timeout exception can land after the STM dequeue
+                        -- commits, silently dropping the message.
+                        mMsg ← Q.readQueueTimeout maxSleepMicros etlq
+                        case mMsg of
+                          Just msg → do
+                              processLuaMsg env ls stateRef msg
+                              processLuaMsgs env ls stateRef
+                              pure True
+                          Nothing → do
+                              currentSecs' ← nowSeconds
+                              scriptsMap' ← readTVarIO (lbsScripts ls)
+                              forM_ (Map.toList scriptsMap') $ \(sid, script) → do
+                                when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
+                                  when (isValidRef (scriptModuleRef script)) $ do
+                                    let dt = scriptTickRate script
+                                    _ ← callModuleFunction ls (scriptModuleRef script) "update" [ScriptNumber dt]
+                                    return ()
+                                  atomically $ modifyTVar' (lbsScripts ls) $
+                                    Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
+                              pure True
               )
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)

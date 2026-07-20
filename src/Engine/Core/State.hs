@@ -4,7 +4,6 @@ import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
@@ -62,6 +61,8 @@ import World.Generate.Config (WorldGenConfig)
 import Unit.Pathing.Config (PathingConfig)
 import Sim.Command.Types (SimCommand)
 import Engine.Save.Barrier (SaveBarrier)
+import Engine.Load.Status (LoadStatusRef)
+import World.Load.Types (StagedSession)
 
 data EngineEnv = EngineEnv
   { engineConfig        ∷ EngineConfig
@@ -137,17 +138,46 @@ data EngineEnv = EngineEnv
   --   touching any cursor field, so the per-world snapshot alone can't
   --   detect the switch — issue #129).
   , hudActivePageRef    ∷ IORef (Maybe WorldPageId)
-  -- | Per-save provenance: save name → the restore ids that save's last load
-  --   registered. Re-loading the SAME save consults its own entry to reuse (and
-  --   thus replace) its collision-renamed synthetic pages instead of
-  --   accumulating new ones; loading a DIFFERENT save never owns another save's
-  --   synthetic pages, so they stay preserved as unrelated live pages (#214,
-  --   #191). Keyed by save name (SaveMetadata.smName).
-  , loadProvenanceRef   ∷ IORef (HM.HashMap Text (HS.HashSet WorldPageId))
+  -- | Runtime-only whole-session LOAD transaction status (issue #763,
+  --   save-overhaul C2) — the load-side counterpart to 'saveBarrierRef'.
+  --   Diagnostic and coordination state, never part of 'SaveData'. See
+  --   "Engine.Load.Status".
+  , loadStatusRef       ∷ LoadStatusRef
+  -- | Single-slot handoff for a fully-staged, not-yet-published load
+  --   (issue #763): written by the world thread once
+  --   'World.Command.Types.WorldLoadTransaction' finishes staging, read
+  --   (and cleared) by the world thread again when it processes the
+  --   matching 'World.Command.Types.WorldLoadPublish'. Keyed by request
+  --   id purely as a defensive cross-check — only one load is ever in
+  --   flight at a time (enforced by 'loadStatusRef'). Mirrors the
+  --   existing single-slot staging handoff pattern 'zoomAtlasDataRef' /
+  --   'worldPreviewRef' already use for the render thread.
+  , pendingLoadRef      ∷ IORef (Maybe (Int, StagedSession))
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
-  , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
-  , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString))  -- ^ Pending zoom atlas pixel data for GPU upload
+  , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString, Word64))
+    -- ^ Pending world-preview pixel data for GPU upload, tagged with the
+    --   generation it was enqueued under (round 10 review, issue #763;
+    --   see 'worldPreviewGenerationRef').
+  , worldPreviewGenerationRef ∷ IORef Word64
+    -- ^ Monotonic counter bumped once per preview enqueue (never read
+    --   back down). The upload handler compares the generation it
+    --   dequeued against this counter's CURRENT value at delivery time
+    --   (round 10 review): if a newer preview has been enqueued since,
+    --   this counter has already moved past the dequeued generation, so
+    --   the in-flight (now-stale) upload can tell it must not announce
+    --   itself — no live-ref re-read of 'worldPreviewRef' itself is
+    --   needed, since the counter only ever increases and a plain read
+    --   of it is never torn.
+  , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString, [WorldState]))
+    -- ^ Pending zoom atlas pixel data for GPU upload, plus the EXACT
+    --   'WorldState's it belongs to, captured at the moment it was
+    --   enqueued (round 9 review, issue #763): the upload can take
+    --   multiple frames, and re-reading 'worldManagerRef' only once
+    --   the upload finishes would race a load publish that swaps it
+    --   in between — this closes that gap completely rather than
+    --   narrowing it, since nothing needs to be re-read from a live
+    --   ref at write time at all.
   , screenshotRequestQueue ∷ Q.Queue ScreenshotRequest
     -- ^ Pending debug.captureScreenshot requests (#643). The Lua
     --   thread enqueues; the render thread drains one per frame in
@@ -264,6 +294,16 @@ data EngineEnv = EngineEnv
   , saveBarrierRef     ∷ SaveBarrier
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
     -- and synchronization state, never part of 'SaveData'.
+  , inputThreadActiveRef ∷ IORef Bool
+    -- ^ Round 3 review (issue #763): True once 'Engine.Input.Thread
+    --   .startInputThread' has actually launched — headless boot
+    --   ('App.Headless') never calls it at all (no GLFW window to
+    --   poll), so SaveInput must not be a HARD requirement of every
+    --   save/load transaction's owner set; 'saveWorldFn'/
+    --   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged' consult
+    --   this to decide whether to include SaveInput, rather than
+    --   'waitForOwners' timing out forever waiting for an owner that
+    --   can never acknowledge. Runtime-only, never part of 'SaveData'.
     -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
     --   only when `enginePausedRef` is False. All gameplay timestamps
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,

@@ -185,6 +185,10 @@ PROBES = [
      "thought event stream, state-of-mind-biased selection, thought-log data path (#351)"),
     ("till", "till_probe.py",
      "till-designation layer + till AI end to end, plantable contract (#333)"),
+    ("transactional_load", "transactional_load_probe.py",
+     "whole-session load transaction: mutual exclusion, complete replacement "
+     "(not merge), missing-def rejection leaves the old session intact, "
+     "paused dwell + default-speed unpause, no ghost pages on repeat (#763)"),
     ("wire", "wire_probe.py",
      "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]

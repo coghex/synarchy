@@ -16,10 +16,11 @@ lives here next to save_pause_probe.py rather than in test-headless/.
 What it does:
   1. Boots a headless engine (engine A) and loads the unit/building defs
      the loading screen would normally load (it doesn't run headless).
-  2. Generates TWO real worlds: the active page "main_world" (which the
-     load path remaps every active page onto) and a second page
-     "second_world". Two generated pages is the canonical "active page
-     remaps to main_world, secondary page would vanish" scenario.
+  2. Generates TWO real worlds: the active page "main_world" (its own
+     saved id -- issue #763's whole-session load transaction preserves
+     every saved page id verbatim, no remap) and a second page
+     "second_world". Two generated pages is the canonical "secondary
+     page would vanish in a naive load" scenario.
   3. Spawns a player unit AND a cargo-hold building on EACH page.
   4. Saves (engine.saveWorld("main_world", ...)), asserts the save file
      was actually written, then QUITS engine A.
@@ -76,7 +77,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send, send_json
+from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
 
@@ -377,6 +378,11 @@ def main() -> int:
         loaded = send(args.port, f"return engine.loadSave('{save_name}')")
         if loaded.strip() != "true":
             print(f"FAIL: engine.loadSave returned {loaded!r}", file=sys.stderr)
+            return 2
+        published, status = wait_load_published(args.port)
+        if not published:
+            print(f"FAIL: load transaction did not publish: {status}",
+                  file=sys.stderr)
             return 2
         send(args.port, "return world.waitForInit(180)", timeout=190)
         time.sleep(3)  # let the secondary page + queued chunks settle

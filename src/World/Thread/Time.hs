@@ -6,6 +6,7 @@ module World.Thread.Time
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
+import Engine.Load.Status (loadInProgress)
 import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
 import World.Thread.ItemTemp (tickItemTemperatures)
@@ -78,8 +79,26 @@ tickWorldTime env dt = do
     -- (auto-paused) save with a unit already standing in a location's
     -- margin must discover it on the very next tick rather than
     -- waiting for an unpause.
-    forM_ (wmWorlds manager) $ \(pageId, worldState) →
-        tickLocationDiscovery env pageId worldState
+    --
+    -- Round 12 review (issue #763): gated on a load transaction NOT
+    -- being in flight, which is a DIFFERENT thing from the pause flag
+    -- above and must stay independent of it. World.Load.Stage.stageSession
+    -- (a whole-session load's staging phase) runs on this same world
+    -- thread but BEFORE the save barrier's capture lock is ever entered
+    -- (that only happens later, once staging hands off to
+    -- handleLoadStaged) — so without this gate, an ordinary tick landing
+    -- during that unlocked staging window would mutate the LIVE, still-
+    -- current (pre-load) session's wgpLocationDiscovered and emit real
+    -- discovery events, even though staging might still fail and the
+    -- #763 contract requires a failed/aborted load to leave the
+    -- pre-load session completely unchanged. Once a load DOES publish,
+    -- loadInProgress goes false the moment its outcome is set, so the
+    -- freshly-published session's own immediate-discovery-while-paused
+    -- behavior (the whole point of the paragraph above) is untouched.
+    loading ← loadInProgress (loadStatusRef env)
+    unless loading $
+        forM_ (wmWorlds manager) $ \(pageId, worldState) →
+            tickLocationDiscovery env pageId worldState
 
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of

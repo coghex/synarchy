@@ -78,7 +78,21 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 unless paused $ do
                     modifyIORef' (gameTimeRef env) (+ dt)
                     tickAllMovement dt env utsRef
-                publishToRender env utsRef
+                -- Round 3 review (issue #763): a load publish
+                -- (World.Load.Publish.publishStagedSession) swaps
+                -- unitManagerRef and utsRef itself while THIS thread is
+                -- meant to be fully quiesced (SaveUnit) — but
+                -- publishToRender was never gated on 'locked' the way
+                -- every other write below is, so it could previously
+                -- copy STALE utsRef sim state onto the freshly-swapped
+                -- unitManagerRef mid-publish (or the old unitManagerRef
+                -- with freshly-swapped utsRef), corrupting a reused unit
+                -- id's render-facing pose/anim/position with data from
+                -- the session being replaced. A save never writes either
+                -- ref, so gating this costs nothing there beyond a
+                -- render-state update pausing for the same brief window
+                -- 'processAllUnitCommands' already skips.
+                unless locked $ publishToRender env utsRef
                 unless locked $ processAllBuildingCommands env
                 acknowledgeCurrent (saveBarrierRef env) SaveUnit
                 acknowledgeCurrent (saveBarrierRef env) SaveBuilding

@@ -97,12 +97,37 @@ simLoop env stateRef simStateRef = do
                 -- Process all pending commands
                 locked ← captureLocked (saveBarrierRef env)
                 unless locked $ processSimCommands env logger simStateRef
-                acknowledgeCurrent (saveBarrierRef env) SaveSimulation
 
                 ss ← readIORef simStateRef
-
-                if locked ∨ ssPaused ss ∨ not (anyLiveWorld ss)
+                -- Round 7 review: 'ssPaused' is set ONLY by
+                -- 'SimFastSettleAll' (dump mode's own synchronous
+                -- settle path) -- engine.setPaused (Engine.Scripting
+                -- .Lua.API.Core.setPausedFn) writes ONLY
+                -- 'enginePausedRef' and has never dispatched a SimPause
+                -- command, so 'ssPaused' alone never reflected ordinary
+                -- gameplay pause at all. Concretely for #763: a load
+                -- publish sets 'enginePausedRef' True but never touches
+                -- 'ssPaused', so fluid simulation kept ticking against
+                -- the freshly-published, "supposedly paused" session.
+                -- Reading 'enginePausedRef' directly (the single
+                -- authoritative flag every other paused-gate in the
+                -- engine already reads) fixes both: the general
+                -- gameplay-pause gap and this issue's post-publish one.
+                enginePaused ← readIORef (enginePausedRef env)
+                -- Round 7 review: acknowledging BEFORE this tick's own
+                -- work (the tick/emitWorldDirtyFluids branch below,
+                -- which queues WorldApplyFluids writebacks to the world
+                -- thread) let this ack be the FINAL one a quiescence
+                -- pass needed while a writeback was still about to be
+                -- produced -- the world thread could already have
+                -- processed WorldLoadPublish and released the barrier
+                -- by the time that late writeback arrived, letting it
+                -- mutate a freshly-published page that reused the same
+                -- id. Moved to fire only once BOTH branches below have
+                -- fully finished producing (or skipping) that work.
+                if locked ∨ ssPaused ss ∨ enginePaused ∨ not (anyLiveWorld ss)
                     then do
+                        acknowledgeCurrent (saveBarrierRef env) SaveSimulation
                         threadDelay (ssTickRate ss)
                         pure True
                     else do
@@ -116,6 +141,7 @@ simLoop env stateRef simStateRef = do
                         let cleared = HM.map clearDirty ticked
                         writeIORef simStateRef ss { ssWorlds = cleared }
 
+                        acknowledgeCurrent (saveBarrierRef env) SaveSimulation
                         threadDelay (ssTickRate ss)
                         pure True
               )

@@ -73,6 +73,30 @@ assert_eq() {
     fi
 }
 
+# issue #763: engine.loadSave is now a whole-session LOAD TRANSACTION --
+# the world thread's per-page phaseRef (what world.waitForInit polls)
+# belongs to whichever page is CURRENTLY live and may already read
+# LoadDone/phase=3 from BEFORE this loadSave call even started, so
+# waitForInit alone can return before the new session actually
+# publishes. Poll engine.getLoadStatus() for the terminal phase first.
+wait_load_published() {
+    local secs="${1:-60}"
+    local i status
+    for i in $(seq 1 $((secs * 4))); do
+        # A bare Lua STRING return is wrapped in literal double quotes by
+        # the debug console's raw serialization (unlike a boolean/number,
+        # or the multi-return "return x, y" idiom other queries in this
+        # script use) -- match the quoted form.
+        status=$(lua "local s = engine.getLoadStatus(); if s == nil then return 'nil' end; return s.phase")
+        case "$status" in
+            '"LoadPublished"') return 0 ;;
+            '"LoadFailed"') return 1 ;;
+        esac
+        sleep 0.25
+    done
+    return 1
+}
+
 # ── Tests ────────────────────────────────────────────────────────────
 echo "[1] saveWorld validation rejects bad inputs (no world initialized)"
 assert_eq "missing page"          "false" "engine.saveWorld('nonexistent_page', 'test')"
@@ -167,8 +191,13 @@ echo "[8] camera transients reset on load"
 lua "camera.setZoomVelocity(5.0)" > /dev/null
 assert_eq "zoom velocity pre-load"   "5"     "math.floor(camera.getZoomVelocity())"
 assert_eq "loadSave returns true"    "true"  "engine.loadSave('${TEST_SAVE_NAME}')"
-# Load handler is async — block on the load progress phaseRef instead of
-# sleeping (it's shared with init's phaseRef; phase=3 means "done").
+# The load transaction is async -- wait for engine.getLoadStatus() to
+# report LoadPublished (issue #763) before asserting on the newly
+# published session, then waitForInit for the rest of its chunks.
+if ! wait_load_published 60; then
+    echo "  FAIL: load transaction never reached LoadPublished"
+    FAIL=$((FAIL + 1))
+fi
 LOAD_RESULT=$(lua "return world.waitForInit(60)" 60)
 echo "  waitForInit (post-load) returned: [$LOAD_RESULT]"
 assert_eq "zoom velocity post-load"  "0"     "math.floor(camera.getZoomVelocity())"
@@ -308,13 +337,15 @@ assert_eq "activeLastLineCount is a function" "true" \
 
 echo "[22] a REQUIRED Lua save component's snapshot failure aborts the \
 whole save (issue #761 requirement 6)"
-# Step [8] already loaded '${TEST_SAVE_NAME}', which lands under
-# 'main_world' regardless of its original page name (documented
-# convention) -- the original 'test' page id is gone by this point, so
-# every saveWorld call below MUST target 'main_world', not 'test'
-# (targeting the now-nonexistent 'test' would make saveWorld return
-# false for "world not found" regardless of the injected failure,
-# silently never exercising this case at all).
+# Step [8] already loaded '${TEST_SAVE_NAME}' -- issue #763 (round 4
+# review) replaced the old "every load lands under 'main_world'
+# regardless of its original page name" remap with saved-page-id-
+# preserving replacement, so the loaded page is still 'test' (the id
+# it was saved under back in step [2]/[7]), not 'main_world'. Every
+# saveWorld call below targets 'test' (targeting the now-nonexistent
+# 'main_world' would make saveWorld return false for "world not
+# found" regardless of the injected failure, silently never
+# exercising this case at all).
 # Temporarily break unit_ai's registered snapshot function so
 # saveModules.snapshotAll() reports {ok=false}. engine.saveWorld must
 # then return false and never queue a WorldSave command -- no partial
@@ -325,7 +356,7 @@ lua "local sm = require('scripts.lib.save_modules'); \
      _G.__smoke_orig_snapshot = sm.registry.unit_ai.snapshot; \
      sm.registry.unit_ai.snapshot = function() error('smoke-injected failure') end" > /dev/null
 assert_eq "save fails when a required component's snapshot throws" \
-    "false" "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_broken')"
+    "false" "engine.saveWorld('test', '${TEST_SAVE_NAME}_broken')"
 assert_eq "no save directory was created for the aborted save" \
     "false" \
     "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}_broken' then return true end end return false end)()"
@@ -334,7 +365,7 @@ lua "local sm = require('scripts.lib.save_modules'); \
      _G.__smoke_orig_snapshot = nil" > /dev/null
 sleep 0.3
 assert_eq "a normal save still succeeds once restored" "true" \
-    "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_recovered')"
+    "engine.saveWorld('test', '${TEST_SAVE_NAME}_recovered')"
 # engine.saveWorld returns on enqueue -- poll listSaves (same idiom as
 # [7] above) until the recovery save has actually landed on disk, so
 # this proves the barrier genuinely recovered and completed a REAL

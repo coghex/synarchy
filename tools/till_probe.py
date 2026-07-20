@@ -26,7 +26,7 @@ Usage: python3 tools/till_probe.py [--port 9178] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
 TILLED_SOIL_VEG_ID = 77
@@ -162,12 +162,15 @@ def main():
                    "return 'ok'")
         time.sleep(3.0)
         send(port, "engine.loadSave('till_v76_check'); return 'ok'")
-        time.sleep(15.0)
-        send(port, "world.show('main_world'); return 'ok'")
+        published, load_status = wait_load_published(port, 200)
+        if not published:
+            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            return 1
+        send(port, "world.show('probe'); return 'ok'")
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        d3 = jget(port, f"return till.getDesignationAt('main_world',{tx},{ty})")
+        d3 = jget(port, f"return till.getDesignationAt('probe',{tx},{ty})")
         ok3 = isinstance(d3, dict) and isinstance(d3.get("z"), (int, float))
         passed &= ok3
         print(f"  [{'PASS' if ok3 else 'FAIL'}] designation survives "
@@ -214,7 +217,7 @@ def main():
         seen_anims = []
         while time.time() < deadline:
             poll = jget(port,
-                        f"local d=till.getDesignationAt('main_world',{tx},{ty}); "
+                        f"local d=till.getDesignationAt('probe',{tx},{ty}); "
                         f"local v=world.getVegAt({tx},{ty}); "
                         f"local i=unit.getInfo({uid}); "
                         f"return {{cleared=(d==nil), "
@@ -263,10 +266,10 @@ def main():
               f"tilling: {post}")
 
         # --- 6. Idempotent re-sweep: already-tilled tile skipped ---
-        send(port, f"till.designate('main_world',{tx},{ty},{tx},{ty}); "
+        send(port, f"till.designate('probe',{tx},{ty},{tx},{ty}); "
                    f"return 'ok'")
         time.sleep(0.5)
-        d5 = jget(port, f"return till.getDesignationAt('main_world',{tx},{ty})")
+        d5 = jget(port, f"return till.getDesignationAt('probe',{tx},{ty})")
         ok5 = not isinstance(d5, dict)
         passed &= ok5
         print(f"  [{'PASS' if ok5 else 'FAIL'}] re-sweep skips the "

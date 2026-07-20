@@ -597,23 +597,26 @@ function hud.selectDefaultTool()
     end
 end
 
--- A save load ALWAYS targets the main_world page and resets its engine
--- ToolMode to default (World/Thread/Command/Save.hs). Mirror that into
--- the shared toolbar — but only while the toolbar is actually bound to
--- main_world, since its onChange writes world.setToolMode(hud.worldId,
--- ...) and must never reset the arena's tool state on a main_world load.
--- If the HUD is on another page or hidden when the load lands, the reset
--- is deferred (mainWorldToolDirty) and consumed the next time the HUD
--- binds to main_world in hud.show.
+-- A save load resets its (loaded) active page's engine ToolMode to
+-- default (World/Load/Stage.hs) — issue #763 replaced the old "always
+-- main_world" contract with saved-page-id-preserving replacement, so the
+-- loaded page's id is resolved via world.getActiveWorldId() at the time
+-- the load actually publishes, not assumed. Mirror the reset into the
+-- shared toolbar — but only while the toolbar is actually bound to that
+-- page, since its onChange writes world.setToolMode(hud.worldId, ...)
+-- and must never reset the arena's tool state on a load. If the HUD is
+-- on another page or hidden when the load lands, the reset is deferred
+-- (mainWorldToolDirty) and consumed the next time the HUD binds to the
+-- loaded page in hud.show.
 --
 -- The flag is only CLEARED once the reset can actually be applied — the
 -- toolbar must already exist (created in hud.createUI). A load that lands
 -- before any gameplay UI has opened (e.g. a debug-console engine.loadSave
 -- from the main menu) leaves toolToggleId nil; keep the flag set so the
--- reset still fires when the toolbar is first shown on main_world, rather
--- than silently consuming a no-op. (#103)
+-- reset still fires when the toolbar is first shown on the loaded page,
+-- rather than silently consuming a no-op. (#103, updated for #763)
 function hud.resetMainWorldToolIfDirty()
-    if hud.mainWorldToolDirty and hud.worldId == "main_world"
+    if hud.mainWorldToolDirty and hud.worldId == world.getActiveWorldId()
             and hud.toolToggleId then
         hud.mainWorldToolDirty = false
         hud.selectDefaultTool()
