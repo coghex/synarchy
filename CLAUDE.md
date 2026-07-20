@@ -2443,6 +2443,77 @@ every other boundary already used — previously only the cross-component
 was capped TWICE (once alone, then again as part of the combined list),
 which could badly under-report the true omitted count.
 
+Round-4 review caught a real correctness bug in round-3's own id-floor
+fix: `checkRefTag`'s blanket `id >= 1` incorrectly rejected a valid
+`ground_item` reference of `0` — `Item.Ground`'s ground-item allocator
+is ZERO-based (`emptyGroundItems` starts `gisNextId` at 0, so the very
+first spawned ground item legitimately has `gid = 0`), unlike
+unit/building/craft_bill/item_instance's allocators, which all start
+at 1. `checkRefTag` now floors at 0 specifically for the `ground_item`
+kind, 1 for every other kind.
+
+Round-5 review hardened `tools/persistence_inventory_audit.py`'s
+`find_lua_reference_kinds` gate: it only scanned a file for
+`kind = "..."`/`addRef("...")` literals when that SAME file also
+contained `references = ` text — which happened to work for
+`unit_ai_save.lua`/`unit_ai_save_refs.lua` only by ACCIDENT
+(`unit_ai_save_refs.lua` independently satisfies the gate via its own
+unrelated `M.references = unitAiReferences` re-export line, not
+because the audit traced the real delegation from
+`unit_ai_save.lua`'s `references = refsMod.references` registration
+field to the module `refsMod` is `require()`'d from). It now also
+resolves `references = <var>.<field>` delegations against a same-file
+`local <var> = require(...)` binding and includes that required
+module's own file in the scan — tracing the real relationship instead
+of relying on incidental text matching (can only WIDEN the scanned set,
+never narrow it, so it can't introduce false positives from unrelated
+Lua tables that happen to use a `kind = "..."` field for something else
+entirely, e.g. UI element kinds).
+
+Round-6 review closed three more gaps, the deepest round yet.
+`checkRefTag` gained a `required` flag: `craftJob.billId`/`craftJob.bid`
+(`unit_ai_craft.lua` sets both unconditionally the instant `craftJob`
+is created) and `repairJob.instanceId` (`unit_ai_repair.lua`, same) are
+now REJECTED when missing — previously `nil` was silently valid for
+every reference field, so a v2/v3 payload with the job table present
+but the field missing would apply with the job effectively discarded,
+no diagnostic at all. `repairJob.bid` deliberately stays optional:
+`unit_ai_repair.lua` never actually sets it at job creation, so
+requiring it would reject every real repair job — each "required"
+classification is verified against its actual construction call site,
+never assumed, after round-4's blanket-minimum mistake made that
+lesson concrete. `scripts/lib/save_modules.lua`'s `snapshotAllImpl` now
+also calls `reg.validate(dataOrErr)` between `snapshot()` and
+`dataCodec.encode()`, failing the whole save (required) or omitting
+with a warning (optional) exactly like the existing snapshot/encode
+failure branches — `validate()` used to run ONLY on the load side, so a
+live state mutated into a malformed shape (e.g. `attackTargetUid` set
+to a non-numeric value by some other bug) could snapshot, encode, and
+WRITE to disk untouched, only surfacing as a silently-dropped reference
+edge on a LATER load rather than as a save-time failure.
+
+Finally, the outer per-unit (`aiState[uid]`) and per-building
+(`state[bid]`) table KEYS are now typed too, closing the one asymmetry
+left after `psSim`'s HashMap key went through the same treatment in
+round 3: `unitAiReferences`/`buildingSpawnReferences` already reported
+the outer key as a `"unit"`/`"building"` reference edge, but nothing
+tagged it on the wire the way a wrapped VALUE field is. Lua has no
+equivalent of `SamePageRef`'s wire-transparent newtype trick — a table
+can never itself BE a `data_codec.lua` map key (canonical encoding only
+supports integer/string keys) — so the fix is a self-describing
+`__owner = {__ref=kind, id=N}` field carried INSIDE each row's own
+value instead, redundant with the key by construction: `wrapUnitState`/
+`wrapLastUid` synthesize it, `checkOwnerRef`/`validateBuildingSpawnData`
+require it AND verify its id exactly matches the outer key (not merely
+well-formed), and `unwrapUnitState`/`unwrapLastUid` strip it back off —
+`aiState`/`state`'s LIVE in-memory shape never grows this field. Both
+components bumped to v3 (`inputVersions = {1,2,3}`): a v1 payload
+migrates straight to v3 in one step (`wrapUnitState`/`wrapLastUid`
+already synthesize `__owner` for fresh writes); a v2 payload (every
+OTHER field already wrapped, no `__owner` yet) migrates via
+`addOwnerToAiState`/`addOwnerToAllLastUid`, which add ONLY `__owner`
+without re-wrapping already-wrapped fields.
+
 Deliberately NOT rewritten onto this vocabulary: the nine existing
 `missingXReferences` content-definition checks (`World.Save.Types`/
 `Engine.Scripting.Lua.API.Save`'s `continueLoad`) stay as they are —

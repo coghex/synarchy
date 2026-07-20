@@ -261,8 +261,15 @@ function M.register(unitAi, aiState)
         -- unitAiReferences declares is now a typed structured reference
         -- on the wire ({__ref=kind, id=N} via wrapUnitState above), not
         -- a bare number. v1 payloads migrate via decode() below.
-        version = 2,
-        inputVersions = { 1, 2 },
+        -- v3 (round-6 review, issue #764): each per-unit entry also
+        -- carries a self-describing __owner = {__ref="unit", id=uid}
+        -- field, typing the OUTER per-unit key the same way (there is
+        -- no way to wrap a Lua table KEY itself -- see
+        -- unit_ai_save_refs.lua's wrapUnitState haddock for why this is
+        -- the closest Lua equivalent to psSim's SamePageRef-typed
+        -- HashMap key).
+        version = 3,
+        inputVersions = { 1, 2, 3 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -308,8 +315,14 @@ function M.register(unitAi, aiState)
             -- them here is the unambiguous v1->v2 migration (requirement
             -- 14): v1's fields have always meant exactly what
             -- unitAiReferences already declares, so there is nothing to
-            -- guess. v2 payloads are already wrapped (identity).
+            -- guess. wrapUnitState (via wrapAiState) ALSO synthesizes
+            -- __owner for v3, so a v1 payload migrates straight to v3 in
+            -- one step. v2 payloads have every OTHER field already
+            -- wrapped but no __owner yet -- addOwnerToAiState adds ONLY
+            -- that, without re-wrapping fields that are already wrapped.
+            -- v3 payloads are already complete (identity).
             if version == 1 then return refsMod.wrapAiState(data) end
+            if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data
         end,
         validate = validateUnitAiData,

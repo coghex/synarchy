@@ -180,9 +180,26 @@ local function mapNested(s, field, subfield, fn)
     s[field] = t
 end
 
-local function wrapUnitState(s)
+-- __owner (round-6 review, issue #764): the per-unit KEY this state
+-- table is stored under (`aiState[uid]`) is itself a durable cross-
+-- component reference -- unitAiReferences already reports it as one
+-- (`addRef("unit", uid, uid, prefix)` above) -- but the Lua table KEY
+-- alone has no wire kind/scope tag the way a wrapped VALUE field does,
+-- unlike World.Save.Component.Entities' PageSimDTO.psSim, whose
+-- analogous Haskell HashMap key was typed via SamePageRef in round 3.
+-- There is no Lua equivalent of that wire-transparent newtype trick:
+-- scripts/lib/data_codec.lua's canonical map encoding only supports
+-- integer/string keys, so a table can never BE a map key on this wire
+-- format. __owner is the alternative the round-6 review itself allowed
+-- for ("another typed-key representation"): a self-describing
+-- {__ref="unit", id=uid} field carried INSIDE the row's own value,
+-- redundant with the key by construction but giving the row a real,
+-- validated typed reference to its own identity. Stripped back off on
+-- unwrap -- aiState's LIVE in-memory shape never grows this field.
+local function wrapUnitState(uid, s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
+    copy.__owner = wrapRef("unit", uid)
     for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
         copy[f] = wrapRef("unit", copy[f])
     end
@@ -219,6 +236,7 @@ end
 local function unwrapUnitState(s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
+    copy.__owner = nil
     for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do copy[f] = unwrapRef(copy[f]) end
     for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do copy[f] = unwrapRef(copy[f]) end
     mapNested(copy, "treatClaim", "patient", unwrapRef)
@@ -250,12 +268,26 @@ end
 
 function M.wrapAiState(data)
     local out = {}
-    for uid, s in pairs(data) do out[uid] = wrapUnitState(s) end
+    for uid, s in pairs(data) do out[uid] = wrapUnitState(uid, s) end
     return out
 end
 function M.unwrapAiState(data)
     local out = {}
     for uid, s in pairs(data) do out[uid] = unwrapUnitState(s) end
+    return out
+end
+-- v2->v3 migration (round-6 review, issue #764): a v2 payload already
+-- has every OTHER reference field wrapped -- only __owner is new in
+-- v3 -- so this must NOT re-wrap already-wrapped fields the way
+-- wrapUnitState (built for BARE v1 input) would.
+function M.addOwnerToAiState(data)
+    local out = {}
+    for uid, s in pairs(data) do
+        local copy = {}
+        for k, v in pairs(s) do copy[k] = v end
+        copy.__owner = wrapRef("unit", uid)
+        out[uid] = copy
+    end
     return out
 end
 M.references = unitAiReferences
@@ -293,8 +325,31 @@ M.references = unitAiReferences
 -- itself caught this: a blanket "id >= 1" incorrectly rejected a valid
 -- ground_item reference of 0.
 local GROUND_ITEM_KIND = "ground_item"
-local function checkRefTag(v, expectedKind, uid, path, errs)
-    if v == nil then return end
+-- `required` (round-6 review, issue #764): most reference fields are
+-- legitimately absent depending on gameplay state (no active job, no
+-- pending claim, ...), so `nil` is valid by default -- but a field that
+-- is ALWAYS set together with its own enclosing job/claim table at
+-- CONSTRUCTION time (verified against the actual construction call
+-- site, not assumed) is a structural invariant: a v2/v3 payload whose
+-- container is present but the required field is missing is malformed,
+-- not merely "job in an earlier phase" -- and must be rejected here
+-- rather than silently applying with the field dropped (the AI would
+-- otherwise discard the job with no diagnostic at all). Verified
+-- required today: craftJob.billId/bid (unit_ai_craft.lua sets both
+-- unconditionally the instant craftJob is created) and
+-- repairJob.instanceId (unit_ai_repair.lua, same). Left optional:
+-- every other nested field (including repairJob.bid, which
+-- unit_ai_repair.lua never actually sets at all -- requiring it would
+-- reject every real repair job).
+local function checkRefTag(v, expectedKind, uid, path, errs, required)
+    if v == nil then
+        if required then
+            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
+                .. " is required but missing (expected a typed reference "
+                .. "with __ref='" .. expectedKind .. "')"
+        end
+        return
+    end
     if type(v) ~= "table" or v.__ref == nil then
         errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
             .. " is not a typed reference (expected __ref='"
@@ -313,7 +368,22 @@ local function checkRefTag(v, expectedKind, uid, path, errs)
             .. " has a non-numeric or invalid id (" .. tostring(v.id) .. ")"
     end
 end
+-- __owner must be present, correctly tagged/well-formed (checkRefTag),
+-- AND its id must exactly equal the outer key it's redundant with --
+-- a tag-only/shape-only check would still accept a wrapper that
+-- validly names a DIFFERENT unit than the row it's attached to.
+local function checkOwnerRef(v, uid, errs)
+    local before = #errs
+    checkRefTag(v, "unit", uid, "__owner", errs, true)
+    if #errs > before then return end
+    if v.id ~= uid then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
+            .. " __owner id (" .. tostring(v.id)
+            .. ") does not match its own key (" .. tostring(uid) .. ")"
+    end
+end
 function M.validateRefTags(uid, s, errs)
+    checkOwnerRef(s.__owner, uid, errs)
     for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
         checkRefTag(s[f], "unit", uid, f, errs)
     end
@@ -334,12 +404,17 @@ function M.validateRefTags(uid, s, errs)
             "deliveryPendingTarget.bid", errs)
     end
     if s.craftJob then
-        checkRefTag(s.craftJob.billId, "craft_bill", uid, "craftJob.billId", errs)
-        checkRefTag(s.craftJob.bid, "building", uid, "craftJob.bid", errs)
+        checkRefTag(s.craftJob.billId, "craft_bill", uid, "craftJob.billId",
+            errs, true)
+        checkRefTag(s.craftJob.bid, "building", uid, "craftJob.bid", errs, true)
     end
     if s.repairJob then
         checkRefTag(s.repairJob.instanceId, "item_instance", uid,
-            "repairJob.instanceId", errs)
+            "repairJob.instanceId", errs, true)
+        -- NOT required: repairJob.bid is listed in unitAiReferences'
+        -- schema (and wrapped/unwrapped symmetrically) but
+        -- unit_ai_repair.lua never actually sets it at job creation --
+        -- requiring it would reject every real repair job.
         checkRefTag(s.repairJob.bid, "building", uid, "repairJob.bid", errs)
     end
     if s.pickupOrder then

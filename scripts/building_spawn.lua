@@ -262,13 +262,40 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 
+-- Checks one wrapped {__ref=,id=} reference table (mirrors
+-- unit_ai_save_refs.lua's checkRefTag exactly): tag present and
+-- correct, id a well-formed positive integer. `what` names the field
+-- for the error text.
+local function checkWrappedRef(v, expectedKind, bid, what, errs)
+    if type(v) ~= "table" or v.__ref == nil then
+        errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+            .. " " .. what .. " is not a typed reference (expected __ref='"
+            .. expectedKind .. "')"
+        return
+    end
+    if v.__ref ~= expectedKind then
+        errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+            .. " " .. what .. " has wrong reference kind '"
+            .. tostring(v.__ref) .. "' (expected '" .. expectedKind .. "')"
+        return
+    end
+    if type(v.id) ~= "number" or v.id ~= math.floor(v.id) or v.id < 1 then
+        errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+            .. " " .. what .. " has a non-numeric or invalid id ("
+            .. tostring(v.id) .. ")"
+    end
+end
+
 -- Component-local validator (issue #761): `data` must be a table keyed
 -- by positive-integer building ids, each mapping to a state table.
--- Round-2 review (#764): also rejects a `lastUid` whose wrapper tag
--- isn't `__ref="unit"` -- mirrors unit_ai_save_refs.lua's
--- checkRefTag/validateRefTags, closing the same "unwrapLastUid trusts
--- field position alone" gap for this component's own sole reference
--- field.
+-- Round-2/3 review (#764): also rejects a `lastUid` whose wrapper tag
+-- isn't `__ref="unit"` or whose id is non-numeric/invalid -- mirrors
+-- unit_ai_save_refs.lua's checkRefTag/validateRefTags, closing the
+-- same "unwrapLastUid trusts field position alone" gap for this
+-- component's own sole reference field. Round-6 review: __owner
+-- (typing the OUTER per-building key itself, see wrapLastUid below)
+-- is REQUIRED on every entry, unlike lastUid, which is legitimately
+-- absent until a building actually spawns a unit.
 local function validateBuildingSpawnData(data)
     if type(data) ~= "table" then
         return { "building_spawn: payload must be a table" }
@@ -281,23 +308,21 @@ local function validateBuildingSpawnData(data)
         elseif type(s) ~= "table" then
             errs[#errs + 1] = "building_spawn: state for building "
                 .. tostring(bid) .. " is not a table"
-        elseif s.lastUid ~= nil then
-            if type(s.lastUid) ~= "table" or s.lastUid.__ref == nil then
+        else
+            if s.__owner == nil then
                 errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
-                    .. " lastUid is not a typed reference (expected __ref='unit')"
-            elseif s.lastUid.__ref ~= "unit" then
-                errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
-                    .. " lastUid has wrong reference kind '"
-                    .. tostring(s.lastUid.__ref) .. "' (expected 'unit')"
-            -- Round-3 review: a tag-only check would still accept
-            -- {__ref="unit", id="bad"} -- mirrors
-            -- unit_ai_save_refs.lua's checkRefTag id validation.
-            elseif type(s.lastUid.id) ~= "number"
-                    or s.lastUid.id ~= math.floor(s.lastUid.id)
-                    or s.lastUid.id < 1 then
-                errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
-                    .. " lastUid has a non-numeric or invalid id ("
-                    .. tostring(s.lastUid.id) .. ")"
+                    .. " __owner is required but missing (expected a typed "
+                    .. "reference with __ref='building')"
+            else
+                checkWrappedRef(s.__owner, "building", bid, "__owner", errs)
+                if type(s.__owner) == "table" and s.__owner.id ~= bid then
+                    errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+                        .. " __owner id (" .. tostring(s.__owner.id)
+                        .. ") does not match its own key (" .. tostring(bid) .. ")"
+                end
+            end
+            if s.lastUid ~= nil then
+                checkWrappedRef(s.lastUid, "unit", bid, "lastUid", errs)
             end
         end
     end
@@ -339,28 +364,48 @@ end
 -- snapshot/decode time and unwrapped back to a bare number at apply
 -- time, so `state`'s LIVE in-memory shape (read by onSaveLoaded below
 -- and every other consumer) never changes -- only the bytes on disk do.
-local function wrapLastUid(s)
-    if s.lastUid == nil then return s end
+-- __owner (round-6 review, issue #764) types the OUTER per-building
+-- key the SAME self-describing-field way unit_ai_save_refs.lua's
+-- wrapUnitState does for aiState's per-unit key -- see that function's
+-- haddock for why a Lua table key can't be wrapped directly.
+local function wrapLastUid(bid, s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
-    copy.lastUid = { __ref = "unit", id = s.lastUid }
+    copy.__owner = { __ref = "building", id = bid }
+    if s.lastUid ~= nil then
+        copy.lastUid = { __ref = "unit", id = s.lastUid }
+    end
     return copy
 end
 local function unwrapLastUid(s)
-    if type(s.lastUid) ~= "table" then return s end
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
-    copy.lastUid = s.lastUid.id
+    copy.__owner = nil
+    if type(s.lastUid) == "table" then
+        copy.lastUid = s.lastUid.id
+    end
     return copy
 end
 local function wrapAllLastUid(data)
     local out = {}
-    for bid, s in pairs(data) do out[bid] = wrapLastUid(s) end
+    for bid, s in pairs(data) do out[bid] = wrapLastUid(bid, s) end
     return out
 end
 local function unwrapAllLastUid(data)
     local out = {}
     for bid, s in pairs(data) do out[bid] = unwrapLastUid(s) end
+    return out
+end
+-- v2->v3 migration (round-6 review): a v2 payload already has lastUid
+-- wrapped -- only __owner is new in v3 -- so this must NOT re-wrap it.
+local function addOwnerToAllLastUid(data)
+    local out = {}
+    for bid, s in pairs(data) do
+        local copy = {}
+        for k, v in pairs(s) do copy[k] = v end
+        copy.__owner = { __ref = "building", id = bid }
+        out[bid] = copy
+    end
     return out
 end
 
@@ -377,8 +422,11 @@ function buildingSpawn.init(scriptId)
         -- v2 (issue #764, save-overhaul C3): lastUid is now a typed
         -- structured reference on the wire (see wrapLastUid above), not
         -- a bare number. v1 payloads migrate via decode() below.
-        version = 2,
-        inputVersions = { 1, 2 },
+        -- v3 (round-6 review, issue #764): every entry also carries a
+        -- self-describing __owner = {__ref="building", id=bid} field,
+        -- typing the OUTER per-building key too.
+        version = 3,
+        inputVersions = { 1, 2, 3 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): buildingSpawnReferences above
@@ -406,8 +454,12 @@ function buildingSpawn.init(scriptId)
             -- v1 payloads carry a bare lastUid number -- wrapping it
             -- here is the unambiguous v1->v2 migration (requirement 14):
             -- v1 never meant anything else, so there is nothing to
-            -- guess. v2 payloads are already wrapped (identity).
+            -- guess. wrapAllLastUid also synthesizes __owner for v3, so
+            -- a v1 payload migrates straight to v3 in one step. v2
+            -- payloads have lastUid already wrapped but no __owner yet.
+            -- v3 payloads are already complete (identity).
             if version == 1 then return wrapAllLastUid(data) end
+            if version == 2 then return addOwnerToAllLastUid(data) end
             return data
         end,
         validate = validateBuildingSpawnData,
