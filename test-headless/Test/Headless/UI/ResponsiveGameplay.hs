@@ -1406,6 +1406,46 @@ spec = aroundAll withSharedFixture $ do
                     uivpStatsBottom p `shouldSatisfy` (≤ 2160)
                     uivpInvBottom p `shouldSatisfy` (≤ 2160)
 
+        it "a resize rebuilds the stats sub-tab strip and recomputes its content rect instead of leaving them permanently empty/stale (round-18 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-18 review: rebuildLayout() (via clearOwned ->
+            -- statsMod.clearAll()) wipes the stats sub-tab strip, but
+            -- rebuildSubTabs() (which recreates it AND recomputes
+            -- statsContentRect from the current statsRect) was
+            -- otherwise only ever called once, at bootstrap — so every
+            -- resize after the first left the stats section
+            -- permanently empty and its content rect stuck at the
+            -- pre-resize size. Rescales to a narrow, high-uiscale
+            -- combination (round-3/16/17's own technique) so a stale
+            -- statsContentRect (still the old 1920@1x-derived width)
+            -- is distinguishable from a freshly recomputed one
+            -- (matching the new, capped-narrow statsRect).
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.update(0.016);"
+                , "local subTabCountBefore = #u.subTabs;"
+                , "local statsWBefore = u.statsContentRect and u.statsContentRect.w or -1;"
+                , "engine.setUIScale(4.0);"
+                , "hud.onFramebufferResize(800, 2160);"
+                , "u.reflow();"
+                , "return {subTabCountBefore = subTabCountBefore, subTabCountAfter = #u.subTabs,"
+                , "        statsWBefore = statsWBefore,"
+                , "        hasContentRectAfter = (u.statsContentRect ~= nil),"
+                , "        statsRectW = u.statsRect and u.statsRect.w or -1,"
+                , "        statsContentRectW = u.statsContentRect and u.statsContentRect.w or -1}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoStatsReflowProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    uisrpSubTabCountBefore p `shouldBe` 5
+                    uisrpSubTabCountAfter p `shouldBe` 5
+                    uisrpHasContentRectAfter p `shouldBe` True
+                    uisrpStatsContentRectW p `shouldBe` uisrpStatsRectW p
+                    uisrpStatsContentRectW p `shouldNotBe` uisrpStatsWBefore p
+
         it "a resize preserves the active unit tab and scroll offset instead of resetting to the first tab (round-17 review)" $ \(env, ls) → do
             resetFixture env ls
             -- #750 round-17 review: reflow() used to force lastSelKey
@@ -2320,6 +2360,16 @@ instance FromJSON UnitInfoVerticalProbe where
     parseJSON = withObject "UnitInfoVerticalProbe" $ \o →
         UnitInfoVerticalProbe <$> o .: "ok" <*> o .: "hasInvRect" <*> o .: "invH"
                                <*> o .: "equipBottom" <*> o .: "statsBottom" <*> o .: "invBottom"
+
+data UnitInfoStatsReflowProbe = UnitInfoStatsReflowProbe
+    { uisrpSubTabCountBefore ∷ Int, uisrpSubTabCountAfter ∷ Int, uisrpStatsWBefore ∷ Double
+    , uisrpHasContentRectAfter ∷ Bool, uisrpStatsRectW ∷ Double, uisrpStatsContentRectW ∷ Double
+    } deriving Show
+instance FromJSON UnitInfoStatsReflowProbe where
+    parseJSON = withObject "UnitInfoStatsReflowProbe" $ \o →
+        UnitInfoStatsReflowProbe <$> o .: "subTabCountBefore" <*> o .: "subTabCountAfter"
+                                   <*> o .: "statsWBefore" <*> o .: "hasContentRectAfter"
+                                   <*> o .: "statsRectW" <*> o .: "statsContentRectW"
 
 data UnitInfoTabPreserveProbe = UnitInfoTabPreserveProbe
     { uitpActiveBefore ∷ Int, uitpScrollBefore ∷ Int

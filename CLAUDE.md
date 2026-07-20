@@ -1809,6 +1809,39 @@ actually catch their regressions (stashed the three fix files, re-ran
 `UI.ResponsiveGameplay` suite (68 examples) and the broader `UI`-tagged
 headless suite (395 examples) both pass; `lua_module_budget.py` clean.
 
+Round-18 review found one more gap in the same `reflow()`: it never
+touched the stats sub-tab strip (Status/Physical/Mental/Skill/
+Knowledge) at all. `rebuildLayout()`'s `clearOwned()` deletes it
+(`statsMod.clearAll()`) same as everything else, but
+`statsMod.rebuildSubTabs()` — the ONLY thing that recreates it and
+recomputes `statsContentRect` from the fresh `statsRect` — was, unlike
+every other section, called just once, at bootstrap (`update()`'s
+`if not unitInfoV2.outerBoxId then rebuildLayout(); statsMod.
+rebuildSubTabs(); ... end` branch), never again on a later resize. So
+every resize after the pane's first layout left the stats section
+permanently blank and its content rect stuck at the pre-resize size —
+`rebuildStatsContent()`'s own guard only checks that
+`statsContentRect` is non-nil, not that it's current. Fixed with a new
+`unit_info_v2_stats.lua` function, `M.reflowStats()`, mirroring the two
+steps `update()` already performs for stats every tick (rebuild the
+sub-tab strip, then — if a unit is active — rebuild content and run its
+refresh callback); `reflow()` calls it right after `tabs.
+reflowSelection()`. Landed in `unit_info_v2_stats.lua` rather than
+inline in `unit_info_v2.lua` for the same module-budget reason as
+round-17's tab-preservation fix — one call site there, the real logic
+where the state already lives.
+
+Verified against a real running engine: loaded `unit_info_v2.lua` +
+`unit_info_v2_stats.lua` via `engine.loadScript`/`require` under a real
+`--headless` boot with no errors. New regression test resizes from
+1920×1080@1x to a narrow 800×2160@4x combination (round-3/16/17's own
+technique) specifically so a stale `statsContentRect` (still the old
+1x-derived width) is distinguishable from a freshly recomputed one —
+confirmed it catches the regression (stashed the two fix files, re-ran
+— 1 failure as expected, restored — passes again); full
+`UI.ResponsiveGameplay` suite (69 examples) and the broader `UI`-tagged
+headless suite (396 examples) both pass; `lua_module_budget.py` clean.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

@@ -400,16 +400,16 @@ end
 function unitInfoV2.reflow()
     -- Layout depends on framebuffer dimensions, so rebuild on resize.
     if unitInfoV2.page then
-        -- #750 round-17: preserve state a mere-resize rebuild would
-        -- otherwise destroy — keyboard control focus (HUD's own resize
-        -- handler runs first and may already have restored it onto a
-        -- unit-info control) and the active tab/scroll offset (handled
-        -- by tabs.reflowSelection() below).
+        -- #750 round-17/18: preserve state a mere-resize rebuild would
+        -- otherwise destroy — control focus, active tab/scroll offset,
+        -- and the stats sub-tab strip + content (see reflowSelection/
+        -- reflowStats below).
         local wasVisible = unitInfoV2.lastWantVisible
         local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
 
         rebuildLayout()
         tabs.reflowSelection()
+        statsMod.reflowStats()
 
         -- Re-apply the same visibility gate as update() so a resize while
         -- a menu / pause / settings overlay is open or the camera is zoomed
