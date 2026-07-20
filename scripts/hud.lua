@@ -2,9 +2,10 @@
 -- Displays a toggle group at the bottom-right of the screen
 -- for switching between map display modes.
 -- Also hosts a tile/chunk info panel in the top-right corner.
-local scale     = require("scripts.ui.scale")
-local toggle    = require("scripts.ui.toggle")
-local infoPanel = require("scripts.hud.info_panel")
+local scale      = require("scripts.ui.scale")
+local toggle     = require("scripts.ui.toggle")
+local infoPanel  = require("scripts.hud.info_panel")
+local responsive = require("scripts.ui.responsive")
 local hud = {}
 
 -- The log icon is a 1-item toggle group (same widget the map/tool
@@ -1113,6 +1114,20 @@ function hud.onFramebufferResize(width, height)
     hud.fbH = height
 
     if hud.uiCreated then
+        -- #750 round-10 review: createUI() destroys and recreates the
+        -- toggle-group controls (map/tool/log — all real ueOnClick,
+        -- keyboard-control-focusable elements per #745), by fresh handle
+        -- every rebuild. Preserve keyboard CONTROL focus across that
+        -- rebuild exactly like every other C2/C4 screen already does
+        -- (main_menu.lua/settings_menu.lua/create_world_menu.lua) —
+        -- snapshot by NAME before teardown (handles don't survive a
+        -- rebuild), restore once the new controls exist AND their page
+        -- is genuinely visible again (UI.getVisibleElements(), which
+        -- restoreControlFocusName searches, only considers visible
+        -- pages). wasVisible is queried before teardown for the same
+        -- reason the existing hud.visible-gated re-show logic below is.
+        local wasVisible = hud.visible
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
         hud.createUI()
         if hud.visible then
             if hud.currentView == "zoomed_in" and hud.world_page then
@@ -1127,6 +1142,9 @@ function hud.onFramebufferResize(width, height)
             if hud.global_page then
                 UI.showPage(hud.global_page)
             end
+        end
+        if wasVisible then
+            responsive.restoreControlFocusName(controlFocusName)
         end
     end
 end

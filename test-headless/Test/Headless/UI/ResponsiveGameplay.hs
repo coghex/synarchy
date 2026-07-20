@@ -373,6 +373,45 @@ spec = aroundAll withSharedFixture $ do
                 ]
             n `shouldBe` 0
 
+        it "a resize preserves keyboard CONTROL focus (#745) on a toolbar toggle, restoring it onto the rebuilt control by name (round-10 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "hud.show();"
+                , "local toggle = require('scripts.ui.toggle');"
+                , "local handles = toggle.getElementHandles(hud.toolToggleId);"
+                , "UI.setControlFocus(handles[1]);"
+                , "local nameBefore = UI.getElementInfo(handles[1]).name;"
+                , "local hadFocusBefore = UI.hasControlFocus(handles[1]);"
+                , "hud.onFramebufferResize(1600, 900);"
+                , "local focusHandle = UI.getControlFocus();"
+                , "local nameAfter = focusHandle and UI.getElementInfo(focusHandle).name or nil;"
+                , "return {hadFocusBefore = hadFocusBefore, hasFocusAfter = (focusHandle ~= nil),"
+                , "        sameName = (nameAfter == nameBefore)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe HudControlFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    hcfpHadFocusBefore p `shouldBe` True
+                    hcfpHasFocusAfter p `shouldBe` True
+                    hcfpSameName p `shouldBe` True
+
+        it "a resize while the HUD is hidden does not attempt to restore control focus (nothing to restore, no crash)" $ \(env, ls) → do
+            resetFixture env ls
+            ok ← evalBool ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local toggle = require('scripts.ui.toggle');"
+                , "local handles = toggle.getElementHandles(hud.toolToggleId);"
+                , "UI.setControlFocus(handles[1]);"
+                , "local ok = pcall(function() hud.onFramebufferResize(1600, 900) end);"
+                , "return ok"
+                ]
+            ok `shouldBe` True
+
     describe "event_log preserves its active tab and scroll position across a resize (#750 round-4 review)" $ do
         it "a resize keeps the active (non-default) tab selected, both logically and on the tabbar widget itself" $ \(env, ls) → do
             resetFixture env ls
@@ -922,6 +961,39 @@ spec = aroundAll withSharedFixture $ do
                     zipViewportZ p `shouldBe` 0
                     zipRowPaintKey p `shouldBe` zipRefPaintKey p
 
+        it "event/combat/injury/unit log panels all build a non-degenerate content viewport at the issue's own out-of-envelope exemplar (800x600@4x, round-10 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "engine.emitEvent('unit_event', 'hello world');"
+                , "local out = {};"
+                , "local specs = {"
+                , "    {mod = 'scripts.event_log',        vp = 'rowViewportId'},"
+                , "    {mod = 'scripts.combat_log',        vp = 'contentViewportId'},"
+                , "    {mod = 'scripts.injury_log_panel',  vp = 'contentViewportId'},"
+                , "    {mod = 'scripts.unit_log',          vp = 'contentViewportId'},"
+                , "};"
+                , "for _, spec in ipairs(specs) do"
+                , "    local m = require(spec.mod);"
+                , "    m.bootstrap(1,2,3,800,600);"
+                , "    local ok = pcall(function()"
+                , "        if spec.mod == 'scripts.unit_log' then m.show(1) else m.show() end"
+                , "    end);"
+                , "    local vp = ok and UI.getElementInfo(m[spec.vp]);"
+                , "    table.insert(out, {mod = spec.mod, ok = ok,"
+                , "        w = vp and vp.width or -1, h = vp and vp.height or -1});"
+                , "end;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [ModGeometryRow] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rows → do
+                    length rows `shouldBe` 4
+                    forM_ rows $ \row → do
+                        mgrOk row `shouldBe` True
+                        mgrW row `shouldSatisfy` (> 0)
+                        mgrH row `shouldSatisfy` (> 0)
+
     describe "\"unit info reserves right edge and suppresses conflicting info\" (#750 introspection over pre-existing behavior)" $ do
         it "unitInfoV2.getBounds() mirrors the real flush-right column, and is nil while not visible" $ \(env, ls) → do
             resetFixture env ls
@@ -1426,6 +1498,18 @@ instance FromJSON TabStripProbe where
         if skipped
             then pure (TabStripProbe True [])
             else TabStripProbe False <$> o .: "tabs"
+
+data HudControlFocusProbe = HudControlFocusProbe
+    { hcfpHadFocusBefore ∷ Bool, hcfpHasFocusAfter ∷ Bool, hcfpSameName ∷ Bool } deriving Show
+instance FromJSON HudControlFocusProbe where
+    parseJSON = withObject "HudControlFocusProbe" $ \o →
+        HudControlFocusProbe <$> o .: "hadFocusBefore" <*> o .: "hasFocusAfter" <*> o .: "sameName"
+
+data ModGeometryRow = ModGeometryRow
+    { mgrMod ∷ Text, mgrOk ∷ Bool, mgrW ∷ Double, mgrH ∷ Double } deriving Show
+instance FromJSON ModGeometryRow where
+    parseJSON = withObject "ModGeometryRow" $ \o →
+        ModGeometryRow <$> o .: "mod" <*> o .: "ok" <*> o .: "w" <*> o .: "h"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

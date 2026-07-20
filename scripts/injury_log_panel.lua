@@ -254,6 +254,17 @@ createUI = function()
     local regionW      = contentRight - contentX
     local contentW     = regionW - sbBtnSize - sbGap
 
+    -- #750 round-10 review: at an outside-envelope scale (e.g.
+    -- 800x600@4x) the scaled chrome above/around the content area can
+    -- exceed the panel's own height, driving contentH/contentW negative
+    -- — UI.newElement below would then create the clipping viewport
+    -- with invalid size. Floor both at a small positive minimum (same
+    -- 20px floor settings_menu.lua's tabFrameHeight already uses for
+    -- the identical class of gap) so the viewport is always valid,
+    -- best-effort geometry rather than guaranteed to look good.
+    contentW = math.max(20, contentW)
+    contentH = math.max(20, contentH)
+
     injuryLog.layout = {
         s                  = s,
         uiscale            = uiscale,

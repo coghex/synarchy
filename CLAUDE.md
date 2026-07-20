@@ -1323,6 +1323,52 @@ between y=265 and y=2080 (inside the 2160px framebuffer, versus the
 reviewer's reported 2272px natural overflow), and the panel itself
 stayed fully in-frame at `{x:352, y:9, w:448, h:2151}`.
 
+Round-10 review found two more gaps, unrelated to each other. First,
+`hud.lua`'s toggle-group controls (map/tool/log — real `ueOnClick`,
+keyboard-control-focusable elements per #745) are destroyed and
+recreated by every `createUI()` rebuild, but `hud.onFramebufferResize`
+never snapshotted or restored which one held keyboard CONTROL focus —
+Tab-focusing a toggle and then resizing silently cleared it on the next
+keyboard dispatch. Every other C2/C4 screen already solved this exact
+problem (`main_menu.lua`/`settings_menu.lua`/`create_world_menu.lua`,
+see this file's earlier responsive-menu-lifecycle notes) with
+`responsive.snapshotControlFocusName()`/`restoreControlFocusName(name)`
+— by-NAME snapshot/restore, since a destroy+recreate cycle always
+assigns fresh element handles. `hud.onFramebufferResize` now does the
+same: snapshot (gated on `hud.visible`, queried BEFORE `createUI()`
+tears anything down) right before the rebuild, restore right after the
+existing visibility-restore logic re-shows whichever pages were
+visible (`restoreControlFocusName` searches `UI.getVisibleElements()`,
+which only considers visible pages — restoring before the re-show would
+silently fail to find anything). Verified against a real running
+engine: a control on a page that's actually visible at resize time
+(the map toggle, on `zoom_page` — the engine's real default camera
+state resolves `hud.currentView` to `"zoomed_out"`) keeps focus across
+`hud.onFramebufferResize` by name.
+
+Second, `event_log.lua`/`combat_log.lua`/`injury_log_panel.lua`/
+`unit_log.lua` all compute their `#747` clipping viewport's
+`contentH`/`contentW` as `panel geometry minus scaled chrome` — at an
+outside-envelope scale (the issue's own 800×600@4x exemplar), the
+scaled chrome (title bar, tab strip, padding) can exceed the panel's
+own height entirely, driving `contentH` negative before it's ever
+handed to `UI.newElement`. Reviewer named `combat_log.lua`/
+`injury_log_panel.lua`/`unit_log.lua` explicitly; `event_log.lua` has
+the structurally identical `(panelY + panelH - s.padY) - contentY`
+shape and was fixed alongside them for the same reason round 7 fixed
+`item_contents_panel.lua`/`build_tool.lua`'s picker alongside the
+explicitly-named `cargo_inventory_panel.lua`. Fixed with the same
+20px floor `settings_menu.lua`'s `tabFrameHeight` already established
+for this exact class of gap (`contentW = math.max(20, contentW);
+contentH = math.max(20, contentH)`, applied right after each
+computation, before anything downstream reads it) — best-effort,
+never-crashing geometry, not guaranteed to look good in an envelope
+the issue itself documents as out-of-support. Verified against a real
+running engine at the reviewer's literal 800×600@4x exemplar: all four
+panels' content viewports came out `h=20` (the floor engaging exactly
+as intended) with a positive width, versus `UI.newElement` receiving a
+negative height pre-fix.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
