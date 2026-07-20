@@ -314,11 +314,27 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
     -- under-sizes the tab box on uiscale > 1 and the text spills
     -- out of its background.
     local widths = {}
+    local naturalTotalW = 0
     for i, td in ipairs(tabDefs) do
         local text = td.name .. " (" .. td.count .. ")"
         local w = engine.getTextWidth(h.menuFont, text, fontPx) or 0
         widths[i] = math.floor(w) + 2 * padX
+        naturalTotalW = naturalTotalW + widths[i] + (i > 1 and math.floor(TAB_GAP * uiscale) or 0)
     end
+
+    -- #750 round-8 review: contentW arrived as a parameter but was never
+    -- consulted — with enough categories (or long names) at a narrow,
+    -- high-scale, still-C2-supported combination, tabs kept flowing off
+    -- the panel/framebuffer edge with no wrap/scroll/clip. Shrink-to-fit,
+    -- same pattern as build_tool.lua's picker tab strip: scale every
+    -- tab's width and gap down by one factor so the whole row lands
+    -- inside contentW, floored so a tab stays clickable rather than
+    -- vanishing.
+    local shrink = 1.0
+    if contentW and naturalTotalW > contentW and naturalTotalW > 0 then
+        shrink = contentW / naturalTotalW
+    end
+    local shrunkGap = math.floor(TAB_GAP * uiscale * shrink)
 
     local cursorX = originX
     for i, td in ipairs(tabDefs) do
@@ -327,7 +343,7 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
         local texSet = active and cargoInventoryPanel.tabSelTexSet
                               or  cargoInventoryPanel.tabUnselTexSet
         local txtCol = active and TAB_SEL_TEXT_COL or TAB_TEXT_COL
-        local tabW   = widths[i]
+        local tabW   = math.max(20, math.floor(widths[i] * shrink))
 
         local bgId = UI.newBox("cargo_inv_tab_bg_" .. i,
             tabW, tabH, texSet, TAB_TILE,
@@ -356,7 +372,7 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
 
         s.tabs[#s.tabs + 1] = { name = td.name, boxId = bgId, labelId = lblId }
         s.tabsByHandle[bgId] = td.name
-        cursorX = cursorX + tabW + math.floor(TAB_GAP * uiscale)
+        cursorX = cursorX + tabW + shrunkGap
     end
 end
 

@@ -962,6 +962,30 @@ spec = aroundAll withSharedFixture $ do
                     wcpInFrame p `shouldBe` True
                     wcpW p `shouldSatisfy` (≤ 800)
 
+        it "the flush-right column never grows wide enough to cover the left-side toolbar clusters (round-8 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local rr = require('scripts.ui.reserved_regions');"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.lastWantVisible = true;"
+                , "local b = u.getBounds();"
+                , "local overlapsAny = false;"
+                , "for _, rc in ipairs(hud.getToolbarRects()) do"
+                , "    if rc.name ~= 'map_toggle' and rr.rectsOverlap(b, rc) then overlapsAny = true end"
+                , "end;"
+                , "return {overlapsAny = overlapsAny,"
+                , "        inFrame = (b.x >= 0 and (b.x+b.w) <= 800)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe OverlapProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    opOverlapsAny p `shouldBe` False
+                    opInFrame p `shouldBe` True
+
         it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1073,6 +1097,41 @@ spec = aroundAll withSharedFixture $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → wcpInFrame p `shouldBe` True
 
+        it "cargo_inventory_panel: a multi-category inventory's tab strip shrinks to fit instead of running off-frame (round-8 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
+                , "    { defName='i3', category='Cat3' }, { defName='i4', category='Cat4' },"
+                , "    { defName='i5', category='Cat5' }, { defName='i6', category='Cat6' },"
+                , "    { defName='i7', category='Cat7' }, { defName='i8', category='Cat8' },"
+                , "} end;"
+                , "local pg = UI.newPage('cargo_tab_test_page', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
+                , "cip.openFor(1, 400, 400);"
+                , "local out = {};"
+                , "for _, t in ipairs(cip.state.tabs) do"
+                , "    local info = UI.getElementInfo(t.boxId);"
+                , "    table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height})"
+                , "end;"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [RectRow] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rects → do
+                    length rects `shouldSatisfy` (≥ 8)
+                    forM_ rects $ \rc → do
+                        rrX rc `shouldSatisfy` (≥ 0)
+                        rrW rc `shouldSatisfy` (≥ 20)
+                        (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
+
         it "item_contents_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1094,7 +1153,7 @@ spec = aroundAll withSharedFixture $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → wcpInFrame p `shouldBe` True
 
-    describe "build_tool.lua's picker stays in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $
+    describe "build_tool.lua's picker stays in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $ do
         it "the picker width is capped to the remaining framebuffer space right of its toolbar anchor, with no prior position clamp to rely on" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1128,6 +1187,81 @@ spec = aroundAll withSharedFixture $ do
                     -- fix itself is exercised directly whenever it can
                     -- open.
                     when (not (ppSkipped p)) $ ppInFrame p `shouldBe` True
+
+        it "the icon grid's column count derives from the (possibly shrunk) panel's real content width, not a fixed constant (round-8 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local orig = building.listDefs;"
+                , "building.listDefs = function() return {"
+                , "    { name='t1', displayName='Wall',  category='Structures', isStarting=true },"
+                , "    { name='t2', displayName='Farm',  category='Structures', isStarting=true },"
+                , "    { name='t3', displayName='Kiln',  category='Structures', isStarting=true },"
+                , "    { name='t4', displayName='Fort',  category='Structures', isStarting=true },"
+                , "    { name='t5', displayName='Dock',  category='Structures', isStarting=true },"
+                , "    { name='t6', displayName='Mill',  category='Structures', isStarting=true },"
+                , "} end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local bt = require('scripts.build_tool');"
+                , "bt.setup({hud = hud});"
+                , "local ok = pcall(function() bt.showPicker() end);"
+                , "building.listDefs = orig;"
+                , "if not ok or bt.state.mode ~= 'picker' then return {skipped = true} end;"
+                , "local out = {};"
+                , "for _, ic in ipairs(bt.state.iconIds or {}) do"
+                , "    local info = UI.getElementInfo(ic);"
+                , "    if info then table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height}) end"
+                , "end;"
+                , "return {skipped = false, columnsPerRow = bt.state.columnsPerRow, icons = out}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ColumnGridProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → when (not (cgpSkipped p)) $ do
+                    cgpColumnsPerRow p `shouldSatisfy` (≥ 1)
+                    forM_ (cgpIcons p) $ \rc → do
+                        rrX rc `shouldSatisfy` (≥ 0)
+                        (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
+
+        it "the tab strip shrinks to fit the panel's content width instead of running tabs off the framebuffer (round-8 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local orig = building.listDefs;"
+                , "building.listDefs = function() return {"
+                , "    { name='t1', displayName='A1', category='Cat1', isStarting=true },"
+                , "    { name='t2', displayName='A2', category='Cat2', isStarting=true },"
+                , "    { name='t3', displayName='A3', category='Cat3', isStarting=true },"
+                , "    { name='t4', displayName='A4', category='Cat4', isStarting=true },"
+                , "    { name='t5', displayName='A5', category='Cat5', isStarting=true },"
+                , "    { name='t6', displayName='A6', category='Cat6', isStarting=true },"
+                , "    { name='t7', displayName='A7', category='Cat7', isStarting=true },"
+                , "    { name='t8', displayName='A8', category='Cat8', isStarting=true },"
+                , "} end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local bt = require('scripts.build_tool');"
+                , "bt.setup({hud = hud});"
+                , "local ok = pcall(function() bt.showPicker() end);"
+                , "building.listDefs = orig;"
+                , "if not ok or bt.state.mode ~= 'picker' then return {skipped = true} end;"
+                , "local out = {};"
+                , "for _, t in ipairs(bt.state.tabIds) do"
+                , "    local info = UI.getElementInfo(t.boxId);"
+                , "    table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height})"
+                , "end;"
+                , "return {skipped = false, tabs = out}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TabStripProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → when (not (tspSkipped p)) $ do
+                    length (tspTabs p) `shouldSatisfy` (≥ 8)
+                    forM_ (tspTabs p) $ \rc → do
+                        rrX rc `shouldSatisfy` (≥ 0)
+                        rrW rc `shouldSatisfy` (≥ 20)
+                        (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
 
 -- * FromJSON row types
 
@@ -1237,6 +1371,23 @@ instance FromJSON PickerProbe where
         if skipped
             then pure (PickerProbe True False)
             else PickerProbe False <$> o .: "inFrame"
+
+data ColumnGridProbe = ColumnGridProbe
+    { cgpSkipped ∷ Bool, cgpColumnsPerRow ∷ Int, cgpIcons ∷ [RectRow] } deriving Show
+instance FromJSON ColumnGridProbe where
+    parseJSON = withObject "ColumnGridProbe" $ \o → do
+        skipped ← o .: "skipped"
+        if skipped
+            then pure (ColumnGridProbe True 0 [])
+            else ColumnGridProbe False <$> o .: "columnsPerRow" <*> o .: "icons"
+
+data TabStripProbe = TabStripProbe { tspSkipped ∷ Bool, tspTabs ∷ [RectRow] } deriving Show
+instance FromJSON TabStripProbe where
+    parseJSON = withObject "TabStripProbe" $ \o → do
+        skipped ← o .: "skipped"
+        if skipped
+            then pure (TabStripProbe True [])
+            else TabStripProbe False <$> o .: "tabs"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

@@ -168,6 +168,26 @@ function reservedRegions.maxAvailableWidth(y, h, reservedRects, screenW)
     return best
 end
 
+-- #750 round-8 review: maxAvailableWidth above finds the widest gap
+-- ANYWHERE — fine for a freely-repositionable rect like a popup, but
+-- unit_info_v2's flush-right column is never repositioned, only
+-- resized; capping it to the framebuffer alone (as it originally was)
+-- lets it grow wide enough to cover reserved regions nowhere NEAR its
+-- right edge. Widest a RIGHT-EDGE-ANCHORED rect spanning [y, y+h)
+-- could be — scanning inward from screenW — without overlapping any
+-- reserved rect whose own vertical span intersects [y, y+h). A blocker
+-- entirely clear of the anchored span (its right edge already left of
+-- where a candidate width would start) doesn't constrain the result.
+function reservedRegions.maxRightAnchoredWidth(y, h, reservedRects, screenW)
+    local maxW = screenW
+    for _, r in ipairs(reservedRects or {}) do
+        if r.y < y + h and y < r.y + r.h then
+            maxW = math.min(maxW, screenW - (r.x + r.w))
+        end
+    end
+    return math.max(0, maxW)
+end
+
 -- Bounds-escape / unreachable-action detection (#750 acceptance:
 -- introspection "detects escapes ... unreachable actions"). `elements`
 -- is an array of UI.getElementInfo-shaped tables. Only a genuinely

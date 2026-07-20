@@ -168,7 +168,29 @@ local function rebuildLayout()
     -- PANEL_W=340 to 1360px), pushing panelX negative and most of the
     -- pane's content/controls off-screen. Best-effort degrade — see
     -- popup.lua's identical fix for the same class of gap.
-    local panelW   = math.min(math.floor(L.PANEL_W * uiscale), fbW)
+    --
+    -- #750 round-8 review: the framebuffer cap alone let this flush-
+    -- right, full-height column grow wide enough to become the WHOLE
+    -- screen width at an extreme combination, covering hud's LEFT-side
+    -- toolbar clusters (log/tool toggle) it has no priority relationship
+    -- with — "toolbar outranks transient info"
+    -- (scripts/ui/reserved_regions.lua's own declared PRIORITY table).
+    -- Deliberately does NOT constrain against map_toggle: this pane
+    -- ALREADY overlaps map_toggle's corner at ordinary, in-envelope
+    -- resolutions (both are flush-right; that overlap is pre-existing,
+    -- accepted shipped behavior, not a #750 regression) — narrowing the
+    -- pane to avoid it too would shrink it down to near-nothing even at
+    -- 1x. reservedRegions.maxRightAnchoredWidth is the right-anchored
+    -- counterpart to popup.lua's maxAvailableWidth (which finds the
+    -- widest gap ANYWHERE — wrong model for a column that's never
+    -- repositioned, only resized).
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local leftToolbarRects = {}
+    for _, rc in ipairs(hud.getToolbarRects()) do
+        if rc.name ~= "map_toggle" then table.insert(leftToolbarRects, rc) end
+    end
+    local panelW = math.min(math.floor(L.PANEL_W * uiscale), fbW,
+        reservedRegions.maxRightAnchoredWidth(0, fbH, leftToolbarRects, fbW))
     local outerPad = math.floor(L.PANEL_PAD * uiscale)
     local sectGap  = math.floor(L.SECTION_GAP * uiscale)
 
@@ -419,10 +441,16 @@ end
 function unitInfoV2.getBounds()
     if not unitInfoV2.isVisible() then return nil end
     local uiscale = scale.get()
-    -- Mirrors rebuildLayout()'s own framebuffer-width cap (#750 round-3
-    -- review) so this can't drift from what rebuildLayout() actually
+    -- Mirrors rebuildLayout()'s own framebuffer-width cap (#750 rounds
+    -- 3 and 8) so this can't drift from what rebuildLayout() actually
     -- builds.
-    local panelW  = math.min(math.floor(L.PANEL_W * uiscale), hud.fbW)
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local leftToolbarRects = {}
+    for _, rc in ipairs(hud.getToolbarRects()) do
+        if rc.name ~= "map_toggle" then table.insert(leftToolbarRects, rc) end
+    end
+    local panelW = math.min(math.floor(L.PANEL_W * uiscale), hud.fbW,
+        reservedRegions.maxRightAnchoredWidth(0, hud.fbH, leftToolbarRects, hud.fbW))
     return { x = hud.fbW - panelW, y = 0, w = panelW, h = hud.fbH }
 end
 

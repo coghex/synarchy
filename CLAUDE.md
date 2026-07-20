@@ -1205,6 +1205,75 @@ with the underlying `building.getStorage*`/`unit.getItemContents`
 native calls monkey-patched (mirroring the same technique the toggle.lua
 round-2 tests already used for `world.setToolMode`).
 
+Round-8 review found round-7's "capping the panel is sufficient, its
+content derives from `panel.getContentBounds()`" claim was too broad in
+three places. First, `cargo_inventory_panel.lua`'s tab strip already
+received a `contentW` parameter (`buildTabStrip(originX, originY,
+contentW, tabDefs)`) but never once consulted it — tabs kept flowing
+left-to-right as page-root elements with no wrap, scroll, or clip, so
+enough categories (or long names) at a narrow, high-scale, still-C2-
+supported combination still ran later tabs off the panel/framebuffer
+edge; the panel-width cap constrained the CONTAINER, not this specific
+child layout. `build_tool.lua`'s picker had the identical gap in its own
+tab strip (`buildTabStrip`, not parameterized with a width at all before
+this round), plus a second, distinct one: its icon grid always laid out
+a fixed `ICONS_PER_ROW = 4` columns regardless of how narrow the
+(possibly now-shrunk) panel actually was, so icons past the fourth
+column rendered off-panel/off-frame the same way. Both tab strips now
+shrink-to-fit rather than wrap: compute each tab's natural width (text +
+padding) and the row's natural total, and — only if that total exceeds
+the available content width — scale every tab's width AND every
+inter-tab gap down by one shared factor so the whole row lands inside
+bounds, floored at 20px per tab so a tab always stays a real click
+target rather than vanishing (never guaranteed to fit if there are
+enough tabs that even the 20px floor overflows — same best-effort
+contract as everywhere else in this class of fix). The icon grid's
+column count is now derived once, in `showPicker()`, from the panel's
+actual usable content width (`math.max(1, ...)`, so a single column is
+always possible) and stored on `buildTool.state.columnsPerRow`, which
+BOTH the row-count/panel-height calculation and `rebuildIconGrid()`
+(called again on every tab switch) read — never a second, independently
+recomputed value that could drift from what the panel was actually
+sized for.
+
+Second, `unit_info_v2.lua`'s flush-right column — capped to the
+framebuffer at round 3 — could still grow wide enough to cover the
+entire left-side toolbar (log/tool toggle clusters) at a narrow,
+high-scale combination, since a framebuffer cap alone says nothing about
+what else occupies that space; unlike a popup card (freely
+repositionable, `reservedRegions.avoidReserved`/`maxAvailableWidth`),
+this column is flush-right-ANCHORED and only ever resized, never moved,
+so neither existing reserved-region helper fit its geometry. Added
+`reservedRegions.maxRightAnchoredWidth(y, h, reservedRects, screenW)` —
+scans inward from `screenW` and returns the widest a right-anchored rect
+spanning `[y, y+h)` could be without overlapping any reserved rect whose
+own vertical span intersects that range — and wired it into both
+`rebuildLayout()` and `getBounds()` (which must keep computing the exact
+same formula, per this file's existing convention). The reserved set
+passed in deliberately excludes `map_toggle`: that toggle already sits
+under the unit-info column's default width at every currently-shipped
+resolution, so folding it in would visibly shrink the column at normal
+play sizes to guard against an overlap that isn't a #750 regression;
+only `log_toggle`/`tool_toggle` (further left, genuinely at risk from
+extreme narrow/high-scale growth) constrain it.
+
+All three fixes were verified against a real running headless engine at
+the reviewer's own 800x2160@4x exemplar before extending the regression
+suite: `unit_info_v2`'s column stayed clear of the toolbar
+(`reservedRegions.rectsOverlap` against real `hud.getToolbarRects()`
+output); the build-tool picker, driven with real loaded building defs
+(`engine.loadBuildingYaml` against `data/buildings/*.yaml`, not a
+synthetic def — the round-7 picker test's `engine.getBuildingDefs`
+monkeypatch turned out to target a function `visibleEntries()` never
+actually calls, `building.listDefs()` is the real hook, so that
+pre-existing test soft-skips every run; the new round-8 tests patch
+`building.listDefs` directly and confirmed via the test log that they
+exercise the real path, not the soft-skip), showed both its tab strip
+and icon grid staying fully in-frame; and `cargo_inventory_panel.lua`,
+driven through a real `openFor` with `building.getStorage` stubbed to
+return eight distinct-category items, showed its tab row shrinking to
+fit rather than overflowing.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
