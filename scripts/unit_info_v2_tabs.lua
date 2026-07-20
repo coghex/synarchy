@@ -360,6 +360,42 @@ function M.rebuildTabs(sel)
     end
 end
 
+-- Restore a previously-active tab + scroll offset after rebuildTabs
+-- reset both to the first unit / 0 (see rebuildTabs's own comment —
+-- that reset is correct for a genuine selection-identity change). uid
+-- is restored only when still present among the freshly-built tabs;
+-- the scroll offset is clamped to whatever the new layout supports.
+local function restoreActiveTab(uid, scrollOffset)
+    if not unitInfoV2.tabLayout or #unitInfoV2.tabs == 0 then return end
+    if uid then
+        for _, t in ipairs(unitInfoV2.tabs) do
+            if t.uid == uid then
+                unitInfoV2.activeUid = uid
+                break
+            end
+        end
+    end
+    local maxOffset = math.max(0,
+        #unitInfoV2.tabs - unitInfoV2.tabLayout.visibleCount)
+    unitInfoV2.scrollOffset = math.max(0, math.min(scrollOffset or 0, maxOffset))
+    applyTabPositions()
+end
+
+-- #750 round-17 review: unitInfoV2.reflow() rebuilds the tab strip for
+-- the SAME (unchanged) selection after a layout-only resize destroys
+-- it — a plain rebuildTabs() call there would lose the player's active
+-- tab/scroll via its own genuine-selection-change reset. Captures and
+-- restores both around the rebuild, and updates lastSelKey so the next
+-- update() tick doesn't redundantly rebuild again.
+function M.reflowSelection()
+    local savedActiveUid = unitInfoV2.activeUid
+    local savedScrollOffset = unitInfoV2.scrollOffset
+    local sel = unit.getSelected()
+    M.rebuildTabs(sel)
+    unitInfoV2.lastSelKey = M.selectionKey(sel)
+    restoreActiveTab(savedActiveUid, savedScrollOffset)
+end
+
 -- Refresh every visible tab's portrait. Prefer the unit def's
 -- authored portrait (static), falling back to the live animation
 -- frame for defs that ship no `portrait:`. Skip setSpriteTexture

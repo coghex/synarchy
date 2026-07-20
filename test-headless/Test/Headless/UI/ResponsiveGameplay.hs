@@ -1406,6 +1406,148 @@ spec = aroundAll withSharedFixture $ do
                     uivpStatsBottom p `shouldSatisfy` (≤ 2160)
                     uivpInvBottom p `shouldSatisfy` (≤ 2160)
 
+        it "a resize preserves the active unit tab and scroll offset instead of resetting to the first tab (round-17 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-17 review: reflow() used to force lastSelKey
+            -- to differ so the next update() tick would call
+            -- rebuildTabs, which always resets the active tab to
+            -- sel[1] and the scroll offset to 0 — correct for a real
+            -- selection change, but a resize re-processes the SAME
+            -- selection and must not lose either. unit.getSelected is
+            -- stubbed (10 units, forcing scroll) since no real world/
+            -- units exist in this harness; tabs.rebuildTabs is driven
+            -- directly so building the strip doesn't need the other
+            -- section modules' own unit/equipment stubs.
+            r ← evalJSON ls $ luaLines
+                [ "local origSel = unit.getSelected;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "local tabs = require('scripts.unit_info_v2_tabs');"
+                , "u.update(0.016);"
+                , "unit.getSelected = function() return {1,2,3,4,5,6,7,8,9,10} end;"
+                , "tabs.rebuildTabs(unit.getSelected());"
+                , "u.handleScrollRight(u.scrollRightId);"
+                , "u.handleScrollRight(u.scrollRightId);"
+                , "u.activeUid = 5;"
+                , "local activeBefore = u.activeUid;"
+                , "local scrollBefore = u.scrollOffset;"
+                , "u.reflow();"
+                , "unit.getSelected = origSel;"
+                , "return {activeBefore = activeBefore, scrollBefore = scrollBefore,"
+                , "        activeAfter = u.activeUid, scrollAfter = u.scrollOffset,"
+                , "        tabCountAfter = #u.tabs}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoTabPreserveProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    uitpScrollBefore p `shouldSatisfy` (> 0)
+                    uitpActiveAfter p `shouldBe` uitpActiveBefore p
+                    uitpScrollAfter p `shouldBe` uitpScrollBefore p
+                    uitpTabCountAfter p `shouldBe` 10
+
+        it "a resize preserves keyboard CONTROL focus (#745) on the Log button, restoring it after rebuildLayout deletes/recreates it (round-17 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-17 review: reflow()'s rebuildLayout() deletes
+            -- and recreates every unit-info control, including the
+            -- keyboard-focusable Log button, with no focus snapshot/
+            -- restore of its own — a focus HUD's own resize handler
+            -- had just restored onto a unit-info control (#745,
+            -- mirroring hud.lua's round-10 pattern) was immediately
+            -- orphaned again. isGameplayInputActive is stubbed true so
+            -- reflow's visibility gate keeps the pane shown — a real
+            -- gameplay/zoom state isn't reachable in this bare-Lua-
+            -- backend harness (no fontsReady/world boot).
+            r ← evalJSON ls $ luaLines
+                [ "local uiManager = require('scripts.ui_manager');"
+                , "local origActive = uiManager.isGameplayInputActive;"
+                , "uiManager.isGameplayInputActive = function() return true end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "hud.currentView = 'zoomed_in';"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.update(0.016);"
+                , "u.lastSelCount = 1;"
+                , "u.lastWantVisible = true;"
+                , "UI.showPage(u.page);"
+                , "UI.setControlFocus(u.logBtnBoxId);"
+                , "local hadFocusBefore = UI.hasControlFocus(u.logBtnBoxId);"
+                , "u.reflow();"
+                , "uiManager.isGameplayInputActive = origActive;"
+                , "local focusHandle = UI.getControlFocus();"
+                , "local nameAfter = focusHandle and UI.getElementInfo(focusHandle).name or '';"
+                , "return {hadFocusBefore = hadFocusBefore, hasFocusAfter = (focusHandle ~= nil),"
+                , "        nameAfter = nameAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    uifpHadFocusBefore p `shouldBe` True
+                    uifpHasFocusAfter p `shouldBe` True
+                    uifpNameAfter p `shouldBe` "unit_info_v2_log_btn"
+
+        it "equipment silhouette + slot content fits the (possibly round-16-fitted) equipment rect instead of overflowing it at 800x2160@4x (round-17 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-17 review: L.fitVerticalSections (round-16)
+            -- only shrinks the equipment SECTION's rect, never
+            -- equipmentMod's own content scale — a 1024px silhouette
+            -- still rendered at the full 4x uiscale into the fitted
+            -- ~625px rect, overlapping stats/inventory. unit.getInfo/
+            -- equipment.getClass/getLoadout/getAccessories are stubbed
+            -- (no real world/units exist in this harness);
+            -- rebuildEquipmentSection is driven directly, bypassing
+            -- update()'s other section modules (which would need their
+            -- own unrelated stubs to not error).
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.update(0.016);"
+                , "local origInfo = unit.getInfo;"
+                , "local origClass = equipment.getClass;"
+                , "local origLoadout = equipment.getLoadout;"
+                , "local origAcc = equipment.getAccessories;"
+                , "unit.getInfo = function(uid) return {equipmentClass = 'probe_class'} end;"
+                , "equipment.getClass = function(name) return {"
+                , "    silhouette = 0, silhouetteW = 1024, silhouetteH = 1024,"
+                , "    slots = {{id='head', name='Head', kind='armor', x=480, y=20, w=64, h=64}}"
+                , "} end;"
+                , "equipment.getLoadout = function(uid) return {} end;"
+                , "equipment.getAccessories = function(uid) return {} end;"
+                , "u.activeUid = 1;"
+                , "local em = require('scripts.unit_info_v2_equipment');"
+                , "local ok = pcall(function() em.rebuildEquipmentSection() end);"
+                , "unit.getInfo = origInfo; equipment.getClass = origClass;"
+                , "equipment.getLoadout = origLoadout; equipment.getAccessories = origAcc;"
+                , "local er = u.equipRect;"
+                , "local silInfo, slotInfo = nil, nil;"
+                , "for _, e in ipairs(u.equipElements) do"
+                , "    if e.id then"
+                , "        local info = UI.getElementInfo(e.id);"
+                , "        if info and info.name == 'unit_info_v2_equip_silhouette' then silInfo = info end;"
+                , "        if info and info.name == 'unit_info_v2_equip_slot_1' then slotInfo = info end;"
+                , "    end"
+                , "end;"
+                , "return {ok = ok, hasSil = (silInfo ~= nil), hasSlot = (slotInfo ~= nil),"
+                , "        rectBottom = (er.y + er.h), rectTop = er.y,"
+                , "        silBottom = silInfo and (silInfo.y + silInfo.height) or -1,"
+                , "        silTop = silInfo and silInfo.y or -1,"
+                , "        slotBottom = slotInfo and (slotInfo.y + slotInfo.height) or -1}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoEquipFitProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    uiefpOk p `shouldBe` True
+                    uiefpHasSil p `shouldBe` True
+                    uiefpHasSlot p `shouldBe` True
+                    uiefpSilTop p `shouldSatisfy` (≥ uiefpRectTop p)
+                    uiefpSilBottom p `shouldSatisfy` (≤ uiefpRectBottom p)
+                    uiefpSlotBottom p `shouldSatisfy` (≤ uiefpRectBottom p)
+
         it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -2178,6 +2320,30 @@ instance FromJSON UnitInfoVerticalProbe where
     parseJSON = withObject "UnitInfoVerticalProbe" $ \o →
         UnitInfoVerticalProbe <$> o .: "ok" <*> o .: "hasInvRect" <*> o .: "invH"
                                <*> o .: "equipBottom" <*> o .: "statsBottom" <*> o .: "invBottom"
+
+data UnitInfoTabPreserveProbe = UnitInfoTabPreserveProbe
+    { uitpActiveBefore ∷ Int, uitpScrollBefore ∷ Int
+    , uitpActiveAfter ∷ Int, uitpScrollAfter ∷ Int, uitpTabCountAfter ∷ Int } deriving Show
+instance FromJSON UnitInfoTabPreserveProbe where
+    parseJSON = withObject "UnitInfoTabPreserveProbe" $ \o →
+        UnitInfoTabPreserveProbe <$> o .: "activeBefore" <*> o .: "scrollBefore"
+                                   <*> o .: "activeAfter" <*> o .: "scrollAfter" <*> o .: "tabCountAfter"
+
+data UnitInfoFocusProbe = UnitInfoFocusProbe
+    { uifpHadFocusBefore ∷ Bool, uifpHasFocusAfter ∷ Bool, uifpNameAfter ∷ Text } deriving Show
+instance FromJSON UnitInfoFocusProbe where
+    parseJSON = withObject "UnitInfoFocusProbe" $ \o →
+        UnitInfoFocusProbe <$> o .: "hadFocusBefore" <*> o .: "hasFocusAfter" <*> o .: "nameAfter"
+
+data UnitInfoEquipFitProbe = UnitInfoEquipFitProbe
+    { uiefpOk ∷ Bool, uiefpHasSil ∷ Bool, uiefpHasSlot ∷ Bool
+    , uiefpRectBottom ∷ Double, uiefpRectTop ∷ Double
+    , uiefpSilBottom ∷ Double, uiefpSilTop ∷ Double, uiefpSlotBottom ∷ Double } deriving Show
+instance FromJSON UnitInfoEquipFitProbe where
+    parseJSON = withObject "UnitInfoEquipFitProbe" $ \o →
+        UnitInfoEquipFitProbe <$> o .: "ok" <*> o .: "hasSil" <*> o .: "hasSlot"
+                                <*> o .: "rectBottom" <*> o .: "rectTop"
+                                <*> o .: "silBottom" <*> o .: "silTop" <*> o .: "slotBottom"
 
 data MultiRegionAvoidProbe = MultiRegionAvoidProbe
     { mrapX ∷ Double, mrapY ∷ Double, mrapClearsAll ∷ Bool } deriving Show

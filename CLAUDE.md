@@ -1741,6 +1741,74 @@ framebuffer (bottom at 1832 vs. the 2160px limit). Confirmed all three
 new/extended tests actually catch their regressions (stashed the three
 fix files, re-ran — 3 failures as expected, restored — passes again).
 
+Round-17 review found three more gaps, all in `unit_info_v2.lua`'s own
+`reflow()` (the resize entry point) and its equipment section — none
+caught by round-16's rect-only fit, since all three are about state or
+content the RECT fix never touched.
+
+`reflow()` used to force `unitInfoV2.lastSelKey = ""` after
+`rebuildLayout()` cleared the tab strip, so the NEXT `update()` tick
+would see the (unchanged) selection as "new" and call
+`tabs.rebuildTabs`, which unconditionally resets the active tab to
+`sel[1]` and the scroll offset to 0 — correct for a genuine selection
+change (per its own long-standing rationale: carrying the active UID
+across a real selection change landed the highlight on an arbitrary
+middle tab), wrong for a pure layout resize, which silently knocked
+the player back to the first tab and reset any scroll position. Fixed
+by having `reflow()` re-run the tab rebuild directly instead of
+deferring it, wrapped by a new `unit_info_v2_tabs.lua` function,
+`M.reflowSelection()`, that captures `activeUid`/`scrollOffset` before
+the rebuild and restores them after (the UID only if still present
+among the freshly-built tabs; the scroll offset clamped to whatever
+the new tab layout supports) — the same capture-before/restore-after
+shape `hud.lua`'s round-10 fix already uses for a different kind of
+rebuild-destroys-state gap.
+
+`reflow()`'s `rebuildLayout()` also deletes and recreates every
+unit-info control, including the keyboard-focusable Log button and tab
+portraits (#745), with no focus snapshot/restore of its own — and
+since `hud.onFramebufferResize` runs earlier in the same forward chain
+and already restores keyboard control focus BY NAME (its own round-10
+fix, generic across every control in the engine, not HUD-specific), a
+focus that had just been restored onto a unit-info control was
+immediately orphaned again one step later. Fixed with the same
+`responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
+pair `hud.lua`/`build_tool_remote_warning.lua` already use, gated on
+whether the pane was visible before the rebuild (mirroring `hud.lua`'s
+exact `wasVisible` convention).
+
+`unit_info_v2_equipment.lua`'s silhouette + slot geometry read the
+UNFITTED `scale.get()` directly — round-16's `fitVerticalSections` only
+shrinks the equipment SECTION's outer rect, never told the equipment
+submodule to shrink its own content scale to match. At a narrow,
+high-scale combination (800×2160@4x) the section rect fits to ~625px
+tall while the 1024px silhouette still renders at the full 4x scale
+(4096px), badly overlapping the stats/inventory sections above and
+below it. Fixed by computing a local, fitted content scale
+(`responsive.fitScale` against both the rect's height AND width, since
+a squeezed width can equally push the silhouette past the accessory
+list) before deriving any silhouette/slot geometry — the same
+"reserve-a-local-effective-scale" technique used throughout this PR,
+just applied one level deeper than round-16 reached.
+
+Keeping `unit_info_v2.lua` at or under its 500-line module budget
+(#542) after adding the focus/tab-state preservation needed trimming:
+the tab-rebuild-preserving logic moved into
+`unit_info_v2_tabs.lua`'s new `reflowSelection()` (which already owns
+`activeUid`/`scrollOffset`, so it has the most context and the most
+spare budget), and two long-standing, unrelated explanatory comments
+in `unit_info_v2.lua` (`onFramebufferResize`'s script-load-order
+no-op rationale, and `reflow()`'s own doc) were condensed without
+losing their key facts — landed at exactly 500/500.
+
+Verified against a real running engine: loaded `unit_info_v2.lua` and
+its submodules via `engine.loadScript`/`require` under a real
+`--headless` boot with no errors. Confirmed all three new tests
+actually catch their regressions (stashed the three fix files, re-ran
+— 3 failures as expected, restored — passes again); full
+`UI.ResponsiveGameplay` suite (68 examples) and the broader `UI`-tagged
+headless suite (395 examples) both pass; `lua_module_budget.py` clean.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

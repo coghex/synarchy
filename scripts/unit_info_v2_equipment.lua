@@ -9,6 +9,7 @@ local unitInfoV2 = package.loaded["scripts.unit_info_v2"]
 local hud         = require("scripts.hud")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
+local responsive  = require("scripts.ui.responsive")
 local qualityTier = require("scripts.ui.quality_tier")
 local repairStatus = require("scripts.ui.repair_status")
 local items       = require("scripts.unit_info_v2_items")
@@ -141,6 +142,27 @@ function M.rebuildEquipmentSection()
     local silPad  = math.floor(SILHOUETTE_PAD * uiscale)
     local silW    = math.floor(cls.silhouetteW * uiscale)
     local silH    = math.floor(cls.silhouetteH * uiscale)
+
+    -- #750 round-17 review: L.fitVerticalSections (round-16) only
+    -- shrinks this section's outer RECT, never the CONTENT scale — at
+    -- a narrow, high-uiscale combination (e.g. 800x2160@4x) the
+    -- silhouette still renders at the full uiscale and overflows the
+    -- fitted rect into the sections stacked above/below it. Fit a
+    -- local content scale to the actual rect on both axes (width
+    -- matters too — a squeezed rect can also run the silhouette past
+    -- the accessory list) before deriving any slot/silhouette
+    -- geometry below, mirroring the fitScale technique used
+    -- throughout this PR for the same class of gap.
+    local fitted = math.min(
+        responsive.fitScale(silH + 2 * silPad, rect.h, uiscale),
+        responsive.fitScale(silW + 2 * silPad, rect.w, uiscale))
+    if fitted < uiscale then
+        uiscale = fitted
+        silPad  = math.floor(SILHOUETTE_PAD * uiscale)
+        silW    = math.floor(cls.silhouetteW * uiscale)
+        silH    = math.floor(cls.silhouetteH * uiscale)
+    end
+
     local silX    = rect.x + silPad
     local silY    = rect.y + math.floor((rect.h - silH) / 2)
 

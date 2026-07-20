@@ -390,29 +390,27 @@ function unitInfoV2.update(dt)
     unitInfoV2.lastSelCount = count
 end
 
--- #750: unit_info_v2 is engine.loadScript'd with an earlier script id
--- than scripts/ui_manager.lua, so the engine's automatic
--- broadcastToModules calls this BEFORE uiManager.onFramebufferResize
--- has run hud.onFramebufferResize — rebuildLayout() below reads
--- hud.fbW/hud.fbH, which are still the PRE-resize values at that point.
--- This handler is therefore a deliberate no-op on the real-resize path;
--- it owns no fbW/fbH of its own to preserve. unitInfoV2.reflow() is the
--- real entry point, called explicitly by ui_manager_boot.lua's manual
--- forward (after hud.onFramebufferResize) and by
--- uiManager.notifyGameplayRescale (which already calls hud first),
--- guaranteeing hud's own geometry is current whenever rebuildLayout()
--- reads it.
+-- #750: this fires before hud.onFramebufferResize (script load order),
+-- so hud.fbW/fbH would still read pre-resize here — deliberate no-op.
+-- unitInfoV2.reflow() is the real entry point, called after hud's own
+-- resize handler by ui_manager_boot.lua / notifyGameplayRescale.
 function unitInfoV2.onFramebufferResize(width, height)
 end
 
 function unitInfoV2.reflow()
     -- Layout depends on framebuffer dimensions, so rebuild on resize.
     if unitInfoV2.page then
+        -- #750 round-17: preserve state a mere-resize rebuild would
+        -- otherwise destroy — keyboard control focus (HUD's own resize
+        -- handler runs first and may already have restored it onto a
+        -- unit-info control) and the active tab/scroll offset (handled
+        -- by tabs.reflowSelection() below).
+        local wasVisible = unitInfoV2.lastWantVisible
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+
         rebuildLayout()
-        -- Tabs got cleared by clearOwned in rebuildLayout. Re-create
-        -- them for the current selection (lastSelKey reset so the next
-        -- update tick will see "new" selection and rebuild).
-        unitInfoV2.lastSelKey = ""
+        tabs.reflowSelection()
+
         -- Re-apply the same visibility gate as update() so a resize while
         -- a menu / pause / settings overlay is open or the camera is zoomed
         -- out doesn't flash the pane back on (#137).
@@ -428,6 +426,9 @@ function unitInfoV2.reflow()
             infoPanel.unsuppress("unit_info_v2")
         end
         unitInfoV2.lastWantVisible = want
+        if wasVisible then
+            responsive.restoreControlFocusName(controlFocusName)
+        end
     end
 end
 
