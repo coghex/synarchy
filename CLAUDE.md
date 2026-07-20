@@ -1555,6 +1555,58 @@ actually catch their regressions (stashed all three fix files,
 re-ran — 3 failures as expected across cargo/focus/font-size; restored,
 re-ran — passes again).
 
+Round-14 review found two more gaps: one an out-of-envelope crash
+class in `popup.lua`, the other round-13's own panel-reopen fix left
+`crafting_panel`/`plant_panel` still discarding SOME of their state.
+
+`popup.lua`'s reserved-width cap (round-4) floored `panelW` at a flat
+20px — enough to keep `panelW` itself positive, but not enough once it
+fell below `2*s.padX` (288px at the issue's own 800×2160@4x): the line
+click box's `panelW - 2*s.padX` went negative, and content positions
+computed from `panelW` (title, OK button) landed outside the panel box
+entirely. Hit specifically when a card's vertical center overlaps BOTH
+toolbar clusters, leaving only their free gap as `availW` — the
+reviewer's example puts that gap at 64px. Fixed by flooring at
+whichever is larger: `availW` itself, or a real minimum-usable width
+(`2*s.padX + 20`, guaranteeing a positive content region survives the
+padding subtraction) — accepting that in this specific extreme case
+the card may still overlap the unreachable-width reserved region,
+since genuinely invalid geometry is worse than an occasional overlap
+of a gap too narrow to use anyway, the same priority order the rest of
+this best-effort contract already uses. Verified against a real
+running engine (toolbar rects stubbed to reproduce the reviewer's own
+"two clusters, 64px gap" scenario, since real toolbar geometry doesn't
+naturally produce it): `panelW` floors at exactly 308px (`2*s.padX+20`
+= `2*144+20` at that scale) and every line's click box comes back with
+a real, positive width.
+
+Round-13's `hud.lua` resize snapshot/reopen for `crafting_panel`/
+`plant_panel` only preserved WHICH station/tile was open — plain
+`show()` (the reopen call it used) always resets
+`recipePage`/`queuePage`/`recipeInputs` (crafting) and
+`sortMode`/`selectedCrop` (plant), so a resize still silently discarded
+those. Both panels gained a `reopenWithState` function (mirroring
+`cargo_inventory_panel.lua`'s round-13 `reopenWithTab`): call the real
+`show()` first (still the right way to rebuild chrome/re-derive live
+data), then restore the saved fields — `crafting_panel`'s
+`recipePage`/`queuePage` are set directly and self-clamp against the
+current recipe/queue count when `renderRecipes()`/`renderQueue()` run
+(never left out of range even if the list shrank); `plant_panel`'s
+`selectedCrop` restore hit a real ordering bug during this round:
+`renderUI()` unconditionally ends by calling its own `renderDetail(nil)`
+("nothing previewed yet" initial state), which resets
+`state.selectedCrop` to `nil` — so restoring it BEFORE `renderUI()` (the
+first attempt) was silently undone by `renderUI()`'s own default call
+immediately after. Fixed by restoring AFTER `renderUI()` completes, and
+via the SAME `renderDetail(row)` path `renderUI()` itself uses (not a
+raw `state.selectedCrop` write), so the visible suitability read-out on
+the right column also reflects the restored crop, not just the field.
+`hud.lua`'s existing snapshot/reopen plumbing needed no structural
+change — only the captured field set grew (`recipeInputs` is a plain,
+unvalidated Lua table captured by reference, since `show()` reassigns
+rather than mutates it) and the reopen calls switched from the panels'
+bare `show()` to their new `reopenWithState()`.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

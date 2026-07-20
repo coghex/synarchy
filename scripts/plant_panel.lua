@@ -530,6 +530,35 @@ function plantPanel.show(pageId, gx, gy)
     renderUI()
 end
 
+-- #750 round-14 review: hud.lua's resize snapshot/reopen (round-13)
+-- only preserved WHICH tile was open — plain show() always resets
+-- sortMode/selectedCrop, so a resize still silently discarded the
+-- player's sort choice and crop selection. Reopens via show()
+-- (unchanged, still the right way to re-derive s.allRows for the
+-- tile) and restores the saved sortMode unconditionally (always a
+-- valid choice, "score" or "name") plus selectedCrop only if it's
+-- still among the tile's current suitability rows — the suitability
+-- list is re-derived fresh by show(), so a crop that dropped out
+-- between resize and reopen must not be restored as if still
+-- selectable. renderDetail(row) — not a raw state write — must run
+-- AFTER renderUI(), since renderUI() unconditionally ends by calling
+-- renderDetail(nil) itself (the normal "nothing previewed yet" initial
+-- state); restoring selectedCrop through the same renderDetail() path
+-- renderUI() uses keeps the visible detail read-out in sync with the
+-- restored state, not just the field.
+function plantPanel.reopenWithState(pageId, gx, gy, sortMode, selectedCrop)
+    plantPanel.show(pageId, gx, gy)
+    local s = plantPanel.state
+    if not s.open then return end
+    if sortMode then s.sortMode = sortMode end
+    renderUI()
+    if selectedCrop then
+        for _, row in ipairs(s.allRows) do
+            if row.name == selectedCrop then renderDetail(row); break end
+        end
+    end
+end
+
 -- Esc closes the screen. Returns true if consumed (init.lua's Escape
 -- cascade, same tier as crafting_panel / cargo_inventory_panel).
 function plantPanel.handleKeyDown(key)

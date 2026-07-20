@@ -307,10 +307,25 @@ renderPopup = function(p)
     local availW = reservedRegions.maxAvailableWidth(
         cy0, panelH, toolbarRects, popup.fbW)
     if availW > 0 then
-        -- Floored at 20px, matching settings_menu's own defensive floor
-        -- for an analogous out-of-envelope exemplar (CLAUDE.md's C2
-        -- section) — never a literally zero/negative box.
-        panelW = math.min(panelW, math.max(20, availW))
+        -- #750 round-14 review: a flat 20px floor (matching
+        -- settings_menu's own defensive floor for an analogous
+        -- out-of-envelope exemplar) is enough to keep panelW itself
+        -- positive, but NOT enough to keep it USABLE — every content
+        -- position below (the line click box's `panelW - 2*s.padX`,
+        -- the title/OK button placement) assumes panelW comfortably
+        -- exceeds the padding alone. At the issue's own 800x2160@4x, a
+        -- card overlapping BOTH toolbar clusters can leave availW as
+        -- small as their free gap (e.g. 64px) — well under 2*s.padX
+        -- (288px at that scale) — which drove the click box negative
+        -- and pushed the title/OK button outside the panel box
+        -- entirely. Floor at whichever is LARGER: the padding-derived
+        -- minimum usable width, or availW itself — genuinely-invalid
+        -- geometry is worse than occasionally still overlapping an
+        -- unreachable-gap reserved region in this extreme a case, same
+        -- "best-effort, never crashing/invalid" priority the rest of
+        -- this contract already uses.
+        local minUsableW = 2 * s.padX + 20
+        panelW = math.min(panelW, math.max(minUsableW, availW))
     end
 
     -- Centre + slot diagonal offset

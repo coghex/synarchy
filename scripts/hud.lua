@@ -233,13 +233,25 @@ function hud.createUI()
         reopenCraft = trySnapshot(function()
             local m = require("scripts.crafting_panel")
             if not m.isOpen() then return nil end
-            return { bid = m.state.bid }
+            local s = m.state
+            -- #750 round-14 review: plain show(bid) resets recipePage/
+            -- queuePage/recipeInputs — capture them too so reopenWithState
+            -- can restore the player's pagination and any in-progress
+            -- recipe count/until-target edits, not just which station
+            -- was open.
+            return { bid = s.bid, recipePage = s.recipePage,
+                     queuePage = s.queuePage, recipeInputs = s.recipeInputs }
         end)
         reopenPlant = trySnapshot(function()
             local m = require("scripts.plant_panel")
             if not m.isOpen() then return nil end
             local s = m.state
-            return { pageId = s.pageId, gx = s.gx, gy = s.gy }
+            -- #750 round-14 review: plain show() resets sortMode/
+            -- selectedCrop — capture them too so reopenWithState can
+            -- restore the player's sort choice and crop selection, not
+            -- just which tile was open.
+            return { pageId = s.pageId, gx = s.gx, gy = s.gy,
+                     sortMode = s.sortMode, selectedCrop = s.selectedCrop }
         end)
         reopenPicker = trySnapshot(function()
             local m = require("scripts.build_tool")
@@ -716,13 +728,16 @@ function hud.createUI()
     end
     if reopenCraft then
         tryReopen(function()
-            require("scripts.crafting_panel").show(reopenCraft.bid)
+            require("scripts.crafting_panel").reopenWithState(
+                reopenCraft.bid, reopenCraft.recipePage, reopenCraft.queuePage,
+                reopenCraft.recipeInputs)
         end)
     end
     if reopenPlant then
         tryReopen(function()
-            require("scripts.plant_panel").show(
-                reopenPlant.pageId, reopenPlant.gx, reopenPlant.gy)
+            require("scripts.plant_panel").reopenWithState(
+                reopenPlant.pageId, reopenPlant.gx, reopenPlant.gy,
+                reopenPlant.sortMode, reopenPlant.selectedCrop)
         end)
     end
     if reopenPicker then

@@ -888,6 +888,57 @@ spec = aroundAll withSharedFixture $ do
                     opOverlapsAny p `shouldBe` False
                     opInFrame p `shouldBe` True
 
+        it "a 10-line card squeezed to a tiny reserved-width gap still produces a positive-width, in-frame click box (round-14 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-14 review: the reserved-width cap floored
+            -- panelW at a flat 20px — enough to keep panelW itself
+            -- positive, but NOT enough once panelW < 2*s.padX (288px at
+            -- 800x2160@4x): the line click box's `panelW - 2*s.padX`
+            -- went negative and the title/OK button landed outside the
+            -- panel box entirely. Stubs hud.getToolbarRects() directly
+            -- (popup.lua re-requires scripts.hud fresh on every
+            -- renderPopup, so patching the already-loaded module takes
+            -- effect immediately) to reproduce the reviewer's own "both
+            -- toolbar clusters overlap, 64px free gap" scenario without
+            -- depending on the real toolbar's actual measured geometry.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local origRects = hud.getToolbarRects;"
+                , "hud.getToolbarRects = function() return {"
+                , "    {name='log_toggle', x=0,   y=0, w=368, h=2160},"
+                , "    {name='map_toggle', x=432, y=0, w=368, h=2160},"
+                , "} end;"
+                , "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,800,2160);"
+                , "local longMsg = string.rep('x', 200);"
+                , "for i = 1, 10 do"
+                , "    p.onShowPopup('unit_event', longMsg .. i, 0,0,0,1, {x=i,y=i});"
+                , "end;"
+                , "hud.getToolbarRects = origRects;"
+                , "local rec = p.active[1];"
+                , "local b = p.getActiveBounds()[1];"
+                , "local lineRects = {};"
+                , "for _, line in ipairs(rec.lines) do"
+                , "    if line.clickBoxHandle then"
+                , "        local info = UI.getElementInfo(line.clickBoxHandle);"
+                , "        table.insert(lineRects, {w = info.width, x = info.x});"
+                , "    end"
+                , "end;"
+                , "return {panelW = b.w, panelX = b.x, panelInFrame = (b.x >= 0 and (b.x+b.w) <= 800),"
+                , "        lineRects = lineRects}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PopupSqueezeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    psqPanelW p `shouldSatisfy` (> 0)
+                    psqPanelInFrame p `shouldBe` True
+                    length (psqLineRects p) `shouldSatisfy` (≥ 1)
+                    forM_ (psqLineRects p) $ \lr →
+                        lrpW lr `shouldSatisfy` (> 0)
+
         it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1492,6 +1543,80 @@ spec = aroundAll withSharedFixture $ do
                     crpBidAfter p `shouldBe` 42
                     crpTabAfter p `shouldBe` "Cat2"
 
+        it "crafting_panel: a resize preserves the open station AND in-progress recipe count/until-target edits (round-14 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-14 review: round-13's snapshot only preserved
+            -- WHICH station was open — plain show(bid) always resets
+            -- recipeInputs (per-recipe count-text/until-target edits),
+            -- so a resize still silently discarded them. recipeInputs
+            -- is a plain Lua table, unvalidated against real recipe
+            -- data (unlike recipePage, which self-clamps to the current
+            -- recipe count and so can't be tested without real station
+            -- recipes) — set directly and checked for an exact round trip.
+            r ← evalJSON ls $ luaLines
+                [ "local origGetInfo = building.getInfo;"
+                , "building.getInfo = function() return {name='test_station'} end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local cp = require('scripts.crafting_panel');"
+                , "cp.show(99);"
+                , "cp.state.recipeInputs = {my_recipe = {count = '5', until_ = true}};"
+                , "local wasOpenBefore = cp.isOpen();"
+                , "hud.onFramebufferResize(1600, 900);"
+                , "building.getInfo = origGetInfo;"
+                , "local ri = cp.state.recipeInputs.my_recipe;"
+                , "return {wasOpenBefore = wasOpenBefore, isOpenAfter = cp.isOpen(),"
+                , "        bidAfter = cp.state.bid, countAfter = ri and ri.count or '',"
+                , "        untilAfter = ri and ri.until_ or false}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CraftingResizeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    crfWasOpenBefore p `shouldBe` True
+                    crfIsOpenAfter p `shouldBe` True
+                    crfBidAfter p `shouldBe` 99
+                    crfCountAfter p `shouldBe` "5"
+                    crfUntilAfter p `shouldBe` True
+
+        it "plant_panel: a resize preserves the open tile AND the player's sort mode/crop selection (round-14 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-14 review: round-13's snapshot only preserved
+            -- WHICH tile was open — plain show() always resets
+            -- sortMode/selectedCrop, so a resize still silently
+            -- discarded the player's sort choice and crop selection.
+            r ← evalJSON ls $ luaLines
+                [ "local origPlantable = world.isPlantable;"
+                , "local origSuitability = world.getPlantSuitability;"
+                , "world.isPlantable = function() return true end;"
+                , "world.getPlantSuitability = function() return {"
+                , "    {name = 'wheat', score = 0.8}, {name = 'corn', score = 0.5}"
+                , "} end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local pp = require('scripts.plant_panel');"
+                , "pp.show('main_world', 10, 20);"
+                , "pp.state.sortMode = 'name';"
+                , "pp.state.selectedCrop = 'corn';"
+                , "local wasOpenBefore = pp.isOpen();"
+                , "hud.onFramebufferResize(1600, 900);"
+                , "world.isPlantable = origPlantable;"
+                , "world.getPlantSuitability = origSuitability;"
+                , "return {wasOpenBefore = wasOpenBefore, isOpenAfter = pp.isOpen(),"
+                , "        gxAfter = pp.state.gx, gyAfter = pp.state.gy,"
+                , "        sortAfter = pp.state.sortMode, cropAfter = pp.state.selectedCrop}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PlantResizeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    prpWasOpenBefore p `shouldBe` True
+                    prpIsOpenAfter p `shouldBe` True
+                    prpGxAfter p `shouldBe` 10
+                    prpGyAfter p `shouldBe` 20
+                    prpSortAfter p `shouldBe` "name"
+                    prpCropAfter p `shouldBe` "corn"
+
         it "item_contents_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1858,6 +1983,19 @@ instance FromJSON LabeledOkRow where
     parseJSON = withObject "LabeledOkRow" $ \o →
         LabeledOkRow <$> o .: "label" <*> o .: "ok"
 
+data LineRectProbe = LineRectProbe { lrpW ∷ Double, lrpX ∷ Double } deriving Show
+instance FromJSON LineRectProbe where
+    parseJSON = withObject "LineRectProbe" $ \o →
+        LineRectProbe <$> o .: "w" <*> o .: "x"
+
+data PopupSqueezeProbe = PopupSqueezeProbe
+    { psqPanelW ∷ Double, psqPanelX ∷ Double, psqPanelInFrame ∷ Bool
+    , psqLineRects ∷ [LineRectProbe] } deriving Show
+instance FromJSON PopupSqueezeProbe where
+    parseJSON = withObject "PopupSqueezeProbe" $ \o →
+        PopupSqueezeProbe <$> o .: "panelW" <*> o .: "panelX" <*> o .: "panelInFrame"
+                           <*> o .: "lineRects"
+
 data RemoteWarningFocusProbe = RemoteWarningFocusProbe
     { rwfpHadFocusBefore ∷ Bool, rwfpHasFocusAfter ∷ Bool } deriving Show
 instance FromJSON RemoteWarningFocusProbe where
@@ -1869,6 +2007,23 @@ data FontSizeCompareProbe = FontSizeCompareProbe
 instance FromJSON FontSizeCompareProbe where
     parseJSON = withObject "FontSizeCompareProbe" $ \o →
         FontSizeCompareProbe <$> o .: "unshrunkSizes" <*> o .: "shrunkSizes"
+
+data CraftingResizeProbe = CraftingResizeProbe
+    { crfWasOpenBefore ∷ Bool, crfIsOpenAfter ∷ Bool, crfBidAfter ∷ Int
+    , crfCountAfter ∷ Text, crfUntilAfter ∷ Bool } deriving Show
+instance FromJSON CraftingResizeProbe where
+    parseJSON = withObject "CraftingResizeProbe" $ \o →
+        CraftingResizeProbe <$> o .: "wasOpenBefore" <*> o .: "isOpenAfter"
+                             <*> o .: "bidAfter" <*> o .: "countAfter" <*> o .: "untilAfter"
+
+data PlantResizeProbe = PlantResizeProbe
+    { prpWasOpenBefore ∷ Bool, prpIsOpenAfter ∷ Bool, prpGxAfter ∷ Int, prpGyAfter ∷ Int
+    , prpSortAfter ∷ Text, prpCropAfter ∷ Text } deriving Show
+instance FromJSON PlantResizeProbe where
+    parseJSON = withObject "PlantResizeProbe" $ \o →
+        PlantResizeProbe <$> o .: "wasOpenBefore" <*> o .: "isOpenAfter"
+                          <*> o .: "gxAfter" <*> o .: "gyAfter"
+                          <*> o .: "sortAfter" <*> o .: "cropAfter"
 
 data CargoResizeProbe = CargoResizeProbe
     { crpWasOpenBefore ∷ Bool, crpTabBefore ∷ Text
