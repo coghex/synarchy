@@ -1842,6 +1842,65 @@ confirmed it catches the regression (stashed the two fix files, re-ran
 `UI.ResponsiveGameplay` suite (69 examples) and the broader `UI`-tagged
 headless suite (396 examples) both pass; `lua_module_budget.py` clean.
 
+Round-19 review found two more gaps, both in `popup.lua`'s
+`renderPopup` — the notification-card renderer, not part of the
+`unit_info_v2_*` split so it carries no module-line budget.
+
+A max-lines (10) card's natural line-block height alone, plus the
+panel's fixed chrome, can exceed a narrow, high-scale, still-supported
+framebuffer (800×1601 is the top of the 1601-2160@1.5x-4x band) —
+1760px needed at that combination. The existing round-3 `panelH` cap
+only shrinks the PANEL after the fact, leaving every row laid out at
+its full natural `rowH`, so the last rows collided with the OK button
+(itself repositioned upward to fit inside the capped panel). Fixed by
+fitting a LOCAL, line-block-only scale (`responsive.fitScale` against
+the height actually left over once the panel's fixed chrome — padding,
+header, footer gap, OK button — is reserved) that shrinks `rowH` and
+the per-line label's own `uiscale` together, never touching the
+panel's other fixed chrome; every row (and the OK button below it)
+stays inside the capped panel as a result, same "best-effort, may look
+cramped, never overlapping/off-screen" contract as everywhere else in
+this file.
+
+Separately, a popup line's label baseline nudge (`rowY + fontSize`)
+added the UNSCALED base `fontSize` (always 20px) instead of the
+correctly scaled `s.fontSize` — at 4x the label rendered 60px too
+high, its glyphs bleeding up into the row above (whose transparent,
+higher-z click box still occupied that space), so clicking what looked
+like one line's text could activate the PRECEDING line's click
+instead. This bug existed independent of the max-lines overflow above
+(any multi-line card at high uiscale hit it) — fixed by deriving the
+nudge from the same per-line `uiscale` the label itself now renders at
+(`lineUiscale`, shared with the line-block fit above: the outer
+uiscale normally, shrunk only when that fit kicks in), so the offset
+always matches the label's actual on-screen glyph size.
+
+`unit_event` (the category every existing popup test in this file
+already uses) has no `coalesce_window`, so repeated `onShowPopup`
+calls never fold into one card's lines — each spawns its OWN
+single-line popup (verified against a real running engine: 10 calls
+produced 6 separate one-line cards plus 4 queued, not one 10-line
+card, contrary to what the existing round-14/16 test's own name
+implied — its assertions turned out weak enough (`>= 1` line) to never
+catch that). The new round-19 max-lines test instead spawns one real
+popup then appends 9 more line records directly onto its `p.lines`
+table before calling the exported `p.reflow()` — the same
+`renderPopup` entry point a real resize/rescale drives — mirroring how
+this same test file already manipulates other modules' internal state
+directly (e.g. `unit_info_v2`'s `activeUid`) rather than fighting
+through unrelated timing/coalescing machinery to reach the layout code
+under test.
+
+Verified against a real running engine: loaded `popup.lua` via
+`engine.loadScript` under a real `--headless` boot with no errors, and
+reproduced the exact 800×1601@4x/10-line scenario live (`panelH` came
+out to 1600, `inFrame = true`, matching the hspec test's own
+computation). Confirmed both new tests catch their regressions
+(stashed `popup.lua`, re-ran — 2 failures as expected, restored —
+passes again); full `UI.ResponsiveGameplay` suite (71 examples) and
+the broader `UI`-tagged headless suite (398 examples) both pass;
+`lua_module_budget.py` clean (`popup.lua` isn't a budgeted module).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

@@ -234,7 +234,10 @@ renderPopup = function(p)
     local uiscale = scale.get()
     local s = scale.applyAllWith(popup.baseSizes, uiscale)
     local rowH = s.rowHeight
-    local fontSize = popup.baseSizes.fontSize
+    -- #750 round-19 review: the label's uiscale for its row (see the
+    -- line-render loop below) — starts at the outer uiscale and only
+    -- shrinks below it when the line block itself needs fitting.
+    local lineUiscale = uiscale
 
     -- Compose + truncate per-line text; track max width for panel sizing.
     -- Reserve room for the X button on the right so titles never run
@@ -273,6 +276,28 @@ renderPopup = function(p)
 
     local contentW = math.max(maxLineW, btnW, titleNeededW)
     local panelW = math.max(s.minWidth, contentW + 2 * s.padX)
+
+    -- #750 round-19 review: a max-lines (10) popup's natural line-block
+    -- height alone can exceed a narrow, high-scale, still-C2-supported
+    -- framebuffer (e.g. 800x1601@4x needs 1760px total) — the round-3
+    -- panelH cap below only shrinks the PANEL, leaving rows laid out at
+    -- their full natural rowH, so the last rows collide with the OK
+    -- button (moved up to fit the capped panel) instead of landing
+    -- inside it. Fit a local, line-block-only scale (rowH + its label's
+    -- uiscale together, never the panel's other fixed chrome) so every
+    -- row — and the OK button below it — stays inside the capped panel,
+    -- the same fitScale technique used throughout this codebase for an
+    -- analogous "fixed content doesn't fit the available space" gap.
+    local responsive = require("scripts.ui.responsive")
+    local fixedChromeH = 2 * s.padY + s.headerH + s.headerGap
+                        + s.footerGap + s.buttonH
+    local availLinesH = math.max(s.rowHeight, popup.fbH - fixedChromeH)
+    local lineScale = responsive.fitScale(#p.lines * rowH, availLinesH, uiscale)
+    if lineScale < uiscale then
+        rowH = math.max(1, math.floor(popup.baseSizes.rowHeight * lineScale))
+        lineUiscale = lineScale
+    end
+
     local linesH = #p.lines * rowH
     local panelH = s.padY + s.headerH + s.headerGap
                    + linesH + s.footerGap + s.buttonH + s.padY
@@ -475,10 +500,17 @@ renderPopup = function(p)
             fontSize = popup.baseSizes.fontSize,
             color    = p.color,
             page     = popup.pageId,
-            uiscale  = uiscale,
+            uiscale  = lineUiscale,
         })
+        -- #750 round-19 review: this baseline nudge used to add the
+        -- UNSCALED base fontSize (always 20px) regardless of uiscale —
+        -- at 4x the label rendered 60px too high, its glyphs bleeding
+        -- into the row above (and its higher-z click box) instead of
+        -- sitting inside its own row. Uses the SAME scale the label
+        -- itself renders at (lineUiscale, above) so the nudge always
+        -- matches the actual glyph size.
         UI.addToPage(popup.pageId, label.getElementHandle(lbl),
-            px + s.padX, rowY + fontSize)
+            px + s.padX, rowY + math.floor(popup.baseSizes.fontSize * lineUiscale))
         UI.setZIndex(label.getElementHandle(lbl), baseZ + 2)
         line.labelId = lbl
     end

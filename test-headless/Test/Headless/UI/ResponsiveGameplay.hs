@@ -998,6 +998,85 @@ spec = aroundAll withSharedFixture $ do
                         psqMuteX p `shouldSatisfy` (≥ psqPanelX p)
                         (psqMuteX p + psqMuteW p) `shouldSatisfy` (≤ panelRight)
 
+        it "a max-lines card's rows compact to fit instead of overlapping the OK button at 800x1601@4x (round-19 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-19 review: a max-lines (10) card's natural
+            -- line-block height alone (1120px at this combination)
+            -- plus the panel's fixed chrome needs 1760px total, but
+            -- 800x1601@4x is within the supported envelope (1601-2160
+            -- at 1.5x-4x). The round-3 panelH cap only shrunk the
+            -- PANEL, leaving rows laid out at their full natural
+            -- rowH, so the last row collided with the OK button
+            -- (moved up to fit the capped panel). unit_event has no
+            -- coalesce_window (folds never happen — each onShowPopup
+            -- call spawns its own popup, see foldEventIntoPopup), so
+            -- lines are appended directly to the spawned popup's
+            -- record and p.reflow() (the same renderPopup entry point
+            -- a real resize/rescale drives) is called to lay them out
+            -- at the new size — mirrors the existing round-16 "10-line
+            -- card" test's own direct-record-manipulation technique.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,1601);"
+                , "hud.createUI();"
+                , "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,800,1601);"
+                , "p.onShowPopup('unit_event', 'line 1', 0,0,0,1, {});"
+                , "local rec = p.active[1];"
+                , "for i = 2, 10 do"
+                , "    table.insert(rec.lines, {text = 'line '..i, count = 1, coords = {},"
+                , "        cycleIdx = 0, lastPannedX = nil, lastPannedY = nil,"
+                , "        firstEventTime = 0, lastUpdateTime = 0,"
+                , "        labelId = nil, clickBoxHandle = nil});"
+                , "end;"
+                , "p.reflow();"
+                , "local b = p.getActiveBounds()[1];"
+                , "local button = require('scripts.ui.button');"
+                , "local okInfo = UI.getElementInfo(button.getElementHandle(rec.okBtnId));"
+                , "local lastLine = rec.lines[#rec.lines];"
+                , "local lastInfo = UI.getElementInfo(lastLine.clickBoxHandle);"
+                , "return {lineCount = #rec.lines,"
+                , "        panelBottom = (b.y + b.h), panelInFrame = ((b.y + b.h) <= 1601),"
+                , "        lastLineBottom = (lastInfo.y + lastInfo.height),"
+                , "        okY = okInfo.y, okBottom = (okInfo.y + okInfo.height)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PopupLineOverflowProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    plopLineCount p `shouldBe` 10
+                    plopPanelInFrame p `shouldBe` True
+                    plopLastLineBottom p `shouldSatisfy` (≤ plopOkY p)
+                    plopOkBottom p `shouldSatisfy` (≤ plopPanelBottom p)
+
+        it "a popup line's label baseline uses the SCALED font size instead of the unscaled base value (round-19 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-19 review: the baseline nudge used to add the
+            -- unscaled base fontSize (always 20px) regardless of
+            -- uiscale — at 4x the label rendered 60px too high,
+            -- bleeding into the row above (and its higher-z click
+            -- box). Isolated from the line-block fit above (only 1
+            -- short line, comfortably within 1080px) so this checks
+            -- ONLY the per-row baseline math, not the max-lines path.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,1920,1080);"
+                , "p.onShowPopup('unit_event', 'line one', 0,0,0,1, {});"
+                , "local rec = p.active[1];"
+                , "local line = rec.lines[1];"
+                , "local label = require('scripts.ui.label');"
+                , "local lineInfo = UI.getElementInfo(line.clickBoxHandle);"
+                , "local lblInfo = UI.getElementInfo(label.getElementHandle(line.labelId));"
+                , "return {offset = (lblInfo.y - lineInfo.y)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PopupLineBaselineProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → plbpOffset p `shouldBe` 80.0
+
         it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -2360,6 +2439,20 @@ instance FromJSON UnitInfoVerticalProbe where
     parseJSON = withObject "UnitInfoVerticalProbe" $ \o →
         UnitInfoVerticalProbe <$> o .: "ok" <*> o .: "hasInvRect" <*> o .: "invH"
                                <*> o .: "equipBottom" <*> o .: "statsBottom" <*> o .: "invBottom"
+
+data PopupLineOverflowProbe = PopupLineOverflowProbe
+    { plopLineCount ∷ Int, plopPanelInFrame ∷ Bool, plopLastLineBottom ∷ Double
+    , plopOkY ∷ Double, plopOkBottom ∷ Double, plopPanelBottom ∷ Double } deriving Show
+instance FromJSON PopupLineOverflowProbe where
+    parseJSON = withObject "PopupLineOverflowProbe" $ \o →
+        PopupLineOverflowProbe <$> o .: "lineCount" <*> o .: "panelInFrame"
+                                 <*> o .: "lastLineBottom" <*> o .: "okY"
+                                 <*> o .: "okBottom" <*> o .: "panelBottom"
+
+data PopupLineBaselineProbe = PopupLineBaselineProbe { plbpOffset ∷ Double } deriving Show
+instance FromJSON PopupLineBaselineProbe where
+    parseJSON = withObject "PopupLineBaselineProbe" $ \o →
+        PopupLineBaselineProbe <$> o .: "offset"
 
 data UnitInfoStatsReflowProbe = UnitInfoStatsReflowProbe
     { uisrpSubTabCountBefore ∷ Int, uisrpSubTabCountAfter ∷ Int, uisrpStatsWBefore ∷ Double
