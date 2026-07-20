@@ -49,7 +49,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import boot, quit_engine, send
+from probelib import boot, quit_engine, send, wait_load_published
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_storage_slot"
@@ -167,8 +167,15 @@ def run_load_case(root: str, port: int, log: str, name: str,
         if result != "true":
             raise RuntimeError(f"[{name}] engine.loadSave rejected a save "
                                 f"that should have a recoverable generation")
+        # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
+        # saved page ("probe", its own id verbatim -- no more main_world
+        # remap) doesn't exist live until the transaction publishes.
+        published, load_status = wait_load_published(port, 180)
+        if not published:
+            raise RuntimeError(f"[{name}] load transaction did not publish: "
+                                f"{load_status}")
         wait_for_init(port)
-        send(port, 'world.show("main_world")', expect_result=False)
+        send(port, 'world.show("probe")', expect_result=False)
         time.sleep(0.5)
         cx, cy = read_camera(port)
         if not (near(cx, expect[0]) and near(cy, expect[1])):

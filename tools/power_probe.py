@@ -75,7 +75,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
 
@@ -392,10 +392,15 @@ def main() -> int:
         passed = check(passed, loaded.strip() == "true",
                        "engine.loadSave returned true (pre-load active: "
                        f"{pre})", loaded)
+        # Issue #763: the saved page ("power_probe", its own id verbatim --
+        # no more main_world remap) doesn't exist live until published.
+        published, load_status = wait_load_published(port, 180)
+        passed = check(passed, published,
+                       "load transaction published", load_status)
         send(port, "return world.waitForInit(180)", timeout=190)
         time.sleep(2)
-        send(port, "world.show('main_world'); return 'ok'")
-        wait_active(port, "main_world")
+        send(port, "world.show('power_probe'); return 'ok'")
+        wait_active(port, "power_probe")
 
         for bid, want_def, want_role, want_peak, want_cap in [
             (panel_bid, "solar_panel", "source", 400, 0),

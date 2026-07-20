@@ -16,13 +16,11 @@ import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import System.Random
-import Engine.Asset.YamlTextures (MaterialDef(..), loadMaterialDirectory)
+import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import World.Material (MaterialProps(..), registerMaterial
-                      , emptyMaterialRegistry)
 import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
@@ -98,11 +96,6 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- not stack a second one in wmWorlds (#58).
         (mgr { wmWorlds = (pageId, worldState)
                         : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
-    -- A freshly-generated page under this id is NOT any prior load's page, so
-    -- drop it from the save-load provenance — otherwise a later load could
-    -- treat this new world as load-owned and clobber it (#214).
-    atomicModifyIORef' (loadProvenanceRef env) $ \m →
-        (HM.map (HS.delete pageId) m, ())
 
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -110,24 +103,13 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- hardness/density/drainage), making per-material differentiation
     -- in erosion / water-table / etc. a no-op. Idempotent — reloading on
     -- successive world inits just rewrites the same data.
+    -- Shared with the whole-session LOAD path (issue #763 round 5) via
+    -- 'Engine.Asset.YamlTextures.loadPopulatedMaterialRegistry' — a
+    -- headless boot that goes straight to engine.loadSave with no prior
+    -- world.init in the same process needs this SAME population before
+    -- it can validate a save's material references.
     sendGenLog env "Loading material registry from data/materials..."
-    matDefs ← loadMaterialDirectory logger "data/materials"
-    let populatedReg = foldl' (\r def →
-            registerMaterial (mdId def)
-                (MaterialProps (mdName def)
-                               (mdHardness def)
-                               (mdDensity def)
-                               (mdAlbedo def)
-                               (mdDrainage def)
-                               (mdPickSpeed def)
-                               (mdShovelSpeed def)
-                               (mdDigSpoil def)
-                               (mdDigBulking def)
-                               (mdDigChunk def)
-                               (mdDigGems def)
-                               (mdMoveCost def))
-                r
-            ) emptyMaterialRegistry matDefs
+    populatedReg ← loadPopulatedMaterialRegistry logger "data/materials"
     writeIORef (materialRegistryRef env) populatedReg
 
     -- Step 1: Timeline (now co-evolves climate)
@@ -235,8 +217,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env "Assembling zoom texture atlas..."
     let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
     _ ← evaluate (force atlas)
+    -- Round 9 review (issue #763): pair the atlas with the EXACT
+    -- WorldState it belongs to (this init's own page), mirroring
+    -- World.Load.Publish's identical fix -- see EngineEnv.zoomAtlasDataRef.
     writeIORef (zoomAtlasDataRef env) $
-        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
+        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas, [worldState])
     -- Store atlas metadata (chunksPerRow) for UV computation during baking
     writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
     -- Store chunksPerRow for later use
@@ -250,8 +235,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env "Rendering world preview..."
     let preview = buildPreviewFromPixels params zoomCache chunkPixels
     _ ← evaluate (force preview)
+    -- Round 10 review: stamp with a fresh generation (see
+    -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
+    previewGen ← atomicModifyIORef' (worldPreviewGenerationRef env)
+                    (\g → (g + 1, g + 1))
     writeIORef (worldPreviewRef env) $
-        Just (piWidth preview, piHeight preview, piData preview)
+        Just (piWidth preview, piHeight preview, piData preview, previewGen)
     sendGenLog env "World preview ready."
     
     -- Step 6: Center chunk
@@ -338,9 +327,6 @@ handleWorldInitArenaCommand env logger pageId = do
         -- not stack a second one in wmWorlds (#58).
         (mgr { wmWorlds = (pageId, worldState)
                         : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
-    -- Fresh arena under this id is not any prior load's page (see #214).
-    atomicModifyIORef' (loadProvenanceRef env) $ \m →
-        (HM.map (HS.delete pageId) m, ())
 
     -- Arena chunk set: shared with the save-load restore path (#365) so a
     -- loaded arena page is rebuilt exactly like a fresh one.

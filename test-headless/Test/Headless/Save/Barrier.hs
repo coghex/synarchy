@@ -90,6 +90,66 @@ spec = describe "save snapshot barrier" $ do
         ssOutcome <$> status `shouldBe` Just (Just SaveSucceeded)
         saveInProgress b `shouldReturn` False
 
+    -- Round 15 review, revised (issue #763): a conditionally-registered
+    -- owner (SaveRender/SaveInput) may still be ticking and acking
+    -- during a transaction that never listed it as an owner at all --
+    -- e.g. the render thread's per-tick acknowledgeCurrent SaveRender
+    -- during a plain save (saveOwnerSet never includes SaveRender).
+    -- That stray ack must be a no-op, not a corruption: inserting it
+    -- into ssAcknowledged unconditionally would permanently break the
+    -- exact-set-equality check this whole protocol is built on,
+    -- wedging the transaction until waitForOwners times out even once
+    -- every REAL owner has acknowledged.
+    it "an acknowledgement from an owner not registered for this transaction is a no-op" $ do
+        b ← newSaveBarrier
+        Right n ← beginSave b (Set.singleton SaveWorld)
+        acknowledgeSave b n SaveRender
+        status ← readSaveStatus b
+        ssAcknowledged <$> status `shouldBe` Just Set.empty
+        -- The real owner still completes all three quiescence passes
+        -- normally -- the stray ack above didn't poison anything.
+        acknowledgeSave b n SaveWorld
+        acknowledgeSave b n SaveWorld
+        acknowledgeSave b n SaveWorld
+        waitForOwners 1000 b n `shouldReturn` Right ()
+
+    -- Round 15 review, revised: SaveRender (Engine.Loop's render/
+    -- offscreen thread) must gate the snapshot boundary exactly like
+    -- any other real state-owner thread when it IS registered for the
+    -- transaction (a load, outside headless mode) -- a bare
+    -- captureLocked pre-check alone let the barrier reach the boundary
+    -- and publish in the gap between that check and the camera/
+    -- Lua-message work it gated, since nothing actually waited for
+    -- this thread. Registering it as a genuine SaveOwner closes that
+    -- window structurally: the boundary is unreachable until this
+    -- thread's own acknowledgement lands, mirroring
+    -- 'Engine.Loop.runGatedByCaptureLock's "check locked, do unlocked
+    -- work if not locked, always ack" shape.
+    it "a registered SaveRender owner gates the snapshot boundary exactly like a real state-owner thread" $ do
+        b ← newSaveBarrier
+        Right n ← beginSave b (Set.fromList [SaveLua, SaveWorld, SaveRender])
+        let ackAll = do
+                acknowledgeSave b n SaveLua
+                acknowledgeSave b n SaveWorld
+                acknowledgeSave b n SaveRender
+        -- Two full passes with every owner participating.
+        ackAll
+        ackAll
+        -- Third pass: every owner but SaveRender acks -- as if the
+        -- render thread's own last unlocked tick hasn't run yet. The
+        -- boundary must NOT be reachable even though the other two
+        -- owners are done.
+        acknowledgeSave b n SaveLua
+        acknowledgeSave b n SaveWorld
+        stillWaiting ← waitForOwners 1000 b n
+        stillWaiting `shouldSatisfy` (\value → case value of Left _ → True; Right _ → False)
+        -- Only once SaveRender itself acks can the barrier proceed.
+        acknowledgeSave b n SaveRender
+        waitForOwners 1000 b n `shouldReturn` Right ()
+        reachSnapshot b n
+        status ← readSaveStatus b
+        ssPhase <$> status `shouldBe` Just SaveSnapshotBoundary
+
     it "failSave finalizes a disk-write failure discovered after releaseCaptureLock" $ do
         b ← newSaveBarrier
         Right n ← beginSave b Set.empty

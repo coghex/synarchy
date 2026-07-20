@@ -58,10 +58,15 @@
 --                              the WHOLE save (requirement 6); an OPTIONAL
 --                              one is omitted with a logged warning
 --                              (requirement 7)
---   prepareLoad(components) -- {ok=true} or {ok=false, errors={...}} --
---                              decode + migrate + component-local-
---                              validate EVERY component with NO live
---                              mutation (requirement 11); all-or-nothing
+--   prepareLoad(components, requestId) -- {ok=true} or {ok=false,
+--                              errors={...}} -- decode + migrate +
+--                              component-local-validate EVERY component
+--                              with NO live mutation (requirement 11);
+--                              all-or-nothing. requestId is stashed
+--                              alongside the prepared data so a later
+--                              abortPreparedLoad(requestId) can tell a
+--                              stale cleanup for an OLD request apart
+--                              from state a NEWER request just prepared.
 --   applyAll()              -- apply the prepared, already-validated
 --                              data (only reachable after prepareLoad
 --                              returned ok=true), then run every
@@ -81,8 +86,9 @@ package.loaded["scripts.lib.save_modules"] = saveModules
 saveModules.registry    = saveModules.registry or {}     -- id -> spec
 saveModules.resetHooks  = saveModules.resetHooks or {}    -- id -> fn
 saveModules._captureActive = false
-saveModules._loadActive    = false
-saveModules._pendingApply  = nil
+saveModules._loadActive     = false
+saveModules._pendingApply   = nil
+saveModules._pendingRequestId = nil
 
 local VALID_ID_PATTERN = "^[a-z][a-z0-9_]*$"
 
@@ -328,11 +334,13 @@ function saveModules.register(id, spec)
     -- structural invariant, not something a topological sort needs to
     -- enforce: every Lua component's apply() (saveModules.applyAll(),
     -- via Engine.Scripting.Lua.API.Save's applyLuaLoad) always runs
-    -- strictly BEFORE the Haskell-side world-thread restore is ever
-    -- queued (WorldLoadSave), for every load, with no exception. The
-    -- declaration still matters -- documenting a real cross-language
-    -- coupling, and rejecting a typo'd/nonexistent id outright, same as
-    -- a bad Lua-to-Lua dep.
+    -- strictly BEFORE the Haskell-side live session replacement is ever
+    -- queued (issue #763's WorldLoadPublish -- staging, WorldLoadTransaction,
+    -- touches no live state and may run before OR after this, since it
+    -- doesn't observe or mutate anything either side could disagree on),
+    -- for every load, with no exception. The declaration still matters --
+    -- documenting a real cross-language coupling, and rejecting a
+    -- typo'd/nonexistent id outright, same as a bad Lua-to-Lua dep.
     local deps = spec.deps
     if type(deps) ~= "table" or not isDenseArray(deps) then
         error("saveModules.register: '" .. id
@@ -544,9 +552,10 @@ end
 -- following `applyAll()` call and returns {ok=true}; on any failure,
 -- returns {ok=false, errors={...}} and stashes nothing, so a caller
 -- that aborts the load can never accidentally apply a partial result.
-function saveModules.prepareLoad(componentsList)
+function saveModules.prepareLoad(componentsList, requestId)
     saveModules._loadActive = true
     saveModules._pendingApply = nil
+    saveModules._pendingRequestId = nil
     local ok, result = pcall(prepareLoadImpl, componentsList)
     if not ok then
         saveModules._loadActive = false
@@ -554,10 +563,51 @@ function saveModules.prepareLoad(componentsList)
     end
     if result.ok then
         saveModules._pendingApply = result.prepared
+        saveModules._pendingRequestId = requestId
     else
         saveModules._loadActive = false
     end
     return { ok = result.ok, errors = result.errors }
+end
+
+-- Round 6 review: a successful `prepareLoad` leaves `_loadActive` true
+-- (by design -- it stays active until `applyAll` commits it), which is
+-- exactly what makes `saveModules.register`/`registerResetHook` refuse
+-- to run mid-load. But `applyAll` is the ONLY other thing that ever
+-- clears it, and staging (World.Load.Stage, on the world thread) runs
+-- AFTER a successful prepareLoad and BEFORE applyAll ever gets called --
+-- a staging failure (a worldgen exception, an internal StageError) or a
+-- publish-barrier failure (Engine.Save.Barrier timing out waiting for
+-- other owners) previously left NEITHER called, wedging `_loadActive`
+-- true forever: every later save/load's own prepareLoad, and any
+-- ordinary saveModules.register call (e.g. a hot-reloaded script),
+-- would fail from that point on for the rest of the session. Call this
+-- from every such failure path to abort the prepared-but-never-applied
+-- load cleanly -- a no-op (but still safe to call) if nothing is
+-- pending.
+--
+-- Round 9 review: a staging failure is reported to the Lua thread as a
+-- QUEUED message (LuaLoadStagingFailed), not a direct call -- it can sit
+-- in the queue for a while after the failing request has already been
+-- made terminal on the world/engine side (Engine.Load.Status.failLoad).
+-- Terminal means the mutual-exclusion gate is open again, so a BRAND
+-- NEW request can be accepted and successfully run its own prepareLoad
+-- before that stale queued message is ever processed. If this function
+-- cleared unconditionally, the stale cleanup for the OLD request would
+-- wipe out the NEW request's already-prepared `_pendingApply`. Passing
+-- the requestId the caller believes it's aborting -- compared against
+-- whatever prepareLoad most recently stashed -- makes a stale abort a
+-- no-op instead: it only ever clears state that actually belongs to it.
+-- A nil requestId (a caller with no request in play, e.g. tests) always
+-- clears, matching the pre-#763-round-9 unconditional behavior.
+function saveModules.abortPreparedLoad(requestId)
+    if requestId ~= nil and saveModules._pendingRequestId ~= nil
+        and requestId ~= saveModules._pendingRequestId then
+        return
+    end
+    saveModules._pendingApply = nil
+    saveModules._pendingRequestId = nil
+    saveModules._loadActive = false
 end
 
 -- Apply the load prepared by the most recent successful `prepareLoad`,
@@ -565,6 +615,23 @@ end
 -- replacement for modules with no durable state). Only reachable after
 -- `prepareLoad` returned {ok=true} -- errors loudly otherwise, since
 -- that is a caller bug, not a data problem.
+--
+-- Round 2 review: `apply()` mutates its module's live singleton
+-- wholesale (the C2 compatibility adapter documented on every
+-- registration) with no rollback of its own. Left unguarded, a LATER
+-- component's apply() throwing would abort the transaction with some
+-- earlier components already migrated to the new session and the rest
+-- still holding the old one -- a half-migrated Lua state paired with
+-- the OLD Haskell session, since WorldLoadPublish is only ever queued
+-- after this whole function returns successfully (see
+-- Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged). Every
+-- registered component's PRE-load live state is captured via its own
+-- `snapshot()` (the SAME function saveWorld uses, so this is exactly
+-- "what would be written if a save happened right now") before
+-- anything is mutated; a later failure restores every
+-- already-applied component from that capture, in reverse order,
+-- before re-raising -- the caller sees the same hard load-abort as
+-- before, but the live Lua session is left exactly as it was.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
@@ -572,28 +639,104 @@ function saveModules.applyAll()
         error("saveModules.applyAll: no prepared load (call prepareLoad \
               first and check its ok field)")
     end
+
+    local rollback = {}
+    for _, id in ipairs(sortedIds(saveModules.registry)) do
+        local ok, snapOrErr = pcall(saveModules.registry[id].snapshot)
+        if not ok then
+            saveModules._pendingApply = nil
+            saveModules._pendingRequestId = nil
+            saveModules._loadActive = false
+            error("saveModules.applyAll: could not capture a rollback "
+                .. "point for '" .. id .. "' -- aborting before any "
+                .. "state changed: " .. tostring(snapOrErr))
+        end
+        rollback[id] = snapOrErr
+    end
+
     local order = select(1, saveModules.dependencyOrder())
-    local applied = {}
+    local applyOrder = {}
+    local orderSeen = {}
     if order then
         for _, id in ipairs(order) do
-            if prepared[id] ~= nil then
-                applied[id] = true
-                saveModules.registry[id].apply(prepared[id])
-            end
+            applyOrder[#applyOrder + 1] = id
+            orderSeen[id] = true
         end
     end
     -- Defensive: apply anything dependencyOrder() didn't cover (should
     -- be unreachable -- prepareLoad already re-checked the registry is
     -- cycle-free -- but never silently drop a prepared component).
     for _, id in ipairs(sortedIds(saveModules.registry)) do
-        if prepared[id] ~= nil and not applied[id] then
-            saveModules.registry[id].apply(prepared[id])
+        if not orderSeen[id] then
+            applyOrder[#applyOrder + 1] = id
         end
     end
-    for _, id in ipairs(sortedIds(saveModules.resetHooks)) do
-        saveModules.resetHooks[id]()
+
+    -- Round 3 review: a reset-hook failure used to report an error
+    -- without rolling back the persistent components applied just
+    -- above -- leaving the OLD Haskell session paired with the NEW
+    -- Lua singleton state for every one of them, exactly the
+    -- half-migrated outcome the apply-loop rollback exists to prevent.
+    -- A reset hook itself owns no durable state to roll back TO (that
+    -- is what makes it a reset hook rather than a component), but the
+    -- persistent components it runs after certainly do, via the SAME
+    -- `rollback` captures taken above -- so a reset-hook failure now
+    -- unwinds those too, making the whole call atomic: either every
+    -- persistent component AND every reset hook completes, or the live
+    -- Lua session is left exactly as it was found.
+    local function rollbackApplied(applied)
+        for i = #applied, 1, -1 do
+            local rid = applied[i]
+            pcall(saveModules.registry[rid].apply, rollback[rid])
+        end
     end
+
+    local applied = {}
+    for _, id in ipairs(applyOrder) do
+        if prepared[id] ~= nil then
+            local ok, err = pcall(saveModules.registry[id].apply, prepared[id])
+            if not ok then
+                -- Round 5 review: `apply` is ordinary Lua code, not
+                -- guaranteed all-or-nothing -- it may have mutated
+                -- PART of its own singleton before throwing, so `id`
+                -- itself is not yet in `applied` and rollbackApplied
+                -- alone would skip it, leaving that partial mutation
+                -- live. Restore its own pre-load snapshot first, then
+                -- unwind every component applied before it.
+                pcall(saveModules.registry[id].apply, rollback[id])
+                rollbackApplied(applied)
+                saveModules._pendingApply = nil
+                saveModules._pendingRequestId = nil
+                saveModules._loadActive = false
+                error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
+                    .. "rolled back every already-applied component "
+                    .. "(including its own partial mutation): "
+                    .. tostring(err))
+            end
+            applied[#applied + 1] = id
+        end
+    end
+
+    -- Reset hooks run only once every real component has committed.
+    -- Re-running an already-fired reset hook after a rollback is safe
+    -- by construction (a "no durable state" module's reset is
+    -- idempotent), so unwinding the components here and re-raising is
+    -- sufficient -- there's nothing hook-side left to compensate for.
+    for _, id in ipairs(sortedIds(saveModules.resetHooks)) do
+        local ok, err = pcall(saveModules.resetHooks[id])
+        if not ok then
+            rollbackApplied(applied)
+            saveModules._pendingApply = nil
+            saveModules._pendingRequestId = nil
+            saveModules._loadActive = false
+            error("saveModules.applyAll: reset hook '" .. id
+                .. "' failed after every component committed, rolled back "
+                .. "every applied component: " .. tostring(err))
+        end
+    end
+
     saveModules._pendingApply = nil
+    saveModules._pendingRequestId = nil
     saveModules._loadActive = false
 end
 

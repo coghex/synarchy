@@ -53,6 +53,10 @@ import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
+import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
+import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
+import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
+import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
@@ -101,6 +105,7 @@ import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.Barrier as SaveBarrier
+import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
@@ -130,6 +135,13 @@ main = hspec $ do
         -- drive the #697 fence relay by hand (harness runs neither
         -- the input nor the Lua thread, so the queues are the test's).
         describe "Input.Followup" InputFollowup.spec
+        -- Same technique as Input.Followup above: no world dependency
+        -- at all, just the live EngineEnv's queues/refs to construct a
+        -- real Lua backend and drive processLuaMsg directly.
+        describe "Lua.DebugQueue" LuaDebugQueue.spec
+        describe "Lua.RenderQueue" LuaRenderQueue.spec
+        describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
+        describe "Lua.PauseGate" LuaPauseGate.spec
         -- Same technique as Input.Followup above: F4 (#730) Layer A's
         -- non-click producers live inside Engine.Input.Thread's real
         -- processInputs, driven directly against the live EngineEnv.
@@ -170,6 +182,7 @@ main = hspec $ do
     describe "save components" SaveComponents.spec
     describe "atomic save storage" SaveStorage.spec
     describe "Save.Barrier" SaveBarrier.spec
+    describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
     describe "World.CursorInfo" CursorInfo.spec

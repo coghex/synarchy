@@ -36,6 +36,7 @@ import System.IO (stdout)
 import System.Directory (doesFileExist, copyFile)
 import Engine.Core.State
 import Engine.Save.Barrier (newSaveBarrier)
+import Engine.Load.Status (newLoadStatusRef)
 import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
@@ -190,12 +191,14 @@ initializeEngineWith logBackend = do
   uiManagerRef ← newIORef emptyUIPageManager
   worldManagerRef ← newIORef emptyWorldManager
   hudActivePageRef ← newIORef Nothing
-  loadProvenanceRef ← newIORef HM.empty
+  loadStatusRef ← newLoadStatusRef
+  pendingLoadRef ← newIORef Nothing
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
   sunAngleRef ← newIORef 0.25       -- start at noon
   worldPreviewRef ← newIORef Nothing
+  worldPreviewGenerationRef ← newIORef 0
   zoomAtlasDataRef ← newIORef Nothing
   worldQuadsRef ← newIORef emptyLayeredQuads
   textureSystemRef ← newIORef Nothing
@@ -226,6 +229,7 @@ initializeEngineWith logBackend = do
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
   saveBarrierRef  ← newSaveBarrier
+  inputThreadActiveRef ← newIORef False
   -- Seeded to the POSIX epoch so the first save uses the real wall
   -- clock; subsequent saves clamp against it for monotonic, distinct
   -- timestamps (#98).
@@ -283,11 +287,13 @@ initializeEngineWith logBackend = do
         , uiManagerRef       = uiManagerRef
         , worldManagerRef    = worldManagerRef
         , hudActivePageRef   = hudActivePageRef
-        , loadProvenanceRef  = loadProvenanceRef
+        , loadStatusRef      = loadStatusRef
+        , pendingLoadRef     = pendingLoadRef
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
         , worldPreviewRef    = worldPreviewRef
+        , worldPreviewGenerationRef = worldPreviewGenerationRef
         , zoomAtlasDataRef   = zoomAtlasDataRef
         , screenshotRequestQueue = screenshotRequestQueue
         , worldQuadsRef      = worldQuadsRef
@@ -318,6 +324,7 @@ initializeEngineWith logBackend = do
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
         , saveBarrierRef    = saveBarrierRef
+        , inputThreadActiveRef = inputThreadActiveRef
         , lastSaveTimeRef   = lastSaveTimeRef
         , itemManagerRef    = itemManagerRef
         , equipmentClassManagerRef = equipmentClassManagerRef

@@ -13,6 +13,7 @@
 --     zoom-atlas GPU uploads from raw pixel bytes.
 module Engine.Scripting.Lua.Message
   ( processLuaMessages
+  , discardLuaMessagesForActiveLoad
   ) where
 
 import UPrelude
@@ -23,6 +24,7 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (ecHeadless)
 import qualified Engine.Core.Queue as Q
+import Engine.Load.Status (loadInProgress)
 import Engine.Scripting.Lua.Message.Scene ( handleSpawnText, handleSetText
                                            , handleSpawnSprite, handleSetPos
                                            , handleSetColor, handleSetSize
@@ -74,6 +76,19 @@ processLuaMessages = do
 
     unwrapTextureLoads msgs =
         [ (handle, path) | LuaLoadTextureRequest handle path ← msgs ]
+
+-- | Drop work produced by the old Lua/UI session while a whole-session load
+--   holds its publication boundary.  The render consumers call this only
+--   while 'captureLocked': preserving these messages until the next unlocked
+--   tick would let their scene/UI mutations land on the replacement session.
+--   A normal save has no generation replacement, so it deliberately retains
+--   its queued work.
+discardLuaMessagesForActiveLoad ∷ EngineEnv → IO Int
+discardLuaMessagesForActiveLoad env = do
+    loading ← loadInProgress (loadStatusRef env)
+    if loading
+        then length <$> Q.flushQueue (luaToEngineQueue env)
+        else pure 0
 
 -- | Run a GPU-touching action only in graphical mode; skip it when
 --   headless (no device). Lets the single 'handleLuaMessage' serve both

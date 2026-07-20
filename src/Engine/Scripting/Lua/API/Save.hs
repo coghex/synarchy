@@ -4,6 +4,9 @@ module Engine.Scripting.Lua.API.Save
     , saveWorldFn
     , saveStatusFn
     , loadSaveFn
+    , loadStatusFn
+    , applyLuaLoad
+    , abortLuaLoad
     ) where
 
 import UPrelude
@@ -19,6 +22,8 @@ import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
+import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
+import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
@@ -28,18 +33,30 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingBillOutputItemReferences
                         , renderMissingBillOutputItemRef
                         , missingConstructDefReferences
-                        , renderMissingConstructDefRef)
+                        , renderMissingConstructDefRef
+                        , missingMaterialReferences
+                        , renderMissingMaterialRef
+                        , missingFloraReferences
+                        , renderMissingFloraRef
+                        , missingLocationOverlayReferences
+                        , renderMissingLocationRef
+                        , missingInfectionReferences
+                        , renderMissingInfectionRef)
+import Location.Types (LocationRegistry(..), LocationDef(..))
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
 import Craft.Types (RecipeManager(..))
-import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
-                   , LoadPhase(..))
+import World.Types
+    (WorldCommand(..), WorldManager(wmWorlds), WorldState(wsGenParamsRef))
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Set as Set
 import Engine.Save.Barrier
+import Engine.Load.Status
+    ( LoadPhase(..), LoadStatus(..)
+    , beginLoad, advanceLoad, failLoad, readLoadStatus, loadInProgress )
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
 --   sorted newest-first by timestamp. `name` is the save-slot identity
@@ -116,6 +133,55 @@ saveStatusFn env = do
                 Lua.setfield (-2) "outcome"
     pure 1
 
+-- | engine.getLoadStatus() — issue #763 requirement 16: exposes the
+--   whole-session LOAD transaction's phase/outcome so a headless caller
+--   can wait for a SPECIFIC load (by @id@) to finish rather than polling
+--   stale state left behind by a previous one. Mirrors 'saveStatusFn'
+--   exactly; see "Engine.Load.Status" for the phase vocabulary.
+loadStatusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+loadStatusFn env = do
+    status ← Lua.liftIO $ readLoadStatus (loadStatusRef env)
+    case status of
+        Nothing → Lua.pushnil
+        Just s → do
+            Lua.newtable
+            Lua.pushinteger (fromIntegral $ lsRequestId s)
+            Lua.setfield (-2) "id"
+            Lua.pushstring (TE.encodeUtf8 (lsSaveName s))
+            Lua.setfield (-2) "saveName"
+            Lua.pushstring . TE.encodeUtf8 . T.pack . show $ lsPhase s
+            Lua.setfield (-2) "phase"
+            forM_ (lsOutcome s) $ \outcome → do
+                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ outcome
+                Lua.setfield (-2) "outcome"
+            -- Round 3 review: 'phase' above is 'LoadFailed' itself once
+            -- the transaction is terminal-and-aborted, which on its own
+            -- says nothing about how far the attempt actually got.
+            -- 'failedAtPhase' is the phase 'lsPhase' held immediately
+            -- BEFORE 'failLoad' overwrote it — present only on a failed
+            -- load.
+            forM_ (lsFailedAtPhase s) $ \phase → do
+                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ phase
+                Lua.setfield (-2) "failedAtPhase"
+    pure 1
+
+-- | The full save/load-transaction owner set (round 3 review), minus
+--   'SaveInput' when the input thread was never started —
+--   'App.Headless' boots without one (no GLFW window to poll), so
+--   requiring it unconditionally would make 'waitForOwners' time out
+--   on every headless save/load waiting for an owner that can never
+--   acknowledge. Shared by 'saveWorldFn' here and
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged' (duplicated
+--   rather than factored into "Engine.Save.Barrier" itself, which
+--   'Engine.Core.State' already depends on for 'SaveBarrier' — the
+--   reverse import would cycle).
+saveOwnerSet ∷ EngineEnv → IO (Set.Set SaveOwner)
+saveOwnerSet env = do
+    inputActive ← readIORef (inputThreadActiveRef env)
+    let base = Set.fromList
+            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
+    pure $ if inputActive then Set.insert SaveInput base else base
+
 -- | engine.saveWorld(pageId, saveName). Validates the request
 --   synchronously (name, world-exists, gen-params present), then
 --   collects every registered Lua module's state via
@@ -140,7 +206,13 @@ saveWorldFn env = do
             let saveName = TE.decodeUtf8Lenient nameBS
                 pageId   = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             logger ← Lua.liftIO $ readIORef (loggerRef env)
-            case sanitizeSaveName saveName of
+            loading ← Lua.liftIO $ loadInProgress (loadStatusRef env)
+            if loading
+              then do
+                Lua.liftIO $ logWarn logger CatLua $
+                    "saveWorld rejected: a load transaction is already active"
+                Lua.pushboolean False
+              else case sanitizeSaveName saveName of
                 Left err → do
                     Lua.liftIO $ do
                         logWarn logger CatLua $
@@ -182,11 +254,9 @@ saveWorldFn env = do
                                     -- cannot be acknowledged by another loop;
                                     -- it acknowledges only after the worker
                                     -- owners reached their tick boundary.
+                                    owners ← Lua.liftIO $ saveOwnerSet env
                                     started ← Lua.liftIO $ beginSave
-                                        (saveBarrierRef env)
-                                        (Set.fromList [SaveLua, SaveWorld,
-                                          SaveUnit, SaveBuilding, SaveCombat,
-                                          SaveSimulation])
+                                        (saveBarrierRef env) owners
                                     case started of
                                       Left err → do
                                         Lua.liftIO $ do
@@ -262,73 +332,172 @@ saveWorldFn env = do
         _ → Lua.pushboolean False
     return 1
 
--- | engine.loadSave(saveName) → loads the file, prepares + validates
---   every registered Lua module's state via
---   `saveModules.prepareLoad`/`applyAll` (issue #761 requirement 11: no
---   live mutation until decode/migrate/validate has succeeded for EVERY
---   required component), then queues the engine-side restore (chunks/
---   buildings/units/sim). Lua state applies BEFORE the engine queue runs
---   so any AI/spawn-sequencer references to restored units are valid by
---   the time the world thread writes unitManagerRef.
+-- | engine.loadSave(saveName) — issue #763 (save-overhaul C2): request a
+--   whole-session LOAD transaction. Everything this function does runs
+--   synchronously on the Lua thread and touches no live gameplay state
+--   beyond 'enginePausedRef' (requirement 3: pause synchronously at
+--   acceptance, before any decode work): mutual-exclusion against a
+--   concurrent save/load, request acceptance ('Engine.Load.Status.beginLoad'),
+--   storage-source selection + envelope validation + Haskell component
+--   decode/migration + snapshot assembly (all performed by 'loadWorld',
+--   issues #759-#762), gameplay content-reference validation (missing
+--   defs reject the load outright), and Lua-component prepare/validate
+--   ('saveModules.prepareLoad', issue #761 requirement 11 — no live Lua
+--   mutation yet). Once every one of those succeeds, the expensive
+--   per-page reconstruction (chunk gen, zoom cache, ...) is handed to the
+--   world thread as a 'WorldLoadTransaction' — this call returns before
+--   that finishes; poll 'engine.getLoadStatus()' for completion
+--   (requirement 16). A failure at any step here rejects the load with
+--   nothing touched beyond the pause (requirement 15: the old session
+--   stays complete and usable).
 loadSaveFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 loadSaveFn env = do
     nameArg ← Lua.tostring 1
     case nameArg of
+        Nothing → Lua.pushboolean False >> return 1
         Just nameBS → do
             let saveName = TE.decodeUtf8Lenient nameBS
             logger ← Lua.liftIO $ readIORef (loggerRef env)
-            descriptorsOrErr ← describeLuaComponents logger
-            case descriptorsOrErr of
-                Left err → do
+            -- Requirement 1: a load and a save must never overlap, for
+            -- the load's WHOLE duration (not just its brief publish
+            -- window) — see "Engine.Load.Status"'s haddock for why this
+            -- is a plain reject rather than the barrier itself.
+            saving ← Lua.liftIO $ saveInProgress (saveBarrierRef env)
+            loading ← Lua.liftIO $ loadInProgress (loadStatusRef env)
+            if saving ∨ loading
+              then do
+                Lua.liftIO $ logWarn logger CatWorld $
+                    "loadSave rejected for '" <> saveName <> "': a "
+                    <> (if saving then "save" else "load")
+                    <> " transaction is already active"
+                Lua.pushboolean False
+                return 1
+              else do
+                begun ← Lua.liftIO $ beginLoad (loadStatusRef env) saveName
+                case begun of
+                  Left err → do
                     Lua.liftIO $ logWarn logger CatWorld $
                         "loadSave rejected for '" <> saveName <> "': " <> err
                     Lua.pushboolean False
-                Right descriptors →
-                    loadSaveWithDescriptors env logger saveName descriptors
-            return 1
-        Nothing → do
-            Lua.pushboolean False
-            return 1
+                  Right requestId → do
+                    -- Pause synchronously at acceptance (requirement 3),
+                    -- before the potentially slower decode/validate work
+                    -- below. A failed load leaves this pause in place —
+                    -- deliberately not restored on any failure path.
+                    Lua.liftIO $ do
+                        writeIORef (enginePausedRef env) True
+                        advanceLoad (loadStatusRef env) requestId LoadPaused
+                    descriptorsOrErr ← describeLuaComponents logger
+                    case descriptorsOrErr of
+                        Left err → do
+                            Lua.liftIO $ do
+                                logWarn logger CatWorld $
+                                    "loadSave rejected for '" <> saveName
+                                    <> "': " <> err
+                                failLoad (loadStatusRef env) requestId err
+                            Lua.pushboolean False
+                        Right descriptors →
+                            continueLoad env logger requestId saveName descriptors
+                return 1
 
 -- | Continue 'loadSaveFn' once the current Lua registry's component
 --   descriptors are known (issue #761 round-4 review): split out so a
 --   malformed descriptor list can reject the load in 'loadSaveFn' BEFORE
 --   this ever runs, rather than proceeding with an incomplete
 --   known/required id set.
-loadSaveWithDescriptors
-    ∷ EngineEnv → LoggerState → Text → [(Text, Word32, Bool)]
+continueLoad
+    ∷ EngineEnv → LoggerState → Int → Text → [(Text, Word32, Bool)]
     → Lua.LuaE Lua.Exception ()
-loadSaveWithDescriptors env logger saveName descriptors = do
+continueLoad env logger requestId saveName descriptors = do
     let luaKnownNames    = HS.fromList [ n | (n, _, _)   ← descriptors ]
         luaRequiredNames = HS.fromList [ n | (n, _, req) ← descriptors, req ]
     result ← Lua.liftIO $
         loadWorld logger saveName luaKnownNames luaRequiredNames
     case result of
+        -- Round 2 review: retain whichever phase 'loadWorld' actually
+        -- reached before failing, rather than jumping straight from
+        -- 'LoadPaused' to 'LoadFailed' regardless of real progress.
+        Left (phase, err) → do
+            Lua.liftIO $ do
+                logWarn logger CatWorld $
+                    "loadSave failed for '" <> saveName <> "': " <> err
+                advanceLoad (loadStatusRef env) requestId phase
+                failLoad (loadStatusRef env) requestId err
+            Lua.pushboolean False
         Right (saveData, luaComponents) → do
+            -- 'loadWorld' already selected the storage generation,
+            -- validated the envelope, decoded + migrated every Haskell
+            -- component, and assembled + cross-validated the complete
+            -- session snapshot (issues #759-#762) — those phases are
+            -- already behind us by the time it returns.
+            Lua.liftIO $ mapM_ (advanceLoad (loadStatusRef env) requestId)
+                [ LoadSourceSelected, LoadEnvelopeValidated
+                , LoadComponentsDecoded, LoadComponentsMigrated
+                , LoadSnapshotAssembled ]
             -- #760 req. 9 (round 8 extends this to every gameplay
-            -- content reference, not just building/unit defs):
-            -- validate every saved content-definition reference
-            -- against the currently-registered defs BEFORE
-            -- publishing ANY live state (Lua modules, pause,
-            -- world-thread restore). A missing gameplay DEFINITION
+            -- content reference, not just building/unit defs; issue
+            -- #763's round-3 review extends it again to material ids,
+            -- round-5 to flora ids, round-7 to location-overlay ids,
+            -- and round-8 to wound-infection ids — the approved issue's
+            -- own acceptance criteria names "material" explicitly
+            -- alongside unit/item/building/recipe, and flora species /
+            -- placed locations / wound infections all drive gameplay
+            -- the same way): validate every saved content-definition
+            -- reference against the currently-registered defs BEFORE
+            -- publishing ANY live state. A missing gameplay DEFINITION
             -- rejects the COMPLETE load with a clear error naming
-            -- what's missing — rather than the world-thread restore
-            -- silently pruning those entities (the old
-            -- fromBuildingSnapshot/fromUnitSnapshot filter + log). This
-            -- runs earliest, in the Lua thread, so an all-or-nothing
-            -- rejection touches nothing: engine.loadSave just returns
-            -- false. (Missing visual ASSETS stay a soft #756 fallback,
-            -- not gated here — only definitions. FloraId/location-
-            -- overlay ids, MaterialId references, and equipment
-            -- slot-id keys all remain a documented, pre-existing,
-            -- out-of-#760-scope gap per
-            -- docs/persistence_state_inventory.md §9 — not addressed
-            -- here.)
+            -- what's missing (requirement 9: never silently prune
+            -- affected entities). (Missing visual ASSETS stay a soft
+            -- fallback, not gated here — only definitions. Equipment
+            -- slot-id keys remain a documented, pre-existing,
+            -- out-of-scope gap per docs/persistence_state_inventory.md
+            -- §9.)
             bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
             rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
+            -- Round 5/6 review: the material registry is otherwise only
+            -- populated by World.Thread.Command.Init's "Step 0.5" (part
+            -- of world.init) — a headless boot that goes straight to
+            -- engine.loadSave with no prior world.init in the SAME
+            -- process would see an entirely empty registry here (every
+            -- id but air reporting as "unknown"). Built OFF TO THE
+            -- SIDE, never written to the live materialRegistryRef here
+            -- (round 6 review: this runs before the load is even known
+            -- to succeed — writing it live now would discard any
+            -- runtime/custom material registrations the OLD, still-
+            -- live session had if THIS load later gets rejected by one
+            -- of the OTHER missing-def checks below, or by staging
+            -- itself). Threaded through WorldLoadTransaction instead so
+            -- staging validates and builds against this exact registry,
+            -- and "World.Load.Publish" is the sole point it ever
+            -- reaches the live ref, same as every other piece of
+            -- session state.
+            --
+            -- Round 13 review: a from-disk-only rebuild silently
+            -- dropped whatever the LIVE session had ALREADY registered
+            -- at runtime — world.init's own base pass (irrelevant here,
+            -- since it registers the exact same data/materials set this
+            -- rebuild does) but ALSO any engine.loadMaterialYaml custom
+            -- registration, which lives ONLY in materialRegistryRef,
+            -- never on disk under data/materials. A save referencing a
+            -- valid custom material was rejected as "unknown", and even
+            -- a successful base-only load discarded the live
+            -- registrations on publish. Merge the current live registry
+            -- ON TOP of the freshly-rebuilt base one — live/custom
+            -- registrations win on any id collision (the same
+            -- "newest registration wins" rule loadMaterialYamlFn's own
+            -- live-registry fold already follows) — so validation sees
+            -- both, and a successful publish preserves the live
+            -- registrations exactly as they were.
+            baseMatReg ← Lua.liftIO $ loadPopulatedMaterialRegistry logger "data/materials"
+            liveMatReg ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            let matReg = mergeMaterialRegistry baseMatReg liveMatReg
+            floraCat ← Lua.liftIO $ readIORef (floraCatalogRef env)
+            locReg ← Lua.liftIO $ readIORef (locationDefsRef env)
+            infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
+                locationDefIds = HS.fromList (map ldId (lrDefs locReg))
                 pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
                 missing = missingDefReferences
                     buildingDefs (HM.keysSet (umDefs um))
@@ -343,10 +512,22 @@ loadSaveWithDescriptors env logger saveName descriptors = do
                         (HM.keysSet (imDefs im)) pages
                 missingConstruct =
                     missingConstructDefReferences buildingDefs pages
+                missingMaterials =
+                    missingMaterialReferences matReg pages
+                missingFlora =
+                    missingFloraReferences floraCat pages
+                missingLocations =
+                    missingLocationOverlayReferences locationDefIds pages
+                missingInfections =
+                    missingInfectionReferences infMgr pages
                 allMissing = length missing + length missingItems
                     + length missingRecipes
                     + length missingBillOutputItems
                     + length missingConstruct
+                    + length missingMaterials
+                    + length missingFlora
+                    + length missingLocations
+                    + length missingInfections
                 allMessages =
                     map renderMissingDefRef missing
                     ⧺ map renderMissingItemDefRef missingItems
@@ -354,103 +535,58 @@ loadSaveWithDescriptors env logger saveName descriptors = do
                     ⧺ map renderMissingBillOutputItemRef
                           missingBillOutputItems
                     ⧺ map renderMissingConstructDefRef missingConstruct
+                    ⧺ map renderMissingMaterialRef missingMaterials
+                    ⧺ map renderMissingFloraRef missingFlora
+                    ⧺ map renderMissingLocationRef missingLocations
+                    ⧺ map renderMissingInfectionRef missingInfections
+            -- Round 15 review: advance to the content-validation
+            -- checkpoint BEFORE running the gate below, not only once it
+            -- succeeds — a failure inside it (any of the missing-*
+            -- checks folded into allMissing) previously left lsPhase at
+            -- whatever the PRIOR checkpoint was (LoadSnapshotAssembled),
+            -- so engine.getLoadStatus().failedAtPhase misreported a
+            -- content-validation failure as having happened one phase
+            -- earlier than it actually did. Both branches below now see
+            -- the phase already advanced.
+            Lua.liftIO $ advanceLoad (loadStatusRef env) requestId LoadContentValidated
             if allMissing > 0
               then do
-                Lua.liftIO $ logWarn logger CatWorld $
-                    "loadSave rejected for '" <> saveName <> "': "
-                    <> T.pack (show allMissing)
-                    <> " saved entit" <> (if allMissing ≡ 1
-                                            then "y references a"
-                                            else "ies reference")
-                    <> " gameplay definition no longer registered — "
-                    <> "aborting the entire load (nothing changed): "
-                    <> T.intercalate "; " allMessages
+                let msg = T.pack (show allMissing)
+                        <> " saved entit" <> (if allMissing ≡ 1
+                                                then "y references a"
+                                                else "ies reference")
+                        <> " gameplay definition no longer registered — "
+                        <> "aborting the entire load (nothing changed): "
+                        <> T.intercalate "; " allMessages
+                Lua.liftIO $ do
+                    logWarn logger CatWorld $
+                        "loadSave rejected for '" <> saveName <> "': " <> msg
+                    failLoad (loadStatusRef env) requestId msg
                 Lua.pushboolean False
               else do
                 -- issue #761 requirement 11: decode + migrate +
                 -- component-locally-validate EVERY registered Lua
-                -- component before touching any live Lua state.
-                -- Any failure aborts the whole load (nothing has
-                -- changed yet), exactly like the def-reference
-                -- check above.
-                prepared ← prepareLuaLoad logger luaComponents
+                -- component before touching any live Lua state. Any
+                -- failure aborts the whole load (nothing has changed
+                -- yet), exactly like the def-reference check above.
+                prepared ← prepareLuaLoad logger requestId luaComponents
                 case prepared of
                   Left err → do
-                    Lua.liftIO $ logWarn logger CatWorld $
-                        "loadSave rejected for '" <> saveName
-                        <> "': " <> err
+                    Lua.liftIO $ do
+                        logWarn logger CatWorld $
+                            "loadSave rejected for '" <> saveName
+                            <> "': " <> err
+                        failLoad (loadStatusRef env) requestId err
                     Lua.pushboolean False
-                  Right () → loadValidatedSave env logger saveData
-        Left err → do
-            Lua.liftIO $ logWarn logger CatWorld $
-                "loadSave failed for '" <> saveName <> "': " <> err
-            Lua.pushboolean False
-
-
--- | Publish a decoded, def-validated save: pause, apply the prepared Lua
---   state, then queue the engine-side (chunks/buildings/units/sim)
---   restore. Split out of 'loadSaveFn' so the def-reference validation
---   and Lua prepare/validate above can reject the complete load BEFORE
---   this ever touches live state (#760 requirement 9 / #761 requirement 11).
-loadValidatedSave
-    ∷ EngineEnv → LoggerState → SaveData
-    → Lua.LuaE Lua.Exception ()
-loadValidatedSave env logger saveData = do
-                    -- Pause the engine BEFORE restoring Lua state, mirroring
-                    -- the save path. Applying the prepared Lua load clobbers
-                    -- the per-id singletons and snapshots _preLoadState, but
-                    -- the world-thread merge + onSaveLoaded reconcile only
-                    -- land later; the Lua loop keeps firing script update()s
-                    -- meanwhile (they gate on engine.isPaused()). Without
-                    -- this, an unpaused same-session load would tick against
-                    -- the half-restored singletons before onSaveLoaded —
-                    -- drifting loaded-page state and racing the off-page
-                    -- reconcile. The world thread restores the saved pause
-                    -- state (sdEnginePaused) when it finishes the load, so
-                    -- this is just a freeze for the load window (#195).
-                    Lua.liftIO $ writeIORef (enginePausedRef env) True
-                    applied ← applyLuaLoad logger
-                    case applied of
-                      -- applyAll() is only reachable after prepareLoad
-                      -- already validated every component, so this is a
-                      -- genuine apply()/reset-hook bug, not a data
-                      -- problem -- but it must still abort the load
-                      -- rather than proceed to queue the Haskell-side
-                      -- restore on top of a Lua state that only
-                      -- partially applied (requirement 6: no required
-                      -- failure may be warning-only or partial).
-                      Left err → do
-                        Lua.liftIO $ logWarn logger CatWorld $
-                            "loadSave rejected for '"
-                            <> smName (sdMetadata saveData)
-                            <> "': applying Lua state failed: " <> err
-                        Lua.pushboolean False
-                      Right () → do
-                        let pageId = WorldPageId "main_world"
-                        -- Synchronously flip the current head world's
-                        -- phaseRef so a follow-up world.waitForInit
-                        -- doesn't read stale LoadDone from the previous
-                        -- gen and return immediately. The real handler
-                        -- creates its own WorldState and prepends it to
-                        -- wmWorlds; once that lands, waitForInit polls
-                        -- the new head and follows it through to
-                        -- LoadDone. This write is shadowed by the new
-                        -- WorldState as soon as the handler runs.
-                        Lua.liftIO $ markHeadWorldLoading env
-                        Lua.liftIO $ Q.writeQueue (worldQueue env)
-                            (WorldLoadSave pageId saveData)
-                        Lua.pushboolean True
-
--- | Set the head world's loading phase to "in progress" so
---   'world.waitForInit' will block correctly even though the actual
---   load handler hasn't run yet. No-op when wmWorlds is empty
---   (waitForInit already handles that case by polling).
-markHeadWorldLoading ∷ EngineEnv → IO ()
-markHeadWorldLoading env = do
-    mgr ← readIORef (worldManagerRef env)
-    case wmWorlds mgr of
-        ((_, ws):_) → writeIORef (wsLoadPhaseRef ws) (LoadPhase1 1 1)
-        []          → return ()
+                  Right () → do
+                    Lua.liftIO $
+                        -- Hand off the expensive per-page reconstruction
+                        -- to the world thread (World.Load.Stage) — it
+                        -- touches no live ref (requirement 6), so
+                        -- nothing here needs to wait for it.
+                        Q.writeQueue (worldQueue env)
+                            (WorldLoadTransaction requestId saveData matReg)
+                    Lua.pushboolean True
 
 -- | Pop the Lua error message at the top of the stack and log it
 --   via the engine logger. Used by every save_modules.* bridge call
@@ -698,17 +834,21 @@ readErrorStringField = do
         then (TE.decodeUtf8Lenient ⊚) ⊚ Lua.tostring (-1)
         else return Nothing
 
--- | Call @saveModules.prepareLoad(components)@ (issue #761): decode +
---   migrate + component-locally-validate EVERY registered Lua component
---   with NO live mutation (requirement 11). Any failure — a require/call
---   failure, or a reported validation error — aborts the load; nothing
---   has touched live Lua state yet either way.
+-- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
+--   decode + migrate + component-locally-validate EVERY registered Lua
+--   component with NO live mutation (requirement 11). Any failure — a
+--   require/call failure, or a reported validation error — aborts the
+--   load; nothing has touched live Lua state yet either way. @requestId@
+--   is stashed on the Lua side alongside the prepared data so a later
+--   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (round
+--   9 review — see 'abortLuaLoad').
 prepareLuaLoad
-    ∷ LoggerState → [(Text, Word32, BS.ByteString)]
+    ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
     → Lua.LuaE Lua.Exception (Either Text ())
-prepareLuaLoad logger components = do
-    ok ← callSaveModules1 logger "prepareLoad" 1
-            (pushComponentsArray components)
+prepareLuaLoad logger requestId components = do
+    ok ← callSaveModules1 logger "prepareLoad" 2
+            (pushComponentsArray components
+                ≫ Lua.pushinteger (fromIntegral requestId))
     if not ok
       then return (Left "save_modules.prepareLoad() could not be called \
                          \(see engine log)")
@@ -751,3 +891,36 @@ applyLuaLoad logger = do
     ok ← callSaveModules0 logger "applyAll"
     return $ if ok then Right ()
              else Left "save_modules.applyAll() failed (see engine log)"
+
+-- | Call @saveModules.abortPreparedLoad(requestId)@ (round 6 review):
+--   every failure path that can occur AFTER a successful 'prepareLuaLoad'
+--   but BEFORE 'applyLuaLoad' ever runs (a staging exception/'StageError'
+--   on the world thread, or the publish barrier itself failing/timing
+--   out — see 'World.Thread.Command.Save.handleWorldLoadTransactionCommand'
+--   and 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') must
+--   call this so Lua's registry-mutation guard
+--   (@saveModules.register@/@registerResetHook@ refusing to run while
+--   @_loadActive@) doesn't stay wedged open for the rest of the
+--   session. Best-effort: a failure here is only logged, never
+--   propagated, since it always runs FROM an existing failure path that
+--   must still report ITS OWN error regardless.
+--
+--   Round 9 review: the world-thread-queued failure path
+--   ('LuaLoadStagingFailed') reaches its caller as a QUEUED Lua message,
+--   which can sit unprocessed for a while — long enough for the failing
+--   request to already be terminal
+--   ('Engine.Load.Status.failLoad') and a BRAND NEW request to have been
+--   accepted and successfully run its OWN 'prepareLuaLoad' before the
+--   stale message is finally handled. Passing @requestId@ through lets
+--   @save_modules.abortPreparedLoad@ compare it against whatever it most
+--   recently stashed and no-op when they don't match, so a stale abort
+--   can never clear a newer, still-in-flight request's prepared state.
+abortLuaLoad ∷ LoggerState → Int → Lua.LuaE Lua.Exception ()
+abortLuaLoad logger requestId = do
+    ok ← callSaveModules1 logger "abortPreparedLoad" 1
+            (Lua.pushinteger (fromIntegral requestId))
+    if ok
+      then Lua.pop 1  -- discard abortPreparedLoad()'s (nil) return value
+      else Lua.liftIO $ logWarn logger CatLua
+            "save_modules.abortPreparedLoad() failed (see engine log) -- \
+            \a prepared load may remain stuck active"

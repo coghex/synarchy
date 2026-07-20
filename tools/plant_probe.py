@@ -47,7 +47,7 @@ Usage: python3 tools/plant_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
 
@@ -320,13 +320,16 @@ def main():
                    "return 'ok'")
         time.sleep(3.0)
         send(port, "engine.loadSave('plant_v78_check'); return 'ok'")
-        time.sleep(15.0)
-        send(port, "world.show('main_world'); return 'ok'")
+        published, load_status = wait_load_published(port, 200)
+        if not published:
+            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            return 1
+        send(port, "world.show('probe'); return 'ok'")
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
         d6 = jget(port,
-                  f"return plant.getDesignationAt('main_world',{tx},{ty})")
+                  f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok7 = isinstance(d6, dict) and d6.get("crop") == "wheat"
         passed &= ok7
         print(f"  [{'PASS' if ok7 else 'FAIL'}] designation (with crop) "

@@ -61,7 +61,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import clear_find_water, quit_engine, boot, send, send_json
+from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 LOG = "/tmp/construction_probe_engine.log"
 
@@ -570,8 +570,12 @@ def phase_save_load(port: int) -> None:
                "return 'ok'")
     time.sleep(5.0)
     send(port, "engine.loadSave('construct_payment_check'); return 'ok'")
-    time.sleep(25.0)
-    send(port, "world.show('main_world'); return 'ok'")
+    # Issue #763: engine.loadSave only ACCEPTS synchronously -- the saved
+    # page (its own id `w` verbatim -- no more main_world remap) doesn't
+    # exist live until the transaction actually publishes.
+    published, load_status = wait_load_published(port, 60)
+    check(f"load transaction published ({load_status})", published)
+    send(port, f"world.show('{w}'); return 'ok'")
     send(port, "engine.setPaused(false); return 'ok'")
     send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)", timeout=45)
     send(port, "return world.waitForChunks(90)", timeout=95)

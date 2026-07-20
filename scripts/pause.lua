@@ -67,8 +67,26 @@ function pause.set(b)
         end
         return
     end
+    -- engine.setPaused(false) can be REJECTED outright (issue #763
+    -- round 15) while a load transaction is in flight -- staging runs
+    -- before the save barrier's capture lock, so this call can land
+    -- mid-transaction and resuming here could let the OLD, still-live
+    -- session's simulation advance before the load either publishes or
+    -- fails. Round 16 rereview: the engine now reports whether it
+    -- actually applied the flag, and this side must honour that --
+    -- previously pause.paused (the local mirror) and world.setTimeScale
+    -- were applied UNCONDITIONALLY regardless of the engine's answer,
+    -- which reintroduced the exact "half-paused world: ticks frozen,
+    -- but world time still advancing" desync the block above heals for
+    -- OTHER causes. A rejection must leave EVERYTHING here untouched,
+    -- matching the #763 "nothing changed" contract for the pre-load
+    -- session -- pause.paused stays whatever it already was (matching
+    -- the engine flag, which the rejection also left untouched).
+    local applied = engine.setPaused(b)
+    if applied == false then
+        return
+    end
     pause.paused = b
-    engine.setPaused(b)
 
     if wid then
         if b then

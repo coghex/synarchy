@@ -33,7 +33,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/item_instance_engine.log"
 WEAPON = "pick_steel"   # kind: weapon — matches the humanoid right_hand slot
@@ -299,10 +299,13 @@ def main() -> int:
             ids_before = sorted({it["instanceId"] for it in picks(inventory(args.port, uid))})
             send(args.port, "engine.saveWorld('arena', 'issue67_probe'); return 'ok'")
             send(args.port, "engine.loadSave('issue67_probe'); return 'ok'")
-            # Units (and their item instances) restore early, but give the
-            # load handler a moment to swap pages and rebuild managers.
-            time.sleep(16)
-            send(args.port, "world.show('main_world'); return 'ok'")
+            # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
+            # saved page ("arena", its own id verbatim -- no more
+            # main_world remap) doesn't exist live until the transaction
+            # actually publishes.
+            published, load_status = wait_load_published(args.port, 60)
+            check("load transaction published", published, str(load_status))
+            send(args.port, "world.show('arena'); return 'ok'")
             # Unit ids are preserved across save/load (UnitSnapshot is keyed
             # by UnitId), so the same uid still addresses the acolyte.
             ids_after = sorted({it["instanceId"] for it in picks(inventory(args.port, uid))})

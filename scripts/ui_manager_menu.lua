@@ -15,6 +15,7 @@ local mainMenu        = require("scripts.main_menu")
 local settingsMenu    = require("scripts.settings_menu")
 local createWorldMenu = require("scripts.create_world_menu")
 local worldView       = require("scripts.world_view")
+local worldManager    = require("scripts.world_manager")
 local saveBrowser     = require("scripts.save_browser")
 local hud             = require("scripts.hud")
 local loadingScreen   = require("scripts.loading_screen")
@@ -68,7 +69,7 @@ function uiManager.showMenu(menuName, params)
         uiManager.ensureWorldView()
         uiManager.ensureGameplayUI()
         worldView.show()
-        hud.worldId = "main_world"
+        hud.worldId = world.getActiveWorldId() or "main_world"
         hud.show()
         -- Re-show pause menu if returning from settings (opened via pause menu)
         if previousMenu == "settings" then
@@ -123,22 +124,48 @@ function uiManager.onSaveBrowserBack(elemHandle)
     return true
 end
 
--- Broadcast from the world thread when ANY save finishes loading
--- (main-menu load, debug-console engine.loadSave, etc. — see
--- World/Thread/Helpers.sendSaveLoaded). A load ALWAYS targets the
--- "main_world" page (Engine/Scripting/Lua/API/Save.hs) and resets its
--- engine ToolMode to default (World/Thread/Command/Save.hs); mirror that
--- into the shared HUD toolbar so the visible tool and world.getToolMode()
--- agree, regardless of how the load was triggered.
+-- Broadcast from the world thread once a whole-session load transaction
+-- PUBLISHES (main-menu load, debug-console engine.loadSave, etc. — see
+-- World/Load/Publish.hs's call to sendSaveLoaded). Issue #763 (save-
+-- overhaul C2) replaced the old "a load ALWAYS targets main_world"
+-- contract with saved-page-id-preserving whole-session replacement, so
+-- the loaded active page's id must be resolved via world.getActiveWorldId()
+-- at the time this fires (it always resolves by now — publish already
+-- made the page visible) rather than assumed. Its engine ToolMode still
+-- resets to default (World/Load/Stage.hs); mirror that into the shared
+-- HUD toolbar so the visible tool and world.getToolMode() agree,
+-- regardless of how the load was triggered.
 --
 -- hud.markLoadedToolReset applies the reset now if the HUD is already
--- bound to main_world, otherwise defers it until the next main_world bind
--- (consumed in hud.show). This both avoids clobbering the arena's tool
--- state on a main_world load (the toolbar onChange writes
--- world.setToolMode(hud.worldId, ...)) AND still resets the toolbar after
--- an arena→menu→load→world_view round-trip, where hud.worldId is stale
--- ("test_arena") at load time and only rebinds to main_world later. (#103)
+-- bound to the loaded active page, otherwise defers it until the next
+-- bind to that page (consumed in hud.show). This both avoids clobbering
+-- the arena's tool state on a load AND still resets the toolbar after an
+-- arena→menu→load→world_view round-trip, where hud.worldId is stale
+-- ("test_arena") at load time and only rebinds to the loaded page
+-- later. (#103, updated for #763)
+-- Round 11 review, issue #763: main_menu.lua's loadAndShowSave binds
+-- worldManager.currentWorld/hud.worldId and resends textures itself,
+-- but only via loadingScreen's OWN poll of engine.getLoadStatus() --
+-- a load triggered any other way (the debug console's engine.loadSave,
+-- a future non-menu caller) while gameplay is already open never runs
+-- that path at all, leaving worldManager.currentWorld/hud.worldId bound
+-- to the now-replaced pre-load page and every subsequent gameplay
+-- action / texture bind targeting a page that no longer exists. This
+-- broadcast is the ONE hook every load reaches regardless of trigger
+-- (see the comment above), so it's the right common place to keep the
+-- Lua-side world/HUD binding in sync with whichever page
+-- world.getActiveWorldId() reports once publish has made it active —
+-- redundant but harmless for the menu-driven path, which does the same
+-- rebind moments later (sendTexturesToWorld is idempotent).
 function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
+    local activeId = world.getActiveWorldId()
+    if activeId then
+        worldManager.currentWorld = activeId
+        worldManager.active = true
+        hud.worldId = activeId
+        worldView.sendTexturesToWorld(activeId)
+    end
+
     if hud.markLoadedToolReset then
         hud.markLoadedToolReset()
     end

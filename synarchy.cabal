@@ -330,6 +330,7 @@ library
                      Engine.Core.Monad
                      Engine.Core.State
                      Engine.Save.Barrier
+                     Engine.Load.Status
                      Engine.Core.Types
                      Engine.Core.Log
                      Engine.Core.Log.Types
@@ -543,10 +544,10 @@ library
                      World.Thread.Command.Basic
                      World.Thread.Command.Init
                      World.Thread.Command.Save
-                     World.Thread.Command.Save.RestoreIds
                      World.Thread.Command.Save.WriteWorld
-                     World.Thread.Command.Save.LoadPage
-                     World.Thread.Command.Save.LoadWorld
+                     World.Load.Types
+                     World.Load.Stage
+                     World.Load.Publish
                      World.Thread.Command.Time
                      World.Thread.Command.Cursor
                      World.Thread.Command.Cursor.Common
@@ -986,6 +987,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Components
                    Test.Headless.World.Save.Storage
                    Test.Headless.Save.Barrier
+                   Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.Identity
                    Test.Headless.World.CursorInfo
@@ -1055,6 +1057,10 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Lua.DebugQueue
+                   Test.Headless.Lua.RenderQueue
+                   Test.Headless.Lua.PreviewGeneration
+                   Test.Headless.Lua.PauseGate
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers

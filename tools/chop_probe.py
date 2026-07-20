@@ -32,7 +32,7 @@ Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
 
@@ -155,12 +155,15 @@ def main():
                    "return 'ok'")
         time.sleep(3.0)
         send(port, "engine.loadSave('chop_v67_check'); return 'ok'")
-        time.sleep(15.0)
-        send(port, "world.show('main_world'); return 'ok'")
+        published, load_status = wait_load_published(port, 200)
+        if not published:
+            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            return 1
+        send(port, "world.show('probe'); return 'ok'")
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        d3 = jget(port, f"return chop.getDesignationAt('main_world',{tx},{ty})")
+        d3 = jget(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
         ok3 = isinstance(d3, dict) and isinstance(d3.get("z"), (int, float))
         passed &= ok3
         print(f"  [{'PASS' if ok3 else 'FAIL'}] designation survives "
@@ -240,7 +243,7 @@ def main():
         while time.time() < deadline:
             time.sleep(2.0)
             d4 = jget(port,
-                      f"return chop.getDesignationAt('main_world',{tx},{ty})")
+                      f"return chop.getDesignationAt('probe',{tx},{ty})")
             if not isinstance(d4, dict):
                 felled = True
             if count_logs_near(port, tx, ty) >= 1:
@@ -271,7 +274,7 @@ def main():
                     f"local x,y={tx}+dx,{ty}+dy; "
                     f"if world.getSlopeAt(x,y)==0 and not world.getFluidAt(x,y)"
                     f" and not world.getFloraAt(x,y)"
-                    f" and not chop.getDesignationAt('main_world',x,y) then "
+                    f" and not chop.getDesignationAt('probe',x,y) then "
                     f"return x..','..y end end end end; return 'none'"
                     ).strip('"')
         if spot == "none":
@@ -280,7 +283,7 @@ def main():
             return 1
         px, py = (int(v) for v in spot.split(","))
         send(port, f"unit.addItem({uid},'steel_plate',0); return 'ok'")
-        send(port, f"construction.designate('main_world',{px},{py},{px},{py},"
+        send(port, f"construction.designate('probe',{px},{py},{px},{py},"
                    f"'structure','dungeon_1','floor'); return 'ok'")
         deadline = time.time() + 90.0
         floored = False
@@ -296,7 +299,7 @@ def main():
             return 1
 
         logs_before = count_logs_near(port, tx, ty, radius=8)
-        send(port, f"construction.designate('main_world',{px},{py},{px},{py},"
+        send(port, f"construction.designate('probe',{px},{py},{px},{py},"
                    f"'structure','dungeon_1','post'); return 'ok'")
         time.sleep(0.5)
         deadline = time.time() + 120.0
@@ -309,7 +312,7 @@ def main():
                                f"'post_n')") == "true"
             cleared = not isinstance(
                 jget(port, f"return construction.getDesignationAt("
-                           f"'main_world',{px},{py})"), dict)
+                           f"'probe',{px},{py})"), dict)
             if built and cleared:
                 break
         logs_after = count_logs_near(port, tx, ty, radius=8)

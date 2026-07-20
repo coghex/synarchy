@@ -4,6 +4,8 @@ module Engine.Scripting.Lua.Types where
 import UPrelude
 import Data.IORef (IORef)
 import Control.Concurrent.STM.TVar (TVar)
+import Control.Concurrent.STM.TQueue (TQueue)
+import Engine.Scripting.Lua.DebugServer (DebugCommand)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
@@ -44,6 +46,15 @@ data LuaBackendState = LuaBackendState
     -- ^ Engine logger, so 'callModuleFunction' can log Lua callback
     --   errors (now caught via pcall) without threading a logger
     --   through every broadcast call site.
+  , lbsDebugQueue   ∷ TQueue DebugCommand
+    -- ^ The debug-console command queue (round 10 review, issue #763):
+    --   reachable from 'ls' at every 'processLuaMsg' call site so the
+    --   'LuaSaveLoaded' handler can quarantine any command still queued
+    --   at that point (queued sometime during the now-replaced session,
+    --   since the debug server keeps accepting commands regardless of
+    --   the save-barrier's capture-lock state) without threading a new
+    --   parameter through 'processLuaMsg'/'processLuaMsgs' and their
+    --   several unrelated callers (input injection, headless tests).
   }
 
 data LuaLogLevel = LuaLogDebug
@@ -200,7 +211,11 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   pre-load state", so a load touches only loaded-page state
               --   and other live pages are untouched (#191); nested refs are
               --   scrubbed against the survivor set.
-            | LuaSaveLoaded [Int] [Int]
+            | LuaSaveLoaded Int [Int] [Int]
+              -- ^ round 2 review: the leading 'Int' is the load
+              --   transaction's request id, so the dispatcher can
+              --   report 'Engine.Load.Status.LoadPublished' only once
+              --   THIS broadcast (below) actually completes.
             | LuaHudLogInfo Text Text Text
               -- ^ HUD info-panel push: basic, advanced, and a SOURCE
               -- kind ("tile" | "chunk"). The kind lets entity-info
@@ -209,7 +224,13 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               -- selection, which share this same broadcast (issue #133).
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text
-            | LuaWorldPreviewReady Int
+            | LuaWorldPreviewReady Int Word64
+              -- ^ handle, generation. Round 11 review, issue #763: the
+              -- generation is validated at DELIVERY time
+              -- ('Engine.Scripting.Lua.Thread.Dispatch', gated behind
+              -- the same captureLocked check every Lua-thread message
+              -- is), not at upload-completion time — see
+              -- 'Engine.Core.State.worldPreviewGenerationRef'.
             | LuaShowPopup Text Text Float Float Float Float
                            (Maybe (Int, Int))
               -- ^ Player-events popup. Fields, in order:
@@ -219,6 +240,30 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --     7. optional (gx, gy) grid coords. When present the
               --        popup line is clickable (click pans the camera
               --        there); 'Nothing' leaves the line non-clickable.
+            | LuaLoadStaged Int
+              -- ^ Issue #763 (save-overhaul C2): the world thread just
+              --   finished STAGING a whole-session load transaction
+              --   (its request id) without touching any live ref. The
+              --   Lua thread is the one that drives the publish barrier
+              --   (see "Engine.Scripting.Lua.Thread.Dispatch") — it
+              --   applies the prepared Lua-side state and queues the
+              --   matching 'World.Command.Types.WorldLoadPublish' once
+              --   every other state-owner thread has quiesced, mirroring
+              --   how 'engine.saveWorld' drives the save barrier.
+            | LuaLoadStagingFailed Int
+              -- ^ Round 6 review: staging (the world thread, off to the
+              --   side of any live ref) FAILED for this request id
+              --   before ever reaching 'LuaLoadStaged' — a staging
+              --   exception or 'World.Load.Stage.StageError'. By this
+              --   point 'Engine.Scripting.Lua.API.Save.prepareLuaLoad'
+              --   already succeeded (staging only ever runs after it
+              --   does), leaving Lua's registration guard
+              --   (@saveModules._loadActive@) active with no
+              --   'LuaLoadStaged' ever coming to drive
+              --   'Engine.Scripting.Lua.API.Save.applyLuaLoad' (the only
+              --   other thing that clears it) — so this tells the Lua
+              --   thread to call
+              --   'Engine.Scripting.Lua.API.Save.abortLuaLoad' instead.
             deriving (Eq, Show)
 
 data LuaResult = LuaSuccess

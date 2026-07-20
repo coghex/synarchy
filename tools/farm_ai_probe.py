@@ -58,7 +58,7 @@ Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
 
@@ -556,8 +556,11 @@ def main():
                    "return 'ok'")
         time.sleep(3.0)
         send(port, "engine.loadSave('farm_ai_v79_check'); return 'ok'")
-        time.sleep(15.0)
-        send(port, "world.show('main_world'); return 'ok'")
+        published, load_status = wait_load_published(port, 200)
+        if not published:
+            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            return 1
+        send(port, "world.show('probe'); return 'ok'")
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
