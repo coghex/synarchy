@@ -171,16 +171,25 @@ end
 
 function hud.createUI()
     -- #750: toggle.new below always recreates the map/tool toggles at
-    -- their hardcoded default slot (map_default / tool_default) — on a
-    -- rebuild (not first creation) that desyncs the visible toolbar from
-    -- whatever mode is actually active (e.g. Mine still armed
-    -- engine-side while the icon claims Default). Capture the current
-    -- visual selection before teardown and restore it via toggle.select
-    -- (visual-only — does not re-fire onChange, so it never re-issues
+    -- their hardcoded default identity per slot (map_default/tool_default,
+    -- each slot's default options) — on a rebuild (not first creation)
+    -- that desyncs the visible toolbar from whatever mode is actually
+    -- active. Two independent things can drift: which slot is selected
+    -- (e.g. Mine still armed engine-side while the icon claims Default),
+    -- and which IDENTITY a slot displays if the player had swapped an
+    -- alternative into it (e.g. slot 1 showing "Pressure" instead of its
+    -- default "Temperature") — restoring only the selected index still
+    -- shows the wrong icon for a swapped slot. Capture both before
+    -- teardown; restore per-slot identity via toggle.restoreSlotIdentity
+    -- (silent — no onOptionSelect/onChange), then the selected index via
+    -- one final toggle.select once the new toggle exists — neither
+    -- re-fires a callback, so a rebuild never re-issues
     -- world.setToolMode/setMapMode or re-triggers the build tool's
-    -- picker show/hide) once the new toggle exists.
+    -- picker show/hide for a mode that's already active.
     local preservedToolIndex = hud.toolToggleId and toggle.getSelectedIndex(hud.toolToggleId)
     local preservedMapIndex  = hud.mapToggleId  and toggle.getSelectedIndex(hud.mapToggleId)
+    local preservedToolNames = hud.toolToggleId and toggle.getSlotNames(hud.toolToggleId) or {}
+    local preservedMapNames  = hud.mapToggleId  and toggle.getSlotNames(hud.mapToggleId)  or {}
 
     -- Tear down previous pages if resizing
     if hud.uiCreated and hud.world_page and hud.zoom_page then
@@ -387,6 +396,9 @@ function hud.createUI()
             engine.logDebug("Map mode changed to: " .. tostring(itemName))
         end,
     })
+    for i, name in ipairs(preservedMapNames) do
+        toggle.restoreSlotIdentity(hud.mapToggleId, i, name)
+    end
     if preservedMapIndex then
         toggle.select(hud.mapToggleId, preservedMapIndex)
     end
@@ -480,6 +492,9 @@ function hud.createUI()
             tileEditor.onToolMode(itemName)
         end,
     })
+    for i, name in ipairs(preservedToolNames) do
+        toggle.restoreSlotIdentity(hud.toolToggleId, i, name)
+    end
     if preservedToolIndex then
         toggle.select(hud.toolToggleId, preservedToolIndex)
     end

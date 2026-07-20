@@ -285,6 +285,48 @@ spec = around withHeadlessEngine $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just names → names `shouldBe` ["map_temp"]
 
+        it "a resize preserves a SWAPPED alternative's identity, not just the slot index (round-2 review)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local toggle = require('scripts.ui.toggle');"
+                -- map_pressure is an OPTION nested under slot 1's
+                -- default identity (map_temp), not a direct slot name —
+                -- picking it swaps it INTO slot 1 (toggle.lua's
+                -- applyOption), which a naive index-only restore can't
+                -- reproduce after a rebuild recreates slot 1 back at its
+                -- hardcoded default (map_temp).
+                , "toggle.applyOptionByName(hud.mapToggleId, 'map_pressure');"
+                , "local beforeIdx = toggle.getSelectedIndex(hud.mapToggleId);"
+                , "hud.onFramebufferResize(1280, 720);"
+                , "return {selected = {toggle.getSelectedName(hud.mapToggleId)},"
+                , "        idxUnchanged = (toggle.getSelectedIndex(hud.mapToggleId) == beforeIdx)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe SwapPreserveProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    spSelected p `shouldBe` ["map_pressure"]
+                    spIdxUnchanged p `shouldBe` True
+
+        it "does not re-fire onOptionSelect/onChange when silently restoring a swapped identity" $ \env → do
+            ls ← newBareLuaBackend env
+            n ← evalInt ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local toggle = require('scripts.ui.toggle');"
+                , "toggle.applyOptionByName(hud.mapToggleId, 'map_pressure');"
+                , "_G.__setMapModeCalls = 0;"
+                , "local origSetMapMode = world.setMapMode;"
+                , "world.setMapMode = function(...) _G.__setMapModeCalls = _G.__setMapModeCalls + 1; return origSetMapMode(...) end;"
+                , "hud.onFramebufferResize(1280, 720);"
+                , "world.setMapMode = origSetMapMode;"
+                , "return _G.__setMapModeCalls"
+                ]
+            n `shouldBe` 0
+
     describe "resize-safe teardown (#750) — scripts/ui/view_teardown.lua's new \"resize\" transition" $ do
         it "hud.createUI() runs the 'resize' sweep before deleting world_page, reaching every registered world_page-mounted widget" $ \env → do
             ls ← newBareLuaBackend env
@@ -373,7 +415,11 @@ spec = around withHeadlessEngine $ do
             n ← evalInt ls $ luaLines
                 [ "_G.__n = 0;"
                 , "local function spy(w, h) _G.__n = _G.__n + 1 end;"
-                , "local stub = { onFramebufferResize = spy };"
+                -- popup gets BOTH onFramebufferResize (stores fbW/fbH)
+                -- and reflow (repositions active cards); unit_info_v2
+                -- only gets reflow (its onFramebufferResize is a
+                -- deliberate no-op — see the ordering note below).
+                , "local stub = { onFramebufferResize = spy, reflow = spy };"
                 , "package.loaded['scripts.world_view']            = stub;"
                 , "package.loaded['scripts.hud']                   = stub;"
                 , "package.loaded['scripts.ui.context_menu']       = stub;"
@@ -393,7 +439,50 @@ spec = around withHeadlessEngine $ do
                 , "uiManager.notifyGameplayRescale(1920, 1080);"
                 , "return _G.__n"
                 ]
-            n `shouldBe` 11
+            -- worldView, hud, contextMenu, buildToolRemoteWarning,
+            -- eventLog, combatLog, injuryLog, unitLog, debug: 1 call
+            -- each (9). popup: 2 (onFramebufferResize + reflow).
+            -- unit_info_v2: 1 (reflow only). Total 12.
+            n `shouldBe` 12
+
+        it "calls hud.onFramebufferResize before popup.reflow()/unitInfoV2.reflow(), so both see the NEW hud geometry" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "_G.__order = {};"
+                , "local hudStub = { onFramebufferResize = function() table.insert(_G.__order, 'hud') end };"
+                , "local popupStub = {"
+                , "    onFramebufferResize = function() end,"
+                , "    reflow = function() table.insert(_G.__order, 'popupReflow') end };"
+                , "local uivStub = { onFramebufferResize = function() end,"
+                , "    reflow = function() table.insert(_G.__order, 'unitInfoV2Reflow') end };"
+                , "local noop = { onFramebufferResize = function() end };"
+                , "package.loaded['scripts.world_view']            = noop;"
+                , "package.loaded['scripts.hud']                   = hudStub;"
+                , "package.loaded['scripts.ui.context_menu']       = noop;"
+                , "package.loaded['scripts.build_tool_remote_warning'] = noop;"
+                , "package.loaded['scripts.popup']                 = popupStub;"
+                , "package.loaded['scripts.event_log']             = noop;"
+                , "package.loaded['scripts.combat_log']            = noop;"
+                , "package.loaded['scripts.injury_log_panel']      = noop;"
+                , "package.loaded['scripts.unit_log']              = noop;"
+                , "package.loaded['scripts.unit_info_v2']          = uivStub;"
+                , "package.loaded['scripts.debug']                 = noop;"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "uiManager.moduleReady.hud = true;"
+                , "uiManager.moduleReady.popupsAndLogs = true;"
+                , "uiManager.notifyGameplayRescale(1920, 1080);"
+                , "return _G.__order"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [Text] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just order → do
+                    order `shouldSatisfy` (elem "hud")
+                    let hudIdx = length (takeWhile (≠ "hud") order)
+                    -- both reflows must appear AFTER "hud" in the order
+                    forM_ ["popupReflow", "unitInfoV2Reflow"] $ \name →
+                        case lookup name (zip order [0 ∷ Int ..]) of
+                            Nothing → expectationFailure (T.unpack name ⧺ " never ran")
+                            Just idx → idx `shouldSatisfy` (> hudIdx)
 
         it "does nothing on a non-positive size (defends the same 0x0 invariant as a real resize)" $ \env → do
             ls ← newBareLuaBackend env
@@ -494,7 +583,7 @@ spec = around withHeadlessEngine $ do
                 Just names → names `shouldMatchList` ["offscreen", "offRight"]
 
     describe "popup.lua reflows active cards on resize (#750 round-1 review)" $ do
-        it "a card recenters to the new framebuffer instead of staying stale or going off-screen after a shrink" $ \env → do
+        it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
                 [ "local p = require('scripts.popup');"
@@ -502,6 +591,24 @@ spec = around withHeadlessEngine $ do
                 , "p.onShowPopup('unit_event', 'hello', 0, 0, 0, 1, {});"
                 , "local before = p.getActiveBounds()[1];"
                 , "p.onFramebufferResize(800, 600);"
+                , "local after = p.getActiveBounds()[1];"
+                , "return {beforeX=before.x, beforeY=before.y, afterX=after.x, afterY=after.y,"
+                , "        afterInFrame=false}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ReflowProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    (rpAfterX p, rpAfterY p) `shouldBe` (rpBeforeX p, rpBeforeY p)
+
+        it "p.reflow() recenters a card to the current framebuffer instead of leaving it stale or off-screen after a shrink" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,1920,1080);"
+                , "p.onShowPopup('unit_event', 'hello', 0, 0, 0, 1, {});"
+                , "local before = p.getActiveBounds()[1];"
+                , "p.onFramebufferResize(800, 600);"
+                , "p.reflow();"
                 , "local after = p.getActiveBounds()[1];"
                 , "return {beforeX=before.x, beforeY=before.y, afterX=after.x, afterY=after.y,"
                 , "        afterInFrame=(after.x >= 0 and after.y >= 0"
@@ -563,6 +670,72 @@ spec = around withHeadlessEngine $ do
                 , "return card ~= nil and not rr.rectsOverlap(card, _G.__natural)"
                 ]
             ok `shouldBe` True
+
+    describe "event/combat/injury/unit log panels migrate their scrollable content to real #747 clipping (round-2 review)" $ do
+        it "event_log: a rendered row is a real child of a clipsChildren viewport, and its absolute bounds resolve inside the clip" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.emitEvent('unit_event', 'hello world');"
+                , "local el = require('scripts.event_log');"
+                , "el.bootstrap(1,2,3,1920,1080);"
+                , "el.show();"
+                , "local vp = UI.getElementInfo(el.rowViewportId);"
+                , "local rowHandle = next(el.rowClickBoxes);"
+                , "local row = UI.getElementInfo(rowHandle);"
+                , "return {clipsChildren = vp.clipsChildren,"
+                , "        rowInsideClip = (row.x >= vp.x and row.y >= vp.y"
+                , "                         and (row.x+row.width) <= (vp.x+vp.width)"
+                , "                         and (row.y+row.height) <= (vp.y+vp.height)),"
+                , "        rowEffectiveClipMatchesViewport ="
+                , "            (row.effectiveClip.x == vp.x and row.effectiveClip.y == vp.y"
+                , "             and row.effectiveClip.w == vp.width and row.effectiveClip.h == vp.height)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe LogClipProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    lcpClipsChildren p `shouldBe` True
+                    lcpRowInsideClip p `shouldBe` True
+                    lcpRowEffectiveClipMatchesViewport p `shouldBe` True
+
+        it "combat_log/injury_log_panel/unit_log each create a clipsChildren content viewport, and their empty-state label is a real descendant" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local out = {};"
+                , "local specs = {"
+                , "    {mod = 'scripts.combat_log', vp = 'contentViewportId'},"
+                , "    {mod = 'scripts.injury_log_panel', vp = 'contentViewportId'},"
+                , "    {mod = 'scripts.unit_log', vp = 'contentViewportId'},"
+                , "};"
+                , "for _, spec in ipairs(specs) do"
+                , "    local m = require(spec.mod);"
+                , "    m.bootstrap(1,2,3,1920,1080);"
+                , "    if spec.mod == 'scripts.unit_log' then m.show(1) else m.show() end;"
+                , "    local vp = UI.getElementInfo(m[spec.vp]);"
+                , "    table.insert(out, {mod = spec.mod, clipsChildren = vp and vp.clipsChildren or false});"
+                , "end;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [LogViewportRow] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rows → do
+                    length rows `shouldBe` 3
+                    forM_ rows $ \row → lvrClipsChildren row `shouldBe` True
+
+        it "a resize while a log panel is visible rebuilds its viewport with clipsChildren still true (no regression to page-attached content)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local el = require('scripts.event_log');"
+                , "el.bootstrap(1,2,3,1920,1080);"
+                , "el.show();"
+                , "local ok = pcall(function() el.onFramebufferResize(1280, 720) end);"
+                , "local vp = UI.getElementInfo(el.rowViewportId);"
+                , "return {ok = ok, clipsChildren = vp and vp.clipsChildren or false}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ResizeClipProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rcpOk p `shouldBe` True
+                    rcpClipsChildren p `shouldBe` True
 
     describe "\"unit info reserves right edge and suppresses conflicting info\" (#750 introspection over pre-existing behavior)" $ do
         it "unitInfoV2.getBounds() mirrors the real flush-right column, and is nil while not visible" $ \env → do
@@ -646,6 +819,32 @@ data ToolPreserveProbe = ToolPreserveProbe
 instance FromJSON ToolPreserveProbe where
     parseJSON = withObject "ToolPreserveProbe" $ \o →
         ToolPreserveProbe <$> o .: "selected" <*> o .: "callsAfterSelect" <*> o .: "callsAfterResize"
+
+data SwapPreserveProbe = SwapPreserveProbe
+    { spSelected ∷ [Text], spIdxUnchanged ∷ Bool } deriving Show
+instance FromJSON SwapPreserveProbe where
+    parseJSON = withObject "SwapPreserveProbe" $ \o →
+        SwapPreserveProbe <$> o .: "selected" <*> o .: "idxUnchanged"
+
+data LogClipProbe = LogClipProbe
+    { lcpClipsChildren ∷ Bool, lcpRowInsideClip ∷ Bool
+    , lcpRowEffectiveClipMatchesViewport ∷ Bool } deriving Show
+instance FromJSON LogClipProbe where
+    parseJSON = withObject "LogClipProbe" $ \o →
+        LogClipProbe <$> o .: "clipsChildren" <*> o .: "rowInsideClip"
+                      <*> o .: "rowEffectiveClipMatchesViewport"
+
+data LogViewportRow = LogViewportRow
+    { lvrMod ∷ Text, lvrClipsChildren ∷ Bool } deriving Show
+instance FromJSON LogViewportRow where
+    parseJSON = withObject "LogViewportRow" $ \o →
+        LogViewportRow <$> o .: "mod" <*> o .: "clipsChildren"
+
+data ResizeClipProbe = ResizeClipProbe
+    { rcpOk ∷ Bool, rcpClipsChildren ∷ Bool } deriving Show
+instance FromJSON ResizeClipProbe where
+    parseJSON = withObject "ResizeClipProbe" $ \o →
+        ResizeClipProbe <$> o .: "ok" <*> o .: "clipsChildren"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

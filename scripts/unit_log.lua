@@ -102,6 +102,13 @@ local function destroyChrome()
         scrollbar.destroy(unitLog.scrollbarId)
         unitLog.scrollbarId = nil
     end
+    -- #750: the content clip viewport — destroyTransient (called first
+    -- by every real teardown path) already destroyed its children;
+    -- UI.deleteElement is idempotent either way.
+    if unitLog.contentViewportId then
+        UI.deleteElement(unitLog.contentViewportId)
+        unitLog.contentViewportId = nil
+    end
     unitLog.chromeLabels  = {}
     unitLog.chromeButtons = {}
     unitLog.chromePanels  = {}
@@ -351,6 +358,16 @@ createUI = function()
         contentW = contentW, contentH = contentH,
     }
 
+    -- #750/#747: clipping viewport for the scrollable prose content only
+    -- (title/unit-tab strip/scrollbar stay page-attached chrome, outside
+    -- it) — same pattern as scripts/event_log.lua / combat_log.lua /
+    -- injury_log_panel.lua.
+    unitLog.contentViewportId = UI.newElement(
+        "unit_log_content_viewport", contentW, contentH, unitLog.pageId)
+    UI.addToPage(unitLog.pageId, unitLog.contentViewportId, contentX, contentY)
+    UI.setClipChildren(unitLog.contentViewportId, true)
+    UI.setZIndex(unitLog.contentViewportId, 503)
+
     local sbTrackH = math.max(math.floor(12 * uiscale),
                               contentH - 2 * sbBtnSize - 2 * sbCapH)
     unitLog.scrollbarId = scrollbar.new({
@@ -444,9 +461,9 @@ renderContent = function()
             uiscale  = L.uiscale,
         })
         table.insert(unitLog.tabLabels, emptyId)
-        UI.addToPage(unitLog.pageId, label.getElementHandle(emptyId),
-            L.contentX + math.floor((L.contentW - emptyW) / 2),
-            L.contentY + math.floor(L.contentH / 2))
+        UI.addChild(unitLog.contentViewportId, label.getElementHandle(emptyId),
+            math.floor((L.contentW - emptyW) / 2),
+            math.floor(L.contentH / 2))
         UI.setZIndex(label.getElementHandle(emptyId), 504)
         return
     end
@@ -499,8 +516,8 @@ renderContent = function()
             uiscale  = L.uiscale,
         })
         table.insert(unitLog.tabLabels, lbl)
-        UI.addToPage(unitLog.pageId, label.getElementHandle(lbl),
-            L.contentX, L.contentY + (row - 1) * lineH + s.fontSize)
+        UI.addChild(unitLog.contentViewportId, label.getElementHandle(lbl),
+            0, (row - 1) * lineH + s.fontSize)
         UI.setZIndex(label.getElementHandle(lbl), 504)
     end
 end

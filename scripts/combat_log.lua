@@ -152,6 +152,12 @@ local function destroyChrome()
         scrollbar.destroy(combatLog.scrollbarId)
         combatLog.scrollbarId = nil
     end
+    -- #750: the content clip viewport — destroyTransient above (called
+    -- first by every real teardown path) already destroyed its children.
+    if combatLog.contentViewportId then
+        UI.deleteElement(combatLog.contentViewportId)
+        combatLog.contentViewportId = nil
+    end
     combatLog.chromeLabels  = {}
     combatLog.chromeButtons = {}
     combatLog.chromePanels  = {}
@@ -303,6 +309,18 @@ createUI = function()
         contentW           = contentW,
         contentH           = contentH,
     }
+
+    -- #750/#747: clipping viewport for the scrollable prose content only
+    -- (title/battle-tab strip/scrollbar stay page-attached chrome,
+    -- outside it) — same pattern as scripts/event_log.lua. Content
+    -- (renderContent below) reparents under this via UI.addChild with
+    -- viewport-RELATIVE coordinates instead of UI.addToPage with
+    -- page-absolute ones.
+    combatLog.contentViewportId = UI.newElement(
+        "combat_log_content_viewport", contentW, contentH, combatLog.pageId)
+    UI.addToPage(combatLog.pageId, combatLog.contentViewportId, contentX, contentY)
+    UI.setClipChildren(combatLog.contentViewportId, true)
+    UI.setZIndex(combatLog.contentViewportId, 503)
 
     -- History scrollbar, pinned to the right edge of the content area.
     -- Content size + visibility are set in renderContent (they depend on
@@ -776,10 +794,10 @@ renderContent = function()
             uiscale  = L.uiscale,
         })
         table.insert(combatLog.tabLabels, emptyId)
-        UI.addToPage(combatLog.pageId,
+        UI.addChild(combatLog.contentViewportId,
             label.getElementHandle(emptyId),
-            L.contentX + math.floor((L.contentW - emptyW) / 2),
-            L.contentY + math.floor(L.contentH / 2))
+            math.floor((L.contentW - emptyW) / 2),
+            math.floor(L.contentH / 2))
         UI.setZIndex(label.getElementHandle(emptyId), 504)
         return
     end
@@ -837,9 +855,9 @@ renderContent = function()
             uiscale  = L.uiscale,
         })
         table.insert(combatLog.tabLabels, lbl)
-        UI.addToPage(combatLog.pageId, label.getElementHandle(lbl),
-            L.contentX,
-            L.contentY + (row - 1) * lineH + s.fontSize)
+        UI.addChild(combatLog.contentViewportId, label.getElementHandle(lbl),
+            0,
+            (row - 1) * lineH + s.fontSize)
         UI.setZIndex(label.getElementHandle(lbl), 504)
     end
 end

@@ -125,6 +125,13 @@ local function destroyOwned()
     for handle, _ in pairs(eventLog.rowClickBoxes) do
         UI.deleteElement(handle)
     end
+    -- #750: the row clip viewport itself — its children (row
+    -- labels/click-boxes) are already gone via the loops above, so
+    -- this deletes an empty container.
+    if eventLog.rowViewportId then
+        UI.deleteElement(eventLog.rowViewportId)
+        eventLog.rowViewportId = nil
+    end
     eventLog.ownedLabels    = {}
     eventLog.ownedButtons   = {}
     eventLog.ownedTabbars   = {}
@@ -286,6 +293,20 @@ createUI = function()
         s           = s,
     }
 
+    -- #750/#747: clipping viewport for the scrollable row area only
+    -- (title/tabbar/close-button/scrollbar stay page-attached chrome,
+    -- outside it). Row content (renderRows below) reparents under this
+    -- via UI.addChild with viewport-RELATIVE coordinates instead of
+    -- UI.addToPage with page-absolute ones, so a row that overflows its
+    -- slot (long text, a rounding edge case) is clipped to the content
+    -- area instead of drawing outside the panel — the virtual-scroll row
+    -- count/positioning math itself is unchanged.
+    eventLog.rowViewportId = UI.newElement(
+        "event_log_row_viewport", contentW, contentH, eventLog.pageId)
+    UI.addToPage(eventLog.pageId, eventLog.rowViewportId, contentX, contentY)
+    UI.setClipChildren(eventLog.rowViewportId, true)
+    UI.setZIndex(eventLog.rowViewportId, 503)
+
     -- Persistent scrollbar to the right of the content area. Its
     -- onScroll callback only mutates scrollOffset + re-renders rows
     -- (never destroys itself).
@@ -429,9 +450,9 @@ renderRows = function()
             page     = eventLog.pageId,
             uiscale  = L.uiscale,
         })
-        UI.addToPage(eventLog.pageId,
+        UI.addChild(eventLog.rowViewportId,
             label.getElementHandle(emptyId),
-            L.contentX, L.contentY + L.s.fontSize)
+            0, L.s.fontSize)
         UI.setZIndex(label.getElementHandle(emptyId), 504)
         table.insert(eventLog.rowEntries, { rowLabels = { emptyId } })
         return
@@ -472,7 +493,7 @@ renderRows = function()
             1.0, 1.0, 1.0, 0.0,   -- fully transparent
             0,
             eventLog.pageId)
-        UI.addToPage(eventLog.pageId, clickBox, L.contentX, rowY)
+        UI.addChild(eventLog.rowViewportId, clickBox, 0, rowY - L.contentY)
         UI.setClickable(clickBox, true)
         UI.setOnClick(clickBox, EVENT_LOG_ROW_CALLBACK)
         UI.setZIndex(clickBox, 503)
@@ -489,9 +510,9 @@ renderRows = function()
                 page     = eventLog.pageId,
                 uiscale  = L.uiscale,
             })
-            UI.addToPage(eventLog.pageId,
+            UI.addChild(eventLog.rowViewportId,
                 label.getElementHandle(id),
-                x, rowY + L.s.fontSize)
+                x - L.contentX, rowY + L.s.fontSize - L.contentY)
             UI.setZIndex(label.getElementHandle(id), 504)
             -- Tracked via rowLabels only: renderRows destroys these on
             -- every re-render, so also appending to ownedLabels just

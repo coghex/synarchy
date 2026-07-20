@@ -493,12 +493,13 @@ clickable outside the list's own bounds even if virtualization ever
 has a gap. `scripts/ui/panel.lua` gained an opt-in `clipChildren`
 constructor param (`UI.setClipChildren` on the panel's own box) for any
 panel-based screen that nests content via `panel.place`/`placeRow`/
-`placeColumn`. Adoption for the settings tabs / create-world content /
-event-combat-injury-unit log panels remains a follow-up: those build
-their scrollable regions as page-root elements positioned by
+`placeColumn`. Adoption for the settings tabs remains a follow-up: it
+still builds its scrollable region as page-root elements positioned by
 hand-computed layout rather than real parent/child nesting, so turning
-on the clip contract there needs a real reparenting migration per
-panel, not a one-line flag flip.
+on the clip contract there needs a real reparenting migration, not a
+one-line flag flip — same story create-world's tab content had until
+the migration described above, and the event/combat/injury/unit log
+panels had until #750 (see below).
 
 **Floating placement** (`UI.PopupPlacement`, also pure, see
 `Test.Headless.UI.PopupPlacement`): one framebuffer-coordinate
@@ -989,6 +990,64 @@ fully off-screen after a real shrink or a UI-scale change. Fixed by
 having it re-run `renderPopup` (the same function content updates
 already reuse) for every active card, which only touches its
 position/size, never its `lines`/`category`/target data.
+
+Round-2 review found three more gaps. First, `toggle.select`'s
+index-only restore (above) still lost a SWAPPED alternative's identity
+— clicking an option in a toggle's popup swaps it into that slot
+in-place (`toggle.lua`'s `applyOption`, e.g. picking "Pressure" swaps
+it into the map toggle's slot 1, replacing "Temperature" there), so a
+rebuild recreating every slot at its hardcoded default still showed the
+wrong icon even with the correct slot selected. Fixed with two new
+`toggle.lua` functions: `toggle.getSlotNames(groupId)` (live per-slot
+names, unlike `toggle.dump()` which requires visibility) and
+`toggle.restoreSlotIdentity(groupId, btnIdx, name)` — finds `name`
+among that slot's current options and swaps it in via `applyOption`'s
+existing logic with a new `silent` parameter that skips both the
+select-this-slot call and the `onOptionSelect`/`onChange` callbacks (the
+mode it names is already active engine-side). `hud.createUI()` snapshots
+every slot's name via `getSlotNames` before teardown and restores each
+via `restoreSlotIdentity` before the final `toggle.select` (which still
+owns refreshing every slot's displayed texture from its now-correct
+identity, regardless of restore order).
+
+Second, an ordering hazard: `popup.lua` and `unit_info_v2.lua` are both
+`engine.loadScript`'d with an EARLIER script id than
+`scripts/ui_manager.lua`, so on a real resize the engine's automatic
+`broadcastToModules` calls their `onFramebufferResize` BEFORE
+`uiManager.onFramebufferResize` has run `hud.onFramebufferResize` —
+`unit_info_v2`'s `rebuildLayout()` (which reads `hud.fbW`/`hud.fbH`)
+computed against STALE dimensions, and nothing re-triggered it once hud
+did rebuild; `popup`'s reflow (above) nudged cards against
+`hud.getToolbarRects()` from the stale, pre-resize toolbar. Fixed by
+splitting each into a now near-no-op `onFramebufferResize` (owns no
+state of its own to preserve — `popup.onFramebufferResize` still stores
+`fbW`/`fbH`; `unit_info_v2.onFramebufferResize` does nothing at all) and
+a separate `reflow()`/re-run entry point, called explicitly AFTER
+`hud.onFramebufferResize` from both `ui_manager_boot.lua`'s manual
+forward and `uiManager.notifyGameplayRescale` (which already called hud
+first) — guaranteeing both always see hud's current geometry.
+
+Third, the issue's own text asks event/combat/injury/unit logs to
+migrate "with #747 clipping" — the four log panels used a virtual-scroll
+pattern (recompute + recreate only the visible row window on every
+scroll/render) with every row a PAGE-ROOT element at absolute
+coordinates, never adopting C1's real clipping at all. Migrated each
+panel's SCROLLABLE CONTENT ONLY (title/tab-strip/close-button/scrollbar
+stay page-attached chrome, unaffected, at lower regression risk) onto a
+dedicated `UI.setClipChildren(viewport, true)` viewport created once in
+`createUI()` at the panel's content bounds; every row/empty-state label
+and (event_log's) row click-box reparents via `UI.addChild(viewport,
+elem, x - contentX, y - contentY)` instead of `UI.addToPage(pageId,
+elem, x, y)` — `label.new({parent=viewport, x=relX, y=relY})` already
+supports this directly (#747), so most call sites just needed their
+absolute coordinates converted to viewport-relative ones. The
+virtual-scroll row-count/positioning math itself is completely
+unchanged; clipping is a safety net (a long line, a rounding edge case)
+on top of it, not a replacement for it. Teardown deletes the viewport
+in each panel's `destroyChrome()` — `UI.deleteElement` is idempotent
+(a no-op on an already-deleted handle via `deleteElementTree`'s cascade
+from `destroyTransient`'s own per-row cleanup), so the two teardown
+functions' relative call order doesn't matter.
 
 ## Project Layout
 

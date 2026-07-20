@@ -38,11 +38,15 @@ function uiManager.notifyGameplayRescale(width, height)
     end
     if uiManager.moduleReady.popupsAndLogs then
         popup.onFramebufferResize(width, height)
+        popup.reflow()
         eventLog.onFramebufferResize(width, height)
         combatLog.onFramebufferResize(width, height)
         injuryLog.onFramebufferResize(width, height)
         unitLog.onFramebufferResize(width, height)
     end
-    unitInfoV2.onFramebufferResize(width, height)
+    -- unitInfoV2.onFramebufferResize is a no-op (see unit_info_v2.lua);
+    -- reflow() is the real entry point, safe to call directly here since
+    -- hud.onFramebufferResize above has already run.
+    unitInfoV2.reflow()
     debugOverlay.onFramebufferResize(width, height)
 end

@@ -357,13 +357,22 @@ function unitInfoV2.update(dt)
     unitInfoV2.lastSelCount = count
 end
 
+-- #750: unit_info_v2 is engine.loadScript'd with an earlier script id
+-- than scripts/ui_manager.lua, so the engine's automatic
+-- broadcastToModules calls this BEFORE uiManager.onFramebufferResize
+-- has run hud.onFramebufferResize — rebuildLayout() below reads
+-- hud.fbW/hud.fbH, which are still the PRE-resize values at that point.
+-- This handler is therefore a deliberate no-op on the real-resize path;
+-- it owns no fbW/fbH of its own to preserve. unitInfoV2.reflow() is the
+-- real entry point, called explicitly by ui_manager_boot.lua's manual
+-- forward (after hud.onFramebufferResize) and by
+-- uiManager.notifyGameplayRescale (which already calls hud first),
+-- guaranteeing hud's own geometry is current whenever rebuildLayout()
+-- reads it.
 function unitInfoV2.onFramebufferResize(width, height)
-    -- #750: a 0x0 minimize must not rebuild against a degenerate
-    -- framebuffer — rebuildLayout() reads hud.fbW/hud.fbH (updated by
-    -- hud's own guarded onFramebufferResize), so skipping here on the
-    -- SAME non-positive size keeps both handlers' notion of "last valid
-    -- geometry" in sync.
-    if width <= 0 or height <= 0 then return end
+end
+
+function unitInfoV2.reflow()
     -- Layout depends on framebuffer dimensions, so rebuild on resize.
     if unitInfoV2.page then
         rebuildLayout()

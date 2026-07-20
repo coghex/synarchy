@@ -748,14 +748,28 @@ function popup.onFramebufferResize(width, height)
     if width <= 0 or height <= 0 then return end
     popup.fbW = width
     popup.fbH = height
-    -- #750: reflow every active card so it stays centered, correctly
-    -- scaled, and reachable (its OK button on-screen) at the new
-    -- geometry — a card positioned against the OLD fbW/fbH could
-    -- otherwise render stale or fully off-screen after a real shrink or
-    -- a UI-scale change. renderPopup fully rebuilds a card's visuals
-    -- from its own record (the same function content updates already
-    -- reuse, e.g. a new coalesced line) — it never touches
-    -- p.lines/category/target data, only the on-screen position/size.
+    -- #750: reflow deliberately does NOT happen here. popup.lua is
+    -- engine.loadScript'd with an EARLIER script id than
+    -- scripts/ui_manager.lua, so the engine's automatic
+    -- broadcastToModules calls this before uiManager.onFramebufferResize
+    -- has run hud.onFramebufferResize — reflowing now would nudge cards
+    -- against hud.getToolbarRects() from the STALE, pre-resize HUD.
+    -- popup.reflow() is the real entry point, called explicitly by
+    -- ui_manager_boot.lua's manual forward (after hud.onFramebufferResize)
+    -- and by uiManager.notifyGameplayRescale (which already calls hud
+    -- first), guaranteeing the toolbar rects it reads are current.
+end
+
+-- #750: reflow every active card so it stays centered, correctly scaled,
+-- and reachable (its OK button on-screen) at the current geometry — a
+-- card positioned against a stale fbW/fbH, or nudged against a stale
+-- hud.getToolbarRects(), could otherwise render stale or fully
+-- off-screen, or overlap the NEW toolbar position, after a real shrink
+-- or a UI-scale change. renderPopup fully rebuilds a card's visuals from
+-- its own record (the same function content updates already reuse, e.g.
+-- a new coalesced line) — it never touches p.lines/category/target data,
+-- only the on-screen position/size.
+function popup.reflow()
     for _, p in ipairs(popup.active) do
         renderPopup(p)
     end

@@ -31,6 +31,7 @@ local combatLog      = require("scripts.combat_log")
 local injuryLog      = require("scripts.injury_log_panel")
 local unitLog        = require("scripts.unit_log")
 local contextMenu    = require("scripts.ui.context_menu")
+local unitInfoV2     = require("scripts.unit_info_v2")
 
 local mainMenu        = require("scripts.main_menu")
 local settingsMenu    = require("scripts.settings_menu")
@@ -342,6 +343,14 @@ function uiManager.onFramebufferResize(width, height)
         if uiManager.moduleReady.buildToolRemoteWarning then
             buildToolRemoteWarning.onFramebufferResize(width, height)
         end
+        -- #750: popup/unit_info_v2 already updated their OWN state via
+        -- the engine's automatic broadcast (both loadScript'd with an
+        -- earlier script id than this module, so it already ran before
+        -- this function did) — their geometry-dependent REFLOW runs here
+        -- instead, guaranteed to see hud's just-updated dimensions/
+        -- toolbar rects rather than the stale pre-resize ones.
+        if uiManager.moduleReady.popupsAndLogs then popup.reflow() end
+        unitInfoV2.reflow()
     end
 
     local currentMenu = uiManager.currentMenu
