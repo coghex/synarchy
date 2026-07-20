@@ -75,41 +75,68 @@ local function refId(v)
     if type(v) == "table" then return v.id end
     return v
 end
+-- `path` (round-2 review, issue #764) names the field this edge came
+-- from, in the SAME dotted-path style Haskell-side integrity errors
+-- already use (e.g. "craft-bills[page=...].station") -- "attackTargetUid",
+-- "craftJob.billId", "forageLoot[3]" -- so a diagnostic naming a
+-- dangling/wrong-kind Lua reference points at the actual field instead
+-- of a synthetic "kind#id" string with no location in it.
 local function unitAiReferences(data)
     local refs = {}
-    local function addRef(kind, rawId, owner)
+    local function addRef(kind, rawId, owner, path)
         local id = refId(rawId)
         if id ~= nil then
-            refs[#refs + 1] = { kind = kind, id = id, owner = owner }
+            refs[#refs + 1] = { kind = kind, id = id, owner = owner, path = path }
         end
     end
-    local function addRefList(kind, ids, owner)
+    local function addRefList(kind, ids, owner, path)
         if ids ~= nil then
-            for _, id in ipairs(ids) do addRef(kind, id, owner) end
+            for i, id in ipairs(ids) do
+                addRef(kind, id, owner, path .. "[" .. i .. "]")
+            end
         end
     end
     for uid, s in pairs(data) do
-        addRef("unit", uid, uid)
-        for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do addRef("unit", s[f], uid) end
-        for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do addRef("building", s[f], uid) end
-        if s.treatClaim then addRef("unit", s.treatClaim.patient, uid) end
-        if s.treatPending then addRef("unit", s.treatPending.uid, uid) end
-        if s.deliveryClaim then addRef("building", s.deliveryClaim.bid, uid) end
-        if s.deliveryPendingTarget then addRef("building", s.deliveryPendingTarget.bid, uid) end
+        local prefix = "unit[" .. tostring(uid) .. "]"
+        addRef("unit", uid, uid, prefix)
+        for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
+            addRef("unit", s[f], uid, prefix .. "." .. f)
+        end
+        for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
+            addRef("building", s[f], uid, prefix .. "." .. f)
+        end
+        if s.treatClaim then
+            addRef("unit", s.treatClaim.patient, uid, prefix .. ".treatClaim.patient")
+        end
+        if s.treatPending then
+            addRef("unit", s.treatPending.uid, uid, prefix .. ".treatPending.uid")
+        end
+        if s.deliveryClaim then
+            addRef("building", s.deliveryClaim.bid, uid,
+                prefix .. ".deliveryClaim.bid")
+        end
+        if s.deliveryPendingTarget then
+            addRef("building", s.deliveryPendingTarget.bid, uid,
+                prefix .. ".deliveryPendingTarget.bid")
+        end
         if s.craftJob then
-            addRef("craft_bill", s.craftJob.billId, uid)
-            addRef("building", s.craftJob.bid, uid)
+            addRef("craft_bill", s.craftJob.billId, uid, prefix .. ".craftJob.billId")
+            addRef("building", s.craftJob.bid, uid, prefix .. ".craftJob.bid")
         end
         if s.repairJob then
-            addRef("item_instance", s.repairJob.instanceId, uid)
-            addRef("building", s.repairJob.bid, uid)
+            addRef("item_instance", s.repairJob.instanceId, uid,
+                prefix .. ".repairJob.instanceId")
+            addRef("building", s.repairJob.bid, uid, prefix .. ".repairJob.bid")
         end
-        if s.pickupOrder then addRef("ground_item", s.pickupOrder.gid, uid) end
+        if s.pickupOrder then
+            addRef("ground_item", s.pickupOrder.gid, uid, prefix .. ".pickupOrder.gid")
+        end
         if s.forageTarget and s.forageTarget.kind == "ground" then
-            addRef("ground_item", s.forageTarget.gid, uid)
+            addRef("ground_item", s.forageTarget.gid, uid,
+                prefix .. ".forageTarget.gid")
         end
-        addRefList("ground_item", s.forageLoot, uid)
-        addRefList("ground_item", s.harvestLoot, uid)
+        addRefList("ground_item", s.forageLoot, uid, prefix .. ".forageLoot")
+        addRefList("ground_item", s.harvestLoot, uid, prefix .. ".harvestLoot")
     end
     return refs
 end
@@ -232,5 +259,80 @@ function M.unwrapAiState(data)
     return out
 end
 M.references = unitAiReferences
+
+-- Wrapper-KIND validation (issue #764 round-2 review): unwrapRef/refId
+-- above read `.id` off ANY table unconditionally, trusting the field's
+-- POSITION in the schema alone to mean the wrapper's `__ref` tag is
+-- correct. A malformed or hand-edited v2 payload can carry a
+-- wrong-kind wrapper (e.g. attackTargetUid = {__ref="building", id=9})
+-- that would silently apply as if it were the right kind, since
+-- nothing before apply() ever compares the tag to the field's expected
+-- kind. checkRefTag/M.validateRefTags close that gap at validate() time
+-- (prepareLoadImpl runs validate() straight after decode(), before any
+-- apply() ever touches live state, so a mismatch here aborts the whole
+-- load per requirement 11 rather than reaching unwrapUnitState) --
+-- mirrors wrapUnitState/unwrapUnitState/unitAiReferences' own field
+-- walk; any NEW reference field needs this walk updated too, same as
+-- the NB comment above already requires for the other three.
+local function checkRefTag(v, expectedKind, uid, path, errs)
+    if v == nil then return end
+    if type(v) ~= "table" or v.__ref == nil then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
+            .. " is not a typed reference (expected __ref='"
+            .. expectedKind .. "')"
+        return
+    end
+    if v.__ref ~= expectedKind then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
+            .. " has wrong reference kind '" .. tostring(v.__ref)
+            .. "' (expected '" .. expectedKind .. "')"
+    end
+end
+function M.validateRefTags(uid, s, errs)
+    for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
+        checkRefTag(s[f], "unit", uid, f, errs)
+    end
+    for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
+        checkRefTag(s[f], "building", uid, f, errs)
+    end
+    if s.treatClaim then
+        checkRefTag(s.treatClaim.patient, "unit", uid, "treatClaim.patient", errs)
+    end
+    if s.treatPending then
+        checkRefTag(s.treatPending.uid, "unit", uid, "treatPending.uid", errs)
+    end
+    if s.deliveryClaim then
+        checkRefTag(s.deliveryClaim.bid, "building", uid, "deliveryClaim.bid", errs)
+    end
+    if s.deliveryPendingTarget then
+        checkRefTag(s.deliveryPendingTarget.bid, "building", uid,
+            "deliveryPendingTarget.bid", errs)
+    end
+    if s.craftJob then
+        checkRefTag(s.craftJob.billId, "craft_bill", uid, "craftJob.billId", errs)
+        checkRefTag(s.craftJob.bid, "building", uid, "craftJob.bid", errs)
+    end
+    if s.repairJob then
+        checkRefTag(s.repairJob.instanceId, "item_instance", uid,
+            "repairJob.instanceId", errs)
+        checkRefTag(s.repairJob.bid, "building", uid, "repairJob.bid", errs)
+    end
+    if s.pickupOrder then
+        checkRefTag(s.pickupOrder.gid, "ground_item", uid, "pickupOrder.gid", errs)
+    end
+    if s.forageTarget and s.forageTarget.kind == "ground" then
+        checkRefTag(s.forageTarget.gid, "ground_item", uid, "forageTarget.gid", errs)
+    end
+    if s.forageLoot then
+        for i, v in ipairs(s.forageLoot) do
+            checkRefTag(v, "ground_item", uid, "forageLoot[" .. i .. "]", errs)
+        end
+    end
+    if s.harvestLoot then
+        for i, v in ipairs(s.harvestLoot) do
+            checkRefTag(v, "ground_item", uid, "harvestLoot[" .. i .. "]", errs)
+        end
+    end
+end
 
 return M

@@ -55,7 +55,7 @@ import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Integrity
     (IntegrityError(..), sessionIntegrityErrors, capIntegrityErrors
-    , IntegrityReport(..))
+    , IntegrityReport(..), integrityErrorCap)
 
 -- | Every Haskell-owned gameplay component, in a stable declaration
 --   order. The @"metadata"@ component is NOT here — it is owned by
@@ -231,7 +231,8 @@ assembleSnapshot meta de = do
                             <> " additional integrity finding(s) omitted \
                                \(see World.Save.Integrity.integrityErrorCap)")
                        | irOmitted integrityReport > 0 ]
-                crossErrs = map snapErr (validateSessionSnapshot snap)
+                crossErrs = capComponentErrors $
+                            map snapErr (validateSessionSnapshot snap)
                             ++ map snapErr (structureEditPaletteErrors snap)
                             ++ metadataErrors meta snap
                             ++ integrityErrs
@@ -275,6 +276,36 @@ snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase
 integrityErr ∷ IntegrityError → ComponentError
 integrityErr e = ComponentError (ieComponent e) (ieVersion e) AssemblePhase
     (iePath e <> ": " <> ieCode e <> ": " <> ieMessage e)
+
+-- | Sort + cap the FULL cross-component error list uniformly (round-2
+--   review, issue #764). Before this, only the
+--   'sessionIntegrityErrors' portion went through 'capIntegrityErrors'
+--   (sorted, capped at 'integrityErrorCap') before landing in
+--   'crossErrs' — 'validateSessionSnapshot'/'structureEditPaletteErrors'/
+--   'metadataErrors' fed in raw, so the FINAL combined list a caller
+--   actually sees was only partially deterministic-and-bounded, not
+--   uniformly so (requirement 10: "never an arbitrary first hash-map
+--   entry, always capped"). This applies the SAME cap to the complete,
+--   already-concatenated list, appending one trailer 'ComponentError'
+--   (attributed to @"core-session"@, the same cross-component-invariant
+--   owner every other whole-session assembly error above already uses)
+--   naming how many were omitted — mirroring 'renderIntegrityReport''s
+--   own never-silently-truncate contract at this outer boundary too.
+capComponentErrors ∷ [ComponentError] → [ComponentError]
+capComponentErrors errs =
+    let sorted  = L.sortOn sortKey errs
+        total   = length sorted
+        capped  = take integrityErrorCap sorted
+        omitted = max 0 (total - length capped)
+    in capped ++
+        [ ComponentError coreSessionComponentId 1 AssemblePhase
+            (T.pack (show omitted) <> " additional component finding(s) \
+             \omitted (see World.Save.Integrity.integrityErrorCap)")
+        | omitted > 0 ]
+  where
+    sortKey e = ( cidText (ceComponent e), ceVersion e
+                , T.pack (show (cePhase e)), ceMessage e )
+    cidText (ComponentId t) = t
 
 -- | Requirement 12: the manifest metadata must agree with the
 --   authoritative gameplay components. A mismatch invalidates the save

@@ -877,6 +877,75 @@ spec = do
             , "  .. 'not a bare number, for a fresh v2 save')"
             ]
 
+        it "rejects a v2 payload whose wrapped reference carries the WRONG \
+           \__ref kind for its field (round-2 review, issue #764) -- \
+           \unwrapUnitState used to trust field position alone and would \
+           \have silently applied a building id as if it were a unit id" $
+            runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "craft = { get = function(_id) return nil end }"
+            , "item = { listDefs = function() return {} end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local fakeAiState = {}"
+            , "local fakeUnitAi = {}"
+            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "-- attackTargetUid must be __ref='unit' -- this payload"
+            , "-- tags it 'building' instead, same numeric id."
+            , "local badKind = { [7] = {"
+            , "  attackTargetUid = { __ref = 'building', id = 8 },"
+            , "} }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(badKind) },"
+            , "})"
+            , "assert(not prep.ok,"
+            , "  'a wrong-kind wrapper on attackTargetUid must reject the load')"
+            , "-- Untagged (no __ref at all) must also be rejected -- not"
+            , "-- silently treated as a bare-number v1-shaped field, since"
+            , "-- this component's declared version is 2."
+            , "local untagged = { [7] = { attackTargetUid = { id = 8 } } }"
+            , "local prep2 = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(untagged) },"
+            , "})"
+            , "assert(not prep2.ok,"
+            , "  'an untagged wrapper on attackTargetUid must reject the load')"
+            , "-- A correctly-tagged payload must still succeed -- this is a"
+            , "-- kind check, not a blanket rejection of every wrapped value."
+            , "local goodKind = { [7] = {"
+            , "  attackTargetUid = { __ref = 'unit', id = 8 },"
+            , "} }"
+            , "local prep3 = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(goodKind) },"
+            , "})"
+            , "assert(prep3.ok, 'a correctly-tagged wrapper must still load: '"
+            , "  .. table.concat(prep3.errors or {}, '; '))"
+            ]
+
+        it "rejects a v2 building_spawn payload whose lastUid carries the \
+           \WRONG __ref kind (round-2 review, issue #764) -- mirrors the \
+           \unit_ai wrapper-tag check for building_spawn's own sole \
+           \reference field" $
+            runsOk $ lns
+            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+            , "local buildingSpawn = require('scripts.building_spawn')"
+            , "buildingSpawn.init('test')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local badKind = { [12] = { lastUid = { __ref = 'building', id = 8 } } }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'building_spawn', version = 2, payload = codec.encode(badKind) },"
+            , "})"
+            , "assert(not prep.ok,"
+            , "  'a wrong-kind wrapper on lastUid must reject the load')"
+            , "local goodKind = { [12] = { lastUid = { __ref = 'unit', id = 8 } } }"
+            , "local prep2 = saveModules.prepareLoad({"
+            , "  { id = 'building_spawn', version = 2, payload = codec.encode(goodKind) },"
+            , "})"
+            , "assert(prep2.ok, 'a correctly-tagged lastUid must still load: '"
+            , "  .. table.concat(prep2.errors or {}, '; '))"
+            ]
+
         it "declares real Haskell-owned dependencies on the ACTUAL \
            \unit_ai and building_spawn registrations (issue #761 \
            \round-8 review) -- not just a synthetic component in the \

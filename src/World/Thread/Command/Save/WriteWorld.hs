@@ -18,6 +18,7 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Control.Exception (SomeException, evaluate, try)
@@ -32,7 +33,7 @@ import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Integrity
     (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
     , IntegrityReport(..), buildKnownEntities, LuaRefEdge(..)
-    , luaReferenceErrors)
+    , luaReferenceErrors, integrityErrorCap)
 import Unit.Types (UnitManager(..), unitsOnPage)
 import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
@@ -52,7 +53,7 @@ import World.Generate.Coordinates (chunkToGlobal)
 --   at all — Lua-owned state is no longer part of 'SessionSnapshot'.
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → Text → [(Text, Word32, Bool, BS.ByteString)]
-                       → [(Text, Text, Int, Maybe Int)] → IO ()
+                       → [(Text, Text, Int, Maybe Int, Text)] → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                         luaRefs = do
     mgr ← readIORef (worldManagerRef env)
@@ -211,8 +212,26 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do
-                            let msg = "session snapshot failed validation: "
-                                    <> T.intercalate "; " (map (T.pack ∘ show) errs)
+                            -- Round-2 review (issue #764): sort + cap this
+                            -- list too, at the SAME 'integrityErrorCap' the
+                            -- rest of the integrity graph uses, rather than
+                            -- rendering a raw, uncapped, insertion-order
+                            -- list — the same "never an arbitrary first
+                            -- hash-map entry, always bounded" contract
+                            -- 'capComponentErrors'/'capIntegrityErrors'
+                            -- already enforce at the other boundaries.
+                            let rendered = L.sort (map (T.pack ∘ show) errs)
+                                total    = length rendered
+                                capped   = take integrityErrorCap rendered
+                                omitted  = max 0 (total - length capped)
+                                trailer  =
+                                    [ T.pack (show omitted)
+                                        <> " additional snapshot finding(s) \
+                                           \omitted (see \
+                                           \World.Save.Integrity.integrityErrorCap)"
+                                    | omitted > 0 ]
+                                msg = "session snapshot failed validation: "
+                                    <> T.intercalate "; " (capped ⧺ trailer)
                             logWarn logger CatWorld msg
                             failTransaction env msg
                           Right snap → case capIntegrityErrors
@@ -235,10 +254,21 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- dangling-reference contract) — logged as
                                 -- diagnostics only (requirement 16).
                                 let knownLua = buildKnownEntities snap
-                                    luaEdges = [ LuaRefEdge c k i o
-                                               | (c, k, i, o) ← luaRefs ]
+                                    luaEdges = [ LuaRefEdge c k i o p
+                                               | (c, k, i, o, p) ← luaRefs ]
+                                    -- componentVersions (round-2 review,
+                                    -- issue #764): luaComponents already
+                                    -- carries each component's just-
+                                    -- snapshotted schema version, so this
+                                    -- diagnostic reports the version the
+                                    -- edge was actually collected against
+                                    -- rather than a hardcoded placeholder.
+                                    componentVersions = HM.fromList
+                                        [ (cid, ver)
+                                        | (cid, ver, _, _) ← luaComponents ]
                                     luaReport = capIntegrityErrors
-                                        (luaReferenceErrors knownLua luaEdges)
+                                        (luaReferenceErrors
+                                            componentVersions knownLua luaEdges)
                                 forM_ (renderIntegrityReport luaReport) $ \m →
                                     logWarn logger CatWorld $
                                         "saveWorld '" <> saveName

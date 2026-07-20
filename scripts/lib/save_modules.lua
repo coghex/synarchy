@@ -53,7 +53,7 @@
 --                              (used to build the envelope's known/
 --                              required id sets, requirement 12/13)
 --   snapshotAll()           -- {ok=true, components={{id,version,payload},..},
---                              references={{component=,kind=,id=,owner=},..}}
+--                              references={{component=,kind=,id=,owner=,path=},..}}
 --                              or {ok=false, error=...} -- a REQUIRED
 --                              component's snapshot/encode failure aborts
 --                              the WHOLE save (requirement 6); an OPTIONAL
@@ -75,11 +75,11 @@
 --                              stale cleanup for an OLD request apart
 --                              from state a NEWER request just prepared.
 --                              references (issue #764, save-overhaul C3)
---                              is every {component=,kind=,id=} edge every
---                              registered component's references() hook
---                              reported, flattened -- the caller cross-
---                              validates these against the loaded
---                              session's real entity sets.
+--                              is every {component=,kind=,id=,owner=,path=}
+--                              edge every registered component's
+--                              references() hook reported, flattened --
+--                              the caller cross-validates these against
+--                              the loaded session's real entity sets.
 --   applyAll()              -- apply the prepared, already-validated
 --                              data (only reachable after prepareLoad
 --                              returned ok=true), then run every
@@ -473,7 +473,8 @@ local function snapshotAllImpl()
                                     and r.id ~= nil then
                                 referenceEdges[#referenceEdges + 1] =
                                     { component = id, kind = r.kind,
-                                      id = r.id, owner = r.owner }
+                                      id = r.id, owner = r.owner,
+                                      path = r.path }
                             end
                         end
                     end
@@ -589,7 +590,8 @@ local function prepareLoadImpl(componentsList)
                                             and r.id ~= nil then
                                         referenceEdges[#referenceEdges + 1] =
                                             { component = id, kind = r.kind,
-                                              id = r.id, owner = r.owner }
+                                              id = r.id, owner = r.owner,
+                                              path = r.path }
                                     end
                                 end
                             end

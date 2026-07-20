@@ -204,10 +204,10 @@ spec = do
                     , keGroundItemsByPage = HM.empty, keUnitPage = HM.empty
                     , keNextUnitId = 100
                     , keNextBuildingId = 100, keNextItemId = 100 }
-                unitEdge     = LuaRefEdge "test" "unit" 5 Nothing
-                buildingEdge = LuaRefEdge "test" "building" 5 Nothing
-            luaReferenceErrors ke [unitEdge] `shouldBe` []
-            length (luaReferenceErrors ke [buildingEdge]) `shouldBe` 1
+                unitEdge     = LuaRefEdge "test" "unit" 5 Nothing ""
+                buildingEdge = LuaRefEdge "test" "building" 5 Nothing ""
+            luaReferenceErrors HM.empty ke [unitEdge] `shouldBe` []
+            length (luaReferenceErrors HM.empty ke [buildingEdge]) `shouldBe` 1
 
         it "explicitly permitted cross-page references are accepted \
            \(requirement 4)" $
@@ -358,7 +358,8 @@ spec = do
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "rejects a power node whose host building resolves on a \
-           \DIFFERENT page" $ do
+           \DIFFERENT page, and (round-2 review) names the offending \
+           \node id in its path -- not just the page" $ do
             let p1 = (minimalPage page1)
                     { pgsPowerNodes = nodeWithBuilding (PowerNodeId 1) (BuildingId 5) }
                 p2 = (minimalPage page2)
@@ -369,6 +370,7 @@ spec = do
                 [e] → do
                     ieCode e `shouldBe` "wrong-page"
                     ieComponent e `shouldBe` powerNodesComponentId
+                    T.isInfixOf "node=1" (iePath e) `shouldBe` True
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "does NOT reject a craft-bill station absent from the WHOLE \
@@ -403,7 +405,7 @@ spec = do
                 , keNextBuildingId = 50, keNextItemId = 1000 }
 
         it "a Lua reference that resolves produces no diagnostic" $
-            luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 1 Nothing]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 1 Nothing ""]
                 `shouldBe` []
 
         it "a dangling Lua reference (target legitimately gone) is a \
@@ -412,36 +414,75 @@ spec = do
             -- id 30 sits BELOW keNextUnitId (50) -- a unit that could
             -- legitimately have existed and died, unlike 999 below
             -- (which could never have been allocated at all).
-            case luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 30 Nothing] of
+            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
                 [d]   → ieCode d `shouldBe` "dangling-reference"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "an id at/above the allocator is coded as an allocator-reuse \
            \hazard, not an ordinary dangling reference (requirement 8)" $
-            case luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 999 Nothing] of
+            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 999 Nothing ""] of
                 [d]   → ieCode d `shouldBe` "ref-exceeds-allocator"
+                other → expectationFailure ("expected one finding, got " <> show other)
+
+        it "a dangling Lua reference's finding carries the REAL source \
+           \field path (round-2 review, issue #764), not a synthetic \
+           \'kind#id' string, and falls back to the synthetic form only \
+           \when the edge itself carries no path" $ do
+            case luaReferenceErrors HM.empty ke
+                    [LuaRefEdge "unit_ai" "unit" 30 Nothing "unit[7].attackTargetUid"] of
+                [d]   → iePath d `shouldBe` "unit[7].attackTargetUid"
+                other → expectationFailure ("expected one finding, got " <> show other)
+            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+                [d]   → iePath d `shouldBe` "unit#30"
+                other → expectationFailure ("expected one finding, got " <> show other)
+
+        it "a dangling Lua reference's finding carries the version its \
+           \OWNING component was actually collected against (round-2 \
+           \review), not a hardcoded placeholder — an unknown component \
+           \id defaults to version 0 rather than crashing" $ do
+            let versions = HM.fromList [("unit_ai", 2)]
+            case luaReferenceErrors versions ke
+                    [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+                [d]   → ieVersion d `shouldBe` 2
+                other → expectationFailure ("expected one finding, got " <> show other)
+            case luaReferenceErrors versions ke
+                    [LuaRefEdge "some_other_component" "unit" 30 Nothing ""] of
+                [d]   → ieVersion d `shouldBe` 0
+                other → expectationFailure ("expected one finding, got " <> show other)
+
+        it "a dangling reference's expected-scope text distinguishes a \
+           \page-scoped (per-page-allocator) kind from a globally-scoped \
+           \one (round-2 review) — never claims 'global' for craft_bill/ \
+           \ground_item" $ do
+            case luaReferenceErrors HM.empty ke
+                    [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing ""] of
+                [d]   → T.unpack (ieExpectedScope d) `shouldContain` "per-page"
+                other → expectationFailure ("expected one finding, got " <> show other)
+            case luaReferenceErrors HM.empty ke
+                    [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+                [d]   → T.unpack (ieExpectedScope d) `shouldContain` "global"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "permitted gameplay cycles (mutual combat/AI targets) never \
            \produce a finding — existence-only checking has no cycle \
            \concept to reject (requirement 9)" $ do
-            let mutual = [ LuaRefEdge "unit_ai" "unit" 1 Nothing
-                         , LuaRefEdge "unit_ai" "unit" 2 Nothing ]
+            let mutual = [ LuaRefEdge "unit_ai" "unit" 1 Nothing ""
+                         , LuaRefEdge "unit_ai" "unit" 2 Nothing "" ]
                          -- 1 targets 2, 2 targets 1
-            luaReferenceErrors ke mutual `shouldBe` []
+            luaReferenceErrors HM.empty ke mutual `shouldBe` []
 
         it "an unknown kind string never manufactures a false positive \
            \(a registration-time vocabulary mismatch is the audit's job, \
            \not this validator's)" $
-            luaReferenceErrors ke [LuaRefEdge "unit_ai" "not_a_real_kind" 1 Nothing]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "not_a_real_kind" 1 Nothing ""]
                 `shouldBe` []
 
         it "a craft_bill/ground_item reference resolves when the OWNING \
            \unit's page has a matching id (requirement 8's page-scoped \
            \per-page-allocator resolution)" $ do
-            luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 1)]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 1) ""]
                 `shouldBe` []
-            luaReferenceErrors ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 1)]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 1) ""]
                 `shouldBe` []
 
         it "a craft_bill/ground_item reference does NOT resolve against a \
@@ -450,17 +491,17 @@ spec = do
            \reference (requirement 8)" $ do
             -- unit #2 lives on page2, which has no bill/ground-item #1 --
             -- only page1 does. Must NOT falsely resolve.
-            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 2)])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 2) ""])
                 `shouldBe` 1
-            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 2)])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 2) ""])
                 `shouldBe` 1
 
         it "a craft_bill/ground_item reference with no owner (or an \
            \unresolvable owner) never resolves -- there is no session-wide \
            \fallback for a per-page-allocated kind" $ do
-            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing ""])
                 `shouldBe` 1
-            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 999)])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 999) ""])
                 `shouldBe` 1
 
     describe "deterministic ordering + truncation (requirement 10)" $ do

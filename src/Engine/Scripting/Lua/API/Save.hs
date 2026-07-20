@@ -655,8 +655,19 @@ continueLoad env logger requestId saveName descriptors = do
                         -- "World.Save.Integrity"'s haddock) — logged as
                         -- diagnostics only (requirement 16).
                         let known = knownEntitiesFromSaveData saveData
-                            edges = [ LuaRefEdge c k i o | (c, k, i, o) ← luaRefs ]
-                            report = capIntegrityErrors (luaReferenceErrors known edges)
+                            edges = [ LuaRefEdge c k i o p
+                                    | (c, k, i, o, p) ← luaRefs ]
+                            -- componentVersions (round-2 review, issue
+                            -- #764): 'descriptors' is this SAME load's
+                            -- current Lua registry ({id,version,required}),
+                            -- already threaded into 'continueLoad' above --
+                            -- reused here rather than re-deriving it, so
+                            -- each diagnostic's version matches the reader
+                            -- that actually decoded its edge.
+                            componentVersions = HM.fromList
+                                [ (n, v) | (n, v, _) ← descriptors ]
+                            report = capIntegrityErrors
+                                (luaReferenceErrors componentVersions known edges)
                         forM_ (renderIntegrityReport report) $ \msg →
                             logWarn logger CatWorld $
                                 "loadSave '" <> saveName
@@ -861,7 +872,7 @@ collectLuaComponents
     ∷ LoggerState
     → Lua.LuaE Lua.Exception
         (Either Text ( [(Text, Word32, Bool, BS.ByteString)]
-                     , [(Text, Text, Int, Maybe Int)] ))
+                     , [(Text, Text, Int, Maybe Int, Text)] ))
 collectLuaComponents logger = do
     ok ← callSaveModules1 logger "snapshotAll" 0 (return ())
     if not ok
@@ -924,14 +935,18 @@ readErrorStringField = do
         then (TE.decodeUtf8Lenient ⊚) ⊚ Lua.tostring (-1)
         else return Nothing
 
--- | Read {component=string, kind=string, id=number, owner=number|nil}
---   from the table at the top of the stack — one entry of
---   @save_modules.lua@'s @prepareLoad@ @references@ result array (issue
---   #764, save-overhaul C3): a single reference edge a Lua component's
---   @references()@ hook reported. @owner@ (the owning unit id, when the
---   hook supplied one) is optional — 'Nothing' both when the field is
---   absent/nil and when it fails to parse as an integer.
-readReferenceEdgeField ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int))
+-- | Read {component=string, kind=string, id=number, owner=number|nil,
+--   path=string|nil} from the table at the top of the stack — one entry
+--   of @save_modules.lua@'s @prepareLoad@/@snapshotAll@ @references@
+--   result array (issue #764, save-overhaul C3): a single reference edge
+--   a Lua component's @references()@ hook reported. @owner@ (the owning
+--   unit id, when the hook supplied one) and @path@ (the source field
+--   path, round-2 review — e.g. "unit[7].attackTargetUid") are both
+--   optional diagnostics-only fields: 'Nothing'/empty when absent or
+--   not the expected type, never a reason to drop the whole edge the
+--   way a malformed @component@/@kind@/@id@ does.
+readReferenceEdgeField
+    ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int, Text))
 readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "component"
     mcompB ← Lua.tostring (-1)
@@ -945,11 +960,15 @@ readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "owner"
     mowner ← Lua.tointeger (-1)
     Lua.pop 1
+    _ ← Lua.getfield (-1) "path"
+    mpathB ← Lua.tostring (-1)
+    Lua.pop 1
     case (mcompB, mkindB, mid) of
         (Just compB, Just kindB, Just i) →
             return (Just ( TE.decodeUtf8Lenient compB
                          , TE.decodeUtf8Lenient kindB, fromIntegral i
-                         , fromIntegral ⊚ mowner ))
+                         , fromIntegral ⊚ mowner
+                         , maybe "" TE.decodeUtf8Lenient mpathB ))
         _ → return Nothing
 
 -- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
@@ -968,7 +987,7 @@ readReferenceEdgeField = do
 --   this never gates the load — see "World.Save.Integrity"'s haddock).
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
-    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int)])
+    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text)])
 prepareLuaLoad logger requestId components = do
     ok ← callSaveModules1 logger "prepareLoad" 2
             (pushComponentsArray components

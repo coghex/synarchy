@@ -68,7 +68,7 @@ import qualified Data.Text as T
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
-import Power.Types (PowerNodes(..), PowerNode(..))
+import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
@@ -253,8 +253,9 @@ sessionIntegrityErrors snap = concat
     nodeBuildingErrors =
         [ err
         | (pid, page) ← HM.toList pages
-        , (_nid, node) ← HM.toList (pnsNodes (pgsPowerNodes page))
-        , let path = "power-nodes[page=" <> pidText pid <> "].building"
+        , (nid, node) ← HM.toList (pnsNodes (pgsPowerNodes page))
+        , let path = "power-nodes[page=" <> pidText pid <> ",node="
+                     <> T.pack (show (unPowerNodeId nid)) <> "].building"
         , Just err ← [ refEdgeError powerNodesComponentId 2 path RefBuilding
                          ScopeSamePage pid (buildingPages (pnBuilding node))
                          (T.pack (show (unBuildingId (pnBuilding node)))) ]
@@ -359,18 +360,23 @@ buildKnownEntities snap = KnownEntities
 
 -- | One reference a Lua save component's @references()@ hook reported —
 --   the raw @{kind=.., id=..}@ shape, plus which Lua component it came
---   from (for diagnostic attribution; Lua's @references()@ contract
---   does not carry a finer per-field data path — see #761's
---   @unitAiReferences@/@buildingSpawnReferences@) and, when the hook
---   supplied one, the OWNING unit id (@lreOwner@) — every
---   @unitAiReferences@ entry is emitted from inside a per-unit loop, so
---   it always has one; @buildingSpawnReferences@ entries never need one
---   (its "unit"/"building" kinds resolve session-wide regardless).
+--   from (for diagnostic attribution), the OWNING unit id when the hook
+--   supplied one (@lreOwner@ — every @unitAiReferences@ entry is emitted
+--   from inside a per-unit loop, so it always has one;
+--   @buildingSpawnReferences@ entries never need one, since its
+--   "unit"/"building" kinds resolve session-wide regardless), and
+--   (round-2 review, issue #764) the actual field path this edge came
+--   from (@lrePath@ — e.g. @"unit[7].attackTargetUid"@,
+--   @"building[12].lastUid"@), in the SAME dotted-path style
+--   'refEdgeError' already uses for Haskell-side findings — see
+--   @unit_ai_save_refs.lua@'s @unitAiReferences@ and
+--   @building_spawn.lua@'s @buildingSpawnReferences@, which build it.
 data LuaRefEdge = LuaRefEdge
     { lreComponent ∷ !Text
     , lreKind      ∷ !Text
     , lreId        ∷ !Int
     , lreOwner     ∷ !(Maybe Int)
+    , lrePath      ∷ !Text
     } deriving (Show, Eq)
 
 -- | Does this edge resolve against the known entity sets? An unknown
@@ -420,25 +426,38 @@ luaEdgeExceedsAllocator ke e = case lreKind e of
 --   (requirement 16: exposed to headless diagnostics / load completion
 --   text) — NEVER a load-blocking failure, matching the #761-established
 --   tolerated-dangling-reference contract this module documents above.
-luaReferenceErrors ∷ KnownEntities → [LuaRefEdge] → [IntegrityError]
-luaReferenceErrors ke edges =
+--   @componentVersions@ (round-2 review, issue #764) maps a Lua
+--   component id to the schema version its edges were collected against
+--   (the save side's just-snapshotted payload version; the load side's
+--   just-decoded payload version — see the two call sites in
+--   "Engine.Scripting.Lua.API.Save" and
+--   "World.Thread.Command.Save.WriteWorld") — an id with no entry
+--   reports version 0 rather than crashing, since a genuinely unknown
+--   component id is itself surfaced by the registry-static checks
+--   elsewhere, not by this diagnostic.
+luaReferenceErrors
+    ∷ HM.HashMap Text Word32 → KnownEntities → [LuaRefEdge] → [IntegrityError]
+luaReferenceErrors componentVersions ke edges =
     [ IntegrityError
         { ieComponent = ComponentId ("lua." <> lreComponent e)
-        , ieVersion = 0
-        , iePath = lreKind e <> "#" <> T.pack (show (lreId e))
+        , ieVersion = HM.lookupDefault 0 (lreComponent e) componentVersions
+        , iePath = path
         , ieRefKind = luaKind (lreKind e)
         , ieRefValue = T.pack (show (lreId e))
-        , ieExpectedScope = "global"
+        , ieExpectedScope = scopeText (lreKind e)
         , ieActual = "not found in the loaded session"
         , ieCode = code
-        , ieMessage = "lua component '" <> lreComponent e <> "' references "
-            <> lreKind e <> " " <> T.pack (show (lreId e))
+        , ieMessage = "lua component '" <> lreComponent e <> "' " <> path
+            <> " references " <> lreKind e <> " " <> T.pack (show (lreId e))
             <> " which does not resolve (tolerated: cleared at reconcile time)"
         }
     | e ← edges
     , not (luaEdgeResolves ke e)
     , let code = if luaEdgeExceedsAllocator ke e
                    then "ref-exceeds-allocator" else "dangling-reference"
+    , let path = if T.null (lrePath e)
+                   then lreKind e <> "#" <> T.pack (show (lreId e))
+                   else lrePath e
     ]
   where
     luaKind k = case k of
@@ -448,3 +467,11 @@ luaReferenceErrors ke edges =
         "item_instance" → RefItemInstance
         "ground_item"   → RefGroundItem
         _               → RefUnit
+    -- craft_bill/ground_item are PER-PAGE allocators, resolved against
+    -- the owning unit's page specifically (see 'luaEdgeResolves') — the
+    -- expected scope text says so, rather than claiming "global" for a
+    -- reference that was never checked session-wide.
+    scopeText k = case k of
+        "craft_bill"  → "owning unit's page (per-page allocator)"
+        "ground_item" → "owning unit's page (per-page allocator)"
+        _             → "global (session-wide allocator)"

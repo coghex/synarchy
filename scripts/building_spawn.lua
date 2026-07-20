@@ -264,6 +264,11 @@ end
 
 -- Component-local validator (issue #761): `data` must be a table keyed
 -- by positive-integer building ids, each mapping to a state table.
+-- Round-2 review (#764): also rejects a `lastUid` whose wrapper tag
+-- isn't `__ref="unit"` -- mirrors unit_ai_save_refs.lua's
+-- checkRefTag/validateRefTags, closing the same "unwrapLastUid trusts
+-- field position alone" gap for this component's own sole reference
+-- field.
 local function validateBuildingSpawnData(data)
     if type(data) ~= "table" then
         return { "building_spawn: payload must be a table" }
@@ -276,6 +281,15 @@ local function validateBuildingSpawnData(data)
         elseif type(s) ~= "table" then
             errs[#errs + 1] = "building_spawn: state for building "
                 .. tostring(bid) .. " is not a table"
+        elseif s.lastUid ~= nil then
+            if type(s.lastUid) ~= "table" or s.lastUid.__ref == nil then
+                errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+                    .. " lastUid is not a typed reference (expected __ref='unit')"
+            elseif s.lastUid.__ref ~= "unit" then
+                errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+                    .. " lastUid has wrong reference kind '"
+                    .. tostring(s.lastUid.__ref) .. "' (expected 'unit')"
+            end
         end
     end
     if #errs > 0 then return errs end
@@ -301,10 +315,11 @@ end
 local function buildingSpawnReferences(data)
     local refs = {}
     for bid, s in pairs(data) do
-        refs[#refs + 1] = { kind = "building", id = bid }
+        local prefix = "building[" .. tostring(bid) .. "]"
+        refs[#refs + 1] = { kind = "building", id = bid, path = prefix }
         local uid = refId(s.lastUid)
         if uid ~= nil then
-            refs[#refs + 1] = { kind = "unit", id = uid }
+            refs[#refs + 1] = { kind = "unit", id = uid, path = prefix .. ".lastUid" }
         end
     end
     return refs

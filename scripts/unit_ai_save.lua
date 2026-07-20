@@ -183,20 +183,28 @@ local function validateUnitAiData(data)
         elseif type(s) ~= "table" then
             errs[#errs + 1] = "unit_ai: state for unit " .. tostring(uid)
                 .. " is not a table"
-        elseif s.craftJob or s.repairJob or s.constructJob
-                or s.deliveryClaim or s.deliveryPendingTarget
-                or s.plantJob then
-            itemDefs = itemDefs or buildItemDefSet()
-            -- buildingDefs is only ever consulted for a "building"-
-            -- category constructJob -- built lazily so every other
-            -- scenario (craft/repair/delivery/plant-only saves, and
-            -- every existing test/probe fixture that stubs `item`/
-            -- `craft`/`repair`/`flora` but not `building`) never
-            -- touches the `building` global at all.
-            if s.constructJob and s.constructJob.category == "building" then
-                buildingDefs = buildingDefs or buildBuildingDefSet()
+        else
+            -- Requirement 13/round-2 review: reject a wrong-kind or
+            -- untagged reference wrapper before it can ever reach
+            -- apply()/unwrapUnitState, which trusts field position
+            -- alone. Runs for every unit entry, not just job-bearing
+            -- ones -- attackTargetUid et al. carry no job field.
+            refsMod.validateRefTags(uid, s, errs)
+            if s.craftJob or s.repairJob or s.constructJob
+                    or s.deliveryClaim or s.deliveryPendingTarget
+                    or s.plantJob then
+                itemDefs = itemDefs or buildItemDefSet()
+                -- buildingDefs is only ever consulted for a "building"-
+                -- category constructJob -- built lazily so every other
+                -- scenario (craft/repair/delivery/plant-only saves, and
+                -- every existing test/probe fixture that stubs `item`/
+                -- `craft`/`repair`/`flora` but not `building`) never
+                -- touches the `building` global at all.
+                if s.constructJob and s.constructJob.category == "building" then
+                    buildingDefs = buildingDefs or buildBuildingDefSet()
+                end
+                validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
             end
-            validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
         end
     end
     if #errs > 0 then return errs end
