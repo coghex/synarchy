@@ -620,6 +620,62 @@ in this PR touches them:
   sanctioned local name); a code-review norm, not further regex, is the
   intended backstop for anything cleverer.
 
+## 9. Typed persistent references and the shared integrity graph (#764, save-overhaul C3)
+
+Every durable cross-component reference now declares its expected
+target kind and scope rather than remaining an untyped raw id (§7's
+audit enforces this going forward — see below). Two modules carry the
+vocabulary and the checks:
+
+- `World.Save.Reference` — the leaf vocabulary (`RefKind`/`ContentKind`/
+  `RefScope`) plus `SamePageRef`/`CrossPageRef`, thin wrapper newtypes
+  a component DTO field uses to declare "this reference's target must
+  live on the same page as the record carrying it" (or an explicitly
+  permitted cross-page target) at the TYPE level. Wire-identical to the
+  wrapped id — see its module haddock for why a same-page reference
+  needs no new bytes on disk, only a new Haskell type.
+- `World.Save.Integrity` — `IntegrityError`/`IntegrityReport` (the
+  shared structured-diagnostic shape: component, version, data path,
+  reference kind/value, expected vs. actual scope, a stable code, and a
+  message — requirement 10's deterministic-order, capped-with-omitted-
+  count report) and `sessionIntegrityErrors`, the NEW structural checks
+  this issue adds over an assembled `SessionSnapshot`: a craft bill's
+  station/claimant and a power node's host building are validated for
+  wrong-PAGE (a target that resolves on a DIFFERENT page than the
+  record referencing it is a hard error) while staying tolerant of
+  absence from the whole session (the pre-existing #758 contract).
+  `luaReferenceErrors`/`KnownEntities` do the analogous cross-check for
+  every reference a Lua save component's `references()` hook reports
+  (issue #761) against the load's real entity sets — always a
+  non-blocking diagnostic, never load-rejecting, matching the same
+  tolerated-dangling-reference precedent.
+
+**Deliberately NOT rewritten onto this vocabulary**: the nine existing
+`missingXReferences` content-definition checks
+("World.Save.Types"/`Engine.Scripting.Lua.API.Save`'s `continueLoad`)
+stay as they are — already working, already tested, each against its
+own IO-loaded content registry. They report through the SAME
+`continueLoad` load-rejection gate the new checks report through (one
+combined rejection message), which is what "the same integrity rules
+at both boundaries" cashes out to operationally; their Haskell TYPES
+were not unified into `IntegrityError`, a rewrite judged not worth the
+regression risk for a vocabulary-only gain. Likewise, Lua's PERSISTED
+reference FIELDS (`attackTargetUid` and friends) remain bare numbers on
+the wire — only the diagnostic surface (`references()`'s already-
+existing declarative output, #761) is now actually cross-validated;
+restructuring every persisted field into a `{kind=,id=}` table, and
+updating every one of unit_ai's dozen-plus submodules that reads them,
+is out of scope here and a natural follow-up.
+
+The persistence-inventory audit (§7,
+`tools/persistence_inventory_audit.py`) enforces this going forward
+exactly like it already does for root-owner fields and Lua save
+modules: a new DTO field typed `SamePageRef`/`CrossPageRef`, or a new
+Lua `kind` string reported by a `references()` hook, with no
+classification row under `docs/persistence_state_inventory.md`'s
+"Typed persistent references" / "Lua reference kinds" headings fails
+the audit.
+
 ## Related
 
 - #768 — the parent persistence-overhaul epic this issue is Phase 1 of.

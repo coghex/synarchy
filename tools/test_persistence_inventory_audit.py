@@ -23,6 +23,7 @@ from persistence_inventory_audit import (  # type: ignore
     find_lua_register_aliases, find_lua_register_dynamic_names,
     find_untracked_registry_aliases,
     parse_classified_names, audit,
+    find_typed_reference_fields, find_lua_reference_kinds,
 )
 
 FAILURES: list[str] = []
@@ -2694,18 +2695,168 @@ def test_audit_detects_intentionally_unclassified_lua_module():
            f"the already-classified unit_ai module is not falsely reported, got {violations}")
 
 
+# ----- #764 requirement 15: typed persistent references ------------------
+
+SYNTHETIC_COMPONENT_DTO = """\
+module Fake.Component where
+
+data FakeBillDTO = FakeBillDTO
+    { fbdId      ∷ !Int
+    , fbdStation ∷ !(SamePageRef BuildingId)
+    , fbdOwner   ∷ !(Maybe (SamePageRef UnitId))
+    } deriving (Show, Eq)
+"""
+
+SYNTHETIC_REFERENCE_INVENTORY = """\
+# Fake inventory
+
+## 1. EngineEnv fields
+
+### EngineEnv
+
+| Field | Classification |
+|---|---|
+| `fieldOne` | Persist exactly |
+| `fieldTwo` | Exclude |
+| `fieldThree` | Exclude |
+
+## 7. Lua persistence registry
+
+### Lua persistence registry
+
+| Field | Classification |
+|---|---|
+| `unit_ai` | Persist exactly (opaque blob) |
+
+## 11. Typed persistent references
+
+### Typed persistent references
+
+| Field | Classification |
+|---|---|
+| `fbdStation` | Persist as identity/reference |
+"""
+
+
+def test_find_typed_reference_fields_detects_samepageref_and_maybe_wrapped():
+    """The req-2/12 detector: a bare SamePageRef field and a
+    Maybe-wrapped one are both found; a plain (unwrapped) field is not."""
+    found = find_typed_reference_fields({"Fake/Component.hs": SYNTHETIC_COMPONENT_DTO})
+    names = [f for f, _ in found]
+    expect("fbdStation" in names,
+           f"a bare SamePageRef field is detected, got {found}")
+    expect("fbdOwner" in names,
+           f"a Maybe-wrapped SamePageRef field is detected, got {found}")
+    expect("fbdId" not in names,
+           f"a plain (unwrapped) field is NOT flagged as a reference, got {found}")
+
+
+def test_audit_detects_unclassified_typed_reference_field():
+    """The req-15 acceptance test, Haskell half: a DTO field typed
+    SamePageRef with no classification row is reported by name; one
+    that DOES have a row is not."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {},
+        SYNTHETIC_REFERENCE_INVENTORY,
+        root_records=FAKE_ROOT_RECORDS,
+        component_sources={"Fake/Component.hs": SYNTHETIC_COMPONENT_DTO},
+    )
+    expect(any("fbdOwner" in v for v in violations),
+           f"an unclassified typed-reference field (fbdOwner) is reported, "
+           f"got {violations}")
+    expect(not any("fbdStation" in v for v in violations),
+           f"a field that IS classified (fbdStation) is not falsely "
+           f"reported, got {violations}")
+
+
+def test_audit_omits_typed_reference_check_when_component_sources_not_given():
+    """component_sources is optional (mirrors registered_ids) -- callers
+    that don't pass it (e.g. every pre-#764 test in this file) must not
+    suddenly start failing merely because SOME OTHER fixture DTO happens
+    to use a reference wrapper type."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("fbd" in v for v in violations),
+           f"no typed-reference violation appears when component_sources "
+           f"is omitted, got {violations}")
+
+
+# ----- #764 requirement 15: Lua reference kinds ---------------------------
+
+SYNTHETIC_LUA_REFERENCES_LITERAL = """\
+local function fakeReferences(data)
+    local refs = {}
+    refs[#refs + 1] = { kind = "unit", id = data.uid }
+    refs[#refs + 1] = { kind = "totally_new_kind", id = data.other }
+    return refs
+end
+saveMods.register("fake_component", {
+    version = 1, inputVersions = {1}, required = true, scope = "global", deps = {},
+    references = fakeReferences,
+})
+"""
+
+SYNTHETIC_LUA_REFERENCES_HELPER = """\
+local function addRef(kind, id)
+    if id ~= nil then return { kind = kind, id = id } end
+end
+local function fakeReferences2(data)
+    return { addRef("building", data.bid), addRef("yet_another_kind", data.x) }
+end
+saveMods.register("fake_component_2", {
+    version = 1, inputVersions = {1}, required = true, scope = "global", deps = {},
+    references = fakeReferences2,
+})
+"""
+
+
+def test_find_lua_reference_kinds_detects_literal_and_helper_call_shapes():
+    """Both established call shapes are found: a direct table-constructor
+    literal (kind = "...") and an addRef("...", ...)-style helper call
+    (unit_ai_save.lua's actual pattern) -- see LUA_REFERENCE_KIND_RES."""
+    found = find_lua_reference_kinds({
+        "scripts/fake_a.lua": SYNTHETIC_LUA_REFERENCES_LITERAL,
+        "scripts/fake_b.lua": SYNTHETIC_LUA_REFERENCES_HELPER,
+    })
+    kinds = [k for k, _ in found]
+    expect("unit" in kinds and "totally_new_kind" in kinds,
+           f"both literal-form kinds are detected, got {found}")
+    expect("building" in kinds and "yet_another_kind" in kinds,
+           f"both addRef-helper-form kinds are detected, got {found}")
+
+
+def test_audit_detects_unclassified_lua_reference_kind():
+    """The req-15 acceptance test, Lua half: a NEW reference kind string
+    with no classification row is reported by name; an already-
+    documented kind is not falsely reported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake_a.lua": SYNTHETIC_LUA_REFERENCES_LITERAL},
+        SYNTHETIC_REFERENCE_INVENTORY,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("totally_new_kind" in v for v in violations),
+           f"an unclassified Lua reference kind is reported, got {violations}")
+
+
 def test_audit_against_the_real_repo():
     """End-to-end smoke test against the actual checked-out inventory and
     source files -- this is what CI/make ci actually runs via main()."""
     from persistence_inventory_audit import _load_repo_state  # type: ignore
-    record_sources, scripts_text_by_file, inventory_text, registered_ids = \
-        _load_repo_state()
+    record_sources, scripts_text_by_file, inventory_text, registered_ids, \
+        component_sources = _load_repo_state()
     violations = audit(record_sources, scripts_text_by_file, inventory_text,
-                       registered_ids=registered_ids)
+                       registered_ids=registered_ids,
+                       component_sources=component_sources)
     expect(not violations,
            f"the real repo's inventory has no unclassified root-owner fields, "
-           f"Lua save modules, or unregistered persistent save components, "
-           f"got {violations}")
+           f"Lua save modules, unregistered persistent save components, typed "
+           f"reference fields, or Lua reference kinds, got {violations}")
 
 
 # ----- #760 component-registration checks --------------------------------
@@ -3040,6 +3191,11 @@ def main() -> int:
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
+        test_find_typed_reference_fields_detects_samepageref_and_maybe_wrapped,
+        test_audit_detects_unclassified_typed_reference_field,
+        test_audit_omits_typed_reference_check_when_component_sources_not_given,
+        test_find_lua_reference_kinds_detects_literal_and_helper_call_shapes,
+        test_audit_detects_unclassified_lua_reference_kind,
         test_audit_against_the_real_repo,
         test_component_check_accepts_registered_persistent_owner,
         test_component_check_flags_unregistered_persistent_owner,

@@ -2349,6 +2349,96 @@ gained a case proving a REQUIRED component's injected snapshot failure
 makes `engine.saveWorld` return `false` with no save directory created,
 and that a normal save still succeeds once restored.
 
+**Typed persistent references + shared integrity graph (#764,
+save-overhaul C3):** every durable cross-component reference now
+declares its expected target kind and scope rather than staying an
+untyped raw id. `World.Save.Reference` is the leaf vocabulary
+(`RefKind`/`ContentKind`/`RefScope`) plus `SamePageRef`/`CrossPageRef`
+— thin wrapper newtypes a component DTO field uses to declare "this
+reference's target must live on the same page as the record carrying
+it" at the TYPE level; wire-identical to the wrapped id (a newtype has
+no cereal discriminant), so no new bytes ride on disk, only a new
+Haskell type. `CraftBillDTO.bilStation`/`bilClaimant` and
+`PowerNodeDTO.nodBuilding` (`World.Save.Component.Entities`) are the
+first fields to adopt it — both components bumped to v2, decoding a v1
+payload via an explicit, unambiguous migration
+(`migrateCraftBillDTOv1`/`migratePowerNodeDTOv1`; the frozen v1 DTOs
+`CraftBillDTOv1`/`PowerNodeDTOv1` stay exactly as they shipped, per the
+frozen-DTO boundary rule).
+
+`World.Save.Integrity` is the shared diagnostic graph: `IntegrityError`/
+`IntegrityReport` (component, version, data path, reference kind/value,
+expected-vs-actual scope, a stable machine-readable code, a message —
+deterministically sorted and capped with an omitted-count, never
+silently truncated) and `sessionIntegrityErrors`, run over an assembled
+`SessionSnapshot` at BOTH boundaries — `World.Save.Component.assembleSnapshot`
+(pre-load) and, via a plain post-capture call (never folded into
+`captureSessionSnapshot` itself — that would cycle back through
+`World.Save.Snapshot`), `World.Thread.Command.Save.WriteWorld` (pre-save).
+It validates a craft bill's station/claimant and a power node's host
+building for wrong-PAGE (a target that resolves on a DIFFERENT page
+than the record referencing it is a hard error) while staying tolerant
+of the target being absent from the WHOLE session — the pre-existing
+#758 "a demolished station's lingering bill is tolerated gameplay, not
+corruption" contract, unchanged. `World.Load.Stage` already restored
+bills/power-nodes verbatim rather than pruning them (issue #763 round
+9) — #764 adds the cross-component check a component-local validator
+structurally can't run, it doesn't change that restore path.
+
+`luaReferenceErrors`/`KnownEntities` do the analogous cross-check for
+Lua: every reference a registered Lua save component's `references()`
+hook reports (issue #761 defined the hook; #764 is what actually
+consumes its output — previously only crash-checked and discarded)
+is validated against the load's real entity sets
+(`Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData`, built
+from the decoded `SaveData`). Always a non-blocking diagnostic (logged
+via `logWarn`, folded into `continueLoad`'s existing log/diagnostic
+surface) — never load-rejecting, matching the same tolerated-dangling-
+reference precedent scrubStaleRefs already relies on. `save_modules.lua`'s
+`prepareLoad` now RETURNS the collected `{component=,kind=,id=}` edges
+(`references` field) instead of only calling `references()` to catch a
+crash.
+
+Deliberately NOT rewritten onto this vocabulary: the nine existing
+`missingXReferences` content-definition checks (`World.Save.Types`/
+`Engine.Scripting.Lua.API.Save`'s `continueLoad`) stay as they are —
+already working, already tested, each against its own IO-loaded content
+registry — reporting through the SAME `continueLoad` load-rejection
+gate the new checks report through (one combined message), rather than
+being rewritten onto `IntegrityError`'s Haskell type for a vocabulary-
+only gain. Lua's PERSISTED reference fields (`attackTargetUid` and
+friends) also stay bare numbers on the wire; only the already-existing
+declarative `references()` diagnostic surface is now consumed.
+Restructuring every persisted Lua reference field into a typed
+`{kind=,id=}` table on the wire, and updating every submodule that
+reads them, is a natural follow-up, not done here.
+
+`tools/persistence_inventory_audit.py` extends the same "every root-
+owner field / Lua save module must be classified" discipline (§7-style)
+to this: a new DTO field typed `SamePageRef`/`CrossPageRef`, or a new
+Lua `kind` string a `references()` hook reports, with no row under
+`docs/persistence_state_inventory.md`'s "Typed persistent references" /
+"Lua reference kinds" headings fails the audit.
+
+Turnkey harness: **`python3 tools/persistence_integrity_probe.py`** —
+the real-engine coverage the pure hspec gate (below) can't reach: a
+unit's `attackTargetUid` pointing at a unit destroyed before the save
+(engine paused first, so the AI's own self-heal can't race the save)
+survives a real save → quit → fresh restart → load round trip as a
+non-blocking diagnostic naming the component/kind/id, and a truncated
+save is rejected with `LoadFailed` while the ALREADY-LOADED live
+session (active page, unit existence, paused status) is left completely
+unchanged. Registered manual-only (`slow/worldgen-heavy`) in
+`tools/ci_probes.py`. Pure gate: `cabal test synarchy-test-headless
+--test-options='--match "persistence reference integrity"'`
+(`Test.Headless.World.Save.Integrity`) — reference-codec round trips
+(same-page/global/permitted-and-forbidden-cross-page scope decisions,
+optional-reference semantics, wrong-kind-cannot-resolve), the v1→v2
+migrations, the wrong-page/tolerated-absence graph checks for bills and
+power nodes, Lua reference dangling/allocator-exceeds/unknown-kind
+diagnostics, and deterministic-ordering + truncation-with-omitted-count
+for the capped report.
+
 ```bash
 # From headless / debug console
 echo 'engine.saveWorld("test", "my_save"); return "saved"' | nc -w 2 localhost 9008

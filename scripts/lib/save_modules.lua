@@ -58,15 +58,22 @@
 --                              the WHOLE save (requirement 6); an OPTIONAL
 --                              one is omitted with a logged warning
 --                              (requirement 7)
---   prepareLoad(components, requestId) -- {ok=true} or {ok=false,
---                              errors={...}} -- decode + migrate +
---                              component-local-validate EVERY component
---                              with NO live mutation (requirement 11);
---                              all-or-nothing. requestId is stashed
---                              alongside the prepared data so a later
+--   prepareLoad(components, requestId) -- {ok=true, references={...}} or
+--                              {ok=false, errors={...}} -- decode +
+--                              migrate + component-local-validate EVERY
+--                              component with NO live mutation
+--                              (requirement 11); all-or-nothing.
+--                              requestId is stashed alongside the
+--                              prepared data so a later
 --                              abortPreparedLoad(requestId) can tell a
 --                              stale cleanup for an OLD request apart
 --                              from state a NEWER request just prepared.
+--                              references (issue #764, save-overhaul C3)
+--                              is every {component=,kind=,id=} edge every
+--                              registered component's references() hook
+--                              reported, flattened -- the caller cross-
+--                              validates these against the loaded
+--                              session's real entity sets.
 --   applyAll()              -- apply the prepared, already-validated
 --                              data (only reachable after prepareLoad
 --                              returned ok=true), then run every
@@ -475,6 +482,15 @@ local function prepareLoadImpl(componentsList)
     end
     local errors = {}
     local prepared = {}
+    -- Issue #764 (save-overhaul C3): every reference a component's
+    -- references() hook reports is collected here (component id +
+    -- kind + id, flattened across every registered component) and
+    -- handed back to the caller, which cross-validates them against
+    -- the loaded session's real entity sets
+    -- (Engine.Scripting.Lua.API.Save / World.Save.Integrity) --
+    -- #761 only ever CALLED references() to catch a crash; the
+    -- returned list itself was discarded until now.
+    local referenceEdges = {}
     for _, id in ipairs(sortedIds(saveModules.registry)) do
         local reg = saveModules.registry[id]
         local entry = byId[id]
@@ -533,6 +549,16 @@ local function prepareLoadImpl(componentsList)
                                 .. "': references() crashed: " .. tostring(refsErr)
                         else
                             prepared[id] = decoded
+                            if reg.references and type(refsErr) == "table" then
+                                for _, r in ipairs(refsErr) do
+                                    if type(r) == "table" and r.kind ~= nil
+                                            and r.id ~= nil then
+                                        referenceEdges[#referenceEdges + 1] =
+                                            { component = id, kind = r.kind,
+                                              id = r.id }
+                                    end
+                                end
+                            end
                         end
                     end
                 end
@@ -542,7 +568,7 @@ local function prepareLoadImpl(componentsList)
     if #errors > 0 then
         return { ok = false, errors = errors }
     end
-    return { ok = true, prepared = prepared }
+    return { ok = true, prepared = prepared, references = referenceEdges }
 end
 
 -- Decode + migrate + component-locally-validate EVERY registered
@@ -567,7 +593,7 @@ function saveModules.prepareLoad(componentsList, requestId)
     else
         saveModules._loadActive = false
     end
-    return { ok = result.ok, errors = result.errors }
+    return { ok = result.ok, errors = result.errors, references = result.references }
 end
 
 -- Round 6 review: a successful `prepareLoad` leaves `_loadActive` true

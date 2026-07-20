@@ -225,13 +225,19 @@ end
 --   unit_ai_farm.lua's harvestLoot
 -- (the *Candidate fields carry no reference here at all -- see
 -- TRANSIENT_CANDIDATE_FIELDS above: they are stripped before this
--- function ever sees them.) Traversed here for documentation/
--- diagnostics (actually CALLED by saveModules.prepareLoad, requirement
--- 11/12 -- not merely declared and left dead); a dangling entry is NOT
--- rejected by this validator (per the #761 issue-review clarification:
--- a target that legitimately died before the save boundary must stay
--- representable) -- it is cleared at reconcile time instead, by
--- unit_ai.lua's scrubStaleRefs/onSaveLoaded.
+-- function ever sees them.) CALLED by saveModules.prepareLoad
+-- (requirement 11/12) and, since issue #764 (save-overhaul C3), its
+-- returned {kind=,id=} list is actually CROSS-VALIDATED --
+-- Engine.Scripting.Lua.API.Save's knownEntitiesFromSaveData /
+-- World.Save.Integrity.luaReferenceErrors check every entry against
+-- this load's real entity sets and log a diagnostic naming the
+-- component/kind/id for one that doesn't resolve (#761 landed this
+-- traversal as crash-checked-but-otherwise-unused; #764 is what
+-- actually consumes the list). A dangling entry is NEVER rejected by
+-- either that check or this component's own validator (per the #761
+-- issue-review clarification: a target that legitimately died before
+-- the save boundary must stay representable) -- it is cleared at
+-- reconcile time instead, by unit_ai.lua's scrubStaleRefs/onSaveLoaded.
 -- NB: any NEW nested claim/job field, or new loot-style list, that
 -- stores a unit/building/bill/item/ground-item id MUST be added here
 -- too (mirroring scrubStaleRefs for the claim/job fields it also

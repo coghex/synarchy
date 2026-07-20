@@ -28,6 +28,7 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
@@ -403,8 +404,8 @@ spec = do
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
             check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 1)
-            check (ccEncode craftBillsCodec)    (ccDecode craftBillsCodec 1)
-            check (ccEncode powerNodesCodec)    (ccDecode powerNodesCodec 1)
+            check (ccEncode craftBillsCodec)    (ccDecode craftBillsCodec 2)
+            check (ccEncode powerNodesCodec)    (ccDecode powerNodesCodec 2)
             check (ccEncode worldEditsCodec)    (ccDecode worldEditsCodec 1)
             check (ccEncode worldActivityCodec) (ccDecode worldActivityCodec 1)
             check (ccEncode texPaletteCodec)    (ccDecode texPaletteCodec 1)
@@ -446,7 +447,7 @@ spec = do
            \allocator" $ do
             let badQueue = BillQueueDTO
                     { bqBills = HM.singleton (BillId 5) CraftBillDTO
-                        { bilId = BillId 5, bilStation = BuildingId 1
+                        { bilId = BillId 5, bilStation = SamePageRef (BuildingId 1)
                         , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
                         , bilClaimedAt = 0, bilProgress = 0, bilSeq = 5
                         , bilPaused = False, bilWorking = False
@@ -472,7 +473,7 @@ spec = do
            \own embedded id" $ do
             let mismatched = BillQueueDTO
                     { bqBills = HM.singleton (BillId 1) CraftBillDTO
-                        { bilId = BillId 2, bilStation = BuildingId 1
+                        { bilId = BillId 2, bilStation = SamePageRef (BuildingId 1)
                         , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
                         , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
                         , bilPaused = False, bilWorking = False
@@ -486,7 +487,7 @@ spec = do
            \allocator" $ do
             let badReg = NodeRegistryDTO
                     { regNodes = HM.singleton (PowerNodeId 3) PowerNodeDTO
-                        { nodId = PowerNodeId 3, nodBuilding = BuildingId 1
+                        { nodId = PowerNodeId 3, nodBuilding = SamePageRef (BuildingId 1)
                         , nodRole = PowerSource, nodPeakWatts = 400
                         , nodCapacityWh = 0, nodStoredWh = 0 }
                     , regNextId = 3 }
@@ -506,7 +507,7 @@ spec = do
            \own embedded id" $ do
             let mismatched = NodeRegistryDTO
                     { regNodes = HM.singleton (PowerNodeId 1) PowerNodeDTO
-                        { nodId = PowerNodeId 2, nodBuilding = BuildingId 1
+                        { nodId = PowerNodeId 2, nodBuilding = SamePageRef (BuildingId 1)
                         , nodRole = PowerSource, nodPeakWatts = 400
                         , nodCapacityWh = 0, nodStoredWh = 0 }
                     , regNextId = 5 }
@@ -742,7 +743,7 @@ spec = do
            \with its own embedded id" $ do
             let mismatched = BillQueueDTO
                     { bqBills = HM.singleton (BillId 1) CraftBillDTO
-                        { bilId = BillId 2, bilStation = BuildingId 1
+                        { bilId = BillId 2, bilStation = SamePageRef (BuildingId 1)
                         , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
                         , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
                         , bilPaused = False, bilWorking = False
@@ -772,7 +773,7 @@ spec = do
            \with its own embedded id" $ do
             let mismatched = NodeRegistryDTO
                     { regNodes = HM.singleton (PowerNodeId 1) PowerNodeDTO
-                        { nodId = PowerNodeId 2, nodBuilding = BuildingId 1
+                        { nodId = PowerNodeId 2, nodBuilding = SamePageRef (BuildingId 1)
                         , nodRole = PowerSource, nodPeakWatts = 400
                         , nodCapacityWh = 0, nodStoredWh = 0 }
                     , regNextId = 5 }

@@ -282,9 +282,13 @@ local function validateBuildingSpawnData(data)
     return nil
 end
 
--- Every reference this component carries (requirement 12) -- traversed
--- for documentation/diagnostics; a dangling `lastUid` is tolerated
--- (scrubbed at reconcile time by onSaveLoaded below), not rejected.
+-- Every reference this component carries (requirement 12). Since issue
+-- #764 (save-overhaul C3) this is actually cross-validated against the
+-- load's real entity sets (Engine.Scripting.Lua.API.Save's
+-- knownEntitiesFromSaveData / World.Save.Integrity.luaReferenceErrors),
+-- not merely traversed for a crash check; a dangling `lastUid` is still
+-- tolerated either way (a non-blocking diagnostic, scrubbed at
+-- reconcile time by onSaveLoaded below), never rejected.
 local function buildingSpawnReferences(data)
     local refs = {}
     for bid, s in pairs(data) do

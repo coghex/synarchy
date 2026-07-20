@@ -53,6 +53,7 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
 
 -- | Every Haskell-owned gameplay component, in a stable declaration
 --   order. The @"metadata"@ component is NOT here — it is owned by
@@ -224,6 +225,7 @@ assembleSnapshot meta de = do
             let crossErrs = map snapErr (validateSessionSnapshot snap)
                             ++ map snapErr (structureEditPaletteErrors snap)
                             ++ metadataErrors meta snap
+                            ++ map integrityErr (sessionIntegrityErrors snap)
             if null crossErrs then Right snap else Left crossErrs
   where
     cidText (ComponentId t) = t
@@ -254,6 +256,16 @@ assembleSnapshot meta de = do
 snapErr ∷ Show e ⇒ e → ComponentError
 snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase
                 (T.pack (show e))
+
+-- | Lift a "World.Save.Integrity" structural finding (issue #764,
+--   save-overhaul C3) into the existing per-component error shape —
+--   attributed to the component the finding actually names (a
+--   craft-bill/power-node wrong-page violation), at 'AssemblePhase'
+--   (a cross-component check, same phase every other whole-session
+--   invariant above reports at).
+integrityErr ∷ IntegrityError → ComponentError
+integrityErr e = ComponentError (ieComponent e) (ieVersion e) AssemblePhase
+    (iePath e <> ": " <> ieCode e <> ": " <> ieMessage e)
 
 -- | Requirement 12: the manifest metadata must agree with the
 --   authoritative gameplay components. A mismatch invalidates the save

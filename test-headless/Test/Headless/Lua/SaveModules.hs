@@ -525,6 +525,42 @@ spec = do
             , "assert(called, 'references() must actually be invoked during prepareLoad')"
             ]
 
+        it "returns every references() edge, flattened across components, \
+           \on a SUCCESSFUL prepareLoad (issue #764, save-overhaul C3) -- \
+           \previously only ever CALLED for its crash-check, the returned \
+           \list itself was discarded" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "saveModules.register('refs_a', { version=1, inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return { u = 5 } end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() end,"
+            , "  references=function(d) return {{kind='unit', id=d.u}} end })"
+            , "saveModules.register('refs_b', { version=1, inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return { b = 9 } end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() end,"
+            , "  references=function(d) return {{kind='building', id=d.b}} end })"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'refs_a', version = 1, payload = codec.encode({u = 5}) },"
+            , "  { id = 'refs_b', version = 1, payload = codec.encode({b = 9}) },"
+            , "})"
+            , "assert(prep.ok, 'expected prepareLoad to succeed')"
+            , "assert(type(prep.references) == 'table', 'expected a references array')"
+            , "local byComponent = {}"
+            , "for _, r in ipairs(prep.references) do byComponent[r.component] = r end"
+            , "assert(byComponent.refs_a ~= nil, 'expected an edge from refs_a')"
+            , "assert(byComponent.refs_a.kind == 'unit', 'expected refs_a edge kind unit')"
+            , "assert(byComponent.refs_a.id == 5, 'expected refs_a edge id 5')"
+            , "assert(byComponent.refs_b ~= nil, 'expected an edge from refs_b')"
+            , "assert(byComponent.refs_b.kind == 'building', 'expected refs_b edge kind building')"
+            , "assert(byComponent.refs_b.id == 9, 'expected refs_b edge id 9')"
+            , "assert(#prep.references == 2, 'expected exactly 2 edges, got ' .. #prep.references)"
+            ]
+
         it "correlates abortPreparedLoad(requestId) with the request id \
            \prepareLoad stashed, so a stale abort for an OLD, already- \
            \superseded request cannot clear a NEWER requests prepared \

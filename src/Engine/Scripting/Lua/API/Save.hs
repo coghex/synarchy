@@ -43,10 +43,18 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingInfectionReferences
                         , renderMissingInfectionRef)
 import Location.Types (LocationRegistry(..), LocationDef(..))
-import Building.Types (BuildingManager(..))
-import Unit.Types (UnitManager(..))
-import Item.Types (ItemManager(..))
+import Building.Types (BuildingManager(..), BuildingId(..))
+import Unit.Types (UnitManager(..), UnitId(..))
+import Item.Types (ItemManager(..), ItemInstance(..))
 import Craft.Types (RecipeManager(..))
+import Craft.Bills (CraftBills(..), BillId(..))
+import Item.Ground (GroundItems(..), GroundItem(..))
+import World.Save.Types
+    ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
+    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
+import World.Save.Integrity
+    ( KnownEntities(..), LuaRefEdge(..), luaReferenceErrors
+    , renderIntegrityError )
 import World.Types
     (WorldCommand(..), WorldManager(wmWorlds), WorldState(wsGenParamsRef))
 import World.Page.Types (WorldPageId(..))
@@ -400,6 +408,56 @@ loadSaveFn env = do
                             continueLoad env logger requestId saveName descriptors
                 return 1
 
+-- | Every item-instance id reachable from one 'ItemInstance', including
+--   ones nested (recursively) in 'iiContents' — mirrors
+--   "World.Save.Snapshot"'s 'World.Save.Snapshot.allItemInstanceIds',
+--   just over the legacy 'SaveData'/'WorldPageSave' shape this module
+--   still works with rather than a 'World.Save.Snapshot.SessionSnapshot'.
+flattenItemInstanceIds' ∷ ItemInstance → [Word64]
+flattenItemInstanceIds' i =
+    iiInstanceId i : concatMap flattenItemInstanceIds' (iiContents i)
+
+-- | The known-entity id sets (issue #764, save-overhaul C3) every
+--   Lua-declared reference is cross-validated against — see
+--   "World.Save.Integrity"'s 'KnownEntities' haddock for why this is
+--   session-wide rather than per-page. Built once per load from the
+--   SAME decoded 'SaveData' the existing missing-def-reference ladder
+--   already reads (below), never from live state.
+knownEntitiesFromSaveData ∷ SaveData → KnownEntities
+knownEntitiesFromSaveData sd = KnownEntities
+    { keUnits = HS.fromList
+        [ fromIntegral (unUnitId uid)
+        | w ← pages, uid ← HM.keys (usnInstances (wpsUnits w)) ]
+    , keBuildings = HS.fromList
+        [ fromIntegral (unBuildingId bid)
+        | w ← pages, bid ← HM.keys (bsnInstances (wpsBuildings w)) ]
+    , keBills = HS.fromList
+        [ fromIntegral (unBillId bid)
+        | w ← pages, bid ← HM.keys (cbsBills (wpsCraftBills w)) ]
+    , keItemInstances = HS.fromList (map fromIntegral (concatMap pageItemIds pages))
+    , keGroundItems = HS.fromList
+        [ gid | w ← pages, gid ← HM.keys (gisItems (wpsGroundItems w)) ]
+    , keNextUnitId = maybe 0 (fromIntegral . usnNextId . wpsUnits) (listToMaybe pages)
+    , keNextBuildingId =
+        maybe 0 (fromIntegral . bsnNextId . wpsBuildings) (listToMaybe pages)
+    , keNextItemId = fromIntegral (sdNextItemInstanceId sd)
+    }
+  where
+    pages = sdWorlds sd
+    pageItemIds w =
+        concatMap (flattenItemInstanceIds' . giInst)
+                  (HM.elems (gisItems (wpsGroundItems w)))
+        ⧺ concatMap unitItemIds (HM.elems (usnInstances (wpsUnits w)))
+        ⧺ concatMap buildingItemIds (HM.elems (bsnInstances (wpsBuildings w)))
+    unitItemIds u =
+        concatMap flattenItemInstanceIds' (uisInventory u)
+        ⧺ concatMap flattenItemInstanceIds' (HM.elems (uisEquipped u))
+        ⧺ concatMap flattenItemInstanceIds' (uisAccessories u)
+    buildingItemIds b =
+        concatMap (concatMap flattenItemInstanceIds')
+                  (HM.elems (bisMaterialsDelivered b))
+        ⧺ concatMap flattenItemInstanceIds' (bisStorage b)
+
 -- | Continue 'loadSaveFn' once the current Lua registry's component
 --   descriptors are known (issue #761 round-4 review): split out so a
 --   malformed descriptor list can reject the load in 'loadSaveFn' BEFORE
@@ -578,8 +636,23 @@ continueLoad env logger requestId saveName descriptors = do
                             <> "': " <> err
                         failLoad (loadStatusRef env) requestId err
                     Lua.pushboolean False
-                  Right () → do
-                    Lua.liftIO $
+                  Right luaRefs → do
+                    Lua.liftIO $ do
+                        -- Issue #764 (save-overhaul C3): cross-validate
+                        -- every Lua-declared reference against this
+                        -- load's real entity sets. Never load-blocking
+                        -- (the #761-established tolerated-dangling-
+                        -- reference contract — see
+                        -- "World.Save.Integrity"'s haddock) — logged as
+                        -- diagnostics only (requirement 16).
+                        let known = knownEntitiesFromSaveData saveData
+                            edges = [ LuaRefEdge c k i | (c, k, i) ← luaRefs ]
+                            diagnostics = luaReferenceErrors known edges
+                        forM_ diagnostics $ \d →
+                            logWarn logger CatWorld $
+                                "loadSave '" <> saveName
+                                <> "': integrity diagnostic: "
+                                <> renderIntegrityError d
                         -- Hand off the expensive per-page reconstruction
                         -- to the world thread (World.Load.Stage) — it
                         -- touches no live ref (requirement 6), so
@@ -834,6 +907,28 @@ readErrorStringField = do
         then (TE.decodeUtf8Lenient ⊚) ⊚ Lua.tostring (-1)
         else return Nothing
 
+-- | Read {component=string, kind=string, id=number} from the table at
+--   the top of the stack — one entry of @save_modules.lua@'s
+--   @prepareLoad@ @references@ result array (issue #764, save-overhaul
+--   C3): a single reference edge a Lua component's @references()@ hook
+--   reported.
+readReferenceEdgeField ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int))
+readReferenceEdgeField = do
+    _ ← Lua.getfield (-1) "component"
+    mcompB ← Lua.tostring (-1)
+    Lua.pop 1
+    _ ← Lua.getfield (-1) "kind"
+    mkindB ← Lua.tostring (-1)
+    Lua.pop 1
+    _ ← Lua.getfield (-1) "id"
+    mid ← Lua.tointeger (-1)
+    Lua.pop 1
+    case (mcompB, mkindB, mid) of
+        (Just compB, Just kindB, Just i) →
+            return (Just ( TE.decodeUtf8Lenient compB
+                         , TE.decodeUtf8Lenient kindB, fromIntegral i))
+        _ → return Nothing
+
 -- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
 --   decode + migrate + component-locally-validate EVERY registered Lua
 --   component with NO live mutation (requirement 11). Any failure — a
@@ -842,9 +937,15 @@ readErrorStringField = do
 --   is stashed on the Lua side alongside the prepared data so a later
 --   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (round
 --   9 review — see 'abortLuaLoad').
+-- | On success, also returns every reference edge
+--   ('readReferenceEdgeField') the just-prepared components' @references()@
+--   hooks reported (issue #764) — @continueLoad@ cross-validates these
+--   against the loaded session's real entity sets. A malformed entry in
+--   that array degrades to being dropped (best-effort diagnostics only;
+--   this never gates the load — see "World.Save.Integrity"'s haddock).
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
-    → Lua.LuaE Lua.Exception (Either Text ())
+    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int)])
 prepareLuaLoad logger requestId components = do
     ok ← callSaveModules1 logger "prepareLoad" 2
             (pushComponentsArray components
@@ -858,7 +959,11 @@ prepareLuaLoad logger requestId components = do
         Lua.pop 1
         result ←
             if isOk
-              then return (Right ())
+              then do
+                _ ← Lua.getfield (-1) "references"
+                refResult ← readLuaArrayAt readReferenceEdgeField
+                Lua.pop 1  -- references array
+                return (Right (either (const []) id refResult))
               else do
                 _ ← Lua.getfield (-1) "errors"
                 -- Purely a diagnostic message list here — the load is
