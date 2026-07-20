@@ -422,6 +422,11 @@ function debugOverlay.onKeyDown(key)
 end
 
 function debugOverlay.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not rebuild the overlay against a
+    -- degenerate framebuffer; createUI() reads engine.getFramebufferSize
+    -- itself (not these params), so just skip the rebuild entirely and
+    -- let the next real resize pick it up.
+    if width <= 0 or height <= 0 then return end
     if debugOverlay.uiCreated then
         debugOverlay.createUI()
         if debugOverlay.visible then UI.showPage(debugOverlay.page) end

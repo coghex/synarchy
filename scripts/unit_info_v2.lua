@@ -358,6 +358,12 @@ function unitInfoV2.update(dt)
 end
 
 function unitInfoV2.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not rebuild against a degenerate
+    -- framebuffer — rebuildLayout() reads hud.fbW/hud.fbH (updated by
+    -- hud's own guarded onFramebufferResize), so skipping here on the
+    -- SAME non-positive size keeps both handlers' notion of "last valid
+    -- geometry" in sync.
+    if width <= 0 or height <= 0 then return end
     -- Layout depends on framebuffer dimensions, so rebuild on resize.
     if unitInfoV2.page then
         rebuildLayout()
@@ -381,6 +387,25 @@ function unitInfoV2.onFramebufferResize(width, height)
         end
         unitInfoV2.lastWantVisible = want
     end
+end
+
+-- #750: introspection for the reserved-region audit (and tests) —
+-- true only while the pane is ACTUALLY shown (the same want-visible
+-- gate update()/onFramebufferResize maintain), not merely "a unit is
+-- selected".
+function unitInfoV2.isVisible()
+    return unitInfoV2.lastWantVisible == true
+end
+
+-- Real on-screen bounds of the flush-right column, mirroring
+-- rebuildLayout()'s own first few lines off the SAME L.PANEL_W
+-- constant (never a re-guessed width) so this can't drift from what
+-- rebuildLayout() actually builds. nil while not visible.
+function unitInfoV2.getBounds()
+    if not unitInfoV2.isVisible() then return nil end
+    local uiscale = scale.get()
+    local panelW  = math.floor(L.PANEL_W * uiscale)
+    return { x = hud.fbW - panelW, y = 0, w = panelW, h = hud.fbH }
 end
 
 -- "Log" button → open the per-unit collated log for the active unit.

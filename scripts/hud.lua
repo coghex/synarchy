@@ -172,6 +172,13 @@ end
 function hud.createUI()
     -- Tear down previous pages if resizing
     if hud.uiCreated and hud.world_page and hud.zoom_page then
+        -- #750: every popup mounted on hud.world_page (crafting/cargo/
+        -- item-contents/plant panels, the build-tool picker, the tile
+        -- editor) owns module-level "open" state that UI.deletePage below
+        -- has no way to reconcile — left alone it stays "open" pointing
+        -- at elements that are about to be destroyed. Close them first,
+        -- same as any other view-transition teardown.
+        require("scripts.ui.view_teardown").run("resize")
         UI.deletePage(hud.world_page)
         UI.deletePage(hud.zoom_page)
         if hud.mapToggleId then
@@ -1006,6 +1013,53 @@ end
 
 function hud.clearInfo()
     infoPanel.clear()
+end
+
+-----------------------------------------------------------
+-- Reserved regions (#750) — the "required controls" the collision/
+-- priority contract (scripts/ui/reserved_regions.lua) protects from
+-- being covered by a lower-priority surface (e.g. a notification card).
+-- Union each toggle group's REAL element bounds via UI.getElementInfo
+-- rather than re-deriving toggle.lua's own direction-dependent packing
+-- math — a bounding box built from live element rects can never drift
+-- from what's actually on screen, unlike a hand-mirrored formula (see
+-- the coupling risk CLAUDE.md already flags for tile_editor's own
+-- popupBounds()).
+-----------------------------------------------------------
+local function unionElementRects(handles)
+    local minX, minY, maxX, maxY
+    for _, eh in ipairs(handles) do
+        local info = eh and UI.getElementInfo(eh)
+        if info then
+            minX = minX and math.min(minX, info.x) or info.x
+            minY = minY and math.min(minY, info.y) or info.y
+            maxX = maxX and math.max(maxX, info.x + info.width)  or (info.x + info.width)
+            maxY = maxY and math.max(maxY, info.y + info.height) or (info.y + info.height)
+        end
+    end
+    if not minX then return nil end
+    return { x = minX, y = minY, w = maxX - minX, h = maxY - minY }
+end
+
+-- Returns an array of {name, x, y, w, h} — one entry per toggle cluster
+-- currently on screen (a cluster not yet created is simply omitted).
+function hud.getToolbarRects()
+    local rects = {}
+    local groups = {
+        { name = "log_toggle",  id = hud.logToggleId },
+        { name = "map_toggle",  id = hud.mapToggleId },
+        { name = "tool_toggle", id = hud.toolToggleId },
+    }
+    for _, g in ipairs(groups) do
+        if g.id then
+            local rect = unionElementRects(toggle.getElementHandles(g.id))
+            if rect then
+                rect.name = g.name
+                table.insert(rects, rect)
+            end
+        end
+    end
+    return rects
 end
 
 -----------------------------------------------------------

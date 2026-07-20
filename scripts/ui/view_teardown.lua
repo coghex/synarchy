@@ -21,6 +21,26 @@
 --     stays visible behind Settings hook this one (#146/#147). The
 --     non-keepWorld paths also run hud.hide(), i.e. the full "hudHide"
 --     sweep.
+--   * "resize"   — hud.createUI() (#750): about to UI.deletePage
+--     hud.world_page and replace it with a fresh page handle, as part
+--     of a real framebuffer resize or a UI-scale rebuild. Any popup
+--     mounted ON hud.world_page (panel.new({page = h.page, ...})) has
+--     its elements destroyed by that delete regardless of its own
+--     module state, so left alone it would reappear "open"
+--     (state.open/panelId still set) pointing at deleted elements.
+--     Hooked widgets close BEFORE the delete, same as any other
+--     view-transition teardown — this is not a gameplay action, the
+--     underlying job/build/craft keeps running, only the popup view
+--     itself closes (the player can reopen it). Deliberately NOT
+--     hooked: build_tool's "placement" mode (the structure two-click
+--     anchor + building ghost) — its ghost is engine-side world-space
+--     rendering (building.setGhost, re-established every tick), not a
+--     hud.world_page element, and per the #750 issue thread's
+--     amendment a layout-only rebuild must never cancel a committed/
+--     armed two-click designation anchor the way it may a merely
+--     PENDING (unreleased) interaction. Same reasoning keeps
+--     mine_tool/chop_tool/till_tool's own designation anchors off this
+--     transition too (they aren't hud.world_page-mounted UI at all).
 --
 -- Rules for entries:
 --   * Hooks MUST be idempotent — they run on every transition of their
@@ -53,7 +73,8 @@ local registry = {
     -- open and it would reappear stale. closeIfOpen() is idempotent.
     { name = "item_contents_panel",
       zoomBand = function() require("scripts.item_contents_panel").closeIfOpen() end,
-      hudHide  = function() require("scripts.item_contents_panel").closeIfOpen() end },
+      hudHide  = function() require("scripts.item_contents_panel").closeIfOpen() end,
+      resize   = function() require("scripts.item_contents_panel").closeIfOpen() end },
 
     -- Cargo-inventory popup (#141/#99): same story as the item-contents
     -- popup — mounted on hud.world_page, so a page hide leaves
@@ -61,21 +82,24 @@ local registry = {
     -- idempotent.
     { name = "cargo_inventory_panel",
       zoomBand = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,
-      hudHide  = function() require("scripts.cargo_inventory_panel").closeIfOpen() end },
+      hudHide  = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,
+      resize   = function() require("scripts.cargo_inventory_panel").closeIfOpen() end },
 
     -- Crafting station bills popup (#330): same story — mounted on
     -- hud.world_page, own module-level "open" state, opened via
     -- right-click. closeIfOpen() is idempotent.
     { name = "crafting_panel",
       zoomBand = function() require("scripts.crafting_panel").closeIfOpen() end,
-      hudHide  = function() require("scripts.crafting_panel").closeIfOpen() end },
+      hudHide  = function() require("scripts.crafting_panel").closeIfOpen() end,
+      resize   = function() require("scripts.crafting_panel").closeIfOpen() end },
 
     -- Planting screen (#335): same story — mounted on hud.world_page,
     -- own module-level "open" state, opened by the plant tool.
     -- closeIfOpen() is idempotent.
     { name = "plant_panel",
       zoomBand = function() require("scripts.plant_panel").closeIfOpen() end,
-      hudHide  = function() require("scripts.plant_panel").closeIfOpen() end },
+      hudHide  = function() require("scripts.plant_panel").closeIfOpen() end,
+      resize   = function() require("scripts.plant_panel").closeIfOpen() end },
 
     -- Right-click context menu (#139/#86): lives on its own modal page,
     -- anchored to the tile/unit/item under the click. Page swaps never
@@ -120,7 +144,8 @@ local registry = {
     -- no-ops with no panel; mode only resets from "picker") and
     -- deliberately does NOT touch "placement" mode.
     { name = "build_tool_picker",
-      zoomBand = function() require("scripts.build_tool").hidePicker() end },
+      zoomBand = function() require("scripts.build_tool").hidePicker() end,
+      resize   = function() require("scripts.build_tool").hidePicker() end },
 
     -- Build placement (#140): once the build tool enters "placement"
     -- mode, its ghost preview and click handling keep running off the
@@ -152,7 +177,8 @@ local registry = {
     -- clear() is idempotent (destroyPopup no-ops with no popup, and is
     -- a no-op outside arena mode).
     { name = "tile_editor",
-      zoomBand = function() require("scripts.tile_editor").clear() end },
+      zoomBand = function() require("scripts.tile_editor").clear() end,
+      resize   = function() require("scripts.tile_editor").clear() end },
 
     -- Main debug overlay (#147, and the armed spawn/edit modes it owns,
     -- #148 — debug.hide() clears them all): only meaningful in the

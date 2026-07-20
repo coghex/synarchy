@@ -283,6 +283,19 @@ renderPopup = function(p)
     local off = (p.slot - 1) * s.slotOffset
     local px, py = cx + off, cy + off
 
+    -- #750: nudge the card off the always-reachable toolbar clusters
+    -- instead of covering one — a small window + a corner-anchored
+    -- toggle group + a centered/cascading popup can genuinely overlap.
+    -- Lazily required to avoid a load cycle (hud.lua doesn't require
+    -- popup.lua either way, but every other cross-module reach in this
+    -- file follows the same lazy convention).
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local hud = require("scripts.hud")
+    local nudged = reservedRegions.avoidReserved(
+        { x = px, y = py, w = panelW, h = panelH },
+        hud.getToolbarRects(), popup.fbW, popup.fbH)
+    px, py = nudged.x, nudged.y
+
     local baseZ = p.baseZ
 
     p.panelId = panel.new({
@@ -728,6 +741,12 @@ end
 function popup.update(dt) end
 
 function popup.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not become the stored geometry — a new
+    -- notification created before the next real resize would size itself
+    -- against a degenerate framebuffer (maxPanelW = floor(fbW*0.55) = 0).
+    -- Keep the last valid fbW/fbH instead; existing popups already aren't
+    -- reflowed by this handler either way.
+    if width <= 0 or height <= 0 then return end
     popup.fbW = width
     popup.fbH = height
     -- Don't reflow existing popups; new ones use updated dimensions.
@@ -762,6 +781,25 @@ end
 
 function popup.isBootstrapped()
     return popup.bootstrapped and true or false
+end
+
+-- #750: real on-screen bounds of every currently-rendered card, for the
+-- reserved-region introspection audit (and tests) — never a re-derived
+-- estimate, since renderPopup already nudges px/py via
+-- reserved_regions.avoidReserved before creating the panel.
+function popup.getActiveBounds()
+    local panelMod = require("scripts.ui.panel")
+    local rects = {}
+    for _, p in ipairs(popup.active) do
+        if p.panelId then
+            local x, y = panelMod.getPosition(p.panelId)
+            local w, h = panelMod.getSize(p.panelId)
+            if x then
+                table.insert(rects, { id = p.id, x = x, y = y, w = w, h = h })
+            end
+        end
+    end
+    return rects
 end
 
 -- Number of lines in the active popup for a category, or 0 if no

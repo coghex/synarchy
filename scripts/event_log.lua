@@ -679,6 +679,11 @@ function eventLog.update(dt)
 end
 
 function eventLog.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not become the stored geometry or trigger
+    -- a rebuild against a degenerate framebuffer; keep the last valid
+    -- fbW/fbH and skip rebuilding, same as C2's responsive.notifyResize
+    -- guard for menu screens.
+    if width <= 0 or height <= 0 then return end
     eventLog.fbW = width
     eventLog.fbH = height
     if eventLog.visible and eventLog.uiCreated then

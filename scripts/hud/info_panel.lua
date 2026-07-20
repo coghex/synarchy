@@ -582,4 +582,17 @@ function infoPanel.isVisible()
     return infoPanel.visible
 end
 
+-- #750: real on-screen bounds for the reserved-region introspection
+-- audit — reads the actually-rendered panel (panel.getPosition/
+-- getSize) rather than re-deriving fbW*widthFrac locally, so it can
+-- never drift from what infoPanel.create() actually built. nil when
+-- not created or not visible (suppressed/empty).
+function infoPanel.getBounds()
+    if not infoPanel.panelId or not infoPanel.isVisible() then return nil end
+    local x, y = panel.getPosition(infoPanel.panelId)
+    local w, h = panel.getSize(infoPanel.panelId)
+    if not x then return nil end
+    return { x = x, y = y, w = w, h = h }
+end
+
 return infoPanel

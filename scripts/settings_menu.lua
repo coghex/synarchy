@@ -958,6 +958,15 @@ function settingsMenu.onApply()
         -- case shell's own direct broadcast never covers, so call its
         -- existing onFramebufferResize directly here instead.
         shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+        -- #750: gameplay (hud/worldView/popup/logs/unit_info_v2/debug/
+        -- context menu/build-tool warning) shares shell's gap — none of
+        -- them are responsive-registered either, and a scale-only change
+        -- has no real resize event to reach them through. Settings can be
+        -- opened over gameplay via the pause menu's keepWorld path, so
+        -- this can be live even while Apply is clicked. require()'d lazily
+        -- to avoid a load cycle (scripts.ui_manager -> ui_manager_boot ->
+        -- settings_menu).
+        require("scripts.ui_manager").notifyGameplayRescale(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 
@@ -968,6 +977,7 @@ function settingsMenu.onSave()
     if result.scaleChanged then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
         shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+        require("scripts.ui_manager").notifyGameplayRescale(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 
@@ -985,6 +995,7 @@ function settingsMenu.onBack()
     if data.current.uiScale ~= uiScaleBefore then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
         shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+        require("scripts.ui_manager").notifyGameplayRescale(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 

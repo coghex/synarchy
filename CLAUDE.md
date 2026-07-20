@@ -535,9 +535,12 @@ screen (main, pause, settings, create-world, save browser, loading)
 adopts, replacing the per-screen copies that used to exist —
 `ui_manager_boot`'s hand-listed `onFramebufferResize` fan-out and
 `settings_menu`'s own scaleChanged-only self-rebuild. Gameplay surfaces
-(HUD/overlays) are C4 and still use their own explicit forwarding in
-`ui_manager_boot.lua`; the contract is ready for C4 to adopt without
-duplicating it.
+(HUD/overlays, #750/C4 below) consume the SAME band/envelope
+definitions but deliberately stay off this registry — most of them are
+reached only through `ui_manager_boot.lua`'s own explicit forwarding
+(never `engine.loadScript`'d), and the rest already get a real resize
+for free via the engine's automatic broadcast, so joining this registry
+too would double-fire them.
 
 The supported envelope (`responsive.bands`, inclusive on both ends,
 contiguous, non-overlapping): 600-900px framebuffer height at
@@ -883,6 +886,83 @@ sufficient — see `Test.Headless.UI.ResponsiveMenus` for the pattern
 on `fontsReady`, which needs real font rasterization, gated behind
 `Engine.Scripting.Lua.Message`'s `whenGraphical` and so never true
 without a GPU).
+
+**Gameplay responsive lifecycle** (#750, Phase C child C4, see
+`Test.Headless.UI.ResponsiveGameplay`): gameplay HUD/overlay surfaces
+consume C2's envelope/band definitions (`scripts/ui/responsive.lua`)
+rather than re-declaring them, but stay OFF `responsive.register`/
+`notifyResize`'s registry — most of them (hud/worldView/contextMenu/
+buildToolRemoteWarning) are reached only through
+`ui_manager_boot.lua`'s manual `onFramebufferResize` forward, while the
+rest (popup/event_log/combat_log/injury_log_panel/unit_log/
+unit_info_v2/debug) are `engine.loadScript`'d and already get a REAL
+resize for free via the engine's own `broadcastToModules`
+(`Engine.Scripting.Lua.Thread.Dispatch`) — registering them too would
+double-fire their rebuild every resize, the trap `shell.lua` already
+sidestepped pre-#750. Three concrete gaps this closed: (1) the manual-
+forward block had no 0x0-minimize guard at all (`ui_manager_boot.lua`'s
+`onFramebufferResize` now skips it entirely below `width>0 and
+height>0`, matching `responsive.notifyResize`'s own guard; the
+auto-broadcast-reached modules each guard themselves, since there's no
+shared call site to guard once for all of them); (2) popup/the four
+logs were being forwarded through BOTH paths at once (removed from the
+manual list, since the automatic broadcast already covers them —
+mirrors how unit_info_v2/debug/shell were already broadcast-only); (3)
+a scale-only Settings Apply/Save/Back (`responsive.notifyResize` plus a
+direct `shell.onFramebufferResize` call) never reached gameplay at
+all — `uiManager.notifyGameplayRescale(w, h)`
+(`scripts/ui_manager_resize.lua`, split out of `ui_manager_boot.lua` to
+stay under its line budget) is the new synthetic-change path
+`settingsMenu.onApply`/`onSave`/`onBack` also call, reaching every
+gameplay surface directly since no automatic broadcast exists for a
+non-resize scale change.
+
+A resize while a popup mounted on `hud.world_page` (crafting/cargo/
+item-contents/plant panels, the build-tool picker) is open used to
+leave it stale: `hud.createUI()` tears the whole page down and rebuilds
+it on every resize, destroying the popup's elements out from under it
+while the popup's own module state (`state.open`/`panelId`) stayed set,
+pointing at deleted elements. Fixed by extending `scripts/ui/
+view_teardown.lua`'s #156 registry (already the mechanism for exactly
+this failure family on zoom-band/HUD-hide/menu transitions) with a
+fourth transition, `"resize"`, run from `hud.createUI()` right before
+it deletes `hud.world_page` — reusing each widget's existing idempotent
+`closeIfOpen()`/`hidePicker()`/`clear()` hook. Deliberately NOT
+hooked: `build_tool`'s "placement" mode (the two-click structure
+anchor + ghost preview) — its ghost is engine-side world-space
+rendering (`building.setGhost`, re-established every tick), not a
+`hud.world_page` element, and a layout-only rebuild must never cancel a
+committed/armed two-click designation anchor (the #745 press-activation
+correction on this issue's own thread draws the same line: "never
+cancel" protects committed/armed state, not merely a pending,
+unreleased interaction) — same reasoning keeps mine/chop/till's own
+anchors, which aren't `hud.world_page`-mounted UI at all, off this
+transition too.
+
+The deterministic collision/priority contract the issue asks for
+(`scripts/ui/reserved_regions.lua`, pure) is new territory layered on
+top of what already existed: modals outranking gameplay and debug/
+shell passing through above everything are already `uiLayerBand`/
+`UI.InputOwnership`'s job (untouched); context menus already place via
+#747's `UI.placePopup` (untouched); "unit info reserves the right edge
+and suppresses conflicting info" was ALREADY implemented pre-#750 (
+`unit_info_v2.lua`'s `update()` calls `hud/info_panel.lua`'s reason-
+keyed `suppress("unit_info_v2")`/`unsuppress` whenever the flush-right
+column wants to be visible) — #750 only added introspection over it
+(`unitInfoV2.isVisible()`/`getBounds()`, `infoPanel.getBounds()`). What
+genuinely needed new code: `hud.getToolbarRects()` unions each toggle
+cluster's REAL element bounds via `UI.getElementInfo` (never a
+re-derived formula, so it can't drift from `toggle.lua`'s own
+direction-dependent packing math) as the "required controls" a
+lower-priority surface must avoid; `reservedRegions.checkViolations`
+flags an overlapping pair by priority (or as ambiguous on a tie);
+`reservedRegions.avoidReserved` is the minimal-translation nudge
+`popup.lua`'s `renderPopup` now runs its natural centered position
+through, so a notification card can no longer render on top of a
+toolbar cluster on a small window; `reservedRegions.findEscapes` flags
+a visible, pointer-blocking element hanging outside `[0,fbW]x[0,fbH]`
+— the "unreachable actions" half of the introspection ask, generic over
+any `UI.getElementInfo`-shaped element list.
 
 ## Project Layout
 
