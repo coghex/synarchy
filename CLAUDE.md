@@ -964,6 +964,32 @@ a visible, pointer-blocking element hanging outside `[0,fbW]x[0,fbH]`
 — the "unreachable actions" half of the introspection ask, generic over
 any `UI.getElementInfo`-shaped element list.
 
+Round-1 review of this PR found three more pre-existing `hud.createUI()`
+gaps this issue's own "preserve valid... state" acceptance criteria
+cover: it unconditionally showed the world/zoom page based on live
+camera zoom regardless of `hud.visible`, resurrecting hidden HUD
+controls over whatever menu a resize happened to land on; it never
+re-showed `global_page` (the log toggle) at all, so a resize while
+visible silently dropped it; and the tool/map toggles were always
+recreated at their hardcoded default slot, desyncing the visible
+toolbar from whichever tool/map mode was actually active. Fixed by
+having `createUI()` only derive `hud.currentView` (no `UI.showPage`
+calls of its own — both its callers, `hud.show()` and
+`hud.onFramebufferResize`, already apply the full `hud.visible`-gated
+show logic afterward), extending `onFramebufferResize`'s restore to
+include `global_page`, and snapshotting/restoring each toggle's visual
+selection via `toggle.select` (visual-only — does not re-fire
+`onChange`, so a rebuild never re-issues `world.setToolMode`/
+`setMapMode` or re-triggers the build tool's picker show/hide). Also
+found: `popup.onFramebufferResize` inherited a deliberate pre-#750
+"don't reflow existing popups" behavior that became a real
+reachability gap once gameplay's own rescale path could reach it — a
+card positioned against the old framebuffer could render stale or
+fully off-screen after a real shrink or a UI-scale change. Fixed by
+having it re-run `renderPopup` (the same function content updates
+already reuse) for every active card, which only touches its
+position/size, never its `lines`/`category`/target data.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

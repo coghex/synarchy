@@ -170,6 +170,18 @@ end
 -----------------------------------------------------------
 
 function hud.createUI()
+    -- #750: toggle.new below always recreates the map/tool toggles at
+    -- their hardcoded default slot (map_default / tool_default) — on a
+    -- rebuild (not first creation) that desyncs the visible toolbar from
+    -- whatever mode is actually active (e.g. Mine still armed
+    -- engine-side while the icon claims Default). Capture the current
+    -- visual selection before teardown and restore it via toggle.select
+    -- (visual-only — does not re-fire onChange, so it never re-issues
+    -- world.setToolMode/setMapMode or re-triggers the build tool's
+    -- picker show/hide) once the new toggle exists.
+    local preservedToolIndex = hud.toolToggleId and toggle.getSelectedIndex(hud.toolToggleId)
+    local preservedMapIndex  = hud.mapToggleId  and toggle.getSelectedIndex(hud.mapToggleId)
+
     -- Tear down previous pages if resizing
     if hud.uiCreated and hud.world_page and hud.zoom_page then
         -- #750: every popup mounted on hud.world_page (crafting/cargo/
@@ -375,6 +387,9 @@ function hud.createUI()
             engine.logDebug("Map mode changed to: " .. tostring(itemName))
         end,
     })
+    if preservedMapIndex then
+        toggle.select(hud.mapToggleId, preservedMapIndex)
+    end
 
     local toolAnchorX = s.margin
     local toolAnchorY = hud.fbH - s.margin - s.buttonSize
@@ -465,6 +480,9 @@ function hud.createUI()
             tileEditor.onToolMode(itemName)
         end,
     })
+    if preservedToolIndex then
+        toggle.select(hud.toolToggleId, preservedToolIndex)
+    end
 
     -- Pass the hud module reference to the build tool (read live: page /
     -- worldId / selectDefaultTool all mutate outside setup(), same as the
@@ -564,14 +582,23 @@ function hud.createUI()
         fbH       = hud.fbH,
     })
 
+    -- #750: re-derive currentView from the live camera zoom (needed by
+    -- every other reader of hud.currentView), but DON'T show a page here
+    -- — every freshly created page already starts hidden (UI.newPage),
+    -- and this function reruns on every resize, not just the first
+    -- creation. Showing here unconditionally used to resurrect the
+    -- world/zoom page over a menu that had explicitly hidden the HUD
+    -- (hud.visible == false), and never restored global_page (the log
+    -- toggle) at all. hud.show() (first creation) and
+    -- hud.onFramebufferResize (a rebuild) are the two callers, and both
+    -- already apply the full, hud.visible-gated show logic themselves
+    -- after this returns.
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()
     local zoomFadeEnd = camera.getZoomFadeEnd()
     if zoom > zoomFadeEnd then
-        UI.showPage(hud.zoom_page)
         hud.currentView = "zoomed_out"
     elseif zoom < zoomFadeStart then
-        UI.showPage(hud.world_page)
         hud.currentView = "zoomed_in"
     else
         hud.currentView = "none"
@@ -1077,6 +1104,13 @@ function hud.onFramebufferResize(width, height)
                 UI.showPage(hud.world_page)
             elseif hud.currentView == "zoomed_out" and hud.zoom_page then
                 UI.showPage(hud.zoom_page)
+            end
+            -- #750: global_page (the always-on log toggle) is shown by
+            -- hud.show() but createUI() no longer shows it on its own —
+            -- a rebuild while visible must restore it too, or the log
+            -- toggle disappears on every resize.
+            if hud.global_page then
+                UI.showPage(hud.global_page)
             end
         end
     end

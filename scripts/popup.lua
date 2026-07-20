@@ -744,12 +744,21 @@ function popup.onFramebufferResize(width, height)
     -- #750: a 0x0 minimize must not become the stored geometry — a new
     -- notification created before the next real resize would size itself
     -- against a degenerate framebuffer (maxPanelW = floor(fbW*0.55) = 0).
-    -- Keep the last valid fbW/fbH instead; existing popups already aren't
-    -- reflowed by this handler either way.
+    -- Keep the last valid fbW/fbH instead.
     if width <= 0 or height <= 0 then return end
     popup.fbW = width
     popup.fbH = height
-    -- Don't reflow existing popups; new ones use updated dimensions.
+    -- #750: reflow every active card so it stays centered, correctly
+    -- scaled, and reachable (its OK button on-screen) at the new
+    -- geometry — a card positioned against the OLD fbW/fbH could
+    -- otherwise render stale or fully off-screen after a real shrink or
+    -- a UI-scale change. renderPopup fully rebuilds a card's visuals
+    -- from its own record (the same function content updates already
+    -- reuse, e.g. a new coalesced line) — it never touches
+    -- p.lines/category/target data, only the on-screen position/size.
+    for _, p in ipairs(popup.active) do
+        renderPopup(p)
+    end
 end
 
 function popup.shutdown()

@@ -213,6 +213,78 @@ spec = around withHeadlessEngine $ do
                     fsW s `shouldBe` 1920
                     fsH s `shouldBe` 1080
 
+    describe "hud.createUI() preserves visibility state and toolbar selection across a rebuild (#750 round-1 review)" $ do
+        it "a resize while the HUD is hidden never resurrects the world/zoom page over whatever is now on screen" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "hud.show();"
+                , "hud.hide();"
+                , "hud.onFramebufferResize(1600, 900);"
+                , "return {visible=hud.visible,"
+                , "        zoomPageVisible=UI.isPageVisible(hud.zoom_page),"
+                , "        worldPageVisible=UI.isPageVisible(hud.world_page)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe HiddenResizeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    hrpVisible p `shouldBe` False
+                    hrpZoomPageVisible p `shouldBe` False
+                    hrpWorldPageVisible p `shouldBe` False
+
+        it "a resize while the HUD is visible keeps global_page (the log toggle) visible too" $ \env → do
+            ls ← newBareLuaBackend env
+            visible ← evalBool ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "hud.show();"
+                , "hud.onFramebufferResize(1280, 720);"
+                , "return UI.isPageVisible(hud.global_page)"
+                ]
+            visible `shouldBe` True
+
+        it "a resize preserves the visually selected tool, without re-firing world.setToolMode" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local toggle = require('scripts.ui.toggle');"
+                , "_G.__setToolModeCalls = 0;"
+                , "local origSetToolMode = world.setToolMode;"
+                , "world.setToolMode = function(...) _G.__setToolModeCalls = _G.__setToolModeCalls + 1; return origSetToolMode(...) end;"
+                , "toggle.applyOptionByName(hud.toolToggleId, 'tool_mine');"
+                , "local callsAfterSelect = _G.__setToolModeCalls;"
+                , "hud.onFramebufferResize(1600, 900);"
+                , "world.setToolMode = origSetToolMode;"
+                , "return {selected=toggle.getSelectedName(hud.toolToggleId),"
+                , "        callsAfterSelect=callsAfterSelect, callsAfterResize=_G.__setToolModeCalls}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ToolPreserveProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tppSelected p `shouldBe` "tool_mine"
+                    tppCallsAfterSelect p `shouldBe` 1
+                    tppCallsAfterResize p `shouldBe` 1
+
+        it "a resize preserves the visually selected map mode" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local toggle = require('scripts.ui.toggle');"
+                , "toggle.applyOptionByName(hud.mapToggleId, 'map_temp');"
+                , "hud.onFramebufferResize(1280, 720);"
+                , "return {toggle.getSelectedName(hud.mapToggleId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [Text] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just names → names `shouldBe` ["map_temp"]
+
     describe "resize-safe teardown (#750) — scripts/ui/view_teardown.lua's new \"resize\" transition" $ do
         it "hud.createUI() runs the 'resize' sweep before deleting world_page, reaching every registered world_page-mounted widget" $ \env → do
             ls ← newBareLuaBackend env
@@ -421,6 +493,26 @@ spec = around withHeadlessEngine $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just names → names `shouldMatchList` ["offscreen", "offRight"]
 
+    describe "popup.lua reflows active cards on resize (#750 round-1 review)" $ do
+        it "a card recenters to the new framebuffer instead of staying stale or going off-screen after a shrink" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,1920,1080);"
+                , "p.onShowPopup('unit_event', 'hello', 0, 0, 0, 1, {});"
+                , "local before = p.getActiveBounds()[1];"
+                , "p.onFramebufferResize(800, 600);"
+                , "local after = p.getActiveBounds()[1];"
+                , "return {beforeX=before.x, beforeY=before.y, afterX=after.x, afterY=after.y,"
+                , "        afterInFrame=(after.x >= 0 and after.y >= 0"
+                , "                      and (after.x+after.w) <= 800 and (after.y+after.h) <= 600)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ReflowProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rpAfterInFrame p `shouldBe` True
+                    (rpAfterX p, rpAfterY p) `shouldNotBe` (rpBeforeX p, rpBeforeY p)
+
     describe "popup.lua avoids the reserved toolbar regions (#750) — \"notifications avoid required controls\"" $ do
         it "renderPopup calls reserved_regions.avoidReserved against the real hud toolbar rects" $ \env → do
             ls ← newBareLuaBackend env
@@ -542,6 +634,26 @@ instance FromJSON ZeroMinimizeProbe where
 data FbSize = FbSize { fsW ∷ Int, fsH ∷ Int } deriving Show
 instance FromJSON FbSize where
     parseJSON = withObject "FbSize" $ \o → FbSize <$> o .: "fbW" <*> o .: "fbH"
+
+data HiddenResizeProbe = HiddenResizeProbe
+    { hrpVisible ∷ Bool, hrpZoomPageVisible ∷ Bool, hrpWorldPageVisible ∷ Bool } deriving Show
+instance FromJSON HiddenResizeProbe where
+    parseJSON = withObject "HiddenResizeProbe" $ \o →
+        HiddenResizeProbe <$> o .: "visible" <*> o .: "zoomPageVisible" <*> o .: "worldPageVisible"
+
+data ToolPreserveProbe = ToolPreserveProbe
+    { tppSelected ∷ Text, tppCallsAfterSelect ∷ Int, tppCallsAfterResize ∷ Int } deriving Show
+instance FromJSON ToolPreserveProbe where
+    parseJSON = withObject "ToolPreserveProbe" $ \o →
+        ToolPreserveProbe <$> o .: "selected" <*> o .: "callsAfterSelect" <*> o .: "callsAfterResize"
+
+data ReflowProbe = ReflowProbe
+    { rpBeforeX ∷ Double, rpBeforeY ∷ Double
+    , rpAfterX ∷ Double, rpAfterY ∷ Double, rpAfterInFrame ∷ Bool } deriving (Show, Eq)
+instance FromJSON ReflowProbe where
+    parseJSON = withObject "ReflowProbe" $ \o →
+        ReflowProbe <$> o .: "beforeX" <*> o .: "beforeY"
+                     <*> o .: "afterX" <*> o .: "afterY" <*> o .: "afterInFrame"
 
 data FailingHookProbe = FailingHookProbe { fhpOk ∷ Bool, fhpN ∷ Int } deriving Show
 instance FromJSON FailingHookProbe where

@@ -168,6 +168,9 @@ function settingsMenu.onDefaults()
     if data.current.uiScale ~= uiScaleBefore then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
         shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)
+        -- #750: Defaults shares onApply/onSave/onBack's gameplay gap —
+        -- see the comment there.
+        require("scripts.ui_manager").notifyGameplayRescale(settingsMenu.fbW, settingsMenu.fbH)
     end
 end
 
