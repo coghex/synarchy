@@ -46,6 +46,7 @@ local infoPanel   = require("scripts.hud.info_panel")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
+local responsive  = require("scripts.ui.responsive")
 
 local L = require("scripts.unit_info_v2_layout")
 
@@ -192,7 +193,6 @@ local function rebuildLayout()
     local panelW = math.min(math.floor(L.PANEL_W * uiscale), fbW,
         reservedRegions.maxRightAnchoredWidth(0, fbH, leftToolbarRects, fbW))
     local outerPad = math.floor(L.PANEL_PAD * uiscale)
-    local sectGap  = math.floor(L.SECTION_GAP * uiscale)
 
     local panelX = fbW - panelW
     local panelY = 0
@@ -214,13 +214,17 @@ local function rebuildLayout()
     -- Section sizes (scaled)
     local contentX = panelX + outerPad
     local contentW = panelW - 2 * outerPad
-    local cursorY  = panelY + outerPad
 
-    local tabsH   = math.floor(L.TABS_H   * uiscale)
-    local headerH = math.floor(L.HEADER_H * uiscale)
-    local statsH  = math.floor(L.STATS_H  * uiscale)
-    local equipH  = math.floor(L.EQUIP_H  * uiscale)
-    local dThick  = math.floor(L.DIVIDER_THICKNESS * uiscale)
+    -- #750 round-16 review: fit the 4 fixed section heights (tabs/
+    -- header/stats/equipment) — which alone can exceed the whole
+    -- framebuffer at a narrow, high-scale combination — against the
+    -- height actually available. See L.fitVerticalSections's own
+    -- comment for the full rationale; vOuterPad/sectGap/*H/dThick here
+    -- are all at that fitted scale, distinct from the WIDTH-side
+    -- outerPad above.
+    local vOuterPad, sectGap, tabsH, headerH, statsH, equipH, dThick, minInvH =
+        L.fitVerticalSections(uiscale, fbH)
+    local cursorY = panelY + vOuterPad
 
     -- Helper: lay down a section's content, then a divider beneath it.
     -- The cursorY ends up below the divider, ready for the next
@@ -263,11 +267,12 @@ local function rebuildLayout()
     -- Inventory: remaining height, no divider after. Just record the
     -- rect; rebuildInventorySection (driven by update()) populates the
     -- tab strip + item list + total-weight footer inside it.
-    local invH = (panelY + panelH - outerPad) - cursorY
-    if invH > 0 then
-        unitInfoV2.invRect = { x = contentX, y = cursorY,
-                               w = contentW, h = invH }
-    end
+    -- #750 round-16: floored at minInvH defensively (rounding from the
+    -- floored section heights above could eat into the fit's reserve)
+    -- so inventory is never silently omitted the way it was pre-fix.
+    local invH = math.max(minInvH, (panelY + panelH - vOuterPad) - cursorY)
+    unitInfoV2.invRect = { x = contentX, y = cursorY,
+                           w = contentW, h = invH }
 end
 
 -----------------------------------------------------------

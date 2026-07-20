@@ -6,6 +6,8 @@
 -- belong to any single section either. Kept together rather than
 -- guessing which future module might need which constant.
 
+local responsive = require("scripts.ui.responsive")
+
 local M = {}
 
 -----------------------------------------------------------
@@ -150,6 +152,50 @@ function M.placeDivider(unitInfoV2, x, y, w, uiscale)
     UI.addToPage(unitInfoV2.page, sprId, x + inset, y)
     UI.setZIndex(sprId, 11)
     table.insert(unitInfoV2.dividerIds, sprId)
+end
+
+-- #750 round-16 review: at a narrow, high-scale, still-C2-supported
+-- combination (e.g. 800x2160@4x), the 4 fixed section heights below
+-- (tabs/header/stats/equipment) alone — before gap/divider overhead —
+-- already exceed the whole framebuffer, driving inventory's remaining
+-- height negative (silently omitted) and pushing equipment's own rect
+-- past the bottom edge. Fits a LOCAL, vertical-only scale for these
+-- heights (never contentW/panelW's own scale, or any section
+-- submodule's own internal uiscale) against whatever height remains
+-- after reserving a minimum sliver for inventory — the same
+-- `responsive.fitScale` technique used elsewhere in this codebase for
+-- an analogous "fixed chrome doesn't fit the available space" gap.
+-- Best-effort: each section's own CONTENT (rendered by its own
+-- submodule) still uses the full uiscale internally — a full content
+-- re-flow across five independent submodules is a follow-up — but
+-- this guarantees every section's RECT, and so inventory's own
+-- existence, stays within the framebuffer and reachable. Returns
+-- outerPad, sectGap, tabsH, headerH, statsH, equipH, dThick, minInvH.
+function M.fitVerticalSections(uiscale, fbH)
+    local outerPad = math.floor(M.PANEL_PAD * uiscale)
+    local sectGap  = math.floor(M.SECTION_GAP * uiscale)
+    local tabsH    = math.floor(M.TABS_H   * uiscale)
+    local headerH  = math.floor(M.HEADER_H * uiscale)
+    local statsH   = math.floor(M.STATS_H  * uiscale)
+    local equipH   = math.floor(M.EQUIP_H  * uiscale)
+    local dThick   = math.floor(M.DIVIDER_THICKNESS * uiscale)
+    local minInvH  = math.floor(60 * uiscale)
+
+    local perSectionOverhead = 2 * sectGap + dThick
+    local fixedNaturalTotal = 2 * outerPad
+        + (tabsH + headerH + statsH + equipH) + 4 * perSectionOverhead
+    local vScale = responsive.fitScale(
+        fixedNaturalTotal, math.max(minInvH, fbH - minInvH), uiscale)
+    if vScale < uiscale then
+        outerPad = math.floor(M.PANEL_PAD          * vScale)
+        sectGap  = math.floor(M.SECTION_GAP        * vScale)
+        tabsH    = math.floor(M.TABS_H             * vScale)
+        headerH  = math.floor(M.HEADER_H           * vScale)
+        statsH   = math.floor(M.STATS_H            * vScale)
+        equipH   = math.floor(M.EQUIP_H            * vScale)
+        dThick   = math.floor(M.DIVIDER_THICKNESS  * vScale)
+    end
+    return outerPad, sectGap, tabsH, headerH, statsH, equipH, dThick, minInvH
 end
 
 return M

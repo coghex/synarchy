@@ -318,13 +318,24 @@ renderPopup = function(p)
         -- small as their free gap (e.g. 64px) — well under 2*s.padX
         -- (288px at that scale) — which drove the click box negative
         -- and pushed the title/OK button outside the panel box
-        -- entirely. Floor at whichever is LARGER: the padding-derived
-        -- minimum usable width, or availW itself — genuinely-invalid
-        -- geometry is worse than occasionally still overlapping an
-        -- unreachable-gap reserved region in this extreme a case, same
-        -- "best-effort, never crashing/invalid" priority the rest of
-        -- this contract already uses.
-        local minUsableW = 2 * s.padX + 20
+        -- entirely.
+        --
+        -- #750 round-16 review: a flat "padding + 20px" floor still
+        -- wasn't enough — it kept panelW positive, but never accounted
+        -- for the PANEL'S OWN FIXED CHROME that has to fit inside it:
+        -- the OK button alone needs at least s.buttonMinW (320px at
+        -- 4x), and when the mute-toggle icon exists it sits beside the
+        -- close X, needing its own strip of width. Floor at whichever
+        -- the panel's fixed content actually needs — 2*s.padX plus the
+        -- WIDER of the OK button's own width or the close+mute icon
+        -- strip's width — so both always land inside the panel
+        -- regardless of how tight availW gets (the panel may still
+        -- overlap a reserved region in a genuinely infeasible case,
+        -- same "best-effort, never crashing/invalid" priority the rest
+        -- of this contract already uses — but its own OK/close/mute
+        -- controls never spill outside the panel box itself).
+        local closeAndMuteW = muteToggleReserved + s.closeBtnSize
+        local minUsableW = 2 * s.padX + math.max(btnW, closeAndMuteW, 20)
         panelW = math.min(panelW, math.max(minUsableW, availW))
     end
 

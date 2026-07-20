@@ -1663,6 +1663,84 @@ bounds) instead of overflowing; the Delete Tile button lands at
 catch their regressions (stashed both fix files, re-ran — 2 failures
 as expected, restored — passes again).
 
+Round-16 review found three more gaps: a genuine algorithm bug in
+`reserved_regions.lua`, and two more instances of round-14's "chrome-
+aware floor" class in `popup.lua`/`unit_info_v2.lua`.
+
+`reserved_regions.lua`'s `avoidReserved` processed reservations ONE AT
+A TIME in sequence — push clear of reservation 1, then push THAT
+result clear of reservation 2, etc — so a small push chosen to clear a
+LATER reservation could silently re-overlap an EARLIER one already
+cleared, with nothing left to re-check it. The reviewer's own
+counter-example: rect `{100,400,300,100}` with reservations
+`{0,0,300,1000}` (a near-full-height column) then `{500,400,100,100}`
+(a small block to the right) on a 1000×1000 screen — the smallest
+per-reservation push against the SECOND reservation alone lands back
+inside the first, even though a larger push against the second
+reservation (`{600,400}`) clears both at once. Rewrote the whole
+function: generate one candidate per (push direction × reserved rect —
+the same 4 "push flush against this rect's near edge" directions the
+old `separate()` helper used, now evaluated against the FULL
+reservation set rather than just the one that generated them) and pick
+whichever candidate clears EVERY reservation with the smallest total
+displacement from the original position; falls back to whichever
+clears the MOST reservations (ties broken by displacement) if nothing
+clears all of them — a genuinely infeasible placement, same
+best-effort contract as the rest of this module. For the single-
+reservation case (every pre-existing caller) this is provably
+equivalent to the old `separate()` — both reduce to "smallest `|delta|`
+among candidates that clear" — so no regression there; verified this
+holds via the existing round-1/round-4 tests plus a new one
+reproducing the reviewer's exact counter-example (confirmed it now
+returns `{600,400}`, clearing both reservations).
+
+`popup.lua`'s round-14 floor (`2*s.padX + 20`) kept `panelW` positive
+but never accounted for the panel's own FIXED CHROME that has to fit
+inside it: the OK button alone needs at least `s.buttonMinW` (320px at
+4x, wider than the whole round-14 floor of 308px), and the mute-toggle
+icon (when its textures are loaded) sits beside the close X, needing
+its own strip of width. Floored instead at whichever is wider — the OK
+button's own width, or the close+mute icon strip's width — plus
+padding, so both always land inside the panel regardless of how tight
+the reserved-width gap gets (the panel itself may still overlap a
+reserved region in a genuinely infeasible case, same best-effort
+priority as everywhere else in this contract, but its own OK/close/
+mute controls never spill outside the panel box).
+
+`unit_info_v2.lua`'s 4 fixed section heights (tabs/header/stats/
+equipment — 352/336/1120/1088px at the issue's own 800×2160@4x) alone,
+before any gap/divider overhead, already exceed the entire framebuffer
+height, driving inventory's remaining-height computation negative (the
+section used to be omitted outright) and pushing equipment's own rect
+past the bottom edge. Fixed with a LOCAL, vertical-only effective scale
+for these 4 section heights (never `contentW`/`panelW`'s own scale, or
+any section submodule's own internal `uiscale`), fit via
+`responsive.fitScale` against whatever height remains after reserving
+a minimum sliver for inventory — the same technique used throughout
+this codebase for an analogous "fixed chrome doesn't fit the available
+space" gap. Best-effort: each section's own CONTENT (rendered by its
+own submodule — tabs/header/stats/equipment) still renders at the full
+`uiscale` internally; a full content re-flow across five independent
+submodules is a follow-up, not attempted here — this fix only
+guarantees every section's RECT, and so inventory's own existence,
+stays within the framebuffer and reachable. The fit computation itself
+moved into `unit_info_v2_layout.lua` as a new shared helper
+(`L.fitVerticalSections`) rather than living inline in
+`rebuildLayout()` — inline, the fix pushed `unit_info_v2.lua` over its
+own 500-line module-split budget (#542); the layout module (already
+the designated home for shared layout math like `planSubTabRows`) had
+plenty of headroom.
+
+Verified against a real running engine: `reserved_regions.avoidReserved`
+on the reviewer's exact counter-example returns `{600,400}` clearing
+both reservations; the popup's OK/close/mute controls at the reviewer's
+800×2160@4x/64px-gap scenario all land within the panel's own
+`[96,704)` span; `unit_info_v2`'s inventory rect comes out with a real
+positive height (253px) and equipment's rect stays within the
+framebuffer (bottom at 1832 vs. the 2160px limit). Confirmed all three
+new/extended tests actually catch their regressions (stashed the three
+fix files, re-ran — 3 failures as expected, restored — passes again).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

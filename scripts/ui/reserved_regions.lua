@@ -87,56 +87,74 @@ local function clampRect(rect, screenW, screenH)
     return out
 end
 
--- Minimal-translation nudge: moves `rect` off `reserved`, trying the 4
--- candidate directions (flush against reserved's near edge on each
--- side) smallest-push-first, clamping each candidate to the screen and
--- keeping the FIRST one that's actually clear once clamped — not just
--- whichever axis had the smaller raw overlap (#750 round-4 review: that
--- shortcut misfires whenever `reserved`'s own span fully CONTAINS
--- `rect`'s span on one axis, e.g. a toolbar column spanning nearly the
--- whole screen height — pushing by the "overlap" amount in that case
--- doesn't reach clear ground at all, and a later screen clamp could
--- shove `rect` right back into `reserved`). Falls back to the smallest-
--- push candidate, clamped, if every candidate still overlaps once
--- clamped (a genuinely infeasible placement — `rect` doesn't fit
--- anywhere clear of `reserved` within the screen at all; best-effort,
--- not guaranteed clear, same contract as everywhere else in this
--- module). Returns a NEW rect; never mutates the input.
-local function separate(rect, reserved, screenW, screenH)
-    if not reservedRegions.rectsOverlap(rect, reserved) then return rect end
-    local candidates = {
-        { axis = "x", delta = reserved.x - (rect.x + rect.w) },        -- push left
-        { axis = "x", delta = (reserved.x + reserved.w) - rect.x },    -- push right
-        { axis = "y", delta = reserved.y - (rect.y + rect.h) },        -- push up
-        { axis = "y", delta = (reserved.y + reserved.h) - rect.y },    -- push down
-    }
-    table.sort(candidates, function(a, b) return math.abs(a.delta) < math.abs(b.delta) end)
+-- Nudges `rect` clear of EVERY rect in `reservedRects` (e.g.
+-- hud.getToolbarRects()) at once, clamping to [0,screenW]x[0,screenH]
+-- (when given). Generates one candidate per (push direction × reserved
+-- rect) — the 4 "push flush against this rect's near edge" directions,
+-- clamped to the screen — and picks whichever candidate clears EVERY
+-- reservation in the set with the smallest total displacement from
+-- `rect`'s own (clamped) position. Falls back to whichever candidate
+-- clears the MOST reservations (ties broken by displacement) when
+-- nothing clears all of them — a genuinely infeasible placement,
+-- best-effort, not guaranteed clear, same contract as everywhere else
+-- in this module. Returns a NEW rect; never mutates the input.
+--
+-- #750 round-16 review: the previous version processed reservations
+-- ONE AT A TIME in sequence — push clear of reservation 1, then push
+-- THAT result clear of reservation 2, etc — so a small push chosen to
+-- clear a LATER reservation could silently re-overlap an EARLIER one
+-- it had already cleared, with nothing left to re-check it. Concrete
+-- counter-example the review cited: rect {100,400,300,100} with
+-- reservations {0,0,300,1000} then {500,400,100,100} on a 1000x1000
+-- screen — the smallest per-reservation push against the SECOND
+-- reservation alone lands back inside the first, even though a larger
+-- push against the second reservation (600,400) clears BOTH at once.
+-- Evaluating every candidate against the FULL reservation set (not
+-- just the one that generated it) finds that candidate directly.
+function reservedRegions.avoidReserved(rect, reservedRects, screenW, screenH)
+    local clamped0 = clampRect(rect, screenW, screenH)
+    local rects = reservedRects or {}
+    if #rects == 0 then return clamped0 end
 
-    local fallback = nil
-    for _, c in ipairs(candidates) do
-        local moved = { x = rect.x, y = rect.y, w = rect.w, h = rect.h }
-        if c.axis == "x" then moved.x = rect.x + c.delta else moved.y = rect.y + c.delta end
-        local clamped = clampRect(moved, screenW, screenH)
-        if not fallback then fallback = clamped end
-        if not reservedRegions.rectsOverlap(clamped, reserved) then
-            return clamped
+    local function clearsAll(candidate)
+        for _, r in ipairs(rects) do
+            if reservedRegions.rectsOverlap(candidate, r) then return false end
+        end
+        return true
+    end
+    if clearsAll(clamped0) then return clamped0 end
+
+    local function overlapCount(candidate)
+        local n = 0
+        for _, r in ipairs(rects) do
+            if reservedRegions.rectsOverlap(candidate, r) then n = n + 1 end
+        end
+        return n
+    end
+    local function displacement(a, b)
+        return math.abs(a.x - b.x) + math.abs(a.y - b.y)
+    end
+
+    local best, bestOverlaps, bestDisp = clamped0, overlapCount(clamped0), 0
+    for _, reserved in ipairs(rects) do
+        local pushes = {
+            { dx = reserved.x - (clamped0.x + clamped0.w), dy = 0 },       -- push left
+            { dx = (reserved.x + reserved.w) - clamped0.x, dy = 0 },       -- push right
+            { dx = 0, dy = reserved.y - (clamped0.y + clamped0.h) },       -- push up
+            { dx = 0, dy = (reserved.y + reserved.h) - clamped0.y },       -- push down
+        }
+        for _, p in ipairs(pushes) do
+            local moved = { x = clamped0.x + p.dx, y = clamped0.y + p.dy,
+                             w = clamped0.w, h = clamped0.h }
+            local candidate = clampRect(moved, screenW, screenH)
+            local ov = overlapCount(candidate)
+            local disp = displacement(candidate, clamped0)
+            if ov < bestOverlaps or (ov == bestOverlaps and disp < bestDisp) then
+                best, bestOverlaps, bestDisp = candidate, ov, disp
+            end
         end
     end
-    return fallback
-end
-
--- Nudges `rect` clear of every rect in `reservedRects` (e.g.
--- hud.getToolbarRects()), clamping to [0,screenW]x[0,screenH] (when
--- given) after each individual separation so a later screen clamp can
--- never blindly undo an earlier one. Deterministic; passes are order-
--- dependent, so callers with more than one plausible conflict should
--- list higher-priority regions first.
-function reservedRegions.avoidReserved(rect, reservedRects, screenW, screenH)
-    local out = clampRect(rect, screenW, screenH)
-    for _, reserved in ipairs(reservedRects or {}) do
-        out = separate(out, reserved, screenW, screenH)
-    end
-    return out
+    return best
 end
 
 -- #750 round-4 review: capping a card's width to the framebuffer alone

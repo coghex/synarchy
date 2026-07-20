@@ -815,6 +815,37 @@ spec = aroundAll withSharedFixture $ do
                         rrX rr `shouldBe` 500
                         rrY rr `shouldBe` 500
 
+            -- #750 round-16 review: avoidReserved used to clear each
+            -- reservation ONE AT A TIME in sequence, so a small push
+            -- chosen to clear a LATER reservation could silently
+            -- re-overlap an EARLIER one already cleared, with nothing
+            -- left to re-check it. The reviewer's own counter-example:
+            -- rect {100,400,300,100} with reservations {0,0,300,1000}
+            -- (a near-full-height left column) then {500,400,100,100}
+            -- (a small block to the right) on a 1000x1000 screen — the
+            -- old sequential version landed back inside the first
+            -- reservation even though a feasible fully-clear placement
+            -- exists ({600,400}).
+            do  r ← evalJSON ls $ luaLines
+                    [ "local rr = require('scripts.ui.reserved_regions');"
+                    , "local reservations = {"
+                    , "    {x=0, y=0, w=300, h=1000},"
+                    , "    {x=500, y=400, w=100, h=100},"
+                    , "};"
+                    , "local out = rr.avoidReserved({x=100,y=400,w=300,h=100}, reservations, 1000, 1000);"
+                    , "local clearsAll = true;"
+                    , "for _, r in ipairs(reservations) do"
+                    , "    if rr.rectsOverlap(out, r) then clearsAll = false end"
+                    , "end;"
+                    , "return {x = out.x, y = out.y, clearsAll = clearsAll}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe MultiRegionAvoidProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        mrapClearsAll p `shouldBe` True
+                        mrapX p `shouldBe` 600
+                        mrapY p `shouldBe` 400
+
             do  r ← evalJSON ls $ luaLines
                     [ "local rr = require('scripts.ui.reserved_regions');"
                     , "local elements = {"
@@ -888,7 +919,7 @@ spec = aroundAll withSharedFixture $ do
                     opOverlapsAny p `shouldBe` False
                     opInFrame p `shouldBe` True
 
-        it "a 10-line card squeezed to a tiny reserved-width gap still produces a positive-width, in-frame click box (round-14 review)" $ \(env, ls) → do
+        it "a 10-line card squeezed to a tiny reserved-width gap still produces a positive-width, in-frame click box, OK button, and mute icon (round-14/round-16 review)" $ \(env, ls) → do
             resetFixture env ls
             -- #750 round-14 review: the reserved-width cap floored
             -- panelW at a flat 20px — enough to keep panelW itself
@@ -901,6 +932,15 @@ spec = aroundAll withSharedFixture $ do
             -- effect immediately) to reproduce the reviewer's own "both
             -- toolbar clusters overlap, 64px free gap" scenario without
             -- depending on the real toolbar's actual measured geometry.
+            --
+            -- #750 round-16 review: the round-14 floor (padding + 20px)
+            -- still didn't account for the panel's own FIXED CHROME —
+            -- the OK button alone needs at least s.buttonMinW (320px at
+            -- 4x), wider than the whole round-14 floor (308px), and the
+            -- mute icon (present here since popup.bootstrap loads both
+            -- textures) needs its own strip beside the close X. Extended
+            -- this same test to also assert the OK button and mute icon
+            -- stay within the panel, not just the line click boxes.
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(4.0);"
                 , "local hud = require('scripts.hud');"
@@ -927,8 +967,16 @@ spec = aroundAll withSharedFixture $ do
                 , "        table.insert(lineRects, {w = info.width, x = info.x});"
                 , "    end"
                 , "end;"
+                , "local button = require('scripts.ui.button');"
+                , "local okInfo = UI.getElementInfo(button.getElementHandle(rec.okBtnId));"
+                , "local closeInfo = UI.getElementInfo(button.getElementHandle(rec.closeBtnId));"
+                , "local muteInfo = rec.muteToggleId and UI.getElementInfo(rec.muteToggleId);"
                 , "return {panelW = b.w, panelX = b.x, panelInFrame = (b.x >= 0 and (b.x+b.w) <= 800),"
-                , "        lineRects = lineRects}"
+                , "        lineRects = lineRects,"
+                , "        okX = okInfo.x, okW = okInfo.width,"
+                , "        closeX = closeInfo.x, closeW = closeInfo.width,"
+                , "        hasMute = (muteInfo ~= nil),"
+                , "        muteX = muteInfo and muteInfo.x or 0, muteW = muteInfo and muteInfo.width or 0}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PopupSqueezeProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
@@ -938,6 +986,17 @@ spec = aroundAll withSharedFixture $ do
                     length (psqLineRects p) `shouldSatisfy` (≥ 1)
                     forM_ (psqLineRects p) $ \lr →
                         lrpW lr `shouldSatisfy` (> 0)
+                    let panelRight = psqPanelX p + psqPanelW p
+                    psqOkW p `shouldSatisfy` (> 0)
+                    psqOkX p `shouldSatisfy` (≥ psqPanelX p)
+                    (psqOkX p + psqOkW p) `shouldSatisfy` (≤ panelRight)
+                    psqCloseW p `shouldSatisfy` (> 0)
+                    psqCloseX p `shouldSatisfy` (≥ psqPanelX p)
+                    (psqCloseX p + psqCloseW p) `shouldSatisfy` (≤ panelRight)
+                    when (psqHasMute p) $ do
+                        psqMuteW p `shouldSatisfy` (> 0)
+                        psqMuteX p `shouldSatisfy` (≥ psqPanelX p)
+                        (psqMuteX p + psqMuteW p) `shouldSatisfy` (≤ panelRight)
 
         it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \(env, ls) → do
             resetFixture env ls
@@ -1309,6 +1368,43 @@ spec = aroundAll withSharedFixture $ do
                 Just p → do
                     opOverlapsAny p `shouldBe` False
                     opInFrame p `shouldBe` True
+
+        it "the 4 fixed sections + inventory all stay within the framebuffer at a narrow, high-scale, still-C2-supported combination (round-16 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-16 review: tabsH/headerH/statsH/equipH alone
+            -- (352/336/1120/1088px at the issue's own 800x2160@4x)
+            -- already exceed the framebuffer height before any gap/
+            -- divider overhead, driving inventory's remaining-height
+            -- computation negative (the section used to be omitted
+            -- outright) and pushing equipment's own rect past the
+            -- bottom edge. unitInfoV2.rebuildLayout() is only reachable
+            -- through update() (bootstrap() — which sets .page and
+            -- triggers the FIRST rebuildLayout() — is local, not
+            -- exported); unit.getSelected() safely returns
+            -- nil/empty headless, so this drives the real entry point.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "local ok = pcall(function() u.update(0.016) end);"
+                , "return {ok = ok,"
+                , "        hasInvRect = (u.invRect ~= nil),"
+                , "        invH = u.invRect and u.invRect.h or 0,"
+                , "        equipBottom = u.equipRect and (u.equipRect.y + u.equipRect.h) or 0,"
+                , "        statsBottom = u.statsRect and (u.statsRect.y + u.statsRect.h) or 0,"
+                , "        invBottom = u.invRect and (u.invRect.y + u.invRect.h) or 0}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoVerticalProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    uivpOk p `shouldBe` True
+                    uivpHasInvRect p `shouldBe` True
+                    uivpInvH p `shouldSatisfy` (> 0)
+                    uivpEquipBottom p `shouldSatisfy` (≤ 2160)
+                    uivpStatsBottom p `shouldSatisfy` (≤ 2160)
+                    uivpInvBottom p `shouldSatisfy` (≤ 2160)
 
         it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \(env, ls) → do
             resetFixture env ls
@@ -2075,6 +2171,20 @@ instance FromJSON LabeledOkRow where
     parseJSON = withObject "LabeledOkRow" $ \o →
         LabeledOkRow <$> o .: "label" <*> o .: "ok"
 
+data UnitInfoVerticalProbe = UnitInfoVerticalProbe
+    { uivpOk ∷ Bool, uivpHasInvRect ∷ Bool, uivpInvH ∷ Double
+    , uivpEquipBottom ∷ Double, uivpStatsBottom ∷ Double, uivpInvBottom ∷ Double } deriving Show
+instance FromJSON UnitInfoVerticalProbe where
+    parseJSON = withObject "UnitInfoVerticalProbe" $ \o →
+        UnitInfoVerticalProbe <$> o .: "ok" <*> o .: "hasInvRect" <*> o .: "invH"
+                               <*> o .: "equipBottom" <*> o .: "statsBottom" <*> o .: "invBottom"
+
+data MultiRegionAvoidProbe = MultiRegionAvoidProbe
+    { mrapX ∷ Double, mrapY ∷ Double, mrapClearsAll ∷ Bool } deriving Show
+instance FromJSON MultiRegionAvoidProbe where
+    parseJSON = withObject "MultiRegionAvoidProbe" $ \o →
+        MultiRegionAvoidProbe <$> o .: "x" <*> o .: "y" <*> o .: "clearsAll"
+
 data InfoPanelTabsProbe = InfoPanelTabsProbe
     { iptPanelX ∷ Double, iptPanelW ∷ Double, iptTabCount ∷ Int, iptTabs ∷ [RectRow] } deriving Show
 instance FromJSON InfoPanelTabsProbe where
@@ -2096,11 +2206,17 @@ instance FromJSON LineRectProbe where
 
 data PopupSqueezeProbe = PopupSqueezeProbe
     { psqPanelW ∷ Double, psqPanelX ∷ Double, psqPanelInFrame ∷ Bool
-    , psqLineRects ∷ [LineRectProbe] } deriving Show
+    , psqLineRects ∷ [LineRectProbe]
+    , psqOkX ∷ Double, psqOkW ∷ Double
+    , psqCloseX ∷ Double, psqCloseW ∷ Double
+    , psqHasMute ∷ Bool, psqMuteX ∷ Double, psqMuteW ∷ Double } deriving Show
 instance FromJSON PopupSqueezeProbe where
     parseJSON = withObject "PopupSqueezeProbe" $ \o →
         PopupSqueezeProbe <$> o .: "panelW" <*> o .: "panelX" <*> o .: "panelInFrame"
                            <*> o .: "lineRects"
+                           <*> o .: "okX" <*> o .: "okW"
+                           <*> o .: "closeX" <*> o .: "closeW"
+                           <*> o .: "hasMute" <*> o .: "muteX" <*> o .: "muteW"
 
 data RemoteWarningFocusProbe = RemoteWarningFocusProbe
     { rwfpHadFocusBefore ∷ Bool, rwfpHasFocusAfter ∷ Bool } deriving Show
