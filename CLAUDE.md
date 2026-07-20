@@ -1274,6 +1274,55 @@ driven through a real `openFor` with `building.getStorage` stubbed to
 return eight distinct-category items, showed its tab row shrinking to
 fit rather than overflowing.
 
+Round-9 review found one more gap in `build_tool.lua`'s picker:
+round-8's `columnsPerRow` fix bounded the icon grid's WIDTH, but
+`pickerH`'s framebuffer cap only ever shrank the panel's own box —
+`iconAreaH` (rowCount × iconSize, computed from the pre-cap iconSize)
+was never itself constrained, so a narrow width forcing few columns
+(one, in the reviewer's cited 800×2160@4x case) could still stack
+enough rows into an icon area taller than the framebuffer, with
+nothing clipping or scrolling to reach the overflow. Fixed by
+compacting rather than adding a new scrollable-grid subsystem — the
+same best-effort philosophy behind every other fix in this class:
+after the width-driven `columnsPerRow`/`rowCount`/`iconAreaH` are
+computed, if `iconAreaH` would exceed the tallest the picker could ever
+be (`fbH` minus its fixed chrome — the picker's Y position floats
+below, so this is the best case regardless of where it eventually
+clamps to), shrink `iconSize`/`iconGap` by one factor (floored at 16px/
+2px so an icon stays a real, visible target) and re-derive
+`columnsPerRow` from the shrunk size against the same width budget — a
+smaller icon fits more per row, which itself reduces how many rows are
+needed. `showPicker()` now stores the final `iconSize`/`iconGap` on
+`buildTool.state` alongside `columnsPerRow`, and `rebuildIconGrid()`
+(re-run on every tab switch) reads all three from there instead of
+recomputing `ICON_SIZE_BASE`/`ICON_GAP_BASE * uiscale` fresh — the same
+"never a drifted, independently recomputed value" discipline round-8
+established for `columnsPerRow` alone.
+
+A second, related gap: `rowCount`/`iconAreaH` were computed from
+whichever category happened to be ACTIVE when the picker opened, but
+`handleTabClick` (switching tabs within an already-open picker) only
+calls `rebuildIconGrid()` — it never re-runs `showPicker()`'s sizing
+pass — so a picker opened on a small category and then switched to a
+larger one could overflow a panel/icon-area budget that was never sized
+for it. Fixed by sizing against `math.max(#activeCatDefs, #visible)` —
+"All" is always a superset of every other tab, so budgeting for its
+count up front guarantees no same-session tab switch ever needs more
+rows than what's already accounted for. Mirrors the "fit against the
+worst-case row" technique `input_tab.lua`/`notifications_tab.lua`
+already use elsewhere in this codebase (see this file's earlier
+responsive-menu-lifecycle notes) for the identical reason: a control
+shouldn't jump size, or overflow, relative to a sibling that shares its
+layout pass.
+
+Verified against a real running headless engine at the reviewer's own
+800×2160@4x, eight-entry exemplar (`building.listDefs` monkey-patched
+over the debug console the same way the new regression test does):
+`iconSize` shrank from its base 256px to 205px, all eight icons landed
+between y=265 and y=2080 (inside the 2160px framebuffer, versus the
+reviewer's reported 2272px natural overflow), and the panel itself
+stayed fully in-frame at `{x:352, y:9, w:448, h:2151}`.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

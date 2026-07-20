@@ -1263,6 +1263,44 @@ spec = aroundAll withSharedFixture $ do
                         rrW rc `shouldSatisfy` (≥ 20)
                         (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
 
+        it "the icon grid is vertically compacted so a many-entry single-column category doesn't run off the framebuffer (round-9 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local orig = building.listDefs;"
+                , "building.listDefs = function() return {"
+                , "    { name='t1', displayName='A1', category='All', isStarting=true },"
+                , "    { name='t2', displayName='A2', category='All', isStarting=true },"
+                , "    { name='t3', displayName='A3', category='All', isStarting=true },"
+                , "    { name='t4', displayName='A4', category='All', isStarting=true },"
+                , "    { name='t5', displayName='A5', category='All', isStarting=true },"
+                , "    { name='t6', displayName='A6', category='All', isStarting=true },"
+                , "    { name='t7', displayName='A7', category='All', isStarting=true },"
+                , "    { name='t8', displayName='A8', category='All', isStarting=true },"
+                , "} end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local bt = require('scripts.build_tool');"
+                , "bt.setup({hud = hud});"
+                , "local ok = pcall(function() bt.showPicker() end);"
+                , "building.listDefs = orig;"
+                , "if not ok or bt.state.mode ~= 'picker' then return {skipped = true} end;"
+                , "local out = {};"
+                , "for _, ic in ipairs(bt.state.iconIds or {}) do"
+                , "    local info = UI.getElementInfo(ic);"
+                , "    if info then table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height}) end"
+                , "end;"
+                , "return {skipped = false, columnsPerRow = bt.state.columnsPerRow, icons = out}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ColumnGridProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → when (not (cgpSkipped p)) $ do
+                    length (cgpIcons p) `shouldSatisfy` (≥ 8)
+                    forM_ (cgpIcons p) $ \rc → do
+                        rrY rc `shouldSatisfy` (≥ 0)
+                        (rrY rc + rrH rc) `shouldSatisfy` (≤ 2160)
+
 -- * FromJSON row types
 
 data ToolbarRow = ToolbarRow { trW ∷ Int, trH ∷ Int, trCount ∷ Int, trAllIn ∷ Bool } deriving Show

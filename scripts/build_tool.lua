@@ -344,14 +344,17 @@ local function rebuildIconGrid(visible)
     if not h then return end
 
     local uiscale     = scale.get()
-    local iconSize    = math.floor(ICON_SIZE_BASE * uiscale)
-    local iconGap     = math.floor(ICON_GAP_BASE  * uiscale)
+    -- #750 round-8/9 review: the SAME columnsPerRow/iconSize/iconGap
+    -- showPicker() derived (and, at round 9, possibly vertically
+    -- compacted) when it computed rowCount/iconAreaH — never the fixed
+    -- ICONS_PER_ROW/ICON_SIZE_BASE/ICON_GAP_BASE defaults, or a narrow
+    -- or short panel's icon grid would drift back to running off the
+    -- panel/framebuffer edge on the very next rebuild (every tab
+    -- switch calls this function again).
+    local iconSize    = buildTool.state.iconSize or math.floor(ICON_SIZE_BASE * uiscale)
+    local iconGap     = buildTool.state.iconGap  or math.floor(ICON_GAP_BASE  * uiscale)
     local catDefs     = defsInCategory(visible, buildTool.state.activeCategory)
     local whiteTex    = buildTool.whitePixelTex
-    -- #750 round-8 review: the SAME columnsPerRow showPicker() derived
-    -- from the actual panel width when it computed rowCount/iconAreaH —
-    -- never the fixed ICONS_PER_ROW default, or a narrow panel's icon
-    -- grid would drift back to running off the panel/framebuffer edge.
     local columnsPerRow = buildTool.state.columnsPerRow or ICONS_PER_ROW
 
     for i, d in ipairs(catDefs) do
@@ -556,18 +559,63 @@ function buildTool.showPicker()
     local availableIconW = math.max(iconSize, pickerW - 2 * padX)
     local columnsPerRow = math.max(1,
         math.floor((availableIconW + iconGap) / (iconSize + iconGap)))
-    buildTool.state.columnsPerRow = columnsPerRow
+
+    -- #750 round-9 review: size the icon area against the WORST-CASE
+    -- category rather than whichever tab happens to be active when the
+    -- picker opens — "All" is always a superset of every other tab, so
+    -- using its count guarantees a later same-session tab switch
+    -- (handleTabClick only rebuilds the icon grid, it never re-runs this
+    -- sizing pass) can never need more rows than what's already
+    -- budgeted. Mirrors the same "fit against the worst-case row"
+    -- technique input_tab.lua/notifications_tab.lua already use
+    -- elsewhere in this codebase (see CLAUDE.md's responsive-menu-
+    -- lifecycle notes).
+    local worstCaseCount = math.max(#activeCatDefs, #visible)
 
     -- Always show at least one slot of vertical space so the panel
     -- isn't a flat strip when a category is empty.
     local rowCount = math.max(1,
-        math.ceil(#activeCatDefs / columnsPerRow))
+        math.ceil(worstCaseCount / columnsPerRow))
     local iconAreaH = rowCount * iconSize + math.max(0, rowCount - 1) * iconGap
 
     -- Tab-strip + small gap + icon area + panel padding.
     local tabGapBelow = math.floor(8 * uiscale)
-    local pickerH = math.floor((PANEL_PAD_TOP + PANEL_PAD_BOTTOM) * uiscale)
-                  + tabH + tabGapBelow + iconAreaH
+    local chromeH = math.floor((PANEL_PAD_TOP + PANEL_PAD_BOTTOM) * uiscale)
+                  + tabH + tabGapBelow
+
+    -- #750 round-9 review: capping pickerH below constrains the PANEL's
+    -- own box, but never touched iconAreaH itself — a narrow width
+    -- forcing few columns could still stack enough rows into an icon
+    -- area taller than the framebuffer, with nothing to clip or scroll
+    -- to the overflow. Compact instead of scroll (same best-effort
+    -- philosophy as every other fix in this class): if the natural icon
+    -- area exceeds the tallest the picker could ever be (the picker's Y
+    -- position floats below, so fbH minus its fixed chrome is the best
+    -- case regardless of where it eventually clamps to), shrink icon
+    -- size and gap by one factor (floored so an icon stays a real,
+    -- visible target) and re-derive columnsPerRow from the shrunk size
+    -- against the SAME width budget — a smaller icon fits more per row,
+    -- which itself reduces how many rows are needed. Both are stored on
+    -- buildTool.state so rebuildIconGrid (re-run on every tab switch)
+    -- draws at the SAME size this budget assumed.
+    if h.fbH and iconAreaH > 0 then
+        local maxIconAreaH = math.max(iconSize, h.fbH - chromeH)
+        if iconAreaH > maxIconAreaH then
+            local vshrink = maxIconAreaH / iconAreaH
+            iconSize = math.max(16, math.floor(iconSize * vshrink))
+            iconGap  = math.max(2,  math.floor(iconGap  * vshrink))
+            columnsPerRow = math.max(1,
+                math.floor((math.max(iconSize, pickerW - 2 * padX) + iconGap)
+                           / (iconSize + iconGap)))
+            rowCount = math.max(1, math.ceil(worstCaseCount / columnsPerRow))
+            iconAreaH = rowCount * iconSize + math.max(0, rowCount - 1) * iconGap
+        end
+    end
+    buildTool.state.columnsPerRow = columnsPerRow
+    buildTool.state.iconSize = iconSize
+    buildTool.state.iconGap  = iconGap
+
+    local pickerH = chromeH + iconAreaH
 
     local buildBtnTopY = h.fbH - margin - 2 * btnSize - stackGap
     local pickerY      = buildBtnTopY
