@@ -1,0 +1,25 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b1-initial-session-minimal fixture (issue #766). Storage metadata (name, timestamp) is deliberately excluded from gameplay-state equivalence -- see World.Save.Snapshot's SessionSnapshot haddock. Cross-checked by Test.Headless.World.Save.Components' \"B1 -> current migration\" gate.",
+  "metadata": {
+    "seed": 42,
+    "worldSize": 8,
+    "plateCount": 3,
+    "worldName": null,
+    "worldGloss": null
+  },
+  "activePage": "main_world",
+  "visiblePages": ["main_world"],
+  "pages": [
+    {
+      "pageId": "main_world",
+      "buildingCount": 0,
+      "unitCount": 0,
+      "unitSimStateCount": 0,
+      "craftBillCount": 0,
+      "powerNodeCount": 0,
+      "groundItemCount": 0
+    }
+  ],
+  "luaComponentCount": 0,
+  "isMigratedLegacyBaseline": true
+}

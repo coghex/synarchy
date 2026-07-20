@@ -720,6 +720,7 @@ library
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component
+                     World.Save.Compat.SessionV90
                      World.Save.Reference
                      World.Save.Integrity
                      World.Save.Storage
@@ -987,6 +988,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
+                   Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.Save.Barrier

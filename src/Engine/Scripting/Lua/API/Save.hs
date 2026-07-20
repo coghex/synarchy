@@ -491,7 +491,7 @@ continueLoad env logger requestId saveName descriptors = do
                 advanceLoad (loadStatusRef env) requestId phase
                 failLoad (loadStatusRef env) requestId err
             Lua.pushboolean False
-        Right (saveData, luaComponents) → do
+        Right (saveData, luaComponents, isMigratedLegacyBaseline) → do
             -- 'loadWorld' already selected the storage generation,
             -- validated the envelope, decoded + migrated every Haskell
             -- component, and assembled + cross-validated the complete
@@ -636,7 +636,15 @@ continueLoad env logger requestId saveName descriptors = do
                 -- component before touching any live Lua state. Any
                 -- failure aborts the whole load (nothing has changed
                 -- yet), exactly like the def-reference check above.
+                -- issue #766 requirement 5: a recognized pre-#760
+                -- compatibility migration predates every Lua-owned
+                -- persistent component (luaComponents is always empty
+                -- here), so isMigratedLegacyBaseline tells
+                -- save_modules.prepareLoad to supply each currently-
+                -- required module's own empty-state default instead of
+                -- hard-failing on "missing".
                 prepared ← prepareLuaLoad logger requestId luaComponents
+                                          isMigratedLegacyBaseline
                 case prepared of
                   Left err → do
                     Lua.liftIO $ do
@@ -971,14 +979,22 @@ readReferenceEdgeField = do
                          , maybe "" TE.decodeUtf8Lenient mpathB ))
         _ → return Nothing
 
--- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
---   decode + migrate + component-locally-validate EVERY registered Lua
---   component with NO live mutation (requirement 11). Any failure — a
---   require/call failure, or a reported validation error — aborts the
+-- | Call @saveModules.prepareLoad(components, requestId, isMigrating)@
+--   (issue #761; the third argument added by issue #766, save-overhaul
+--   C4): decode + migrate + component-locally-validate EVERY registered
+--   Lua component with NO live mutation (requirement 11). Any failure —
+--   a require/call failure, or a reported validation error — aborts the
 --   load; nothing has touched live Lua state yet either way. @requestId@
 --   is stashed on the Lua side alongside the prepared data so a later
 --   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (round
---   9 review — see 'abortLuaLoad').
+--   9 review — see 'abortLuaLoad'). @isMigratingLegacyBaseline@ is
+--   'True' only for a recognized pre-#760 compatibility migration
+--   (always empty @components@) — every currently-required module then
+--   gets its own empty-state default (via @reg.decode(reg.version,
+--   nil)@, which every registered persistent component already
+--   tolerates) instead of failing on "missing", since every one of them
+--   post-dates that baseline (requirement 7: an honest default, not a
+--   guess).
 -- | On success, also returns every reference edge
 --   ('readReferenceEdgeField') the just-prepared components' @references()@
 --   hooks reported (issue #764) — @continueLoad@ cross-validates these
@@ -986,12 +1002,13 @@ readReferenceEdgeField = do
 --   that array degrades to being dropped (best-effort diagnostics only;
 --   this never gates the load — see "World.Save.Integrity"'s haddock).
 prepareLuaLoad
-    ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
+    ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)] → Bool
     → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text)])
-prepareLuaLoad logger requestId components = do
-    ok ← callSaveModules1 logger "prepareLoad" 2
+prepareLuaLoad logger requestId components isMigratingLegacyBaseline = do
+    ok ← callSaveModules1 logger "prepareLoad" 3
             (pushComponentsArray components
-                ≫ Lua.pushinteger (fromIntegral requestId))
+                ≫ Lua.pushinteger (fromIntegral requestId)
+                ≫ Lua.pushboolean isMigratingLegacyBaseline)
     if not ok
       then return (Left "save_modules.prepareLoad() could not be called \
                          \(see engine log)")

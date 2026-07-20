@@ -38,33 +38,37 @@ fi
 # Identical to the CI "Configure" step: -Werror for the local package only.
 printf 'package synarchy\n  ghc-options: -Werror\n' > "$LOCAL"
 
-echo "==> [1/9] build (library + executable, -Werror)"
+echo "==> [1/10] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/9] build test suites"
+echo "==> [2/10] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/9] headless hspec suite"
+echo "==> [3/10] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/9] test audit"
+echo "==> [4/10] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/9] lua module line budget"
+echo "==> [5/10] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [6/9] lua duplicate function audit"
+echo "==> [6/10] lua duplicate function audit"
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [7/9] haskell module line budget"
+echo "==> [7/10] haskell module line budget"
 python3 tools/haskell_module_budget.py
 
-echo "==> [8/9] persistence inventory audit"
+echo "==> [8/10] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [9/9] world_check --quick"
+echo "==> [9/10] save compatibility audit"
+python3 tools/test_save_compat_audit.py
+python3 tools/save_compat_audit.py
+
+echo "==> [10/10] world_check --quick"
 python3 tools/world_check.py --quick
 
 echo "==> make ci: all gates passed"

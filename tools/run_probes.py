@@ -170,6 +170,10 @@ PROBES = [
      "resource-root launch contract: built exe runs --dump/--headless from outside the repo (#636)"),
     ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
+    ("save_compat_migration", "save_compat_migration_probe.py",
+     "fresh-process migration probe: a tracked pre-#760 B1 fixture loads, "
+     "publishes, dwells paused, re-saves current-format, and reloads "
+     "cleanly across a real process restart (#766)"),
     ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
     ("save_barrier", "save_barrier_probe.py",

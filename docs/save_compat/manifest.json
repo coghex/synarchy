@@ -1,0 +1,64 @@
+{
+  "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py and tools/save_compat_fixtures.py.",
+  "envelopeFramingVersion": 1,
+  "frozenDtoFingerprint": "30ae5c8d1f615fde815b4ca839722925444efcf2591d2169f187da46836fdcf0",
+  "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs",
+  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs -- see tools/save_compat_audit.py's frozen_dto_fingerprint(). Changes only when a field is added/removed/reordered, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\"",
+  "baselines": [
+    {
+      "id": "b1-initial-session",
+      "description": "The first tracked envelope (issue #759, save-overhaul B1): a single required \"session\" component wrapping the then-current SaveData/WorldPageSave shape (save-version 90) verbatim, alongside the ordinary \"metadata\" component. This is the compatibility baseline requirement 1 designates as the starting point -- every later baseline builds on it.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Compat.SessionV90.migrateSessionV90",
+      "components": [
+        {"id": "metadata", "version": 1, "required": true},
+        {"id": "session", "version": 90, "required": true}
+      ],
+      "fixtures": [
+        {
+          "id": "b1-initial-session-minimal",
+          "path": "test-headless/data/save-compat/b1-initial-session.bin",
+          "kind": "complete-session",
+          "sha256": "0f365f8f6d05e64210d7a144af200bf0e6cc909cb50e30af61e880cd23430570",
+          "sizeBytes": 295495,
+          "provenance": "Generated through the real codec: a genuine world.init('main_world', 42, 8, 3) small world was generated and saved through a real headless engine boot (so its WorldGenParams/plate data is staging-valid, unlike a hand-built defaultWorldGenParams value), its 'world-pages' component's real PageCoreDTO gen params were extracted, then wrapped as a v90-shaped SaveDataV90 value and encoded via World.Save.Envelope.Codec.encodeEnvelope into a single required 'session' component -- see tools/save_compat_audit.py --add-baseline to re-register after regenerating.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/b1-initial-session.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "historical-b1-session-recovered",
+      "description": "A REAL B1-era envelope recovered from git history (commit 988c2727, the tracked fixture Test.Headless.World.Save.Envelope carried before #760 replaced it) -- proves World.Save.Compat.SessionV90's frozen DTO decodes genuine pre-#760 bytes, not merely this codebase's own encoder output. This fixture's own \"metadata\" component was hand-picked independently of its gameplay gen params by the original test author (world size 64 / plate count 3, vs. the page's real defaultWorldGenParams 128 / 10) -- B1 predates requirement 12's manifest/gameplay agreement check entirely, so the FULL migration (decodeSessionEnvelope) correctly rejects it on that pre-existing mismatch. It is tracked as decode-only evidence, not as a fixture the full migration pipeline must accept.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "decode-only (component-focused; not a migration-acceptance fixture -- see description)",
+      "migrationTarget": "n/a (frozen-DTO byte-compatibility evidence only)",
+      "migratedBy": "World.Save.Compat.SessionV90.decodeSessionV90",
+      "components": [
+        {"id": "metadata", "version": 1, "required": true},
+        {"id": "session", "version": 90, "required": true}
+      ],
+      "fixtures": [
+        {
+          "id": "historical-b1-session-recovered",
+          "path": "test-headless/Test/Headless/World/Save/Compat.hs",
+          "kind": "component-focused",
+          "sha256": null,
+          "sizeBytes": null,
+          "provenance": "Recovered verbatim from git history: commit 988c2727 (\"Introduce the tagged, checksummed save envelope (#759, save-overhaul B1)\"), Test.Headless.World.Save.Envelope's trackedEnvelopeFixtureHex constant. Stored as an inline hex literal (matching that historical file's own convention) rather than a tracked binary blob, since a `git show` of that exact commit is the authoritative, independently-reproducible source -- see the module haddock.",
+          "expectedCanonicalSummary": null
+        }
+      ]
+    }
+  ],
+  "retiredBaselines": [
+    {
+      "id": "b2-transitional-lua-state",
+      "description": "The brief #760-only shape (Haskell persistence already split into independently-versioned components, but Lua state still the single opaque \"lua-state\" blob map predating #761's versioned Lua components). This window was NEVER declared a compatibility baseline -- no manifest existed yet, and no fixture for it was ever tracked outside the same-day #760/#761 development arc it was superseded within (#760's own fixture was itself replaced before this manifest's first version). Per requirement 1 (\"removing support for a baseline is never incidental cleanup\"), that rule protects a baseline that was actually DECLARED; this one never was, so there is nothing to migrate or remove support for.",
+      "supportStatus": "never declared -- not a removal"
+    }
+  ]
+}

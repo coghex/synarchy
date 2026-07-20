@@ -244,19 +244,57 @@ dropping the in-progress stamp.
   `WorldPageSave` load bridge, which is not a wire contract; the
   historical global-version meanings (e.g. v83 = #785, v84 = #811) are
   preserved and never reassigned.
-- **No pre-B1→new-format migration is implemented.** Existing local
-  saves and obsolete old-format test fixtures may simply be deleted.
-- The **first completed new-format save becomes the compatibility
-  baseline** — i.e. the format is not required to be stable *before*
-  that point, only from it forward.
-- From that baseline on, every subsequent format change requires an
+- **Pre-B1 (v82 and earlier) positional saves remain unsupported** and
+  receive B1's clean-break diagnostic (an envelope-version/magic
+  mismatch, no heuristic positional decoding attempted). Migrating THOSE
+  is explicitly out of scope for every save-overhaul child, including
+  #766 below.
+- The **first completed new-format save (the B1 envelope, #759) is the
+  compatibility baseline** — i.e. the format was not required to be
+  stable *before* that point, only from it forward. Issue #766
+  (save-overhaul C4) implements the machinery that promise requires:
+  `World.Save.Compat.SessionV90` recognizes and migrates a real B1
+  envelope (a single required `"session"` component wrapping the
+  then-current `SaveData`/`WorldPageSave` shape) into the current,
+  fully-validated `SessionSnapshot` — reusing the SAME per-component
+  assembly helpers (`basePageSnapshots`/`applyWorldEdits`/etc.) the
+  modern registry-driven path uses, so a migrated B1 session is
+  reconstructed by identical code, not a parallel implementation.
+  `docs/save_compat/manifest.json` is the machine-readable record of
+  every baseline declared supported this way, its tracked fixtures, and
+  a frozen-DTO fingerprint guarding against silent drift;
+  `tools/save_compat_audit.py` (wired into `make ci`/CI) enforces it, and
+  `tools/save_compat_migration_probe.py` proves a tracked fixture
+  survives a real load→publish→resave→restart→reload round trip.
+  The intervening #760-only transitional shape (Haskell already split
+  into components, but Lua state still the pre-#761 opaque blob map)
+  was never itself declared a compatibility baseline — no manifest or
+  fixture existed for it before it was superseded within the same
+  development arc — so there is no separate migration for it.
+- From the B1 baseline on, every subsequent format change requires an
   explicit per-component migration: translate changed fields, supply
-  deliberate defaults for new fields. No more silent breaks.
+  deliberate defaults for new fields. No more silent breaks. The
+  raw-to-typed-reference transition (issue #764, save-overhaul C3;
+  `craft-bills`/`power-nodes`/`unit-sim` components v1→v2) is the first
+  real example of this machinery in the modern, already-split component
+  set — `docs/save_compat/manifest.json` documents it as already
+  supported without a new migration function, since the existing
+  `ccInputVers`-dispatched decode already handles it.
 - An unsupported or malformed save must fail clearly (a readable error
   naming the expected vs. found version, mirroring the existing
   `currentSaveVersion` mismatch behavior) without partially modifying
   the live session — this is the same publish-after-validate rule from
   §1 applied to the format layer specifically.
+- **Unknown optional components** (an id present in a save's manifest
+  that this build does not recognize, and which the writer itself
+  marked optional) must never be silently discarded on the next save to
+  the SAME slot. Rather than threading opaque payload bytes through live
+  session state, `World.Save.Storage`'s publish transaction reads the
+  slot's CURRENT authoritative generation before ever writing a new
+  candidate: if it carries any component this build doesn't recognize,
+  the whole publish is refused (`PhaseForeignOptionalData`) — the
+  original file, and whatever it contains, is simply never overwritten.
+  A different save-slot name remains unaffected.
 
 ## 6. Existing save/load test & probe disposition
 
@@ -275,6 +313,7 @@ persistence envelope itself:
 | `tools/transactional_load_probe.py` | The genuinely new session-replacement-not-merge case, mutual exclusion, missing-def rejection, no-ghost-on-repeat (#763) | **Added by #763.** A same-process load test the multiworld probe structurally cannot be (that probe starts every run with zero pre-load pages): builds a live pre-load page never part of ANY save and proves it does not survive a real published load. | Done (#763) |
 | `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite by A2/#757.** A coordinated save keeps the engine paused and must not restore a prior simulation speed; the positional compatibility field remains decode-compatible until format work. | A2/#757 |
 | `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
+| `tools/save_compat_migration_probe.py` | Tracked pre-#760 B1 fixture load→publish→resave→restart→reload round trip (#766) | **Added by #766.** The one thing the pure hspec "save components"/"save compatibility" gates cannot prove: a real fixture on disk survives the normal whole-session transaction and a genuine process restart. | Done (#766) |
 
 **Secondary probes** — domain probes whose own gate happens to include
 a save→quit→restart→load round trip as one assertion among several
@@ -694,3 +733,7 @@ the audit.
   merge-preserving load behavior this contract's session-replacement
   target (§1) deliberately diverges from; see "Divergence: current
   loading merges, it does not replace" above.
+- #766 (save-overhaul C4) implements this contract's §5 compatibility
+  promise: component migrations, `docs/save_compat/manifest.json`,
+  `tools/save_compat_audit.py`, and
+  `tools/save_compat_migration_probe.py`.

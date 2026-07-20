@@ -39,22 +39,22 @@
 --   transitional 'SaveData'/'WorldPageSave' bridge shape used by the
 --   load path, no longer any wire contract.
 --
---   INTENTIONAL INCOMPATIBILITY: a save written by B1-era code (a
---   single required @"session"@ component, no gameplay components) can
---   no longer be loaded once this module lands — @"session"@ is
---   dropped from 'knownComponentIds', so 'decodeSessionEnvelope' fails
---   it as an unknown required component (requirement 13: retire the
---   transitional payload; #760's acceptance explicitly permits this in
---   place of a migration, provided it is documented and tested — see
---   "Test.Headless.World.Save.Components"'s \"B1 -> B2 intentional
---   incompatibility\" case). A real migration from the transitional
---   shape is out of scope for B2; #760's Related section assigns
---   long-lived compatibility fixtures/migrations to a future C4.
---   Metadata-only reads ('decodeSaveEnvelopeMetadata', i.e.
---   'World.Save.Serialize.listSaves') validate the SAME envelope
---   structure before ever touching the metadata payload, so a B1-era
---   save also can't be listed under B2 — it disappears from the save
---   browser entirely rather than appearing but failing to load.
+--   B1 COMPATIBILITY (issue #766, save-overhaul C4): a save written by
+--   B1-era code (a single required, now-unknown @"session"@ component,
+--   no gameplay components) is no longer decodable through the modern,
+--   registry-driven path above — @"session"@ was dropped from
+--   'knownComponentIds' by #760 and never re-added — but every decode
+--   entry point below (full decode AND metadata-only listing) falls
+--   back to 'decodeLegacySessionEnvelope' when the modern attempt fails,
+--   recognizing exactly that shape and migrating it through
+--   "World.Save.Compat.SessionV90" into a fully-validated modern
+--   'SessionSnapshot'. This is the migration #760's own acceptance
+--   explicitly deferred to "a future C4" rather than a permanent
+--   incompatibility. A genuinely modern envelope's decode path and error
+--   text are completely unchanged — the legacy fallback only ever
+--   triggers after the modern attempt has already failed, and only ever
+--   succeeds for a manifest that is exactly @{metadata, session}@, which
+--   this build never writes.
 module World.Save.Envelope
     ( currentEnvelopeVersion
     , metadataComponentId
@@ -68,6 +68,7 @@ module World.Save.Envelope
     , isRecoverableEnvelopeError
     , decodeSessionEnvelopeClassified
     , decodeSaveEnvelopeMetadataClassified
+    , foreignOptionalComponentIds
     ) where
 
 import UPrelude
@@ -86,6 +87,9 @@ import World.Save.Component
 import World.Save.Component.Types
     (ComponentError, renderComponentError, metadataComponentId
     , luaComponentPrefix)
+import World.Save.Compat.SessionV90
+    ( sessionComponentId, sessionComponentVersion
+    , decodeSessionV90, migrateSessionV90 )
 
 -- | The envelope-framing generation (requirement 15): bumped only when
 --   the FRAMING contract itself changes incompatibly — never merely
@@ -172,27 +176,135 @@ encodeSessionSnapshot meta snap luaSpecs =
 --   listing never demands a Lua component be present).
 decodeSaveEnvelopeMetadata
     ∷ HS.HashSet Text → BS.ByteString → Either Text SaveMetadata
-decodeSaveEnvelopeMetadata luaKnownNames bytes = do
-    decoded ← decodeValidatedEnvelope luaKnownNames HS.empty bytes
-    decodeMetadataComponent decoded
+decodeSaveEnvelopeMetadata luaKnownNames bytes =
+    case decodeValidatedEnvelope luaKnownNames HS.empty bytes
+             >>= decodeMetadataComponent of
+        Right meta     → Right meta
+        Left modernErr → case decodeLegacySessionMetadata bytes of
+            NotLegacyShaped         → Left modernErr
+            LegacyShapedButFailed e → Left e
+            LegacyDecoded meta      → Right meta
 
 -- | Decode + validate the envelope, decode the metadata component, then
 --   reconstruct the complete, cross-validated 'SessionSnapshot' from all
 --   Haskell gameplay components (requirement 6), returning it alongside
 --   every present Lua component's raw (name, version, payload) —
 --   Haskell never interprets a Lua component's bytes itself; the caller
---   hands these to @saveModules.prepareLoad@/@applyAll@.
+--   hands these to @saveModules.prepareLoad@/@applyAll@. The trailing
+--   'Bool' is 'True' iff this generation was reconstructed via the
+--   legacy pre-#760 B1 migration (issue #766) rather than the modern
+--   registry-driven path — in which case @[LuaComponentSpec]@ is always
+--   empty (B1 predates every Lua-owned persistent component), and the
+--   caller must supply each currently-required Lua module's own
+--   empty-state default instead of treating it as missing
+--   (@saveModules.prepareLoad@'s @isMigratingLegacyBaseline@ parameter).
 --   @luaKnownNames@/@luaRequiredNames@ are the CURRENT Lua registry's
 --   ids (gathered via @saveModules.describeAll()@ before this call).
 decodeSessionEnvelope
     ∷ HS.HashSet Text → HS.HashSet Text → BS.ByteString
-    → Either Text (SaveMetadata, SessionSnapshot, [LuaComponentSpec])
-decodeSessionEnvelope luaKnownNames luaRequiredNames bytes = do
-    decoded ← decodeValidatedEnvelope luaKnownNames luaRequiredNames bytes
-    meta    ← decodeMetadataComponent decoded
-    snap    ← either (Left . renderComponentErrors) Right
-                     (assembleSnapshot meta decoded)
-    pure (meta, snap, extractLuaComponents decoded)
+    → Either Text (SaveMetadata, SessionSnapshot, [LuaComponentSpec], Bool)
+decodeSessionEnvelope luaKnownNames luaRequiredNames bytes =
+    case decodeModern of
+        Right result   → Right result
+        Left modernErr → case decodeLegacySessionEnvelope bytes of
+            NotLegacyShaped         → Left modernErr
+            LegacyShapedButFailed e → Left e
+            LegacyDecoded (meta, snap) → Right (meta, snap, [], True)
+  where
+    decodeModern = do
+        decoded ← decodeValidatedEnvelope luaKnownNames luaRequiredNames bytes
+        meta    ← decodeMetadataComponent decoded
+        snap    ← either (Left . renderComponentErrors) Right
+                         (assembleSnapshot meta decoded)
+        pure (meta, snap, extractLuaComponents decoded, False)
+
+-- | The outcome of attempting the legacy B1 fallback (issue #766,
+--   save-overhaul C4). Distinguishes "this envelope was never B1-shaped
+--   at all" (silently defer to the modern attempt's own error — a
+--   genuinely modern file with a real problem must keep reporting ITS
+--   OWN, more specific error, e.g. \"missing required component X\",
+--   never the less helpful \"unknown required component X\" the legacy
+--   attempt's narrower known-id set would otherwise produce) from "this
+--   IS a structurally-recognized B1 envelope, but migrating it failed
+--   for a real reason" (report THAT failure — once the manifest is
+--   confirmed to be exactly @{metadata, session}@, any later failure is
+--   the genuine, actionable reason, not noise to discard).
+data LegacyDecodeResult a
+    = NotLegacyShaped
+    | LegacyShapedButFailed !Text
+    | LegacyDecoded !a
+
+-- | Recognize and migrate a pre-#760 B1 envelope (issue #766,
+--   save-overhaul C4): a single required @"session"@ component wrapping
+--   the frozen v90 'World.Save.Compat.SessionV90.SaveDataV90' shape,
+--   alongside the ordinary @"metadata"@ component. Tried ONLY after the
+--   modern registry-driven decode has already failed (every call site
+--   above), so a genuinely modern envelope's error text and behaviour
+--   are completely unchanged (requirement 6: migration never
+--   participates in the normal path) — this only ever recognizes a
+--   structurally-valid envelope whose manifest is exactly
+--   @{metadata, session}@, which a current build never writes.
+decodeLegacySessionEnvelope
+    ∷ BS.ByteString → LegacyDecodeResult (SaveMetadata, SessionSnapshot)
+decodeLegacySessionEnvelope bytes =
+    case decodeLegacyStructureAndMetadata bytes of
+        Nothing              → NotLegacyShaped
+        Just (Left e)        → LegacyShapedButFailed e
+        Just (Right (decoded, meta)) →
+            either LegacyShapedButFailed LegacyDecoded $ do
+                payload ← maybe (Left "legacy session component payload missing")
+                                Right
+                                (HM.lookup sessionComponentId (dePayloads decoded))
+                sd   ← either (Left . renderComponentError) Right
+                              (decodeSessionV90 payload)
+                snap ← either (Left . renderComponentErrors) Right
+                              (migrateSessionV90 meta sd)
+                pure (meta, snap)
+
+-- | Metadata-only counterpart to 'decodeLegacySessionEnvelope'
+--   (requirement 12's "listing never decodes gameplay" contract applies
+--   to the legacy fallback too): validate the SAME legacy envelope
+--   structure and return the @"metadata"@ component alone, WITHOUT
+--   decoding or migrating @"session"@ — a B1-era save is listable even
+--   when its gameplay migration would separately fail (e.g. a
+--   manifest/gameplay mismatch requirement 12 only started enforcing
+--   after B1), exactly mirroring how the modern format's own metadata
+--   listing never runs 'assembleSnapshot'.
+decodeLegacySessionMetadata ∷ BS.ByteString → LegacyDecodeResult SaveMetadata
+decodeLegacySessionMetadata bytes =
+    case decodeLegacyStructureAndMetadata bytes of
+        Nothing               → NotLegacyShaped
+        Just (Left e)         → LegacyShapedButFailed e
+        Just (Right (_, meta)) → LegacyDecoded meta
+
+-- | Shared structural step for both legacy entry points above: validate
+--   the envelope against exactly @{metadata, session}@ and confirm the
+--   @"session"@ descriptor's version is the one frozen shape this build
+--   recognizes, without touching its payload bytes. 'Nothing' means the
+--   envelope's manifest itself is not @{metadata, session}@ (or is
+--   otherwise structurally invalid under that known/required set) — not
+--   a B1 envelope at all, so the caller must defer entirely to the
+--   modern attempt's own error. A 'Just' — structurally confirmed
+--   B1-shaped — carries either the metadata (component-version check
+--   passed) or the specific reason it didn't; either way, this is no
+--   longer "maybe not legacy", so the caller must surface it.
+decodeLegacyStructureAndMetadata
+    ∷ BS.ByteString → Maybe (Either Text (DecodedEnvelope, SaveMetadata))
+decodeLegacyStructureAndMetadata bytes =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             legacyIds legacyIds bytes of
+        Left _ → Nothing
+        Right decoded → Just $ do
+            meta ← decodeMetadataComponent decoded
+            desc ← maybe (Left "legacy session component descriptor missing")
+                         Right
+                         (findDescriptor sessionComponentId (deManifest decoded))
+            when (cdVersion desc ≢ sessionComponentVersion) $
+                Left ("Save format incompatible: expected legacy session \
+                      \component v" <> T.pack (show sessionComponentVersion)
+                      <> ", got v" <> T.pack (show (cdVersion desc)))
+            pure (decoded, meta)
+  where legacyIds = HS.fromList [metadataComponentId, sessionComponentId]
 
 -- | Every component in the decoded envelope whose id carries the
 --   reserved @"lua."@ prefix, with that prefix stripped back to the bare
@@ -214,6 +326,26 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
         . decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
                           (knownComponentIds luaKnownNames)
                           (readerRequiredComponentIds luaRequiredNames)
+
+-- | Requirement 9 (issue #766, save-overhaul C4): every component id
+--   present in a structurally-valid envelope that this reader does not
+--   recognize — always OPTIONAL ones, since an unknown REQUIRED
+--   component already fails 'decodeEnvelope' itself
+--   ('UnknownRequiredComponent'), which this function reports as "no
+--   foreign data" (an empty list) rather than attempt to peek past a
+--   structurally-rejected envelope. @luaKnownNames@ widens the known set
+--   the SAME way every other decode entry point does. Used by
+--   "World.Save.Storage" to refuse overwriting a generation carrying
+--   data this build cannot round-trip, rather than silently discarding
+--   it on the next save.
+foreignOptionalComponentIds ∷ HS.HashSet Text → BS.ByteString → [ComponentId]
+foreignOptionalComponentIds luaKnownNames bytes =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             (knownComponentIds luaKnownNames) HS.empty bytes of
+        Left _        → []
+        Right decoded →
+            [ cdId d | d ← emComponents (deManifest decoded)
+            , not (HS.member (cdId d) (knownComponentIds luaKnownNames)) ]
 
 -- | Load-time generation-validity classification (issue #762, storage-
 --   overhaul C1): whether a structurally-invalid file is safe to treat as
@@ -298,9 +430,17 @@ decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes =
 --   decide whether the authoritative file is even worth trying.
 decodeSaveEnvelopeMetadataClassified
     ∷ HS.HashSet Text → BS.ByteString → Either GenerationFailure SaveMetadata
-decodeSaveEnvelopeMetadataClassified luaKnownNames bytes = do
-    decoded ← decodeClassifiedEnvelope luaKnownNames HS.empty bytes
-    either (Left . GenerationIncompatible) Right (decodeMetadataComponent decoded)
+decodeSaveEnvelopeMetadataClassified luaKnownNames bytes =
+    case decodeModern of
+        Right meta     → Right meta
+        Left modernErr → case decodeLegacySessionMetadata bytes of
+            NotLegacyShaped         → Left modernErr
+            LegacyShapedButFailed e → Left (GenerationIncompatible e)
+            LegacyDecoded meta      → Right meta
+  where
+    decodeModern = do
+        decoded ← decodeClassifiedEnvelope luaKnownNames HS.empty bytes
+        either (Left . GenerationIncompatible) Right (decodeMetadataComponent decoded)
 
 -- | 'decodeSessionEnvelope', classified per 'GenerationFailure' — the
 --   full decode 'World.Save.Storage.selectLoadGeneration' uses to decide,
@@ -315,14 +455,23 @@ decodeSaveEnvelopeMetadataClassified luaKnownNames bytes = do
 --   mismatch, never routine bit-level corruption.
 decodeSessionEnvelopeClassified
     ∷ HS.HashSet Text → HS.HashSet Text → BS.ByteString
-    → Either GenerationFailure (SaveMetadata, SessionSnapshot, [LuaComponentSpec])
-decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes = do
-    decoded ← decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes
-    meta ← either (Left . GenerationIncompatible) Right
-                  (decodeMetadataComponent decoded)
-    snap ← either (Left . GenerationIncompatible . renderComponentErrors)
-                  Right (assembleSnapshot meta decoded)
-    pure (meta, snap, extractLuaComponents decoded)
+    → Either GenerationFailure
+             (SaveMetadata, SessionSnapshot, [LuaComponentSpec], Bool)
+decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes =
+    case decodeModern of
+        Right result   → Right result
+        Left modernErr → case decodeLegacySessionEnvelope bytes of
+            NotLegacyShaped            → Left modernErr
+            LegacyShapedButFailed e    → Left (GenerationIncompatible e)
+            LegacyDecoded (meta, snap) → Right (meta, snap, [], True)
+  where
+    decodeModern = do
+        decoded ← decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes
+        meta ← either (Left . GenerationIncompatible) Right
+                      (decodeMetadataComponent decoded)
+        snap ← either (Left . GenerationIncompatible . renderComponentErrors)
+                      Right (assembleSnapshot meta decoded)
+        pure (meta, snap, extractLuaComponents decoded, False)
 
 -- | Decode the @"metadata"@ component, rejecting an unsupported schema
 --   version before touching its bytes. The descriptor/payload "missing"
