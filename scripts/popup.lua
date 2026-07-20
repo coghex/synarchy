@@ -287,6 +287,32 @@ renderPopup = function(p)
     panelW = math.min(panelW, popup.fbW)
     panelH = math.min(panelH, popup.fbH)
 
+    -- Lazily required to avoid a load cycle (hud.lua doesn't require
+    -- popup.lua either way, but every other cross-module reach in this
+    -- file follows the same lazy convention).
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local hud = require("scripts.hud")
+    local toolbarRects = hud.getToolbarRects()
+
+    -- #750 round-4 review: the framebuffer-width cap above isn't enough
+    -- when a reserved region spans nearly the full height at the card's
+    -- OWN vertical position (e.g. the tool toggle column) — no amount of
+    -- x-nudging then fits a wide card beside it, so avoidReserved's
+    -- position-only nudge below can end up right back on top of it once
+    -- clamped to the screen. Shrink panelW to the widest horizontal gap
+    -- actually free at this card's (pre-nudge, vertically centered) y —
+    -- best-effort, same "may look cramped, never off-screen/unreachable"
+    -- contract as the framebuffer cap above.
+    local cy0 = math.floor((popup.fbH - panelH) / 2)
+    local availW = reservedRegions.maxAvailableWidth(
+        cy0, panelH, toolbarRects, popup.fbW)
+    if availW > 0 then
+        -- Floored at 20px, matching settings_menu's own defensive floor
+        -- for an analogous out-of-envelope exemplar (CLAUDE.md's C2
+        -- section) — never a literally zero/negative box.
+        panelW = math.min(panelW, math.max(20, availW))
+    end
+
     -- Centre + slot diagonal offset
     local cx = math.floor((popup.fbW - panelW) / 2)
     local cy = math.floor((popup.fbH - panelH) / 2)
@@ -296,14 +322,9 @@ renderPopup = function(p)
     -- #750: nudge the card off the always-reachable toolbar clusters
     -- instead of covering one — a small window + a corner-anchored
     -- toggle group + a centered/cascading popup can genuinely overlap.
-    -- Lazily required to avoid a load cycle (hud.lua doesn't require
-    -- popup.lua either way, but every other cross-module reach in this
-    -- file follows the same lazy convention).
-    local reservedRegions = require("scripts.ui.reserved_regions")
-    local hud = require("scripts.hud")
     local nudged = reservedRegions.avoidReserved(
         { x = px, y = py, w = panelW, h = panelH },
-        hud.getToolbarRects(), popup.fbW, popup.fbH)
+        toolbarRects, popup.fbW, popup.fbH)
     px, py = nudged.x, nudged.y
 
     local baseZ = p.baseZ

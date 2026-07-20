@@ -76,36 +76,8 @@ function reservedRegions.checkViolations(regions)
     return violations
 end
 
--- Minimal-translation nudge: moves `rect` off `reserved` along
--- whichever axis has the smaller overlap, pushing away from
--- `reserved`'s center. Returns a NEW rect; never mutates the input.
-local function separate(rect, reserved)
-    if not reservedRegions.rectsOverlap(rect, reserved) then return rect end
-    local overlapX = math.min(rect.x + rect.w, reserved.x + reserved.w)
-                    - math.max(rect.x, reserved.x)
-    local overlapY = math.min(rect.y + rect.h, reserved.y + reserved.h)
-                    - math.max(rect.y, reserved.y)
-    local rectCx, rectCy = rect.x + rect.w / 2, rect.y + rect.h / 2
-    local resCx,  resCy  = reserved.x + reserved.w / 2, reserved.y + reserved.h / 2
-    local nx, ny = rect.x, rect.y
-    if overlapX < overlapY then
-        nx = rect.x + (rectCx >= resCx and overlapX or -overlapX)
-    else
-        ny = rect.y + (rectCy >= resCy and overlapY or -overlapY)
-    end
-    return { x = nx, y = ny, w = rect.w, h = rect.h }
-end
-
--- Nudges `rect` clear of every rect in `reservedRects` (e.g.
--- hud.getToolbarRects()), then clamps to [0,screenW]x[0,screenH] when
--- given. Deterministic; passes are order-dependent, so callers with
--- more than one plausible conflict should list higher-priority regions
--- first.
-function reservedRegions.avoidReserved(rect, reservedRects, screenW, screenH)
+local function clampRect(rect, screenW, screenH)
     local out = { x = rect.x, y = rect.y, w = rect.w, h = rect.h }
-    for _, reserved in ipairs(reservedRects or {}) do
-        out = separate(out, reserved)
-    end
     if screenW then
         out.x = math.max(0, math.min(out.x, math.max(0, screenW - out.w)))
     end
@@ -113,6 +85,87 @@ function reservedRegions.avoidReserved(rect, reservedRects, screenW, screenH)
         out.y = math.max(0, math.min(out.y, math.max(0, screenH - out.h)))
     end
     return out
+end
+
+-- Minimal-translation nudge: moves `rect` off `reserved`, trying the 4
+-- candidate directions (flush against reserved's near edge on each
+-- side) smallest-push-first, clamping each candidate to the screen and
+-- keeping the FIRST one that's actually clear once clamped — not just
+-- whichever axis had the smaller raw overlap (#750 round-4 review: that
+-- shortcut misfires whenever `reserved`'s own span fully CONTAINS
+-- `rect`'s span on one axis, e.g. a toolbar column spanning nearly the
+-- whole screen height — pushing by the "overlap" amount in that case
+-- doesn't reach clear ground at all, and a later screen clamp could
+-- shove `rect` right back into `reserved`). Falls back to the smallest-
+-- push candidate, clamped, if every candidate still overlaps once
+-- clamped (a genuinely infeasible placement — `rect` doesn't fit
+-- anywhere clear of `reserved` within the screen at all; best-effort,
+-- not guaranteed clear, same contract as everywhere else in this
+-- module). Returns a NEW rect; never mutates the input.
+local function separate(rect, reserved, screenW, screenH)
+    if not reservedRegions.rectsOverlap(rect, reserved) then return rect end
+    local candidates = {
+        { axis = "x", delta = reserved.x - (rect.x + rect.w) },        -- push left
+        { axis = "x", delta = (reserved.x + reserved.w) - rect.x },    -- push right
+        { axis = "y", delta = reserved.y - (rect.y + rect.h) },        -- push up
+        { axis = "y", delta = (reserved.y + reserved.h) - rect.y },    -- push down
+    }
+    table.sort(candidates, function(a, b) return math.abs(a.delta) < math.abs(b.delta) end)
+
+    local fallback = nil
+    for _, c in ipairs(candidates) do
+        local moved = { x = rect.x, y = rect.y, w = rect.w, h = rect.h }
+        if c.axis == "x" then moved.x = rect.x + c.delta else moved.y = rect.y + c.delta end
+        local clamped = clampRect(moved, screenW, screenH)
+        if not fallback then fallback = clamped end
+        if not reservedRegions.rectsOverlap(clamped, reserved) then
+            return clamped
+        end
+    end
+    return fallback
+end
+
+-- Nudges `rect` clear of every rect in `reservedRects` (e.g.
+-- hud.getToolbarRects()), clamping to [0,screenW]x[0,screenH] (when
+-- given) after each individual separation so a later screen clamp can
+-- never blindly undo an earlier one. Deterministic; passes are order-
+-- dependent, so callers with more than one plausible conflict should
+-- list higher-priority regions first.
+function reservedRegions.avoidReserved(rect, reservedRects, screenW, screenH)
+    local out = clampRect(rect, screenW, screenH)
+    for _, reserved in ipairs(reservedRects or {}) do
+        out = separate(out, reserved, screenW, screenH)
+    end
+    return out
+end
+
+-- #750 round-4 review: capping a card's width to the framebuffer alone
+-- (as popup.lua/unit_info_v2.lua both do) isn't enough when a reserved
+-- region spans nearly the full height at the card's own vertical
+-- position — no amount of x-nudging then fits it beside that region.
+-- Given a vertical span [y, y+h) and a list of reserved rects, returns
+-- the widest horizontal gap within [0, screenW) not covered by any
+-- reserved rect whose OWN vertical span intersects [y, y+h) — i.e. the
+-- widest a rect placed at exactly this y could be without overlapping
+-- any of them, without needing to move vertically at all. A reserved
+-- rect whose span doesn't reach this y range is not a blocker here.
+function reservedRegions.maxAvailableWidth(y, h, reservedRects, screenW)
+    local blockers = {}
+    for _, r in ipairs(reservedRects or {}) do
+        if r.y < y + h and y < r.y + r.h then
+            table.insert(blockers,
+                { x = math.max(0, r.x), x2 = math.min(screenW, r.x + r.w) })
+        end
+    end
+    table.sort(blockers, function(a, b) return a.x < b.x end)
+    local best = 0
+    local cursor = 0
+    for _, b in ipairs(blockers) do
+        if b.x > cursor then best = math.max(best, b.x - cursor) end
+        cursor = math.max(cursor, b.x2)
+    end
+    best = math.max(best, screenW - cursor)
+    return best
 end
 
 -- Bounds-escape / unreachable-action detection (#750 acceptance:

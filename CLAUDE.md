@@ -1075,6 +1075,43 @@ exemplar: `panelW = math.min(panelW, fbW)` (and `panelH` symmetrically
 for popup); `unitInfoV2.getBounds()` mirrors the same cap so it can't
 drift from what `rebuildLayout()` actually builds.
 
+Round-4 review found three more gaps. First, a genuine algorithm bug in
+`reserved_regions.lua`'s `avoidReserved`: its 1D separation formula
+(`overlap = min(bottoms) - max(tops)`, pushing by that amount) is only
+correct when neither rect's span fully CONTAINS the other's on that
+axis — `hud`'s tool-toggle column can span nearly the full framebuffer
+height, so a popup's span is often fully contained within it, and
+pushing by the (wrong, too-small) "overlap" amount didn't reach clear
+ground at all; a later screen clamp could then shove the card right
+back on top of it. Fixed by computing all 4 candidate "push flush
+against reserved's near edge" directions directly, trying them
+smallest-first, and clamping-then-checking each rather than trusting a
+single overlap-based heuristic. Even with a correct algorithm, a card
+can still be too WIDE to fit beside a tall reserved column at all
+within the framebuffer (confirmed with real `popup.lua` output at
+800x901@2x) — `reservedRegions.maxAvailableWidth(y, h, reservedRects,
+screenW)` is the fix: the widest horizontal gap actually free at a
+given vertical span, which `popup.lua` now also caps `panelW` against
+(best-effort, same "may look cramped, never unreachable" contract as
+everywhere else). Second, `event_log.lua`'s `createUI()` (which also
+runs on a resize, not just a fresh open) unconditionally reset
+`activeTabKey`/`scrollOffset` on every call, silently discarding the
+player's active tab/scroll position on every resize — moved that reset
+into `eventLog.show()` (the real "fresh open" path) instead, and added
+`tabbar.select`/`selectByKey`'s own `silent` parameter (mirroring
+`toggle.lua`'s round-2 fix) so `createUI()` can resync the tabbar
+WIDGET's visual selection to the preserved `activeTabKey` — `tabbar.new`
+always starts a fresh tabbar at hardcoded index 1 — without re-firing
+`onChange` (which would reset `scrollOffset` right back to 0). Third,
+the new `UI.ResponsiveGameplay` suite's `around withHeadlessEngine`
+(a fresh engine per `it`, the same convention `UI.ResponsiveMenus`/
+`UI.InputOwnership` already established) drew a cost-guardrail review
+comment; `scripts/ui/reserved_regions.lua`'s own functions are pure and
+independent of each other, so its whole test group was consolidated
+into one `it` sharing a single engine/backend, cutting a meaningful
+slice of the suite's total engine-boot count without touching the
+stateful HUD/log-panel tests that genuinely need per-case isolation.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

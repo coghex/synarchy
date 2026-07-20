@@ -327,6 +327,65 @@ spec = around withHeadlessEngine $ do
                 ]
             n `shouldBe` 0
 
+    describe "event_log preserves its active tab and scroll position across a resize (#750 round-4 review)" $ do
+        it "a resize keeps the active (non-default) tab selected, both logically and on the tabbar widget itself" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.emitEvent('unit_event', 'e1');"
+                , "local el = require('scripts.event_log');"
+                , "el.bootstrap(1,2,3,1920,1080);"
+                , "el.show();"
+                , "local tabbar = require('scripts.ui.tabbar');"
+                , "tabbar.selectByKey(el.tabbarId, 'unit_event');"
+                , "el.onFramebufferResize(1600, 900);"
+                , "return {activeTabKey = el.activeTabKey,"
+                , "        tabbarKey = tabbar.getSelectedKey(el.tabbarId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TabPreserveProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tpActiveTabKey p `shouldBe` "unit_event"
+                    tpTabbarKey p `shouldBe` "unit_event"
+
+        it "a resize preserves a nonzero scroll offset instead of forcing it back to 0" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "for i = 1, 300 do engine.emitEvent('unit_event', 'event ' .. i) end;"
+                , "local el = require('scripts.event_log');"
+                , "el.bootstrap(1,2,3,1920,1080);"
+                , "el.show();"
+                , "local sb = require('scripts.ui.scrollbar');"
+                , "sb.setScrollOffset(el.scrollbarId, 5);"
+                , "local before = el.scrollOffset;"
+                , "el.onFramebufferResize(1600, 900);"
+                , "return {before = before, after = el.scrollOffset}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ScrollPreserveProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    sppBefore p `shouldSatisfy` (> 0)
+                    sppAfter p `shouldBe` sppBefore p
+
+        it "eventLog.show() still resets to the 'All' tab on a genuine fresh open" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.emitEvent('unit_event', 'e1');"
+                , "local el = require('scripts.event_log');"
+                , "el.bootstrap(1,2,3,1920,1080);"
+                , "el.show();"
+                , "local tabbar = require('scripts.ui.tabbar');"
+                , "tabbar.selectByKey(el.tabbarId, 'unit_event');"
+                , "el.hide();"
+                , "el.show();"
+                , "return {activeTabKey = el.activeTabKey,"
+                , "        tabbarKey = tabbar.getSelectedKey(el.tabbarId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TabPreserveProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tpActiveTabKey p `shouldBe` "all"
+                    tpTabbarKey p `shouldBe` "all"
+
     describe "resize-safe teardown (#750) — scripts/ui/view_teardown.lua's new \"resize\" transition" $ do
         it "hud.createUI() runs the 'resize' sweep before deleting world_page, reaching every registered world_page-mounted widget" $ \env → do
             ls ← newBareLuaBackend env
@@ -497,90 +556,100 @@ spec = around withHeadlessEngine $ do
                 ]
             n `shouldBe` 0
 
-    describe "scripts/ui/reserved_regions.lua (#750) — the collision/priority contract" $ do
-        it "rectsOverlap is a plain AABB test" $ \env → do
+    -- #750 round-4 review: reserved_regions.lua's own functions are pure
+    -- (no engine/UI/page state at all — see the module's own header
+    -- comment) and independent of each other, so — per the issue's own
+    -- cost guardrail spec addition ("share one booted headless engine +
+    -- Lua environment across cases... no per-case engine boots") —
+    -- every case below shares ONE newBareLuaBackend/engine instead of
+    -- one per assertion.
+    describe "scripts/ui/reserved_regions.lua (#750) — the collision/priority contract" $
+        it "rectsOverlap, checkViolations, avoidReserved, and findEscapes all behave correctly on one shared backend" $ \env → do
             ls ← newBareLuaBackend env
-            yes ← evalBool ls
-                "return require('scripts.ui.reserved_regions').rectsOverlap({x=0,y=0,w=10,h=10},{x=5,y=5,w=10,h=10})"
-            no ← evalBool ls
-                "return require('scripts.ui.reserved_regions').rectsOverlap({x=0,y=0,w=10,h=10},{x=20,y=20,w=10,h=10})"
-            yes `shouldBe` True
-            no `shouldBe` False
 
-        it "checkViolations flags the lower-priority region as the loser, and a same-priority overlap as ambiguous" $ \env → do
-            ls ← newBareLuaBackend env
-            r ← evalJSON ls $ luaLines
-                [ "local rr = require('scripts.ui.reserved_regions');"
-                , "local regions = {"
-                , "    {name='toolbar', priority=100, rect={x=0,y=0,w=100,h=100}},"
-                , "    {name='info',    priority=50,  rect={x=50,y=50,w=100,h=100}},"
-                , "    {name='far',     priority=50,  rect={x=900,y=900,w=10,h=10}},"
-                , "};"
-                , "local v = rr.checkViolations(regions);"
-                , "return {count=#v, loser=v[1] and v[1].loser.name, winner=v[1] and v[1].winner.name,"
-                , "        ambiguous=v[1] and v[1].ambiguous}"
-                ]
-            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ViolationProbe of
-                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
-                Just p → do
-                    vpCount p `shouldBe` 1
-                    vpLoser p `shouldBe` Just "info"
-                    vpWinner p `shouldBe` Just "toolbar"
-                    vpAmbiguous p `shouldBe` Just False
+            do  yes ← evalBool ls
+                    "return require('scripts.ui.reserved_regions').rectsOverlap({x=0,y=0,w=10,h=10},{x=5,y=5,w=10,h=10})"
+                no ← evalBool ls
+                    "return require('scripts.ui.reserved_regions').rectsOverlap({x=0,y=0,w=10,h=10},{x=20,y=20,w=10,h=10})"
+                yes `shouldBe` True
+                no `shouldBe` False
 
-        it "a same-priority overlap is flagged ambiguous, with no crash" $ \env → do
-            ls ← newBareLuaBackend env
-            ok ← evalBool ls $ luaLines
-                [ "local rr = require('scripts.ui.reserved_regions');"
-                , "local regions = {"
-                , "    {name='a', priority=50, rect={x=0,y=0,w=100,h=100}},"
-                , "    {name='b', priority=50, rect={x=50,y=50,w=100,h=100}},"
-                , "};"
-                , "local v = rr.checkViolations(regions);"
-                , "return #v == 1 and v[1].ambiguous == true"
-                ]
-            ok `shouldBe` True
+            do  r ← evalJSON ls $ luaLines
+                    [ "local rr = require('scripts.ui.reserved_regions');"
+                    , "local regions = {"
+                    , "    {name='toolbar', priority=100, rect={x=0,y=0,w=100,h=100}},"
+                    , "    {name='info',    priority=50,  rect={x=50,y=50,w=100,h=100}},"
+                    , "    {name='far',     priority=50,  rect={x=900,y=900,w=10,h=10}},"
+                    , "};"
+                    , "local v = rr.checkViolations(regions);"
+                    , "return {count=#v, loser=v[1] and v[1].loser.name, winner=v[1] and v[1].winner.name,"
+                    , "        ambiguous=v[1] and v[1].ambiguous}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ViolationProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        vpCount p `shouldBe` 1
+                        vpLoser p `shouldBe` Just "info"
+                        vpWinner p `shouldBe` Just "toolbar"
+                        vpAmbiguous p `shouldBe` Just False
 
-        it "avoidReserved nudges a rect fully clear of a reserved rect, and clamps within the screen" $ \env → do
-            ls ← newBareLuaBackend env
-            ok ← evalBool ls $ luaLines
-                [ "local rr = require('scripts.ui.reserved_regions');"
-                , "local out = rr.avoidReserved({x=10,y=10,w=50,h=50}, {{x=0,y=0,w=40,h=40}}, 1000, 1000);"
-                , "return not rr.rectsOverlap(out, {x=0,y=0,w=40,h=40})"
-                , "       and out.x >= 0 and out.y >= 0"
-                , "       and (out.x+out.w) <= 1000 and (out.y+out.h) <= 1000"
-                ]
-            ok `shouldBe` True
+            do  ok ← evalBool ls $ luaLines
+                    [ "local rr = require('scripts.ui.reserved_regions');"
+                    , "local regions = {"
+                    , "    {name='a', priority=50, rect={x=0,y=0,w=100,h=100}},"
+                    , "    {name='b', priority=50, rect={x=50,y=50,w=100,h=100}},"
+                    , "};"
+                    , "local v = rr.checkViolations(regions);"
+                    , "return #v == 1 and v[1].ambiguous == true"
+                    ]
+                ok `shouldBe` True
 
-        it "avoidReserved is a no-op when nothing overlaps" $ \env → do
-            ls ← newBareLuaBackend env
-            r ← evalJSON ls
-                "return require('scripts.ui.reserved_regions').avoidReserved({x=500,y=500,w=50,h=50}, {{x=0,y=0,w=40,h=40}}, 1000, 1000)"
-            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RectRow of
-                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
-                Just rr → do
-                    rrX rr `shouldBe` 500
-                    rrY rr `shouldBe` 500
+            do  ok ← evalBool ls $ luaLines
+                    [ "local rr = require('scripts.ui.reserved_regions');"
+                    , "local out = rr.avoidReserved({x=10,y=10,w=50,h=50}, {{x=0,y=0,w=40,h=40}}, 1000, 1000);"
+                    , "return not rr.rectsOverlap(out, {x=0,y=0,w=40,h=40})"
+                    , "       and out.x >= 0 and out.y >= 0"
+                    , "       and (out.x+out.w) <= 1000 and (out.y+out.h) <= 1000"
+                    ]
+                ok `shouldBe` True
 
-        it "findEscapes flags only a visible, pointer-blocking, out-of-frame element — never a decorative or hidden one" $ \env → do
-            ls ← newBareLuaBackend env
-            r ← evalJSON ls $ luaLines
-                [ "local rr = require('scripts.ui.reserved_regions');"
-                , "local elements = {"
-                , "    {name='onscreen',   x=10, y=10, width=20, height=20, visible=true,  pageVisible=true,  pointerBlocking=true},"
-                , "    {name='offscreen',  x=-5, y=10, width=20, height=20, visible=true,  pageVisible=true,  pointerBlocking=true},"
-                , "    {name='hiddenPage', x=-5, y=10, width=20, height=20, visible=true,  pageVisible=false, pointerBlocking=true},"
-                , "    {name='decorative', x=-5, y=10, width=20, height=20, visible=true,  pageVisible=true,  pointerBlocking=false},"
-                , "    {name='offRight',   x=990, y=10, width=20, height=20, visible=true, pageVisible=true,  pointerBlocking=true},"
-                , "};"
-                , "local escapes = rr.findEscapes(elements, 1000, 1000);"
-                , "local names = {};"
-                , "for _, e in ipairs(escapes) do table.insert(names, e.name) end;"
-                , "return names"
-                ]
-            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [Text] of
-                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
-                Just names → names `shouldMatchList` ["offscreen", "offRight"]
+            do  r ← evalJSON ls
+                    "return require('scripts.ui.reserved_regions').avoidReserved({x=500,y=500,w=50,h=50}, {{x=0,y=0,w=40,h=40}}, 1000, 1000)"
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RectRow of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just rr → do
+                        rrX rr `shouldBe` 500
+                        rrY rr `shouldBe` 500
+
+            do  r ← evalJSON ls $ luaLines
+                    [ "local rr = require('scripts.ui.reserved_regions');"
+                    , "local elements = {"
+                    , "    {name='onscreen',   x=10, y=10, width=20, height=20, visible=true,  pageVisible=true,  pointerBlocking=true},"
+                    , "    {name='offscreen',  x=-5, y=10, width=20, height=20, visible=true,  pageVisible=true,  pointerBlocking=true},"
+                    , "    {name='hiddenPage', x=-5, y=10, width=20, height=20, visible=true,  pageVisible=false, pointerBlocking=true},"
+                    , "    {name='decorative', x=-5, y=10, width=20, height=20, visible=true,  pageVisible=true,  pointerBlocking=false},"
+                    , "    {name='offRight',   x=990, y=10, width=20, height=20, visible=true, pageVisible=true,  pointerBlocking=true},"
+                    , "};"
+                    , "local escapes = rr.findEscapes(elements, 1000, 1000);"
+                    , "local names = {};"
+                    , "for _, e in ipairs(escapes) do table.insert(names, e.name) end;"
+                    , "return names"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [Text] of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just names → names `shouldMatchList` ["offscreen", "offRight"]
+
+            do  r ← evalJSON ls $ luaLines
+                    [ "local rr = require('scripts.ui.reserved_regions');"
+                    , "local w1 = rr.maxAvailableWidth(50, 100, {{x=100,y=0,w=100,h=900}}, 1000);"
+                    , "local w2 = rr.maxAvailableWidth(950, 50, {{x=100,y=0,w=100,h=900}}, 1000);"
+                    , "return {w1 = w1, w2 = w2}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe MaxWidthProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        mwpW1 p `shouldBe` 800
+                        mwpW2 p `shouldBe` 1000
 
     describe "popup.lua reflows active cards on resize (#750 round-1 review)" $ do
         it "a card's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \env → do
@@ -599,6 +668,31 @@ spec = around withHeadlessEngine $ do
                 Just p → do
                     wcpInFrame p `shouldBe` True
                     wcpW p `shouldSatisfy` (≤ 800)
+
+        it "a card never overlaps a tall reserved column even when the framebuffer cap alone isn't enough to clear it (round-4 review)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(2.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,901);"
+                , "hud.createUI();"
+                , "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,800,901);"
+                , "p.onShowPopup('unit_event', 'a normal length notification message here', 0, 0, 0, 1, {});"
+                , "local b = p.getActiveBounds()[1];"
+                , "local rr = require('scripts.ui.reserved_regions');"
+                , "local overlapsAny = false;"
+                , "for _, rect in ipairs(hud.getToolbarRects()) do"
+                , "    if rr.rectsOverlap(b, rect) then overlapsAny = true end"
+                , "end;"
+                , "return {overlapsAny = overlapsAny,"
+                , "        inFrame = (b.x >= 0 and (b.x+b.w) <= 800 and b.y >= 0 and (b.y+b.h) <= 901)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe OverlapProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    opOverlapsAny p `shouldBe` False
+                    opInFrame p `shouldBe` True
 
         it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \env → do
             ls ← newBareLuaBackend env
@@ -919,6 +1013,28 @@ data WidthCapProbe = WidthCapProbe { wcpW ∷ Int, wcpInFrame ∷ Bool } derivin
 instance FromJSON WidthCapProbe where
     parseJSON = withObject "WidthCapProbe" $ \o →
         WidthCapProbe <$> o .: "w" <*> o .: "inFrame"
+
+data OverlapProbe = OverlapProbe { opOverlapsAny ∷ Bool, opInFrame ∷ Bool } deriving Show
+instance FromJSON OverlapProbe where
+    parseJSON = withObject "OverlapProbe" $ \o →
+        OverlapProbe <$> o .: "overlapsAny" <*> o .: "inFrame"
+
+data MaxWidthProbe = MaxWidthProbe { mwpW1 ∷ Double, mwpW2 ∷ Double } deriving Show
+instance FromJSON MaxWidthProbe where
+    parseJSON = withObject "MaxWidthProbe" $ \o →
+        MaxWidthProbe <$> o .: "w1" <*> o .: "w2"
+
+data TabPreserveProbe = TabPreserveProbe
+    { tpActiveTabKey ∷ Text, tpTabbarKey ∷ Text } deriving Show
+instance FromJSON TabPreserveProbe where
+    parseJSON = withObject "TabPreserveProbe" $ \o →
+        TabPreserveProbe <$> o .: "activeTabKey" <*> o .: "tabbarKey"
+
+data ScrollPreserveProbe = ScrollPreserveProbe
+    { sppBefore ∷ Int, sppAfter ∷ Int } deriving Show
+instance FromJSON ScrollPreserveProbe where
+    parseJSON = withObject "ScrollPreserveProbe" $ \o →
+        ScrollPreserveProbe <$> o .: "before" <*> o .: "after"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

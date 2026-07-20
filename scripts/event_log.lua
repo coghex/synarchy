@@ -271,6 +271,13 @@ createUI = function()
         end,
     })
     table.insert(eventLog.ownedTabbars, eventLog.tabbarId)
+    -- #750 round-4 review: tabbar.new always starts a fresh tabbar at
+    -- its hardcoded selectedIndex=1 ("All") — sync the VISUAL selection
+    -- to whatever eventLog.activeTabKey already is (preserved across a
+    -- resize rebuild, reset only by eventLog.show() on a fresh open).
+    -- Silent: must not re-fire onChange, which would reset scrollOffset
+    -- right back to 0 for a tab the player never actually changed.
+    tabbar.selectByKey(eventLog.tabbarId, eventLog.activeTabKey, true)
 
     -- Cache geometry for the content renderer.
     local contentX = panelX + s.padX + s.padX
@@ -343,10 +350,14 @@ createUI = function()
     })
     table.insert(eventLog.ownedScrollbars, eventLog.scrollbarId)
 
-    -- Activate "All" tab on every fresh open so the user lands on
-    -- the full history rather than wherever they were last time.
-    eventLog.activeTabKey = "all"
-    eventLog.scrollOffset = 0
+    -- #750 round-4 review: activeTabKey/scrollOffset are NOT reset here
+    -- any more — createUI() also runs on a resize/UI-scale rebuild
+    -- (onFramebufferResize below), and resetting on every one of those
+    -- silently discarded the player's active tab/scroll position,
+    -- contrary to this issue's own "preserve ... logs/tabs/scroll"
+    -- requirement. eventLog.show() (the actual "fresh open" path) resets
+    -- both BEFORE calling createUI() instead, so this render just uses
+    -- whatever is currently set — correct for both callers.
     renderContent()
 
     eventLog.uiCreated = true
@@ -626,6 +637,13 @@ end
 
 function eventLog.show()
     if not eventLog.bootstrapped then return end
+    -- #750 round-4 review: reset to the "All" tab + top of scroll on
+    -- every fresh OPEN (moved here from createUI(), which also runs on
+    -- a resize rebuild — see its own comment) so the user lands on the
+    -- full history rather than wherever they were last time, without
+    -- that reset firing again on a mere resize while already open.
+    eventLog.activeTabKey = "all"
+    eventLog.scrollOffset = 0
     -- Rebuild the UI every show so resize / new categories are
     -- picked up. Cheap — only ~9 tabs + a panel + a few labels.
     createUI()

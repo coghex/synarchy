@@ -185,12 +185,19 @@ end
 -- Tab Selection
 -----------------------------------------------------------
 
-function tabbar.select(id, index)
+-- #750 round-4 review: `silent` (default false) skips the onChange
+-- callback — used to sync the visual selection to an already-current
+-- logical tab (e.g. after a layout-only rebuild recreates the tabbar at
+-- its hardcoded default selectedIndex=1) without re-issuing whatever
+-- side effect the real onChange callback performs (event_log.lua's own
+-- handler resets scrollOffset to 0, which a rebuild-while-already-on-
+-- this-tab must not do).
+function tabbar.select(id, index, silent)
     local tb = tabbars[id]
     if not tb then return end
     if index < 1 or index > #tb.tabs then return end
     if tb.selectedIndex == index then return end
-    
+
     -- Deselect old tab
     local oldTab = tb.tabs[tb.selectedIndex]
     if oldTab and oldTab.boxId then
@@ -199,7 +206,7 @@ function tabbar.select(id, index)
             tb.textColor[1], tb.textColor[2],
             tb.textColor[3], tb.textColor[4])
     end
-    
+
     -- Select new tab
     tb.selectedIndex = index
     local newTab = tb.tabs[index]
@@ -209,21 +216,21 @@ function tabbar.select(id, index)
             tb.selectedTextColor[1], tb.selectedTextColor[2],
             tb.selectedTextColor[3], tb.selectedTextColor[4])
     end
-    
-    if tb.onChange then
+
+    if not silent and tb.onChange then
         tb.onChange(newTab.key, index, id)
     end
-    
+
     engine.logDebug("TabBar selected: " .. tb.name .. " -> " .. newTab.name)
 end
 
-function tabbar.selectByKey(id, key)
+function tabbar.selectByKey(id, key, silent)
     local tb = tabbars[id]
     if not tb then return end
-    
+
     for i, tab in ipairs(tb.tabs) do
         if tab.key == key then
-            tabbar.select(id, i)
+            tabbar.select(id, i, silent)
             return
         end
     end
