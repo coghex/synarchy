@@ -125,6 +125,13 @@ local function destroyOwned()
     for handle, _ in pairs(eventLog.rowClickBoxes) do
         UI.deleteElement(handle)
     end
+    -- #750: the row clip viewport itself — its children (row
+    -- labels/click-boxes) are already gone via the loops above, so
+    -- this deletes an empty container.
+    if eventLog.rowViewportId then
+        UI.deleteElement(eventLog.rowViewportId)
+        eventLog.rowViewportId = nil
+    end
     eventLog.ownedLabels    = {}
     eventLog.ownedButtons   = {}
     eventLog.ownedTabbars   = {}
@@ -264,6 +271,13 @@ createUI = function()
         end,
     })
     table.insert(eventLog.ownedTabbars, eventLog.tabbarId)
+    -- #750 round-4 review: tabbar.new always starts a fresh tabbar at
+    -- its hardcoded selectedIndex=1 ("All") — sync the VISUAL selection
+    -- to whatever eventLog.activeTabKey already is (preserved across a
+    -- resize rebuild, reset only by eventLog.show() on a fresh open).
+    -- Silent: must not re-fire onChange, which would reset scrollOffset
+    -- right back to 0 for a tab the player never actually changed.
+    tabbar.selectByKey(eventLog.tabbarId, eventLog.activeTabKey, true)
 
     -- Cache geometry for the content renderer.
     local contentX = panelX + s.padX + s.padX
@@ -271,6 +285,16 @@ createUI = function()
     local sbWidth  = math.floor(24 * uiscale) + math.floor(8 * uiscale)
     local contentW = panelW - 4 * s.padX - sbWidth
     local contentH = (panelY + panelH - s.padY) - contentY
+    -- #750 round-10 review: at an outside-envelope scale (e.g.
+    -- 800x600@4x) the scaled chrome above/around the content area can
+    -- exceed the panel's own height, driving contentH/contentW negative
+    -- — UI.newElement below would then create the clipping viewport
+    -- with invalid size. Floor both at a small positive minimum (same
+    -- 20px floor settings_menu.lua's tabFrameHeight already uses for
+    -- the identical class of gap) so the viewport is always valid,
+    -- best-effort geometry rather than guaranteed to look good.
+    contentW = math.max(20, contentW)
+    contentH = math.max(20, contentH)
     local visibleRows = math.max(1, math.floor(contentH / s.rowHeight))
     eventLog.layout = {
         contentX    = contentX,
@@ -285,6 +309,30 @@ createUI = function()
         uiscale     = uiscale,
         s           = s,
     }
+
+    -- #750/#747: clipping viewport for the scrollable row area only
+    -- (title/tabbar/close-button/scrollbar stay page-attached chrome,
+    -- outside it). Row content (renderRows below) reparents under this
+    -- via UI.addChild with viewport-RELATIVE coordinates instead of
+    -- UI.addToPage with page-absolute ones, so a row that overflows its
+    -- slot (long text, a rounding edge case) is clipped to the content
+    -- area instead of drawing outside the panel — the virtual-scroll row
+    -- count/positioning math itself is unchanged.
+    -- #750 round-3 review: the viewport's OWN zIndex must stay 0
+    -- (UI.newElement's default — never set explicitly here). zIndex
+    -- ACCUMULATES through the parent chain (UI.Manager.Query's
+    -- elementPaintKey sums ueZIndex up every ueParent), so a nonzero
+    -- viewport z would add onto every reparented row's own z (503/504)
+    -- instead of leaving it as their effective paint position — e.g. a
+    -- viewport z of 503 would have pushed rows to an effective 1006/1007,
+    -- painting them above popup.lua's notification cards (baseZ
+    -- 1000+). The viewport itself renders nothing, so z=0 doesn't
+    -- affect its own visibility, only correctly avoids perturbing its
+    -- children's accumulated z.
+    eventLog.rowViewportId = UI.newElement(
+        "event_log_row_viewport", contentW, contentH, eventLog.pageId)
+    UI.addToPage(eventLog.pageId, eventLog.rowViewportId, contentX, contentY)
+    UI.setClipChildren(eventLog.rowViewportId, true)
 
     -- Persistent scrollbar to the right of the content area. Its
     -- onScroll callback only mutates scrollOffset + re-renders rows
@@ -312,10 +360,14 @@ createUI = function()
     })
     table.insert(eventLog.ownedScrollbars, eventLog.scrollbarId)
 
-    -- Activate "All" tab on every fresh open so the user lands on
-    -- the full history rather than wherever they were last time.
-    eventLog.activeTabKey = "all"
-    eventLog.scrollOffset = 0
+    -- #750 round-4 review: activeTabKey/scrollOffset are NOT reset here
+    -- any more — createUI() also runs on a resize/UI-scale rebuild
+    -- (onFramebufferResize below), and resetting on every one of those
+    -- silently discarded the player's active tab/scroll position,
+    -- contrary to this issue's own "preserve ... logs/tabs/scroll"
+    -- requirement. eventLog.show() (the actual "fresh open" path) resets
+    -- both BEFORE calling createUI() instead, so this render just uses
+    -- whatever is currently set — correct for both callers.
     renderContent()
 
     eventLog.uiCreated = true
@@ -429,9 +481,9 @@ renderRows = function()
             page     = eventLog.pageId,
             uiscale  = L.uiscale,
         })
-        UI.addToPage(eventLog.pageId,
+        UI.addChild(eventLog.rowViewportId,
             label.getElementHandle(emptyId),
-            L.contentX, L.contentY + L.s.fontSize)
+            0, L.s.fontSize)
         UI.setZIndex(label.getElementHandle(emptyId), 504)
         table.insert(eventLog.rowEntries, { rowLabels = { emptyId } })
         return
@@ -472,7 +524,7 @@ renderRows = function()
             1.0, 1.0, 1.0, 0.0,   -- fully transparent
             0,
             eventLog.pageId)
-        UI.addToPage(eventLog.pageId, clickBox, L.contentX, rowY)
+        UI.addChild(eventLog.rowViewportId, clickBox, 0, rowY - L.contentY)
         UI.setClickable(clickBox, true)
         UI.setOnClick(clickBox, EVENT_LOG_ROW_CALLBACK)
         UI.setZIndex(clickBox, 503)
@@ -489,9 +541,9 @@ renderRows = function()
                 page     = eventLog.pageId,
                 uiscale  = L.uiscale,
             })
-            UI.addToPage(eventLog.pageId,
+            UI.addChild(eventLog.rowViewportId,
                 label.getElementHandle(id),
-                x, rowY + L.s.fontSize)
+                x - L.contentX, rowY + L.s.fontSize - L.contentY)
             UI.setZIndex(label.getElementHandle(id), 504)
             -- Tracked via rowLabels only: renderRows destroys these on
             -- every re-render, so also appending to ownedLabels just
@@ -595,6 +647,13 @@ end
 
 function eventLog.show()
     if not eventLog.bootstrapped then return end
+    -- #750 round-4 review: reset to the "All" tab + top of scroll on
+    -- every fresh OPEN (moved here from createUI(), which also runs on
+    -- a resize rebuild — see its own comment) so the user lands on the
+    -- full history rather than wherever they were last time, without
+    -- that reset firing again on a mere resize while already open.
+    eventLog.activeTabKey = "all"
+    eventLog.scrollOffset = 0
     -- Rebuild the UI every show so resize / new categories are
     -- picked up. Cheap — only ~9 tabs + a panel + a few labels.
     createUI()
@@ -679,6 +738,11 @@ function eventLog.update(dt)
 end
 
 function eventLog.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not become the stored geometry or trigger
+    -- a rebuild against a degenerate framebuffer; keep the last valid
+    -- fbW/fbH and skip rebuilding, same as C2's responsive.notifyResize
+    -- guard for menu screens.
+    if width <= 0 or height <= 0 then return end
     eventLog.fbW = width
     eventLog.fbH = height
     if eventLog.visible and eventLog.uiCreated then

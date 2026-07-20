@@ -393,7 +393,7 @@ end
 
 --- Swap an option into a button's slot. The old button data goes to position 1
 --- (closest to the button) in the options list so the user can swap back.
-local function applyOption(grp, btnIdx, optionIndex)
+local function applyOption(grp, btnIdx, optionIndex, silent)
     local btn = grp.buttons[btnIdx]
     local opt = btn.options[optionIndex]
     if not opt then return end
@@ -424,6 +424,15 @@ local function applyOption(grp, btnIdx, optionIndex)
     -- still has options (the displaced item is now one), so the rich
     -- form with the expand-hint is appropriate.
     applyButtonTooltip(grp, btnIdx)
+
+    if silent then
+        -- #750: a layout-only rebuild restoring a previously-swapped
+        -- slot identity must not select an unrelated slot or fire the
+        -- real click-path callbacks (world.setToolMode/setMapMode,
+        -- onOptionSelect) a second time for a mode that's already
+        -- active engine-side — see toggle.restoreSlotIdentity.
+        return
+    end
 
     -- Select this button in the group (making it the active toggle).
     toggle.select(grp.id, btnIdx)
@@ -468,6 +477,52 @@ function toggle.applyOptionByName(groupId, name)
                     return true
                 end
             end
+        end
+    end
+    return false
+end
+
+-- #750: per-slot identity snapshot/restore for a layout-only rebuild
+-- (hud.lua's createUI). A slot's NAME (and texture set) can be swapped
+-- by picking an alternative from its options popup (applyOption above)
+-- independently of which slot is selectedIndex — a fresh toggle.new
+-- after a rebuild always recreates every slot at its hardcoded default
+-- identity, so restoring only the selected INDEX (toggle.select) still
+-- displays the wrong icon for a slot whose identity had been swapped.
+
+--- Live per-slot names, in button order — unlike toggle.dump(), this
+--- doesn't require the element to be currently visible.
+function toggle.getSlotNames(groupId)
+    local grp = groups[groupId]
+    if not grp then return {} end
+    local names = {}
+    for i, btn in ipairs(grp.buttons) do
+        names[i] = btn.name
+    end
+    return names
+end
+
+--- Restore slot `btnIdx`'s identity to `name` without selecting it or
+--- firing onOptionSelect/onChange (the mode it names is already active
+--- engine-side — a layout-only rebuild must not re-issue that
+--- transition). No-op if the slot already shows `name`, or if `name`
+--- isn't found among that slot's current options (e.g. the slot has no
+--- swappable alternates at all). Callers that also need the correct
+--- selectedIndex restored should follow up with one final
+--- toggle.select — its refresh loop re-applies every slot's (now
+--- correct) texDefault/texSelected regardless of the order restores
+--- happened in.
+function toggle.restoreSlotIdentity(groupId, btnIdx, name)
+    local grp = groups[groupId]
+    if not grp or not name then return false end
+    local btn = grp.buttons[btnIdx]
+    if not btn then return false end
+    if btn.name == name then return true end
+    if not btn.options then return false end
+    for i, opt in ipairs(btn.options) do
+        if opt.name == name then
+            applyOption(grp, btnIdx, i, true)
+            return true
         end
     end
     return false

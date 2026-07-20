@@ -65,6 +65,7 @@ require("scripts.ui_manager_panels")
 require("scripts.ui_manager_scroll")
 require("scripts.ui_manager_input")
 require("scripts.ui_manager_events")
+require("scripts.ui_manager_resize")
 
 -----------------------------------------------------------
 -- Key Input Forwarding

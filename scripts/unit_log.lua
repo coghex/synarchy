@@ -102,6 +102,13 @@ local function destroyChrome()
         scrollbar.destroy(unitLog.scrollbarId)
         unitLog.scrollbarId = nil
     end
+    -- #750: the content clip viewport — destroyTransient (called first
+    -- by every real teardown path) already destroyed its children;
+    -- UI.deleteElement is idempotent either way.
+    if unitLog.contentViewportId then
+        UI.deleteElement(unitLog.contentViewportId)
+        unitLog.contentViewportId = nil
+    end
     unitLog.chromeLabels  = {}
     unitLog.chromeButtons = {}
     unitLog.chromePanels  = {}
@@ -344,12 +351,36 @@ createUI = function()
     local regionW      = contentRight - contentX
     local contentW     = regionW - sbBtnSize - sbGap
 
+    -- #750 round-10 review: at an outside-envelope scale (e.g.
+    -- 800x600@4x) the scaled chrome above/around the content area can
+    -- exceed the panel's own height, driving contentH/contentW negative
+    -- — UI.newElement below would then create the clipping viewport
+    -- with invalid size. Floor both at a small positive minimum (same
+    -- 20px floor settings_menu.lua's tabFrameHeight already uses for
+    -- the identical class of gap) so the viewport is always valid,
+    -- best-effort geometry rather than guaranteed to look good.
+    contentW = math.max(20, contentW)
+    contentH = math.max(20, contentH)
+
     unitLog.layout = {
         s = s, uiscale = uiscale,
         tabY = tabY, tabX0 = tabX0,
         contentX = contentX, contentY = contentY,
         contentW = contentW, contentH = contentH,
     }
+
+    -- #750/#747: clipping viewport for the scrollable prose content only
+    -- (title/unit-tab strip/scrollbar stay page-attached chrome, outside
+    -- it) — same pattern as scripts/event_log.lua / combat_log.lua /
+    -- injury_log_panel.lua.
+    -- #750 round-3 review: leave the viewport's own zIndex at its
+    -- UI.newElement default (0) — see scripts/event_log.lua's identical
+    -- comment for why a nonzero value here would accumulate onto every
+    -- reparented row's own z via UI.Manager.Query's elementPaintKey.
+    unitLog.contentViewportId = UI.newElement(
+        "unit_log_content_viewport", contentW, contentH, unitLog.pageId)
+    UI.addToPage(unitLog.pageId, unitLog.contentViewportId, contentX, contentY)
+    UI.setClipChildren(unitLog.contentViewportId, true)
 
     local sbTrackH = math.max(math.floor(12 * uiscale),
                               contentH - 2 * sbBtnSize - 2 * sbCapH)
@@ -444,9 +475,9 @@ renderContent = function()
             uiscale  = L.uiscale,
         })
         table.insert(unitLog.tabLabels, emptyId)
-        UI.addToPage(unitLog.pageId, label.getElementHandle(emptyId),
-            L.contentX + math.floor((L.contentW - emptyW) / 2),
-            L.contentY + math.floor(L.contentH / 2))
+        UI.addChild(unitLog.contentViewportId, label.getElementHandle(emptyId),
+            math.floor((L.contentW - emptyW) / 2),
+            math.floor(L.contentH / 2))
         UI.setZIndex(label.getElementHandle(emptyId), 504)
         return
     end
@@ -499,8 +530,8 @@ renderContent = function()
             uiscale  = L.uiscale,
         })
         table.insert(unitLog.tabLabels, lbl)
-        UI.addToPage(unitLog.pageId, label.getElementHandle(lbl),
-            L.contentX, L.contentY + (row - 1) * lineH + s.fontSize)
+        UI.addChild(unitLog.contentViewportId, label.getElementHandle(lbl),
+            0, (row - 1) * lineH + s.fontSize)
         UI.setZIndex(label.getElementHandle(lbl), 504)
     end
 end
@@ -621,6 +652,11 @@ function unitLog.update(dt)
 end
 
 function unitLog.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not become the stored geometry or trigger
+    -- a rebuild against a degenerate framebuffer; keep the last valid
+    -- fbW/fbH and skip rebuilding, same as C2's responsive.notifyResize
+    -- guard for menu screens.
+    if width <= 0 or height <= 0 then return end
     unitLog.fbW = width
     unitLog.fbH = height
     if unitLog.visible and unitLog.uiCreated then

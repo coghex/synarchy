@@ -314,11 +314,27 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
     -- under-sizes the tab box on uiscale > 1 and the text spills
     -- out of its background.
     local widths = {}
+    local naturalTotalW = 0
     for i, td in ipairs(tabDefs) do
         local text = td.name .. " (" .. td.count .. ")"
         local w = engine.getTextWidth(h.menuFont, text, fontPx) or 0
         widths[i] = math.floor(w) + 2 * padX
+        naturalTotalW = naturalTotalW + widths[i] + (i > 1 and math.floor(TAB_GAP * uiscale) or 0)
     end
+
+    -- #750 round-8 review: contentW arrived as a parameter but was never
+    -- consulted — with enough categories (or long names) at a narrow,
+    -- high-scale, still-C2-supported combination, tabs kept flowing off
+    -- the panel/framebuffer edge with no wrap/scroll/clip. Shrink-to-fit,
+    -- same pattern as build_tool.lua's picker tab strip: scale every
+    -- tab's width and gap down by one factor so the whole row lands
+    -- inside contentW, floored so a tab stays clickable rather than
+    -- vanishing.
+    local shrink = 1.0
+    if contentW and naturalTotalW > contentW and naturalTotalW > 0 then
+        shrink = contentW / naturalTotalW
+    end
+    local shrunkGap = math.floor(TAB_GAP * uiscale * shrink)
 
     local cursorX = originX
     for i, td in ipairs(tabDefs) do
@@ -327,7 +343,7 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
         local texSet = active and cargoInventoryPanel.tabSelTexSet
                               or  cargoInventoryPanel.tabUnselTexSet
         local txtCol = active and TAB_SEL_TEXT_COL or TAB_TEXT_COL
-        local tabW   = widths[i]
+        local tabW   = math.max(20, math.floor(widths[i] * shrink))
 
         local bgId = UI.newBox("cargo_inv_tab_bg_" .. i,
             tabW, tabH, texSet, TAB_TILE,
@@ -337,6 +353,18 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
         UI.setClickable(bgId, true)
         UI.setOnClick(bgId, "onCargoInventoryTabClick")
 
+        -- #750 round-12 review: shrinking the BOX (tabW) alone left the
+        -- label rendering at the full uiscale — with enough categories
+        -- compressing tabs hard, the (unclipped, page-root) label text
+        -- stayed wider than its own box, overlapping neighbouring tabs.
+        -- Scale the label's OWN effective uiscale by the SAME `shrink`
+        -- factor the box used (the "reserve a column, fit text to it via
+        -- a locally-computed effective uiscale" technique this codebase
+        -- already uses elsewhere — see CLAUDE.md's responsive-menu-
+        -- lifecycle notes on graphics_tab.lua/input_tab.lua's
+        -- dropdownUiscale/keyBtnUiscale/labelUiscale) — at shrink == 1.0
+        -- (the common case) this is identical to the old behavior.
+        local labelUiscale = uiscale * shrink
         local lblId = label.new({
             name     = "cargo_inv_tab_lbl_" .. i,
             text     = text,
@@ -344,7 +372,7 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
             fontSize = TAB_FONT,
             color    = txtCol,
             page     = h.page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
         })
         local lh = label.getElementHandle(lblId)
         local lw = select(1, label.getSize(lblId))
@@ -356,7 +384,7 @@ local function buildTabStrip(originX, originY, contentW, tabDefs)
 
         s.tabs[#s.tabs + 1] = { name = td.name, boxId = bgId, labelId = lblId }
         s.tabsByHandle[bgId] = td.name
-        cursorX = cursorX + tabW + math.floor(TAB_GAP * uiscale)
+        cursorX = cursorX + tabW + shrunkGap
     end
 end
 
@@ -551,6 +579,16 @@ local function buildLayout(bid, mx, my)
     local rowsH    = visibleCount * rowH + (visibleCount - 1) * rowPad
     local panelH   = padTop + titleH + subH + 6 + tabH + 8 + rowsH + padBot
 
+    -- #750 round-7 review: cap against the actual framebuffer — the
+    -- pre-existing px/py clamp below only ever repositions the panel,
+    -- never shrinks it, so PANEL_W_BASE*uiscale (460 at 1x, 1840 at a
+    -- still-C2-supported 4x) could exceed the framebuffer several times
+    -- over regardless of position, leaving tabs/items/actions
+    -- off-screen. Best-effort degrade, same pattern as popup.lua/
+    -- unit_info_v2.lua/build_tool_remote_warning.lua's earlier fixes.
+    if h.fbW then panelW = math.min(panelW, h.fbW) end
+    if h.fbH then panelH = math.min(panelH, h.fbH) end
+
     -- Clamp the panel position to the framebuffer so it doesn't open
     -- partly off-screen if the player right-clicks near an edge.
     local px = mx
@@ -598,6 +636,33 @@ function cargoInventoryPanel.openFor(bid, mx, my)
     cargoInventoryPanel.state.mx   = mx
     cargoInventoryPanel.state.my   = my
     buildLayout(bid, mx, my)
+end
+
+-- #750 round-13 review: hud.lua's "resize" teardown (scripts/ui/
+-- view_teardown.lua) closes this popup before hud.world_page — which it
+-- is mounted on — gets deleted and replaced; a resize/rescale otherwise
+-- silently discarded the player's open cargo panel (and which tab they
+-- had selected) rather than treating it as the layout-only change #750
+-- requires it to survive. hud.lua snapshots isOpen()/state.bid/mx/my/
+-- activeTab BEFORE the teardown runs and calls this to rebuild the SAME
+-- panel, on the SAME tab, once its own rebuild is done. Plain openFor()
+-- always resets to the "All" tab (closeIfOpen's own reset), so the
+-- saved tab is re-applied afterward via the same "force rebuild" path
+-- handleTabClick already uses, IF it's still a valid tab for the
+-- (possibly changed) current contents.
+function cargoInventoryPanel.reopenWithTab(bid, mx, my, tab)
+    cargoInventoryPanel.openFor(bid, mx, my)
+    local s = cargoInventoryPanel.state
+    if not s.open or not tab or tab == s.activeTab then return end
+    local stillValid = false
+    for _, t in ipairs(s.tabs) do
+        if t.name == tab then stillValid = true; break end
+    end
+    if stillValid then
+        s.activeTab = tab
+        s.lastHash  = ""
+        buildLayout(s.bid, s.mx, s.my)
+    end
 end
 
 function cargoInventoryPanel.closeIfOpen()

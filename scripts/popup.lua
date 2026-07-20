@@ -234,7 +234,10 @@ renderPopup = function(p)
     local uiscale = scale.get()
     local s = scale.applyAllWith(popup.baseSizes, uiscale)
     local rowH = s.rowHeight
-    local fontSize = popup.baseSizes.fontSize
+    -- #750 round-19 review: the label's uiscale for its row (see the
+    -- line-render loop below) — starts at the outer uiscale and only
+    -- shrinks below it when the line block itself needs fitting.
+    local lineUiscale = uiscale
 
     -- Compose + truncate per-line text; track max width for panel sizing.
     -- Reserve room for the X button on the right so titles never run
@@ -273,15 +276,107 @@ renderPopup = function(p)
 
     local contentW = math.max(maxLineW, btnW, titleNeededW)
     local panelW = math.max(s.minWidth, contentW + 2 * s.padX)
+
+    -- #750 round-19 review: a max-lines (10) popup's natural line-block
+    -- height alone can exceed a narrow, high-scale, still-C2-supported
+    -- framebuffer (e.g. 800x1601@4x needs 1760px total) — the round-3
+    -- panelH cap below only shrinks the PANEL, leaving rows laid out at
+    -- their full natural rowH, so the last rows collide with the OK
+    -- button (moved up to fit the capped panel) instead of landing
+    -- inside it. Fit a local, line-block-only scale (rowH + its label's
+    -- uiscale together, never the panel's other fixed chrome) so every
+    -- row — and the OK button below it — stays inside the capped panel,
+    -- the same fitScale technique used throughout this codebase for an
+    -- analogous "fixed content doesn't fit the available space" gap.
+    local responsive = require("scripts.ui.responsive")
+    local fixedChromeH = 2 * s.padY + s.headerH + s.headerGap
+                        + s.footerGap + s.buttonH
+    local availLinesH = math.max(s.rowHeight, popup.fbH - fixedChromeH)
+    local lineScale = responsive.fitScale(#p.lines * rowH, availLinesH, uiscale)
+    if lineScale < uiscale then
+        rowH = math.max(1, math.floor(popup.baseSizes.rowHeight * lineScale))
+        lineUiscale = lineScale
+    end
+
     local linesH = #p.lines * rowH
     local panelH = s.padY + s.headerH + s.headerGap
                    + linesH + s.footerGap + s.buttonH + s.padY
+    -- #750 round-3 review: cap against the actual framebuffer.
+    -- s.minWidth alone (scaled by uiscale) can exceed a narrow/high-scale
+    -- but still C2-supported framebuffer (e.g. 800x2160@4x scales
+    -- minWidth to 1440px), pushing the close/OK buttons off-screen
+    -- regardless of avoidReserved's position clamp below (which only
+    -- ever moves x/y, never shrinks w/h). Best-effort degrade, same
+    -- spirit as settings_menu's own tabFrameHeight floor for its
+    -- out-of-envelope exemplar (CLAUDE.md's C2 section).
+    panelW = math.min(panelW, popup.fbW)
+    panelH = math.min(panelH, popup.fbH)
+
+    -- Lazily required to avoid a load cycle (hud.lua doesn't require
+    -- popup.lua either way, but every other cross-module reach in this
+    -- file follows the same lazy convention).
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local hud = require("scripts.hud")
+    local toolbarRects = hud.getToolbarRects()
+
+    -- #750 round-4 review: the framebuffer-width cap above isn't enough
+    -- when a reserved region spans nearly the full height at the card's
+    -- OWN vertical position (e.g. the tool toggle column) — no amount of
+    -- x-nudging then fits a wide card beside it, so avoidReserved's
+    -- position-only nudge below can end up right back on top of it once
+    -- clamped to the screen. Shrink panelW to the widest horizontal gap
+    -- actually free at this card's (pre-nudge, vertically centered) y —
+    -- best-effort, same "may look cramped, never off-screen/unreachable"
+    -- contract as the framebuffer cap above.
+    local cy0 = math.floor((popup.fbH - panelH) / 2)
+    local availW = reservedRegions.maxAvailableWidth(
+        cy0, panelH, toolbarRects, popup.fbW)
+    if availW > 0 then
+        -- #750 round-14 review: a flat 20px floor (matching
+        -- settings_menu's own defensive floor for an analogous
+        -- out-of-envelope exemplar) is enough to keep panelW itself
+        -- positive, but NOT enough to keep it USABLE — every content
+        -- position below (the line click box's `panelW - 2*s.padX`,
+        -- the title/OK button placement) assumes panelW comfortably
+        -- exceeds the padding alone. At the issue's own 800x2160@4x, a
+        -- card overlapping BOTH toolbar clusters can leave availW as
+        -- small as their free gap (e.g. 64px) — well under 2*s.padX
+        -- (288px at that scale) — which drove the click box negative
+        -- and pushed the title/OK button outside the panel box
+        -- entirely.
+        --
+        -- #750 round-16 review: a flat "padding + 20px" floor still
+        -- wasn't enough — it kept panelW positive, but never accounted
+        -- for the PANEL'S OWN FIXED CHROME that has to fit inside it:
+        -- the OK button alone needs at least s.buttonMinW (320px at
+        -- 4x), and when the mute-toggle icon exists it sits beside the
+        -- close X, needing its own strip of width. Floor at whichever
+        -- the panel's fixed content actually needs — 2*s.padX plus the
+        -- WIDER of the OK button's own width or the close+mute icon
+        -- strip's width — so both always land inside the panel
+        -- regardless of how tight availW gets (the panel may still
+        -- overlap a reserved region in a genuinely infeasible case,
+        -- same "best-effort, never crashing/invalid" priority the rest
+        -- of this contract already uses — but its own OK/close/mute
+        -- controls never spill outside the panel box itself).
+        local closeAndMuteW = muteToggleReserved + s.closeBtnSize
+        local minUsableW = 2 * s.padX + math.max(btnW, closeAndMuteW, 20)
+        panelW = math.min(panelW, math.max(minUsableW, availW))
+    end
 
     -- Centre + slot diagonal offset
     local cx = math.floor((popup.fbW - panelW) / 2)
     local cy = math.floor((popup.fbH - panelH) / 2)
     local off = (p.slot - 1) * s.slotOffset
     local px, py = cx + off, cy + off
+
+    -- #750: nudge the card off the always-reachable toolbar clusters
+    -- instead of covering one — a small window + a corner-anchored
+    -- toggle group + a centered/cascading popup can genuinely overlap.
+    local nudged = reservedRegions.avoidReserved(
+        { x = px, y = py, w = panelW, h = panelH },
+        toolbarRects, popup.fbW, popup.fbH)
+    px, py = nudged.x, nudged.y
 
     local baseZ = p.baseZ
 
@@ -405,10 +500,17 @@ renderPopup = function(p)
             fontSize = popup.baseSizes.fontSize,
             color    = p.color,
             page     = popup.pageId,
-            uiscale  = uiscale,
+            uiscale  = lineUiscale,
         })
+        -- #750 round-19 review: this baseline nudge used to add the
+        -- UNSCALED base fontSize (always 20px) regardless of uiscale —
+        -- at 4x the label rendered 60px too high, its glyphs bleeding
+        -- into the row above (and its higher-z click box) instead of
+        -- sitting inside its own row. Uses the SAME scale the label
+        -- itself renders at (lineUiscale, above) so the nudge always
+        -- matches the actual glyph size.
         UI.addToPage(popup.pageId, label.getElementHandle(lbl),
-            px + s.padX, rowY + fontSize)
+            px + s.padX, rowY + math.floor(popup.baseSizes.fontSize * lineUiscale))
         UI.setZIndex(label.getElementHandle(lbl), baseZ + 2)
         line.labelId = lbl
     end
@@ -728,9 +830,38 @@ end
 function popup.update(dt) end
 
 function popup.onFramebufferResize(width, height)
+    -- #750: a 0x0 minimize must not become the stored geometry — a new
+    -- notification created before the next real resize would size itself
+    -- against a degenerate framebuffer (maxPanelW = floor(fbW*0.55) = 0).
+    -- Keep the last valid fbW/fbH instead.
+    if width <= 0 or height <= 0 then return end
     popup.fbW = width
     popup.fbH = height
-    -- Don't reflow existing popups; new ones use updated dimensions.
+    -- #750: reflow deliberately does NOT happen here. popup.lua is
+    -- engine.loadScript'd with an EARLIER script id than
+    -- scripts/ui_manager.lua, so the engine's automatic
+    -- broadcastToModules calls this before uiManager.onFramebufferResize
+    -- has run hud.onFramebufferResize — reflowing now would nudge cards
+    -- against hud.getToolbarRects() from the STALE, pre-resize HUD.
+    -- popup.reflow() is the real entry point, called explicitly by
+    -- ui_manager_boot.lua's manual forward (after hud.onFramebufferResize)
+    -- and by uiManager.notifyGameplayRescale (which already calls hud
+    -- first), guaranteeing the toolbar rects it reads are current.
+end
+
+-- #750: reflow every active card so it stays centered, correctly scaled,
+-- and reachable (its OK button on-screen) at the current geometry — a
+-- card positioned against a stale fbW/fbH, or nudged against a stale
+-- hud.getToolbarRects(), could otherwise render stale or fully
+-- off-screen, or overlap the NEW toolbar position, after a real shrink
+-- or a UI-scale change. renderPopup fully rebuilds a card's visuals from
+-- its own record (the same function content updates already reuse, e.g.
+-- a new coalesced line) — it never touches p.lines/category/target data,
+-- only the on-screen position/size.
+function popup.reflow()
+    for _, p in ipairs(popup.active) do
+        renderPopup(p)
+    end
 end
 
 function popup.shutdown()
@@ -762,6 +893,25 @@ end
 
 function popup.isBootstrapped()
     return popup.bootstrapped and true or false
+end
+
+-- #750: real on-screen bounds of every currently-rendered card, for the
+-- reserved-region introspection audit (and tests) — never a re-derived
+-- estimate, since renderPopup already nudges px/py via
+-- reserved_regions.avoidReserved before creating the panel.
+function popup.getActiveBounds()
+    local panelMod = require("scripts.ui.panel")
+    local rects = {}
+    for _, p in ipairs(popup.active) do
+        if p.panelId then
+            local x, y = panelMod.getPosition(p.panelId)
+            local w, h = panelMod.getSize(p.panelId)
+            if x then
+                table.insert(rects, { id = p.id, x = x, y = y, w = w, h = h })
+            end
+        end
+    end
+    return rects
 end
 
 -- Number of lines in the active popup for a category, or 0 if no

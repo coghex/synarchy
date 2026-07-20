@@ -3,10 +3,11 @@
 -- corner of the screen.  Each tab holds multiple lines of pre-formatted
 -- text.  The panel auto-hides when all tabs are empty and auto-shows
 -- when any tab receives content.
-local scale   = require("scripts.ui.scale")
-local panel   = require("scripts.ui.panel")
-local label   = require("scripts.ui.label")
-local tabbar  = require("scripts.ui.tabbar")
+local scale      = require("scripts.ui.scale")
+local panel      = require("scripts.ui.panel")
+local label      = require("scripts.ui.label")
+local tabbar     = require("scripts.ui.tabbar")
+local responsive = require("scripts.ui.responsive")
 
 local infoPanel = {}
 
@@ -269,6 +270,27 @@ function infoPanel.create(params)
     local frameHeight = bounds.height - s.tabHeight
                       - math.floor(10 * uiscale)
 
+    -- #750 round-15 review: the panel's own width is deliberately
+    -- narrow (20% of the framebuffer, base.widthFrac), but tabbar.lua
+    -- lays each tab out at a width driven purely by its OWN label text
+    -- + scaled textPadding, left-to-right with no fit/clip/scroll of
+    -- its own — unrelated to bounds.width. At the issue's own
+    -- 800x2160@4x, the content area is ~80px wide while resource/
+    -- weather/status tabs (measured at the full scaled tabFontSize)
+    -- extend well outside the panel/framebuffer. Shrink one effective,
+    -- LOCAL uiscale for the tab bar only, fit against bounds.width —
+    -- mirrors settings_menu.lua's/create_world_menu.lua's identical
+    -- tab-bar treatment (responsive.fitScale) for their own tabs.
+    local tabFontSize = math.floor(base.tabFontSize * uiscale)
+    local textPadding = math.floor(10 * uiscale)
+    local naturalTabWidth = 0
+    for _, def in ipairs(defs) do
+        naturalTabWidth = naturalTabWidth
+            + engine.getTextWidth(menuFont, def.name, tabFontSize)
+            + textPadding * 2
+    end
+    local tabBarUiscale = responsive.fitScale(naturalTabWidth, bounds.width, uiscale)
+
     infoPanel.tabBarId = trackTabbar(tabbar.new({
         name              = "hud_info_tabs",
         page              = page,
@@ -279,7 +301,7 @@ function infoPanel.create(params)
         fontSize          = base.tabFontSize,
         tabHeight         = base.tabHeight,
         frameHeight       = frameHeight,
-        uiscale           = uiscale,
+        uiscale           = tabBarUiscale,
         zIndex            = Z_TAB_FRAME,
         textColor         = {0.6, 0.6, 0.6, 1.0},
         selectedTextColor = {1.0, 1.0, 1.0, 1.0},
@@ -580,6 +602,19 @@ end
 
 function infoPanel.isVisible()
     return infoPanel.visible
+end
+
+-- #750: real on-screen bounds for the reserved-region introspection
+-- audit — reads the actually-rendered panel (panel.getPosition/
+-- getSize) rather than re-deriving fbW*widthFrac locally, so it can
+-- never drift from what infoPanel.create() actually built. nil when
+-- not created or not visible (suppressed/empty).
+function infoPanel.getBounds()
+    if not infoPanel.panelId or not infoPanel.isVisible() then return nil end
+    local x, y = panel.getPosition(infoPanel.panelId)
+    local w, h = panel.getSize(infoPanel.panelId)
+    if not x then return nil end
+    return { x = x, y = y, w = w, h = h }
 end
 
 return infoPanel

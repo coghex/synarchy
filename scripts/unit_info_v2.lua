@@ -46,6 +46,7 @@ local infoPanel   = require("scripts.hud.info_panel")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
+local responsive  = require("scripts.ui.responsive")
 
 local L = require("scripts.unit_info_v2_layout")
 
@@ -160,12 +161,39 @@ local function rebuildLayout()
     clearOwned()
 
     local uiscale  = scale.get()
-    local panelW   = math.floor(L.PANEL_W * uiscale)
-    local outerPad = math.floor(L.PANEL_PAD * uiscale)
-    local sectGap  = math.floor(L.SECTION_GAP * uiscale)
-
     local fbW = hud.fbW
     local fbH = hud.fbH
+    -- #750 round-3 review: cap against the actual framebuffer width.
+    -- L.PANEL_W alone (scaled by uiscale) can exceed a narrow/high-scale
+    -- but still C2-supported framebuffer (e.g. 800x2160@4x scales
+    -- PANEL_W=340 to 1360px), pushing panelX negative and most of the
+    -- pane's content/controls off-screen. Best-effort degrade — see
+    -- popup.lua's identical fix for the same class of gap.
+    --
+    -- #750 round-8 review: the framebuffer cap alone let this flush-
+    -- right, full-height column grow wide enough to become the WHOLE
+    -- screen width at an extreme combination, covering hud's LEFT-side
+    -- toolbar clusters (log/tool toggle) it has no priority relationship
+    -- with — "toolbar outranks transient info"
+    -- (scripts/ui/reserved_regions.lua's own declared PRIORITY table).
+    -- Deliberately does NOT constrain against map_toggle: this pane
+    -- ALREADY overlaps map_toggle's corner at ordinary, in-envelope
+    -- resolutions (both are flush-right; that overlap is pre-existing,
+    -- accepted shipped behavior, not a #750 regression) — narrowing the
+    -- pane to avoid it too would shrink it down to near-nothing even at
+    -- 1x. reservedRegions.maxRightAnchoredWidth is the right-anchored
+    -- counterpart to popup.lua's maxAvailableWidth (which finds the
+    -- widest gap ANYWHERE — wrong model for a column that's never
+    -- repositioned, only resized).
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local leftToolbarRects = {}
+    for _, rc in ipairs(hud.getToolbarRects()) do
+        if rc.name ~= "map_toggle" then table.insert(leftToolbarRects, rc) end
+    end
+    local panelW = math.min(math.floor(L.PANEL_W * uiscale), fbW,
+        reservedRegions.maxRightAnchoredWidth(0, fbH, leftToolbarRects, fbW))
+    local outerPad = math.floor(L.PANEL_PAD * uiscale)
+
     local panelX = fbW - panelW
     local panelY = 0
     local panelH = fbH
@@ -186,13 +214,17 @@ local function rebuildLayout()
     -- Section sizes (scaled)
     local contentX = panelX + outerPad
     local contentW = panelW - 2 * outerPad
-    local cursorY  = panelY + outerPad
 
-    local tabsH   = math.floor(L.TABS_H   * uiscale)
-    local headerH = math.floor(L.HEADER_H * uiscale)
-    local statsH  = math.floor(L.STATS_H  * uiscale)
-    local equipH  = math.floor(L.EQUIP_H  * uiscale)
-    local dThick  = math.floor(L.DIVIDER_THICKNESS * uiscale)
+    -- #750 round-16 review: fit the 4 fixed section heights (tabs/
+    -- header/stats/equipment) — which alone can exceed the whole
+    -- framebuffer at a narrow, high-scale combination — against the
+    -- height actually available. See L.fitVerticalSections's own
+    -- comment for the full rationale; vOuterPad/sectGap/*H/dThick here
+    -- are all at that fitted scale, distinct from the WIDTH-side
+    -- outerPad above.
+    local vOuterPad, sectGap, tabsH, headerH, statsH, equipH, dThick, minInvH =
+        L.fitVerticalSections(uiscale, fbH)
+    local cursorY = panelY + vOuterPad
 
     -- Helper: lay down a section's content, then a divider beneath it.
     -- The cursorY ends up below the divider, ready for the next
@@ -235,11 +267,12 @@ local function rebuildLayout()
     -- Inventory: remaining height, no divider after. Just record the
     -- rect; rebuildInventorySection (driven by update()) populates the
     -- tab strip + item list + total-weight footer inside it.
-    local invH = (panelY + panelH - outerPad) - cursorY
-    if invH > 0 then
-        unitInfoV2.invRect = { x = contentX, y = cursorY,
-                               w = contentW, h = invH }
-    end
+    -- #750 round-16: floored at minInvH defensively (rounding from the
+    -- floored section heights above could eat into the fit's reserve)
+    -- so inventory is never silently omitted the way it was pre-fix.
+    local invH = math.max(minInvH, (panelY + panelH - vOuterPad) - cursorY)
+    unitInfoV2.invRect = { x = contentX, y = cursorY,
+                           w = contentW, h = invH }
 end
 
 -----------------------------------------------------------
@@ -357,14 +390,27 @@ function unitInfoV2.update(dt)
     unitInfoV2.lastSelCount = count
 end
 
+-- #750: this fires before hud.onFramebufferResize (script load order),
+-- so hud.fbW/fbH would still read pre-resize here — deliberate no-op.
+-- unitInfoV2.reflow() is the real entry point, called after hud's own
+-- resize handler by ui_manager_boot.lua / notifyGameplayRescale.
 function unitInfoV2.onFramebufferResize(width, height)
+end
+
+function unitInfoV2.reflow()
     -- Layout depends on framebuffer dimensions, so rebuild on resize.
     if unitInfoV2.page then
+        -- #750 round-17/18: preserve state a mere-resize rebuild would
+        -- otherwise destroy — control focus, active tab/scroll offset,
+        -- and the stats sub-tab strip + content (see reflowSelection/
+        -- reflowStats below).
+        local wasVisible = unitInfoV2.lastWantVisible
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
+
         rebuildLayout()
-        -- Tabs got cleared by clearOwned in rebuildLayout. Re-create
-        -- them for the current selection (lastSelKey reset so the next
-        -- update tick will see "new" selection and rebuild).
-        unitInfoV2.lastSelKey = ""
+        tabs.reflowSelection()
+        statsMod.reflowStats()
+
         -- Re-apply the same visibility gate as update() so a resize while
         -- a menu / pause / settings overlay is open or the camera is zoomed
         -- out doesn't flash the pane back on (#137).
@@ -380,7 +426,38 @@ function unitInfoV2.onFramebufferResize(width, height)
             infoPanel.unsuppress("unit_info_v2")
         end
         unitInfoV2.lastWantVisible = want
+        if wasVisible then
+            responsive.restoreControlFocusName(controlFocusName)
+        end
     end
+end
+
+-- #750: introspection for the reserved-region audit (and tests) —
+-- true only while the pane is ACTUALLY shown (the same want-visible
+-- gate update()/onFramebufferResize maintain), not merely "a unit is
+-- selected".
+function unitInfoV2.isVisible()
+    return unitInfoV2.lastWantVisible == true
+end
+
+-- Real on-screen bounds of the flush-right column, mirroring
+-- rebuildLayout()'s own first few lines off the SAME L.PANEL_W
+-- constant (never a re-guessed width) so this can't drift from what
+-- rebuildLayout() actually builds. nil while not visible.
+function unitInfoV2.getBounds()
+    if not unitInfoV2.isVisible() then return nil end
+    local uiscale = scale.get()
+    -- Mirrors rebuildLayout()'s own framebuffer-width cap (#750 rounds
+    -- 3 and 8) so this can't drift from what rebuildLayout() actually
+    -- builds.
+    local reservedRegions = require("scripts.ui.reserved_regions")
+    local leftToolbarRects = {}
+    for _, rc in ipairs(hud.getToolbarRects()) do
+        if rc.name ~= "map_toggle" then table.insert(leftToolbarRects, rc) end
+    end
+    local panelW = math.min(math.floor(L.PANEL_W * uiscale), hud.fbW,
+        reservedRegions.maxRightAnchoredWidth(0, hud.fbH, leftToolbarRects, hud.fbW))
+    return { x = hud.fbW - panelW, y = 0, w = panelW, h = hud.fbH }
 end
 
 -- "Log" button → open the per-unit collated log for the active unit.

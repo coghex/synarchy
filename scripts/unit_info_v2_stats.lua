@@ -134,6 +134,23 @@ function M.rebuildSubTabs()
     applySubTabStyling()
 end
 
+-- #750 round-18 review: unitInfoV2.reflow() calls this after
+-- rebuildLayout() clears the sub-tab strip (statsMod.clearAll(), via
+-- clearOwned) — rebuildSubTabs() was otherwise only ever called once,
+-- at bootstrap, so a resize left the stats section permanently empty
+-- and statsContentRect stale (rebuildStatsContent's own guard only
+-- checks non-nil, not freshness). Mirrors the two steps update()
+-- already performs for content on every tick.
+function M.reflowStats()
+    M.rebuildSubTabs()
+    if unitInfoV2.activeUid then
+        M.rebuildStatsContent()
+        if unitInfoV2.statsRefresh then
+            unitInfoV2.statsRefresh(unitInfoV2.activeUid)
+        end
+    end
+end
+
 -----------------------------------------------------------
 -- Panel dispatch + rebuild-vs-refresh
 -----------------------------------------------------------

@@ -493,12 +493,13 @@ clickable outside the list's own bounds even if virtualization ever
 has a gap. `scripts/ui/panel.lua` gained an opt-in `clipChildren`
 constructor param (`UI.setClipChildren` on the panel's own box) for any
 panel-based screen that nests content via `panel.place`/`placeRow`/
-`placeColumn`. Adoption for the settings tabs / create-world content /
-event-combat-injury-unit log panels remains a follow-up: those build
-their scrollable regions as page-root elements positioned by
+`placeColumn`. Adoption for the settings tabs remains a follow-up: it
+still builds its scrollable region as page-root elements positioned by
 hand-computed layout rather than real parent/child nesting, so turning
-on the clip contract there needs a real reparenting migration per
-panel, not a one-line flag flip.
+on the clip contract there needs a real reparenting migration, not a
+one-line flag flip — same story create-world's tab content had until
+the migration described above, and the event/combat/injury/unit log
+panels had until #750 (see below).
 
 **Floating placement** (`UI.PopupPlacement`, also pure, see
 `Test.Headless.UI.PopupPlacement`): one framebuffer-coordinate
@@ -535,9 +536,12 @@ screen (main, pause, settings, create-world, save browser, loading)
 adopts, replacing the per-screen copies that used to exist —
 `ui_manager_boot`'s hand-listed `onFramebufferResize` fan-out and
 `settings_menu`'s own scaleChanged-only self-rebuild. Gameplay surfaces
-(HUD/overlays) are C4 and still use their own explicit forwarding in
-`ui_manager_boot.lua`; the contract is ready for C4 to adopt without
-duplicating it.
+(HUD/overlays, #750/C4 below) consume the SAME band/envelope
+definitions but deliberately stay off this registry — most of them are
+reached only through `ui_manager_boot.lua`'s own explicit forwarding
+(never `engine.loadScript`'d), and the rest already get a real resize
+for free via the engine's automatic broadcast, so joining this registry
+too would double-fire them.
 
 The supported envelope (`responsive.bands`, inclusive on both ends,
 contiguous, non-overlapping): 600-900px framebuffer height at
@@ -883,6 +887,1121 @@ sufficient — see `Test.Headless.UI.ResponsiveMenus` for the pattern
 on `fontsReady`, which needs real font rasterization, gated behind
 `Engine.Scripting.Lua.Message`'s `whenGraphical` and so never true
 without a GPU).
+
+**Gameplay responsive lifecycle** (#750, Phase C child C4, see
+`Test.Headless.UI.ResponsiveGameplay`): gameplay HUD/overlay surfaces
+consume C2's envelope/band definitions (`scripts/ui/responsive.lua`)
+rather than re-declaring them, but stay OFF `responsive.register`/
+`notifyResize`'s registry — most of them (hud/worldView/contextMenu/
+buildToolRemoteWarning) are reached only through
+`ui_manager_boot.lua`'s manual `onFramebufferResize` forward, while the
+rest (popup/event_log/combat_log/injury_log_panel/unit_log/
+unit_info_v2/debug) are `engine.loadScript`'d and already get a REAL
+resize for free via the engine's own `broadcastToModules`
+(`Engine.Scripting.Lua.Thread.Dispatch`) — registering them too would
+double-fire their rebuild every resize, the trap `shell.lua` already
+sidestepped pre-#750. Three concrete gaps this closed: (1) the manual-
+forward block had no 0x0-minimize guard at all (`ui_manager_boot.lua`'s
+`onFramebufferResize` now skips it entirely below `width>0 and
+height>0`, matching `responsive.notifyResize`'s own guard; the
+auto-broadcast-reached modules each guard themselves, since there's no
+shared call site to guard once for all of them); (2) popup/the four
+logs were being forwarded through BOTH paths at once (removed from the
+manual list, since the automatic broadcast already covers them —
+mirrors how unit_info_v2/debug/shell were already broadcast-only); (3)
+a scale-only Settings Apply/Save/Back (`responsive.notifyResize` plus a
+direct `shell.onFramebufferResize` call) never reached gameplay at
+all — `uiManager.notifyGameplayRescale(w, h)`
+(`scripts/ui_manager_resize.lua`, split out of `ui_manager_boot.lua` to
+stay under its line budget) is the new synthetic-change path
+`settingsMenu.onApply`/`onSave`/`onBack` also call, reaching every
+gameplay surface directly since no automatic broadcast exists for a
+non-resize scale change.
+
+A resize while a popup mounted on `hud.world_page` (crafting/cargo/
+item-contents/plant panels, the build-tool picker) is open used to
+leave it stale: `hud.createUI()` tears the whole page down and rebuilds
+it on every resize, destroying the popup's elements out from under it
+while the popup's own module state (`state.open`/`panelId`) stayed set,
+pointing at deleted elements. Fixed by extending `scripts/ui/
+view_teardown.lua`'s #156 registry (already the mechanism for exactly
+this failure family on zoom-band/HUD-hide/menu transitions) with a
+fourth transition, `"resize"`, run from `hud.createUI()` right before
+it deletes `hud.world_page` — reusing each widget's existing idempotent
+`closeIfOpen()`/`hidePicker()`/`clear()` hook. Deliberately NOT
+hooked: `build_tool`'s "placement" mode (the two-click structure
+anchor + ghost preview) — its ghost is engine-side world-space
+rendering (`building.setGhost`, re-established every tick), not a
+`hud.world_page` element, and a layout-only rebuild must never cancel a
+committed/armed two-click designation anchor (the #745 press-activation
+correction on this issue's own thread draws the same line: "never
+cancel" protects committed/armed state, not merely a pending,
+unreleased interaction) — same reasoning keeps mine/chop/till's own
+anchors, which aren't `hud.world_page`-mounted UI at all, off this
+transition too.
+
+The deterministic collision/priority contract the issue asks for
+(`scripts/ui/reserved_regions.lua`, pure) is new territory layered on
+top of what already existed: modals outranking gameplay and debug/
+shell passing through above everything are already `uiLayerBand`/
+`UI.InputOwnership`'s job (untouched); context menus already place via
+#747's `UI.placePopup` (untouched); "unit info reserves the right edge
+and suppresses conflicting info" was ALREADY implemented pre-#750 (
+`unit_info_v2.lua`'s `update()` calls `hud/info_panel.lua`'s reason-
+keyed `suppress("unit_info_v2")`/`unsuppress` whenever the flush-right
+column wants to be visible) — #750 only added introspection over it
+(`unitInfoV2.isVisible()`/`getBounds()`, `infoPanel.getBounds()`). What
+genuinely needed new code: `hud.getToolbarRects()` unions each toggle
+cluster's REAL element bounds via `UI.getElementInfo` (never a
+re-derived formula, so it can't drift from `toggle.lua`'s own
+direction-dependent packing math) as the "required controls" a
+lower-priority surface must avoid; `reservedRegions.checkViolations`
+flags an overlapping pair by priority (or as ambiguous on a tie);
+`reservedRegions.avoidReserved` is the minimal-translation nudge
+`popup.lua`'s `renderPopup` now runs its natural centered position
+through, so a notification card can no longer render on top of a
+toolbar cluster on a small window; `reservedRegions.findEscapes` flags
+a visible, pointer-blocking element hanging outside `[0,fbW]x[0,fbH]`
+— the "unreachable actions" half of the introspection ask, generic over
+any `UI.getElementInfo`-shaped element list.
+
+Round-1 review of this PR found three more pre-existing `hud.createUI()`
+gaps this issue's own "preserve valid... state" acceptance criteria
+cover: it unconditionally showed the world/zoom page based on live
+camera zoom regardless of `hud.visible`, resurrecting hidden HUD
+controls over whatever menu a resize happened to land on; it never
+re-showed `global_page` (the log toggle) at all, so a resize while
+visible silently dropped it; and the tool/map toggles were always
+recreated at their hardcoded default slot, desyncing the visible
+toolbar from whichever tool/map mode was actually active. Fixed by
+having `createUI()` only derive `hud.currentView` (no `UI.showPage`
+calls of its own — both its callers, `hud.show()` and
+`hud.onFramebufferResize`, already apply the full `hud.visible`-gated
+show logic afterward), extending `onFramebufferResize`'s restore to
+include `global_page`, and snapshotting/restoring each toggle's visual
+selection via `toggle.select` (visual-only — does not re-fire
+`onChange`, so a rebuild never re-issues `world.setToolMode`/
+`setMapMode` or re-triggers the build tool's picker show/hide). Also
+found: `popup.onFramebufferResize` inherited a deliberate pre-#750
+"don't reflow existing popups" behavior that became a real
+reachability gap once gameplay's own rescale path could reach it — a
+card positioned against the old framebuffer could render stale or
+fully off-screen after a real shrink or a UI-scale change. Fixed by
+having it re-run `renderPopup` (the same function content updates
+already reuse) for every active card, which only touches its
+position/size, never its `lines`/`category`/target data.
+
+Round-2 review found three more gaps. First, `toggle.select`'s
+index-only restore (above) still lost a SWAPPED alternative's identity
+— clicking an option in a toggle's popup swaps it into that slot
+in-place (`toggle.lua`'s `applyOption`, e.g. picking "Pressure" swaps
+it into the map toggle's slot 1, replacing "Temperature" there), so a
+rebuild recreating every slot at its hardcoded default still showed the
+wrong icon even with the correct slot selected. Fixed with two new
+`toggle.lua` functions: `toggle.getSlotNames(groupId)` (live per-slot
+names, unlike `toggle.dump()` which requires visibility) and
+`toggle.restoreSlotIdentity(groupId, btnIdx, name)` — finds `name`
+among that slot's current options and swaps it in via `applyOption`'s
+existing logic with a new `silent` parameter that skips both the
+select-this-slot call and the `onOptionSelect`/`onChange` callbacks (the
+mode it names is already active engine-side). `hud.createUI()` snapshots
+every slot's name via `getSlotNames` before teardown and restores each
+via `restoreSlotIdentity` before the final `toggle.select` (which still
+owns refreshing every slot's displayed texture from its now-correct
+identity, regardless of restore order).
+
+Second, an ordering hazard: `popup.lua` and `unit_info_v2.lua` are both
+`engine.loadScript`'d with an EARLIER script id than
+`scripts/ui_manager.lua`, so on a real resize the engine's automatic
+`broadcastToModules` calls their `onFramebufferResize` BEFORE
+`uiManager.onFramebufferResize` has run `hud.onFramebufferResize` —
+`unit_info_v2`'s `rebuildLayout()` (which reads `hud.fbW`/`hud.fbH`)
+computed against STALE dimensions, and nothing re-triggered it once hud
+did rebuild; `popup`'s reflow (above) nudged cards against
+`hud.getToolbarRects()` from the stale, pre-resize toolbar. Fixed by
+splitting each into a now near-no-op `onFramebufferResize` (owns no
+state of its own to preserve — `popup.onFramebufferResize` still stores
+`fbW`/`fbH`; `unit_info_v2.onFramebufferResize` does nothing at all) and
+a separate `reflow()`/re-run entry point, called explicitly AFTER
+`hud.onFramebufferResize` from both `ui_manager_boot.lua`'s manual
+forward and `uiManager.notifyGameplayRescale` (which already called hud
+first) — guaranteeing both always see hud's current geometry.
+
+Third, the issue's own text asks event/combat/injury/unit logs to
+migrate "with #747 clipping" — the four log panels used a virtual-scroll
+pattern (recompute + recreate only the visible row window on every
+scroll/render) with every row a PAGE-ROOT element at absolute
+coordinates, never adopting C1's real clipping at all. Migrated each
+panel's SCROLLABLE CONTENT ONLY (title/tab-strip/close-button/scrollbar
+stay page-attached chrome, unaffected, at lower regression risk) onto a
+dedicated `UI.setClipChildren(viewport, true)` viewport created once in
+`createUI()` at the panel's content bounds; every row/empty-state label
+and (event_log's) row click-box reparents via `UI.addChild(viewport,
+elem, x - contentX, y - contentY)` instead of `UI.addToPage(pageId,
+elem, x, y)` — `label.new({parent=viewport, x=relX, y=relY})` already
+supports this directly (#747), so most call sites just needed their
+absolute coordinates converted to viewport-relative ones. The
+virtual-scroll row-count/positioning math itself is completely
+unchanged; clipping is a safety net (a long line, a rounding edge case)
+on top of it, not a replacement for it. Teardown deletes the viewport
+in each panel's `destroyChrome()` — `UI.deleteElement` is idempotent
+(a no-op on an already-deleted handle via `deleteElementTree`'s cascade
+from `destroyTransient`'s own per-row cleanup), so the two teardown
+functions' relative call order doesn't matter.
+
+Round-3 review found three more gaps, all in this same clipping
+migration and the two width-flexible panels it's adjacent to. First: a
+zIndex ACCUMULATES through the parent chain
+(`UI.Manager.Query.elementPaintKey` sums `ueZIndex` up every
+`ueParent`), so giving each new content viewport its own zIndex (503,
+matching the rows' own) pushed every reparented row to an effective
+1006/1007 instead of the 503/504 they had as page-root elements before
+this migration — painting log content above `popup.lua`'s notification
+cards (`baseZ` 1000+) instead of preserving the original stacking. Fixed
+by leaving every viewport's own zIndex at `UI.newElement`'s default (0)
+— the viewport renders nothing itself, so this only affects its
+children's accumulated total, restoring it to exactly their own zIndex
+again. Second and third: `popup.lua`'s `panelW` (floored at
+`s.minWidth`, itself scaled by uiscale) and `unit_info_v2.lua`'s
+`panelW` (`L.PANEL_W * uiscale`) both ignored the actual framebuffer
+width entirely — at a narrow-but-tall, high-scale, still-C2-supported
+combination (e.g. 800x2160@4x, height alone determines the 1601-2160/
+1.5x-4x band) either could exceed the framebuffer several times over,
+pushing controls (a popup's close/OK buttons, most of the unit-info
+pane) off-screen regardless of `avoidReserved`'s position-only clamp.
+Fixed with the same best-effort-degrade pattern settings_menu's own
+`tabFrameHeight` floor already established for its out-of-envelope
+exemplar: `panelW = math.min(panelW, fbW)` (and `panelH` symmetrically
+for popup); `unitInfoV2.getBounds()` mirrors the same cap so it can't
+drift from what `rebuildLayout()` actually builds.
+
+Round-4 review found three more gaps. First, a genuine algorithm bug in
+`reserved_regions.lua`'s `avoidReserved`: its 1D separation formula
+(`overlap = min(bottoms) - max(tops)`, pushing by that amount) is only
+correct when neither rect's span fully CONTAINS the other's on that
+axis — `hud`'s tool-toggle column can span nearly the full framebuffer
+height, so a popup's span is often fully contained within it, and
+pushing by the (wrong, too-small) "overlap" amount didn't reach clear
+ground at all; a later screen clamp could then shove the card right
+back on top of it. Fixed by computing all 4 candidate "push flush
+against reserved's near edge" directions directly, trying them
+smallest-first, and clamping-then-checking each rather than trusting a
+single overlap-based heuristic. Even with a correct algorithm, a card
+can still be too WIDE to fit beside a tall reserved column at all
+within the framebuffer (confirmed with real `popup.lua` output at
+800x901@2x) — `reservedRegions.maxAvailableWidth(y, h, reservedRects,
+screenW)` is the fix: the widest horizontal gap actually free at a
+given vertical span, which `popup.lua` now also caps `panelW` against
+(best-effort, same "may look cramped, never unreachable" contract as
+everywhere else). Second, `event_log.lua`'s `createUI()` (which also
+runs on a resize, not just a fresh open) unconditionally reset
+`activeTabKey`/`scrollOffset` on every call, silently discarding the
+player's active tab/scroll position on every resize — moved that reset
+into `eventLog.show()` (the real "fresh open" path) instead, and added
+`tabbar.select`/`selectByKey`'s own `silent` parameter (mirroring
+`toggle.lua`'s round-2 fix) so `createUI()` can resync the tabbar
+WIDGET's visual selection to the preserved `activeTabKey` — `tabbar.new`
+always starts a fresh tabbar at hardcoded index 1 — without re-firing
+`onChange` (which would reset `scrollOffset` right back to 0). Third,
+the new `UI.ResponsiveGameplay` suite's `around withHeadlessEngine`
+(a fresh engine per `it`, the same convention `UI.ResponsiveMenus`/
+`UI.InputOwnership` already established) drew a cost-guardrail review
+comment; round-4's response consolidated `scripts/ui/reserved_regions.lua`'s
+own pure, state-independent test group into one shared-backend `it`,
+but left the rest on `around`.
+
+Round-5 review pushed for the FULL shared-engine conversion the
+guardrail literally asks for, and it landed: `spec = aroundAll
+withHeadlessEngine` now boots exactly ONE engine for the whole 36+-case
+module. Each `it` still gets its own fresh `newBareLuaBackend` (a
+genuinely new Lua VM per case), so Lua-side module state (`hud.lua`'s
+`hud.world_page`, `popup.lua`'s `popup.active`, etc.) was ALREADY
+case-isolated regardless — what a shared engine actually risks
+leaking between cases is the HASKELL-side state living in `EngineEnv`
+itself, independent of any Lua VM. Two such leaks surfaced immediately
+under a shared engine with Hspec's default randomized case order: the
+`UIPageManager` (`uiManagerRef`) accumulating every prior case's pages/
+elements, and `engine.setUIScale`'s target (`videoConfigRef`'s
+`vcUIScale`) persisting from whichever earlier case last set it — several
+cases call `engine.setUIScale` for a band-boundary/out-of-envelope
+exemplar, and a later case's toolbar-rect/panel-width assertions
+silently used that STALE scale instead of the 1x it assumed, failing
+under some random orderings but not others. `resetUI env` (called as
+the first line of every `it`) resets both back to a known baseline
+before each case runs. No case asserts on a hardcoded absolute element/
+page handle or count (only relative growth or freshly-fetched handles),
+so the shared `UIPageManager`'s otherwise-still-growing handle counter
+across cases is inert. The engine-level event/combat/injury log ring
+buffers are deliberately NOT reset (no reset primitive is exposed to a
+test) — every case touching them asserts existence or relative
+preservation, never an exact count, so cross-case accumulation there is
+inert by the same construction. Verified stable across multiple runs
+with different random seeds before landing.
+
+Round-6 review found two more gaps. First, `build_tool_remote_warning.lua`
+(#779's remote-settlement confirmation modal) joins popup.lua/
+unit_info_v2.lua's round-3 list: `panelWidth`
+(`math.max(PANEL_W_BASE=560, contentWidth + s.panelPaddingX*2)` —
+`PANEL_W_BASE` itself deliberately NOT scaled by uiscale, but the
+padding/button-row terms feeding `contentWidth` are) could still exceed
+a narrow, high-scale, still-C2-supported framebuffer (confirmed with
+real output at 800x2160@4x: 832px wide on an 800px-wide screen), pushing
+its own Establish/Cancel buttons off-screen. Same fix, same best-effort-
+degrade contract: `panelWidth`/`panelHeight` capped to `fbW`/`fbH`.
+
+Second: round-5's `aroundAll` only shared the ENGINE — each case still
+got its own fresh `newBareLuaBackend` Lua VM. Reading the guardrail
+literally ("share one booted headless engine + Lua environment across
+cases"), round-6 shares BOTH: `withSharedFixture` boots one engine and
+one Lua VM for the entire module; every case receives `(EngineEnv,
+LuaBackendState)` instead of just `EngineEnv`. With the Lua VM itself
+now shared, `require('scripts.hud')` etc. would otherwise keep
+returning whichever EARLIER case's already-initialized module table
+(`hud.uiCreated=true`, a tool already selected, `popup.active` entries,
+...) — Lua's `package.loaded` is a process-wide cache, and a shared VM
+means a shared cache. `resetFixture` (called first in every case, in
+place of round-5's `resetUI`) wipes `package.loaded` ENTIRELY before
+each case — verified against a real running engine that this reproduces
+an identical fresh-module state to a genuinely new Lua VM (every field
+back to its file-scope literal initializer, since the next `require`
+re-executes the whole `.lua` file) — alongside the same `UIPageManager`/
+`vcUIScale` resets round 5 already established. The native `UI`/
+`engine`/`world` API surface is untouched by the wipe: those are plain
+Lua globals `registerLuaAPI` installs once at Lua-VM-construction time,
+never entries in `package.loaded` to begin with. Verified stable across
+10 consecutive runs with different random seeds before landing.
+
+Round-7 review confirmed the shared-fixture conversion held, but found
+the "cap width/height to the framebuffer" fix pattern hadn't been
+applied everywhere it needed to be. First,
+`build_tool_remote_warning.lua`'s round-6 fix capped the PANEL but not
+the Establish/Cancel BUTTON ROW inside it — `establishW`/`cancelW` were
+computed from the natural (uncapped) content before the panel-width cap
+ran, so the buttons themselves could still extend past the now-shrunk
+panel. Fixed by shrinking both buttons equally (floored at 20px) to fit
+whatever width the capped panel actually has left after its padding.
+Second, the exact same "cap position, never width" gap the reviewer
+found in `build_tool_remote_warning.lua` at round 6 turned out to be
+systemic: `cargo_inventory_panel.lua` and `item_contents_panel.lua`
+(both `PANEL_W_BASE * uiscale` with only a position clamp, same shape)
+and `build_tool.lua`'s picker (`PICKER_W_BASE * uiscale` with no
+framebuffer awareness at all — not even a position clamp) all got the
+same width/height cap. Each of these three derives its INTERNAL content
+(tabs, rows, icon grid) from `panel.getContentBounds()` — the panel's
+own REAL bounds — rather than recomputing independently the way
+`build_tool_remote_warning.lua`'s buttons did, so capping just the
+panel's own width/height was sufficient to correctly constrain
+everything downstream too, unlike the button-row case above. By
+contrast, `crafting_panel.lua`/`plant_panel.lua`/`tile_editor.lua`
+already size themselves as a FRACTION of `fbW`/`fbH` (e.g. `fbW*0.72`)
+rather than a fixed base times `uiscale`, so they were never exposed to
+this class of gap in the first place. Verified each against a real
+running engine at the reviewer's own 800x2160@4x exemplar (including
+reading real per-button `UI.getElementInfo` bounds off
+`build_tool_remote_warning.lua`'s click handlers) before extending the
+regression tests, which drive `cargo_inventory_panel.lua`/
+`item_contents_panel.lua` through their real `openFor` entry points
+with the underlying `building.getStorage*`/`unit.getItemContents`
+native calls monkey-patched (mirroring the same technique the toggle.lua
+round-2 tests already used for `world.setToolMode`).
+
+Round-8 review found round-7's "capping the panel is sufficient, its
+content derives from `panel.getContentBounds()`" claim was too broad in
+three places. First, `cargo_inventory_panel.lua`'s tab strip already
+received a `contentW` parameter (`buildTabStrip(originX, originY,
+contentW, tabDefs)`) but never once consulted it — tabs kept flowing
+left-to-right as page-root elements with no wrap, scroll, or clip, so
+enough categories (or long names) at a narrow, high-scale, still-C2-
+supported combination still ran later tabs off the panel/framebuffer
+edge; the panel-width cap constrained the CONTAINER, not this specific
+child layout. `build_tool.lua`'s picker had the identical gap in its own
+tab strip (`buildTabStrip`, not parameterized with a width at all before
+this round), plus a second, distinct one: its icon grid always laid out
+a fixed `ICONS_PER_ROW = 4` columns regardless of how narrow the
+(possibly now-shrunk) panel actually was, so icons past the fourth
+column rendered off-panel/off-frame the same way. Both tab strips now
+shrink-to-fit rather than wrap: compute each tab's natural width (text +
+padding) and the row's natural total, and — only if that total exceeds
+the available content width — scale every tab's width AND every
+inter-tab gap down by one shared factor so the whole row lands inside
+bounds, floored at 20px per tab so a tab always stays a real click
+target rather than vanishing (never guaranteed to fit if there are
+enough tabs that even the 20px floor overflows — same best-effort
+contract as everywhere else in this class of fix). The icon grid's
+column count is now derived once, in `showPicker()`, from the panel's
+actual usable content width (`math.max(1, ...)`, so a single column is
+always possible) and stored on `buildTool.state.columnsPerRow`, which
+BOTH the row-count/panel-height calculation and `rebuildIconGrid()`
+(called again on every tab switch) read — never a second, independently
+recomputed value that could drift from what the panel was actually
+sized for.
+
+Second, `unit_info_v2.lua`'s flush-right column — capped to the
+framebuffer at round 3 — could still grow wide enough to cover the
+entire left-side toolbar (log/tool toggle clusters) at a narrow,
+high-scale combination, since a framebuffer cap alone says nothing about
+what else occupies that space; unlike a popup card (freely
+repositionable, `reservedRegions.avoidReserved`/`maxAvailableWidth`),
+this column is flush-right-ANCHORED and only ever resized, never moved,
+so neither existing reserved-region helper fit its geometry. Added
+`reservedRegions.maxRightAnchoredWidth(y, h, reservedRects, screenW)` —
+scans inward from `screenW` and returns the widest a right-anchored rect
+spanning `[y, y+h)` could be without overlapping any reserved rect whose
+own vertical span intersects that range — and wired it into both
+`rebuildLayout()` and `getBounds()` (which must keep computing the exact
+same formula, per this file's existing convention). The reserved set
+passed in deliberately excludes `map_toggle`: that toggle already sits
+under the unit-info column's default width at every currently-shipped
+resolution, so folding it in would visibly shrink the column at normal
+play sizes to guard against an overlap that isn't a #750 regression;
+only `log_toggle`/`tool_toggle` (further left, genuinely at risk from
+extreme narrow/high-scale growth) constrain it.
+
+All three fixes were verified against a real running headless engine at
+the reviewer's own 800x2160@4x exemplar before extending the regression
+suite: `unit_info_v2`'s column stayed clear of the toolbar
+(`reservedRegions.rectsOverlap` against real `hud.getToolbarRects()`
+output); the build-tool picker, driven with real loaded building defs
+(`engine.loadBuildingYaml` against `data/buildings/*.yaml`, not a
+synthetic def — the round-7 picker test's `engine.getBuildingDefs`
+monkeypatch turned out to target a function `visibleEntries()` never
+actually calls, `building.listDefs()` is the real hook, so that
+pre-existing test soft-skips every run; the new round-8 tests patch
+`building.listDefs` directly and confirmed via the test log that they
+exercise the real path, not the soft-skip), showed both its tab strip
+and icon grid staying fully in-frame; and `cargo_inventory_panel.lua`,
+driven through a real `openFor` with `building.getStorage` stubbed to
+return eight distinct-category items, showed its tab row shrinking to
+fit rather than overflowing.
+
+Round-9 review found one more gap in `build_tool.lua`'s picker:
+round-8's `columnsPerRow` fix bounded the icon grid's WIDTH, but
+`pickerH`'s framebuffer cap only ever shrank the panel's own box —
+`iconAreaH` (rowCount × iconSize, computed from the pre-cap iconSize)
+was never itself constrained, so a narrow width forcing few columns
+(one, in the reviewer's cited 800×2160@4x case) could still stack
+enough rows into an icon area taller than the framebuffer, with
+nothing clipping or scrolling to reach the overflow. Fixed by
+compacting rather than adding a new scrollable-grid subsystem — the
+same best-effort philosophy behind every other fix in this class:
+after the width-driven `columnsPerRow`/`rowCount`/`iconAreaH` are
+computed, if `iconAreaH` would exceed the tallest the picker could ever
+be (`fbH` minus its fixed chrome — the picker's Y position floats
+below, so this is the best case regardless of where it eventually
+clamps to), shrink `iconSize`/`iconGap` by one factor (floored at 16px/
+2px so an icon stays a real, visible target) and re-derive
+`columnsPerRow` from the shrunk size against the same width budget — a
+smaller icon fits more per row, which itself reduces how many rows are
+needed. `showPicker()` now stores the final `iconSize`/`iconGap` on
+`buildTool.state` alongside `columnsPerRow`, and `rebuildIconGrid()`
+(re-run on every tab switch) reads all three from there instead of
+recomputing `ICON_SIZE_BASE`/`ICON_GAP_BASE * uiscale` fresh — the same
+"never a drifted, independently recomputed value" discipline round-8
+established for `columnsPerRow` alone.
+
+A second, related gap: `rowCount`/`iconAreaH` were computed from
+whichever category happened to be ACTIVE when the picker opened, but
+`handleTabClick` (switching tabs within an already-open picker) only
+calls `rebuildIconGrid()` — it never re-runs `showPicker()`'s sizing
+pass — so a picker opened on a small category and then switched to a
+larger one could overflow a panel/icon-area budget that was never sized
+for it. Fixed by sizing against `math.max(#activeCatDefs, #visible)` —
+"All" is always a superset of every other tab, so budgeting for its
+count up front guarantees no same-session tab switch ever needs more
+rows than what's already accounted for. Mirrors the "fit against the
+worst-case row" technique `input_tab.lua`/`notifications_tab.lua`
+already use elsewhere in this codebase (see this file's earlier
+responsive-menu-lifecycle notes) for the identical reason: a control
+shouldn't jump size, or overflow, relative to a sibling that shares its
+layout pass.
+
+Verified against a real running headless engine at the reviewer's own
+800×2160@4x, eight-entry exemplar (`building.listDefs` monkey-patched
+over the debug console the same way the new regression test does):
+`iconSize` shrank from its base 256px to 205px, all eight icons landed
+between y=265 and y=2080 (inside the 2160px framebuffer, versus the
+reviewer's reported 2272px natural overflow), and the panel itself
+stayed fully in-frame at `{x:352, y:9, w:448, h:2151}`.
+
+Round-10 review found two more gaps, unrelated to each other. First,
+`hud.lua`'s toggle-group controls (map/tool/log — real `ueOnClick`,
+keyboard-control-focusable elements per #745) are destroyed and
+recreated by every `createUI()` rebuild, but `hud.onFramebufferResize`
+never snapshotted or restored which one held keyboard CONTROL focus —
+Tab-focusing a toggle and then resizing silently cleared it on the next
+keyboard dispatch. Every other C2/C4 screen already solved this exact
+problem (`main_menu.lua`/`settings_menu.lua`/`create_world_menu.lua`,
+see this file's earlier responsive-menu-lifecycle notes) with
+`responsive.snapshotControlFocusName()`/`restoreControlFocusName(name)`
+— by-NAME snapshot/restore, since a destroy+recreate cycle always
+assigns fresh element handles. `hud.onFramebufferResize` now does the
+same: snapshot (gated on `hud.visible`, queried BEFORE `createUI()`
+tears anything down) right before the rebuild, restore right after the
+existing visibility-restore logic re-shows whichever pages were
+visible (`restoreControlFocusName` searches `UI.getVisibleElements()`,
+which only considers visible pages — restoring before the re-show would
+silently fail to find anything). Verified against a real running
+engine: a control on a page that's actually visible at resize time
+(the map toggle, on `zoom_page` — the engine's real default camera
+state resolves `hud.currentView` to `"zoomed_out"`) keeps focus across
+`hud.onFramebufferResize` by name.
+
+Second, `event_log.lua`/`combat_log.lua`/`injury_log_panel.lua`/
+`unit_log.lua` all compute their `#747` clipping viewport's
+`contentH`/`contentW` as `panel geometry minus scaled chrome` — at an
+outside-envelope scale (the issue's own 800×600@4x exemplar), the
+scaled chrome (title bar, tab strip, padding) can exceed the panel's
+own height entirely, driving `contentH` negative before it's ever
+handed to `UI.newElement`. Reviewer named `combat_log.lua`/
+`injury_log_panel.lua`/`unit_log.lua` explicitly; `event_log.lua` has
+the structurally identical `(panelY + panelH - s.padY) - contentY`
+shape and was fixed alongside them for the same reason round 7 fixed
+`item_contents_panel.lua`/`build_tool.lua`'s picker alongside the
+explicitly-named `cargo_inventory_panel.lua`. Fixed with the same
+20px floor `settings_menu.lua`'s `tabFrameHeight` already established
+for this exact class of gap (`contentW = math.max(20, contentW);
+contentH = math.max(20, contentH)`, applied right after each
+computation, before anything downstream reads it) — best-effort,
+never-crashing geometry, not guaranteed to look good in an envelope
+the issue itself documents as out-of-support. Verified against a real
+running engine at the reviewer's literal 800×600@4x exemplar: all four
+panels' content viewports came out `h=20` (the floor engaging exactly
+as intended) with a positive width, versus `UI.newElement` receiving a
+negative height pre-fix.
+
+Round-11 review found two test-QUALITY gaps in
+`Test.Headless.UI.ResponsiveGameplay` itself, not functional ones.
+First, the "band-boundary + automatic high-DPI + ultrawide" case list
+was a hand-copied Haskell literal — a future change to
+`scripts/ui/responsive.lua`'s `responsive.bands` table or
+`scripts/settings/data.lua`'s `loadDefaults` auto-scale multipliers
+(`is1080p`/`is1440p`/`is4K`) could silently drift out of sync with what
+the suite actually exercises. Rewritten as ONE Lua script building the
+whole matrix from the real sources at test time: band-boundary cases
+iterate `responsive.bands` directly (its own `minH`/`maxH`/`minScale`/
+`maxScale`); the auto-DPI/ultrawide cases call the REAL
+`data.loadDefaults()` once per `data.resolutions` entry (already
+includes both configured ultrawides) with `engine.loadDefaultConfig`
+stubbed to return that entry's width/height — the tested scale is
+whatever `data.current.uiScale` comes out as, not a hardcoded guess.
+This wasn't just defensive: verified against a real running engine that
+the derivation actually diverges from the old hardcoded matrix — the
+old test asserted `2560×1080` at a flat `1.0`, but `data.loadDefaults()`
+really computes `1.5` there (`2560×1080`'s screen area clears the
+`is1080p` threshold same as plain `1920×1080` does), and `3440×1440`
+computes `2.0`. The old hardcoded values happened to still pass (`1.0`
+is also a validly-supported scale at that resolution per
+`responsive.classify`), but they were quietly testing a combination
+`loadDefaults` would never actually produce — exactly the kind of
+silent staleness the reviewer flagged.
+
+Second, every existing `notifyGameplayRescale` case drove
+`uiManager.notifyGameplayRescale` directly against STUBBED gameplay
+modules, so none of them proved the actual CALLER
+(`settingsMenu.onDefaults()`, which only fans out when
+`data.loadDefaults()` genuinely changed `data.current.uiScale` — see
+this file's earlier round-11(#748) Defaults/Back fan-out notes) really
+reaches it end to end. Added an integration test driving the REAL
+`scripts.hud` module (no stub) through the REAL
+`settingsMenu.onDefaults()` entry point, with
+`engine.loadDefaultConfig` stubbed only to force the scale-changed
+gating condition. `hud`/`settingsMenu` are booted at DIFFERENT
+framebuffer sizes so a successful fan-out (hud picking up
+`settingsMenu`'s own `fbW`/`fbH`) is unambiguous — confirmed the test
+actually catches a regression by temporarily commenting out
+`onDefaults`'s `notifyGameplayRescale` call and re-running (fails as
+expected), then restoring (passes again). Verified against a real
+running engine too: `hud.fbW`/`fbH` picked up `settingsMenu`'s
+1600×900 (from its own 1920×1080) purely through
+`settingsMenu.onDefaults()`, with no direct call into `hud` anywhere in
+the test.
+
+Round-12 review found three more gaps. First and second:
+`cargo_inventory_panel.lua`'s and `build_tool.lua`'s picker tab strips
+(round-8's shrink-to-fit fix) only shrank the tab BOX — the label kept
+rendering at the full `uiscale`, unclipped and page-rooted, so at a
+narrow, high-scale, many-category combination the text stayed wider
+than its own compressed box and bled into neighbouring tabs. Fixed by
+scaling the label's OWN effective `uiscale` by the SAME `shrink` factor
+the box used (`labelUiscale = uiscale * shrink`, identical to the
+`dropdownUiscale`/`keyBtnUiscale`/`labelUiscale` "reserve a column, fit
+text to it via a locally-computed effective uiscale" technique already
+used elsewhere in this codebase) — at `shrink == 1.0` (the common case)
+this is identical to the old behavior. `build_tool.lua`'s picker also
+re-measures the label's actual post-shrink width for horizontal
+centering instead of reusing the pre-shrink `labelWidths[i]`. Headless
+regression coverage can't assert on real overlap directly
+(`engine.getTextWidth` always measures 0 in this suite's synthetic
+boot — see the module's own docstring caveat), so both new tests
+instead compare `label.lua`'s own HEIGHT (`fontSize * uiscale`,
+independent of any real text metrics) between an unshrunk single-tab
+case and a heavily-shrunk eight-tab case — a fixed, unshrunk `uiscale`
+would report the identical height regardless of category count; the
+fix makes the shrunk one measurably smaller. Verified with REAL font
+metrics too, via a real `--offscreen` engine session (GPU-on/window-off,
+so `engine.getTextWidth` returns real glyph widths instead of the
+headless-suite's synthetic 0): every tab's `labelW <= boxW` in both
+panels at the reviewer's own narrow/high-scale/many-category scenario,
+confirmed via `label.getSize`/`UI.getElementInfo` read back over the
+debug console.
+
+Third: `scripts/test_arena.lua` (the dev-only arena world view, in
+#741's own explicit C4 scope) was missing from BOTH gameplay resize
+paths entirely — `ui_manager_boot.lua`'s real-resize manual-forward set
+and `ui_manager_resize.lua`'s `notifyGameplayRescale` scale-only
+fan-out — despite exposing the identical `onFramebufferResize`
+contract every other surface in both lists already gets. Fixed by
+adding the same `if uiManager.moduleReady.testArena then
+testArena.onFramebufferResize(width, height) end` forward to both,
+gated on its own `moduleReady` flag exactly like `worldView`/`hud`/
+`buildToolRemoteWarning` already are. The scale-only path is covered by
+a headless regression test (mirrors the existing hud-stub pattern:
+forwards when `moduleReady.testArena` is true, doesn't when false); the
+real-resize path can't be driven headless at all (this suite's own
+docstring: `uiManager.onFramebufferResize`'s meaningful body only runs
+once the boot-only `initialized` flag flips true, which needs
+`fontsReady` — a GPU font atlas `--headless` never has) — verified
+instead against a real `--offscreen` session: `uiManager.ensureTestArena()`
+then a real `uiManager.onFramebufferResize(1600, 900)` call updated
+`testArena.fbW`/`fbH` from their initial `1280×720` to `1600×900`, and a
+separate `notifyGameplayRescale(1920, 1080)` call updated them again —
+proving both paths reach it end to end.
+
+Round-13 review found three more gaps, the biggest of which reopened a
+design question from round 1. First and third:
+`build_tool_remote_warning.lua`'s Establish/Cancel buttons had the
+IDENTICAL "box shrinks, child text doesn't" defect round-12 found in
+the tab strips — `makeButton`'s `UI.newText` label still rendered at
+the full, unshrunk `s.buttonFontSize`, so at the issue's own
+800×2160@4x combination "Choose Another Site" (1368px wide in the
+shipped Press Start 2P font at that size) rendered far outside an
+800px-wide modal despite its click box staying in-frame. Fixed the
+same way: each button's own font size is scaled by the ratio of its
+final (possibly round-7-shrunk) width to its natural pre-shrink width
+— `fontScale = width / naturalWidth`, floored at 6px. Verified this
+is precise, not just directionally better: text width scales EXACTLY
+linearly with font size in this renderer (confirmed against a real
+`--offscreen` session — "Choose Another Site" measured 342px at
+fontSize 18 and exactly 1368px at fontSize 72, a perfect ×4), so
+`width/naturalWidth` reliably predicts the shrunk font that makes the
+shrunk text refit — the Cancel button's real text width dropped from
+1368px to 304px against its 356px box (fits) at the reviewer's own
+scenario. The Establish button in that same scenario still overflows
+slightly (84px text in a 20px box) — that box was independently
+floored to 20px by round-7's OWN shrink step before this fix's ratio
+is even computed, a pre-existing, accepted best-effort limit this fix
+doesn't newly introduce or worsen. `UI.newText` elements always report
+a zero-sized `UI.getElementInfo` bounding box (the same fact
+`label.lua`'s own comment documents for its wrapped labels), so this
+module gained `buttonTextByBox`/`buttonFontSizeByBox` (box handle →
+child text handle / the computed font size) purely for introspection —
+headless coverage compares the computed font size between an unshrunk
+wide framebuffer and the reviewer's narrow one, mirroring round-12's
+"unshrunk vs shrunk" technique exactly since `engine.getTextWidth`
+itself is 0 in this suite's synthetic boot.
+
+Also fixed while in this file: `onFramebufferResize` deletes and
+recreates the whole modal page on every rebuild, including the
+Establish/Cancel boxes — real keyboard-control-focusable elements per
+`#745` — with no control-focus snapshot/restore at all, the same gap
+round-10 already fixed in `hud.lua`. Same fix here:
+`responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
+around the rebuild, gated on the page actually being visible
+beforehand.
+
+Second, and the larger change: `hud.lua`'s `"resize"` teardown
+(`scripts/ui/view_teardown.lua`, added round 1 to keep
+`hud.world_page`-mounted popups from surviving `UI.deletePage` as
+stale "open" module state pointing at deleted elements) was a ONE-WAY
+close for six panels — cargo/item-contents/crafting/plant, the
+build-tool picker, and the tile editor. A resize or Settings scale
+change while any of them was open silently discarded it (round-13's
+own example: `closeIfOpen()` resets cargo's selected tab), which #750
+requires surviving as a layout-only change, not a real close the
+player has to consciously reopen from. `hud.createUI()` now
+snapshots each one's own "what am I open for" state (target
+building/unit/tile id, cargo's `activeTab`, the picker's persisted
+`activeCategory`) BEFORE the `"resize"` teardown sweep runs (which
+still executes unchanged — module state still needs reconciling before
+the page deletion, corrupted state is still the wrong failure mode),
+and reopens every one that was open at the very end of the function,
+once every panel's own `setup()` call earlier in the same rebuild has
+already re-pointed it at the FRESH `hud.world_page` — reusing each
+panel's own real open entry point (`cargoInventoryPanel.openFor`/
+`itemContentsPanel.openFor`/`craftingPanel.show`/`plantPanel.show`/
+`buildTool.showPicker`/`tileEditor.onTileSelected`) so it renders
+exactly as if freshly opened against the new layout. Cargo needed one
+new function (`reopenWithTab`) since plain `openFor` always resets to
+the "All" tab; every other panel's existing entry point was already a
+complete reopen. Both the snapshot and the reopen side wrap each of
+the six panels in its own `pcall`, mirroring `view_teardown.lua`'s own
+per-hook isolation discipline exactly — caught for real during this
+round: an existing test stubbing all six panels with a MINIMAL
+interface (no `isOpen()`/`state`) to test the (unrelated) teardown
+pcall-isolation guarantee started crashing `hud.createUI()` entirely
+once the unguarded snapshot code called `.isOpen()` on those stubs;
+wrapping each snapshot attempt in its own `pcall` fixed it and is
+simply the correct discipline regardless — a real panel module's
+`isOpen()` throwing must never block the other five, or the whole
+rebuild.
+
+Verified against a real running `--headless` engine: opened a cargo
+panel on a real `hud.world_page`, switched to a non-default tab,
+called a real `hud.onFramebufferResize`, and confirmed
+`cargoInventoryPanel.isOpen()`/`.state.bid`/`.state.activeTab` all
+survived unchanged; separately confirmed `build_tool_remote_warning`'s
+control focus survives the same way. Confirmed both new headless tests
+actually catch their regressions (stashed all three fix files,
+re-ran — 3 failures as expected across cargo/focus/font-size; restored,
+re-ran — passes again).
+
+Round-14 review found two more gaps: one an out-of-envelope crash
+class in `popup.lua`, the other round-13's own panel-reopen fix left
+`crafting_panel`/`plant_panel` still discarding SOME of their state.
+
+`popup.lua`'s reserved-width cap (round-4) floored `panelW` at a flat
+20px — enough to keep `panelW` itself positive, but not enough once it
+fell below `2*s.padX` (288px at the issue's own 800×2160@4x): the line
+click box's `panelW - 2*s.padX` went negative, and content positions
+computed from `panelW` (title, OK button) landed outside the panel box
+entirely. Hit specifically when a card's vertical center overlaps BOTH
+toolbar clusters, leaving only their free gap as `availW` — the
+reviewer's example puts that gap at 64px. Fixed by flooring at
+whichever is larger: `availW` itself, or a real minimum-usable width
+(`2*s.padX + 20`, guaranteeing a positive content region survives the
+padding subtraction) — accepting that in this specific extreme case
+the card may still overlap the unreachable-width reserved region,
+since genuinely invalid geometry is worse than an occasional overlap
+of a gap too narrow to use anyway, the same priority order the rest of
+this best-effort contract already uses. Verified against a real
+running engine (toolbar rects stubbed to reproduce the reviewer's own
+"two clusters, 64px gap" scenario, since real toolbar geometry doesn't
+naturally produce it): `panelW` floors at exactly 308px (`2*s.padX+20`
+= `2*144+20` at that scale) and every line's click box comes back with
+a real, positive width.
+
+Round-13's `hud.lua` resize snapshot/reopen for `crafting_panel`/
+`plant_panel` only preserved WHICH station/tile was open — plain
+`show()` (the reopen call it used) always resets
+`recipePage`/`queuePage`/`recipeInputs` (crafting) and
+`sortMode`/`selectedCrop` (plant), so a resize still silently discarded
+those. Both panels gained a `reopenWithState` function (mirroring
+`cargo_inventory_panel.lua`'s round-13 `reopenWithTab`): call the real
+`show()` first (still the right way to rebuild chrome/re-derive live
+data), then restore the saved fields — `crafting_panel`'s
+`recipePage`/`queuePage` are set directly and self-clamp against the
+current recipe/queue count when `renderRecipes()`/`renderQueue()` run
+(never left out of range even if the list shrank); `plant_panel`'s
+`selectedCrop` restore hit a real ordering bug during this round:
+`renderUI()` unconditionally ends by calling its own `renderDetail(nil)`
+("nothing previewed yet" initial state), which resets
+`state.selectedCrop` to `nil` — so restoring it BEFORE `renderUI()` (the
+first attempt) was silently undone by `renderUI()`'s own default call
+immediately after. Fixed by restoring AFTER `renderUI()` completes, and
+via the SAME `renderDetail(row)` path `renderUI()` itself uses (not a
+raw `state.selectedCrop` write), so the visible suitability read-out on
+the right column also reflects the restored crop, not just the field.
+`hud.lua`'s existing snapshot/reopen plumbing needed no structural
+change — only the captured field set grew (`recipeInputs` is a plain,
+unvalidated Lua table captured by reference, since `show()` reassigns
+rather than mutates it) and the reopen calls switched from the panels'
+bare `show()` to their new `reopenWithState()`.
+
+Round-15 review found two more "fixed base size, no fit" gaps, the
+same class as round-12's tab labels and round-13's modal buttons, in
+two screens that had gone unexamined until now.
+`scripts/hud/info_panel.lua`'s panel is deliberately narrow
+(`widthFrac = 0.20` of the framebuffer), but its `tabbar.new` call
+passed the tab bar the panel's OWN (unfitted) `uiscale` — tabbar.lua
+lays each tab out purely from label text + scaled `textPadding`, with
+no fit/clip/scroll of its own (confirmed by reading `tabbar.new`
+directly: `width` only sizes the FRAME, never constrains individual
+tab boxes). At the issue's own 800×2160@4x, the ~80px content area
+couldn't hold even the 2 default tile-schema tabs, let alone
+resources/weather once dynamically added. Fixed with the same
+`responsive.fitScale(naturalTabWidth, bounds.width, uiscale)` technique
+`settings_menu.lua`/`create_world_menu.lua` already use for their own
+tab bars — a local, tabbar-only effective uiscale, never touching the
+rest of the screen's layout. `scripts/tile_editor.lua`'s Delete Tile
+button had the identical defect one level down: the panel is
+width-fractional (mirrors `info_panel.lua`'s own sizing), but the
+button stayed a fixed 320-base-unit width regardless — at 800×2160@4x,
+`pbounds.width` (~64px) is far smaller than the button's natural
+1280px. Fixed the same way, with `button.new` using ONE `uiscale` for
+width/height/fontSize together (so this can't repeat round-13's "box
+shrinks, text doesn't" bug the way a bare width change would).
+
+Writing the `info_panel` regression test surfaced a real, unrelated
+gap in this test suite's own harness: `scripts/ui/tabbar.lua`'s
+`tabbar.init()` (which loads its module-level box-texture handles) is
+never called by `info_panel.lua`/`hud.lua` themselves — a real boot
+reaches it via `uiManager.init()`, which this suite deliberately never
+drives (see the module's own docstring). Every EXISTING tabbar-based
+test in this suite only exercised `tabbar.lua`'s own bookkeeping
+(`selectByKey`, `getSelectedKey`, `getFrameBounds`) or LABEL-based row
+content, so none of them had ever needed `UI.getElementInfo` on a
+tabbar's own tab/frame BOXES to actually resolve — this is the first
+one that does. Root cause, traced by reading `UI.newBox`'s Haskell
+binding directly: its box-texture-handle argument is read via
+`Lua.tointeger`, and passing Lua `nil` (the un-initialized
+`texSetFrame`/`texSetSelected`/`texSetUnselected`) makes the WHOLE
+argument-pattern match fail, so `UI.newBox` silently returns `nil` —
+leaving `tab.boxId`/`frameBoxId` nil and invisible to
+`UI.getElementInfo`/`tabbar.dump()`, while every OTHER `tabbar.lua`
+field (`selectedIndex`, `tabs[i].width`, frame bounds) stayed
+perfectly correct, which is what made this take a while to isolate.
+Fixed by having the new test call `require('scripts.ui.tabbar').init()`
+explicitly before creating any tabbar-backed UI — a test-only fix, not
+a product change (matches the "boots hud.lua/menu screens directly
+rather than through uiManager.init()" pattern this whole suite already
+uses for fonts/textures elsewhere).
+
+Verified against a real running engine: with `tabbar.init()` called
+first, all 4 info-panel tabs land within `[576, 736)` (the panel's own
+bounds) instead of overflowing; the Delete Tile button lands at
+`[624, 688)`, also within the panel. Confirmed both new tests actually
+catch their regressions (stashed both fix files, re-ran — 2 failures
+as expected, restored — passes again).
+
+Round-16 review found three more gaps: a genuine algorithm bug in
+`reserved_regions.lua`, and two more instances of round-14's "chrome-
+aware floor" class in `popup.lua`/`unit_info_v2.lua`.
+
+`reserved_regions.lua`'s `avoidReserved` processed reservations ONE AT
+A TIME in sequence — push clear of reservation 1, then push THAT
+result clear of reservation 2, etc — so a small push chosen to clear a
+LATER reservation could silently re-overlap an EARLIER one already
+cleared, with nothing left to re-check it. The reviewer's own
+counter-example: rect `{100,400,300,100}` with reservations
+`{0,0,300,1000}` (a near-full-height column) then `{500,400,100,100}`
+(a small block to the right) on a 1000×1000 screen — the smallest
+per-reservation push against the SECOND reservation alone lands back
+inside the first, even though a larger push against the second
+reservation (`{600,400}`) clears both at once. Rewrote the whole
+function: generate one candidate per (push direction × reserved rect —
+the same 4 "push flush against this rect's near edge" directions the
+old `separate()` helper used, now evaluated against the FULL
+reservation set rather than just the one that generated them) and pick
+whichever candidate clears EVERY reservation with the smallest total
+displacement from the original position; falls back to whichever
+clears the MOST reservations (ties broken by displacement) if nothing
+clears all of them — a genuinely infeasible placement, same
+best-effort contract as the rest of this module. For the single-
+reservation case (every pre-existing caller) this is provably
+equivalent to the old `separate()` — both reduce to "smallest `|delta|`
+among candidates that clear" — so no regression there; verified this
+holds via the existing round-1/round-4 tests plus a new one
+reproducing the reviewer's exact counter-example (confirmed it now
+returns `{600,400}`, clearing both reservations).
+
+`popup.lua`'s round-14 floor (`2*s.padX + 20`) kept `panelW` positive
+but never accounted for the panel's own FIXED CHROME that has to fit
+inside it: the OK button alone needs at least `s.buttonMinW` (320px at
+4x, wider than the whole round-14 floor of 308px), and the mute-toggle
+icon (when its textures are loaded) sits beside the close X, needing
+its own strip of width. Floored instead at whichever is wider — the OK
+button's own width, or the close+mute icon strip's width — plus
+padding, so both always land inside the panel regardless of how tight
+the reserved-width gap gets (the panel itself may still overlap a
+reserved region in a genuinely infeasible case, same best-effort
+priority as everywhere else in this contract, but its own OK/close/
+mute controls never spill outside the panel box).
+
+`unit_info_v2.lua`'s 4 fixed section heights (tabs/header/stats/
+equipment — 352/336/1120/1088px at the issue's own 800×2160@4x) alone,
+before any gap/divider overhead, already exceed the entire framebuffer
+height, driving inventory's remaining-height computation negative (the
+section used to be omitted outright) and pushing equipment's own rect
+past the bottom edge. Fixed with a LOCAL, vertical-only effective scale
+for these 4 section heights (never `contentW`/`panelW`'s own scale, or
+any section submodule's own internal `uiscale`), fit via
+`responsive.fitScale` against whatever height remains after reserving
+a minimum sliver for inventory — the same technique used throughout
+this codebase for an analogous "fixed chrome doesn't fit the available
+space" gap. Best-effort: each section's own CONTENT (rendered by its
+own submodule — tabs/header/stats/equipment) still renders at the full
+`uiscale` internally; a full content re-flow across five independent
+submodules is a follow-up, not attempted here — this fix only
+guarantees every section's RECT, and so inventory's own existence,
+stays within the framebuffer and reachable. The fit computation itself
+moved into `unit_info_v2_layout.lua` as a new shared helper
+(`L.fitVerticalSections`) rather than living inline in
+`rebuildLayout()` — inline, the fix pushed `unit_info_v2.lua` over its
+own 500-line module-split budget (#542); the layout module (already
+the designated home for shared layout math like `planSubTabRows`) had
+plenty of headroom.
+
+Verified against a real running engine: `reserved_regions.avoidReserved`
+on the reviewer's exact counter-example returns `{600,400}` clearing
+both reservations; the popup's OK/close/mute controls at the reviewer's
+800×2160@4x/64px-gap scenario all land within the panel's own
+`[96,704)` span; `unit_info_v2`'s inventory rect comes out with a real
+positive height (253px) and equipment's rect stays within the
+framebuffer (bottom at 1832 vs. the 2160px limit). Confirmed all three
+new/extended tests actually catch their regressions (stashed the three
+fix files, re-ran — 3 failures as expected, restored — passes again).
+
+Round-17 review found three more gaps, all in `unit_info_v2.lua`'s own
+`reflow()` (the resize entry point) and its equipment section — none
+caught by round-16's rect-only fit, since all three are about state or
+content the RECT fix never touched.
+
+`reflow()` used to force `unitInfoV2.lastSelKey = ""` after
+`rebuildLayout()` cleared the tab strip, so the NEXT `update()` tick
+would see the (unchanged) selection as "new" and call
+`tabs.rebuildTabs`, which unconditionally resets the active tab to
+`sel[1]` and the scroll offset to 0 — correct for a genuine selection
+change (per its own long-standing rationale: carrying the active UID
+across a real selection change landed the highlight on an arbitrary
+middle tab), wrong for a pure layout resize, which silently knocked
+the player back to the first tab and reset any scroll position. Fixed
+by having `reflow()` re-run the tab rebuild directly instead of
+deferring it, wrapped by a new `unit_info_v2_tabs.lua` function,
+`M.reflowSelection()`, that captures `activeUid`/`scrollOffset` before
+the rebuild and restores them after (the UID only if still present
+among the freshly-built tabs; the scroll offset clamped to whatever
+the new tab layout supports) — the same capture-before/restore-after
+shape `hud.lua`'s round-10 fix already uses for a different kind of
+rebuild-destroys-state gap.
+
+`reflow()`'s `rebuildLayout()` also deletes and recreates every
+unit-info control, including the keyboard-focusable Log button and tab
+portraits (#745), with no focus snapshot/restore of its own — and
+since `hud.onFramebufferResize` runs earlier in the same forward chain
+and already restores keyboard control focus BY NAME (its own round-10
+fix, generic across every control in the engine, not HUD-specific), a
+focus that had just been restored onto a unit-info control was
+immediately orphaned again one step later. Fixed with the same
+`responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
+pair `hud.lua`/`build_tool_remote_warning.lua` already use, gated on
+whether the pane was visible before the rebuild (mirroring `hud.lua`'s
+exact `wasVisible` convention).
+
+`unit_info_v2_equipment.lua`'s silhouette + slot geometry read the
+UNFITTED `scale.get()` directly — round-16's `fitVerticalSections` only
+shrinks the equipment SECTION's outer rect, never told the equipment
+submodule to shrink its own content scale to match. At a narrow,
+high-scale combination (800×2160@4x) the section rect fits to ~625px
+tall while the 1024px silhouette still renders at the full 4x scale
+(4096px), badly overlapping the stats/inventory sections above and
+below it. Fixed by computing a local, fitted content scale
+(`responsive.fitScale` against both the rect's height AND width, since
+a squeezed width can equally push the silhouette past the accessory
+list) before deriving any silhouette/slot geometry — the same
+"reserve-a-local-effective-scale" technique used throughout this PR,
+just applied one level deeper than round-16 reached.
+
+Keeping `unit_info_v2.lua` at or under its 500-line module budget
+(#542) after adding the focus/tab-state preservation needed trimming:
+the tab-rebuild-preserving logic moved into
+`unit_info_v2_tabs.lua`'s new `reflowSelection()` (which already owns
+`activeUid`/`scrollOffset`, so it has the most context and the most
+spare budget), and two long-standing, unrelated explanatory comments
+in `unit_info_v2.lua` (`onFramebufferResize`'s script-load-order
+no-op rationale, and `reflow()`'s own doc) were condensed without
+losing their key facts — landed at exactly 500/500.
+
+Verified against a real running engine: loaded `unit_info_v2.lua` and
+its submodules via `engine.loadScript`/`require` under a real
+`--headless` boot with no errors. Confirmed all three new tests
+actually catch their regressions (stashed the three fix files, re-ran
+— 3 failures as expected, restored — passes again); full
+`UI.ResponsiveGameplay` suite (68 examples) and the broader `UI`-tagged
+headless suite (395 examples) both pass; `lua_module_budget.py` clean.
+
+Round-18 review found one more gap in the same `reflow()`: it never
+touched the stats sub-tab strip (Status/Physical/Mental/Skill/
+Knowledge) at all. `rebuildLayout()`'s `clearOwned()` deletes it
+(`statsMod.clearAll()`) same as everything else, but
+`statsMod.rebuildSubTabs()` — the ONLY thing that recreates it and
+recomputes `statsContentRect` from the fresh `statsRect` — was, unlike
+every other section, called just once, at bootstrap (`update()`'s
+`if not unitInfoV2.outerBoxId then rebuildLayout(); statsMod.
+rebuildSubTabs(); ... end` branch), never again on a later resize. So
+every resize after the pane's first layout left the stats section
+permanently blank and its content rect stuck at the pre-resize size —
+`rebuildStatsContent()`'s own guard only checks that
+`statsContentRect` is non-nil, not that it's current. Fixed with a new
+`unit_info_v2_stats.lua` function, `M.reflowStats()`, mirroring the two
+steps `update()` already performs for stats every tick (rebuild the
+sub-tab strip, then — if a unit is active — rebuild content and run its
+refresh callback); `reflow()` calls it right after `tabs.
+reflowSelection()`. Landed in `unit_info_v2_stats.lua` rather than
+inline in `unit_info_v2.lua` for the same module-budget reason as
+round-17's tab-preservation fix — one call site there, the real logic
+where the state already lives.
+
+Verified against a real running engine: loaded `unit_info_v2.lua` +
+`unit_info_v2_stats.lua` via `engine.loadScript`/`require` under a real
+`--headless` boot with no errors. New regression test resizes from
+1920×1080@1x to a narrow 800×2160@4x combination (round-3/16/17's own
+technique) specifically so a stale `statsContentRect` (still the old
+1x-derived width) is distinguishable from a freshly recomputed one —
+confirmed it catches the regression (stashed the two fix files, re-ran
+— 1 failure as expected, restored — passes again); full
+`UI.ResponsiveGameplay` suite (69 examples) and the broader `UI`-tagged
+headless suite (396 examples) both pass; `lua_module_budget.py` clean.
+
+Round-19 review found two more gaps, both in `popup.lua`'s
+`renderPopup` — the notification-card renderer, not part of the
+`unit_info_v2_*` split so it carries no module-line budget.
+
+A max-lines (10) card's natural line-block height alone, plus the
+panel's fixed chrome, can exceed a narrow, high-scale, still-supported
+framebuffer (800×1601 is the top of the 1601-2160@1.5x-4x band) —
+1760px needed at that combination. The existing round-3 `panelH` cap
+only shrinks the PANEL after the fact, leaving every row laid out at
+its full natural `rowH`, so the last rows collided with the OK button
+(itself repositioned upward to fit inside the capped panel). Fixed by
+fitting a LOCAL, line-block-only scale (`responsive.fitScale` against
+the height actually left over once the panel's fixed chrome — padding,
+header, footer gap, OK button — is reserved) that shrinks `rowH` and
+the per-line label's own `uiscale` together, never touching the
+panel's other fixed chrome; every row (and the OK button below it)
+stays inside the capped panel as a result, same "best-effort, may look
+cramped, never overlapping/off-screen" contract as everywhere else in
+this file.
+
+Separately, a popup line's label baseline nudge (`rowY + fontSize`)
+added the UNSCALED base `fontSize` (always 20px) instead of the
+correctly scaled `s.fontSize` — at 4x the label rendered 60px too
+high, its glyphs bleeding up into the row above (whose transparent,
+higher-z click box still occupied that space), so clicking what looked
+like one line's text could activate the PRECEDING line's click
+instead. This bug existed independent of the max-lines overflow above
+(any multi-line card at high uiscale hit it) — fixed by deriving the
+nudge from the same per-line `uiscale` the label itself now renders at
+(`lineUiscale`, shared with the line-block fit above: the outer
+uiscale normally, shrunk only when that fit kicks in), so the offset
+always matches the label's actual on-screen glyph size.
+
+`unit_event` (the category every existing popup test in this file
+already uses) has no `coalesce_window`, so repeated `onShowPopup`
+calls never fold into one card's lines — each spawns its OWN
+single-line popup (verified against a real running engine: 10 calls
+produced 6 separate one-line cards plus 4 queued, not one 10-line
+card, contrary to what the existing round-14/16 test's own name
+implied — its assertions turned out weak enough (`>= 1` line) to never
+catch that). The new round-19 max-lines test instead spawns one real
+popup then appends 9 more line records directly onto its `p.lines`
+table before calling the exported `p.reflow()` — the same
+`renderPopup` entry point a real resize/rescale drives — mirroring how
+this same test file already manipulates other modules' internal state
+directly (e.g. `unit_info_v2`'s `activeUid`) rather than fighting
+through unrelated timing/coalescing machinery to reach the layout code
+under test.
+
+Verified against a real running engine: loaded `popup.lua` via
+`engine.loadScript` under a real `--headless` boot with no errors, and
+reproduced the exact 800×1601@4x/10-line scenario live (`panelH` came
+out to 1600, `inFrame = true`, matching the hspec test's own
+computation). Confirmed both new tests catch their regressions
+(stashed `popup.lua`, re-ran — 2 failures as expected, restored —
+passes again); full `UI.ResponsiveGameplay` suite (71 examples) and
+the broader `UI`-tagged headless suite (398 examples) both pass;
+`lua_module_budget.py` clean (`popup.lua` isn't a budgeted module).
+
+Round-20 review found a gap in `build_tool_remote_warning.lua`'s
+(#779) title/message labels: `panel.place`'s `width = 0, height = 0`
+options meant a `"top-center"` origin's offset (`origin.x * elemWidth`)
+was always zero regardless of the label's REAL size — neither label
+was actually centered at all; both started at the panel's content
+midpoint and ran rightward, overflowing a narrow, high-scale, still-
+supported framebuffer (800×2160@4x) even before accounting for the
+panel's own fbW cap shrinking the available width further. Fixed two
+ways: (1) `panel.place` for both labels now passes their REAL rendered
+width/height instead of `0`, so the origin math actually centers them;
+(2) each label's own `uiscale` (previously always the full outer
+`uiscale`) is now fit via `responsive.fitScale` against the panel's
+actual (possibly fbW-capped) content width — mirrors the button row's
+own round-7 fit, and the identical technique used throughout this PR.
+`contentWidth` (which sizes the panel itself) also now includes the
+title's own natural width, not just the message and button row — a
+latent gap since the title was never accounted for at all before this
+round, even though the SAME `width=0` bug applied to it too.
+
+Testing this needed a new technique for this test file: `panel.place`
+positions ANY element by treating it as if it starts at its OWN
+top-left origin then subtracts `origin.x * elemWidth`/`origin.y *
+elemHeight` — so a bug that always passes `elemWidth=0` still leaves
+the element's X coordinate technically non-negative and inside the
+panel (the un-shifted "top-center" position IS the panel's own
+horizontal center), meaning a first attempt at this test that only
+checked `label.x >= panel.x` passed on both the buggy AND fixed code
+identically — a false-negative that would have shipped a non-catching
+regression test. The right check is `label.x + REAL width <= panel
+edge`, using label.lua's own `getSize` (an independent record of the
+real width, sourced from the same `engine.getTextWidth` call as the
+fix itself) rather than `UI.getElementInfo(...).width`, which is
+ALWAYS zero for a raw `UI.newText` element regardless of any bug or
+fix (label.lua's own comment on this fact, already relied on by the
+existing round-13 button-font test in this same describe block).
+Confirmed this catches the regression with a two-round check: the
+first version of the new test passed unchanged on both the reverted
+and fixed code (the false-negative above); rewritten to use
+`label.getSize` + a real (stubbed) `engine.getTextWidth` measurement,
+it now fails on the reverted code and passes on the fix.
+
+This suite's synthetic font handles make `engine.getTextWidth` always
+return 0 (this module's own header comment) — with the OLD, buggy
+code that measures identically as "fits" regardless of the bug. The
+new test stubs `engine.getTextWidth` with a real, deterministic,
+length-proportional measurement for its own duration only (save orig,
+override, restore immediately after `w.open()` — the same monkeypatch
+convention this whole test file already uses pervasively for other
+real API functions), so the centering math and the new width-fit are
+both genuinely exercised rather than trivially vacuous.
+
+Verified against a real running engine: loaded
+`build_tool_remote_warning.lua` via `engine.loadScript` under a real
+`--headless` boot with no errors. Full `UI.ResponsiveGameplay` suite
+(72 examples) and the broader `UI`-tagged headless suite (399
+examples) both pass; `lua_module_budget.py` clean (this file isn't a
+budgeted module).
+
+Round-21 review found a gap in `unit_info_v2_inventory.lua`'s own
+`rebuildInventorySection`: round-16's vertical fit
+(`fitVerticalSections`) can leave the WHOLE inventory section only
+~253px tall at 800×2160@4x, but this renderer still derived its own
+tab strip + row + footer chrome (`tabH`/`topPad`/`botPad`/`rowH`/
+`rowPad`/`footerH`) from the full, unfitted `uiscale` — one tab row
+alone plus top/bottom padding and the footer already consumed ~240px,
+driving `maxRows` (the item-row count computed from whatever height is
+left) to 0. A nonempty inventory therefore rendered no item rows and
+no right-click hit zones at all — the content wasn't merely cramped,
+it was completely unreachable.
+
+Fixed with the same local-scale-fit technique as round-17's equipment
+content and round-19's popup line block: a NEW local `invScale`, fit
+via `responsive.fitScale` against the height needed for the tab strip
++ AT LEAST ONE item row + the footer, applied to every
+`rebuildInventorySection`-owned vertical constant
+(`tabH`/`topPad`/`botPad`/`rowH`/`rowPad`/`iconSz`/`footerH`/
+`textPad`/`sectPad`/`rowGap`) — never another section's own scale.
+Computing the fit target needed the REAL tab-row count
+(`nTabRows = #tabPlan`), so the tab-width-measurement and row-wrap-plan
+code (which was already independent of `uiscale` — tab labels render
+at a fixed size regardless) moved earlier in the function, ahead of
+the uiscale-derived size block, rather than duplicating that logic.
+Tab LABEL text itself stays fixed-size (unchanged, not part of this
+gap), so the fit can only ever shrink the surrounding chrome toward
+it, never meaningfully past it, at the review's own cited boundary —
+a fit severe enough to shrink `tabH` below the label's own fixed size
+is a theoretically possible but far more extreme combination than what
+this review covers, same best-effort acceptance as everywhere else in
+this contract.
+
+Verified against a real running engine: at 800×2160@4x, `invRect.h`
+measured 253px exactly as the reviewer cited; with no inventory
+content, `rebuildInventorySection` runs cleanly; with a stubbed
+one-item inventory, a real row + its right-click hit zone now renders
+(`#invRows == 1`, confirmed empty pre-fix at the same combination).
+Confirmed the new test catches the regression (stashed
+`unit_info_v2_inventory.lua`, re-ran — 1 failure as expected, restored
+— passes again); full `UI.ResponsiveGameplay` suite (73 examples) and
+the broader `UI`-tagged headless suite (400 examples) both pass;
+`lua_module_budget.py` clean (`unit_info_v2_inventory.lua` at
+435/500).
 
 ## Project Layout
 

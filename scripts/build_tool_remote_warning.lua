@@ -29,6 +29,7 @@ local buildToolRemoteWarning = {}
 local panel = require("scripts.ui.panel")
 local label = require("scripts.ui.label")
 local scale = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
 
 buildToolRemoteWarning.page = nil
 buildToolRemoteWarning.panelId = nil
@@ -40,6 +41,18 @@ buildToolRemoteWarning.fbH = 0
 
 buildToolRemoteWarning.ownedLabels = {}
 buildToolRemoteWarning.ownedBoxes  = {}
+-- Button box handle -> its child text element handle (#750 round-13:
+-- these are raw UI.newText elements, not label.lua-wrapped, so they
+-- don't fit ownedLabels' label.destroy(id) convention — cascade-deleted
+-- along with the rest of the page on rebuild, same as every other
+-- page-child element here; tracked only so callers/tests can introspect
+-- the actual rendered button text geometry). Text elements always
+-- report a zero-sized UI.getElementInfo bounding box (see label.lua's
+-- own comment on the same fact), so buttonFontSizeByBox exists purely
+-- so a caller/test can independently re-derive the real rendered width
+-- via engine.getTextWidth(bodyFont, text, thatSize).
+buildToolRemoteWarning.buttonTextByBox = {}
+buildToolRemoteWarning.buttonFontSizeByBox = {}
 
 -- { defName, gx, gy, worldId } for the tile the warning was opened
 -- against, or nil when closed. distance/thresholdTiles are cached
@@ -99,6 +112,8 @@ local function destroyOwned()
     buildToolRemoteWarning.ownedLabels = {}
     buildToolRemoteWarning.ownedBoxes  = {}
     buildToolRemoteWarning.clickHandlers = {}
+    buildToolRemoteWarning.buttonTextByBox = {}
+    buildToolRemoteWarning.buttonFontSizeByBox = {}
 end
 
 local function createUI(distance, thresholdTiles)
@@ -113,6 +128,7 @@ local function createUI(distance, thresholdTiles)
     buildToolRemoteWarning.page = UI.newPage("build_tool_remote_warning", "modal")
 
     local message = formatMessage(distance, thresholdTiles)
+    local titleText = "Establish Colony Remotely?"
 
     local establishLabel = "Establish Here"
     local cancelLabel    = "Choose Another Site"
@@ -124,15 +140,59 @@ local function createUI(distance, thresholdTiles)
         + s.buttonPaddingX
     local buttonsRowWidth = establishW + cancelW + s.buttonSpacing
 
+    local titleW = engine.getTextWidth(
+        buildToolRemoteWarning.titleFont, titleText, s.titleFontSize)
     local msgW = engine.getTextWidth(
         buildToolRemoteWarning.bodyFont, message, s.bodyFontSize)
-    local contentWidth = math.max(buttonsRowWidth, msgW)
+    local contentWidth = math.max(buttonsRowWidth, msgW, titleW)
     local panelWidth = math.max(PANEL_W_BASE, contentWidth + s.panelPaddingX * 2)
 
     local titleH = s.titleFontSize
     local msgH   = s.bodyFontSize
     local panelHeight = s.panelPaddingY * 2 + titleH + s.titleGap + msgH
         + s.messageGap + s.buttonHeight
+
+    -- #750 round-6 review: cap against the actual framebuffer, same
+    -- best-effort-degrade pattern as popup.lua/unit_info_v2.lua's
+    -- earlier fixes for the identical class of gap. PANEL_W_BASE (560,
+    -- deliberately NOT scaled by uiscale) plus the scaled button row/
+    -- padding can still exceed a narrow, high-scale, still-C2-supported
+    -- framebuffer (e.g. 800x2160@4x), leaving this modal's own
+    -- Establish/Cancel buttons off-screen.
+    panelWidth  = math.min(panelWidth, buildToolRemoteWarning.fbW)
+    panelHeight = math.min(panelHeight, buildToolRemoteWarning.fbH)
+
+    -- #750 round-20 review: fit the title/message labels to the panel's
+    -- actual (possibly fbW-capped) content width — mirrors the button
+    -- row's own round-7 fit below, via the responsive.fitScale idiom
+    -- used throughout this codebase for the identical class of gap.
+    -- Each label's OWN uiscale shrinks independently (never the panel/
+    -- button geometry); the re-measured width feeds panel.place below,
+    -- which needs the label's REAL rendered size to center it correctly.
+    local availableContentW = panelWidth - 2 * s.panelPaddingX
+    local titleUiscale = responsive.fitScale(titleW, availableContentW, uiscale)
+    local msgUiscale = responsive.fitScale(msgW, availableContentW, uiscale)
+    local titleScaledW = engine.getTextWidth(buildToolRemoteWarning.titleFont,
+        titleText, math.floor(baseSizes.titleFontSize * titleUiscale))
+    local msgScaledW = engine.getTextWidth(buildToolRemoteWarning.bodyFont,
+        message, math.floor(baseSizes.bodyFontSize * msgUiscale))
+
+    -- #750 round-7 review: capping the PANEL alone isn't enough — the
+    -- Establish/Cancel button row's own width (establishW/cancelW,
+    -- computed above from the UNCAPPED natural content) can still
+    -- exceed the now-shrunk panel, leaving the buttons themselves
+    -- extending past the panel (and framebuffer) edge even though the
+    -- panel box itself fits. Shrink each button equally (never below a
+    -- small floor) so the row fits the panel's actual content width —
+    -- best-effort, may look cramped, but the buttons stay reachable.
+    local naturalEstablishW = establishW
+    local naturalCancelW = cancelW
+    local availableButtonsW = panelWidth - 2 * s.panelPaddingX
+    if buttonsRowWidth > availableButtonsW then
+        local shrinkEach = (buttonsRowWidth - availableButtonsW) / 2
+        establishW = math.max(20, establishW - shrinkEach)
+        cancelW = math.max(20, cancelW - shrinkEach)
+    end
 
     local panelX = (buildToolRemoteWarning.fbW - panelWidth) / 2
     local panelY = (buildToolRemoteWarning.fbH - panelHeight) / 2
@@ -157,17 +217,23 @@ local function createUI(distance, thresholdTiles)
 
     local titleId = label.new({
         name     = "build_tool_remote_warning_title",
-        text     = "Establish Colony Remotely?",
+        text     = titleText,
         font     = buildToolRemoteWarning.titleFont,
         fontSize = baseSizes.titleFontSize,
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = buildToolRemoteWarning.page,
-        uiscale  = uiscale,
+        uiscale  = titleUiscale,
     })
     table.insert(buildToolRemoteWarning.ownedLabels, titleId)
+    -- #750 round-20 review: width/height=0 here meant panel.place's
+    -- "top-center" origin offset by ZERO regardless of origin — the
+    -- label was never actually centered at all (it started at the
+    -- panel midpoint and ran rightward). Passing the label's REAL
+    -- (possibly fitted) rendered size lets the origin math center it
+    -- properly and keeps it inside the available content width.
     panel.place(buildToolRemoteWarning.panelId, label.getElementHandle(titleId), {
         x = "50%", y = 0, origin = "top-center",
-        width = 0, height = 0,
+        width = titleScaledW, height = titleH,
     })
 
     local msgId = label.new({
@@ -177,18 +243,29 @@ local function createUI(distance, thresholdTiles)
         fontSize = baseSizes.bodyFontSize,
         color    = {0.85, 0.85, 0.85, 1.0},
         page     = buildToolRemoteWarning.page,
-        uiscale  = uiscale,
+        uiscale  = msgUiscale,
     })
     table.insert(buildToolRemoteWarning.ownedLabels, msgId)
     panel.place(buildToolRemoteWarning.panelId, label.getElementHandle(msgId), {
         x = "50%", y = titleH + s.titleGap, origin = "top-center",
-        width = 0, height = 0,
+        width = msgScaledW, height = msgH,
     })
 
     local buttonsY = titleH + s.titleGap + msgH + s.messageGap
     local baseZ = panel.getZIndex(buildToolRemoteWarning.panelId)
 
-    local function makeButton(name, text, width, onClick)
+    -- #750 round-13 review: shrinking the button BOX alone left its
+    -- child text rendering at the full, unshrunk s.buttonFontSize —
+    -- with the shipped Press Start 2P font, "Choose Another Site" is
+    -- wide enough at that size to render across (or off) an 800px-wide
+    -- modal despite the click box itself staying in-frame. Scale each
+    -- button's OWN font size by the ratio of its final (possibly
+    -- shrunk) width to its natural (pre-shrink) width — mirrors the
+    -- `labelUiscale = uiscale * shrink` technique
+    -- cargo_inventory_panel.lua/build_tool.lua's picker tab labels
+    -- already use for the identical class of gap (#750 round-12) —
+    -- floored so text stays a nonzero, visible target.
+    local function makeButton(name, text, width, naturalWidth, onClick)
         local boxH = UI.newBox(
             name .. "_box", width, s.buttonHeight,
             buildToolRemoteWarning.boxTexSet, s.buttonTileSize,
@@ -200,25 +277,29 @@ local function createUI(distance, thresholdTiles)
         UI.setOnClick(boxH, "onBuildToolRemoteWarningClick")
         buildToolRemoteWarning.clickHandlers[boxH] = onClick
 
+        local fontScale = (naturalWidth > 0) and math.min(1.0, width / naturalWidth) or 1.0
+        local buttonFontSize = math.max(6, math.floor(s.buttonFontSize * fontScale))
         local textH = UI.newText(
             name .. "_label", text,
-            buildToolRemoteWarning.bodyFont, s.buttonFontSize,
+            buildToolRemoteWarning.bodyFont, buttonFontSize,
             1.0, 1.0, 1.0, 1.0,
             buildToolRemoteWarning.page
         )
         local lblW = engine.getTextWidth(
-            buildToolRemoteWarning.bodyFont, text, s.buttonFontSize)
-        UI.addChild(boxH, textH, (width - lblW) / 2, (s.buttonHeight / 2) + (s.buttonFontSize / 2))
+            buildToolRemoteWarning.bodyFont, text, buttonFontSize)
+        UI.addChild(boxH, textH, (width - lblW) / 2, (s.buttonHeight / 2) + (buttonFontSize / 2))
         UI.setZIndex(textH, 1)
         UI.setZIndex(boxH, baseZ + 1)
+        buildToolRemoteWarning.buttonTextByBox[boxH] = textH
+        buildToolRemoteWarning.buttonFontSizeByBox[boxH] = buttonFontSize
         return boxH, { width = width, height = s.buttonHeight }
     end
 
     local establishBox, establishSize = makeButton(
-        "build_tool_remote_warning_establish", establishLabel, establishW,
+        "build_tool_remote_warning_establish", establishLabel, establishW, naturalEstablishW,
         function() buildToolRemoteWarning.establishHere() end)
     local cancelBox, cancelSize = makeButton(
-        "build_tool_remote_warning_cancel", cancelLabel, cancelW,
+        "build_tool_remote_warning_cancel", cancelLabel, cancelW, naturalCancelW,
         function() buildToolRemoteWarning.chooseAnotherSite() end)
 
     panel.placeRow(buildToolRemoteWarning.panelId,
@@ -346,8 +427,24 @@ function buildToolRemoteWarning.onFramebufferResize(width, height)
     buildToolRemoteWarning.fbH = height
     if buildToolRemoteWarning.pending then
         local pending = buildToolRemoteWarning.pending
+        -- #750 round-13 review: createUI() deletes and recreates the
+        -- whole page (including the Establish/Cancel boxes, both real
+        -- keyboard-control-focusable elements per #745) — page deletion
+        -- clears upmControlFocus with no restore, so a Tab-focused
+        -- action silently lost focus on every resize/scale change.
+        -- Same by-name snapshot/restore hud.lua's own onFramebufferResize
+        -- fix (#750 round-10) already established, guarded on the page
+        -- actually being visible beforehand (restoreControlFocusName
+        -- searches UI.getVisibleElements(), which needs the rebuilt page
+        -- shown again first).
+        local wasVisible = buildToolRemoteWarning.page
+            and UI.isPageVisible(buildToolRemoteWarning.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
         createUI(pending.distance, pending.thresholdTiles)
         UI.showPage(buildToolRemoteWarning.page)
+        if wasVisible then
+            responsive.restoreControlFocusName(controlFocusName)
+        end
     end
 end
 

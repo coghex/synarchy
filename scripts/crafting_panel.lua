@@ -879,6 +879,28 @@ function craftingPanel.show(bid)
     renderQueue()
 end
 
+-- #750 round-14 review: hud.lua's resize snapshot/reopen (round-13)
+-- only preserved WHICH station was open — plain show(bid) always
+-- resets recipePage/queuePage/recipeInputs, so a resize still silently
+-- discarded pagination and any in-progress recipe count/until-target
+-- edits. Reopens via show() (unchanged, still the right way to rebuild
+-- the station's recipe list + chrome) and then restores the saved
+-- transient fields directly, re-rendering so the restored page/inputs
+-- actually show — renderRecipes()/renderQueue() self-clamp
+-- recipePage/queuePage to the current (possibly now-shorter) list, so
+-- a stale saved page number degrades to the nearest valid one instead
+-- of erroring.
+function craftingPanel.reopenWithState(bid, recipePage, queuePage, recipeInputs)
+    craftingPanel.show(bid)
+    local s = craftingPanel.state
+    if not s.open then return end
+    if recipePage then s.recipePage = recipePage end
+    if queuePage then s.queuePage = queuePage end
+    if recipeInputs then s.recipeInputs = recipeInputs end
+    renderRecipes()
+    renderQueue()
+end
+
 function craftingPanel.closeIfOpen()
     local s = craftingPanel.state
     if not s.open then return end

@@ -31,6 +31,7 @@ local combatLog      = require("scripts.combat_log")
 local injuryLog      = require("scripts.injury_log_panel")
 local unitLog        = require("scripts.unit_log")
 local contextMenu    = require("scripts.ui.context_menu")
+local unitInfoV2     = require("scripts.unit_info_v2")
 
 local mainMenu        = require("scripts.main_menu")
 local settingsMenu    = require("scripts.settings_menu")
@@ -318,22 +319,46 @@ function uiManager.onFramebufferResize(width, height)
     -- once a real size arrives).
     responsive.notifyResize(width, height)
 
-    if uiManager.moduleReady.worldView then worldView.onFramebufferResize(width, height) end
-    if uiManager.moduleReady.hud then hud.onFramebufferResize(width, height) end
-    if uiManager.moduleReady.popupsAndLogs then
-        popup.onFramebufferResize(width, height)
-        eventLog.onFramebufferResize(width, height)
-        combatLog.onFramebufferResize(width, height)
-        injuryLog.onFramebufferResize(width, height)
-        unitLog.onFramebufferResize(width, height)
-    end
-    -- #747: an open context menu/submenu is a singleton popup with no
-    -- moduleReady gate of its own (lazily inits via ensureReady in
-    -- cm.show) — a no-op when nothing is open, so it's always safe to
-    -- forward.
-    contextMenu.onFramebufferResize(width, height)
-    if uiManager.moduleReady.buildToolRemoteWarning then
-        buildToolRemoteWarning.onFramebufferResize(width, height)
+    -- #750: gameplay's own manual-forward set never had C2's 0x0 guard —
+    -- a minimize-to-0x0 event reached hud/worldView/contextMenu/
+    -- buildToolRemoteWarning's onFramebufferResize directly, rebuilding
+    -- against a degenerate framebuffer. Skip the whole block on a
+    -- non-positive size, same as responsive.notifyResize's own guard
+    -- above. popup/event_log/combat_log/injury_log_panel/unit_log are
+    -- deliberately NOT forwarded here any more: they're engine.loadScript'd,
+    -- so the engine's own broadcastToModules already calls their
+    -- onFramebufferResize once per real resize — forwarding them here too
+    -- double-fired their rebuild, the same shape unit_info_v2/debug/shell
+    -- already avoid by staying off this manual list (see hud.lua's #750
+    -- view_teardown "resize" sweep for how their world_page-mounted
+    -- popups now survive a HUD rebuild).
+    if width > 0 and height > 0 then
+        if uiManager.moduleReady.worldView then worldView.onFramebufferResize(width, height) end
+        if uiManager.moduleReady.hud then hud.onFramebufferResize(width, height) end
+        -- #747: an open context menu/submenu is a singleton popup with no
+        -- moduleReady gate of its own (lazily inits via ensureReady in
+        -- cm.show) — a no-op when nothing is open, so it's always safe to
+        -- forward.
+        contextMenu.onFramebufferResize(width, height)
+        if uiManager.moduleReady.buildToolRemoteWarning then
+            buildToolRemoteWarning.onFramebufferResize(width, height)
+        end
+        -- #750 round-12 review: test_arena (the "testArena" dev-only
+        -- world view, #741's own explicit scope) was omitted from this
+        -- forward set entirely — its stored fbW/fbH went stale after a
+        -- real resize despite exposing the identical onFramebufferResize
+        -- contract every other gameplay surface here does.
+        if uiManager.moduleReady.testArena then
+            testArena.onFramebufferResize(width, height)
+        end
+        -- #750: popup/unit_info_v2 already updated their OWN state via
+        -- the engine's automatic broadcast (both loadScript'd with an
+        -- earlier script id than this module, so it already ran before
+        -- this function did) — their geometry-dependent REFLOW runs here
+        -- instead, guaranteed to see hud's just-updated dimensions/
+        -- toolbar rects rather than the stale pre-resize ones.
+        if uiManager.moduleReady.popupsAndLogs then popup.reflow() end
+        unitInfoV2.reflow()
     end
 
     local currentMenu = uiManager.currentMenu
@@ -358,6 +383,11 @@ function uiManager.onFramebufferResize(width, height)
         if testArena.page then UI.showPage(testArena.page) end
     end
 end
+
+-- #750: the scale-only gameplay-rescale path (Settings Apply/Save/Back)
+-- lives in scripts/ui_manager_resize.lua, split out to stay under this
+-- file's line budget (tools/lua_module_budget.py) — see that file for
+-- uiManager.notifyGameplayRescale.
 
 function uiManager.update(dt)
     textbox.update(dt)

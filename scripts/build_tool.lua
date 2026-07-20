@@ -344,14 +344,22 @@ local function rebuildIconGrid(visible)
     if not h then return end
 
     local uiscale     = scale.get()
-    local iconSize    = math.floor(ICON_SIZE_BASE * uiscale)
-    local iconGap     = math.floor(ICON_GAP_BASE  * uiscale)
+    -- #750 round-8/9 review: the SAME columnsPerRow/iconSize/iconGap
+    -- showPicker() derived (and, at round 9, possibly vertically
+    -- compacted) when it computed rowCount/iconAreaH — never the fixed
+    -- ICONS_PER_ROW/ICON_SIZE_BASE/ICON_GAP_BASE defaults, or a narrow
+    -- or short panel's icon grid would drift back to running off the
+    -- panel/framebuffer edge on the very next rebuild (every tab
+    -- switch calls this function again).
+    local iconSize    = buildTool.state.iconSize or math.floor(ICON_SIZE_BASE * uiscale)
+    local iconGap     = buildTool.state.iconGap  or math.floor(ICON_GAP_BASE  * uiscale)
     local catDefs     = defsInCategory(visible, buildTool.state.activeCategory)
     local whiteTex    = buildTool.whitePixelTex
+    local columnsPerRow = buildTool.state.columnsPerRow or ICONS_PER_ROW
 
     for i, d in ipairs(catDefs) do
-        local col = (i - 1) % ICONS_PER_ROW
-        local row = math.floor((i - 1) / ICONS_PER_ROW)
+        local col = (i - 1) % columnsPerRow
+        local row = math.floor((i - 1) / columnsPerRow)
         local ix  = rect.x + col * (iconSize + iconGap)
         local iy  = rect.y + row * (iconSize + iconGap)
 
@@ -383,7 +391,7 @@ end
 -- with a centred text label on top; the backdrop is the click
 -- target (text element has a zero-sized hit box).
 -----------------------------------------------------------
-local function buildTabStrip(cats, stripX, stripY)
+local function buildTabStrip(cats, stripX, stripY, contentW)
     destroyTabs()
 
     local h = buildTool.hud
@@ -396,10 +404,36 @@ local function buildTabStrip(cats, stripX, stripY)
     local fontPx   = math.floor(TAB_FONT_SIZE  * uiscale)
     local whiteTex = buildTool.whitePixelTex
 
-    local cursorX = stripX
-    for _, cat in ipairs(cats) do
+    -- #750 round-8 review: the tab strip used to flow horizontally with
+    -- no bound at all against the panel's actual content width — with
+    -- enough categories (or long category names) at a narrow, high-
+    -- scale, still-C2-supported combination, later tabs could render
+    -- past the panel/framebuffer edge, unclipped and unscrollable.
+    -- Shrink-to-fit (never wrap to a second row, which would need its
+    -- own height accounted for above): compute the natural row width
+    -- first; if it exceeds what's actually available, scale every tab's
+    -- width and every gap down by the same factor so the WHOLE row
+    -- lands inside the panel — a tab stays reachable (clickable, even if
+    -- visually cramped), never literally off-screen. Floored so a tab
+    -- can never shrink to zero width.
+    local availableTabW = contentW or math.huge
+    local labelWidths, naturalTabWidths, naturalTotalW = {}, {}, 0
+    for i, cat in ipairs(cats) do
         local labelW = engine.getTextWidth(h.menuFont, cat, fontPx) or 0
         local tabW   = labelW + 2 * tabPadX
+        labelWidths[i] = labelW
+        naturalTabWidths[i] = tabW
+        naturalTotalW = naturalTotalW + tabW + (i > 1 and tabGap or 0)
+    end
+    local shrink = 1.0
+    if naturalTotalW > availableTabW and naturalTotalW > 0 then
+        shrink = availableTabW / naturalTotalW
+    end
+    local shrunkGap = math.floor(tabGap * shrink)
+
+    local cursorX = stripX
+    for i, cat in ipairs(cats) do
+        local tabW   = math.max(20, math.floor(naturalTabWidths[i] * shrink))
         local active = (cat == buildTool.state.activeCategory)
         local bg     = active and TAB_BG_ACTIVE   or TAB_BG_INACTIVE
         local fg     = active and TAB_TEXT_ACTIVE or TAB_TEXT_INACTIVE
@@ -416,6 +450,20 @@ local function buildTabStrip(cats, stripX, stripY)
         UI.setClickable(boxId, true)
         UI.setOnClick(boxId, "onBuildMenuTabClick")
 
+        -- #750 round-12 review: shrinking the BOX (tabW) alone left the
+        -- label rendering at the full uiscale — with enough categories
+        -- compressing tabs hard, the (unclipped, page-root) label text
+        -- stayed wider than its own box, overlapping neighbouring tabs.
+        -- Scale the label's OWN effective uiscale by the SAME `shrink`
+        -- factor the box used (mirrors cargo_inventory_panel.lua's
+        -- identical fix, and the "reserve a column, fit text to it via a
+        -- locally-computed effective uiscale" technique this codebase
+        -- already uses elsewhere — see CLAUDE.md's responsive-menu-
+        -- lifecycle notes) — at shrink == 1.0 (the common case) this is
+        -- identical to the old behavior. Re-measure the label's actual
+        -- (post-shrink) width for centering rather than reusing the
+        -- pre-shrink labelWidths[i].
+        local labelUiscale = uiscale * shrink
         local labelId = label.new({
             name     = "build_tool_tab_label_" .. cat,
             text     = cat,
@@ -423,12 +471,13 @@ local function buildTabStrip(cats, stripX, stripY)
             fontSize = TAB_FONT_SIZE,
             color    = fg,
             page     = h.world_page,
-            uiscale  = uiscale,
+            uiscale  = labelUiscale,
         })
         local labelHandle = label.getElementHandle(labelId)
+        local shrunkLabelW = select(1, label.getSize(labelId))
         -- Centre the label inside the box. UI text positioned at its
         -- baseline → push down by ~0.7 of fontSize.
-        local lblX = cursorX + math.floor((tabW - labelW) / 2)
+        local lblX = cursorX + math.floor((tabW - shrunkLabelW) / 2)
         local lblY = stripY  + math.floor((tabH + fontPx) / 2) - math.floor(fontPx * 0.15)
         UI.addToPage(h.world_page, labelHandle, lblX, lblY)
         UI.setZIndex(labelHandle, 123)
@@ -437,7 +486,7 @@ local function buildTabStrip(cats, stripX, stripY)
             { boxId = boxId, labelId = labelId, category = cat })
         buildTool.state.tabsByHandle[boxId] = cat
 
-        cursorX = cursorX + tabW + tabGap
+        cursorX = cursorX + tabW + shrunkGap
     end
 end
 
@@ -480,24 +529,17 @@ function buildTool.showPicker()
     end
     if not stillValid then buildTool.state.activeCategory = "All" end
 
-    -- Panel sizing. Width is fixed; height depends on how many rows
-    -- of icons we need for the active category.
+    -- Panel sizing. Width is fixed unless the framebuffer forces it
+    -- smaller (below); height depends on how many rows of icons we need
+    -- for the active category, which itself now depends on how many
+    -- columns actually fit (also below).
     local uiscale  = scale.get()
     local iconSize = math.floor(ICON_SIZE_BASE * uiscale)
     local iconGap  = math.floor(ICON_GAP_BASE  * uiscale)
     local tabH     = math.floor(TAB_H_BASE     * uiscale)
     local activeCatDefs = defsInCategory(visible, buildTool.state.activeCategory)
-    -- Always show at least one slot of vertical space so the panel
-    -- isn't a flat strip when a category is empty.
-    local rowCount = math.max(1,
-        math.ceil(#activeCatDefs / ICONS_PER_ROW))
-    local iconAreaH = rowCount * iconSize + math.max(0, rowCount - 1) * iconGap
 
     local pickerW = math.floor(PICKER_W_BASE * uiscale)
-    -- Tab-strip + small gap + icon area + panel padding.
-    local tabGapBelow = math.floor(8 * uiscale)
-    local pickerH = math.floor((PANEL_PAD_TOP + PANEL_PAD_BOTTOM) * uiscale)
-                  + tabH + tabGapBelow + iconAreaH
 
     -- Anchor to the build button (same geometry as before so the
     -- visual position doesn't shift from old to new picker).
@@ -506,8 +548,96 @@ function buildTool.showPicker()
     local btnSize      = buttonSize and math.floor(buttonSize * uiscale) or 64
     local stackGap     = math.floor(8 * uiscale)
     local pickerX      = margin + btnSize + stackGap
+
+    -- #750 round-7 review: cap against the actual framebuffer — unlike
+    -- cargo_inventory_panel.lua/item_contents_panel.lua (which at least
+    -- clamp POSITION), this picker had no framebuffer awareness at all:
+    -- PICKER_W_BASE*uiscale (360 at 1x, 1440 at a still-C2-supported 4x)
+    -- could extend far past the right/bottom edge from its fixed
+    -- toolbar-anchored position. Best-effort degrade, same pattern as
+    -- everywhere else this class of gap was found.
+    if h.fbW then pickerW = math.min(pickerW, math.max(20, h.fbW - pickerX)) end
+
+    -- #750 round-8 review: capping the PANEL alone isn't enough — the
+    -- icon grid below used to always lay out ICONS_PER_ROW (a fixed 4)
+    -- columns regardless of how wide the (possibly now-shrunk) panel
+    -- actually is, so at a narrow, high-scale, still-C2-supported
+    -- combination later icons rendered past the panel/framebuffer edge
+    -- entirely uncapped, unclipped, unscrollable. columnsPerRow is now
+    -- derived from the panel's actual usable content width (floored at
+    -- 1, so a single column is always at least possible) and stored on
+    -- buildTool.state so rebuildIconGrid uses the SAME value this row-
+    -- count/height calculation assumed — never a drifted, independently
+    -- recomputed one.
+    local padX = math.floor(PANEL_PAD_X * uiscale)
+    local availableIconW = math.max(iconSize, pickerW - 2 * padX)
+    local columnsPerRow = math.max(1,
+        math.floor((availableIconW + iconGap) / (iconSize + iconGap)))
+
+    -- #750 round-9 review: size the icon area against the WORST-CASE
+    -- category rather than whichever tab happens to be active when the
+    -- picker opens — "All" is always a superset of every other tab, so
+    -- using its count guarantees a later same-session tab switch
+    -- (handleTabClick only rebuilds the icon grid, it never re-runs this
+    -- sizing pass) can never need more rows than what's already
+    -- budgeted. Mirrors the same "fit against the worst-case row"
+    -- technique input_tab.lua/notifications_tab.lua already use
+    -- elsewhere in this codebase (see CLAUDE.md's responsive-menu-
+    -- lifecycle notes).
+    local worstCaseCount = math.max(#activeCatDefs, #visible)
+
+    -- Always show at least one slot of vertical space so the panel
+    -- isn't a flat strip when a category is empty.
+    local rowCount = math.max(1,
+        math.ceil(worstCaseCount / columnsPerRow))
+    local iconAreaH = rowCount * iconSize + math.max(0, rowCount - 1) * iconGap
+
+    -- Tab-strip + small gap + icon area + panel padding.
+    local tabGapBelow = math.floor(8 * uiscale)
+    local chromeH = math.floor((PANEL_PAD_TOP + PANEL_PAD_BOTTOM) * uiscale)
+                  + tabH + tabGapBelow
+
+    -- #750 round-9 review: capping pickerH below constrains the PANEL's
+    -- own box, but never touched iconAreaH itself — a narrow width
+    -- forcing few columns could still stack enough rows into an icon
+    -- area taller than the framebuffer, with nothing to clip or scroll
+    -- to the overflow. Compact instead of scroll (same best-effort
+    -- philosophy as every other fix in this class): if the natural icon
+    -- area exceeds the tallest the picker could ever be (the picker's Y
+    -- position floats below, so fbH minus its fixed chrome is the best
+    -- case regardless of where it eventually clamps to), shrink icon
+    -- size and gap by one factor (floored so an icon stays a real,
+    -- visible target) and re-derive columnsPerRow from the shrunk size
+    -- against the SAME width budget — a smaller icon fits more per row,
+    -- which itself reduces how many rows are needed. Both are stored on
+    -- buildTool.state so rebuildIconGrid (re-run on every tab switch)
+    -- draws at the SAME size this budget assumed.
+    if h.fbH and iconAreaH > 0 then
+        local maxIconAreaH = math.max(iconSize, h.fbH - chromeH)
+        if iconAreaH > maxIconAreaH then
+            local vshrink = maxIconAreaH / iconAreaH
+            iconSize = math.max(16, math.floor(iconSize * vshrink))
+            iconGap  = math.max(2,  math.floor(iconGap  * vshrink))
+            columnsPerRow = math.max(1,
+                math.floor((math.max(iconSize, pickerW - 2 * padX) + iconGap)
+                           / (iconSize + iconGap)))
+            rowCount = math.max(1, math.ceil(worstCaseCount / columnsPerRow))
+            iconAreaH = rowCount * iconSize + math.max(0, rowCount - 1) * iconGap
+        end
+    end
+    buildTool.state.columnsPerRow = columnsPerRow
+    buildTool.state.iconSize = iconSize
+    buildTool.state.iconGap  = iconGap
+
+    local pickerH = chromeH + iconAreaH
+
     local buildBtnTopY = h.fbH - margin - 2 * btnSize - stackGap
     local pickerY      = buildBtnTopY
+
+    if h.fbH then
+        pickerY = math.max(0, math.min(pickerY, h.fbH - pickerH))
+        pickerH = math.min(pickerH, h.fbH - pickerY)
+    end
 
     buildTool.state.panelId = panel.new({
         name       = "build_tool_picker",
@@ -529,7 +659,7 @@ function buildTool.showPicker()
     local contentX = pickerX + pbounds.x
     local contentY = pickerY + pbounds.y
 
-    buildTabStrip(cats, contentX, contentY)
+    buildTabStrip(cats, contentX, contentY, pbounds.width)
 
     buildTool.state.iconAreaRect = {
         x = contentX,

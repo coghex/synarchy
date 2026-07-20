@@ -2,9 +2,10 @@
 -- Displays a toggle group at the bottom-right of the screen
 -- for switching between map display modes.
 -- Also hosts a tile/chunk info panel in the top-right corner.
-local scale     = require("scripts.ui.scale")
-local toggle    = require("scripts.ui.toggle")
-local infoPanel = require("scripts.hud.info_panel")
+local scale      = require("scripts.ui.scale")
+local toggle     = require("scripts.ui.toggle")
+local infoPanel  = require("scripts.hud.info_panel")
+local responsive = require("scripts.ui.responsive")
 local hud = {}
 
 -- The log icon is a 1-item toggle group (same widget the map/tool
@@ -170,8 +171,110 @@ end
 -----------------------------------------------------------
 
 function hud.createUI()
+    -- #750: toggle.new below always recreates the map/tool toggles at
+    -- their hardcoded default identity per slot (map_default/tool_default,
+    -- each slot's default options) — on a rebuild (not first creation)
+    -- that desyncs the visible toolbar from whatever mode is actually
+    -- active. Two independent things can drift: which slot is selected
+    -- (e.g. Mine still armed engine-side while the icon claims Default),
+    -- and which IDENTITY a slot displays if the player had swapped an
+    -- alternative into it (e.g. slot 1 showing "Pressure" instead of its
+    -- default "Temperature") — restoring only the selected index still
+    -- shows the wrong icon for a swapped slot. Capture both before
+    -- teardown; restore per-slot identity via toggle.restoreSlotIdentity
+    -- (silent — no onOptionSelect/onChange), then the selected index via
+    -- one final toggle.select once the new toggle exists — neither
+    -- re-fires a callback, so a rebuild never re-issues
+    -- world.setToolMode/setMapMode or re-triggers the build tool's
+    -- picker show/hide for a mode that's already active.
+    local preservedToolIndex = hud.toolToggleId and toggle.getSelectedIndex(hud.toolToggleId)
+    local preservedMapIndex  = hud.mapToggleId  and toggle.getSelectedIndex(hud.mapToggleId)
+    local preservedToolNames = hud.toolToggleId and toggle.getSlotNames(hud.toolToggleId) or {}
+    local preservedMapNames  = hud.mapToggleId  and toggle.getSlotNames(hud.mapToggleId)  or {}
+
+    -- #750 round-13 review: the "resize" teardown below (needed because
+    -- UI.deletePage(hud.world_page) destroys these popups' elements
+    -- regardless of their own module state) used to be a one-way close —
+    -- a resize/rescale silently discarded the player's open cargo/item-
+    -- contents/crafting/plant panel, the build picker, or the tile
+    -- editor, rather than surviving it the way #750 requires for a
+    -- layout-only change. Snapshot each one's "what am I open for" state
+    -- HERE, before teardown destroys it, and reopen every one that was
+    -- open at the very end of this function (after everything below has
+    -- rebuilt fresh) — reusing each panel's own normal open entry point,
+    -- so it renders exactly as if freshly opened against the new layout.
+    -- Each snapshot attempt is pcall-isolated, same discipline
+    -- view_teardown.lua's own hooks already follow: a module that lacks
+    -- (or errors out of) the introspection this relies on must never
+    -- block the rest of the rebuild.
+    local function trySnapshot(fn)
+        local ok, result = pcall(fn)
+        if not ok then
+            engine.logError("hud.createUI: panel resize-snapshot failed: " .. tostring(result))
+            return nil
+        end
+        return result
+    end
+    local reopenCargo, reopenItem, reopenCraft, reopenPlant, reopenPicker, reopenTile
+    if hud.uiCreated and hud.world_page and hud.zoom_page then
+        reopenCargo = trySnapshot(function()
+            local m = require("scripts.cargo_inventory_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            return { bid = s.bid, mx = s.mx, my = s.my, tab = s.activeTab }
+        end)
+        reopenItem = trySnapshot(function()
+            local m = require("scripts.item_contents_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            return { uid = s.uid, defName = s.defName, mx = s.mx, my = s.my,
+                     instanceId = s.instanceId }
+        end)
+        reopenCraft = trySnapshot(function()
+            local m = require("scripts.crafting_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            -- #750 round-14 review: plain show(bid) resets recipePage/
+            -- queuePage/recipeInputs — capture them too so reopenWithState
+            -- can restore the player's pagination and any in-progress
+            -- recipe count/until-target edits, not just which station
+            -- was open.
+            return { bid = s.bid, recipePage = s.recipePage,
+                     queuePage = s.queuePage, recipeInputs = s.recipeInputs }
+        end)
+        reopenPlant = trySnapshot(function()
+            local m = require("scripts.plant_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            -- #750 round-14 review: plain show() resets sortMode/
+            -- selectedCrop — capture them too so reopenWithState can
+            -- restore the player's sort choice and crop selection, not
+            -- just which tile was open.
+            return { pageId = s.pageId, gx = s.gx, gy = s.gy,
+                     sortMode = s.sortMode, selectedCrop = s.selectedCrop }
+        end)
+        reopenPicker = trySnapshot(function()
+            local m = require("scripts.build_tool")
+            return m.state.mode == "picker" or nil
+        end)
+        reopenTile = trySnapshot(function()
+            local m = require("scripts.tile_editor")
+            if not m.state.active then return nil end
+            return { gx = m.state.gx, gy = m.state.gy }
+        end)
+    end
+
     -- Tear down previous pages if resizing
     if hud.uiCreated and hud.world_page and hud.zoom_page then
+        -- #750: every popup mounted on hud.world_page (crafting/cargo/
+        -- item-contents/plant panels, the build-tool picker, the tile
+        -- editor) owns module-level "open" state that UI.deletePage below
+        -- has no way to reconcile — left alone it stays "open" pointing
+        -- at elements that are about to be destroyed. Close them first,
+        -- same as any other view-transition teardown; reopened (if it
+        -- was actually open) once this function finishes rebuilding,
+        -- from the snapshot captured above.
+        require("scripts.ui.view_teardown").run("resize")
         UI.deletePage(hud.world_page)
         UI.deletePage(hud.zoom_page)
         if hud.mapToggleId then
@@ -368,6 +471,12 @@ function hud.createUI()
             engine.logDebug("Map mode changed to: " .. tostring(itemName))
         end,
     })
+    for i, name in ipairs(preservedMapNames) do
+        toggle.restoreSlotIdentity(hud.mapToggleId, i, name)
+    end
+    if preservedMapIndex then
+        toggle.select(hud.mapToggleId, preservedMapIndex)
+    end
 
     local toolAnchorX = s.margin
     local toolAnchorY = hud.fbH - s.margin - s.buttonSize
@@ -458,6 +567,12 @@ function hud.createUI()
             tileEditor.onToolMode(itemName)
         end,
     })
+    for i, name in ipairs(preservedToolNames) do
+        toggle.restoreSlotIdentity(hud.toolToggleId, i, name)
+    end
+    if preservedToolIndex then
+        toggle.select(hud.toolToggleId, preservedToolIndex)
+    end
 
     -- Pass the hud module reference to the build tool (read live: page /
     -- worldId / selectDefaultTool all mutate outside setup(), same as the
@@ -557,20 +672,84 @@ function hud.createUI()
         fbH       = hud.fbH,
     })
 
+    -- #750: re-derive currentView from the live camera zoom (needed by
+    -- every other reader of hud.currentView), but DON'T show a page here
+    -- — every freshly created page already starts hidden (UI.newPage),
+    -- and this function reruns on every resize, not just the first
+    -- creation. Showing here unconditionally used to resurrect the
+    -- world/zoom page over a menu that had explicitly hidden the HUD
+    -- (hud.visible == false), and never restored global_page (the log
+    -- toggle) at all. hud.show() (first creation) and
+    -- hud.onFramebufferResize (a rebuild) are the two callers, and both
+    -- already apply the full, hud.visible-gated show logic themselves
+    -- after this returns.
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()
     local zoomFadeEnd = camera.getZoomFadeEnd()
     if zoom > zoomFadeEnd then
-        UI.showPage(hud.zoom_page)
         hud.currentView = "zoomed_out"
     elseif zoom < zoomFadeStart then
-        UI.showPage(hud.world_page)
         hud.currentView = "zoomed_in"
     else
         hud.currentView = "none"
     end
     -- info_page starts hidden (infoPanel.create hides it);
     -- it will show when content is sent via setInfoText.
+
+    -- #750 round-13 review: reopen whatever transient world_page-mounted
+    -- panel was open before this rebuild, from the snapshot captured
+    -- near the top of this function — every setup() call above has
+    -- already re-pointed each panel at the FRESH hud.world_page, so
+    -- reopening now targets the new page, not the deleted one. Safe to
+    -- do before this page is (re)shown by the caller (hud.show()/
+    -- onFramebufferResize): element creation doesn't require the page
+    -- to already be visible, only the page's own later UI.showPage call
+    -- does, and every one of these panels is a plain child of
+    -- hud.world_page. Each reopen is pcall-isolated, same as the
+    -- snapshot side above.
+    local function tryReopen(fn)
+        local ok, err = pcall(fn)
+        if not ok then
+            engine.logError("hud.createUI: panel resize-reopen failed: " .. tostring(err))
+        end
+    end
+    if reopenCargo then
+        tryReopen(function()
+            require("scripts.cargo_inventory_panel").reopenWithTab(
+                reopenCargo.bid, reopenCargo.mx, reopenCargo.my, reopenCargo.tab)
+        end)
+    end
+    if reopenItem then
+        tryReopen(function()
+            require("scripts.item_contents_panel").openFor(
+                reopenItem.uid, reopenItem.defName, reopenItem.mx, reopenItem.my,
+                reopenItem.instanceId)
+        end)
+    end
+    if reopenCraft then
+        tryReopen(function()
+            require("scripts.crafting_panel").reopenWithState(
+                reopenCraft.bid, reopenCraft.recipePage, reopenCraft.queuePage,
+                reopenCraft.recipeInputs)
+        end)
+    end
+    if reopenPlant then
+        tryReopen(function()
+            require("scripts.plant_panel").reopenWithState(
+                reopenPlant.pageId, reopenPlant.gx, reopenPlant.gy,
+                reopenPlant.sortMode, reopenPlant.selectedCrop)
+        end)
+    end
+    if reopenPicker then
+        tryReopen(function()
+            require("scripts.build_tool").showPicker()
+        end)
+    end
+    if reopenTile then
+        tryReopen(function()
+            require("scripts.tile_editor").onTileSelected(reopenTile.gx, reopenTile.gy)
+        end)
+    end
 
     hud.uiCreated = true
     engine.logDebug("HUD UI created")
@@ -1009,6 +1188,53 @@ function hud.clearInfo()
 end
 
 -----------------------------------------------------------
+-- Reserved regions (#750) — the "required controls" the collision/
+-- priority contract (scripts/ui/reserved_regions.lua) protects from
+-- being covered by a lower-priority surface (e.g. a notification card).
+-- Union each toggle group's REAL element bounds via UI.getElementInfo
+-- rather than re-deriving toggle.lua's own direction-dependent packing
+-- math — a bounding box built from live element rects can never drift
+-- from what's actually on screen, unlike a hand-mirrored formula (see
+-- the coupling risk CLAUDE.md already flags for tile_editor's own
+-- popupBounds()).
+-----------------------------------------------------------
+local function unionElementRects(handles)
+    local minX, minY, maxX, maxY
+    for _, eh in ipairs(handles) do
+        local info = eh and UI.getElementInfo(eh)
+        if info then
+            minX = minX and math.min(minX, info.x) or info.x
+            minY = minY and math.min(minY, info.y) or info.y
+            maxX = maxX and math.max(maxX, info.x + info.width)  or (info.x + info.width)
+            maxY = maxY and math.max(maxY, info.y + info.height) or (info.y + info.height)
+        end
+    end
+    if not minX then return nil end
+    return { x = minX, y = minY, w = maxX - minX, h = maxY - minY }
+end
+
+-- Returns an array of {name, x, y, w, h} — one entry per toggle cluster
+-- currently on screen (a cluster not yet created is simply omitted).
+function hud.getToolbarRects()
+    local rects = {}
+    local groups = {
+        { name = "log_toggle",  id = hud.logToggleId },
+        { name = "map_toggle",  id = hud.mapToggleId },
+        { name = "tool_toggle", id = hud.toolToggleId },
+    }
+    for _, g in ipairs(groups) do
+        if g.id then
+            local rect = unionElementRects(toggle.getElementHandles(g.id))
+            if rect then
+                rect.name = g.name
+                table.insert(rects, rect)
+            end
+        end
+    end
+    return rects
+end
+
+-----------------------------------------------------------
 -- Resize
 -----------------------------------------------------------
 
@@ -1017,6 +1243,20 @@ function hud.onFramebufferResize(width, height)
     hud.fbH = height
 
     if hud.uiCreated then
+        -- #750 round-10 review: createUI() destroys and recreates the
+        -- toggle-group controls (map/tool/log — all real ueOnClick,
+        -- keyboard-control-focusable elements per #745), by fresh handle
+        -- every rebuild. Preserve keyboard CONTROL focus across that
+        -- rebuild exactly like every other C2/C4 screen already does
+        -- (main_menu.lua/settings_menu.lua/create_world_menu.lua) —
+        -- snapshot by NAME before teardown (handles don't survive a
+        -- rebuild), restore once the new controls exist AND their page
+        -- is genuinely visible again (UI.getVisibleElements(), which
+        -- restoreControlFocusName searches, only considers visible
+        -- pages). wasVisible is queried before teardown for the same
+        -- reason the existing hud.visible-gated re-show logic below is.
+        local wasVisible = hud.visible
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
         hud.createUI()
         if hud.visible then
             if hud.currentView == "zoomed_in" and hud.world_page then
@@ -1024,6 +1264,16 @@ function hud.onFramebufferResize(width, height)
             elseif hud.currentView == "zoomed_out" and hud.zoom_page then
                 UI.showPage(hud.zoom_page)
             end
+            -- #750: global_page (the always-on log toggle) is shown by
+            -- hud.show() but createUI() no longer shows it on its own —
+            -- a rebuild while visible must restore it too, or the log
+            -- toggle disappears on every resize.
+            if hud.global_page then
+                UI.showPage(hud.global_page)
+            end
+        end
+        if wasVisible then
+            responsive.restoreControlFocusName(controlFocusName)
         end
     end
 end
