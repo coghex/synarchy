@@ -28,6 +28,8 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Integrity (integrityErrorCap)
+import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
@@ -402,9 +404,9 @@ spec = do
             check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 1)
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
-            check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 1)
-            check (ccEncode craftBillsCodec)    (ccDecode craftBillsCodec 1)
-            check (ccEncode powerNodesCodec)    (ccDecode powerNodesCodec 1)
+            check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
+            check (ccEncode craftBillsCodec)    (ccDecode craftBillsCodec 2)
+            check (ccEncode powerNodesCodec)    (ccDecode powerNodesCodec 2)
             check (ccEncode worldEditsCodec)    (ccDecode worldEditsCodec 1)
             check (ccEncode worldActivityCodec) (ccDecode worldActivityCodec 1)
             check (ccEncode texPaletteCodec)    (ccDecode texPaletteCodec 1)
@@ -446,7 +448,7 @@ spec = do
            \allocator" $ do
             let badQueue = BillQueueDTO
                     { bqBills = HM.singleton (BillId 5) CraftBillDTO
-                        { bilId = BillId 5, bilStation = BuildingId 1
+                        { bilId = BillId 5, bilStation = SamePageRef (BuildingId 1)
                         , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
                         , bilClaimedAt = 0, bilProgress = 0, bilSeq = 5
                         , bilPaused = False, bilWorking = False
@@ -472,7 +474,7 @@ spec = do
            \own embedded id" $ do
             let mismatched = BillQueueDTO
                     { bqBills = HM.singleton (BillId 1) CraftBillDTO
-                        { bilId = BillId 2, bilStation = BuildingId 1
+                        { bilId = BillId 2, bilStation = SamePageRef (BuildingId 1)
                         , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
                         , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
                         , bilPaused = False, bilWorking = False
@@ -486,7 +488,7 @@ spec = do
            \allocator" $ do
             let badReg = NodeRegistryDTO
                     { regNodes = HM.singleton (PowerNodeId 3) PowerNodeDTO
-                        { nodId = PowerNodeId 3, nodBuilding = BuildingId 1
+                        { nodId = PowerNodeId 3, nodBuilding = SamePageRef (BuildingId 1)
                         , nodRole = PowerSource, nodPeakWatts = 400
                         , nodCapacityWh = 0, nodStoredWh = 0 }
                     , regNextId = 3 }
@@ -506,7 +508,7 @@ spec = do
            \own embedded id" $ do
             let mismatched = NodeRegistryDTO
                     { regNodes = HM.singleton (PowerNodeId 1) PowerNodeDTO
-                        { nodId = PowerNodeId 2, nodBuilding = BuildingId 1
+                        { nodId = PowerNodeId 2, nodBuilding = SamePageRef (BuildingId 1)
                         , nodRole = PowerSource, nodPeakWatts = 400
                         , nodCapacityWh = 0, nodStoredWh = 0 }
                     , regNextId = 5 }
@@ -563,6 +565,28 @@ spec = do
 
         it "NodeRegistryDTO round-trips a non-empty power-node registry" $
             fromNodeRegistryDTO (toNodeRegistryDTO richNodes) `shouldBe` richNodes
+
+        it "migrates an unambiguous v1 unit-sim page slice into the typed \
+           \v2 shape (issue #764 round-3 review: psSim's map KEY is a \
+           \same-page cross-component reference to its owning unit, typed \
+           \the same way as a bill's station or a node's host building)" $ do
+            let v1 = PageSimDTOv1
+                    { ps1PageId = page1
+                    , ps1Sim = HM.singleton (UnitId 5)
+                        (toUnitSimStateDTO richSimState) }
+                v2 = migratePageSimDTOv1 v1
+            psPageId v2 `shouldBe` page1
+            HM.keys (psSim v2) `shouldBe` [SamePageRef (UnitId 5)]
+            HM.lookup (SamePageRef (UnitId 5)) (psSim v2)
+                `shouldBe` Just (toUnitSimStateDTO richSimState)
+
+        it "migrateUnitSimDTOv1 migrates every page slice in a v1 payload" $
+            let v1 = UnitSimDTOv1
+                    [ PageSimDTOv1 page1 (HM.singleton (UnitId 5)
+                        (toUnitSimStateDTO richSimState))
+                    , PageSimDTOv1 page2 HM.empty ]
+                UnitSimDTO v2Pages = migrateUnitSimDTOv1 v1
+            in map psPageId v2Pages `shouldBe` [page1, page2]
 
     describe "frozen worldgen + item DTOs (boundary rule, review round 6)" $ do
         -- The nested worldgen config/state records and the recursive
@@ -742,7 +766,7 @@ spec = do
            \with its own embedded id" $ do
             let mismatched = BillQueueDTO
                     { bqBills = HM.singleton (BillId 1) CraftBillDTO
-                        { bilId = BillId 2, bilStation = BuildingId 1
+                        { bilId = BillId 2, bilStation = SamePageRef (BuildingId 1)
                         , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
                         , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
                         , bilPaused = False, bilWorking = False
@@ -772,7 +796,7 @@ spec = do
            \with its own embedded id" $ do
             let mismatched = NodeRegistryDTO
                     { regNodes = HM.singleton (PowerNodeId 1) PowerNodeDTO
-                        { nodId = PowerNodeId 2, nodBuilding = BuildingId 1
+                        { nodId = PowerNodeId 2, nodBuilding = SamePageRef (BuildingId 1)
                         , nodRole = PowerSource, nodPeakWatts = 400
                         , nodCapacityWh = 0, nodStoredWh = 0 }
                     , regNextId = 5 }
@@ -884,6 +908,31 @@ spec = do
                 Left msg → msg `shouldSatisfy` T.isInfixOf "buildings"
                 Right _  → expectationFailure
                     "expected a malformed component to fail the whole decode"
+
+    describe "capComponentErrors (round-3 review, issue #764)" $ do
+        it "passes a small list through unchanged, sorted deterministically \
+           \-- no trailer note when nothing was actually omitted" $ do
+            let errs = [ ComponentError buildingsComponentId 1 ValidatePhase "z"
+                       , ComponentError buildingsComponentId 1 ValidatePhase "a" ]
+            map ceMessage (capComponentErrors errs) `shouldBe` ["a", "z"]
+
+        it "caps a large synthetic list at integrityErrorCap with a \
+           \trailer note reporting the TRUE omitted count -- not a \
+           \double-capped undercount from capping twice" $ do
+            let n = integrityErrorCap + 137
+                errs = [ ComponentError buildingsComponentId 1 ValidatePhase
+                            ("msg-" <> tshow4 i)
+                       | i ← [1 .. n] ]
+                tshow4 i = let s = show (i ∷ Int)
+                           in T.pack (replicate (4 - length s) '0' <> s)
+                result = capComponentErrors errs
+            length result `shouldBe` integrityErrorCap + 1
+            ceMessage (last result)
+                `shouldBe` "137 additional component finding(s) omitted \
+                           \(see World.Save.Integrity.integrityErrorCap)"
+
+        it "an empty list stays empty (no spurious trailer)" $
+            capComponentErrors [] `shouldBe` []
 
     describe "frozen tracked fixture" $
         it "decodes a frozen, tracked multi-component byte fixture -- not \

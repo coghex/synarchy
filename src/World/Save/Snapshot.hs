@@ -39,6 +39,7 @@ module World.Save.Snapshot
     , validateSessionSnapshot
     , captureSessionSnapshot
     , structureEditPaletteErrors
+    , allItemInstanceIds
     ) where
 
 import UPrelude
@@ -198,13 +199,25 @@ buildSessionSnapshot globals pages = SessionSnapshot
 -- | Every referential-integrity invariant a valid snapshot must
 --   satisfy. Deliberately narrower than every relationship the #756
 --   inventory could theoretically name: a craft bill's station
---   reference and a power node's host-building reference are NOT
---   checked here, because a demolished station leaving its bills
---   "lingering, visible + cancellable" is documented, tolerated
---   gameplay behaviour (CLAUDE.md's craft-bill notes), not corruption
---   — hard-failing on it would reject otherwise-valid saves. Likewise
---   tile-coordinate bounds are not re-validated (the inventory already
---   records this as a pre-existing, accepted gap, not a #758
+--   reference and a power node's host-building reference being ABSENT
+--   from the whole session are NOT checked here, because a demolished
+--   station leaving its bills "lingering, visible + cancellable" is
+--   documented, tolerated gameplay behaviour (CLAUDE.md's craft-bill
+--   notes), not corruption — hard-failing on it would reject otherwise-
+--   valid saves. A station/host-building that resolves on a DIFFERENT
+--   page than its bill/node IS a hard error, just not this function's —
+--   see "World.Save.Integrity".'World.Save.Integrity.sessionIntegrityErrors'
+--   (issue #764, save-overhaul C3), which "World.Save.Component"'s
+--   'World.Save.Component.assembleSnapshot' runs as an additional
+--   cross-component check on the pre-load boundary, and
+--   'World.Thread.Command.Save.WriteWorld.handleWorldSaveCommand' runs
+--   the same way immediately after a successful 'captureSessionSnapshot'
+--   on the pre-save boundary (kept OUTSIDE this module rather than
+--   folded into 'captureSessionSnapshot' itself, since
+--   "World.Save.Integrity" imports THIS module for 'SessionSnapshot' —
+--   folding the call in here would be a cycle).
+--   Likewise tile-coordinate bounds are not re-validated (the inventory
+--   already records this as a pre-existing, accepted gap, not a #758
 --   requirement). What IS checked below are invariants that should
 --   ALWAYS hold by construction; a violation means real corruption.
 --

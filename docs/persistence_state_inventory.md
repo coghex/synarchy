@@ -292,8 +292,8 @@ prior fields (no cross-page ordering requirement):
 | `wpsUnitSimStates` | Persist exactly | `wpsUnits` (sim state is keyed by `UnitId`, restored after unit instances) | every sim-state key should correspond to a restored unit id (an orphaned key is not currently detected) | `tools/movement_probe.py` (post-load) |
 | `wpsFloraHarvests` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | `tools/flora_growth_probe.py` |
 | `wpsChopDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/chop_probe.py` |
-| `wpsCraftBills` | Persist exactly | referenced station building must already be restored (`wpsBuildings`) | `cbClaimant`, if any, should reference a restored unit (not currently re-validated) | `tools/craft_bill_probe.py` |
-| `wpsPowerNodes` | Persist exactly | referenced host building must already be restored (`wpsBuildings`) | none beyond type-correctness | `tools/power_probe.py` |
+| `wpsCraftBills` | Persist exactly | referenced station building must already be restored (`wpsBuildings`) | `cbStation`/`cbClaimant` absent from the whole session are tolerated (#758); either resolving on a DIFFERENT page than the bill is hard-rejected by `World.Save.Integrity.sessionIntegrityErrors` (#764) | `tools/craft_bill_probe.py`, `Test.Headless.World.Save.Integrity` |
+| `wpsPowerNodes` | Persist exactly | referenced host building must already be restored (`wpsBuildings`) | `pnBuilding` absent from the whole session is tolerated (#758); resolving on a DIFFERENT page than the node is hard-rejected by `World.Save.Integrity.sessionIntegrityErrors` (#764) | `tools/power_probe.py`, `Test.Headless.World.Save.Integrity` |
 | `wpsTillDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/till_probe.py` |
 | `wpsCropPlots` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | `tools/crop_probe.py` |
 | `wpsPlantDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/plant_probe.py` |
@@ -537,6 +537,67 @@ component (`"lua.<module>"`, disjoint reserved namespace —
 `World.Save.Component.Types.luaComponentPrefix`), gathered from the
 live Lua registry at save/load time rather than declared statically in
 Haskell. See §7 for the Lua-owned component list.
+
+---
+
+## 11. Typed persistent references (`World.Save.Reference` / `World.Save.Integrity`) — the C3 reference graph (#764)
+
+#764 (save-overhaul C3) gives every durable cross-component reference a
+declared kind and scope rather than leaving it an untyped raw id. Two
+distinct vocabularies exist, cross-checked by
+`tools/persistence_inventory_audit.py` the same way §1-§7's root-owner
+fields and Lua save modules already are (contract §7, requirement 15):
+a newly introduced reference-bearing field or kind with no row below
+fails the audit.
+
+**Haskell DTO fields** typed with a `World.Save.Reference` wrapper
+(`SamePageRef`/`CrossPageRef`) declare their scope at the TYPE level —
+see `World.Save.Reference`'s module haddock for why this needs no new
+wire bytes beyond the wrapped id. Classified `Persist as identity/
+reference` uniformly: each is a stable id resolved against the current
+session at load time, never an embedded copy.
+
+### Typed persistent references
+
+| Field | DTO / component | Scope | Classification | Validated by | Migration |
+|---|---|---|---|---|---|
+| `bilStation` | `CraftBillDTO` (`craft-bills`) | Same page as the bill | Persist as identity/reference | `World.Save.Integrity.sessionIntegrityErrors` (wrong-page hard-fails; absent-everywhere tolerated, #758) | v1→v2, `migrateCraftBillDTOv1` |
+| `bilClaimant` | `CraftBillDTO` (`craft-bills`) | Same page as the bill (optional) | Persist as identity/reference | `World.Save.Integrity.sessionIntegrityErrors` (wrong-page hard-fails; absent tolerated) | v1→v2, `migrateCraftBillDTOv1` |
+| `nodBuilding` | `PowerNodeDTO` (`power-nodes`) | Same page as the node | Persist as identity/reference | `World.Save.Integrity.sessionIntegrityErrors` (wrong-page hard-fails; absent tolerated) | v1→v2, `migratePowerNodeDTOv1` |
+| `psSim` (map KEY, not a field value) | `PageSimDTO` (`unit-sim`) | Same page as the sim-state slice | Persist as identity/reference | `World.Save.Snapshot`'s `OrphanedUnitSimState` check (pre-existing #758 whole-session invariant — a sim owner with no matching unit on the same page hard-fails; this component was already validated, only the wire TYPE was untyped before round-3 review, #764) | v1→v2, `migratePageSimDTOv1`/`migrateUnitSimDTOv1` |
+
+**Lua reference kinds** are the controlled `kind` vocabulary a
+registered Lua save component's `references()` hook reports
+(`scripts/unit_ai_save_refs.lua`, `scripts/building_spawn.lua` — see
+#761's `references` spec field). Cross-validated by
+`Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData` /
+`World.Save.Integrity.luaReferenceErrors`: `unit`/`building`/
+`item_instance` resolve session-wide (matching each component's own
+declared `scope = "global"` — these three are GLOBAL allocators, one
+counter for the whole session), while `craft_bill`/`ground_item`
+resolve against the OWNING unit's page specifically (each `references()`
+edge carries an `owner` — the unit id it came from — since `BillId`/
+ground-item ids are PER-PAGE allocators, and a session-wide match would
+let a reference meant for one page's missing bill falsely resolve
+against an unrelated same-numbered bill elsewhere). Either way, a
+reference that doesn't resolve is a non-blocking diagnostic (dangling
+target, or one at/above its kind's allocator), never a load failure —
+the #761-established tolerated-dangling-reference contract. Classified
+`Persist as identity/reference` uniformly, same reasoning as the
+Haskell table above. The persisted FIELDS themselves (not just this
+diagnostic surface) are typed too — see "Typed persistent references
+and the shared integrity graph" in `persistence_contract.md`'s §9 for
+the `{__ref=kind, id=N}` wire shape and the v1→v2 migration.
+
+### Lua reference kinds
+
+| Kind | Reported by | Resolution scope | Haskell-owned target | Classification |
+|---|---|---|---|---|
+| `unit` | `unit_ai_save_refs.lua`, `building_spawn.lua` | session-wide (global allocator) | `units` component (`UnitId`) | Persist as identity/reference |
+| `building` | `unit_ai_save_refs.lua`, `building_spawn.lua` | session-wide (global allocator) | `buildings` component (`BuildingId`) | Persist as identity/reference |
+| `craft_bill` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `craft-bills` component (`BillId`) | Persist as identity/reference |
+| `item_instance` | `unit_ai_save_refs.lua` | session-wide (global allocator) | carried inventory, owned by the `units` component's own snapshot | Persist as identity/reference |
+| `ground_item` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `world-activity` component (ground items) | Persist as identity/reference |
 
 ---
 

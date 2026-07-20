@@ -5,21 +5,15 @@
 
 local M = {}
 
--- aiState fields on a per-unit entry that hold a direct reference to
--- another entity by raw id. After a load these can point at an id that
--- did NOT survive on the loaded page — a missing-def orphan, an entity
--- already gone before the save (its stale ref was still serialized),
--- or an id that now collides with a LIVE off-page entity. The per-tick
--- validators (unit.exists / unit.getInfo / building.getInfo) are
--- GLOBAL raw lookups, so for a collision they'd pass for the wrong
--- off-page entity and the survivor would resume targeting / delivering
--- to it (#195). unit_ai.lua's scrubStaleRefs clears any ref whose
--- target isn't in the surviving loaded-page set.
--- NB: any NEW aiState field that stores a unit/building id MUST be
--- listed here, or it silently reintroduces the stale-ref bug.
-M.AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
-                             "notifyTarget", "lungeTarget" }
-M.AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
+-- Reference-field schema, references() traversal, and typed structured-
+-- reference wrap/unwrap (issue #764) live in unit_ai_save_refs.lua --
+-- split out to stay under this file's line budget (#538). AI_UNIT_REF_FIELDS/
+-- AI_BUILDING_REF_FIELDS are re-exported unchanged so unit_ai.lua's
+-- existing `unitAiSave.AI_UNIT_REF_FIELDS`/`AI_BUILDING_REF_FIELDS`
+-- access (scrubStaleRefs) keeps working exactly as before.
+local refsMod = require("scripts.unit_ai_save_refs")
+M.AI_UNIT_REF_FIELDS     = refsMod.AI_UNIT_REF_FIELDS
+M.AI_BUILDING_REF_FIELDS = refsMod.AI_BUILDING_REF_FIELDS
 
 -- Per-unit "*Candidate" fields (issue #761 requirement 13/14): scratch
 -- space a utility function fills in on ITS OWN tick and that the
@@ -189,89 +183,32 @@ local function validateUnitAiData(data)
         elseif type(s) ~= "table" then
             errs[#errs + 1] = "unit_ai: state for unit " .. tostring(uid)
                 .. " is not a table"
-        elseif s.craftJob or s.repairJob or s.constructJob
-                or s.deliveryClaim or s.deliveryPendingTarget
-                or s.plantJob then
-            itemDefs = itemDefs or buildItemDefSet()
-            -- buildingDefs is only ever consulted for a "building"-
-            -- category constructJob -- built lazily so every other
-            -- scenario (craft/repair/delivery/plant-only saves, and
-            -- every existing test/probe fixture that stubs `item`/
-            -- `craft`/`repair`/`flora` but not `building`) never
-            -- touches the `building` global at all.
-            if s.constructJob and s.constructJob.category == "building" then
-                buildingDefs = buildingDefs or buildBuildingDefSet()
+        else
+            -- Requirement 13/round-2 review: reject a wrong-kind or
+            -- untagged reference wrapper before it can ever reach
+            -- apply()/unwrapUnitState, which trusts field position
+            -- alone. Runs for every unit entry, not just job-bearing
+            -- ones -- attackTargetUid et al. carry no job field.
+            refsMod.validateRefTags(uid, s, errs)
+            if s.craftJob or s.repairJob or s.constructJob
+                    or s.deliveryClaim or s.deliveryPendingTarget
+                    or s.plantJob then
+                itemDefs = itemDefs or buildItemDefSet()
+                -- buildingDefs is only ever consulted for a "building"-
+                -- category constructJob -- built lazily so every other
+                -- scenario (craft/repair/delivery/plant-only saves, and
+                -- every existing test/probe fixture that stubs `item`/
+                -- `craft`/`repair`/`flora` but not `building`) never
+                -- touches the `building` global at all.
+                if s.constructJob and s.constructJob.category == "building" then
+                    buildingDefs = buildingDefs or buildBuildingDefSet()
+                end
+                validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
             end
-            validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
         end
     end
     if #errs > 0 then return errs end
     return nil
-end
-
--- Every reference this component carries (requirement 12) -- unit/
--- building/craft-bill/item/ground-item ids reachable from a per-unit
--- aiState entry, including ones nested inside claim/job tables and
--- collection-held ones inside loot lists, plus (round-6 review) the
--- OUTER per-unit key itself -- the same "the id this entry is keyed by
--- is a reference too" pattern building_spawn.lua's own references()
--- already uses for its per-building key:
---   unit_ai_medic.lua's treatClaim/treatPending
---   unit_ai_deliver.lua's deliveryClaim/deliveryPendingTarget
---   unit_ai_craft.lua's craftJob
---   unit_ai_repair.lua's repairJob
---   unit_ai_pickup.lua's pickupOrder
---   unit_ai_needs.lua's forageTarget/forageLoot
---   unit_ai_farm.lua's harvestLoot
--- (the *Candidate fields carry no reference here at all -- see
--- TRANSIENT_CANDIDATE_FIELDS above: they are stripped before this
--- function ever sees them.) Traversed here for documentation/
--- diagnostics (actually CALLED by saveModules.prepareLoad, requirement
--- 11/12 -- not merely declared and left dead); a dangling entry is NOT
--- rejected by this validator (per the #761 issue-review clarification:
--- a target that legitimately died before the save boundary must stay
--- representable) -- it is cleared at reconcile time instead, by
--- unit_ai.lua's scrubStaleRefs/onSaveLoaded.
--- NB: any NEW nested claim/job field, or new loot-style list, that
--- stores a unit/building/bill/item/ground-item id MUST be added here
--- too (mirroring scrubStaleRefs for the claim/job fields it also
--- reconciles); any NEW *Candidate-style scratch field should instead be
--- added to TRANSIENT_CANDIDATE_FIELDS if it can embed a raw id or a
--- copy of live content, matching the existing ones.
-local function unitAiReferences(data)
-    local refs = {}
-    local function addRef(kind, id)
-        if id ~= nil then refs[#refs + 1] = { kind = kind, id = id } end
-    end
-    local function addRefList(kind, ids)
-        if ids ~= nil then
-            for _, id in ipairs(ids) do addRef(kind, id) end
-        end
-    end
-    for uid, s in pairs(data) do
-        addRef("unit", uid)
-        for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do addRef("unit", s[f]) end
-        for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do addRef("building", s[f]) end
-        if s.treatClaim then addRef("unit", s.treatClaim.patient) end
-        if s.treatPending then addRef("unit", s.treatPending.uid) end
-        if s.deliveryClaim then addRef("building", s.deliveryClaim.bid) end
-        if s.deliveryPendingTarget then addRef("building", s.deliveryPendingTarget.bid) end
-        if s.craftJob then
-            addRef("craft_bill", s.craftJob.billId)
-            addRef("building", s.craftJob.bid)
-        end
-        if s.repairJob then
-            addRef("item_instance", s.repairJob.instanceId)
-            addRef("building", s.repairJob.bid)
-        end
-        if s.pickupOrder then addRef("ground_item", s.pickupOrder.gid) end
-        if s.forageTarget and s.forageTarget.kind == "ground" then
-            addRef("ground_item", s.forageTarget.gid)
-        end
-        addRefList("ground_item", s.forageLoot)
-        addRefList("ground_item", s.harvestLoot)
-    end
-    return refs
 end
 
 -- A shallow copy of one unit's aiState entry with every transient
@@ -320,12 +257,24 @@ function M.register(unitAi, aiState)
     -- silently starting every unit with blank AI state.
     local saveMods = require("scripts.lib.save_modules")
     saveMods.register("unit_ai", {
-        version = 1,
-        inputVersions = { 1 },
+        -- v2 (issue #764, save-overhaul C3): every reference field
+        -- unitAiReferences declares is now a typed structured reference
+        -- on the wire ({__ref=kind, id=N} via wrapUnitState above), not
+        -- a bare number. v1 payloads migrate via decode() below.
+        -- v3 (round-6 review, issue #764): each per-unit entry also
+        -- carries a self-describing __owner = {__ref="unit", id=uid}
+        -- field, typing the OUTER per-unit key the same way (there is
+        -- no way to wrap a Lua table KEY itself -- see
+        -- unit_ai_save_refs.lua's wrapUnitState haddock for why this is
+        -- the closest Lua equivalent to psSim's SamePageRef-typed
+        -- HashMap key).
+        version = 3,
+        inputVersions = { 1, 2, 3 },
         required = true,
         scope = "global",
-        -- Requirement 2 (round-8 review): unitAiReferences above
-        -- declares every reference KIND this component's data actually
+        -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
+        -- unitAiReferences declares every reference KIND this component's
+        -- data actually
         -- carries -- "unit"/"building" (AI_UNIT_REF_FIELDS/
         -- AI_BUILDING_REF_FIELDS, claim/job bid/patient/uid fields),
         -- "craft_bill" (craftJob.billId), and "ground_item"
@@ -358,13 +307,26 @@ function M.register(unitAi, aiState)
             for uid, s in pairs(aiState) do
                 if unit.exists(uid) then live[uid] = snapshotUnitState(s) end
             end
-            return live
+            return refsMod.wrapAiState(live)
         end,
-        decode = function(_version, data)
-            return data or {}
+        decode = function(version, data)
+            data = data or {}
+            -- v1 payloads carry bare-number reference fields -- wrapping
+            -- them here is the unambiguous v1->v2 migration (requirement
+            -- 14): v1's fields have always meant exactly what
+            -- unitAiReferences already declares, so there is nothing to
+            -- guess. wrapUnitState (via wrapAiState) ALSO synthesizes
+            -- __owner for v3, so a v1 payload migrates straight to v3 in
+            -- one step. v2 payloads have every OTHER field already
+            -- wrapped but no __owner yet -- addOwnerToAiState adds ONLY
+            -- that, without re-wrapping fields that are already wrapped.
+            -- v3 payloads are already complete (identity).
+            if version == 1 then return refsMod.wrapAiState(data) end
+            if version == 2 then return refsMod.addOwnerToAiState(data) end
+            return data
         end,
         validate = validateUnitAiData,
-        references = unitAiReferences,
+        references = refsMod.references,
         -- Temporary C2 compatibility adapter (issue #761, requirement 15):
         -- clobber aiState wholesale from the decoded payload, exactly like
         -- the pre-#761 deserializer body. unitAi.onSaveLoaded is the
@@ -380,9 +342,12 @@ function M.register(unitAi, aiState)
             -- state instead of the payload's stale copy (#195, #191).
             unitAi._preLoadState = {}
             for k, v in pairs(aiState) do unitAi._preLoadState[k] = v end
-            -- Replace in-place so the package.loaded singleton sees it
+            -- Replace in-place so the package.loaded singleton sees it.
+            -- Unwraps every reference field back to a bare number so
+            -- aiState's LIVE in-memory shape (read by every OTHER
+            -- module) never changes -- only the bytes on disk do.
             for k in pairs(aiState) do aiState[k] = nil end
-            for k, v in pairs(data) do aiState[k] = v end
+            for k, v in pairs(refsMod.unwrapAiState(data)) do aiState[k] = v end
         end,
     })
 end

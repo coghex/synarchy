@@ -506,16 +506,24 @@ data WorldPageSave = WorldPageSave
         -- ^ Craft-bill queue (#329): standing per-station craft orders
         --   incl. claim + cycle progress. Station references are
         --   BuildingIds, which restore verbatim (see wpsBuildings), so
-        --   bills reconnect to their stations; restore prunes bills
-        --   whose station was orphaned. Appended for save v72.
+        --   bills reconnect to their stations; restore keeps a bill
+        --   whose station is orphaned intact rather than pruning it
+        --   (issue #763 round 9 — "World.Load.Stage" restores bills
+        --   VERBATIM, never against the loaded page's own building
+        --   snapshot; a demolished station's lingering bill is tolerated
+        --   gameplay, not corruption). A station that resolves on a
+        --   DIFFERENT page than its bill is a genuine wrong-page
+        --   violation instead, hard-rejected by
+        --   "World.Save.Integrity" (issue #764). Appended for save v72.
     , wpsPowerNodes ∷ !PowerNodes
         -- ^ Power-node registry (#358): placed solar-panel/battery
         --   source + storage nodes (role + parameters), plus each
         --   storage node's current charge (pnStoredWh, #360). Like
         --   craft bills, references a BuildingId that restores
-        --   verbatim (see wpsBuildings); restore prunes nodes whose
-        --   building was orphaned. Appended for save v73, pnStoredWh
-        --   for v75.
+        --   verbatim (see wpsBuildings); an orphaned host building is
+        --   tolerated the same way (issue #763 round 9 — no pruning),
+        --   a wrong-page one hard-rejected (issue #764). Appended for
+        --   save v73, pnStoredWh for v75.
     , wpsTillDesignations ∷ !TillDesignations
         -- ^ Till designations (#333): tile → surface z. Like the other
         --   designation layers, restored straight into

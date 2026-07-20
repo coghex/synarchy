@@ -166,7 +166,7 @@ spec = do
             -- Save with id_named_w8 as the primary (active) page.
             sendWorldCommand env
                 (WorldSave (WorldPageId "id_named_w8") slotA
-                           "2026-07-10T00:00:00.000000Z" [])
+                           "2026-07-10T00:00:00.000000Z" [] [])
             waitForFile ("saves/" <> slotA <> "/world.synworld")
 
             -- Decode the file directly: identities and metadata are in
@@ -235,7 +235,7 @@ spec = do
 
             sendWorldCommand env
                 (WorldSave (WorldPageId "id_dangling_w8") slotB
-                           "2026-07-19T00:00:00.000000Z" [])
+                           "2026-07-19T00:00:00.000000Z" [] [])
             waitForFile ("saves/" <> slotB <> "/world.synworld")
 
             logger ← readIORef (loggerRef env)
@@ -315,7 +315,7 @@ spec = do
 
             sendWorldCommand env
                 (WorldSave (WorldPageId "id_nopreview_w8") slotC
-                           "2026-07-19T00:00:00.000000Z" [])
+                           "2026-07-19T00:00:00.000000Z" [] [])
             waitForFile ("saves/" <> slotC <> "/world.synworld")
 
             logger ← readIORef (loggerRef env)

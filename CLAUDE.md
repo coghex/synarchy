@@ -3468,6 +3468,206 @@ gained a case proving a REQUIRED component's injected snapshot failure
 makes `engine.saveWorld` return `false` with no save directory created,
 and that a normal save still succeeds once restored.
 
+**Typed persistent references + shared integrity graph (#764,
+save-overhaul C3):** every durable cross-component reference now
+declares its expected target kind and scope rather than staying an
+untyped raw id. `World.Save.Reference` is the leaf vocabulary
+(`RefKind`/`ContentKind`/`RefScope`) plus `SamePageRef`/`CrossPageRef`
+— thin wrapper newtypes a component DTO field uses to declare "this
+reference's target must live on the same page as the record carrying
+it" at the TYPE level; wire-identical to the wrapped id (a newtype has
+no cereal discriminant), so no new bytes ride on disk, only a new
+Haskell type. `CraftBillDTO.bilStation`/`bilClaimant` and
+`PowerNodeDTO.nodBuilding` (`World.Save.Component.Entities`) are the
+first fields to adopt it — both components bumped to v2, decoding a v1
+payload via an explicit, unambiguous migration
+(`migrateCraftBillDTOv1`/`migratePowerNodeDTOv1`; the frozen v1 DTOs
+`CraftBillDTOv1`/`PowerNodeDTOv1` stay exactly as they shipped, per the
+frozen-DTO boundary rule).
+
+`World.Save.Integrity` is the shared diagnostic graph: `IntegrityError`/
+`IntegrityReport` (component, version, data path, reference kind/value,
+expected-vs-actual scope, a stable machine-readable code, a message —
+deterministically sorted and capped with an omitted-count, never
+silently truncated) and `sessionIntegrityErrors`, run over an assembled
+`SessionSnapshot` at BOTH boundaries — `World.Save.Component.assembleSnapshot`
+(pre-load) and, via a plain post-capture call (never folded into
+`captureSessionSnapshot` itself — that would cycle back through
+`World.Save.Snapshot`), `World.Thread.Command.Save.WriteWorld` (pre-save).
+It validates a craft bill's station/claimant and a power node's host
+building for wrong-PAGE (a target that resolves on a DIFFERENT page
+than the record referencing it is a hard error) while staying tolerant
+of the target being absent from the WHOLE session — the pre-existing
+#758 "a demolished station's lingering bill is tolerated gameplay, not
+corruption" contract, unchanged. `World.Load.Stage` already restored
+bills/power-nodes verbatim rather than pruning them (issue #763 round
+9) — #764 adds the cross-component check a component-local validator
+structurally can't run, it doesn't change that restore path.
+
+`luaReferenceErrors`/`KnownEntities` do the analogous cross-check for
+Lua: every reference a registered Lua save component's `references()`
+hook reports (issue #761 defined the hook; #764 is what actually
+consumes its output — previously only crash-checked and discarded)
+is validated against the load's real entity sets
+(`Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData`, built
+from the decoded `SaveData`). Always a non-blocking diagnostic (logged
+via `logWarn`, folded into `continueLoad`'s existing log/diagnostic
+surface) — never load-rejecting, matching the same tolerated-dangling-
+reference precedent scrubStaleRefs already relies on. `save_modules.lua`'s
+`prepareLoad` now RETURNS the collected `{component=,kind=,id=}` edges
+(`references` field) instead of only calling `references()` to catch a
+crash.
+
+Lua's persisted reference fields are typed on the wire too: every field
+`scripts/unit_ai_save_refs.lua`'s `unitAiReferences` declares
+(`attackTargetUid`/`retreatThreatUid`/`notifyTarget`/`lungeTarget`/
+`buildTarget`/`storeTarget`, plus the nested `treatClaim.patient`/
+`treatPending.uid`/`deliveryClaim.bid`/`deliveryPendingTarget.bid`/
+`craftJob.billId`/`craftJob.bid`/`repairJob.instanceId`/`repairJob.bid`/
+`pickupOrder.gid`/`forageTarget.gid`/`forageLoot[]`/`harvestLoot[]`) and
+`scripts/building_spawn.lua`'s `lastUid` are wrapped to a structured
+`{__ref=kind, id=N}` shape at `snapshot()`/`decode()` time and unwrapped
+back to a bare number at `apply()` time — both components bumped to
+schema v2 (`inputVersions={1,2}`), with an unambiguous v1→v2 migration:
+v1's fields have always meant exactly what the declared list says, so
+there is nothing to guess. This wrap/unwrap lives ONLY in
+`unit_ai_save_refs.lua` (split out of `unit_ai_save.lua` to stay under
+its line budget, #538) and `building_spawn.lua` — `aiState`'s LIVE
+in-memory shape never changes, so `unit_ai_combat.lua`,
+`unit_ai_deliver.lua`, `unit_ai.lua`'s own `scrubStaleRefs`, and every
+other consumer needed no change at all; `unitAiReferences`'s `addRef`
+reads either a wrapped table or a bare number transparently
+(`refId()`), so it works unchanged whether called against decoded
+(wrapped) data or the outer per-unit key (always bare, since a Lua
+table key can't be a table).
+
+Round-3 review closed three more gaps. `PageSimDTO.psSim`
+(`unit-sim`, `World.Save.Component.Entities`) is keyed by `SamePageRef
+UnitId` rather than a bare `UnitId` — the map KEY (a unit-sim state's
+owning unit) is exactly as durable a cross-component reference as a
+bill's station, just carried as a `HashMap` key instead of a field
+value (`SamePageRef` now derives `Hashable` for this); bumped to v2 via
+`migratePageSimDTOv1`/`migrateUnitSimDTOv1`. `checkRefTag`
+(`unit_ai_save_refs.lua`) and its `building_spawn.lua` mirror now
+reject a wrapped reference whose `__ref` tag doesn't match the field's
+expected kind AND whose `id` isn't a positive integer — a tag-only
+check would still accept `{__ref="unit", id="bad"}`, silently
+unwrapping into live `aiState` and vanishing from every diagnostic that
+`Lua.tointeger()`s the id instead of being reported. `World.Save.Component.assembleSnapshot`'s
+decode/apply-phase error lists, and `World.Thread.Command.Save.WriteWorld`'s
+`captureSessionSnapshot` failure path, now go through the SAME
+sort+cap (`capComponentErrors`, exported from `World.Save.Component`)
+every other boundary already used — previously only the cross-component
+`crossErrs` list was capped, and the `sessionIntegrityErrors` portion
+was capped TWICE (once alone, then again as part of the combined list),
+which could badly under-report the true omitted count.
+
+Round-4 review caught a real correctness bug in round-3's own id-floor
+fix: `checkRefTag`'s blanket `id >= 1` incorrectly rejected a valid
+`ground_item` reference of `0` — `Item.Ground`'s ground-item allocator
+is ZERO-based (`emptyGroundItems` starts `gisNextId` at 0, so the very
+first spawned ground item legitimately has `gid = 0`), unlike
+unit/building/craft_bill/item_instance's allocators, which all start
+at 1. `checkRefTag` now floors at 0 specifically for the `ground_item`
+kind, 1 for every other kind.
+
+Round-5 review hardened `tools/persistence_inventory_audit.py`'s
+`find_lua_reference_kinds` gate: it only scanned a file for
+`kind = "..."`/`addRef("...")` literals when that SAME file also
+contained `references = ` text — which happened to work for
+`unit_ai_save.lua`/`unit_ai_save_refs.lua` only by ACCIDENT
+(`unit_ai_save_refs.lua` independently satisfies the gate via its own
+unrelated `M.references = unitAiReferences` re-export line, not
+because the audit traced the real delegation from
+`unit_ai_save.lua`'s `references = refsMod.references` registration
+field to the module `refsMod` is `require()`'d from). It now also
+resolves `references = <var>.<field>` delegations against a same-file
+`local <var> = require(...)` binding and includes that required
+module's own file in the scan — tracing the real relationship instead
+of relying on incidental text matching (can only WIDEN the scanned set,
+never narrow it, so it can't introduce false positives from unrelated
+Lua tables that happen to use a `kind = "..."` field for something else
+entirely, e.g. UI element kinds).
+
+Round-6 review closed three more gaps, the deepest round yet.
+`checkRefTag` gained a `required` flag: `craftJob.billId`/`craftJob.bid`
+(`unit_ai_craft.lua` sets both unconditionally the instant `craftJob`
+is created) and `repairJob.instanceId` (`unit_ai_repair.lua`, same) are
+now REJECTED when missing — previously `nil` was silently valid for
+every reference field, so a v2/v3 payload with the job table present
+but the field missing would apply with the job effectively discarded,
+no diagnostic at all. `repairJob.bid` deliberately stays optional:
+`unit_ai_repair.lua` never actually sets it at job creation, so
+requiring it would reject every real repair job — each "required"
+classification is verified against its actual construction call site,
+never assumed, after round-4's blanket-minimum mistake made that
+lesson concrete. `scripts/lib/save_modules.lua`'s `snapshotAllImpl` now
+also calls `reg.validate(dataOrErr)` between `snapshot()` and
+`dataCodec.encode()`, failing the whole save (required) or omitting
+with a warning (optional) exactly like the existing snapshot/encode
+failure branches — `validate()` used to run ONLY on the load side, so a
+live state mutated into a malformed shape (e.g. `attackTargetUid` set
+to a non-numeric value by some other bug) could snapshot, encode, and
+WRITE to disk untouched, only surfacing as a silently-dropped reference
+edge on a LATER load rather than as a save-time failure.
+
+Finally, the outer per-unit (`aiState[uid]`) and per-building
+(`state[bid]`) table KEYS are now typed too, closing the one asymmetry
+left after `psSim`'s HashMap key went through the same treatment in
+round 3: `unitAiReferences`/`buildingSpawnReferences` already reported
+the outer key as a `"unit"`/`"building"` reference edge, but nothing
+tagged it on the wire the way a wrapped VALUE field is. Lua has no
+equivalent of `SamePageRef`'s wire-transparent newtype trick — a table
+can never itself BE a `data_codec.lua` map key (canonical encoding only
+supports integer/string keys) — so the fix is a self-describing
+`__owner = {__ref=kind, id=N}` field carried INSIDE each row's own
+value instead, redundant with the key by construction: `wrapUnitState`/
+`wrapLastUid` synthesize it, `checkOwnerRef`/`validateBuildingSpawnData`
+require it AND verify its id exactly matches the outer key (not merely
+well-formed), and `unwrapUnitState`/`unwrapLastUid` strip it back off —
+`aiState`/`state`'s LIVE in-memory shape never grows this field. Both
+components bumped to v3 (`inputVersions = {1,2,3}`): a v1 payload
+migrates straight to v3 in one step (`wrapUnitState`/`wrapLastUid`
+already synthesize `__owner` for fresh writes); a v2 payload (every
+OTHER field already wrapped, no `__owner` yet) migrates via
+`addOwnerToAiState`/`addOwnerToAllLastUid`, which add ONLY `__owner`
+without re-wrapping already-wrapped fields.
+
+Deliberately NOT rewritten onto this vocabulary: the nine existing
+`missingXReferences` content-definition checks (`World.Save.Types`/
+`Engine.Scripting.Lua.API.Save`'s `continueLoad`) stay as they are —
+already working, already tested, each against its own IO-loaded content
+registry — reporting through the SAME `continueLoad` load-rejection
+gate the new checks report through (one combined message), rather than
+being rewritten onto `IntegrityError`'s Haskell type for a vocabulary-
+only gain.
+
+`tools/persistence_inventory_audit.py` extends the same "every root-
+owner field / Lua save module must be classified" discipline (§7-style)
+to this: a new DTO field typed `SamePageRef`/`CrossPageRef`, or a new
+Lua `kind` string a `references()` hook reports, with no row under
+`docs/persistence_state_inventory.md`'s "Typed persistent references" /
+"Lua reference kinds" headings fails the audit.
+
+Turnkey harness: **`python3 tools/persistence_integrity_probe.py`** —
+the real-engine coverage the pure hspec gate (below) can't reach: a
+unit's `attackTargetUid` pointing at a unit destroyed before the save
+(engine paused first, so the AI's own self-heal can't race the save)
+survives a real save → quit → fresh restart → load round trip as a
+non-blocking diagnostic naming the component/kind/id, and a truncated
+save is rejected with `LoadFailed` while the ALREADY-LOADED live
+session (active page, unit existence, paused status) is left completely
+unchanged. Registered manual-only (`slow/worldgen-heavy`) in
+`tools/ci_probes.py`. Pure gate: `cabal test synarchy-test-headless
+--test-options='--match "persistence reference integrity"'`
+(`Test.Headless.World.Save.Integrity`) — reference-codec round trips
+(same-page/global/permitted-and-forbidden-cross-page scope decisions,
+optional-reference semantics, wrong-kind-cannot-resolve), the v1→v2
+migrations, the wrong-page/tolerated-absence graph checks for bills and
+power nodes, Lua reference dangling/allocator-exceeds/unknown-kind
+diagnostics, and deterministic-ordering + truncation-with-omitted-count
+for the capped report.
+
 ```bash
 # From headless / debug console
 echo 'engine.saveWorld("test", "my_save"); return "saved"' | nc -w 2 localhost 9008
