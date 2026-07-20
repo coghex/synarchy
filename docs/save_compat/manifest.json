@@ -107,41 +107,59 @@
           "id": "c3-typed-reference-v1-minimal",
           "path": "test-headless/data/save-compat/c3-typed-reference-v1.bin",
           "kind": "complete-session",
-          "sha256": "e373ec75c640ffb3f76a1f60ecf81351358bf88a32f3ee8ebd91e9ba5d81f07f",
-          "sizeBytes": 2434,
-          "provenance": "Generated through the real codec: Test.Headless.World.Save.Components' existing fullSnapshot fixture (one page, one building, one unit, one unit-sim state, one craft bill, one power node -- already used by the 'round-trips a session populating EVERY component's data' hspec gate) encoded via World.Save.Component.encodeComponentSpecs, with craft-bills/power-nodes/unit-sim's payloads swapped for their historical v1 (bare-id) DTOs (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1, already exported by World.Save.Component.Entities) before being wrapped in the envelope alongside the metadata component.",
+          "sha256": "ff9894e08ecb194ad81c6e7a560f43f9d8acad920192113bdd09a4b20417bd04",
+          "sizeBytes": 296538,
+          "provenance": "Generated through the real codec: a single page (real, staging-valid WorldGenParams extracted from a genuine world.init('main_world', 42, 8, 3) headless-engine boot, same source as the b1-initial-session fixture) carrying one REAL-content building (def 'cargo_hold_S'), one REAL-content unit (def 'acolyte', matching what tools/multiworld_save_probe.py spawns), one unit-sim state, one craft bill (a real recipe id 'forge_steel_dagger', FixedCount mode so no output-item def is needed), and one power node -- built via World.Save.Snapshot.captureSessionSnapshot, encoded via World.Save.Component.encodeComponentSpecs, with craft-bills/power-nodes/unit-sim's payloads swapped for their historical v1 (bare-id) DTOs (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1, already exported by World.Save.Component.Entities), PLUS the real lua.unit_ai/lua.building_spawn components (empty AI/spawn state, version 3) extracted from that same real engine boot's save. Real content definitions (not the pure-hspec 'test_building'/'test_unit' placeholders) are required so the real engine's content-reference validation (Engine.Scripting.Lua.API.Save's continueLoad, issue #760 requirement 9) accepts this fixture in the fresh-process migration probe, not just the pure hspec decode path.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1.expected.json"
         }
       ]
     },
     {
       "id": "b3-lua-versioned",
-      "description": "The first versioned Lua persistence components (issue #761, save-overhaul B3): each registered persistent Lua module (unit_ai, building_spawn) became its own dynamically-added envelope component with an explicit version/inputVersions/decode/validate contract, mirroring the Haskell registry. Issue #764 (save-overhaul C3) then added a v1->v3 reference-typing migration on TOP of that same Lua contract (wrapUnitState/addOwnerToAiState etc. in scripts/unit_ai_save_refs.lua). This baseline is documentation-only in THIS manifest: Lua-side persistence versioning lives entirely in scripts/lib/save_modules.lua's own registry, not the Haskell envelope's component-version dispatch this manifest otherwise tracks, and its real decode/migrate/validate coverage already exists as a comprehensive, already-blocking hspec gate (see fixtures below) rather than a tracked binary fixture in this repo's format -- registering it here satisfies requirement 2's 'so existing decoders cannot be removed without the compatibility gate failing' without duplicating that coverage in a second fixture format.",
+      "description": "The first versioned Lua persistence components (issue #761, save-overhaul B3): each registered persistent Lua module (unit_ai, building_spawn) became its own dynamically-added envelope component with an explicit version/inputVersions/decode/validate contract, mirroring the Haskell registry. Issue #764 (save-overhaul C3) then added a v1->v3 reference-typing migration on TOP of that same Lua contract (wrapUnitState/addOwnerToAiState etc. in scripts/unit_ai_save_refs.lua). This baseline's tracked fixtures below are REAL v1-shaped payloads (bare-number reference fields, no __owner) for both modules, encoded through the genuine scripts/lib/data_codec.lua M.encode via a real HsLua VM (not a hand-rolled reimplementation of the wire format, and not re-synthesized inline the way every OTHER Lua persistence test in this suite does) -- see Test.Headless.Lua.SaveModules's \"tracked v1 fixtures from disk\" describe block, which reads these exact bytes off disk and runs them through the real saveModules.prepareLoad/applyAll path, asserting the canonical unwrapped result these fixtures' .expected.json files record. The version recorded below (1) is deliberately the OLDEST accepted input version, not the current one (3) -- mirroring the c3-raw-reference-v1 baseline's convention -- since proving the oldest migration still works is this manifest's whole point; the current v1/v2/v3 contract itself remains exercised by every other 'Lua persistence components' test.",
       "declaredAt": "2026-07-20",
       "declaredByIssue": 766,
-      "supportStatus": "supported (documentation-only entry; see description)",
+      "supportStatus": "supported",
       "migrationTarget": "current",
       "migratedBy": "scripts/unit_ai_save.lua / scripts/building_spawn.lua's decode() (v1/v2/v3), scripts/unit_ai_save_refs.lua's wrapUnitState/addOwnerToAiState",
       "components": [
         {
           "id": "lua.unit_ai",
-          "version": 3,
+          "version": 1,
           "required": true
         },
         {
           "id": "lua.building_spawn",
-          "version": 3,
+          "version": 1,
           "required": true
         }
       ],
       "fixtures": [
+        {
+          "id": "lua-unit-ai-v1",
+          "path": "test-headless/data/save-compat/lua-unit-ai-v1.bin",
+          "kind": "component-focused",
+          "sha256": "497a5ea086397e68fd407cc9d1d3efe1990beff58031d5939a38ca0f29153915",
+          "sizeBytes": 106,
+          "provenance": "Generated through the real codec: a v1-shaped unit_ai payload table ({[7] = {attackTargetUid=8, buildTarget=20, craftJob={billId=3, bid=21, recipeId='x'}}}, matching the same shape Test.Headless.Lua.SaveModules's inline v1-payload tests already use) encoded via scripts/lib/data_codec.lua's M.encode, run through a genuine HsLua VM (cabal repl, Lua.run/Lua.dostring -- the SAME entry points collectLuaComponents uses in Engine.Scripting.Lua.API.Save), not a Python or hand-written reimplementation of the wire format.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/lua-unit-ai-v1.expected.json"
+        },
+        {
+          "id": "lua-building-spawn-v1",
+          "path": "test-headless/data/save-compat/lua-building-spawn-v1.bin",
+          "kind": "component-focused",
+          "sha256": "46176a584a187dc4968780f8c893263486a2348823240fbe298ffa5f1289728e",
+          "sizeBytes": 50,
+          "provenance": "Generated through the real codec: a v1-shaped building_spawn payload table ({[12] = {lastUid=4, lastSpawnedAt=123.5}}, bare-number lastUid) encoded via scripts/lib/data_codec.lua's M.encode, run through a genuine HsLua VM the same way as lua-unit-ai-v1 above.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/lua-building-spawn-v1.expected.json"
+        },
         {
           "id": "b3-lua-versioned-hspec-coverage",
           "path": "test-headless/Test/Headless/Lua/SaveModules.hs",
           "kind": "component-focused",
           "sha256": null,
           "sizeBytes": null,
-          "provenance": "Not a tracked binary fixture -- this points at the existing, already-blocking hspec gate (\"Lua persistence components\", part of cabal test synarchy-test-headless) that exercises unit_ai/building_spawn's v1/v2/v3 decode+migrate+validate contract directly through a standalone Lua VM (HsLua), synthesizing each historical payload shape rather than reading a tracked binary. Removing that coverage, or the v1/v2 decode branches it tests, fails the SAME cabal test synarchy-test-headless gate this manifest's own fixtures run under.",
+          "provenance": "Not a tracked binary fixture -- this points at the existing, already-blocking hspec gate (\"Lua persistence components\", part of cabal test synarchy-test-headless) that exercises unit_ai/building_spawn's FULL v1/v2/v3 decode+migrate+validate contract (including the two tracked fixtures above, plus every other historical shape and rejection case) directly through a standalone Lua VM (HsLua). Removing that coverage, or the v1/v2 decode branches it tests, fails the SAME cabal test synarchy-test-headless gate this manifest's own fixtures run under.",
           "expectedCanonicalSummary": null
         }
       ]

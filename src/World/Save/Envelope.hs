@@ -295,6 +295,22 @@ decodeLegacyStructureAndMetadata bytes =
              legacyIds legacyIds bytes of
         Left _ → Nothing
         Right decoded → Just $ do
+            -- Requirement 9: 'decodeEnvelope' tolerates an unknown OPTIONAL
+            -- component structurally (that is what makes forward
+            -- compatibility possible at all), but a genuine B1 envelope
+            -- never carried anything beyond these two -- an extra
+            -- component, known or not, required or not, means this is NOT
+            -- the frozen B1 shape (tampering, corruption, or a foreign
+            -- format this build genuinely does not understand), so it
+            -- must be reported rather than silently migrated with that
+            -- extra payload dropped on the floor.
+            let present = HS.fromList (map cdId (emComponents (deManifest decoded)))
+            when (present ≢ legacyIds) $
+                Left ("legacy envelope does not carry exactly the frozen \
+                      \B1 component set {metadata, session} (found: "
+                      <> T.intercalate ", " (map cidText (HS.toList present))
+                      <> ") -- refusing to migrate rather than silently \
+                         \drop the extra component")
             meta ← decodeMetadataComponent decoded
             desc ← maybe (Left "legacy session component descriptor missing")
                          Right
@@ -304,7 +320,9 @@ decodeLegacyStructureAndMetadata bytes =
                       \component v" <> T.pack (show sessionComponentVersion)
                       <> ", got v" <> T.pack (show (cdVersion desc)))
             pure (decoded, meta)
-  where legacyIds = HS.fromList [metadataComponentId, sessionComponentId]
+  where
+    legacyIds = HS.fromList [metadataComponentId, sessionComponentId]
+    cidText (ComponentId t) = t
 
 -- | Every component in the decoded envelope whose id carries the
 --   reserved @"lua."@ prefix, with that prefix stripped back to the bare
@@ -334,18 +352,23 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   ('UnknownRequiredComponent'), which this function reports as "no
 --   foreign data" (an empty list) rather than attempt to peek past a
 --   structurally-rejected envelope. @luaKnownNames@ widens the known set
---   the SAME way every other decode entry point does. Used by
---   "World.Save.Storage" to refuse overwriting a generation carrying
---   data this build cannot round-trip, rather than silently discarding
---   it on the next save.
+--   the SAME way every other decode entry point does; the legacy
+--   @"session"@ id is ALSO always treated as known here (issue #766) —
+--   it is a recognized, migratable legacy shape, not foreign data, so a
+--   B1-shaped generation's OWN session/metadata pair must never itself
+--   trigger a refusal, while anything genuinely beyond that pair still
+--   does. Used by "World.Save.Storage" to refuse overwriting a
+--   generation carrying data this build cannot round-trip, rather than
+--   silently discarding it on the next save.
 foreignOptionalComponentIds ∷ HS.HashSet Text → BS.ByteString → [ComponentId]
 foreignOptionalComponentIds luaKnownNames bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-             (knownComponentIds luaKnownNames) HS.empty bytes of
+             knownIds HS.empty bytes of
         Left _        → []
         Right decoded →
             [ cdId d | d ← emComponents (deManifest decoded)
-            , not (HS.member (cdId d) (knownComponentIds luaKnownNames)) ]
+            , not (HS.member (cdId d) knownIds) ]
+  where knownIds = HS.insert sessionComponentId (knownComponentIds luaKnownNames)
 
 -- | Load-time generation-validity classification (issue #762, storage-
 --   overhaul C1): whether a structurally-invalid file is safe to treat as

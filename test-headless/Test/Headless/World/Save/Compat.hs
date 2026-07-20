@@ -37,17 +37,21 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Numeric (readHex)
 
 import World.Save.Envelope
-    ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope )
-import World.Save.Envelope.Codec (decodeEnvelope, dePayloads)
+    ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope, encodeSessionSnapshot
+    , metadataComponentId, metadataComponentVersion, currentEnvelopeVersion
+    , foreignOptionalComponentIds )
+import World.Save.Envelope.Codec (decodeEnvelope, encodeEnvelope, dePayloads)
 import World.Save.Envelope.Types (defaultEnvelopeLimits, ComponentId(..))
 import World.Save.Compat.SessionV90
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..) )
-import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
+import World.Save.Snapshot
+    (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import World.Save.Component.Page (fromWorldGenParamsDTO)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
@@ -119,10 +123,23 @@ instance Aeson.FromJSON ExpectedMeta where
         <$> o .: "seed" <*> o .: "worldSize" <*> o .: "plateCount"
         <*> o .: "worldName" <*> o .: "worldGloss"
 
+data ExpectedCamera = ExpectedCamera
+    { ecOwnerPage ∷ !(Maybe Text), ecX ∷ !Float, ecY ∷ !Float
+    , ecZoom ∷ !Float, ecFacing ∷ !Text
+    }
+
+instance Aeson.FromJSON ExpectedCamera where
+    parseJSON = Aeson.withObject "camera" $ \o → ExpectedCamera
+        <$> o .: "ownerPage" <*> o .: "x" <*> o .: "y"
+        <*> o .: "zoom" <*> o .: "facing"
+
 data ExpectedPage = ExpectedPage
     { epPageId ∷ !Text, epBuildingCount ∷ !Int, epUnitCount ∷ !Int
     , epUnitSimStateCount ∷ !Int, epCraftBillCount ∷ !Int
     , epPowerNodeCount ∷ !Int, epGroundItemCount ∷ !Int
+    , epTimeHour ∷ !Int, epTimeMinute ∷ !Int
+    , epDateYear ∷ !Int, epDateMonth ∷ !Int, epDateDay ∷ !Int
+    , epMapMode ∷ !Text
     }
 
 instance Aeson.FromJSON ExpectedPage where
@@ -130,9 +147,17 @@ instance Aeson.FromJSON ExpectedPage where
         <$> o .: "pageId" <*> o .: "buildingCount" <*> o .: "unitCount"
         <*> o .: "unitSimStateCount" <*> o .: "craftBillCount"
         <*> o .: "powerNodeCount" <*> o .: "groundItemCount"
+        <*> o .: "timeHour" <*> o .: "timeMinute"
+        <*> o .: "dateYear" <*> o .: "dateMonth" <*> o .: "dateDay"
+        <*> o .: "mapMode"
 
 data ExpectedSummary = ExpectedSummary
     { esMeta ∷ !ExpectedMeta
+    , esGameTime ∷ !Double
+    , esNextItemId ∷ !Word64
+    , esNextBuildingId ∷ !Word32
+    , esNextUnitId ∷ !Word32
+    , esCamera ∷ !ExpectedCamera
     , esActivePage ∷ !Text
     , esVisiblePages ∷ ![Text]
     , esPages ∷ ![ExpectedPage]
@@ -142,7 +167,9 @@ data ExpectedSummary = ExpectedSummary
 
 instance Aeson.FromJSON ExpectedSummary where
     parseJSON = Aeson.withObject "expected summary" $ \o → ExpectedSummary
-        <$> o .: "metadata" <*> o .: "activePage" <*> o .: "visiblePages"
+        <$> o .: "metadata" <*> o .: "gameTime" <*> o .: "nextItemId"
+        <*> o .: "nextBuildingId" <*> o .: "nextUnitId" <*> o .: "camera"
+        <*> o .: "activePage" <*> o .: "visiblePages"
         <*> o .: "pages" <*> o .: "luaComponentCount"
         <*> o .: "isMigratedLegacyBaseline"
 
@@ -175,7 +202,16 @@ spec = do
                 expected ← either
                     (\err → expectationFailure (summaryPath <> ": " <> err)
                             >> fail "unreachable") pure summaryResult
-                case decodeSessionEnvelope HS.empty HS.empty bytes of
+                -- The real, live Lua registry always knows/requires
+                -- exactly these two modules -- a fixture may legitimately
+                -- carry them (the #764 baseline's does, so its real-engine
+                -- probe counterpart can load it too), so this reader must
+                -- recognize them the same way the real engine does. The
+                -- legacy B1 fallback ignores these arguments entirely (it
+                -- decodes its own hardcoded {metadata, session} pair), so
+                -- this has no effect on that path.
+                let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+                case decodeSessionEnvelope luaNames luaNames bytes of
                     Left err → expectationFailure
                         (mfrPath fixture <> ": " <> T.unpack err)
                     Right (meta, snap, luaComponents, isMigrated) → do
@@ -190,6 +226,19 @@ spec = do
                             `shouldBe` map WorldPageId (esVisiblePages expected)
                         length luaComponents `shouldBe` esLuaComponentCount expected
                         isMigrated `shouldBe` esIsMigratedLegacyBaseline expected
+
+                        snapGameTime snap `shouldBe` esGameTime expected
+                        snapNextItemId snap `shouldBe` esNextItemId expected
+                        snapNextBuildingId snap `shouldBe` esNextBuildingId expected
+                        snapNextUnitId snap `shouldBe` esNextUnitId expected
+                        let cam = snapLiveCamera snap
+                            ec = esCamera expected
+                        lcsOwnerPage cam `shouldBe` fmap WorldPageId (ecOwnerPage ec)
+                        lcsX cam `shouldBe` ecX ec
+                        lcsY cam `shouldBe` ecY ec
+                        lcsZoom cam `shouldBe` ecZoom ec
+                        T.pack (show (lcsFacing cam)) `shouldBe` ecFacing ec
+
                         forM_ (esPages expected) $ \ep →
                             case HM.lookup (WorldPageId (epPageId ep)) (snapPages snap) of
                                 Nothing → expectationFailure
@@ -208,6 +257,43 @@ spec = do
                                         `shouldBe` epPowerNodeCount ep
                                     HM.size (gisItems (pgsGroundItems page))
                                         `shouldBe` epGroundItemCount ep
+                                    pgsTimeHour page `shouldBe` epTimeHour ep
+                                    pgsTimeMinute page `shouldBe` epTimeMinute ep
+                                    pgsDateYear page `shouldBe` epDateYear ep
+                                    pgsDateMonth page `shouldBe` epDateMonth ep
+                                    pgsDateDay page `shouldBe` epDateDay ep
+                                    T.pack (show (pgsMapMode page))
+                                        `shouldBe` epMapMode ep
+
+                        -- Re-encode/fresh-decode equivalence: the migrated
+                        -- snapshot, run back through the SAME current-format
+                        -- encoder and decoder every ordinary save/load uses,
+                        -- must reproduce itself exactly. This is what proves
+                        -- the migration produced a FULLY faithful modern
+                        -- snapshot (every field the derived Eq instance
+                        -- covers), not merely one that happens to match the
+                        -- handful of fields spot-checked above.
+                        -- Required is exactly whatever Lua components THIS
+                        -- decode actually reported (never the hardcoded
+                        -- luaNames): a migrated B1 session carries none
+                        -- (there is no live Lua VM in this pure hspec gate
+                        -- to supply fresh unit_ai/building_spawn state the
+                        -- way a real engine's next save always would), and
+                        -- requiring them here would be testing an
+                        -- impossible-in-pure-Haskell scenario, not a real
+                        -- gap -- Test.Headless.World.Save.Compat.hs's own
+                        -- probe counterpart already proves the real-engine
+                        -- round trip in that case.
+                        let reencoded = encodeSessionSnapshot meta snap luaComponents
+                            actualLuaNames =
+                                HS.fromList [ n | (n, _, _, _) ← luaComponents ]
+                        case decodeSessionEnvelope luaNames actualLuaNames reencoded of
+                            Left err → expectationFailure
+                                (mfrPath fixture <> ": re-encode/fresh-decode \
+                                                     \equivalence: " <> T.unpack err)
+                            Right (meta', snap', _, _) → do
+                                meta' `shouldBe` meta
+                                snap' `shouldBe` snap
 
     describe "frozen v90 DTO (issue #766, save-overhaul C4)" $ do
         it "decodes the real, tracked B1 envelope fixture's metadata \
@@ -253,6 +339,70 @@ spec = do
                     "expected the pre-existing metadata/gameplay mismatch \
                     \to be rejected"
                 Left msg  → msg `shouldSatisfy` T.isInfixOf "disagrees"
+
+    describe "unknown optional data in a legacy envelope (requirement 9)" $ do
+        it "refuses to migrate a legacy envelope carrying an extra \
+           \optional component beyond {metadata, session}, rather than \
+           \silently dropping it" $ do
+            let extraSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, True
+                      , extractSessionPayload fixtureBytes)
+                    , (ComponentId "future-thing", 1, False, BS.pack [9, 9, 9])
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion extraSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Right _   → expectationFailure
+                    "expected the extra optional component to be rejected, \
+                    \not silently dropped"
+                Left msg  → msg `shouldSatisfy` T.isInfixOf "future-thing"
+
+        it "the overwrite guard recognizes a legacy {metadata, session} \
+           \envelope as carrying NO foreign data (session itself is a \
+           \recognized, migratable shape, not foreign)" $ do
+            let plainSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, True
+                      , extractSessionPayload fixtureBytes)
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion plainSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            foreignOptionalComponentIds HS.empty bytes `shouldBe` []
+
+        it "the overwrite guard DOES flag a legacy envelope's genuinely \
+           \extra optional component as foreign data" $ do
+            let extraSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, True
+                      , extractSessionPayload fixtureBytes)
+                    , (ComponentId "future-thing", 1, False, BS.pack [9, 9, 9])
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion extraSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            foreignOptionalComponentIds HS.empty bytes
+                `shouldBe` [ComponentId "future-thing"]
+
+-- | A metadata value that agrees with the extracted fixture session's own
+--   gameplay gen params (seed 42 / world size 128 / plate count 10 — see
+--   the frozen v90 DTO test above), used by the requirement-9 tests: they
+--   are not testing requirement 12's metadata-agreement check, so must
+--   not trip over it.
+minimalSaveMetadataForExtra ∷ SaveMetadata
+minimalSaveMetadataForExtra = SaveMetadata
+    { smName = "extra-test", smSeed = 42, smWorldSize = 128, smPlateCount = 10
+    , smTimestamp = "2026-07-16T00:00:00.000000Z"
+    , smWorldName = Nothing, smWorldGloss = Nothing
+    }
 
 -- | Byte-for-byte the SAME fixture 'Test.Headless.World.Save.Envelope'
 --   tracked immediately after #759 landed (commit 988c2727), before #760

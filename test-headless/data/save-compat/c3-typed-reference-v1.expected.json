@@ -1,11 +1,22 @@
 {
-  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's c3-typed-reference-v1-minimal fixture (issue #766/#764). Proves the ALREADY-EXISTING per-component v1->v2 raw-to-typed-reference dispatch (World.Save.Component.Entities' craftBillsCodec/powerNodesCodec/unitSimCodec ccInputVers=[1,2]) without any new migration code -- this fixture goes through the ORDINARY modern registry-driven decode path (isMigratedLegacyBaseline=false), just with three components encoded at their historical v1 (bare-id) shape. Cross-checked by Test.Headless.World.Save.Compat's manifest-driven gate.",
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's c3-typed-reference-v1-minimal fixture (issue #766/#764). Proves the ALREADY-EXISTING per-component v1->v2 raw-to-typed-reference dispatch (World.Save.Component.Entities' craftBillsCodec/powerNodesCodec/unitSimCodec ccInputVers=[1,2]) without any new migration code -- this fixture goes through the ORDINARY modern registry-driven decode path (isMigratedLegacyBaseline=false), just with three components encoded at their historical v1 (bare-id) shape. Real content definitions (cargo_hold_S/acolyte/forge_steel_dagger) so the real-engine fresh-process migration probe can load it too, not just the pure hspec decode path. Cross-checked by Test.Headless.World.Save.Compat's manifest-driven gate, which ALSO re-encodes the migrated snapshot and fresh-decodes it, asserting full structural equality.",
   "metadata": {
-    "seed": 123456,
-    "worldSize": 128,
-    "plateCount": 10,
-    "worldName": "Rich World",
-    "worldGloss": "a gloss"
+    "seed": 42,
+    "worldSize": 8,
+    "plateCount": 3,
+    "worldName": null,
+    "worldGloss": null
+  },
+  "gameTime": 42.0,
+  "nextItemId": 1,
+  "nextBuildingId": 10,
+  "nextUnitId": 10,
+  "camera": {
+    "ownerPage": "page1",
+    "x": 7.0,
+    "y": 8.0,
+    "zoom": 3.0,
+    "facing": "FaceEast"
   },
   "activePage": "page1",
   "visiblePages": ["page1"],
@@ -17,9 +28,15 @@
       "unitSimStateCount": 1,
       "craftBillCount": 1,
       "powerNodeCount": 1,
-      "groundItemCount": 1
+      "groundItemCount": 0,
+      "timeHour": 12,
+      "timeMinute": 0,
+      "dateYear": 1,
+      "dateMonth": 1,
+      "dateDay": 1,
+      "mapMode": "ZMDefault"
     }
   ],
-  "luaComponentCount": 0,
+  "luaComponentCount": 2,
   "isMigratedLegacyBaseline": false
 }

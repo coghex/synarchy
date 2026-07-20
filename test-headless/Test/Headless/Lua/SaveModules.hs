@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables, TypeApplications #-}
 -- | The "Lua persistence components" gate (issue #761, save-overhaul
 --   B3): a standalone Lua VM (no engine, no world/unit threads, no
 --   HsLua-side marshalling of the registry's internals) exercising
@@ -23,6 +23,7 @@ module Test.Headless.Lua.SaveModules (spec) where
 import UPrelude
 import Test.Hspec
 import qualified HsLua as Lua
+import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 
@@ -55,6 +56,33 @@ runsOk chunkText = do
 
 lns ∷ [Text] → Text
 lns = T.intercalate "\n"
+
+-- | Same as 'runsOk', but first pushes each (name, bytes) pair as a
+--   GLOBAL Lua string (via 'Lua.pushstring' -- a Lua string is an
+--   arbitrary byte string, not required to be UTF-8, exactly like the
+--   real @data_codec.lua@ wire payload this exists to inject) before
+--   running the chunk. Lets a chunk reference a tracked fixture's REAL
+--   on-disk bytes (e.g. @FIXTURE@) by name instead of re-synthesizing
+--   the payload inline via @codec.encode@ -- proving the tracked file
+--   itself, not merely this test's own encoder output, is what
+--   @saveModules.prepareLoad@ accepts (issue #766, save-overhaul C4).
+runsOkWithPayloads ∷ [(Text, BS.ByteString)] → Text → Expectation
+runsOkWithPayloads payloads chunkText = do
+    result ← Lua.run @Lua.Exception $ do
+        Lua.openlibs
+        _ ← Lua.dostring (TE.encodeUtf8 engineStub)
+        forM_ payloads $ \(name, bytes) → do
+            Lua.pushstring bytes
+            Lua.setglobal (Lua.Name (TE.encodeUtf8 name))
+        status ← Lua.dostring (TE.encodeUtf8 chunkText)
+        case status of
+            Lua.OK → return Nothing
+            _ → do
+                err ← Lua.tostring (-1)
+                return (Just (maybe "<no message>" TE.decodeUtf8Lenient err))
+    case result of
+        Nothing  → pure ()
+        Just msg → expectationFailure (T.unpack msg)
 
 -- | A complete, valid persistent-component spec table literal, as Lua
 --   source text, parameterised by id -- the shortest well-formed
@@ -1334,3 +1362,89 @@ spec = do
             , "local ok5 = tryRegister(1, { 1 })"
             , "assert(ok5, 'an ordinary positive integer version must still register')"
             ]
+
+    -- Issue #766 (save-overhaul C4): docs/save_compat/manifest.json's
+    -- "b3-lua-versioned" baseline tracks these two .bin fixtures --
+    -- REAL v1 unit_ai/building_spawn payloads encoded through the
+    -- genuine scripts/lib/data_codec.lua (via a real HsLua VM, see
+    -- tools/save_compat_audit.py's "add tracked Lua payload/session
+    -- fixtures with canonical expectations and exercise them through
+    -- the real Lua preparation path" requirement) -- not re-synthesized
+    -- inline via codec.encode the way every OTHER test above does. This
+    -- proves the tracked BYTES ON DISK are what saveModules.prepareLoad
+    -- accepts, matching test-headless/data/save-compat/
+    -- lua-unit-ai-v1.expected.json / lua-building-spawn-v1.expected.json.
+    describe "tracked v1 fixtures from disk (issue #766, save-overhaul C4)" $ do
+        it "migrates the tracked lua-unit-ai-v1.bin fixture through \
+           \saveModules.prepareLoad/applyAll to exactly the canonical \
+           \unwrapped aiState and reference edges its .expected.json \
+           \records" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/lua-unit-ai-v1.bin"
+            runsOkWithPayloads [("FIXTURE", bytes)] $ lns
+                [ "unit = { exists = function(_uid) return true end }"
+                , "craft = { get = function(id)"
+                , "  if id == 'x' then return { id = 'x' } end return nil end }"
+                , "item = { listDefs = function() return {} end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local fakeAiState = {}"
+                , "local fakeUnitAi = {}"
+                , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 1, payload = FIXTURE },"
+                , "})"
+                , "assert(prep.ok, 'the tracked v1 fixture must migrate cleanly: '"
+                , "  .. table.concat(prep.errors or {}, '; '))"
+                , "local found = {}"
+                , "for _, r in ipairs(prep.references) do"
+                , "  found[r.kind .. ':' .. tostring(r.id)] = r.owner"
+                , "end"
+                , "assert(found['unit:7'] == 7,"
+                , "  'the outer per-unit key itself must be a reference')"
+                , "assert(found['unit:8'] == 7, 'attackTargetUid must resolve')"
+                , "assert(found['building:20'] == 7, 'buildTarget must resolve')"
+                , "assert(found['craft_bill:3'] == 7, 'craftJob.billId must resolve')"
+                , "assert(found['building:21'] == 7, 'craftJob.bid must resolve')"
+                , "saveModules.applyAll()"
+                , "assert(fakeAiState[7].attackTargetUid == 8,"
+                , "  'apply() must unwrap attackTargetUid to a bare number')"
+                , "assert(fakeAiState[7].buildTarget == 20,"
+                , "  'apply() must unwrap buildTarget to a bare number')"
+                , "assert(fakeAiState[7].craftJob.billId == 3,"
+                , "  'apply() must unwrap craftJob.billId to a bare number')"
+                , "assert(fakeAiState[7].craftJob.bid == 21,"
+                , "  'apply() must unwrap craftJob.bid to a bare number')"
+                , "assert(fakeAiState[7].craftJob.recipeId == 'x',"
+                , "  'non-reference fields must survive the migration untouched')"
+                ]
+
+        it "migrates the tracked lua-building-spawn-v1.bin fixture through \
+           \saveModules.prepareLoad/applyAll to exactly the canonical \
+           \unwrapped state and reference edges its .expected.json \
+           \records" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/lua-building-spawn-v1.bin"
+            runsOkWithPayloads [("FIXTURE", bytes)] $ lns
+                [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+                , "local buildingSpawn = require('scripts.building_spawn')"
+                , "buildingSpawn.init('test')"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'building_spawn', version = 1, payload = FIXTURE },"
+                , "})"
+                , "assert(prep.ok, 'the tracked v1 fixture must migrate cleanly: '"
+                , "  .. table.concat(prep.errors or {}, '; '))"
+                , "local found = {}"
+                , "for _, r in ipairs(prep.references) do"
+                , "  found[r.kind .. ':' .. tostring(r.id)] = true"
+                , "end"
+                , "assert(found['building:12'],"
+                , "  'the outer per-building key itself must be a reference')"
+                , "assert(found['unit:4'], 'lastUid must be a reference')"
+                , "saveModules.applyAll()"
+                , "assert(buildingSpawn.state[12].lastUid == 4,"
+                , "  'apply() must unwrap lastUid to a bare number in LIVE state')"
+                , "assert(buildingSpawn.state[12].lastSpawnedAt == 123.5,"
+                , "  'non-reference fields must survive the migration untouched')"
+                ]

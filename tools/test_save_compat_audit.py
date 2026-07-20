@@ -41,6 +41,24 @@ def make_fixture(tmp: Path, name: str, content: bytes) -> Path:
     return p
 
 
+def _oldest_version_components() -> list[dict]:
+    """A components[] list covering every REAL multi-version component's
+    oldest accepted version, satisfying audit_component_versions' "the
+    oldest version must be tracked somewhere" check with entries that are
+    trivially true of THIS repo's actual registry. audit_component_versions
+    cross-checks against the real source unconditionally (there is no
+    "test mode" -- that's the whole point), so a synthetic manifest aimed
+    at ONE specific, unrelated violation class must still declare this or
+    it would incidentally also fail on every real component's coverage
+    check, which has nothing to do with what that test is exercising."""
+    registry = sca.real_component_registry()
+    return [
+        {"id": cid, "version": min(info["inputVersions"]), "required": True}
+        for cid, info in registry.items()
+        if len(info["inputVersions"]) > 1
+    ]
+
+
 def base_manifest(tmp: Path, fixture_path: Path, content: bytes) -> dict:
     return {
         "envelopeFramingVersion": sca.current_envelope_version(),
@@ -48,6 +66,7 @@ def base_manifest(tmp: Path, fixture_path: Path, content: bytes) -> dict:
         "baselines": [
             {
                 "id": "test-baseline",
+                "components": _oldest_version_components(),
                 "fixtures": [
                     {
                         "id": "test-fixture",
@@ -155,7 +174,7 @@ def test_detects_baseline_with_no_fixtures() -> None:
     manifest = {
         "envelopeFramingVersion": sca.current_envelope_version(),
         "frozenDtoFingerprint": sca.frozen_dto_fingerprint(),
-        "baselines": [{"id": "empty-baseline", "fixtures": []}],
+        "baselines": [{"id": "empty-baseline", "components": _oldest_version_components(), "fixtures": []}],
     }
     violations = sca.audit(manifest)
     expect(any("has no fixtures" in v for v in violations),
@@ -212,7 +231,16 @@ class _Args:
             baseline_id=None, fixture_id=None, path=None, kind=None,
             summary=None, provenance=None, description=None,
             migration_target=None, migrated_by=None, components=None,
-            declared_at=None, declared_by_issue=766, force=False)
+            declared_at=None, declared_by_issue=766, force=False,
+            # Every EXISTING test below registers a fixture that was
+            # never actually run through the real codec (they're plain
+            # placeholder bytes) -- skip_validation defaults to True here
+            # so they keep exercising the atomic bookkeeping in
+            # isolation, without also needing a real cabal toolchain in
+            # every environment this suite runs in. The validation path
+            # itself is exercised separately below via a monkeypatched
+            # _run_real_codec_validation, never a real subprocess.
+            skip_validation=True)
         defaults.update(kwargs)
         self.__dict__.update(defaults)
 
@@ -326,6 +354,148 @@ def test_add_baseline_requires_summary_for_complete_session() -> None:
             sca.MANIFEST_PATH = old_path
 
 
+def test_add_baseline_rolls_back_on_failed_real_codec_validation() -> None:
+    print("--add-baseline rolls the manifest back if the real-codec validation fails")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        original = b"original bytes"
+        fixture = make_fixture(tmp, "f.bin", original)
+        summary = tmp / "f.expected.json"
+        summary.write_text('{"ok": true}')
+        manifest_path = tmp / "manifest.json"
+        manifest_before = json.dumps({"baselines": []})
+        manifest_path.write_text(manifest_before)
+        old_manifest_path = sca.MANIFEST_PATH
+        old_validate = sca._run_real_codec_validation
+        sca.MANIFEST_PATH = manifest_path
+        # Simulate the real `cabal test` gate failing, without spawning a
+        # real subprocess -- _finalize_manifest_write only ever consumes
+        # (bool, str), so substituting this is a faithful stand-in for a
+        # genuinely broken fixture.
+        sca._run_real_codec_validation = lambda: (False, "simulated hspec failure")
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="new-baseline", fixture_id="new-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                summary=str(summary.relative_to(sca.REPO_ROOT)),
+                description="a test baseline", migration_target="current",
+                migrated_by="test", components='[{"id":"metadata","version":1,"required":true}]',
+                skip_validation=False))
+            expect(rc == 1, f"expected the failed validation to fail the command, got {rc}")
+            expect(manifest_path.read_text() == manifest_before,
+                   "expected the manifest to be rolled back to its exact prior content")
+        finally:
+            sca.MANIFEST_PATH = old_manifest_path
+            sca._run_real_codec_validation = old_validate
+
+
+def test_add_baseline_keeps_registration_on_passed_real_codec_validation() -> None:
+    print("--add-baseline keeps the registration if the real-codec validation passes")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        original = b"original bytes"
+        fixture = make_fixture(tmp, "f.bin", original)
+        summary = tmp / "f.expected.json"
+        summary.write_text('{"ok": true}')
+        manifest_path = tmp / "manifest.json"
+        manifest_path.write_text(json.dumps({"baselines": []}))
+        old_manifest_path = sca.MANIFEST_PATH
+        old_validate = sca._run_real_codec_validation
+        sca.MANIFEST_PATH = manifest_path
+        sca._run_real_codec_validation = lambda: (True, "simulated hspec pass")
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="new-baseline", fixture_id="new-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="complete-session",
+                summary=str(summary.relative_to(sca.REPO_ROOT)),
+                description="a test baseline", migration_target="current",
+                migrated_by="test", components='[{"id":"metadata","version":1,"required":true}]',
+                skip_validation=False))
+            expect(rc == 0, f"expected the passed validation to keep the registration, got {rc}")
+            written = json.loads(manifest_path.read_text())
+            expect(len(written.get("baselines", [])) == 1,
+                   "expected the new baseline to still be registered")
+        finally:
+            sca.MANIFEST_PATH = old_manifest_path
+            sca._run_real_codec_validation = old_validate
+
+
+def test_add_baseline_skips_validation_for_component_focused_kind() -> None:
+    print("--add-baseline never runs the generic real-codec gate for a component-focused fixture")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fixture = make_fixture(tmp, "f.bin", b"lua payload bytes")
+        manifest_path = tmp / "manifest.json"
+        manifest_path.write_text(json.dumps({"baselines": []}))
+        old_manifest_path = sca.MANIFEST_PATH
+        old_validate = sca._run_real_codec_validation
+        sca.MANIFEST_PATH = manifest_path
+        called = []
+        sca._run_real_codec_validation = lambda: called.append(1) or (True, "")
+        try:
+            rc = sca.cmd_add_baseline(_Args(
+                baseline_id="new-baseline", fixture_id="new-fixture",
+                path=str(fixture.relative_to(sca.REPO_ROOT)), kind="component-focused",
+                description="a test baseline", migration_target="current",
+                migrated_by="test", components="[]", skip_validation=False))
+            expect(rc == 0, f"expected success, got {rc}")
+            expect(called == [],
+                   "expected the real-codec validation to never be invoked for a "
+                   "component-focused fixture")
+        finally:
+            sca.MANIFEST_PATH = old_manifest_path
+            sca._run_real_codec_validation = old_validate
+
+
+def test_detects_unknown_component_id_in_baseline() -> None:
+    print("a baseline declares a component id the real registry doesn't know")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        manifest["baselines"][0]["components"].append(
+            {"id": "totally-made-up-component", "version": 1, "required": True})
+        violations = sca.audit(manifest)
+        expect(any("no longer exists in the real component registry" in v
+                    for v in violations),
+               f"expected an unknown-component violation, got {violations}")
+
+
+def test_detects_removed_input_version() -> None:
+    print("a baseline declares a version the real codec no longer accepts")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        # craft-bills really accepts {1, 2} -- 99 has never existed.
+        manifest["baselines"][0]["components"].append(
+            {"id": "craft-bills", "version": 99, "required": True})
+        violations = sca.audit(manifest)
+        expect(any("currently accepted input versions" in v
+                    and "craft-bills" in v for v in violations),
+               f"expected a removed-decoder violation, got {violations}")
+
+
+def test_detects_untracked_oldest_version() -> None:
+    print("a real multi-version component has no baseline tracking its oldest version")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        # Drop craft-bills' coverage entirely -- its real v1->v2 migration
+        # is now untracked by any baseline.
+        manifest["baselines"][0]["components"] = [
+            c for c in manifest["baselines"][0]["components"]
+            if c["id"] != "craft-bills"]
+        violations = sca.audit(manifest)
+        expect(any("craft-bills" in v and "no manifest baseline declares" in v
+                    for v in violations),
+               f"expected an untracked-oldest-version violation, got {violations}")
+
+
 def test_real_manifest_passes_the_audit() -> None:
     print("the real, checked-in manifest currently passes (regression guard)")
     manifest = sca.load_manifest()
@@ -350,6 +520,12 @@ def main() -> int:
         test_add_baseline_refuses_new_baseline_missing_required_fields,
         test_add_baseline_refuses_to_overwrite_without_force,
         test_add_baseline_requires_summary_for_complete_session,
+        test_add_baseline_rolls_back_on_failed_real_codec_validation,
+        test_add_baseline_keeps_registration_on_passed_real_codec_validation,
+        test_add_baseline_skips_validation_for_component_focused_kind,
+        test_detects_unknown_component_id_in_baseline,
+        test_detects_removed_input_version,
+        test_detects_untracked_oldest_version,
         test_real_manifest_passes_the_audit,
     ]:
         fn()

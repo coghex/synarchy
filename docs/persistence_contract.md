@@ -283,9 +283,15 @@ dropping the in-progress stamp.
   backed by a tracked fixture proving the v1 payloads decode through the
   real envelope/registry path. The first versioned Lua components
   (issue #761, save-overhaul B3) are likewise documented as a
-  `b3-lua-versioned` manifest entry, pointing at the existing, already-
-  blocking `test-headless/Test/Headless/Lua/SaveModules.hs` hspec gate
-  rather than a second tracked-fixture format for Lua's own versioning.
+  `b3-lua-versioned` manifest entry, backed by real tracked v1 payload
+  fixtures for both `unit_ai` and `building_spawn` (encoded through the
+  genuine `scripts/lib/data_codec.lua` via a real HsLua VM, not a
+  reimplementation of the wire format) that
+  `test-headless/Test/Headless/Lua/SaveModules.hs`'s "tracked v1
+  fixtures from disk" gate reads straight off disk and runs through the
+  real `saveModules.prepareLoad`/`applyAll` path — on top of, not
+  instead of, that same file's existing exhaustive synthesized-payload
+  coverage of the full v1/v2/v3 contract.
 - An unsupported or malformed save must fail clearly (a readable error
   naming the expected vs. found version, mirroring the existing
   `currentSaveVersion` mismatch behavior) without partially modifying

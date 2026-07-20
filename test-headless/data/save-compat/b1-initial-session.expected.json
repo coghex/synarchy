@@ -1,11 +1,22 @@
 {
-  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b1-initial-session-minimal fixture (issue #766). Storage metadata (name, timestamp) is deliberately excluded from gameplay-state equivalence -- see World.Save.Snapshot's SessionSnapshot haddock. Cross-checked by Test.Headless.World.Save.Components' \"B1 -> current migration\" gate.",
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b1-initial-session-minimal fixture (issue #766). Storage metadata (name, timestamp) is deliberately excluded from gameplay-state equivalence -- see World.Save.Snapshot's SessionSnapshot haddock. Cross-checked by Test.Headless.World.Save.Compat's manifest-driven gate, which ALSO re-encodes the migrated snapshot and fresh-decodes it, asserting full structural equality -- these explicit fields are a human-readable spot check, not the only coverage.",
   "metadata": {
     "seed": 42,
     "worldSize": 8,
     "plateCount": 3,
     "worldName": null,
     "worldGloss": null
+  },
+  "gameTime": 0.0,
+  "nextItemId": 1,
+  "nextBuildingId": 1,
+  "nextUnitId": 1,
+  "camera": {
+    "ownerPage": "main_world",
+    "x": 0.0,
+    "y": 0.0,
+    "zoom": 1.0,
+    "facing": "FaceSouth"
   },
   "activePage": "main_world",
   "visiblePages": ["main_world"],
@@ -17,7 +28,13 @@
       "unitSimStateCount": 0,
       "craftBillCount": 0,
       "powerNodeCount": 0,
-      "groundItemCount": 0
+      "groundItemCount": 0,
+      "timeHour": 10,
+      "timeMinute": 0,
+      "dateYear": 1,
+      "dateMonth": 1,
+      "dateDay": 1,
+      "mapMode": "ZMDefault"
     }
   ],
   "luaComponentCount": 0,

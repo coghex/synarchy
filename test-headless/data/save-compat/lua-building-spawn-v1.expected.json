@@ -1,0 +1,15 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b3-lua-versioned baseline's lua-building-spawn-v1 fixture (issue #766). The tracked .bin is a REAL v1-shaped building_spawn payload -- bare-number lastUid, no __owner -- encoded through the genuine scripts/lib/data_codec.lua M.encode (via a real HsLua VM; see Test.Headless.Lua.SaveModules's 'tracked v1 fixtures from disk' describe block). building_spawn's own buildingSpawnReferences (scripts/building_spawn.lua) never sets an owner field on its edges (unlike unit_ai_save_refs.lua's), so 'owner' is intentionally absent here, not merely omitted.",
+  "componentId": "building_spawn",
+  "encodedVersion": 1,
+  "afterApply": {
+    "12": {
+      "lastUid": 4,
+      "lastSpawnedAt": 123.5
+    }
+  },
+  "references": [
+    { "kind": "building", "id": 12 },
+    { "kind": "unit", "id": 4 }
+  ]
+}
