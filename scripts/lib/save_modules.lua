@@ -52,11 +52,17 @@
 --                              persistent component, BEFORE encode/decode
 --                              (used to build the envelope's known/
 --                              required id sets, requirement 12/13)
---   snapshotAll()           -- {ok=true, components={{id,version,payload},..}}
+--   snapshotAll()           -- {ok=true, components={{id,version,payload},..},
+--                              references={{component=,kind=,id=,owner=},..}}
 --                              or {ok=false, error=...} -- a REQUIRED
 --                              component's snapshot/encode failure aborts
 --                              the WHOLE save (requirement 6); an OPTIONAL
---                              one is omitted with a logged warning
+--                              one is omitted with a logged warning.
+--                              references (issue #764, save-overhaul C3)
+--                              is every reference edge collected the SAME
+--                              way prepareLoad's are -- the caller cross-
+--                              validates these against the just-captured
+--                              live snapshot.
 --                              (requirement 7)
 --   prepareLoad(components, requestId) -- {ok=true, references={...}} or
 --                              {ok=false, errors={...}} -- decode +
@@ -420,6 +426,12 @@ local function snapshotAllImpl()
             .. table.concat(structErrs, "; ") }
     end
     local components = {}
+    -- Issue #764 (save-overhaul C3): collected the SAME way
+    -- prepareLoadImpl collects them on the load side -- save and load
+    -- cross-validate Lua references against one shared graph, not two
+    -- independently-decided ones (Engine.Scripting.Lua.API.Save /
+    -- World.Save.Integrity consume this on the Haskell side).
+    local referenceEdges = {}
     for _, id in ipairs(sortedIds(saveModules.registry)) do
         local reg = saveModules.registry[id]
         local ok, dataOrErr = pcall(reg.snapshot)
@@ -444,10 +456,32 @@ local function snapshotAllImpl()
             else
                 components[#components + 1] = { id = id, version = reg.version,
                     required = reg.required, payload = payload }
+                if reg.references then
+                    local refsOk, refsOrErr = pcall(reg.references, dataOrErr)
+                    if not refsOk then
+                        if reg.required then
+                            return { ok = false, error = "'" .. id
+                                .. "': references() crashed: "
+                                .. tostring(refsOrErr) }
+                        end
+                        engine.logWarn("saveModules: optional component '"
+                            .. id .. "' references() crashed, omitting its "
+                            .. "edges: " .. tostring(refsOrErr))
+                    elseif type(refsOrErr) == "table" then
+                        for _, r in ipairs(refsOrErr) do
+                            if type(r) == "table" and r.kind ~= nil
+                                    and r.id ~= nil then
+                                referenceEdges[#referenceEdges + 1] =
+                                    { component = id, kind = r.kind,
+                                      id = r.id, owner = r.owner }
+                            end
+                        end
+                    end
+                end
             end
         end
     end
-    return { ok = true, components = components }
+    return { ok = true, components = components, references = referenceEdges }
 end
 
 -- Snapshot every registered persistent component (requirement 6/10):
@@ -555,7 +589,7 @@ local function prepareLoadImpl(componentsList)
                                             and r.id ~= nil then
                                         referenceEdges[#referenceEdges + 1] =
                                             { component = id, kind = r.kind,
-                                              id = r.id }
+                                              id = r.id, owner = r.owner }
                                     end
                                 end
                             end

@@ -818,6 +818,65 @@ spec = do
             , "assert(found, 'the outer unit id itself must be a declared reference')"
             ]
 
+        it "types every persisted reference field on the wire (issue #764, \
+           \save-overhaul C3 requirement 13): a v1 payload with BARE-NUMBER \
+           \reference fields migrates to the typed {__ref=,id=} shape, \
+           \references() reads it correctly, and apply() unwraps it back \
+           \to a bare number in the LIVE aiState (every other module \
+           \still sees plain numbers)" $ runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "craft = { get = function(id)"
+            , "  if id == 'x' then return { id = 'x' } end return nil end }"
+            , "item = { listDefs = function() return {} end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local fakeAiState = {}"
+            , "local fakeUnitAi = {}"
+            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "-- A v1 payload: every reference field is a BARE NUMBER,"
+            , "-- exactly as #761 originally shipped it."
+            , "local v1 = { [7] = {"
+            , "  attackTargetUid = 8, buildTarget = 20,"
+            , "  craftJob = { billId = 3, bid = 21, recipeId = 'x' },"
+            , "} }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 1, payload = codec.encode(v1) },"
+            , "})"
+            , "assert(prep.ok, 'v1 payload must migrate cleanly: '"
+            , "  .. table.concat(prep.errors or {}, '; '))"
+            , "local found = {}"
+            , "for _, r in ipairs(prep.references) do"
+            , "  found[r.kind .. ':' .. tostring(r.id)] = r.owner"
+            , "end"
+            , "assert(found['unit:8'] == 7,"
+            , "  'attackTargetUid must resolve through the wrapped v1->v2 shape')"
+            , "assert(found['building:20'] == 7,"
+            , "  'buildTarget must resolve through the wrapped v1->v2 shape')"
+            , "assert(found['craft_bill:3'] == 7,"
+            , "  'craftJob.billId must resolve through the wrapped v1->v2 shape')"
+            , "assert(found['building:21'] == 7,"
+            , "  'craftJob.bid must resolve through the wrapped v1->v2 shape')"
+            , "saveModules.applyAll()"
+            , "assert(fakeAiState[7].attackTargetUid == 8,"
+            , "  'apply() must unwrap attackTargetUid back to a bare number in LIVE aiState')"
+            , "assert(type(fakeAiState[7].attackTargetUid) == 'number',"
+            , "  'LIVE aiState must never hold a wrapped table -- every OTHER '"
+            , "  .. 'module (unit_ai_combat.lua etc.) reads a bare number')"
+            , "assert(fakeAiState[7].craftJob.billId == 3,"
+            , "  'apply() must unwrap nested craftJob.billId too')"
+            , "-- Round-trip through the engine's OWN encoder: snapshot() on"
+            , "-- this now-live (unwrapped) state must re-wrap it as v2 --"
+            , "-- the wire format is typed even for freshly-written saves,"
+            , "-- not merely a migration-only artifact."
+            , "local snap = saveModules.registry.unit_ai.snapshot()"
+            , "assert(type(snap[7].attackTargetUid) == 'table'"
+            , "  and snap[7].attackTargetUid.__ref == 'unit'"
+            , "  and snap[7].attackTargetUid.id == 8,"
+            , "  'snapshot() must write the TYPED structured-reference shape, '"
+            , "  .. 'not a bare number, for a fresh v2 save')"
+            ]
+
         it "declares real Haskell-owned dependencies on the ACTUAL \
            \unit_ai and building_spawn registrations (issue #761 \
            \round-8 review) -- not just a synthetic component in the \
@@ -844,6 +903,36 @@ spec = do
             , "  'building_spawn must declare a real dependency on buildings')"
             , "assert(hasDep('building_spawn', 'units'),"
             , "  'building_spawn must declare a real dependency on units')"
+            ]
+
+        it "types building_spawn's lastUid reference field on the wire too \
+           \(issue #764, save-overhaul C3 requirement 13): a v1 payload \
+           \with a BARE-NUMBER lastUid migrates to the typed shape, \
+           \references() reads it, apply() unwraps it back to a bare \
+           \number, and a fresh snapshot() re-wraps it as v2" $ runsOk $ lns
+            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+            , "local buildingSpawn = require('scripts.building_spawn')"
+            , "buildingSpawn.init('test')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local v1 = { [9] = { lastUid = 4, lastSpawnedAt = 1.0 } }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'building_spawn', version = 1, payload = codec.encode(v1) },"
+            , "})"
+            , "assert(prep.ok, 'v1 payload must migrate cleanly: '"
+            , "  .. table.concat(prep.errors or {}, '; '))"
+            , "local found = false"
+            , "for _, r in ipairs(prep.references) do"
+            , "  if r.kind == 'unit' and r.id == 4 then found = true end"
+            , "end"
+            , "assert(found, 'lastUid must resolve through the wrapped v1->v2 shape')"
+            , "saveModules.applyAll()"
+            , "local snap = saveModules.registry.building_spawn.snapshot()"
+            , "assert(type(snap[9].lastUid) == 'table'"
+            , "  and snap[9].lastUid.__ref == 'unit' and snap[9].lastUid.id == 4,"
+            , "  'a fresh snapshot() must write the TYPED structured-reference '"
+            , "  .. 'shape -- if apply() had left lastUid wrapped in LIVE state '"
+            , "  .. 'this would double-wrap or crash instead')"
             , "local errs = saveModules.registryStaticErrors()"
             , "assert(#errs == 0, 'the real registrations must resolve their "
               <> "own deps cleanly: ' .. table.concat(errs, '; '))"

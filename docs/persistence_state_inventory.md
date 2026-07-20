@@ -567,25 +567,36 @@ session at load time, never an embedded copy.
 
 **Lua reference kinds** are the controlled `kind` vocabulary a
 registered Lua save component's `references()` hook reports
-(`scripts/unit_ai_save.lua`, `scripts/building_spawn.lua` — see #761's
-`references` spec field). Cross-validated session-wide (matching each
-component's own declared `scope = "global"`) by
+(`scripts/unit_ai_save_refs.lua`, `scripts/building_spawn.lua` — see
+#761's `references` spec field). Cross-validated by
 `Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData` /
-`World.Save.Integrity.luaReferenceErrors`: a reference that doesn't
-resolve is a non-blocking diagnostic (dangling target, or one at/above
-its kind's allocator), never a load failure — the #761-established
-tolerated-dangling-reference contract. Classified `Persist as identity/
-reference` uniformly, same reasoning as the Haskell table above.
+`World.Save.Integrity.luaReferenceErrors`: `unit`/`building`/
+`item_instance` resolve session-wide (matching each component's own
+declared `scope = "global"` — these three are GLOBAL allocators, one
+counter for the whole session), while `craft_bill`/`ground_item`
+resolve against the OWNING unit's page specifically (each `references()`
+edge carries an `owner` — the unit id it came from — since `BillId`/
+ground-item ids are PER-PAGE allocators, and a session-wide match would
+let a reference meant for one page's missing bill falsely resolve
+against an unrelated same-numbered bill elsewhere). Either way, a
+reference that doesn't resolve is a non-blocking diagnostic (dangling
+target, or one at/above its kind's allocator), never a load failure —
+the #761-established tolerated-dangling-reference contract. Classified
+`Persist as identity/reference` uniformly, same reasoning as the
+Haskell table above. The persisted FIELDS themselves (not just this
+diagnostic surface) are typed too — see "Typed persistent references
+and the shared integrity graph" in `persistence_contract.md`'s §9 for
+the `{__ref=kind, id=N}` wire shape and the v1→v2 migration.
 
 ### Lua reference kinds
 
-| Kind | Reported by | Haskell-owned target | Classification |
-|---|---|---|---|
-| `unit` | `unit_ai_save.lua`, `building_spawn.lua` | `units` component (`UnitId`) | Persist as identity/reference |
-| `building` | `unit_ai_save.lua`, `building_spawn.lua` | `buildings` component (`BuildingId`) | Persist as identity/reference |
-| `craft_bill` | `unit_ai_save.lua` | `craft-bills` component (`BillId`) | Persist as identity/reference |
-| `item_instance` | `unit_ai_save.lua` | carried inventory, owned by the `units` component's own snapshot | Persist as identity/reference |
-| `ground_item` | `unit_ai_save.lua` | `world-activity` component (ground items) | Persist as identity/reference |
+| Kind | Reported by | Resolution scope | Haskell-owned target | Classification |
+|---|---|---|---|---|
+| `unit` | `unit_ai_save_refs.lua`, `building_spawn.lua` | session-wide (global allocator) | `units` component (`UnitId`) | Persist as identity/reference |
+| `building` | `unit_ai_save_refs.lua`, `building_spawn.lua` | session-wide (global allocator) | `buildings` component (`BuildingId`) | Persist as identity/reference |
+| `craft_bill` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `craft-bills` component (`BillId`) | Persist as identity/reference |
+| `item_instance` | `unit_ai_save_refs.lua` | session-wide (global allocator) | carried inventory, owned by the `units` component's own snapshot | Persist as identity/reference |
+| `ground_item` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `world-activity` component (ground items) | Persist as identity/reference |
 
 ---
 

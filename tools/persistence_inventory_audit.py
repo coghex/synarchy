@@ -799,7 +799,7 @@ def find_typed_reference_fields(
 
 # Lua reference kinds (issue #764): the controlled `kind = "..."`
 # vocabulary a save component's `references()` hook reports
-# (scripts/unit_ai_save.lua / scripts/building_spawn.lua). Scoped to
+# (scripts/unit_ai_save_refs.lua / scripts/building_spawn.lua). Scoped to
 # any file that registers a `references = <something>` spec field at
 # all -- either an inline `references = function(data) ... end` or (the
 # form both real registrations actually use) a named function reference
@@ -818,7 +818,7 @@ def find_typed_reference_fields(
 # registrations use one or the other): a direct table-constructor
 # literal (`{ kind = "building", id = bid }`, building_spawn.lua) and a
 # same-file `addRef(kind, id)`-style helper invoked with a literal
-# first argument (`addRef("unit", uid)`, unit_ai_save.lua -- the
+# first argument (`addRef("unit", uid)`, unit_ai_save_refs.lua -- the
 # helper's OWN table constructor is `{ kind = kind, id = id }`, a
 # variable, not a literal, so only the CALL SITE's literal argument is
 # textually findable).

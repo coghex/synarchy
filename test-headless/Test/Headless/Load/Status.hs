@@ -121,7 +121,7 @@ spec = describe "transactional load" $ do
     describe "captureLocked authorized-command discard (requirement 12)" $ do
         it "a save keeps its non-authorized commands, deferred in order" $ do
             let hide  = WorldHide (WorldPageId "a")
-                save  = WorldSave (WorldPageId "alpha") "slot" "ts" []
+                save  = WorldSave (WorldPageId "alpha") "slot" "ts" [] []
                 shw   = WorldShow (WorldPageId "b")
                 (authorized, deferred) = partitionAuthorized [hide, save, shw]
             map (T.pack . show) authorized `shouldBe` [T.pack (show save)]

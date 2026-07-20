@@ -53,7 +53,9 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
-import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
+import World.Save.Integrity
+    (IntegrityError(..), sessionIntegrityErrors, capIntegrityErrors
+    , IntegrityReport(..))
 
 -- | Every Haskell-owned gameplay component, in a stable declaration
 --   order. The @"metadata"@ component is NOT here — it is owned by
@@ -222,10 +224,17 @@ assembleSnapshot meta de = do
             --    cereal-decoded into fully concrete values) — see its
             --    haddock in "World.Save.Snapshot" for why that distinction
             --    matters (the capture-path "full-encode forcing" contract).
-            let crossErrs = map snapErr (validateSessionSnapshot snap)
+            let integrityReport = capIntegrityErrors (sessionIntegrityErrors snap)
+                integrityErrs = map integrityErr (irErrors integrityReport)
+                    ++ [ ComponentError coreSessionComponentId 1 AssemblePhase
+                           (T.pack (show (irOmitted integrityReport))
+                            <> " additional integrity finding(s) omitted \
+                               \(see World.Save.Integrity.integrityErrorCap)")
+                       | irOmitted integrityReport > 0 ]
+                crossErrs = map snapErr (validateSessionSnapshot snap)
                             ++ map snapErr (structureEditPaletteErrors snap)
                             ++ metadataErrors meta snap
-                            ++ map integrityErr (sessionIntegrityErrors snap)
+                            ++ integrityErrs
             if null crossErrs then Right snap else Left crossErrs
   where
     cidText (ComponentId t) = t

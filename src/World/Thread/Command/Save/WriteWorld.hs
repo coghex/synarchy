@@ -29,7 +29,10 @@ import World.Types
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
-import World.Save.Integrity (sessionIntegrityErrors, renderIntegrityError)
+import World.Save.Integrity
+    (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
+    , IntegrityReport(..), buildKnownEntities, LuaRefEdge(..)
+    , luaReferenceErrors)
 import Unit.Types (UnitManager(..), unitsOnPage)
 import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
@@ -48,8 +51,10 @@ import World.Generate.Coordinates (chunkToGlobal)
 --   'encodeSessionSnapshot' below rather than through 'SessionGlobals'
 --   at all — Lua-owned state is no longer part of 'SessionSnapshot'.
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
-                       → Text → [(Text, Word32, Bool, BS.ByteString)] → IO ()
-handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents = do
+                       → Text → [(Text, Word32, Bool, BS.ByteString)]
+                       → [(Text, Text, Int, Maybe Int)] → IO ()
+handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
+                        luaRefs = do
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
     -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
@@ -210,14 +215,34 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents = d
                                     <> T.intercalate "; " (map (T.pack ∘ show) errs)
                             logWarn logger CatWorld msg
                             failTransaction env msg
-                          Right snap → case sessionIntegrityErrors snap of
-                            integrityErrs@(_ : _) → do
+                          Right snap → case capIntegrityErrors
+                                              (sessionIntegrityErrors snap) of
+                            report | not (null (irErrors report)) → do
                               let msg = "session snapshot failed integrity \
                                         \validation: " <> T.intercalate "; "
-                                        (map renderIntegrityError integrityErrs)
+                                        (renderIntegrityReport report)
                               logWarn logger CatWorld msg
                               failTransaction env msg
-                            [] → do
+                            _ → do
+                                -- Issue #764 (save-overhaul C3): cross-validate
+                                -- every Lua-declared reference (gathered on the
+                                -- SAME live snapshot saveModules.snapshotAll()
+                                -- just captured) against the same known-entity
+                                -- graph the load boundary uses — save and load
+                                -- share one complete integrity picture, not two
+                                -- independently-decided ones. Never load/save-
+                                -- blocking (the #761-established tolerated-
+                                -- dangling-reference contract) — logged as
+                                -- diagnostics only (requirement 16).
+                                let knownLua = buildKnownEntities snap
+                                    luaEdges = [ LuaRefEdge c k i o
+                                               | (c, k, i, o) ← luaRefs ]
+                                    luaReport = capIntegrityErrors
+                                        (luaReferenceErrors knownLua luaEdges)
+                                forM_ (renderIntegrityReport luaReport) $ \m →
+                                    logWarn logger CatWorld $
+                                        "saveWorld '" <> saveName
+                                        <> "': integrity diagnostic: " <> m
                                 -- UTC ISO 8601 microsecond precision, captured and
                                 -- monotonically clamped at the API request time
                                 -- (see saveWorldFn) — NOT here, so two saves

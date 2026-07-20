@@ -650,6 +650,19 @@ vocabulary and the checks:
   non-blocking diagnostic, never load-rejecting, matching the same
   tolerated-dangling-reference precedent.
 
+**Lua's persisted reference fields are typed on the wire too**:
+`attackTargetUid` and every other field
+`scripts/unit_ai_save_refs.lua`'s `unitAiReferences` declares (and
+`scripts/building_spawn.lua`'s `lastUid`) are wrapped to a structured
+`{__ref=kind, id=N}` shape at `snapshot()`/`decode()` time and unwrapped
+back to a bare number at `apply()` time — both components bumped to
+schema v2, with an unambiguous v1→v2 migration (v1 always meant exactly
+what the declared field list already says, so there is nothing to
+guess). This wrap/unwrap happens ONLY at the save-component boundary in
+`unit_ai_save_refs.lua`/`building_spawn.lua`: `aiState`'s LIVE
+in-memory shape never changes, so no other module (`unit_ai_combat.lua`,
+`unit_ai_deliver.lua`, `scrubStaleRefs`, ...) needed any change.
+
 **Deliberately NOT rewritten onto this vocabulary**: the nine existing
 `missingXReferences` content-definition checks
 ("World.Save.Types"/`Engine.Scripting.Lua.API.Save`'s `continueLoad`)
@@ -659,13 +672,7 @@ own IO-loaded content registry. They report through the SAME
 combined rejection message), which is what "the same integrity rules
 at both boundaries" cashes out to operationally; their Haskell TYPES
 were not unified into `IntegrityError`, a rewrite judged not worth the
-regression risk for a vocabulary-only gain. Likewise, Lua's PERSISTED
-reference FIELDS (`attackTargetUid` and friends) remain bare numbers on
-the wire — only the diagnostic surface (`references()`'s already-
-existing declarative output, #761) is now actually cross-validated;
-restructuring every persisted field into a `{kind=,id=}` table, and
-updating every one of unit_ai's dozen-plus submodules that reads them,
-is out of scope here and a natural follow-up.
+regression risk for a vocabulary-only gain.
 
 The persistence-inventory audit (§7,
 `tools/persistence_inventory_audit.py`) enforces this going forward

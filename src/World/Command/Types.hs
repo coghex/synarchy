@@ -225,20 +225,26 @@ data WorldCommand
         --   via the WeAddTile edit path (debug terrain placement —
         --   same machinery spoil promotion uses, so it persists).
     | WorldSave WorldPageId Text Text [(Text, Word32, Bool, BS.ByteString)]
+        [(Text, Text, Int, Maybe Int)]
         -- ^ pageId, save-name, request-timestamp (ISO 8601 microsecond
-        --   precision, monotonically clamped), and every currently-
+        --   precision, monotonically clamped), every currently-
         --   registered Lua save component (bare registry name, schema
         --   version, required flag, already-encoded payload — issue
         --   #761, save-overhaul B3, mirrors
         --   "World.Save.Envelope.LuaComponentSpec" without importing
-        --   the whole Save/Envelope module graph into this one). The
-        --   Lua side captures the timestamp at request time (so two
-        --   saves queued close together get distinct timestamps
-        --   reflecting when the player asked, not whenever the world
-        --   thread happened to process them) and calls
-        --   @saveModules.snapshotAll()@ before queueing this command,
-        --   aborting the save entirely rather than enqueueing it if any
-        --   REQUIRED Lua component failed to snapshot.
+        --   the whole Save/Envelope module graph into this one), and
+        --   every reference edge those components' @references()@
+        --   hooks reported on the SAME live snapshot (component id,
+        --   kind, target id, optional owning-unit id — issue #764,
+        --   save-overhaul C3, mirrors the load path's
+        --   'prepareLuaLoad' result shape). The Lua side captures the
+        --   timestamp at request time (so two saves queued close
+        --   together get distinct timestamps reflecting when the
+        --   player asked, not whenever the world thread happened to
+        --   process them) and calls @saveModules.snapshotAll()@ before
+        --   queueing this command, aborting the save entirely rather
+        --   than enqueueing it if any REQUIRED Lua component failed to
+        --   snapshot.
     | WorldLoadTransaction Int SaveData MaterialRegistry
         -- ^ requestId, decoded + content-validated 'SaveData', and the
         --   'MaterialRegistry' 'Engine.Scripting.Lua.API.Save.continueLoad'

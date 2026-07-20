@@ -200,36 +200,44 @@ spec = do
            \resolve — kind-specific sets never cross-match" $ do
             let ke = KnownEntities
                     { keUnits = HS.singleton 5, keBuildings = HS.empty
-                    , keBills = HS.empty, keItemInstances = HS.empty
-                    , keGroundItems = HS.empty, keNextUnitId = 100
+                    , keBillsByPage = HM.empty, keItemInstances = HS.empty
+                    , keGroundItemsByPage = HM.empty, keUnitPage = HM.empty
+                    , keNextUnitId = 100
                     , keNextBuildingId = 100, keNextItemId = 100 }
-                unitEdge     = LuaRefEdge "test" "unit" 5
-                buildingEdge = LuaRefEdge "test" "building" 5
+                unitEdge     = LuaRefEdge "test" "unit" 5 Nothing
+                buildingEdge = LuaRefEdge "test" "building" 5 Nothing
             luaReferenceErrors ke [unitEdge] `shouldBe` []
             length (luaReferenceErrors ke [buildingEdge]) `shouldBe` 1
 
         it "explicitly permitted cross-page references are accepted \
            \(requirement 4)" $
             refEdgeError craftBillsComponentId 2 "test.path" RefBuilding
-                ScopeCrossPage page1 (Just page2) "1"
+                ScopeCrossPage page1 [page2] "1"
                 `shouldBe` Nothing
 
         it "forbidden (same-page-only) cross-page references are rejected \
            \(requirement 4)" $
             refEdgeError craftBillsComponentId 2 "test.path" RefBuilding
-                ScopeSamePage page1 (Just page2) "1"
+                ScopeSamePage page1 [page2] "1"
                 `shouldSatisfy` (≢ Nothing)
 
         it "a global-scope reference is accepted regardless of which page \
            \it resolves on" $
             refEdgeError craftBillsComponentId 2 "test.path" RefUnit
-                ScopeGlobal page1 (Just page2) "1"
+                ScopeGlobal page1 [page2] "1"
                 `shouldBe` Nothing
 
         it "a reference absent from every page is tolerated, not rejected \
            \(the #758-established dangling-reference contract)" $
             refEdgeError craftBillsComponentId 2 "test.path" RefBuilding
-                ScopeSamePage page1 Nothing "1"
+                ScopeSamePage page1 [] "1"
+                `shouldBe` Nothing
+
+        it "a reference resolving on MORE THAN ONE page never fires its \
+           \own wrong-page verdict -- that ambiguity is a duplicate-identity \
+           \violation reported elsewhere, not guessed at here (requirement 8)" $
+            refEdgeError craftBillsComponentId 2 "test.path" RefBuilding
+                ScopeSamePage page1 [page1, page2] "1"
                 `shouldBe` Nothing
 
     describe "Haskell migration (requirement 12/14)" $ do
@@ -274,6 +282,50 @@ spec = do
                         (HM.singleton (BuildingId 1) minimalBuilding) 100
                     , pgsCraftBills = billWithStation (BillId 1) (BuildingId 1) }
                 p2 = minimalPage page2
+                snap = buildSnap page1 [p1, p2]
+            sessionIntegrityErrors snap `shouldBe` []
+
+    describe "integrity graph — duplicate global identities (requirement 8)" $ do
+        it "rejects the SAME BuildingId existing on two different pages \
+           \(BuildingId is a GLOBAL allocator, unlike per-page BillId/ \
+           \PowerNodeId)" $ do
+            let p1 = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1) minimalBuilding) 100 }
+                p2 = (minimalPage page2)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1) minimalBuilding) 100 }
+                snap = buildSnap page1 [p1, p2]
+                errs = sessionIntegrityErrors snap
+            length (filter ((≡ "duplicate-identity") ∘ ieCode) errs)
+                `shouldBe` 1
+            map ieRefKind (filter ((≡ "duplicate-identity") ∘ ieCode) errs)
+                `shouldBe` [RefBuilding]
+
+        it "rejects the SAME UnitId existing on two different pages" $ do
+            let p1 = (minimalPage page1)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 1) minimalUnit) 100 }
+                p2 = (minimalPage page2)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 1) minimalUnit) 100 }
+                snap = buildSnap page1 [p1, p2]
+                errs = sessionIntegrityErrors snap
+            length (filter ((≡ "duplicate-identity") ∘ ieCode) errs)
+                `shouldBe` 1
+
+        it "does NOT reject the SAME BillId/PowerNodeId existing on two \
+           \different pages -- both are legitimately PER-PAGE allocators" $ do
+            let p1 = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1) minimalBuilding) 100
+                    , pgsCraftBills = billWithStation (BillId 1) (BuildingId 1)
+                    , pgsPowerNodes = nodeWithBuilding (PowerNodeId 1) (BuildingId 1) }
+                p2 = (minimalPage page2)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 2) minimalBuilding) 100
+                    , pgsCraftBills = billWithStation (BillId 1) (BuildingId 2)
+                    , pgsPowerNodes = nodeWithBuilding (PowerNodeId 1) (BuildingId 2) }
                 snap = buildSnap page1 [p1, p2]
             sessionIntegrityErrors snap `shouldBe` []
 
@@ -338,14 +390,21 @@ spec = do
 
     describe "integrity graph — Lua AI references (requirement 8, unit_ai/ \
               \building_spawn)" $ do
+        -- unit #1 lives on page1, unit #2 on page2 -- page1's bill/
+        -- ground-item #1 must NOT resolve a reference owned by unit #2
+        -- (see the page-scoped tests below).
         let ke = KnownEntities
                 { keUnits = HS.fromList [1, 2], keBuildings = HS.fromList [10]
-                , keBills = HS.fromList [1], keItemInstances = HS.fromList [500]
-                , keGroundItems = HS.fromList [1], keNextUnitId = 50
+                , keBillsByPage = HM.fromList [ (page1, HS.fromList [1]) ]
+                , keItemInstances = HS.fromList [500]
+                , keGroundItemsByPage = HM.fromList [ (page1, HS.fromList [1]) ]
+                , keUnitPage = HM.fromList [ (1, page1), (2, page2) ]
+                , keNextUnitId = 50
                 , keNextBuildingId = 50, keNextItemId = 1000 }
 
         it "a Lua reference that resolves produces no diagnostic" $
-            luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 1] `shouldBe` []
+            luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 1 Nothing]
+                `shouldBe` []
 
         it "a dangling Lua reference (target legitimately gone) is a \
            \non-blocking diagnostic, coded distinctly from an allocator \
@@ -353,28 +412,56 @@ spec = do
             -- id 30 sits BELOW keNextUnitId (50) -- a unit that could
             -- legitimately have existed and died, unlike 999 below
             -- (which could never have been allocated at all).
-            case luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 30] of
+            case luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 30 Nothing] of
                 [d]   → ieCode d `shouldBe` "dangling-reference"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "an id at/above the allocator is coded as an allocator-reuse \
            \hazard, not an ordinary dangling reference (requirement 8)" $
-            case luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 999] of
+            case luaReferenceErrors ke [LuaRefEdge "unit_ai" "unit" 999 Nothing] of
                 [d]   → ieCode d `shouldBe` "ref-exceeds-allocator"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "permitted gameplay cycles (mutual combat/AI targets) never \
            \produce a finding — existence-only checking has no cycle \
            \concept to reject (requirement 9)" $ do
-            let mutual = [ LuaRefEdge "unit_ai" "unit" 1
-                         , LuaRefEdge "unit_ai" "unit" 2 ]  -- 1 targets 2, 2 targets 1
+            let mutual = [ LuaRefEdge "unit_ai" "unit" 1 Nothing
+                         , LuaRefEdge "unit_ai" "unit" 2 Nothing ]
+                         -- 1 targets 2, 2 targets 1
             luaReferenceErrors ke mutual `shouldBe` []
 
         it "an unknown kind string never manufactures a false positive \
            \(a registration-time vocabulary mismatch is the audit's job, \
            \not this validator's)" $
-            luaReferenceErrors ke [LuaRefEdge "unit_ai" "not_a_real_kind" 1]
+            luaReferenceErrors ke [LuaRefEdge "unit_ai" "not_a_real_kind" 1 Nothing]
                 `shouldBe` []
+
+        it "a craft_bill/ground_item reference resolves when the OWNING \
+           \unit's page has a matching id (requirement 8's page-scoped \
+           \per-page-allocator resolution)" $ do
+            luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 1)]
+                `shouldBe` []
+            luaReferenceErrors ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 1)]
+                `shouldBe` []
+
+        it "a craft_bill/ground_item reference does NOT resolve against a \
+           \same-numbered entity on a DIFFERENT page than its owning unit \
+           \-- session-wide matching would mask a genuine dangling \
+           \reference (requirement 8)" $ do
+            -- unit #2 lives on page2, which has no bill/ground-item #1 --
+            -- only page1 does. Must NOT falsely resolve.
+            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 2)])
+                `shouldBe` 1
+            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 2)])
+                `shouldBe` 1
+
+        it "a craft_bill/ground_item reference with no owner (or an \
+           \unresolvable owner) never resolves -- there is no session-wide \
+           \fallback for a per-page-allocated kind" $ do
+            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing])
+                `shouldBe` 1
+            length (luaReferenceErrors ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 999)])
+                `shouldBe` 1
 
     describe "deterministic ordering + truncation (requirement 10)" $ do
         it "sorts findings deterministically by (component, path, value, code)" $ do

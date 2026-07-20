@@ -54,7 +54,7 @@ import World.Save.Types
     , UnitSnapshot(..), UnitInstanceSnapshot(..) )
 import World.Save.Integrity
     ( KnownEntities(..), LuaRefEdge(..), luaReferenceErrors
-    , renderIntegrityError )
+    , capIntegrityErrors, renderIntegrityReport )
 import World.Types
     (WorldCommand(..), WorldManager(wmWorlds), WorldState(wsGenParamsRef))
 import World.Page.Types (WorldPageId(..))
@@ -302,7 +302,7 @@ saveWorldFn env = do
                                                     emitEvent env "save_load" "World.Save" $
                                                         "Save failed: " <> err
                                                 Lua.pushboolean False
-                                              Right components → do
+                                              Right (components, luaRefs) → do
                                     -- Capture the timestamp at API
                                     -- (request) time so two saves
                                     -- queued back-to-back get distinct
@@ -335,7 +335,8 @@ saveWorldFn env = do
                                                         defaultTimeLocale "%FT%T%6QZ" ts
                                                 Lua.liftIO $ Q.writeQueue
                                                     (worldQueue env)
-                                                    (WorldSave pageId name nowText components)
+                                                    (WorldSave pageId name nowText
+                                                        components luaRefs)
                                                 Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
@@ -419,10 +420,12 @@ flattenItemInstanceIds' i =
 
 -- | The known-entity id sets (issue #764, save-overhaul C3) every
 --   Lua-declared reference is cross-validated against — see
---   "World.Save.Integrity"'s 'KnownEntities' haddock for why this is
---   session-wide rather than per-page. Built once per load from the
---   SAME decoded 'SaveData' the existing missing-def-reference ladder
---   already reads (below), never from live state.
+--   "World.Save.Integrity"'s 'KnownEntities' haddock for why
+--   @craft_bill@/@ground_item@ are tracked PER PAGE (per-page
+--   allocators) while unit/building/item-instance stay session-wide
+--   (global allocators). Built once per load from the SAME decoded
+--   'SaveData' the existing missing-def-reference ladder already reads
+--   (below), never from live state.
 knownEntitiesFromSaveData ∷ SaveData → KnownEntities
 knownEntitiesFromSaveData sd = KnownEntities
     { keUnits = HS.fromList
@@ -431,12 +434,18 @@ knownEntitiesFromSaveData sd = KnownEntities
     , keBuildings = HS.fromList
         [ fromIntegral (unBuildingId bid)
         | w ← pages, bid ← HM.keys (bsnInstances (wpsBuildings w)) ]
-    , keBills = HS.fromList
-        [ fromIntegral (unBillId bid)
-        | w ← pages, bid ← HM.keys (cbsBills (wpsCraftBills w)) ]
+    , keBillsByPage = HM.fromList
+        [ (wpsPageId w, HS.fromList
+              [ fromIntegral (unBillId bid)
+              | bid ← HM.keys (cbsBills (wpsCraftBills w)) ])
+        | w ← pages ]
     , keItemInstances = HS.fromList (map fromIntegral (concatMap pageItemIds pages))
-    , keGroundItems = HS.fromList
-        [ gid | w ← pages, gid ← HM.keys (gisItems (wpsGroundItems w)) ]
+    , keGroundItemsByPage = HM.fromList
+        [ (wpsPageId w, HS.fromList (HM.keys (gisItems (wpsGroundItems w))))
+        | w ← pages ]
+    , keUnitPage = HM.fromList
+        [ (fromIntegral (unUnitId uid), wpsPageId w)
+        | w ← pages, uid ← HM.keys (usnInstances (wpsUnits w)) ]
     , keNextUnitId = maybe 0 (fromIntegral . usnNextId . wpsUnits) (listToMaybe pages)
     , keNextBuildingId =
         maybe 0 (fromIntegral . bsnNextId . wpsBuildings) (listToMaybe pages)
@@ -646,13 +655,12 @@ continueLoad env logger requestId saveName descriptors = do
                         -- "World.Save.Integrity"'s haddock) — logged as
                         -- diagnostics only (requirement 16).
                         let known = knownEntitiesFromSaveData saveData
-                            edges = [ LuaRefEdge c k i | (c, k, i) ← luaRefs ]
-                            diagnostics = luaReferenceErrors known edges
-                        forM_ diagnostics $ \d →
+                            edges = [ LuaRefEdge c k i o | (c, k, i, o) ← luaRefs ]
+                            report = capIntegrityErrors (luaReferenceErrors known edges)
+                        forM_ (renderIntegrityReport report) $ \msg →
                             logWarn logger CatWorld $
                                 "loadSave '" <> saveName
-                                <> "': integrity diagnostic: "
-                                <> renderIntegrityError d
+                                <> "': integrity diagnostic: " <> msg
                         -- Hand off the expensive per-page reconstruction
                         -- to the world thread (World.Load.Stage) — it
                         -- touches no live ref (requirement 6), so
@@ -845,10 +853,15 @@ readSnapshotComponentField = do
 --   anything is queued to the world thread, rather than silently
 --   continuing with partial Lua state the way the pre-#761 blob map
 --   used to (the engine save no longer "still proceeds, just without
---   Lua blobs").
+--   Lua blobs"). On success, also returns every reference edge
+--   ('readReferenceEdgeField') collected on the SAME live snapshot
+--   (issue #764) — the caller cross-validates these the same way the
+--   load boundary does, so save and load share one integrity graph.
 collectLuaComponents
     ∷ LoggerState
-    → Lua.LuaE Lua.Exception (Either Text [(Text, Word32, Bool, BS.ByteString)])
+    → Lua.LuaE Lua.Exception
+        (Either Text ( [(Text, Word32, Bool, BS.ByteString)]
+                     , [(Text, Text, Int, Maybe Int)] ))
 collectLuaComponents logger = do
     ok ← callSaveModules1 logger "snapshotAll" 0 (return ())
     if not ok
@@ -864,16 +877,20 @@ collectLuaComponents logger = do
                 _ ← Lua.getfield (-1) "components"
                 arrResult ← readLuaArrayAt readSnapshotComponentField
                 Lua.pop 1  -- components array
-                return $ case arrResult of
-                    Right xs → Right xs
+                case arrResult of
                     -- round-4 review "fail closed": a component record
                     -- HsLua can't fully read (e.g. an out-of-range
                     -- version) must abort the save, not vanish from
                     -- the list — dropping it here is indistinguishable
                     -- from that REQUIRED component never having
                     -- existed at all.
-                    Left err → Left ("save_modules.snapshotAll() returned "
-                        <> "a malformed component record: " <> err)
+                    Left err → return (Left ("save_modules.snapshotAll() \
+                        \returned a malformed component record: " <> err))
+                    Right xs → do
+                        _ ← Lua.getfield (-1) "references"
+                        refResult ← readLuaArrayAt readReferenceEdgeField
+                        Lua.pop 1  -- references array
+                        return (Right (xs, either (const []) id refResult))
               else do
                 _ ← Lua.getfield (-1) "error"
                 merr ← Lua.tostring (-1)
@@ -907,12 +924,14 @@ readErrorStringField = do
         then (TE.decodeUtf8Lenient ⊚) ⊚ Lua.tostring (-1)
         else return Nothing
 
--- | Read {component=string, kind=string, id=number} from the table at
---   the top of the stack — one entry of @save_modules.lua@'s
---   @prepareLoad@ @references@ result array (issue #764, save-overhaul
---   C3): a single reference edge a Lua component's @references()@ hook
---   reported.
-readReferenceEdgeField ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int))
+-- | Read {component=string, kind=string, id=number, owner=number|nil}
+--   from the table at the top of the stack — one entry of
+--   @save_modules.lua@'s @prepareLoad@ @references@ result array (issue
+--   #764, save-overhaul C3): a single reference edge a Lua component's
+--   @references()@ hook reported. @owner@ (the owning unit id, when the
+--   hook supplied one) is optional — 'Nothing' both when the field is
+--   absent/nil and when it fails to parse as an integer.
+readReferenceEdgeField ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int))
 readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "component"
     mcompB ← Lua.tostring (-1)
@@ -923,10 +942,14 @@ readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "id"
     mid ← Lua.tointeger (-1)
     Lua.pop 1
+    _ ← Lua.getfield (-1) "owner"
+    mowner ← Lua.tointeger (-1)
+    Lua.pop 1
     case (mcompB, mkindB, mid) of
         (Just compB, Just kindB, Just i) →
             return (Just ( TE.decodeUtf8Lenient compB
-                         , TE.decodeUtf8Lenient kindB, fromIntegral i))
+                         , TE.decodeUtf8Lenient kindB, fromIntegral i
+                         , fromIntegral ⊚ mowner ))
         _ → return Nothing
 
 -- | Call @saveModules.prepareLoad(components, requestId)@ (issue #761):
@@ -945,7 +968,7 @@ readReferenceEdgeField = do
 --   this never gates the load — see "World.Save.Integrity"'s haddock).
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)]
-    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int)])
+    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int)])
 prepareLuaLoad logger requestId components = do
     ok ← callSaveModules1 logger "prepareLoad" 2
             (pushComponentsArray components

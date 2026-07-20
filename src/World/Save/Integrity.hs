@@ -51,6 +51,7 @@ module World.Save.Integrity
     , integrityErrorCap
     , capIntegrityErrors
     , renderIntegrityError
+    , renderIntegrityReport
     , sessionIntegrityErrors
     , KnownEntities(..)
     , buildKnownEntities
@@ -71,7 +72,8 @@ import Power.Types (PowerNodes(..), PowerNode(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
-    (craftBillsComponentId, powerNodesComponentId)
+    ( craftBillsComponentId, powerNodesComponentId
+    , buildingsComponentId, unitsComponentId )
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
 import World.Save.Snapshot
     ( SessionSnapshot(..), PageSnapshot(..), allItemInstanceIds )
@@ -133,35 +135,54 @@ capIntegrityErrors errs =
                 , ieRefValue e, ieCode e )
     cidText (ComponentId t) = t
 
+-- | Every retained finding's rendered text, plus (requirement 10: never
+--   silently truncate) one trailing line naming how many additional
+--   findings were omitted by the cap. This is what a caller should
+--   actually surface — never the raw, unsorted, uncapped error list.
+renderIntegrityReport ∷ IntegrityReport → [Text]
+renderIntegrityReport report =
+    map renderIntegrityError (irErrors report)
+    ++ [ T.pack (show (irOmitted report)) <> " additional integrity \
+        \finding(s) omitted (see World.Save.Integrity.integrityErrorCap)"
+       | irOmitted report > 0 ]
+
 pidText ∷ WorldPageId → Text
 pidText (WorldPageId t) = t
 
 -- | The generic same-page/global/permitted-cross-page decision
 --   (requirement 4). Given the scope a field declares, the page the
---   referencing record lives on, and the page the target ACTUALLY
---   resolved on ('Nothing' when the target is absent from the whole
---   session), decide whether this is a hard violation:
+--   referencing record lives on, and EVERY page the target actually
+--   resolved on (empty when absent from the whole session), decide
+--   whether this is a hard violation:
 --
 --   - Absent everywhere → 'Nothing' (never a hard error at this layer
 --     — the documented, tolerated gap; see the module haddock).
---   - 'ScopeGlobal' → any resolved page is fine.
---   - 'ScopeSamePage' → must resolve on exactly the source page;
---     resolving on any OTHER page is a genuine wrong-page violation.
---   - 'ScopeCrossPage' → explicitly permitted; any resolved page is
---     fine (no shipped field uses this scope yet — see
+--   - Resolves on MORE THAN ONE page → 'Nothing' here specifically —
+--     that is a duplicate-identity violation
+--     ('duplicateGlobalIdErrors' reports it, with a stable
+--     @"duplicate-identity"@ code), and firing a second, arbitrarily-
+--     page-chosen "wrong-page" verdict on top of it would be redundant
+--     and potentially non-deterministic depending on iteration order.
+--   - 'ScopeGlobal' → any single resolved page is fine.
+--   - 'ScopeSamePage' → the one resolved page must be exactly the
+--     source page; any other single page is a genuine wrong-page
+--     violation.
+--   - 'ScopeCrossPage' → explicitly permitted; any single resolved
+--     page is fine (no shipped field uses this scope yet — see
 --     "World.Save.Reference"'s 'World.Save.Reference.CrossPageRef'
 --     haddock — exercised directly by this module's test suite).
 refEdgeError
     ∷ ComponentId → Word32 → Text → RefKind → RefScope
-    → WorldPageId → Maybe WorldPageId → Text
+    → WorldPageId → [WorldPageId] → Text
     → Maybe IntegrityError
-refEdgeError cid ver path kind scope sourcePage foundPage val =
-    case (scope, foundPage) of
-        (_, Nothing)                          → Nothing
-        (ScopeGlobal, Just _)                  → Nothing
-        (ScopeCrossPage, Just _)                → Nothing
-        (ScopeSamePage, Just p) | p ≡ sourcePage → Nothing
-                                 | otherwise      → Just (mkErr p)
+refEdgeError cid ver path kind scope sourcePage foundPages val =
+    case (scope, foundPages) of
+        (_, [])                                  → Nothing
+        (_, _ : _ : _)                            → Nothing
+        (ScopeGlobal, [_])                        → Nothing
+        (ScopeCrossPage, [_])                     → Nothing
+        (ScopeSamePage, [p]) | p ≡ sourcePage      → Nothing
+                              | otherwise           → Just (mkErr p)
   where
     mkErr p = IntegrityError
         { ieComponent = cid, ieVersion = ver, iePath = path
@@ -185,17 +206,24 @@ refEdgeError cid ver path kind scope sourcePage foundPage val =
 --   necessarily-IO-bound call sites — see "Engine.Scripting.Lua.API.Save").
 sessionIntegrityErrors ∷ SessionSnapshot → [IntegrityError]
 sessionIntegrityErrors snap = concat
-    [ billStationErrors, billClaimantErrors, nodeBuildingErrors ]
+    [ duplicateGlobalIdErrors snap
+    , billStationErrors, billClaimantErrors, nodeBuildingErrors
+    ]
   where
     pages = snapPages snap
 
-    buildingPage ∷ BuildingId → Maybe WorldPageId
-    buildingPage bid = listToMaybe
+    -- Every page a building/unit id resolves on, sorted for determinism
+    -- — more than one entry means a duplicate global identity, which
+    -- 'refEdgeError' deliberately treats as "don't ALSO guess a
+    -- wrong-page verdict" (see 'duplicateGlobalIdErrors', the check
+    -- that actually reports the duplicate).
+    buildingPages ∷ BuildingId → [WorldPageId]
+    buildingPages bid = L.sort
         [ pid | (pid, page) ← HM.toList pages
               , HM.member bid (bsnInstances (pgsBuildings page)) ]
 
-    unitPage ∷ UnitId → Maybe WorldPageId
-    unitPage uid = listToMaybe
+    unitPages ∷ UnitId → [WorldPageId]
+    unitPages uid = L.sort
         [ pid | (pid, page) ← HM.toList pages
               , HM.member uid (usnInstances (pgsUnits page)) ]
 
@@ -206,7 +234,7 @@ sessionIntegrityErrors snap = concat
         , let path = "craft-bills[page=" <> pidText pid <> ",bill="
                      <> T.pack (show (unBillId bid)) <> "].station"
         , Just err ← [ refEdgeError craftBillsComponentId 2 path RefBuilding
-                         ScopeSamePage pid (buildingPage (cbStation bill))
+                         ScopeSamePage pid (buildingPages (cbStation bill))
                          (T.pack (show (unBuildingId (cbStation bill)))) ]
         ]
 
@@ -218,7 +246,7 @@ sessionIntegrityErrors snap = concat
         , let path = "craft-bills[page=" <> pidText pid <> ",bill="
                      <> T.pack (show (unBillId bid)) <> "].claimant"
         , Just err ← [ refEdgeError craftBillsComponentId 2 path RefUnit
-                         ScopeSamePage pid (unitPage uid)
+                         ScopeSamePage pid (unitPages uid)
                          (T.pack (show (unUnitId uid))) ]
         ]
 
@@ -228,28 +256,77 @@ sessionIntegrityErrors snap = concat
         , (_nid, node) ← HM.toList (pnsNodes (pgsPowerNodes page))
         , let path = "power-nodes[page=" <> pidText pid <> "].building"
         , Just err ← [ refEdgeError powerNodesComponentId 2 path RefBuilding
-                         ScopeSamePage pid (buildingPage (pnBuilding node))
+                         ScopeSamePage pid (buildingPages (pnBuilding node))
                          (T.pack (show (unBuildingId (pnBuilding node)))) ]
+        ]
+
+-- | A 'UnitId'/'BuildingId' is a GLOBAL allocator (one counter for the
+--   whole session, see "World.Save.Snapshot"'s 'SessionGlobals'
+--   haddock) — the SAME numeric id existing in more than one page's
+--   instance map is therefore never legitimate, unlike 'BillId'/
+--   'PowerNodeId' (genuinely per-page allocators, where the same
+--   number on two pages is normal and already excluded from this check).
+duplicateGlobalIdErrors ∷ SessionSnapshot → [IntegrityError]
+duplicateGlobalIdErrors snap = concat
+    [ dupsFor RefBuilding buildingsComponentId
+        [ (pid, unBuildingId bid)
+        | (pid, page) ← HM.toList (snapPages snap)
+        , bid ← HM.keys (bsnInstances (pgsBuildings page)) ]
+    , dupsFor RefUnit unitsComponentId
+        [ (pid, unUnitId uid)
+        | (pid, page) ← HM.toList (snapPages snap)
+        , uid ← HM.keys (usnInstances (pgsUnits page)) ]
+    ]
+  where
+    dupsFor ∷ RefKind → ComponentId → [(WorldPageId, Word32)] → [IntegrityError]
+    dupsFor kind cid entries =
+        [ IntegrityError
+            { ieComponent = cid, ieVersion = 1
+            , iePath = refKindText kind <> "#" <> T.pack (show val)
+            , ieRefKind = kind, ieRefValue = T.pack (show val)
+            , ieExpectedScope = "globally unique identity (one allocator \
+                                 \for the whole session)"
+            , ieActual = "present on pages " <> pagesText
+            , ieCode = "duplicate-identity"
+            , ieMessage = refKindText kind <> " " <> T.pack (show val)
+                <> " exists on multiple pages: " <> pagesText
+            }
+        | (val, ps) ← HM.toList (HM.fromListWith (++)
+                          [ (v, [pid]) | (pid, v) ← entries ])
+        , length ps > 1
+        , let pagesText = T.intercalate ", " (map pidText (L.sort ps))
         ]
 
 -- Lua reference validation --------------------------------------------
 
--- | Session-wide id sets every Lua-declared reference (requirement 8's
---   "Lua AI targets, claims, deliveries, and nested references") is
---   checked for existence against. Every registered Lua component
---   declares @scope = "global"@ today (#761), so this is deliberately
---   session-wide rather than per-page — matching @scrubStaleRefs@'s own
---   global survivor-set reconciliation in @scripts/unit_ai.lua@, not a
---   narrower check this module invents independently.
+-- | Id sets every Lua-declared reference (requirement 8's "Lua AI
+--   targets, claims, deliveries, and nested references") is checked for
+--   existence against. @keUnits@/@keBuildings@/@keItemInstances@ are
+--   session-wide — every registered Lua component declares
+--   @scope = "global"@ today (#761), matching @scrubStaleRefs@'s own
+--   global survivor-set reconciliation, AND 'UnitId'/'BuildingId'/item-
+--   instance ids are genuinely GLOBAL allocators (one counter for the
+--   whole session — see "World.Save.Snapshot"). @keBillsByPage@/
+--   @keGroundItemsByPage@ are deliberately PER-PAGE instead: 'BillId'/
+--   ground-item ids are per-page allocators (the same number
+--   legitimately names two different real entities on two different
+--   pages), so resolving them session-wide would let a reference meant
+--   for one page's (missing) bill silently "resolve" against an
+--   unrelated bill of the same number on another page — a false
+--   negative that would mask a genuine dangling reference. Resolution
+--   for these two kinds goes through @keUnitPage@ (the owning unit's
+--   page, threaded from the reference edge's own @owner@ — see
+--   'LuaRefEdge').
 data KnownEntities = KnownEntities
-    { keUnits         ∷ !(HS.HashSet Int)
-    , keBuildings     ∷ !(HS.HashSet Int)
-    , keBills         ∷ !(HS.HashSet Int)
-    , keItemInstances ∷ !(HS.HashSet Int)
-    , keGroundItems   ∷ !(HS.HashSet Int)
-    , keNextUnitId    ∷ !Int
-    , keNextBuildingId ∷ !Int
-    , keNextItemId    ∷ !Int
+    { keUnits             ∷ !(HS.HashSet Int)
+    , keBuildings         ∷ !(HS.HashSet Int)
+    , keBillsByPage       ∷ !(HM.HashMap WorldPageId (HS.HashSet Int))
+    , keItemInstances     ∷ !(HS.HashSet Int)
+    , keGroundItemsByPage ∷ !(HM.HashMap WorldPageId (HS.HashSet Int))
+    , keUnitPage          ∷ !(HM.HashMap Int WorldPageId)
+    , keNextUnitId        ∷ !Int
+    , keNextBuildingId    ∷ !Int
+    , keNextItemId        ∷ !Int
     } deriving (Show, Eq)
 
 buildKnownEntities ∷ SessionSnapshot → KnownEntities
@@ -260,13 +337,20 @@ buildKnownEntities snap = KnownEntities
     , keBuildings = HS.fromList
         [ fromIntegral (unBuildingId bid)
         | page ← pages, bid ← HM.keys (bsnInstances (pgsBuildings page)) ]
-    , keBills = HS.fromList
-        [ fromIntegral (unBillId bid)
-        | page ← pages, bid ← HM.keys (cbsBills (pgsCraftBills page)) ]
+    , keBillsByPage = HM.fromList
+        [ (pid, HS.fromList
+              [ fromIntegral (unBillId bid)
+              | bid ← HM.keys (cbsBills (pgsCraftBills page)) ])
+        | (pid, page) ← HM.toList (snapPages snap) ]
     , keItemInstances = HS.fromList
         (map fromIntegral (allItemInstanceIds snap))
-    , keGroundItems = HS.fromList
-        [ gid | page ← pages, gid ← HM.keys (gisItems (pgsGroundItems page)) ]
+    , keGroundItemsByPage = HM.fromList
+        [ (pid, HS.fromList (HM.keys (gisItems (pgsGroundItems page))))
+        | (pid, page) ← HM.toList (snapPages snap) ]
+    , keUnitPage = HM.fromList
+        [ (fromIntegral (unUnitId uid), pid)
+        | (pid, page) ← HM.toList (snapPages snap)
+        , uid ← HM.keys (usnInstances (pgsUnits page)) ]
     , keNextUnitId     = fromIntegral (snapNextUnitId snap)
     , keNextBuildingId = fromIntegral (snapNextBuildingId snap)
     , keNextItemId     = fromIntegral (snapNextItemId snap)
@@ -277,11 +361,16 @@ buildKnownEntities snap = KnownEntities
 --   the raw @{kind=.., id=..}@ shape, plus which Lua component it came
 --   from (for diagnostic attribution; Lua's @references()@ contract
 --   does not carry a finer per-field data path — see #761's
---   @unitAiReferences@/@buildingSpawnReferences@).
+--   @unitAiReferences@/@buildingSpawnReferences@) and, when the hook
+--   supplied one, the OWNING unit id (@lreOwner@) — every
+--   @unitAiReferences@ entry is emitted from inside a per-unit loop, so
+--   it always has one; @buildingSpawnReferences@ entries never need one
+--   (its "unit"/"building" kinds resolve session-wide regardless).
 data LuaRefEdge = LuaRefEdge
     { lreComponent ∷ !Text
     , lreKind      ∷ !Text
     , lreId        ∷ !Int
+    , lreOwner     ∷ !(Maybe Int)
     } deriving (Show, Eq)
 
 -- | Does this edge resolve against the known entity sets? An unknown
@@ -290,14 +379,25 @@ data LuaRefEdge = LuaRefEdge
 --   @tools/persistence_inventory_audit.py@'s reference-kind check) and
 --   is treated as trivially resolving rather than manufacturing a false
 --   positive.
+--
+--   @craft_bill@/@ground_item@ resolve against the OWNING unit's page
+--   only (per-page allocators — see 'KnownEntities' haddock): with no
+--   owner, or an owner that itself doesn't resolve to a live unit, the
+--   edge is reported as not resolving rather than falling back to a
+--   session-wide (and therefore potentially wrong-page) match.
 luaEdgeResolves ∷ KnownEntities → LuaRefEdge → Bool
 luaEdgeResolves ke e = case lreKind e of
     "unit"          → HS.member (lreId e) (keUnits ke)
     "building"      → HS.member (lreId e) (keBuildings ke)
-    "craft_bill"    → HS.member (lreId e) (keBills ke)
     "item_instance" → HS.member (lreId e) (keItemInstances ke)
-    "ground_item"   → HS.member (lreId e) (keGroundItems ke)
+    "craft_bill"    → resolvesOnOwnerPage (keBillsByPage ke)
+    "ground_item"   → resolvesOnOwnerPage (keGroundItemsByPage ke)
     _               → True
+  where
+    resolvesOnOwnerPage byPage =
+        case lreOwner e ⌦ (`HM.lookup` keUnitPage ke) of
+            Nothing  → False
+            Just pid → maybe False (HS.member (lreId e)) (HM.lookup pid byPage)
 
 -- | An id at/above the relevant GLOBAL allocator can never have
 --   belonged to a real entity (requirement 8's "allocators that could

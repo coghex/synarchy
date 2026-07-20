@@ -22,7 +22,10 @@ instead:
      (`Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData` /
      `World.Save.Integrity.luaReferenceErrors`) actually reports it as
      a diagnostic, naming the component, the reference kind, and the
-     destroyed unit's id.
+     destroyed unit's id, AT BOTH the pre-save boundary (over the same
+     live snapshot `saveModules.snapshotAll()` captured) and the
+     pre-load boundary of the fresh restart -- proving save and load
+     share one integrity graph rather than only load being checked.
   2. A genuinely corrupted (truncated) save file is rejected with a
      real `LoadFailed` status, the engine stays paused, and the
      ALREADY-LOADED live session (page/unit state) is left completely
@@ -211,6 +214,21 @@ def main() -> int:
 
         quit_engine(args.port, proc_a)
         proc_a = None
+
+        print("\n--- pre-save boundary sees the same dangling reference ---")
+        # The dangling reference already existed at SAVE time (unit #b
+        # was destroyed before engine.saveWorld ran), so the pre-save
+        # integrity check (World.Thread.Command.Save.WriteWorld, over
+        # the SAME live snapshot saveModules.snapshotAll() captured)
+        # must have logged the identical diagnostic engine B's load-side
+        # check reports -- proving save and load share one graph rather
+        # than only the load boundary being checked.
+        log_a_text = read_log(log_a)
+        chk.ok("integrity diagnostic" in log_a_text,
+               "engine A's log records an integrity diagnostic AT SAVE TIME")
+        chk.ok("unit_ai" in log_a_text and "dangling-reference" in log_a_text,
+               "the save-time diagnostic names unit_ai and is coded "
+               "'dangling-reference'")
 
         # ── Engine B: fresh restart. Load the valid save; the dangling
         #    reference must be diagnosed, never load-blocking ─────────

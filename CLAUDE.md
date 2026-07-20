@@ -2399,6 +2399,29 @@ reference precedent scrubStaleRefs already relies on. `save_modules.lua`'s
 (`references` field) instead of only calling `references()` to catch a
 crash.
 
+Lua's persisted reference fields are typed on the wire too: every field
+`scripts/unit_ai_save_refs.lua`'s `unitAiReferences` declares
+(`attackTargetUid`/`retreatThreatUid`/`notifyTarget`/`lungeTarget`/
+`buildTarget`/`storeTarget`, plus the nested `treatClaim.patient`/
+`treatPending.uid`/`deliveryClaim.bid`/`deliveryPendingTarget.bid`/
+`craftJob.billId`/`craftJob.bid`/`repairJob.instanceId`/`repairJob.bid`/
+`pickupOrder.gid`/`forageTarget.gid`/`forageLoot[]`/`harvestLoot[]`) and
+`scripts/building_spawn.lua`'s `lastUid` are wrapped to a structured
+`{__ref=kind, id=N}` shape at `snapshot()`/`decode()` time and unwrapped
+back to a bare number at `apply()` time — both components bumped to
+schema v2 (`inputVersions={1,2}`), with an unambiguous v1→v2 migration:
+v1's fields have always meant exactly what the declared list says, so
+there is nothing to guess. This wrap/unwrap lives ONLY in
+`unit_ai_save_refs.lua` (split out of `unit_ai_save.lua` to stay under
+its line budget, #538) and `building_spawn.lua` — `aiState`'s LIVE
+in-memory shape never changes, so `unit_ai_combat.lua`,
+`unit_ai_deliver.lua`, `unit_ai.lua`'s own `scrubStaleRefs`, and every
+other consumer needed no change at all; `unitAiReferences`'s `addRef`
+reads either a wrapped table or a bare number transparently
+(`refId()`), so it works unchanged whether called against decoded
+(wrapped) data or the outer per-unit key (always bare, since a Lua
+table key can't be a table).
+
 Deliberately NOT rewritten onto this vocabulary: the nine existing
 `missingXReferences` content-definition checks (`World.Save.Types`/
 `Engine.Scripting.Lua.API.Save`'s `continueLoad`) stay as they are —
@@ -2406,12 +2429,7 @@ already working, already tested, each against its own IO-loaded content
 registry — reporting through the SAME `continueLoad` load-rejection
 gate the new checks report through (one combined message), rather than
 being rewritten onto `IntegrityError`'s Haskell type for a vocabulary-
-only gain. Lua's PERSISTED reference fields (`attackTargetUid` and
-friends) also stay bare numbers on the wire; only the already-existing
-declarative `references()` diagnostic surface is now consumed.
-Restructuring every persisted Lua reference field into a typed
-`{kind=,id=}` table on the wire, and updating every submodule that
-reads them, is a natural follow-up, not done here.
+only gain.
 
 `tools/persistence_inventory_audit.py` extends the same "every root-
 owner field / Lua save module must be classified" discipline (§7-style)

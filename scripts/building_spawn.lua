@@ -289,15 +289,55 @@ end
 -- not merely traversed for a crash check; a dangling `lastUid` is still
 -- tolerated either way (a non-blocking diagnostic, scrubbed at
 -- reconcile time by onSaveLoaded below), never rejected.
+--
+-- `s.lastUid` here is the WRAPPED persisted shape ({__ref="unit",
+-- id=N}), not a bare number -- see wrapLastUid/unwrapLastUid below;
+-- refId() reads either shape so this function works unchanged whether
+-- called against decoded (wrapped) or hypothetically-bare data.
+local function refId(v)
+    if type(v) == "table" then return v.id end
+    return v
+end
 local function buildingSpawnReferences(data)
     local refs = {}
     for bid, s in pairs(data) do
         refs[#refs + 1] = { kind = "building", id = bid }
-        if s.lastUid ~= nil then
-            refs[#refs + 1] = { kind = "unit", id = s.lastUid }
+        local uid = refId(s.lastUid)
+        if uid ~= nil then
+            refs[#refs + 1] = { kind = "unit", id = uid }
         end
     end
     return refs
+end
+
+-- Typed structured references on the wire (issue #764, save-overhaul
+-- C3 requirement 13): `lastUid` is wrapped to {__ref="unit", id=N} at
+-- snapshot/decode time and unwrapped back to a bare number at apply
+-- time, so `state`'s LIVE in-memory shape (read by onSaveLoaded below
+-- and every other consumer) never changes -- only the bytes on disk do.
+local function wrapLastUid(s)
+    if s.lastUid == nil then return s end
+    local copy = {}
+    for k, v in pairs(s) do copy[k] = v end
+    copy.lastUid = { __ref = "unit", id = s.lastUid }
+    return copy
+end
+local function unwrapLastUid(s)
+    if type(s.lastUid) ~= "table" then return s end
+    local copy = {}
+    for k, v in pairs(s) do copy[k] = v end
+    copy.lastUid = s.lastUid.id
+    return copy
+end
+local function wrapAllLastUid(data)
+    local out = {}
+    for bid, s in pairs(data) do out[bid] = wrapLastUid(s) end
+    return out
+end
+local function unwrapAllLastUid(data)
+    local out = {}
+    for bid, s in pairs(data) do out[bid] = unwrapLastUid(s) end
+    return out
 end
 
 function buildingSpawn.init(scriptId)
@@ -310,8 +350,11 @@ function buildingSpawn.init(scriptId)
     -- invalid building_spawn component aborts the whole load.
     local saveMods = require("scripts.lib.save_modules")
     saveMods.register("building_spawn", {
-        version = 1,
-        inputVersions = { 1 },
+        -- v2 (issue #764, save-overhaul C3): lastUid is now a typed
+        -- structured reference on the wire (see wrapLastUid above), not
+        -- a bare number. v1 payloads migrate via decode() below.
+        version = 2,
+        inputVersions = { 1, 2 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): buildingSpawnReferences above
@@ -332,16 +375,24 @@ function buildingSpawn.init(scriptId)
             for bid, s in pairs(state) do
                 if building.getInfo(bid) then live[bid] = s end
             end
-            return live
+            return wrapAllLastUid(live)
         end,
-        decode = function(_version, data)
-            return data or {}
+        decode = function(version, data)
+            data = data or {}
+            -- v1 payloads carry a bare lastUid number -- wrapping it
+            -- here is the unambiguous v1->v2 migration (requirement 14):
+            -- v1 never meant anything else, so there is nothing to
+            -- guess. v2 payloads are already wrapped (identity).
+            if version == 1 then return wrapAllLastUid(data) end
+            return data
         end,
         validate = validateBuildingSpawnData,
         references = buildingSpawnReferences,
         -- Temporary C2 compatibility adapter (issue #761, requirement 15)
         -- -- see unit_ai.lua's identical note: clobber `state` wholesale,
         -- onSaveLoaded below still does the #195/#191 reconciliation.
+        -- Unwraps lastUid back to a bare number so `state`'s LIVE shape
+        -- (read by onSaveLoaded and every other consumer) never changes.
         apply = function(data)
             -- Snapshot the pre-load singleton BEFORE clobbering, so
             -- onSaveLoaded can restore still-live OFF-PAGE buildings'
@@ -349,7 +400,7 @@ function buildingSpawn.init(scriptId)
             buildingSpawn._preLoadState = {}
             for k, v in pairs(state) do buildingSpawn._preLoadState[k] = v end
             for k in pairs(state) do state[k] = nil end
-            for k, v in pairs(data) do state[k] = v end
+            for k, v in pairs(unwrapAllLastUid(data)) do state[k] = v end
         end,
     })
 end
