@@ -25,9 +25,10 @@
 local tileEditor = package.loaded["scripts.tile_editor"] or {}
 package.loaded["scripts.tile_editor"] = tileEditor
 
-local panel  = require("scripts.ui.panel")
-local button = require("scripts.ui.button")
-local scale  = require("scripts.ui.scale")
+local panel      = require("scripts.ui.panel")
+local button     = require("scripts.ui.button")
+local scale      = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
 
 -- Module state. Hung off the module table so it survives reloads.
 tileEditor.state = tileEditor.state or {
@@ -139,8 +140,19 @@ local function rebuild(gx, gy)
     -- comfortably inside the box without clipping the texture edges.
     local btnWidthBase  = 320
     local btnHeightBase = 40
-    local btnW = math.floor(btnWidthBase  * b.uiscale)
-    local btnH = math.floor(btnHeightBase * b.uiscale)
+    -- #750 round-15 review: the panel is width-fractional (mirrors
+    -- info_panel.lua's own 20%-of-framebuffer sizing), but the button
+    -- stayed a fixed 320-base-unit width regardless — at the issue's
+    -- own 800x2160@4x, pbounds.width is ~64px while the button rendered
+    -- at 1280px, placing the popup's only action off-screen. Shrink one
+    -- effective, LOCAL uiscale for the button so both its box AND its
+    -- text (button.new uses the SAME uiscale for width/height/fontSize
+    -- internally, so this can't repeat round-13's "box shrinks, text
+    -- doesn't" bug) fit within the panel's actual content width.
+    local btnUiscale = responsive.fitScale(
+        btnWidthBase * b.uiscale, math.max(20, pbounds.width), b.uiscale)
+    local btnW = math.floor(btnWidthBase  * btnUiscale)
+    local btnH = math.floor(btnHeightBase * btnUiscale)
     local btnX = b.x + pbounds.x + math.floor((pbounds.width  - btnW) / 2)
     local btnY = b.y + pbounds.y + math.floor((pbounds.height - btnH) / 2)
 
@@ -152,7 +164,7 @@ local function rebuild(gx, gy)
         width      = btnWidthBase,
         height     = btnHeightBase,
         fontSize   = 18,
-        uiscale    = b.uiscale,
+        uiscale    = btnUiscale,
         page       = h.page,
         font       = h.menuFont,
         textureSet = h.boxTexSet,

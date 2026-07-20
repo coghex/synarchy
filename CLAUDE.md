@@ -1607,6 +1607,62 @@ unvalidated Lua table captured by reference, since `show()` reassigns
 rather than mutates it) and the reopen calls switched from the panels'
 bare `show()` to their new `reopenWithState()`.
 
+Round-15 review found two more "fixed base size, no fit" gaps, the
+same class as round-12's tab labels and round-13's modal buttons, in
+two screens that had gone unexamined until now.
+`scripts/hud/info_panel.lua`'s panel is deliberately narrow
+(`widthFrac = 0.20` of the framebuffer), but its `tabbar.new` call
+passed the tab bar the panel's OWN (unfitted) `uiscale` — tabbar.lua
+lays each tab out purely from label text + scaled `textPadding`, with
+no fit/clip/scroll of its own (confirmed by reading `tabbar.new`
+directly: `width` only sizes the FRAME, never constrains individual
+tab boxes). At the issue's own 800×2160@4x, the ~80px content area
+couldn't hold even the 2 default tile-schema tabs, let alone
+resources/weather once dynamically added. Fixed with the same
+`responsive.fitScale(naturalTabWidth, bounds.width, uiscale)` technique
+`settings_menu.lua`/`create_world_menu.lua` already use for their own
+tab bars — a local, tabbar-only effective uiscale, never touching the
+rest of the screen's layout. `scripts/tile_editor.lua`'s Delete Tile
+button had the identical defect one level down: the panel is
+width-fractional (mirrors `info_panel.lua`'s own sizing), but the
+button stayed a fixed 320-base-unit width regardless — at 800×2160@4x,
+`pbounds.width` (~64px) is far smaller than the button's natural
+1280px. Fixed the same way, with `button.new` using ONE `uiscale` for
+width/height/fontSize together (so this can't repeat round-13's "box
+shrinks, text doesn't" bug the way a bare width change would).
+
+Writing the `info_panel` regression test surfaced a real, unrelated
+gap in this test suite's own harness: `scripts/ui/tabbar.lua`'s
+`tabbar.init()` (which loads its module-level box-texture handles) is
+never called by `info_panel.lua`/`hud.lua` themselves — a real boot
+reaches it via `uiManager.init()`, which this suite deliberately never
+drives (see the module's own docstring). Every EXISTING tabbar-based
+test in this suite only exercised `tabbar.lua`'s own bookkeeping
+(`selectByKey`, `getSelectedKey`, `getFrameBounds`) or LABEL-based row
+content, so none of them had ever needed `UI.getElementInfo` on a
+tabbar's own tab/frame BOXES to actually resolve — this is the first
+one that does. Root cause, traced by reading `UI.newBox`'s Haskell
+binding directly: its box-texture-handle argument is read via
+`Lua.tointeger`, and passing Lua `nil` (the un-initialized
+`texSetFrame`/`texSetSelected`/`texSetUnselected`) makes the WHOLE
+argument-pattern match fail, so `UI.newBox` silently returns `nil` —
+leaving `tab.boxId`/`frameBoxId` nil and invisible to
+`UI.getElementInfo`/`tabbar.dump()`, while every OTHER `tabbar.lua`
+field (`selectedIndex`, `tabs[i].width`, frame bounds) stayed
+perfectly correct, which is what made this take a while to isolate.
+Fixed by having the new test call `require('scripts.ui.tabbar').init()`
+explicitly before creating any tabbar-backed UI — a test-only fix, not
+a product change (matches the "boots hud.lua/menu screens directly
+rather than through uiManager.init()" pattern this whole suite already
+uses for fonts/textures elsewhere).
+
+Verified against a real running engine: with `tabbar.init()` called
+first, all 4 info-panel tabs land within `[576, 736)` (the panel's own
+bounds) instead of overflowing; the Delete Tile button lands at
+`[624, 688)`, also within the panel. Confirmed both new tests actually
+catch their regressions (stashed both fix files, re-ran — 2 failures
+as expected, restored — passes again).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

@@ -1154,6 +1154,98 @@ spec = aroundAll withSharedFixture $ do
                         mgrW row `shouldSatisfy` (> 0)
                         mgrH row `shouldSatisfy` (> 0)
 
+    describe "hud/info_panel.lua and tile_editor.lua stay in-frame at a narrow, high-scale, still-C2-supported combination (round-15 review)" $ do
+        it "info_panel: every visible tab stays inside the panel's own bounds with 4 tabs active (round-15 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-15 review: the panel is deliberately narrow
+            -- (20% of the framebuffer), but the tabbar laid tabs out at
+            -- full scaled text width with no fit — at the issue's own
+            -- 800x2160@4x, the ~80px content area couldn't hold even
+            -- the 2 default tile-schema tabs, let alone the 2 dynamic
+            -- ones (resources/weather) added here to prove the fix
+            -- holds under the reviewer's own "resource/weather/status
+            -- tabs extend outside" scenario.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                -- tabbar.init() loads its own module-level box-texture
+                -- handles (texSetFrame/texSetSelected/texSetUnselected)
+                -- — never called by info_panel.lua/hud.lua themselves
+                -- (a real boot reaches it via uiManager.init(), which
+                -- this suite deliberately never drives — see the module
+                -- docstring). Without it every tabbar.new() this suite
+                -- creates passes a nil box-texture handle to
+                -- UI.newBox(), which requires an integer 4th argument
+                -- and silently returns nil on a type mismatch — leaving
+                -- tab.boxId/frameBoxId nil and so invisible to
+                -- UI.getElementInfo/tabbar.dump(). Harmless for tests
+                -- that only touch tabbar's own bookkeeping (selectByKey,
+                -- getSelectedKey), but this test needs real tab element
+                -- geometry, so it's the first in this suite to need the
+                -- explicit init() call.
+                , "require('scripts.ui.tabbar').init();"
+                -- Pre-seed the dynamic tabs' text directly (rather than
+                -- via setResourcesInfo/setWeatherInfo after createUI())
+                -- so hud.createUI()'s single infoPanel.create() call
+                -- builds the full 4-tab tabbar in one pass instead of
+                -- going through 2 extra hide/rebuild/show cycles on the
+                -- SAME page — orthogonal to what this test verifies.
+                , "local ip = require('scripts.hud.info_panel');"
+                , "ip.tabText.basic = 'basic text';"
+                , "ip.tabText.advanced = 'advanced text';"
+                , "ip.tabText.resources = 'iron: 12';"
+                , "ip.tabText.weather = 'sunny';"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "ip.refresh();"
+                , "local tabbar = require('scripts.ui.tabbar');"
+                , "local prefix = 'tabbar:' .. tostring(ip.tabBarId) .. ':';"
+                , "local pb = ip.getBounds();"
+                , "local tabs = {};"
+                , "for _, e in ipairs(tabbar.dump()) do"
+                , "    if e.id:sub(1, #prefix) == prefix then"
+                , "        table.insert(tabs, {x = e.bounds.x, y = e.bounds.y,"
+                , "                            w = e.bounds.w, h = e.bounds.h})"
+                , "    end"
+                , "end;"
+                , "return {panelX = pb.x, panelW = pb.w, tabCount = #tabs, tabs = tabs}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe InfoPanelTabsProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    iptTabCount p `shouldBe` 4
+                    forM_ (iptTabs p) $ \t →
+                        (rrX t + rrW t) `shouldSatisfy` (≤ iptPanelX p + iptPanelW p)
+
+        it "tile_editor: the Delete Tile button fits inside the panel's content bounds (round-15 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-15 review: the panel is width-fractional
+            -- (mirrors info_panel.lua's own sizing), but the Delete
+            -- Tile button stayed a fixed 320-base-unit width — at the
+            -- issue's own 800x2160@4x, pbounds.width (~64px) is far
+            -- smaller than the button's natural 1280px.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local pg = UI.newPage('tile_editor_test_page', 'overlay');"
+                , "local te = require('scripts.tile_editor');"
+                , "te.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1, menuFont = 2, worldId = 'test_arena'});"
+                , "te.setArenaActive(true);"
+                , "te.onTileSelected(5, 5);"
+                , "local p = require('scripts.ui.panel');"
+                , "local px, py = p.getPosition(te.state.panelId);"
+                , "local pw, ph = p.getSize(te.state.panelId);"
+                , "local b = require('scripts.ui.button');"
+                , "local bh = b.getElementHandle(te.state.deleteBtn);"
+                , "local info = UI.getElementInfo(bh);"
+                , "return {panelX = px, panelW = pw, btnX = info.x, btnW = info.width}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TileEditorButtonProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tebBtnW p `shouldSatisfy` (> 0)
+                    tebBtnX p `shouldSatisfy` (≥ tebPanelX p)
+                    (tebBtnX p + tebBtnW p) `shouldSatisfy` (≤ tebPanelX p + tebPanelW p)
+
     describe "\"unit info reserves right edge and suppresses conflicting info\" (#750 introspection over pre-existing behavior)" $ do
         it "unitInfoV2.getBounds() mirrors the real flush-right column, and is nil while not visible" $ \(env, ls) → do
             resetFixture env ls
@@ -1982,6 +2074,20 @@ data LabeledOkRow = LabeledOkRow { lorLabel ∷ Text, lorOk ∷ Bool } deriving 
 instance FromJSON LabeledOkRow where
     parseJSON = withObject "LabeledOkRow" $ \o →
         LabeledOkRow <$> o .: "label" <*> o .: "ok"
+
+data InfoPanelTabsProbe = InfoPanelTabsProbe
+    { iptPanelX ∷ Double, iptPanelW ∷ Double, iptTabCount ∷ Int, iptTabs ∷ [RectRow] } deriving Show
+instance FromJSON InfoPanelTabsProbe where
+    parseJSON = withObject "InfoPanelTabsProbe" $ \o →
+        InfoPanelTabsProbe <$> o .: "panelX" <*> o .: "panelW"
+                            <*> o .: "tabCount" <*> o .: "tabs"
+
+data TileEditorButtonProbe = TileEditorButtonProbe
+    { tebPanelX ∷ Double, tebPanelW ∷ Double, tebBtnX ∷ Double, tebBtnW ∷ Double } deriving Show
+instance FromJSON TileEditorButtonProbe where
+    parseJSON = withObject "TileEditorButtonProbe" $ \o →
+        TileEditorButtonProbe <$> o .: "panelX" <*> o .: "panelW"
+                               <*> o .: "btnX" <*> o .: "btnW"
 
 data LineRectProbe = LineRectProbe { lrpW ∷ Double, lrpX ∷ Double } deriving Show
 instance FromJSON LineRectProbe where
