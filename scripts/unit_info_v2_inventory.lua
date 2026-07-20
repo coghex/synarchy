@@ -11,6 +11,7 @@ local unitInfoV2 = package.loaded["scripts.unit_info_v2"]
 local hud   = require("scripts.hud")
 local label = require("scripts.ui.label")
 local scale = require("scripts.ui.scale")
+local responsive   = require("scripts.ui.responsive")
 local qualityTier  = require("scripts.ui.quality_tier")
 local repairStatus = require("scripts.ui.repair_status")
 local items = require("scripts.unit_info_v2_items")
@@ -101,15 +102,6 @@ function M.rebuildInventorySection()
     if not uid then return end
 
     local uiscale = scale.get()
-    local tabH    = math.floor(L.INV_TAB_H * uiscale)
-    local topPad  = math.floor(L.INV_TAB_TOP_PAD * uiscale)
-    local botPad  = math.floor(L.INV_TAB_BOTTOM_PAD * uiscale)
-    local rowH    = math.floor(L.INV_ROW_H * uiscale)
-    local rowPad  = math.floor(L.INV_ROW_PAD * uiscale)
-    local iconSz  = math.floor(L.INV_ICON_SIZE * uiscale)
-    local footerH = math.floor(L.INV_FOOTER_H * uiscale)
-    local textPad = math.floor(L.INV_TEXT_PAD * uiscale)
-    local sectPad = math.floor(L.SECTION_PAD * uiscale)
 
     -- 1. Tab strip
     local tabDefs = data.computeInvTabs(invItems)
@@ -126,7 +118,10 @@ function M.rebuildInventorySection()
     end
 
     -- Pre-measure tab widths so we can plan row wraps without
-    -- instantiating elements. Mirrors the sub-tab layout above.
+    -- instantiating elements. Mirrors the sub-tab layout above. Uses
+    -- L.INV_TAB_FONT_SIZE directly (not uiscale-scaled — tab labels
+    -- always render at a fixed size, see the label.new call below), so
+    -- the row-wrap plan itself is independent of uiscale/the fit below.
     local tabTexts  = {}
     local tabWidths = {}
     for i, td in ipairs(tabDefs) do
@@ -139,8 +134,55 @@ function M.rebuildInventorySection()
     -- Wrap plan: rows have (startIdx, endIdx, totalW). Reuses the
     -- sub-tab wrapper since the inv tabs share the same gap=0
     -- flush-tab styling.
-    local rowGap    = math.floor(L.SUB_TAB_ROW_GAP * uiscale)
-    local tabPlan   = L.planSubTabRows(rect, tabWidths)
+    local tabPlan  = L.planSubTabRows(rect, tabWidths)
+    local nTabRows = #tabPlan
+
+    local tabH    = math.floor(L.INV_TAB_H * uiscale)
+    local topPad  = math.floor(L.INV_TAB_TOP_PAD * uiscale)
+    local botPad  = math.floor(L.INV_TAB_BOTTOM_PAD * uiscale)
+    local rowH    = math.floor(L.INV_ROW_H * uiscale)
+    local rowPad  = math.floor(L.INV_ROW_PAD * uiscale)
+    local iconSz  = math.floor(L.INV_ICON_SIZE * uiscale)
+    local footerH = math.floor(L.INV_FOOTER_H * uiscale)
+    local textPad = math.floor(L.INV_TEXT_PAD * uiscale)
+    local sectPad = math.floor(L.SECTION_PAD * uiscale)
+    local rowGap  = math.floor(L.SUB_TAB_ROW_GAP * uiscale)
+
+    -- #750 round-21 review: at a narrow, high-scale, still-supported
+    -- combination (e.g. 800x2160@4x), round-16's own vertical fit
+    -- (unit_info_v2_layout.lua's fitVerticalSections) can leave this
+    -- WHOLE section only ~253px tall — but this renderer, until now,
+    -- still derived its own chrome (tab strip + row + footer) from the
+    -- full, unfitted uiscale: one tab row alone plus top/bottom padding
+    -- and the footer already consumed ~240px, leaving maxRows (below)
+    -- at 0 — a nonempty inventory rendered no item rows or right-click
+    -- hit zones at all. Fits a LOCAL scale (never contentW/panelW's own
+    -- scale, or another section's uiscale) against the height needed
+    -- for the tab strip + AT LEAST ONE item row + the footer, the same
+    -- fitScale technique used throughout this codebase for an
+    -- analogous "fixed content doesn't fit the available space" gap.
+    -- Tab LABEL text stays fixed-size regardless (see above), so this
+    -- only ever shrinks toward it, never past — a degenerate case
+    -- (label text overflowing its own shrunk tab box) is theoretically
+    -- possible at a far more extreme combination than this review's
+    -- own cited boundary, same best-effort acceptance as elsewhere.
+    local naturalMinH = topPad + nTabRows * tabH
+        + math.max(0, nTabRows - 1) * rowGap + botPad
+        + (rowH + rowPad) + footerH
+    local invScale = responsive.fitScale(naturalMinH, rect.h, uiscale)
+    if invScale < uiscale then
+        tabH    = math.floor(L.INV_TAB_H * invScale)
+        topPad  = math.floor(L.INV_TAB_TOP_PAD * invScale)
+        botPad  = math.floor(L.INV_TAB_BOTTOM_PAD * invScale)
+        rowH    = math.floor(L.INV_ROW_H * invScale)
+        rowPad  = math.floor(L.INV_ROW_PAD * invScale)
+        iconSz  = math.floor(L.INV_ICON_SIZE * invScale)
+        footerH = math.floor(L.INV_FOOTER_H * invScale)
+        textPad = math.floor(L.INV_TEXT_PAD * invScale)
+        sectPad = math.floor(L.SECTION_PAD * invScale)
+        rowGap  = math.floor(L.SUB_TAB_ROW_GAP * invScale)
+    end
+
     local cursorY   = rect.y + topPad
     for _, r in ipairs(tabPlan) do
         local rowStartX = rect.x + math.floor((rect.w - r.totalW) / 2)

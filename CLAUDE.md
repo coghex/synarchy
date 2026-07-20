@@ -1959,6 +1959,50 @@ Verified against a real running engine: loaded
 examples) both pass; `lua_module_budget.py` clean (this file isn't a
 budgeted module).
 
+Round-21 review found a gap in `unit_info_v2_inventory.lua`'s own
+`rebuildInventorySection`: round-16's vertical fit
+(`fitVerticalSections`) can leave the WHOLE inventory section only
+~253px tall at 800×2160@4x, but this renderer still derived its own
+tab strip + row + footer chrome (`tabH`/`topPad`/`botPad`/`rowH`/
+`rowPad`/`footerH`) from the full, unfitted `uiscale` — one tab row
+alone plus top/bottom padding and the footer already consumed ~240px,
+driving `maxRows` (the item-row count computed from whatever height is
+left) to 0. A nonempty inventory therefore rendered no item rows and
+no right-click hit zones at all — the content wasn't merely cramped,
+it was completely unreachable.
+
+Fixed with the same local-scale-fit technique as round-17's equipment
+content and round-19's popup line block: a NEW local `invScale`, fit
+via `responsive.fitScale` against the height needed for the tab strip
++ AT LEAST ONE item row + the footer, applied to every
+`rebuildInventorySection`-owned vertical constant
+(`tabH`/`topPad`/`botPad`/`rowH`/`rowPad`/`iconSz`/`footerH`/
+`textPad`/`sectPad`/`rowGap`) — never another section's own scale.
+Computing the fit target needed the REAL tab-row count
+(`nTabRows = #tabPlan`), so the tab-width-measurement and row-wrap-plan
+code (which was already independent of `uiscale` — tab labels render
+at a fixed size regardless) moved earlier in the function, ahead of
+the uiscale-derived size block, rather than duplicating that logic.
+Tab LABEL text itself stays fixed-size (unchanged, not part of this
+gap), so the fit can only ever shrink the surrounding chrome toward
+it, never meaningfully past it, at the review's own cited boundary —
+a fit severe enough to shrink `tabH` below the label's own fixed size
+is a theoretically possible but far more extreme combination than what
+this review covers, same best-effort acceptance as everywhere else in
+this contract.
+
+Verified against a real running engine: at 800×2160@4x, `invRect.h`
+measured 253px exactly as the reviewer cited; with no inventory
+content, `rebuildInventorySection` runs cleanly; with a stubbed
+one-item inventory, a real row + its right-click hit zone now renders
+(`#invRows == 1`, confirmed empty pre-fix at the same combination).
+Confirmed the new test catches the regression (stashed
+`unit_info_v2_inventory.lua`, re-ran — 1 failure as expected, restored
+— passes again); full `UI.ResponsiveGameplay` suite (73 examples) and
+the broader `UI`-tagged headless suite (400 examples) both pass;
+`lua_module_budget.py` clean (`unit_info_v2_inventory.lua` at
+435/500).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

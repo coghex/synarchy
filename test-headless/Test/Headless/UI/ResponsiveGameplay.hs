@@ -1667,6 +1667,64 @@ spec = aroundAll withSharedFixture $ do
                     uiefpSilBottom p `shouldSatisfy` (≤ uiefpRectBottom p)
                     uiefpSlotBottom p `shouldSatisfy` (≤ uiefpRectBottom p)
 
+        it "a populated inventory renders at least one item row instead of maxRows=0 at 800x2160@4x (round-21 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-21 review: round-16's own vertical fit
+            -- (unit_info_v2_layout.lua's fitVerticalSections) can leave
+            -- the whole inventory section only ~253px tall at this
+            -- combination, but rebuildInventorySection still derived
+            -- its own tab strip + row + footer chrome from the full,
+            -- unfitted uiscale — one tab row plus top/bottom padding
+            -- and the footer alone consumed ~240px, leaving maxRows at
+            -- 0: a nonempty inventory rendered no item rows or
+            -- right-click hit zones at all. unit.getInventory/
+            -- equipment.getLoadout/unit.getInfo/equipment.getAccessories
+            -- are stubbed (no real world/units exist in this harness);
+            -- rebuildInventorySection is driven directly, bypassing
+            -- update()'s other section modules (which would need their
+            -- own unrelated stubs to not error).
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.update(0.016);"
+                , "local origInv = unit.getInventory;"
+                , "local origLoadout = equipment.getLoadout;"
+                , "local origInfo = unit.getInfo;"
+                , "local origAcc = equipment.getAccessories;"
+                , "unit.getInventory = function(uid) return {"
+                , "    {defName='item1', displayName='Item One', category='Cat1', weight=1.0},"
+                , "    {defName='item2', displayName='Item Two', category='Cat1', weight=1.0},"
+                , "    {defName='item3', displayName='Item Three', category='Cat1', weight=1.0},"
+                , "} end;"
+                , "equipment.getLoadout = function(uid) return {} end;"
+                , "unit.getInfo = function(uid) return {equipmentClass = nil} end;"
+                , "equipment.getAccessories = function(uid) return {} end;"
+                , "u.activeUid = 1;"
+                , "local im = require('scripts.unit_info_v2_inventory');"
+                , "local ok = pcall(function() im.rebuildInventorySection() end);"
+                , "unit.getInventory = origInv; equipment.getLoadout = origLoadout;"
+                , "unit.getInfo = origInfo; equipment.getAccessories = origAcc;"
+                , "local ir = u.invRect;"
+                , "local rowInfos = {};"
+                , "for _, row in ipairs(u.invRows) do"
+                , "    local info = UI.getElementInfo(row.hitId);"
+                , "    table.insert(rowInfos, {x=info.x, y=info.y, w=info.width, h=info.height});"
+                , "end;"
+                , "return {ok = ok, rowCount = #u.invRows,"
+                , "        rectTop = ir.y, rectBottom = ir.y + ir.h, rows = rowInfos}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoInvRowsProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    uiirpOk p `shouldBe` True
+                    uiirpRowCount p `shouldSatisfy` (≥ 1)
+                    forM_ (uiirpRows p) $ \rc → do
+                        rrY rc `shouldSatisfy` (≥ uiirpRectTop p)
+                        (rrY rc + rrH rc) `shouldSatisfy` (≤ uiirpRectBottom p)
+
         it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -2493,6 +2551,14 @@ instance FromJSON UnitInfoVerticalProbe where
     parseJSON = withObject "UnitInfoVerticalProbe" $ \o →
         UnitInfoVerticalProbe <$> o .: "ok" <*> o .: "hasInvRect" <*> o .: "invH"
                                <*> o .: "equipBottom" <*> o .: "statsBottom" <*> o .: "invBottom"
+
+data UnitInfoInvRowsProbe = UnitInfoInvRowsProbe
+    { uiirpOk ∷ Bool, uiirpRowCount ∷ Int
+    , uiirpRectTop ∷ Double, uiirpRectBottom ∷ Double, uiirpRows ∷ [RectRow] } deriving Show
+instance FromJSON UnitInfoInvRowsProbe where
+    parseJSON = withObject "UnitInfoInvRowsProbe" $ \o →
+        UnitInfoInvRowsProbe <$> o .: "ok" <*> o .: "rowCount"
+                               <*> o .: "rectTop" <*> o .: "rectBottom" <*> o .: "rows"
 
 data RemoteWarningTextFitProbe = RemoteWarningTextFitProbe
     { rwtfHasMsg ∷ Bool, rwtfHasTitle ∷ Bool
