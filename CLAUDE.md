@@ -1467,6 +1467,94 @@ then a real `uiManager.onFramebufferResize(1600, 900)` call updated
 separate `notifyGameplayRescale(1920, 1080)` call updated them again —
 proving both paths reach it end to end.
 
+Round-13 review found three more gaps, the biggest of which reopened a
+design question from round 1. First and third:
+`build_tool_remote_warning.lua`'s Establish/Cancel buttons had the
+IDENTICAL "box shrinks, child text doesn't" defect round-12 found in
+the tab strips — `makeButton`'s `UI.newText` label still rendered at
+the full, unshrunk `s.buttonFontSize`, so at the issue's own
+800×2160@4x combination "Choose Another Site" (1368px wide in the
+shipped Press Start 2P font at that size) rendered far outside an
+800px-wide modal despite its click box staying in-frame. Fixed the
+same way: each button's own font size is scaled by the ratio of its
+final (possibly round-7-shrunk) width to its natural pre-shrink width
+— `fontScale = width / naturalWidth`, floored at 6px. Verified this
+is precise, not just directionally better: text width scales EXACTLY
+linearly with font size in this renderer (confirmed against a real
+`--offscreen` session — "Choose Another Site" measured 342px at
+fontSize 18 and exactly 1368px at fontSize 72, a perfect ×4), so
+`width/naturalWidth` reliably predicts the shrunk font that makes the
+shrunk text refit — the Cancel button's real text width dropped from
+1368px to 304px against its 356px box (fits) at the reviewer's own
+scenario. The Establish button in that same scenario still overflows
+slightly (84px text in a 20px box) — that box was independently
+floored to 20px by round-7's OWN shrink step before this fix's ratio
+is even computed, a pre-existing, accepted best-effort limit this fix
+doesn't newly introduce or worsen. `UI.newText` elements always report
+a zero-sized `UI.getElementInfo` bounding box (the same fact
+`label.lua`'s own comment documents for its wrapped labels), so this
+module gained `buttonTextByBox`/`buttonFontSizeByBox` (box handle →
+child text handle / the computed font size) purely for introspection —
+headless coverage compares the computed font size between an unshrunk
+wide framebuffer and the reviewer's narrow one, mirroring round-12's
+"unshrunk vs shrunk" technique exactly since `engine.getTextWidth`
+itself is 0 in this suite's synthetic boot.
+
+Also fixed while in this file: `onFramebufferResize` deletes and
+recreates the whole modal page on every rebuild, including the
+Establish/Cancel boxes — real keyboard-control-focusable elements per
+`#745` — with no control-focus snapshot/restore at all, the same gap
+round-10 already fixed in `hud.lua`. Same fix here:
+`responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
+around the rebuild, gated on the page actually being visible
+beforehand.
+
+Second, and the larger change: `hud.lua`'s `"resize"` teardown
+(`scripts/ui/view_teardown.lua`, added round 1 to keep
+`hud.world_page`-mounted popups from surviving `UI.deletePage` as
+stale "open" module state pointing at deleted elements) was a ONE-WAY
+close for six panels — cargo/item-contents/crafting/plant, the
+build-tool picker, and the tile editor. A resize or Settings scale
+change while any of them was open silently discarded it (round-13's
+own example: `closeIfOpen()` resets cargo's selected tab), which #750
+requires surviving as a layout-only change, not a real close the
+player has to consciously reopen from. `hud.createUI()` now
+snapshots each one's own "what am I open for" state (target
+building/unit/tile id, cargo's `activeTab`, the picker's persisted
+`activeCategory`) BEFORE the `"resize"` teardown sweep runs (which
+still executes unchanged — module state still needs reconciling before
+the page deletion, corrupted state is still the wrong failure mode),
+and reopens every one that was open at the very end of the function,
+once every panel's own `setup()` call earlier in the same rebuild has
+already re-pointed it at the FRESH `hud.world_page` — reusing each
+panel's own real open entry point (`cargoInventoryPanel.openFor`/
+`itemContentsPanel.openFor`/`craftingPanel.show`/`plantPanel.show`/
+`buildTool.showPicker`/`tileEditor.onTileSelected`) so it renders
+exactly as if freshly opened against the new layout. Cargo needed one
+new function (`reopenWithTab`) since plain `openFor` always resets to
+the "All" tab; every other panel's existing entry point was already a
+complete reopen. Both the snapshot and the reopen side wrap each of
+the six panels in its own `pcall`, mirroring `view_teardown.lua`'s own
+per-hook isolation discipline exactly — caught for real during this
+round: an existing test stubbing all six panels with a MINIMAL
+interface (no `isOpen()`/`state`) to test the (unrelated) teardown
+pcall-isolation guarantee started crashing `hud.createUI()` entirely
+once the unguarded snapshot code called `.isOpen()` on those stubs;
+wrapping each snapshot attempt in its own `pcall` fixed it and is
+simply the correct discipline regardless — a real panel module's
+`isOpen()` throwing must never block the other five, or the whole
+rebuild.
+
+Verified against a real running `--headless` engine: opened a cargo
+panel on a real `hud.world_page`, switched to a non-default tab,
+called a real `hud.onFramebufferResize`, and confirmed
+`cargoInventoryPanel.isOpen()`/`.state.bid`/`.state.activeTab` all
+survived unchanged; separately confirmed `build_tool_remote_warning`'s
+control focus survives the same way. Confirmed both new headless tests
+actually catch their regressions (stashed all three fix files,
+re-ran — 3 failures as expected across cargo/focus/font-size; restored,
+re-ran — passes again).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

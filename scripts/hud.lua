@@ -192,6 +192,66 @@ function hud.createUI()
     local preservedToolNames = hud.toolToggleId and toggle.getSlotNames(hud.toolToggleId) or {}
     local preservedMapNames  = hud.mapToggleId  and toggle.getSlotNames(hud.mapToggleId)  or {}
 
+    -- #750 round-13 review: the "resize" teardown below (needed because
+    -- UI.deletePage(hud.world_page) destroys these popups' elements
+    -- regardless of their own module state) used to be a one-way close —
+    -- a resize/rescale silently discarded the player's open cargo/item-
+    -- contents/crafting/plant panel, the build picker, or the tile
+    -- editor, rather than surviving it the way #750 requires for a
+    -- layout-only change. Snapshot each one's "what am I open for" state
+    -- HERE, before teardown destroys it, and reopen every one that was
+    -- open at the very end of this function (after everything below has
+    -- rebuilt fresh) — reusing each panel's own normal open entry point,
+    -- so it renders exactly as if freshly opened against the new layout.
+    -- Each snapshot attempt is pcall-isolated, same discipline
+    -- view_teardown.lua's own hooks already follow: a module that lacks
+    -- (or errors out of) the introspection this relies on must never
+    -- block the rest of the rebuild.
+    local function trySnapshot(fn)
+        local ok, result = pcall(fn)
+        if not ok then
+            engine.logError("hud.createUI: panel resize-snapshot failed: " .. tostring(result))
+            return nil
+        end
+        return result
+    end
+    local reopenCargo, reopenItem, reopenCraft, reopenPlant, reopenPicker, reopenTile
+    if hud.uiCreated and hud.world_page and hud.zoom_page then
+        reopenCargo = trySnapshot(function()
+            local m = require("scripts.cargo_inventory_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            return { bid = s.bid, mx = s.mx, my = s.my, tab = s.activeTab }
+        end)
+        reopenItem = trySnapshot(function()
+            local m = require("scripts.item_contents_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            return { uid = s.uid, defName = s.defName, mx = s.mx, my = s.my,
+                     instanceId = s.instanceId }
+        end)
+        reopenCraft = trySnapshot(function()
+            local m = require("scripts.crafting_panel")
+            if not m.isOpen() then return nil end
+            return { bid = m.state.bid }
+        end)
+        reopenPlant = trySnapshot(function()
+            local m = require("scripts.plant_panel")
+            if not m.isOpen() then return nil end
+            local s = m.state
+            return { pageId = s.pageId, gx = s.gx, gy = s.gy }
+        end)
+        reopenPicker = trySnapshot(function()
+            local m = require("scripts.build_tool")
+            return m.state.mode == "picker" or nil
+        end)
+        reopenTile = trySnapshot(function()
+            local m = require("scripts.tile_editor")
+            if not m.state.active then return nil end
+            return { gx = m.state.gx, gy = m.state.gy }
+        end)
+    end
+
     -- Tear down previous pages if resizing
     if hud.uiCreated and hud.world_page and hud.zoom_page then
         -- #750: every popup mounted on hud.world_page (crafting/cargo/
@@ -199,7 +259,9 @@ function hud.createUI()
         -- editor) owns module-level "open" state that UI.deletePage below
         -- has no way to reconcile — left alone it stays "open" pointing
         -- at elements that are about to be destroyed. Close them first,
-        -- same as any other view-transition teardown.
+        -- same as any other view-transition teardown; reopened (if it
+        -- was actually open) once this function finishes rebuilding,
+        -- from the snapshot captured above.
         require("scripts.ui.view_teardown").run("resize")
         UI.deletePage(hud.world_page)
         UI.deletePage(hud.zoom_page)
@@ -621,6 +683,58 @@ function hud.createUI()
     end
     -- info_page starts hidden (infoPanel.create hides it);
     -- it will show when content is sent via setInfoText.
+
+    -- #750 round-13 review: reopen whatever transient world_page-mounted
+    -- panel was open before this rebuild, from the snapshot captured
+    -- near the top of this function — every setup() call above has
+    -- already re-pointed each panel at the FRESH hud.world_page, so
+    -- reopening now targets the new page, not the deleted one. Safe to
+    -- do before this page is (re)shown by the caller (hud.show()/
+    -- onFramebufferResize): element creation doesn't require the page
+    -- to already be visible, only the page's own later UI.showPage call
+    -- does, and every one of these panels is a plain child of
+    -- hud.world_page. Each reopen is pcall-isolated, same as the
+    -- snapshot side above.
+    local function tryReopen(fn)
+        local ok, err = pcall(fn)
+        if not ok then
+            engine.logError("hud.createUI: panel resize-reopen failed: " .. tostring(err))
+        end
+    end
+    if reopenCargo then
+        tryReopen(function()
+            require("scripts.cargo_inventory_panel").reopenWithTab(
+                reopenCargo.bid, reopenCargo.mx, reopenCargo.my, reopenCargo.tab)
+        end)
+    end
+    if reopenItem then
+        tryReopen(function()
+            require("scripts.item_contents_panel").openFor(
+                reopenItem.uid, reopenItem.defName, reopenItem.mx, reopenItem.my,
+                reopenItem.instanceId)
+        end)
+    end
+    if reopenCraft then
+        tryReopen(function()
+            require("scripts.crafting_panel").show(reopenCraft.bid)
+        end)
+    end
+    if reopenPlant then
+        tryReopen(function()
+            require("scripts.plant_panel").show(
+                reopenPlant.pageId, reopenPlant.gx, reopenPlant.gy)
+        end)
+    end
+    if reopenPicker then
+        tryReopen(function()
+            require("scripts.build_tool").showPicker()
+        end)
+    end
+    if reopenTile then
+        tryReopen(function()
+            require("scripts.tile_editor").onTileSelected(reopenTile.gx, reopenTile.gy)
+        end)
+    end
 
     hud.uiCreated = true
     engine.logDebug("HUD UI created")

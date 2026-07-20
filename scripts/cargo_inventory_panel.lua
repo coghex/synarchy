@@ -638,6 +638,33 @@ function cargoInventoryPanel.openFor(bid, mx, my)
     buildLayout(bid, mx, my)
 end
 
+-- #750 round-13 review: hud.lua's "resize" teardown (scripts/ui/
+-- view_teardown.lua) closes this popup before hud.world_page — which it
+-- is mounted on — gets deleted and replaced; a resize/rescale otherwise
+-- silently discarded the player's open cargo panel (and which tab they
+-- had selected) rather than treating it as the layout-only change #750
+-- requires it to survive. hud.lua snapshots isOpen()/state.bid/mx/my/
+-- activeTab BEFORE the teardown runs and calls this to rebuild the SAME
+-- panel, on the SAME tab, once its own rebuild is done. Plain openFor()
+-- always resets to the "All" tab (closeIfOpen's own reset), so the
+-- saved tab is re-applied afterward via the same "force rebuild" path
+-- handleTabClick already uses, IF it's still a valid tab for the
+-- (possibly changed) current contents.
+function cargoInventoryPanel.reopenWithTab(bid, mx, my, tab)
+    cargoInventoryPanel.openFor(bid, mx, my)
+    local s = cargoInventoryPanel.state
+    if not s.open or not tab or tab == s.activeTab then return end
+    local stillValid = false
+    for _, t in ipairs(s.tabs) do
+        if t.name == tab then stillValid = true; break end
+    end
+    if stillValid then
+        s.activeTab = tab
+        s.lastHash  = ""
+        buildLayout(s.bid, s.mx, s.my)
+    end
+end
+
 function cargoInventoryPanel.closeIfOpen()
     if not cargoInventoryPanel.state.open then return end
     destroyAll()

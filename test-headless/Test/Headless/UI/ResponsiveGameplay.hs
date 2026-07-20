@@ -1193,6 +1193,42 @@ spec = aroundAll withSharedFixture $ do
                     spAfter p `shouldBe` True
 
     describe "build_tool_remote_warning.lua stays in-frame at a narrow, high-scale, still-C2-supported combination (round-6 review)" $ do
+        it "a resize preserves keyboard CONTROL focus (#745) on Establish/Cancel, restoring it onto the rebuilt control (round-13 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-13 review: onFramebufferResize deletes and
+            -- recreates the whole modal page (including the Establish/
+            -- Cancel boxes, both real keyboard-control-focusable
+            -- elements per #745) — page deletion clears upmControlFocus
+            -- with no restore, so a Tab-focused action silently lost
+            -- focus on every resize/scale change. Mirrors hud.lua's own
+            -- identical fix (#750 round-10).
+            r ← evalJSON ls $ luaLines
+                [ "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,1920,1080);"
+                , "w.open('acolyte_portal', 5, 5, 100, 50);"
+                , "local boxHandle = next(w.clickHandlers);"
+                , "UI.setControlFocus(boxHandle);"
+                , "local hadFocusBefore = UI.hasControlFocus(boxHandle);"
+                , "w.onFramebufferResize(1600, 900);"
+                , "local focusHandle = UI.getControlFocus();"
+                , "return {hadFocusBefore = hadFocusBefore, hasFocusAfter = (focusHandle ~= nil)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RemoteWarningFocusProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rwfpHadFocusBefore p `shouldBe` True
+                    rwfpHasFocusAfter p `shouldBe` True
+
+        it "a resize with no confirmation pending does not attempt to restore control focus (nothing to restore, no crash)" $ \(env, ls) → do
+            resetFixture env ls
+            ok ← evalBool ls $ luaLines
+                [ "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,1920,1080);"
+                , "local ok = pcall(function() w.onFramebufferResize(1600, 900) end);"
+                , "return ok"
+                ]
+            ok `shouldBe` True
+
         it "the modal panel is capped to the framebuffer instead of pushing Establish/Cancel off-screen" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
@@ -1252,6 +1288,57 @@ spec = aroundAll withSharedFixture $ do
                         rrY rc `shouldSatisfy` (≥ 0)
                         (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
                         (rrY rc + rrH rc) `shouldSatisfy` (≤ 2160)
+
+        it "a heavily-shrunk button's label font shrinks with its box, not at a fixed full-uiscale size (round-13 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-13 review: shrinking the button BOX alone
+            -- (round-7) left its child text rendering at the full,
+            -- unshrunk s.buttonFontSize — with the shipped Press Start
+            -- 2P font, "Choose Another Site" is wide enough at that size
+            -- to render across/off an 800px modal despite the click box
+            -- staying in-frame. UI.getElementInfo always reports a
+            -- zero-sized bounding box for a raw UI.newText element (see
+            -- label.lua's own comment on the same fact for label-wrapped
+            -- text), so this compares the fix's own
+            -- buttonFontSizeByBox[boxH] (added for exactly this
+            -- introspection) between a wide framebuffer (no shrink
+            -- needed) and the reviewer's narrow 800x2160@4x — a fixed,
+            -- unshrunk uiscale would report the SAME font size either
+            -- way; the fix makes the narrow one measurably smaller.
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,1920,1080);"
+                , "w.open('acolyte_portal', 5, 5, 100, 50);"
+                , "local unshrunkSizes = {};"
+                , "for _, fs in pairs(w.buttonFontSizeByBox) do table.insert(unshrunkSizes, fs) end;"
+                -- w.open() no-ops while a confirmation is already pending
+                -- (buildToolRemoteWarning.pending) — must close before
+                -- reopening at the new framebuffer size, or the second
+                -- open silently reuses the first's geometry.
+                , "w.closeIfOpen();"
+                , "w.init(1,2,3,800,2160);"
+                , "w.open('acolyte_portal', 5, 5, 100, 50);"
+                , "local shrunkSizes = {};"
+                , "for _, fs in pairs(w.buttonFontSizeByBox) do table.insert(shrunkSizes, fs) end;"
+                , "table.sort(unshrunkSizes); table.sort(shrunkSizes);"
+                , "return {unshrunkSizes = unshrunkSizes, shrunkSizes = shrunkSizes}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe FontSizeCompareProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    length (fscpUnshrunkSizes p) `shouldBe` 2
+                    length (fscpShrunkSizes p) `shouldBe` 2
+                    forM_ (fscpShrunkSizes p) $ \sz → sz `shouldSatisfy` (> 0)
+                    -- Every shrunk-case size must be no larger than its
+                    -- unshrunk counterpart (both lists sorted the same
+                    -- way — establish is always narrower than cancel).
+                    forM_ (zip (fscpShrunkSizes p) (fscpUnshrunkSizes p)) $ \(sh, un) →
+                        sh `shouldSatisfy` (≤ un)
+                    -- At least one button must have ACTUALLY shrunk (not
+                    -- just clamped equal) to prove the fix engaged.
+                    or (zipWith (<) (fscpShrunkSizes p) (fscpUnshrunkSizes p))
+                        `shouldBe` True
 
     describe "cargo_inventory_panel.lua / item_contents_panel.lua stay in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $ do
         it "cargo_inventory_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
@@ -1360,6 +1447,50 @@ spec = aroundAll withSharedFixture $ do
                 Just p → do
                     shpShrunkH p `shouldSatisfy` (> 0)
                     shpShrunkH p `shouldSatisfy` (< shpUnshrunkH p)
+
+        it "cargo_inventory_panel: a resize preserves the open panel's target building AND its selected tab instead of silently closing it (round-13 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-13 review: hud.lua's "resize" teardown used to
+            -- be a one-way close() — a resize while a cargo panel was
+            -- open discarded it (and which tab was selected) entirely,
+            -- rather than surviving the layout-only change like #750
+            -- requires. Drives the REAL hud.world_page (not a standalone
+            -- test page) so hud.createUI()'s snapshot/reopen machinery
+            -- actually engages.
+            r ← evalJSON ls $ luaLines
+                [ "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
+                , "} end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.openFor(42, 400, 400);"
+                , "local targetBox = nil;"
+                , "for _, t in ipairs(cip.state.tabs) do"
+                , "    if t.name == 'Cat2' then targetBox = t.boxId end"
+                , "end;"
+                , "cip.handleTabClick(targetBox);"
+                , "local wasOpenBefore = cip.isOpen();"
+                , "local tabBefore = cip.state.activeTab;"
+                , "hud.onFramebufferResize(1600, 900);"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return {wasOpenBefore = wasOpenBefore, tabBefore = tabBefore,"
+                , "        isOpenAfter = cip.isOpen(), bidAfter = cip.state.bid,"
+                , "        tabAfter = cip.state.activeTab}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CargoResizeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    crpWasOpenBefore p `shouldBe` True
+                    crpTabBefore p `shouldBe` "Cat2"
+                    crpIsOpenAfter p `shouldBe` True
+                    crpBidAfter p `shouldBe` 42
+                    crpTabAfter p `shouldBe` "Cat2"
 
         it "item_contents_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
@@ -1726,6 +1857,26 @@ data LabeledOkRow = LabeledOkRow { lorLabel ∷ Text, lorOk ∷ Bool } deriving 
 instance FromJSON LabeledOkRow where
     parseJSON = withObject "LabeledOkRow" $ \o →
         LabeledOkRow <$> o .: "label" <*> o .: "ok"
+
+data RemoteWarningFocusProbe = RemoteWarningFocusProbe
+    { rwfpHadFocusBefore ∷ Bool, rwfpHasFocusAfter ∷ Bool } deriving Show
+instance FromJSON RemoteWarningFocusProbe where
+    parseJSON = withObject "RemoteWarningFocusProbe" $ \o →
+        RemoteWarningFocusProbe <$> o .: "hadFocusBefore" <*> o .: "hasFocusAfter"
+
+data FontSizeCompareProbe = FontSizeCompareProbe
+    { fscpUnshrunkSizes ∷ [Int], fscpShrunkSizes ∷ [Int] } deriving Show
+instance FromJSON FontSizeCompareProbe where
+    parseJSON = withObject "FontSizeCompareProbe" $ \o →
+        FontSizeCompareProbe <$> o .: "unshrunkSizes" <*> o .: "shrunkSizes"
+
+data CargoResizeProbe = CargoResizeProbe
+    { crpWasOpenBefore ∷ Bool, crpTabBefore ∷ Text
+    , crpIsOpenAfter ∷ Bool, crpBidAfter ∷ Int, crpTabAfter ∷ Text } deriving Show
+instance FromJSON CargoResizeProbe where
+    parseJSON = withObject "CargoResizeProbe" $ \o →
+        CargoResizeProbe <$> o .: "wasOpenBefore" <*> o .: "tabBefore"
+                          <*> o .: "isOpenAfter" <*> o .: "bidAfter" <*> o .: "tabAfter"
 
 data ShrinkHeightProbe = ShrinkHeightProbe
     { shpUnshrunkH ∷ Double, shpShrunkH ∷ Double } deriving Show

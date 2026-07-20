@@ -29,6 +29,7 @@ local buildToolRemoteWarning = {}
 local panel = require("scripts.ui.panel")
 local label = require("scripts.ui.label")
 local scale = require("scripts.ui.scale")
+local responsive = require("scripts.ui.responsive")
 
 buildToolRemoteWarning.page = nil
 buildToolRemoteWarning.panelId = nil
@@ -40,6 +41,18 @@ buildToolRemoteWarning.fbH = 0
 
 buildToolRemoteWarning.ownedLabels = {}
 buildToolRemoteWarning.ownedBoxes  = {}
+-- Button box handle -> its child text element handle (#750 round-13:
+-- these are raw UI.newText elements, not label.lua-wrapped, so they
+-- don't fit ownedLabels' label.destroy(id) convention — cascade-deleted
+-- along with the rest of the page on rebuild, same as every other
+-- page-child element here; tracked only so callers/tests can introspect
+-- the actual rendered button text geometry). Text elements always
+-- report a zero-sized UI.getElementInfo bounding box (see label.lua's
+-- own comment on the same fact), so buttonFontSizeByBox exists purely
+-- so a caller/test can independently re-derive the real rendered width
+-- via engine.getTextWidth(bodyFont, text, thatSize).
+buildToolRemoteWarning.buttonTextByBox = {}
+buildToolRemoteWarning.buttonFontSizeByBox = {}
 
 -- { defName, gx, gy, worldId } for the tile the warning was opened
 -- against, or nil when closed. distance/thresholdTiles are cached
@@ -99,6 +112,8 @@ local function destroyOwned()
     buildToolRemoteWarning.ownedLabels = {}
     buildToolRemoteWarning.ownedBoxes  = {}
     buildToolRemoteWarning.clickHandlers = {}
+    buildToolRemoteWarning.buttonTextByBox = {}
+    buildToolRemoteWarning.buttonFontSizeByBox = {}
 end
 
 local function createUI(distance, thresholdTiles)
@@ -152,6 +167,8 @@ local function createUI(distance, thresholdTiles)
     -- panel box itself fits. Shrink each button equally (never below a
     -- small floor) so the row fits the panel's actual content width —
     -- best-effort, may look cramped, but the buttons stay reachable.
+    local naturalEstablishW = establishW
+    local naturalCancelW = cancelW
     local availableButtonsW = panelWidth - 2 * s.panelPaddingX
     if buttonsRowWidth > availableButtonsW then
         local shrinkEach = (buttonsRowWidth - availableButtonsW) / 2
@@ -213,7 +230,18 @@ local function createUI(distance, thresholdTiles)
     local buttonsY = titleH + s.titleGap + msgH + s.messageGap
     local baseZ = panel.getZIndex(buildToolRemoteWarning.panelId)
 
-    local function makeButton(name, text, width, onClick)
+    -- #750 round-13 review: shrinking the button BOX alone left its
+    -- child text rendering at the full, unshrunk s.buttonFontSize —
+    -- with the shipped Press Start 2P font, "Choose Another Site" is
+    -- wide enough at that size to render across (or off) an 800px-wide
+    -- modal despite the click box itself staying in-frame. Scale each
+    -- button's OWN font size by the ratio of its final (possibly
+    -- shrunk) width to its natural (pre-shrink) width — mirrors the
+    -- `labelUiscale = uiscale * shrink` technique
+    -- cargo_inventory_panel.lua/build_tool.lua's picker tab labels
+    -- already use for the identical class of gap (#750 round-12) —
+    -- floored so text stays a nonzero, visible target.
+    local function makeButton(name, text, width, naturalWidth, onClick)
         local boxH = UI.newBox(
             name .. "_box", width, s.buttonHeight,
             buildToolRemoteWarning.boxTexSet, s.buttonTileSize,
@@ -225,25 +253,29 @@ local function createUI(distance, thresholdTiles)
         UI.setOnClick(boxH, "onBuildToolRemoteWarningClick")
         buildToolRemoteWarning.clickHandlers[boxH] = onClick
 
+        local fontScale = (naturalWidth > 0) and math.min(1.0, width / naturalWidth) or 1.0
+        local buttonFontSize = math.max(6, math.floor(s.buttonFontSize * fontScale))
         local textH = UI.newText(
             name .. "_label", text,
-            buildToolRemoteWarning.bodyFont, s.buttonFontSize,
+            buildToolRemoteWarning.bodyFont, buttonFontSize,
             1.0, 1.0, 1.0, 1.0,
             buildToolRemoteWarning.page
         )
         local lblW = engine.getTextWidth(
-            buildToolRemoteWarning.bodyFont, text, s.buttonFontSize)
-        UI.addChild(boxH, textH, (width - lblW) / 2, (s.buttonHeight / 2) + (s.buttonFontSize / 2))
+            buildToolRemoteWarning.bodyFont, text, buttonFontSize)
+        UI.addChild(boxH, textH, (width - lblW) / 2, (s.buttonHeight / 2) + (buttonFontSize / 2))
         UI.setZIndex(textH, 1)
         UI.setZIndex(boxH, baseZ + 1)
+        buildToolRemoteWarning.buttonTextByBox[boxH] = textH
+        buildToolRemoteWarning.buttonFontSizeByBox[boxH] = buttonFontSize
         return boxH, { width = width, height = s.buttonHeight }
     end
 
     local establishBox, establishSize = makeButton(
-        "build_tool_remote_warning_establish", establishLabel, establishW,
+        "build_tool_remote_warning_establish", establishLabel, establishW, naturalEstablishW,
         function() buildToolRemoteWarning.establishHere() end)
     local cancelBox, cancelSize = makeButton(
-        "build_tool_remote_warning_cancel", cancelLabel, cancelW,
+        "build_tool_remote_warning_cancel", cancelLabel, cancelW, naturalCancelW,
         function() buildToolRemoteWarning.chooseAnotherSite() end)
 
     panel.placeRow(buildToolRemoteWarning.panelId,
@@ -371,8 +403,24 @@ function buildToolRemoteWarning.onFramebufferResize(width, height)
     buildToolRemoteWarning.fbH = height
     if buildToolRemoteWarning.pending then
         local pending = buildToolRemoteWarning.pending
+        -- #750 round-13 review: createUI() deletes and recreates the
+        -- whole page (including the Establish/Cancel boxes, both real
+        -- keyboard-control-focusable elements per #745) — page deletion
+        -- clears upmControlFocus with no restore, so a Tab-focused
+        -- action silently lost focus on every resize/scale change.
+        -- Same by-name snapshot/restore hud.lua's own onFramebufferResize
+        -- fix (#750 round-10) already established, guarded on the page
+        -- actually being visible beforehand (restoreControlFocusName
+        -- searches UI.getVisibleElements(), which needs the rebuilt page
+        -- shown again first).
+        local wasVisible = buildToolRemoteWarning.page
+            and UI.isPageVisible(buildToolRemoteWarning.page)
+        local controlFocusName = wasVisible and responsive.snapshotControlFocusName()
         createUI(pending.distance, pending.thresholdTiles)
         UI.showPage(buildToolRemoteWarning.page)
+        if wasVisible then
+            responsive.restoreControlFocusName(controlFocusName)
+        end
     end
 end
 
