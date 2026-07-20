@@ -289,6 +289,15 @@ local function validateBuildingSpawnData(data)
                 errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
                     .. " lastUid has wrong reference kind '"
                     .. tostring(s.lastUid.__ref) .. "' (expected 'unit')"
+            -- Round-3 review: a tag-only check would still accept
+            -- {__ref="unit", id="bad"} -- mirrors
+            -- unit_ai_save_refs.lua's checkRefTag id validation.
+            elseif type(s.lastUid.id) ~= "number"
+                    or s.lastUid.id ~= math.floor(s.lastUid.id)
+                    or s.lastUid.id < 1 then
+                errs[#errs + 1] = "building_spawn: building " .. tostring(bid)
+                    .. " lastUid has a non-numeric or invalid id ("
+                    .. tostring(s.lastUid.id) .. ")"
             end
         end
     end

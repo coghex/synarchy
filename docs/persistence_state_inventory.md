@@ -564,6 +564,7 @@ session at load time, never an embedded copy.
 | `bilStation` | `CraftBillDTO` (`craft-bills`) | Same page as the bill | Persist as identity/reference | `World.Save.Integrity.sessionIntegrityErrors` (wrong-page hard-fails; absent-everywhere tolerated, #758) | v1→v2, `migrateCraftBillDTOv1` |
 | `bilClaimant` | `CraftBillDTO` (`craft-bills`) | Same page as the bill (optional) | Persist as identity/reference | `World.Save.Integrity.sessionIntegrityErrors` (wrong-page hard-fails; absent tolerated) | v1→v2, `migrateCraftBillDTOv1` |
 | `nodBuilding` | `PowerNodeDTO` (`power-nodes`) | Same page as the node | Persist as identity/reference | `World.Save.Integrity.sessionIntegrityErrors` (wrong-page hard-fails; absent tolerated) | v1→v2, `migratePowerNodeDTOv1` |
+| `psSim` (map KEY, not a field value) | `PageSimDTO` (`unit-sim`) | Same page as the sim-state slice | Persist as identity/reference | `World.Save.Snapshot`'s `OrphanedUnitSimState` check (pre-existing #758 whole-session invariant — a sim owner with no matching unit on the same page hard-fails; this component was already validated, only the wire TYPE was untyped before round-3 review, #764) | v1→v2, `migratePageSimDTOv1`/`migrateUnitSimDTOv1` |
 
 **Lua reference kinds** are the controlled `kind` vocabulary a
 registered Lua save component's `references()` hook reports

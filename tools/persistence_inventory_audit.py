@@ -772,9 +772,19 @@ def extract_lua_registered_modules(
 # generic "### Owner" + "Classification" table parser (no new doc-
 # parsing machinery needed; see docs/persistence_state_inventory.md's
 # "### Typed persistent references" heading).
+#
+# Matches the wrapper ANYWHERE on the field's declaration line after the
+# `∷`/`::` separator (round-3 review, issue #764) -- not just when it's
+# the outermost type constructor. A field like
+# `psSim ∷ !(HM.HashMap (SamePageRef UnitId) UnitSimStateDTO)` types a
+# reference nested inside a HashMap KEY, not as the field's own top-level
+# type, which the original front-anchored pattern couldn't see. This
+# codebase's one-field-per-line style (already relied on by
+# `_extract_fields_from_brace_block`) keeps the match scoped to a single
+# field's own declaration rather than spilling into a sibling field.
 REFERENCE_FIELD_RE = re.compile(
-    r"^\s*,?\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)\s*!?\(?(?:Maybe\s*\(?)?\s*"
-    r"(?:SamePageRef|CrossPageRef)\b",
+    r"^\s*,?\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)[^\n]*"
+    r"\b(?:SamePageRef|CrossPageRef)\b",
     re.MULTILINE,
 )
 REFERENCE_FIELD_OWNER = "Typed persistent references"

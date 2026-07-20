@@ -40,6 +40,14 @@
 --   exercises it directly against a synthetic edge so the "permitted
 --   cross-page" acceptance path has real coverage without inventing a
 --   fake gameplay field.
+--
+--   'SamePageRef' also derives 'Hashable' (round-3 review, issue #764):
+--   a same-page reference can be the very thing a wire DTO's
+--   'Data.HashMap.Strict.HashMap' is keyed BY, not only a field value
+--   inside one — see "World.Save.Component.Entities"'s @PageSimDTO@,
+--   whose @psSim@ map key is a unit-simulation state's OWNING unit,
+--   itself a same-page cross-component reference exactly like a bill's
+--   station.
 module World.Save.Reference
     ( RefKind(..)
     , ContentKind(..)
@@ -52,6 +60,7 @@ module World.Save.Reference
 
 import UPrelude
 import Data.Serialize (Serialize)
+import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
 import World.Page.Types (WorldPageId)
 
@@ -144,7 +153,7 @@ contentKindText ck = case ck of
 --   migration) without changing its encoded bytes.
 newtype SamePageRef a = SamePageRef { unSamePageRef ∷ a }
     deriving stock (Show, Eq, Generic)
-    deriving newtype (Serialize)
+    deriving newtype (Serialize, Hashable)
 
 -- | A reference explicitly permitted to cross pages: the target's own
 --   owning page travels as real payload, since (unlike 'SamePageRef')

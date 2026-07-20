@@ -2422,6 +2422,27 @@ reads either a wrapped table or a bare number transparently
 (wrapped) data or the outer per-unit key (always bare, since a Lua
 table key can't be a table).
 
+Round-3 review closed three more gaps. `PageSimDTO.psSim`
+(`unit-sim`, `World.Save.Component.Entities`) is keyed by `SamePageRef
+UnitId` rather than a bare `UnitId` — the map KEY (a unit-sim state's
+owning unit) is exactly as durable a cross-component reference as a
+bill's station, just carried as a `HashMap` key instead of a field
+value (`SamePageRef` now derives `Hashable` for this); bumped to v2 via
+`migratePageSimDTOv1`/`migrateUnitSimDTOv1`. `checkRefTag`
+(`unit_ai_save_refs.lua`) and its `building_spawn.lua` mirror now
+reject a wrapped reference whose `__ref` tag doesn't match the field's
+expected kind AND whose `id` isn't a positive integer — a tag-only
+check would still accept `{__ref="unit", id="bad"}`, silently
+unwrapping into live `aiState` and vanishing from every diagnostic that
+`Lua.tointeger()`s the id instead of being reported. `World.Save.Component.assembleSnapshot`'s
+decode/apply-phase error lists, and `World.Thread.Command.Save.WriteWorld`'s
+`captureSessionSnapshot` failure path, now go through the SAME
+sort+cap (`capComponentErrors`, exported from `World.Save.Component`)
+every other boundary already used — previously only the cross-component
+`crossErrs` list was capped, and the `sessionIntegrityErrors` portion
+was capped TWICE (once alone, then again as part of the combined list),
+which could badly under-report the true omitted count.
+
 Deliberately NOT rewritten onto this vocabulary: the nine existing
 `missingXReferences` content-definition checks (`World.Save.Types`/
 `Engine.Scripting.Lua.API.Save`'s `continueLoad`) stay as they are —

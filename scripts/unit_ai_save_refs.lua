@@ -274,6 +274,16 @@ M.references = unitAiReferences
 -- mirrors wrapUnitState/unwrapUnitState/unitAiReferences' own field
 -- walk; any NEW reference field needs this walk updated too, same as
 -- the NB comment above already requires for the other three.
+--
+-- Round-3 review: a `.__ref` tag matching the field's expected kind is
+-- not enough on its own -- {__ref="unit", id="bad"} would still pass a
+-- tag-only check, unwrap into live aiState as a non-numeric id, and
+-- (Engine.Scripting.Lua.API.Save's readReferenceEdgeField, which
+-- Lua.tointeger()s the id) silently drop that edge from every
+-- diagnostic entirely rather than reporting it as malformed. Also
+-- reject a non-integer or non-positive id here -- the same "positive
+-- integer" contract validateUnitAiData already enforces on the OUTER
+-- per-unit key.
 local function checkRefTag(v, expectedKind, uid, path, errs)
     if v == nil then return end
     if type(v) ~= "table" or v.__ref == nil then
@@ -286,6 +296,11 @@ local function checkRefTag(v, expectedKind, uid, path, errs)
         errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
             .. " has wrong reference kind '" .. tostring(v.__ref)
             .. "' (expected '" .. expectedKind .. "')"
+        return
+    end
+    if type(v.id) ~= "number" or v.id ~= math.floor(v.id) or v.id < 1 then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
+            .. " has a non-numeric or invalid id (" .. tostring(v.id) .. ")"
     end
 end
 function M.validateRefTags(uid, s, errs)

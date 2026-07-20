@@ -88,6 +88,10 @@ module World.Save.Component.Entities
     , fromUnitInstanceDTO
     , PageSimDTO(..)
     , UnitSimDTO(..)
+    , PageSimDTOv1(..)
+    , UnitSimDTOv1(..)
+    , migratePageSimDTOv1
+    , migrateUnitSimDTOv1
     , UnitSimStateDTO(..)
     , MoveTargetDTO(..)
     , PageCraftBillsDTO(..)
@@ -599,29 +603,92 @@ fromUnitSimStateDTO d = UnitSimState
     , usMoveGrade        = simMoveGrade d
     }
 
+-- | Issue #764 (save-overhaul C3) round-3 review: @psSim@'s map KEY is a
+--   unit-simulation state's OWNING unit — a durable cross-component
+--   reference (this component's own dependency on @"units"@ exists
+--   precisely because of it) exactly like a craft bill's station or a
+--   power node's host building, just carried as a 'HM.HashMap' key
+--   rather than a field value. Typed the same way
+--   ("World.Save.Reference"'s 'SamePageRef', which derives 'Hashable'
+--   for exactly this use) rather than a bare 'UnitId' — a sim-state
+--   entry is always expected on the SAME page as the page slice
+--   carrying it (the live 'pgsUnitSimStates' this mirrors is itself
+--   page-scoped; "World.Save.Snapshot"'s @OrphanedUnitSimState@ check
+--   already enforces the SAME-page relationship this type now
+--   documents). Bumped this component to v2; v1 decodes via
+--   'migrateUnitSimDTOv1' below.
 data PageSimDTO = PageSimDTO
     { psPageId ∷ !WorldPageId
-    , psSim    ∷ !(HM.HashMap UnitId UnitSimStateDTO)
+    , psSim    ∷ !(HM.HashMap (SamePageRef UnitId) UnitSimStateDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitSimDTO = UnitSimDTO { usdPages ∷ [PageSimDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- | The FROZEN v1 shape, preserved verbatim for decode-only backward
+--   compatibility — @psSim@ here is keyed by the original bare
+--   'UnitId', exactly as it shipped. Never edited; a further schema
+--   change adds a v3 type instead (frozen-DTO boundary rule).
+data PageSimDTOv1 = PageSimDTOv1
+    { ps1PageId ∷ !WorldPageId
+    , ps1Sim    ∷ !(HM.HashMap UnitId UnitSimStateDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitSimDTOv1 = UnitSimDTOv1 { usd1Pages ∷ [PageSimDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+-- | Translate an unambiguous v1 page slice into v2: every v1 sim-state
+--   map key has always meant "this unit, on THIS page" (the live
+--   'pgsUnitSimStates' this mirrors is itself page-scoped — see
+--   'PageSimDTO' haddock above), so wrapping every key in 'SamePageRef'
+--   is total and never ambiguous (requirement 14).
+migratePageSimDTOv1 ∷ PageSimDTOv1 → PageSimDTO
+migratePageSimDTOv1 d = PageSimDTO
+    { psPageId = ps1PageId d
+    , psSim    = HM.mapKeys SamePageRef (ps1Sim d)
+    }
+
+migrateUnitSimDTOv1 ∷ UnitSimDTOv1 → UnitSimDTO
+migrateUnitSimDTOv1 (UnitSimDTOv1 ps) = UnitSimDTO (map migratePageSimDTOv1 ps)
+
+-- | Issue #764 (save-overhaul C3) round-3 review: hand-rolled
+--   'ComponentCodec' (mirrors 'craftBillsCodec'/'powerNodesCodec' —
+--   'serializeCodec' has no real multi-version dispatch) now that this
+--   component needs v1→v2 migration too.
 unitSimCodec ∷ ComponentCodec UnitSimDTO
-unitSimCodec = serializeCodec
-    unitSimComponentId 1 True [worldPagesComponentId, unitsComponentId]
-    (\snap → UnitSimDTO
-        [ PageSimDTO (pgsPageId p) (HM.map toUnitSimStateDTO (pgsUnitSimStates p))
+unitSimCodec = ComponentCodec
+    { ccId        = unitSimComponentId
+    , ccVersion   = 2
+    , ccInputVers = [1, 2]
+    , ccRequired  = True
+    , ccDeps      = [worldPagesComponentId, unitsComponentId]
+    , ccEncode    = \snap → S.encode (UnitSimDTO
+        [ PageSimDTO (pgsPageId p)
+            (HM.mapKeys SamePageRef (HM.map toUnitSimStateDTO (pgsUnitSimStates p)))
         | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+    , ccDecode    = \v bytes → case v of
+        2 → case S.decode bytes of
+              Left err → Left (ComponentError unitSimComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right d  → Right d
+        1 → case S.decode bytes of
+              Left err → Left (ComponentError unitSimComponentId v
+                                 DecodePhase ("malformed payload: " <> T.pack err))
+              Right (d ∷ UnitSimDTOv1) → Right (migrateUnitSimDTOv1 d)
+        _ → Left (ComponentError unitSimComponentId v DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+    , ccValidate  = const []
+    }
 
 applyUnitSim
     ∷ Word32 → UnitSimDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
 applyUnitSim ver (UnitSimDTO slices) =
     applyPageSlices unitSimComponentId ver psPageId
-        (\s p → p { pgsUnitSimStates = HM.map fromUnitSimStateDTO (psSim s) })
+        (\s p → p { pgsUnitSimStates =
+            HM.mapKeys unSamePageRef (HM.map fromUnitSimStateDTO (psSim s)) })
         slices
 
 -- craft-bills -------------------------------------------------------

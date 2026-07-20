@@ -922,6 +922,66 @@ spec = do
             , "  .. table.concat(prep3.errors or {}, '; '))"
             ]
 
+        it "rejects a v2 payload whose wrapped reference has the RIGHT \
+           \__ref kind but a non-numeric or invalid id (round-3 review, \
+           \issue #764) -- a tag-only check would still accept \
+           \{__ref='unit', id='bad'}, which would unwrap into live \
+           \aiState and be silently dropped by every diagnostic that \
+           \Lua.tointeger()s the id instead of being reported" $
+            runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "craft = { get = function(_id) return nil end }"
+            , "item = { listDefs = function() return {} end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local fakeAiState = {}"
+            , "local fakeUnitAi = {}"
+            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local badId = { [7] = {"
+            , "  attackTargetUid = { __ref = 'unit', id = 'bad' },"
+            , "} }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(badId) },"
+            , "})"
+            , "assert(not prep.ok,"
+            , "  'a non-numeric id on a correctly-tagged wrapper must reject the load')"
+            , "-- Zero / negative / fractional ids are equally invalid --"
+            , "-- the same positive-integer contract every other id in"
+            , "-- this codebase enforces."
+            , "local zeroId = { [7] = {"
+            , "  attackTargetUid = { __ref = 'unit', id = 0 },"
+            , "} }"
+            , "local prep2 = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(zeroId) },"
+            , "})"
+            , "assert(not prep2.ok, 'a zero id must reject the load')"
+            , "local fracId = { [7] = {"
+            , "  attackTargetUid = { __ref = 'unit', id = 8.5 },"
+            , "} }"
+            , "local prep3 = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 2, payload = codec.encode(fracId) },"
+            , "})"
+            , "assert(not prep3.ok, 'a fractional id must reject the load')"
+            ]
+
+        it "rejects a v2 building_spawn payload whose lastUid has the \
+           \RIGHT __ref kind but a non-numeric id (round-3 review, \
+           \issue #764) -- mirrors the unit_ai id-type check" $
+            runsOk $ lns
+            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+            , "local buildingSpawn = require('scripts.building_spawn')"
+            , "buildingSpawn.init('test')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local badId = { [12] = { lastUid = { __ref = 'unit', id = 'bad' } } }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'building_spawn', version = 2, payload = codec.encode(badId) },"
+            , "})"
+            , "assert(not prep.ok,"
+            , "  'a non-numeric id on lastUid must reject the load')"
+            ]
+
         it "rejects a v2 building_spawn payload whose lastUid carries the \
            \WRONG __ref kind (round-2 review, issue #764) -- mirrors the \
            \unit_ai wrapper-tag check for building_spawn's own sole \
