@@ -51,9 +51,6 @@ import UI.Types (UIPageManager(..), emptyUIPageManager)
 luaLines ∷ [Text] → Text
 luaLines = T.intercalate " "
 
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack ∘ show
-
 -- #750 round-6 review: share ONE booted headless engine AND ONE Lua VM
 -- across every case in this module, per the issue's own cost guardrail
 -- spec addition read literally ("share one booted headless engine + Lua
@@ -132,38 +129,70 @@ spec = aroundAll withSharedFixture $ do
                         trCount row `shouldBe` 3
                         trAllIn row `shouldBe` True
 
-        it "stays in-frame at every C2 band-boundary scale and the automatic high-DPI/ultrawide scales" $ \(env, ls) → do
+        it "stays in-frame at every C2 band-boundary scale and the automatic high-DPI/ultrawide scales (round-11 review: derived from the shared Lua sources, not hand-copied)" $ \(env, ls) → do
             resetFixture env ls
-            let cases ∷ [(Int, Int, Double)]
-                cases =
-                    -- band boundaries (scripts/ui/responsive.lua's own table —
-                    -- consumed via engine.setUIScale, never re-declared here)
-                    [ (1920, 900,  1.0), (1920, 900,  0.5)
-                    , (1920, 1200, 0.75), (1920, 1200, 2.0)
-                    , (1920, 1600, 1.0),  (1920, 1600, 3.0)
-                    , (1920, 2160, 1.5),  (1920, 2160, 4.0)
-                    -- automatic high-DPI profiles (scripts/settings/data.lua's loadDefaults)
-                    , (1920, 1080, 1.5), (2560, 1440, 2.0), (3840, 2160, 2.5)
-                    -- both configured ultrawides
-                    , (2560, 1080, 1.0), (3440, 1440, 1.0)
-                    ]
-            forM_ cases $ \(w, h, uiscale) → do
-                allIn ← evalBool ls $ luaLines
-                    [ "engine.setUIScale(" <> tshow uiscale <> ");"
-                    , "local hud = require('scripts.hud');"
-                    , "hud.init(1,2," <> tshow w <> "," <> tshow h <> ");"
-                    , "hud.createUI();"
-                    , "local rects = hud.getToolbarRects();"
-                    , "if #rects ~= 3 then return false end;"
-                    , "for _, rc in ipairs(rects) do"
-                    , "    if rc.x < 0 or rc.y < 0"
-                    , "       or (rc.x+rc.w) > " <> tshow w <> " or (rc.y+rc.h) > " <> tshow h <> " then"
-                    , "        return false"
-                    , "    end"
-                    , "end;"
-                    , "return true"
-                    ]
-                allIn `shouldBe` True
+            -- #750 round-11 review: this used to hand-copy the band-
+            -- boundary/auto-DPI/ultrawide matrix as a Haskell literal, so
+            -- a future change to scripts/ui/responsive.lua's bands table
+            -- or scripts/settings/data.lua's loadDefaults auto-scale
+            -- multipliers could silently drift out of sync with what
+            -- this suite actually exercises. The WHOLE matrix is now
+            -- built and checked inside one Lua script instead: band-
+            -- boundary cases iterate responsive.bands directly (its own
+            -- minH/maxH/minScale/maxScale, never re-declared here), and
+            -- the "automatic high-DPI" cases call the REAL
+            -- data.loadDefaults() with each of data.resolutions' entries
+            -- (which already includes both configured ultrawides)
+            -- stubbed in via engine.loadDefaultConfig — the tested scale
+            -- is whatever data.current.uiScale comes out as, i.e. the
+            -- real is1080p/is1440p/is4K multiplier logic, not a
+            -- hardcoded guess.
+            r ← evalJSON ls $ luaLines
+                [ "local responsive = require('scripts.ui.responsive');"
+                , "local data = require('scripts.settings.data');"
+                , "local hud = require('scripts.hud');"
+                , "local function checkAt(w, h, uiscale)"
+                , "    engine.setUIScale(uiscale);"
+                , "    hud.init(1,2,w,h);"
+                , "    hud.createUI();"
+                , "    local rects = hud.getToolbarRects();"
+                , "    if #rects ~= 3 then return false end;"
+                , "    for _, rc in ipairs(rects) do"
+                , "        if rc.x < 0 or rc.y < 0"
+                , "           or (rc.x+rc.w) > w or (rc.y+rc.h) > h then"
+                , "            return false"
+                , "        end"
+                , "    end;"
+                , "    return true"
+                , "end;"
+                , "local out = {};"
+                , "for _, b in ipairs(responsive.bands) do"
+                , "    table.insert(out, {label = 'band_' .. b.maxH .. '_min',"
+                , "        ok = checkAt(1920, b.maxH, b.minScale)});"
+                , "    table.insert(out, {label = 'band_' .. b.maxH .. '_max',"
+                , "        ok = checkAt(1920, b.maxH, b.maxScale)});"
+                , "end;"
+                , "local origLoadCfg = engine.loadDefaultConfig;"
+                , "for _, e in ipairs(data.resolutions) do"
+                , "    engine.loadDefaultConfig = function()"
+                , "        return e.width, e.height, 'fullscreen', 1.0, true, 60, 1, 100, false, 'nearest'"
+                , "    end;"
+                , "    data.loadDefaults();"
+                , "    local scale = data.current.uiScale;"
+                , "    table.insert(out, {label = 'auto_' .. e.width .. 'x' .. e.height,"
+                , "        ok = checkAt(e.width, e.height, scale)});"
+                , "end;"
+                , "engine.loadDefaultConfig = origLoadCfg;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [LabeledOkRow] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rows → do
+                    -- 4 bands × 2 + 16 configured resolutions (data.resolutions,
+                    -- which already includes both ultrawides) = 24.
+                    length rows `shouldSatisfy` (≥ 20)
+                    forM_ rows $ \row →
+                        (lorLabel row, lorOk row) `shouldBe` (lorLabel row, True)
 
         it "the issue's own out-of-envelope exemplar (800x600@4x) still produces valid, non-degenerate rects" $ \(env, ls) → do
             resetFixture env ls
@@ -640,6 +669,53 @@ spec = aroundAll withSharedFixture $ do
                 , "return _G.__n"
                 ]
             n `shouldBe` 0
+
+        it "settingsMenu.onDefaults() reaches the REAL gameplay HUD when data.loadDefaults() changes the UI scale (round-11 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #750 round-11 review: every other case in this describe
+            -- block drives notifyGameplayRescale directly against
+            -- STUBBED gameplay modules — none of them prove the actual
+            -- CALLER (settingsMenu.onDefaults(), which conditionally
+            -- fans out only when data.loadDefaults() actually changed
+            -- data.current.uiScale — see settings_menu.lua) really
+            -- reaches it. This drives the REAL scripts.hud module (no
+            -- stub) through the REAL settingsMenu.onDefaults() entry
+            -- point, with engine.loadDefaultConfig stubbed to force a
+            -- genuine scale change (the gating condition). hud and
+            -- settingsMenu are booted at DIFFERENT framebuffer sizes so
+            -- a successful fan-out (hud picking up settingsMenu's own
+            -- fbW/fbH) is unambiguous — if onDefaults's fan-out call
+            -- were ever removed again, hud.fbW/fbH would silently stay
+            -- at its own original size instead.
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "hud.show();"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "uiManager.moduleReady.hud = true;"
+                , "local settingsMenu = require('scripts.settings_menu');"
+                , "settingsMenu.init(1,2,3,1600,900);"
+                , "local data = require('scripts.settings.data');"
+                , "data.current.uiScale = 1.0;"
+                , "local origLoadCfg = engine.loadDefaultConfig;"
+                , "engine.loadDefaultConfig = function()"
+                , "    return 1600, 900, 'fullscreen', 3.0, true, 60, 1, 100, false, 'nearest'"
+                , "end;"
+                , "settingsMenu.onDefaults();"
+                , "engine.loadDefaultConfig = origLoadCfg;"
+                , "return {scaleChanged = (data.current.uiScale ~= 1.0),"
+                , "        hudFbW = hud.fbW, hudFbH = hud.fbH,"
+                , "        settingsFbW = settingsMenu.fbW, settingsFbH = settingsMenu.fbH}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe DefaultsRescaleProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    drpScaleChanged p `shouldBe` True
+                    drpHudFbW p `shouldBe` drpSettingsFbW p
+                    drpHudFbH p `shouldBe` drpSettingsFbH p
+                    drpHudFbW p `shouldBe` 1600
+                    drpHudFbH p `shouldBe` 900
 
     -- #750 round-4 review: reserved_regions.lua's own functions are pure
     -- (no engine/UI/page state at all — see the module's own header
@@ -1510,6 +1586,20 @@ data ModGeometryRow = ModGeometryRow
 instance FromJSON ModGeometryRow where
     parseJSON = withObject "ModGeometryRow" $ \o →
         ModGeometryRow <$> o .: "mod" <*> o .: "ok" <*> o .: "w" <*> o .: "h"
+
+data LabeledOkRow = LabeledOkRow { lorLabel ∷ Text, lorOk ∷ Bool } deriving (Show, Eq)
+instance FromJSON LabeledOkRow where
+    parseJSON = withObject "LabeledOkRow" $ \o →
+        LabeledOkRow <$> o .: "label" <*> o .: "ok"
+
+data DefaultsRescaleProbe = DefaultsRescaleProbe
+    { drpScaleChanged ∷ Bool, drpHudFbW ∷ Int, drpHudFbH ∷ Int
+    , drpSettingsFbW ∷ Int, drpSettingsFbH ∷ Int } deriving Show
+instance FromJSON DefaultsRescaleProbe where
+    parseJSON = withObject "DefaultsRescaleProbe" $ \o →
+        DefaultsRescaleProbe <$> o .: "scaleChanged"
+                              <*> o .: "hudFbW" <*> o .: "hudFbH"
+                              <*> o .: "settingsFbW" <*> o .: "settingsFbH"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

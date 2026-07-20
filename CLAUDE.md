@@ -1369,6 +1369,53 @@ panels' content viewports came out `h=20` (the floor engaging exactly
 as intended) with a positive width, versus `UI.newElement` receiving a
 negative height pre-fix.
 
+Round-11 review found two test-QUALITY gaps in
+`Test.Headless.UI.ResponsiveGameplay` itself, not functional ones.
+First, the "band-boundary + automatic high-DPI + ultrawide" case list
+was a hand-copied Haskell literal — a future change to
+`scripts/ui/responsive.lua`'s `responsive.bands` table or
+`scripts/settings/data.lua`'s `loadDefaults` auto-scale multipliers
+(`is1080p`/`is1440p`/`is4K`) could silently drift out of sync with what
+the suite actually exercises. Rewritten as ONE Lua script building the
+whole matrix from the real sources at test time: band-boundary cases
+iterate `responsive.bands` directly (its own `minH`/`maxH`/`minScale`/
+`maxScale`); the auto-DPI/ultrawide cases call the REAL
+`data.loadDefaults()` once per `data.resolutions` entry (already
+includes both configured ultrawides) with `engine.loadDefaultConfig`
+stubbed to return that entry's width/height — the tested scale is
+whatever `data.current.uiScale` comes out as, not a hardcoded guess.
+This wasn't just defensive: verified against a real running engine that
+the derivation actually diverges from the old hardcoded matrix — the
+old test asserted `2560×1080` at a flat `1.0`, but `data.loadDefaults()`
+really computes `1.5` there (`2560×1080`'s screen area clears the
+`is1080p` threshold same as plain `1920×1080` does), and `3440×1440`
+computes `2.0`. The old hardcoded values happened to still pass (`1.0`
+is also a validly-supported scale at that resolution per
+`responsive.classify`), but they were quietly testing a combination
+`loadDefaults` would never actually produce — exactly the kind of
+silent staleness the reviewer flagged.
+
+Second, every existing `notifyGameplayRescale` case drove
+`uiManager.notifyGameplayRescale` directly against STUBBED gameplay
+modules, so none of them proved the actual CALLER
+(`settingsMenu.onDefaults()`, which only fans out when
+`data.loadDefaults()` genuinely changed `data.current.uiScale` — see
+this file's earlier round-11(#748) Defaults/Back fan-out notes) really
+reaches it end to end. Added an integration test driving the REAL
+`scripts.hud` module (no stub) through the REAL
+`settingsMenu.onDefaults()` entry point, with
+`engine.loadDefaultConfig` stubbed only to force the scale-changed
+gating condition. `hud`/`settingsMenu` are booted at DIFFERENT
+framebuffer sizes so a successful fan-out (hud picking up
+`settingsMenu`'s own `fbW`/`fbH`) is unambiguous — confirmed the test
+actually catches a regression by temporarily commenting out
+`onDefaults`'s `notifyGameplayRescale` call and re-running (fails as
+expected), then restoring (passes again). Verified against a real
+running engine too: `hud.fbW`/`fbH` picked up `settingsMenu`'s
+1600×900 (from its own 1920×1080) purely through
+`settingsMenu.onDefaults()`, with no direct call into `hud` anywhere in
+the test.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
