@@ -1171,6 +1171,40 @@ Lua globals `registerLuaAPI` installs once at Lua-VM-construction time,
 never entries in `package.loaded` to begin with. Verified stable across
 10 consecutive runs with different random seeds before landing.
 
+Round-7 review confirmed the shared-fixture conversion held, but found
+the "cap width/height to the framebuffer" fix pattern hadn't been
+applied everywhere it needed to be. First,
+`build_tool_remote_warning.lua`'s round-6 fix capped the PANEL but not
+the Establish/Cancel BUTTON ROW inside it — `establishW`/`cancelW` were
+computed from the natural (uncapped) content before the panel-width cap
+ran, so the buttons themselves could still extend past the now-shrunk
+panel. Fixed by shrinking both buttons equally (floored at 20px) to fit
+whatever width the capped panel actually has left after its padding.
+Second, the exact same "cap position, never width" gap the reviewer
+found in `build_tool_remote_warning.lua` at round 6 turned out to be
+systemic: `cargo_inventory_panel.lua` and `item_contents_panel.lua`
+(both `PANEL_W_BASE * uiscale` with only a position clamp, same shape)
+and `build_tool.lua`'s picker (`PICKER_W_BASE * uiscale` with no
+framebuffer awareness at all — not even a position clamp) all got the
+same width/height cap. Each of these three derives its INTERNAL content
+(tabs, rows, icon grid) from `panel.getContentBounds()` — the panel's
+own REAL bounds — rather than recomputing independently the way
+`build_tool_remote_warning.lua`'s buttons did, so capping just the
+panel's own width/height was sufficient to correctly constrain
+everything downstream too, unlike the button-row case above. By
+contrast, `crafting_panel.lua`/`plant_panel.lua`/`tile_editor.lua`
+already size themselves as a FRACTION of `fbW`/`fbH` (e.g. `fbW*0.72`)
+rather than a fixed base times `uiscale`, so they were never exposed to
+this class of gap in the first place. Verified each against a real
+running engine at the reviewer's own 800x2160@4x exemplar (including
+reading real per-button `UI.getElementInfo` bounds off
+`build_tool_remote_warning.lua`'s click handlers) before extending the
+regression tests, which drive `cargo_inventory_panel.lua`/
+`item_contents_panel.lua` through their real `openFor` entry points
+with the underlying `building.getStorage*`/`unit.getItemContents`
+native calls monkey-patched (mirroring the same technique the toggle.lua
+round-2 tests already used for `world.setToolMode`).
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

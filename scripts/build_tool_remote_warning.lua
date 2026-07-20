@@ -144,6 +144,21 @@ local function createUI(distance, thresholdTiles)
     panelWidth  = math.min(panelWidth, buildToolRemoteWarning.fbW)
     panelHeight = math.min(panelHeight, buildToolRemoteWarning.fbH)
 
+    -- #750 round-7 review: capping the PANEL alone isn't enough — the
+    -- Establish/Cancel button row's own width (establishW/cancelW,
+    -- computed above from the UNCAPPED natural content) can still
+    -- exceed the now-shrunk panel, leaving the buttons themselves
+    -- extending past the panel (and framebuffer) edge even though the
+    -- panel box itself fits. Shrink each button equally (never below a
+    -- small floor) so the row fits the panel's actual content width —
+    -- best-effort, may look cramped, but the buttons stay reachable.
+    local availableButtonsW = panelWidth - 2 * s.panelPaddingX
+    if buttonsRowWidth > availableButtonsW then
+        local shrinkEach = (buttonsRowWidth - availableButtonsW) / 2
+        establishW = math.max(20, establishW - shrinkEach)
+        cancelW = math.max(20, cancelW - shrinkEach)
+    end
+
     local panelX = (buildToolRemoteWarning.fbW - panelWidth) / 2
     local panelY = (buildToolRemoteWarning.fbH - panelHeight) / 2
 

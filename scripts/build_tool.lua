@@ -509,6 +509,19 @@ function buildTool.showPicker()
     local buildBtnTopY = h.fbH - margin - 2 * btnSize - stackGap
     local pickerY      = buildBtnTopY
 
+    -- #750 round-7 review: cap against the actual framebuffer — unlike
+    -- cargo_inventory_panel.lua/item_contents_panel.lua (which at least
+    -- clamp POSITION), this picker had no framebuffer awareness at all:
+    -- PICKER_W_BASE*uiscale (360 at 1x, 1440 at a still-C2-supported 4x)
+    -- could extend far past the right/bottom edge from its fixed
+    -- toolbar-anchored position. Best-effort degrade, same pattern as
+    -- everywhere else this class of gap was found.
+    if h.fbW then pickerW = math.min(pickerW, math.max(20, h.fbW - pickerX)) end
+    if h.fbH then
+        pickerY = math.max(0, math.min(pickerY, h.fbH - pickerH))
+        pickerH = math.min(pickerH, h.fbH - pickerY)
+    end
+
     buildTool.state.panelId = panel.new({
         name       = "build_tool_picker",
         page       = h.world_page,

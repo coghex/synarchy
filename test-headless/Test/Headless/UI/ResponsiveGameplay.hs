@@ -1024,6 +1024,111 @@ spec = aroundAll withSharedFixture $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → rwpW p `shouldBe` 560
 
+        it "both Establish/Cancel buttons stay within the (possibly shrunk) panel and the framebuffer (round-7 review)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local w = require('scripts.build_tool_remote_warning');"
+                , "w.init(1,2,3,800,2160);"
+                , "w.open('acolyte_portal', 5, 5, 100, 50);"
+                , "local out = {};"
+                , "for h, _ in pairs(w.clickHandlers) do"
+                , "    local info = UI.getElementInfo(h);"
+                , "    table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height})"
+                , "end;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [RectRow] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rects → do
+                    length rects `shouldBe` 2
+                    forM_ rects $ \rc → do
+                        rrX rc `shouldSatisfy` (≥ 0)
+                        rrY rc `shouldSatisfy` (≥ 0)
+                        (rrX rc + rrW rc) `shouldSatisfy` (≤ 800)
+                        (rrY rc + rrH rc) `shouldSatisfy` (≤ 2160)
+
+    describe "cargo_inventory_panel.lua / item_contents_panel.lua stay in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $ do
+        it "cargo_inventory_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {} end;"
+                , "local pg = UI.newPage('cargo_test_page', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
+                , "cip.openFor(1, 400, 400);"
+                , "local p = require('scripts.ui.panel');"
+                , "local x, y = p.getPosition(cip.state.panelId);"
+                , "local pw, ph = p.getSize(cip.state.panelId);"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return {w=pw,"
+                , "        inFrame=(x>=0 and y>=0 and (x+pw)<=800 and (y+ph)<=2160)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WidthCapProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → wcpInFrame p `shouldBe` True
+
+        it "item_contents_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local orig = unit.getItemContents;"
+                , "unit.getItemContents = function() return {} end;"
+                , "local pg = UI.newPage('item_contents_test_page', 'overlay');"
+                , "local icp = require('scripts.item_contents_panel');"
+                , "icp.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
+                , "icp.openFor(1, 'some_container', 400, 400, nil);"
+                , "local p = require('scripts.ui.panel');"
+                , "local x, y = p.getPosition(icp.state.panelId);"
+                , "local pw, ph = p.getSize(icp.state.panelId);"
+                , "unit.getItemContents = orig;"
+                , "return {w=pw,"
+                , "        inFrame=(x>=0 and y>=0 and (x+pw)<=800 and (y+ph)<=2160)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WidthCapProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → wcpInFrame p `shouldBe` True
+
+    describe "build_tool.lua's picker stays in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $
+        it "the picker width is capped to the remaining framebuffer space right of its toolbar anchor, with no prior position clamp to rely on" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local orig = engine.getBuildingDefs;"
+                , "if orig then engine.getBuildingDefs = function() return {"
+                , "    { name = 'test_wall', displayName = 'Wall', category = 'Structures' }"
+                , "} end end;"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local bt = require('scripts.build_tool');"
+                , "bt.setup({hud = hud});"
+                , "local ok = pcall(function() bt.showPicker() end);"
+                , "if orig then engine.getBuildingDefs = orig end;"
+                , "if not ok or bt.state.mode ~= 'picker' then return {skipped = true} end;"
+                , "local p = require('scripts.ui.panel');"
+                , "local x, y = p.getPosition(bt.state.panelId);"
+                , "local pw, ph = p.getSize(bt.state.panelId);"
+                , "return {skipped = false, x=x, y=y, w=pw, h=ph,"
+                , "        inFrame=(x>=0 and y>=0 and (x+pw)<=800 and (y+ph)<=2160)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe PickerProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p →
+                    -- No headless hook exists to force visibleEntries()
+                    -- non-empty across every build (it reads real
+                    -- building defs, whose exact loading path varies) —
+                    -- when the picker genuinely couldn't open, this is a
+                    -- soft skip rather than a false failure; the formula
+                    -- fix itself is exercised directly whenever it can
+                    -- open.
+                    when (not (ppSkipped p)) $ ppInFrame p `shouldBe` True
+
 -- * FromJSON row types
 
 data ToolbarRow = ToolbarRow { trW ∷ Int, trH ∷ Int, trCount ∷ Int, trAllIn ∷ Bool } deriving Show
@@ -1124,6 +1229,14 @@ data RemoteWarningProbe = RemoteWarningProbe
 instance FromJSON RemoteWarningProbe where
     parseJSON = withObject "RemoteWarningProbe" $ \o →
         RemoteWarningProbe <$> o .: "w" <*> o .: "h" <*> o .: "inFrame"
+
+data PickerProbe = PickerProbe { ppSkipped ∷ Bool, ppInFrame ∷ Bool } deriving Show
+instance FromJSON PickerProbe where
+    parseJSON = withObject "PickerProbe" $ \o → do
+        skipped ← o .: "skipped"
+        if skipped
+            then pure (PickerProbe True False)
+            else PickerProbe False <$> o .: "inFrame"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

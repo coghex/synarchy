@@ -373,6 +373,15 @@ local function buildLayout(uid, defName, mx, my, instanceId)
     local rowsH  = visibleCount * rowH + (visibleCount - 1) * rowPad
     local panelH = padTop + titleH + subH + 8 + rowsH + padBot
 
+    -- #750 round-7 review: cap against the actual framebuffer — the
+    -- position clamp below only ever repositions the panel, never
+    -- shrinks it, so PANEL_W_BASE*uiscale could exceed the framebuffer
+    -- at a narrow, high-scale, still-C2-supported combination regardless
+    -- of position. Best-effort degrade, same pattern as cargo_inventory_
+    -- panel.lua/popup.lua/unit_info_v2.lua's fixes for the identical gap.
+    if h.fbW then panelW = math.min(panelW, h.fbW) end
+    if h.fbH then panelH = math.min(panelH, h.fbH) end
+
     -- Clamp the panel to the framebuffer so it never opens partly
     -- off-screen near an edge.
     local px, py = mx, my

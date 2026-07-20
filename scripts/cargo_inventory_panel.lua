@@ -551,6 +551,16 @@ local function buildLayout(bid, mx, my)
     local rowsH    = visibleCount * rowH + (visibleCount - 1) * rowPad
     local panelH   = padTop + titleH + subH + 6 + tabH + 8 + rowsH + padBot
 
+    -- #750 round-7 review: cap against the actual framebuffer — the
+    -- pre-existing px/py clamp below only ever repositions the panel,
+    -- never shrinks it, so PANEL_W_BASE*uiscale (460 at 1x, 1840 at a
+    -- still-C2-supported 4x) could exceed the framebuffer several times
+    -- over regardless of position, leaving tabs/items/actions
+    -- off-screen. Best-effort degrade, same pattern as popup.lua/
+    -- unit_info_v2.lua/build_tool_remote_warning.lua's earlier fixes.
+    if h.fbW then panelW = math.min(panelW, h.fbW) end
+    if h.fbH then panelH = math.min(panelH, h.fbH) end
+
     -- Clamp the panel position to the framebuffer so it doesn't open
     -- partly off-screen if the player right-clicks near an edge.
     local px = mx
