@@ -316,11 +316,14 @@ createUI = function()
     -- (renderContent below) reparents under this via UI.addChild with
     -- viewport-RELATIVE coordinates instead of UI.addToPage with
     -- page-absolute ones.
+    -- #750 round-3 review: leave the viewport's own zIndex at its
+    -- UI.newElement default (0) — see scripts/event_log.lua's identical
+    -- comment for why a nonzero value here would accumulate onto every
+    -- reparented row's own z via UI.Manager.Query's elementPaintKey.
     combatLog.contentViewportId = UI.newElement(
         "combat_log_content_viewport", contentW, contentH, combatLog.pageId)
     UI.addToPage(combatLog.pageId, combatLog.contentViewportId, contentX, contentY)
     UI.setClipChildren(combatLog.contentViewportId, true)
-    UI.setZIndex(combatLog.contentViewportId, 503)
 
     -- History scrollbar, pinned to the right edge of the content area.
     -- Content size + visibility are set in renderContent (they depend on

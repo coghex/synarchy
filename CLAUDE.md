@@ -1049,6 +1049,32 @@ in each panel's `destroyChrome()` — `UI.deleteElement` is idempotent
 from `destroyTransient`'s own per-row cleanup), so the two teardown
 functions' relative call order doesn't matter.
 
+Round-3 review found three more gaps, all in this same clipping
+migration and the two width-flexible panels it's adjacent to. First: a
+zIndex ACCUMULATES through the parent chain
+(`UI.Manager.Query.elementPaintKey` sums `ueZIndex` up every
+`ueParent`), so giving each new content viewport its own zIndex (503,
+matching the rows' own) pushed every reparented row to an effective
+1006/1007 instead of the 503/504 they had as page-root elements before
+this migration — painting log content above `popup.lua`'s notification
+cards (`baseZ` 1000+) instead of preserving the original stacking. Fixed
+by leaving every viewport's own zIndex at `UI.newElement`'s default (0)
+— the viewport renders nothing itself, so this only affects its
+children's accumulated total, restoring it to exactly their own zIndex
+again. Second and third: `popup.lua`'s `panelW` (floored at
+`s.minWidth`, itself scaled by uiscale) and `unit_info_v2.lua`'s
+`panelW` (`L.PANEL_W * uiscale`) both ignored the actual framebuffer
+width entirely — at a narrow-but-tall, high-scale, still-C2-supported
+combination (e.g. 800x2160@4x, height alone determines the 1601-2160/
+1.5x-4x band) either could exceed the framebuffer several times over,
+pushing controls (a popup's close/OK buttons, most of the unit-info
+pane) off-screen regardless of `avoidReserved`'s position-only clamp.
+Fixed with the same best-effort-degrade pattern settings_menu's own
+`tabFrameHeight` floor already established for its out-of-envelope
+exemplar: `panelW = math.min(panelW, fbW)` (and `panelH` symmetrically
+for popup); `unitInfoV2.getBounds()` mirrors the same cap so it can't
+drift from what `rebuildLayout()` actually builds.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

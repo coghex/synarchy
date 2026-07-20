@@ -301,11 +301,21 @@ createUI = function()
     -- slot (long text, a rounding edge case) is clipped to the content
     -- area instead of drawing outside the panel — the virtual-scroll row
     -- count/positioning math itself is unchanged.
+    -- #750 round-3 review: the viewport's OWN zIndex must stay 0
+    -- (UI.newElement's default — never set explicitly here). zIndex
+    -- ACCUMULATES through the parent chain (UI.Manager.Query's
+    -- elementPaintKey sums ueZIndex up every ueParent), so a nonzero
+    -- viewport z would add onto every reparented row's own z (503/504)
+    -- instead of leaving it as their effective paint position — e.g. a
+    -- viewport z of 503 would have pushed rows to an effective 1006/1007,
+    -- painting them above popup.lua's notification cards (baseZ
+    -- 1000+). The viewport itself renders nothing, so z=0 doesn't
+    -- affect its own visibility, only correctly avoids perturbing its
+    -- children's accumulated z.
     eventLog.rowViewportId = UI.newElement(
         "event_log_row_viewport", contentW, contentH, eventLog.pageId)
     UI.addToPage(eventLog.pageId, eventLog.rowViewportId, contentX, contentY)
     UI.setClipChildren(eventLog.rowViewportId, true)
-    UI.setZIndex(eventLog.rowViewportId, 503)
 
     -- Persistent scrollbar to the right of the content area. Its
     -- onScroll callback only mutates scrollOffset + re-renders rows

@@ -583,6 +583,23 @@ spec = around withHeadlessEngine $ do
                 Just names → names `shouldMatchList` ["offscreen", "offRight"]
 
     describe "popup.lua reflows active cards on resize (#750 round-1 review)" $ do
+        it "a card's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local p = require('scripts.popup');"
+                , "p.bootstrap(1,2,3,800,2160);"
+                , "p.onShowPopup('unit_event', 'hi', 0, 0, 0, 1, {});"
+                , "local b = p.getActiveBounds()[1];"
+                , "return {w = b.w, inFrame = (b.x >= 0 and (b.x+b.w) <= 800"
+                , "                            and b.y >= 0 and (b.y+b.h) <= 2160)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WidthCapProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    wcpInFrame p `shouldBe` True
+                    wcpW p `shouldSatisfy` (≤ 800)
+
         it "onFramebufferResize alone stores the new size but does NOT reflow (ordering hazard: it fires before hud rebuilds)" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -737,6 +754,34 @@ spec = around withHeadlessEngine $ do
                     rcpOk p `shouldBe` True
                     rcpClipsChildren p `shouldBe` True
 
+        it "the clip viewport's own zIndex stays 0 so a reparented row's effective paint position is unchanged (round-3 review: zIndex accumulates through parents)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.emitEvent('unit_event', 'hello world');"
+                , "local el = require('scripts.event_log');"
+                , "el.bootstrap(1,2,3,1920,1080);"
+                , "el.show();"
+                , "local vp = UI.getElementInfo(el.rowViewportId);"
+                , "local rowHandle = next(el.rowClickBoxes);"
+                , "local row = UI.getElementInfo(rowHandle);"
+                -- Compare against a page-root reference element with the
+                -- SAME zIndex on the SAME page — no band/offset math
+                -- hardcoded here. If the viewport's own z leaked into the
+                -- row's accumulated z, the row's paintKey would be
+                -- HIGHER than this reference's, not equal.
+                , "local refHandle = UI.newElement('zidx_ref', 1, 1, el.pageId);"
+                , "UI.addToPage(el.pageId, refHandle, 0, 0);"
+                , "UI.setZIndex(refHandle, row.zIndex);"
+                , "local ref = UI.getElementInfo(refHandle);"
+                , "return {viewportZ = vp.zIndex, rowPaintKey = row.paintKey,"
+                , "        refPaintKey = ref.paintKey}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ZIndexProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    zipViewportZ p `shouldBe` 0
+                    zipRowPaintKey p `shouldBe` zipRefPaintKey p
+
     describe "\"unit info reserves right edge and suppresses conflicting info\" (#750 introspection over pre-existing behavior)" $ do
         it "unitInfoV2.getBounds() mirrors the real flush-right column, and is nil while not visible" $ \env → do
             ls ← newBareLuaBackend env
@@ -758,6 +803,24 @@ spec = around withHeadlessEngine $ do
                     uibpY p `shouldBe` 0
                     uibpW p `shouldBe` 340
                     uibpH p `shouldBe` 1080
+
+        it "the flush-right column's width is capped to the framebuffer at a narrow, high-scale, still-C2-supported combination (round-3 review)" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "engine.setUIScale(4.0);"
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1,2,800,2160);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.lastWantVisible = true;"
+                , "local b = u.getBounds();"
+                , "return {x = b.x, w = b.w, inFrame = (b.x >= 0 and (b.x+b.w) <= 800)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WidthCapProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    wcpInFrame p `shouldBe` True
+                    wcpW p `shouldSatisfy` (≤ 800)
 
         it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \env → do
             ls ← newBareLuaBackend env
@@ -845,6 +908,17 @@ data ResizeClipProbe = ResizeClipProbe
 instance FromJSON ResizeClipProbe where
     parseJSON = withObject "ResizeClipProbe" $ \o →
         ResizeClipProbe <$> o .: "ok" <*> o .: "clipsChildren"
+
+data ZIndexProbe = ZIndexProbe
+    { zipViewportZ ∷ Int, zipRowPaintKey ∷ Int, zipRefPaintKey ∷ Int } deriving Show
+instance FromJSON ZIndexProbe where
+    parseJSON = withObject "ZIndexProbe" $ \o →
+        ZIndexProbe <$> o .: "viewportZ" <*> o .: "rowPaintKey" <*> o .: "refPaintKey"
+
+data WidthCapProbe = WidthCapProbe { wcpW ∷ Int, wcpInFrame ∷ Bool } deriving Show
+instance FromJSON WidthCapProbe where
+    parseJSON = withObject "WidthCapProbe" $ \o →
+        WidthCapProbe <$> o .: "w" <*> o .: "inFrame"
 
 data ReflowProbe = ReflowProbe
     { rpBeforeX ∷ Double, rpBeforeY ∷ Double

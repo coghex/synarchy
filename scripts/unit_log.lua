@@ -362,11 +362,14 @@ createUI = function()
     -- (title/unit-tab strip/scrollbar stay page-attached chrome, outside
     -- it) — same pattern as scripts/event_log.lua / combat_log.lua /
     -- injury_log_panel.lua.
+    -- #750 round-3 review: leave the viewport's own zIndex at its
+    -- UI.newElement default (0) — see scripts/event_log.lua's identical
+    -- comment for why a nonzero value here would accumulate onto every
+    -- reparented row's own z via UI.Manager.Query's elementPaintKey.
     unitLog.contentViewportId = UI.newElement(
         "unit_log_content_viewport", contentW, contentH, unitLog.pageId)
     UI.addToPage(unitLog.pageId, unitLog.contentViewportId, contentX, contentY)
     UI.setClipChildren(unitLog.contentViewportId, true)
-    UI.setZIndex(unitLog.contentViewportId, 503)
 
     local sbTrackH = math.max(math.floor(12 * uiscale),
                               contentH - 2 * sbBtnSize - 2 * sbCapH)

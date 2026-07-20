@@ -160,12 +160,18 @@ local function rebuildLayout()
     clearOwned()
 
     local uiscale  = scale.get()
-    local panelW   = math.floor(L.PANEL_W * uiscale)
+    local fbW = hud.fbW
+    local fbH = hud.fbH
+    -- #750 round-3 review: cap against the actual framebuffer width.
+    -- L.PANEL_W alone (scaled by uiscale) can exceed a narrow/high-scale
+    -- but still C2-supported framebuffer (e.g. 800x2160@4x scales
+    -- PANEL_W=340 to 1360px), pushing panelX negative and most of the
+    -- pane's content/controls off-screen. Best-effort degrade — see
+    -- popup.lua's identical fix for the same class of gap.
+    local panelW   = math.min(math.floor(L.PANEL_W * uiscale), fbW)
     local outerPad = math.floor(L.PANEL_PAD * uiscale)
     local sectGap  = math.floor(L.SECTION_GAP * uiscale)
 
-    local fbW = hud.fbW
-    local fbH = hud.fbH
     local panelX = fbW - panelW
     local panelY = 0
     local panelH = fbH
@@ -413,7 +419,10 @@ end
 function unitInfoV2.getBounds()
     if not unitInfoV2.isVisible() then return nil end
     local uiscale = scale.get()
-    local panelW  = math.floor(L.PANEL_W * uiscale)
+    -- Mirrors rebuildLayout()'s own framebuffer-width cap (#750 round-3
+    -- review) so this can't drift from what rebuildLayout() actually
+    -- builds.
+    local panelW  = math.min(math.floor(L.PANEL_W * uiscale), hud.fbW)
     return { x = hud.fbW - panelW, y = 0, w = panelW, h = hud.fbH }
 end
 

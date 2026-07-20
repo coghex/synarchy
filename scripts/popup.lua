@@ -276,6 +276,16 @@ renderPopup = function(p)
     local linesH = #p.lines * rowH
     local panelH = s.padY + s.headerH + s.headerGap
                    + linesH + s.footerGap + s.buttonH + s.padY
+    -- #750 round-3 review: cap against the actual framebuffer.
+    -- s.minWidth alone (scaled by uiscale) can exceed a narrow/high-scale
+    -- but still C2-supported framebuffer (e.g. 800x2160@4x scales
+    -- minWidth to 1440px), pushing the close/OK buttons off-screen
+    -- regardless of avoidReserved's position clamp below (which only
+    -- ever moves x/y, never shrinks w/h). Best-effort degrade, same
+    -- spirit as settings_menu's own tabFrameHeight floor for its
+    -- out-of-envelope exemplar (CLAUDE.md's C2 section).
+    panelW = math.min(panelW, popup.fbW)
+    panelH = math.min(panelH, popup.fbH)
 
     -- Centre + slot diagonal offset
     local cx = math.floor((popup.fbW - panelW) / 2)
