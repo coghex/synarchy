@@ -839,17 +839,76 @@ LUA_REFERENCE_KIND_RES = (
 LUA_REFERENCE_KIND_OWNER = "Lua reference kinds"
 _LUA_REFERENCES_SPEC_FIELD_RE = re.compile(r"\breferences\s*=")
 
+# Round-5 review (issue #764): a REGISTRATION site can delegate its
+# `references = ` spec field to an imported helper module
+# (`references = refsMod.references`, unit_ai_save.lua) rather than
+# defining the hook inline or as a same-file named function
+# (`references = buildingSpawnReferences`, building_spawn.lua -- the
+# latter already worked under the original per-file gate, since the
+# kind literals AND the `references =` text share one file). The
+# former case only worked before by ACCIDENT: unit_ai_save_refs.lua
+# happens to independently satisfy the gate itself, via its own
+# internal `M.references = unitAiReferences` re-export line -- true
+# today, but not a structural guarantee (a differently-named re-export,
+# or a helper module split that never re-exports under that literal
+# name at all, would silently stop being scanned). These two regexes
+# instead trace the REAL relationship: which `require()`d module a
+# registration's `references = <var>.<field>` delegation actually
+# points at.
+_LUA_REQUIRE_LOCAL_RE = re.compile(
+    r"""\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*require\(\s*"""
+    r"""["']([\w.]+)["']\s*\)""")
+_LUA_REFERENCES_DELEGATE_RE = re.compile(
+    r"\breferences\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def _delegated_reference_module_paths(cleaned_text: str) -> set[str]:
+    """relpaths of every `require()`d module a `references = <var>.<field>`
+    delegation in `cleaned_text` resolves to -- e.g. `references =
+    refsMod.references` alongside `local refsMod =
+    require("scripts.unit_ai_save_refs")` resolves to
+    "scripts/unit_ai_save_refs.lua". A delegation whose variable was
+    never `require()`d in the same file (or whose require target isn't
+    a real, present script) resolves to nothing -- this only ever
+    WIDENS which files get scanned for kind literals, it can't narrow
+    the existing per-file gate below.
+    """
+    delegated_vars = {
+        m.group(1) for m in _LUA_REFERENCES_DELEGATE_RE.finditer(cleaned_text)
+    }
+    if not delegated_vars:
+        return set()
+    paths: set[str] = set()
+    for m in _LUA_REQUIRE_LOCAL_RE.finditer(cleaned_text):
+        varname, module = m.group(1), m.group(2)
+        if varname in delegated_vars:
+            paths.add(module.replace(".", "/") + ".lua")
+    return paths
+
 
 def find_lua_reference_kinds(
         scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
     """(kind, relpath) for every distinct reference-kind literal in a
-    file that registers a `references()` hook (see
-    LUA_REFERENCE_KIND_RES for the two call shapes recognised)."""
+    file that registers a `references()` hook, OR in a helper module a
+    registration site `require()`s and delegates its `references = `
+    spec field to (see LUA_REFERENCE_KIND_RES for the two kind-literal
+    call shapes recognised, and `_delegated_reference_module_paths` for
+    the delegation-following that closes the round-5 review gap)."""
+    cleaned_by_file = {
+        relpath: _strip_lua_comments(text)
+        for relpath, text in scripts_text_by_file.items()
+    }
+    scannable: set[str] = set()
+    for relpath, cleaned in cleaned_by_file.items():
+        if _LUA_REFERENCES_SPEC_FIELD_RE.search(cleaned):
+            scannable.add(relpath)
+        for delegated in _delegated_reference_module_paths(cleaned):
+            if delegated in scripts_text_by_file:
+                scannable.add(delegated)
+
     out: list[tuple[str, str]] = []
-    for relpath, text in sorted(scripts_text_by_file.items()):
-        cleaned = _strip_lua_comments(text)
-        if not _LUA_REFERENCES_SPEC_FIELD_RE.search(cleaned):
-            continue
+    for relpath in sorted(scannable):
+        cleaned = cleaned_by_file[relpath]
         seen: set[str] = set()
         for pattern in LUA_REFERENCE_KIND_RES:
             for m in pattern.finditer(cleaned):

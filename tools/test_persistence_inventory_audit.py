@@ -2830,6 +2830,77 @@ def test_find_lua_reference_kinds_detects_literal_and_helper_call_shapes():
            f"both addRef-helper-form kinds are detected, got {found}")
 
 
+# Round-5 review (issue #764): a registration site can delegate its
+# `references = ` spec field to an imported helper module rather than
+# defining/naming the hook inline -- mirrors the REAL
+# unit_ai_save.lua (`references = refsMod.references`, `local refsMod =
+# require("scripts.unit_ai_save_refs")`) / unit_ai_save_refs.lua split.
+# Deliberately gives the helper module NO local `references =` text of
+# its own at all (unlike the real unit_ai_save_refs.lua, which happens
+# to also carry `M.references = unitAiReferences`) -- proving detection
+# follows the real require()/delegation relationship rather than an
+# accidental same-file text match.
+SYNTHETIC_LUA_REFERENCES_REGISTRATION_SITE = """\
+local refsMod = require("scripts.fake_helper_module")
+saveMods.register("fake_split_component", {
+    version = 1, inputVersions = {1}, required = true, scope = "global", deps = {},
+    references = refsMod.references,
+})
+"""
+
+SYNTHETIC_LUA_REFERENCES_HELPER_MODULE = """\
+local M = {}
+function M.references(data)
+    local refs = {}
+    refs[#refs + 1] = { kind = "craft_bill", id = data.billId }
+    refs[#refs + 1] = { kind = "split_module_kind", id = data.other }
+    return refs
+end
+return M
+"""
+
+
+def test_find_lua_reference_kinds_follows_a_delegated_helper_module():
+    """A registration site that delegates `references = ` to an
+    imported helper module (unit_ai_save.lua's real shape) is followed
+    to that module's OWN file for kind literals, even when the helper
+    module carries no `references = ` text of its own -- round-5 review:
+    the original per-file gate only caught this by the ACCIDENT of
+    unit_ai_save_refs.lua also carrying an unrelated
+    `M.references = ...` re-export line; this fixture has no such
+    accident to lean on."""
+    found = find_lua_reference_kinds({
+        "scripts/fake_registration.lua": SYNTHETIC_LUA_REFERENCES_REGISTRATION_SITE,
+        "scripts/fake_helper_module.lua": SYNTHETIC_LUA_REFERENCES_HELPER_MODULE,
+    })
+    kinds_by_file = {}
+    for kind, relpath in found:
+        kinds_by_file.setdefault(relpath, set()).add(kind)
+    expect(
+        kinds_by_file.get("scripts/fake_helper_module.lua") ==
+            {"craft_bill", "split_module_kind"},
+        f"the delegated helper module's own kind literals are found, "
+        f"attributed to ITS file, got {found}")
+
+    # The registration site itself has no kind literals of its own here
+    # -- nothing should be spuriously attributed to it.
+    expect("scripts/fake_registration.lua" not in kinds_by_file,
+           f"the registration site itself contributes no kind literals "
+           f"when it has none, got {found}")
+
+    # A helper module that is NEVER require()d/delegated to by anything
+    # must not be scanned -- the gate still excludes ordinary unrelated
+    # Lua tables that merely happen to use a `kind = "..."` field for
+    # something else entirely (e.g. UI element kinds).
+    unrelated = find_lua_reference_kinds({
+        "scripts/fake_unrelated.lua":
+            'table.insert(chrome, { kind = "label", id = 1 })\n',
+    })
+    expect(unrelated == [],
+           f"a file with a 'kind=' literal but no references()/delegation "
+           f"connection at all is never scanned, got {unrelated}")
+
+
 def test_audit_detects_unclassified_lua_reference_kind():
     """The req-15 acceptance test, Lua half: a NEW reference kind string
     with no classification row is reported by name; an already-
@@ -3195,6 +3266,7 @@ def main() -> int:
         test_audit_detects_unclassified_typed_reference_field,
         test_audit_omits_typed_reference_check_when_component_sources_not_given,
         test_find_lua_reference_kinds_detects_literal_and_helper_call_shapes,
+        test_find_lua_reference_kinds_follows_a_delegated_helper_module,
         test_audit_detects_unclassified_lua_reference_kind,
         test_audit_against_the_real_repo,
         test_component_check_accepts_registered_persistent_owner,
