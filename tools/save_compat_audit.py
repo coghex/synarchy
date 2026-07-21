@@ -930,6 +930,17 @@ def generate_current_format_session(
             quit_engine(port, proc)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
+    # Round-11 review: normalize the freshly-generated fixture's
+    # smTimestamp to a fixed constant AFTER the engine has already
+    # exited -- engine.saveWorld's own wall-clock timestamp would
+    # otherwise make two runs over identical inputs produce different
+    # bytes/checksums, defeating requirement 21's reproducibility intent.
+    ok, tail = normalize_fixture_timestamp(out_path)
+    if not ok:
+        raise GenerationError(
+            f"timestamp normalization failed (fixture at {out_path} is "
+            f"the raw, un-normalized engine.saveWorld output): {tail}")
+
 
 # A small, permanent GHCi program (run via `cabal repl` subprocess) that
 # derives a fixture's canonical-summary JSON DIRECTLY from its real,
@@ -1051,6 +1062,97 @@ case decoded of
     putStrLn "DUMP_OK"
 :}}
 """
+
+# Fixed placeholder ISO-8601 timestamp (round-11 review), matching the
+# same constant test-headless/Test/Headless/World/Save/Compat.hs's own
+# hand-built SaveMetadata values already use -- NOT a real save time,
+# deliberately, so two --generate-session runs over identical inputs
+# produce byte-identical fixtures/checksums.
+FIXED_GENERATED_TIMESTAMP = "2026-07-16T00:00:00.000000Z"
+
+# A small, permanent GHCi program (run via `cabal repl`, mirroring
+# GHCI_DUMP_SUMMARY_TEMPLATE's own subprocess pattern) that overwrites
+# ONLY a freshly-generated fixture's "metadata" component's smTimestamp
+# field with FIXED_GENERATED_TIMESTAMP, leaving every other
+# component's version/required/payload bytes completely untouched.
+#
+# Round-11 review: engine.saveWorld (the real production save path
+# --generate-session deliberately reuses, per requirement 21's "a real
+# generation mode") always stamps the CURRENT WALL-CLOCK time into
+# smTimestamp (Engine.Scripting.Lua.API.Save's getCurrentTime call,
+# by design -- an ordinary player save needs each save to carry a
+# distinct real timestamp). That means two --generate-session runs
+# over IDENTICAL seed/world-size/plate-count/spawn arguments produce
+# DIFFERENT envelope bytes and sha256s purely from wall-clock drift,
+# defeating the reproducibility requirement 21 itself demands (a
+# fixture's checksum must depend only on its declared generation
+# inputs, not on when the command happened to run). This step
+# normalizes that ONE field post-generation, via the real envelope
+# codec (decode the raw manifest/payloads, rebuild every component's
+# spec verbatim except metadata's, re-encode) rather than a hand-rolled
+# binary patch -- so the fix stays correct through any future envelope
+# framing change, exactly like every other fixture-generation step in
+# this file.
+GHCI_NORMALIZE_TIMESTAMP_TEMPLATE = r"""
+:set -XOverloadedStrings
+import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Serialize as S
+import World.Save.Envelope.Codec
+import World.Save.Envelope.Types
+import World.Save.Envelope (currentEnvelopeVersion, metadataComponentId)
+import World.Save.Component (componentKnownIds)
+import World.Save.Types (SaveMetadata(..))
+
+bytes <- BS.readFile "{fixture_path}"
+
+:{{
+let knownAll = HS.insert metadataComponentId
+                 (HS.insert (ComponentId "lua.unit_ai")
+                    (HS.insert (ComponentId "lua.building_spawn") componentKnownIds))
+in case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion knownAll knownAll bytes of
+     Left e -> putStrLn ("NORMALIZE_FAILED: decode: " ++ show e)
+     Right decoded ->
+       case S.decode
+              (HM.lookupDefault BS.empty metadataComponentId (dePayloads decoded))
+              :: Either String SaveMetadata of
+         Left e -> putStrLn ("NORMALIZE_FAILED: metadata decode: " ++ e)
+         Right meta -> do
+           let fixedMeta = meta {{ smTimestamp = "{fixed_timestamp}" }}
+               newSpecs =
+                 [ ( cdId d, cdVersion d, cdRequired d
+                   , if cdId d == metadataComponentId
+                        then S.encode fixedMeta
+                        else HM.lookupDefault BS.empty (cdId d) (dePayloads decoded) )
+                 | d <- emComponents (deManifest decoded) ]
+           case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion newSpecs of
+             Left e -> putStrLn ("NORMALIZE_FAILED: encode: " ++ show e)
+             Right outBytes -> do
+               BS.writeFile "{fixture_path}" outBytes
+               putStrLn "NORMALIZE_OK"
+:}}
+"""
+
+
+def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:
+    """Run GHCI_NORMALIZE_TIMESTAMP_TEMPLATE via a `cabal repl` subprocess
+    to overwrite fixture_path's metadata smTimestamp with
+    FIXED_GENERATED_TIMESTAMP, in place. Returns (ok, diagnostic-tail-on-
+    failure)."""
+    script = GHCI_NORMALIZE_TIMESTAMP_TEMPLATE.format(
+        fixture_path=str(fixture_path), fixed_timestamp=FIXED_GENERATED_TIMESTAMP)
+    try:
+        proc = subprocess.run(
+            ["cabal", "repl", "test:synarchy-test-headless"],
+            input=script, cwd=REPO_ROOT, capture_output=True, text=True,
+            timeout=1800)
+    except FileNotFoundError:
+        return False, "'cabal' was not found on PATH"
+    output = (proc.stdout or "") + (proc.stderr or "")
+    if "NORMALIZE_OK" not in output:
+        return False, "\n".join(output.splitlines()[-60:])
+    return True, ""
 
 
 def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool, str]:
