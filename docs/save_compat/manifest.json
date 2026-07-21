@@ -4,6 +4,9 @@
   "frozenDtoFingerprint": "30ae5c8d1f615fde815b4ca839722925444efcf2591d2169f187da46836fdcf0",
   "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs",
   "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs -- see tools/save_compat_audit.py's frozen_dto_fingerprint(). Changes only when a field is added/removed/reordered, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\"",
+  "envelopeFramingFingerprint": "582c54fe18f585b36a28acc552339851d1e54db5812db0a384de416bbec99198",
+  "envelopeFramingFingerprintOf": "src/World/Save/Envelope/Codec.hs + the wire-relevant bindings in src/World/Save/Envelope/Types.hs (ComponentId/ComponentDescriptor/EnvelopeManifest/envelopeMagic/fnv1a64/encodeW32/decodeW32/encodeW64/decodeW64)",
+  "envelopeFramingFingerprintComment": "round-15 review: envelopeFramingVersion alone is just an integer someone has to remember to bump -- this sha256 (whitespace-normalized, comment-insensitive, same technique as frozenDtoFingerprint) catches an ACTUAL byte-layout change (header/manifest/checksum framing) shipping with envelopeFramingVersion left untouched, which would otherwise be a new wire format with no format epoch. See tools/save_compat_audit.py's envelope_framing_fingerprint(). Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import envelope_framing_fingerprint; print(envelope_framing_fingerprint())\"",
   "baselines": [
     {
       "id": "b1-initial-session",

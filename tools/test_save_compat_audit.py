@@ -73,6 +73,7 @@ def base_manifest(tmp: Path, fixture_path: Path, content: bytes) -> dict:
     return {
         "envelopeFramingVersion": sca.current_envelope_version(),
         "frozenDtoFingerprint": sca.frozen_dto_fingerprint(),
+        "envelopeFramingFingerprint": sca.envelope_framing_fingerprint(),
         "baselines": [
             {
                 "id": "test-baseline",
@@ -234,6 +235,7 @@ def test_detects_baseline_with_no_fixtures() -> None:
     manifest = {
         "envelopeFramingVersion": sca.current_envelope_version(),
         "frozenDtoFingerprint": sca.frozen_dto_fingerprint(),
+        "envelopeFramingFingerprint": sca.envelope_framing_fingerprint(),
         "baselines": [{"id": "empty-baseline", "components": _oldest_version_components(), "fixtures": []}],
     }
     violations = sca.audit(manifest)
@@ -281,6 +283,98 @@ def test_frozen_dto_fingerprint_changes_on_field_reorder() -> None:
         fp2 = sca.frozen_dto_fingerprint(p)
         expect(fp1 != fp2,
                "expected fingerprint to change on field reorder")
+
+
+def _synthetic_envelope_types_text(reordered: bool = False) -> str:
+    descriptor_fields = (
+        "    { cdVersion ∷ !Word32\n    , cdId ∷ !ComponentId\n"
+        if reordered else
+        "    { cdId ∷ !ComponentId\n    , cdVersion ∷ !Word32\n")
+    return (
+        "newtype ComponentId = ComponentId Text\n"
+        "    deriving (Show, Eq, Ord)\n"
+        "    deriving newtype (Hashable, Serialize)\n"
+        "\n"
+        "data ComponentDescriptor = ComponentDescriptor\n"
+        + descriptor_fields +
+        "    } deriving (Show, Eq, Generic, Serialize)\n"
+        "\n"
+        "newtype EnvelopeManifest = EnvelopeManifest\n"
+        "    { emComponents ∷ [ComponentDescriptor]\n"
+        "    } deriving stock (Show, Eq, Generic)\n"
+        "      deriving anyclass (Serialize)\n"
+        "\n"
+        "envelopeMagic ∷ Word32\n"
+        "envelopeMagic = 0x53595241\n"
+        "\n"
+        "fnv1a64 ∷ BS.ByteString → Word64\n"
+        "fnv1a64 = BS.foldl' step 0\n"
+        "  where\n"
+        "    step acc byte = acc\n"
+        "\n"
+        "encodeW32 ∷ Word32 → BS.ByteString\n"
+        "encodeW32 w = BS.pack [fromIntegral w]\n"
+        "\n"
+        "decodeW32 ∷ BS.ByteString → Word32\n"
+        "decodeW32 = BS.foldl' (\\acc byte → acc) 0\n"
+        "\n"
+        "encodeW64 ∷ Word64 → BS.ByteString\n"
+        "encodeW64 w = BS.pack [fromIntegral w]\n"
+        "\n"
+        "decodeW64 ∷ BS.ByteString → Word64\n"
+        "decodeW64 = BS.foldl' (\\acc byte → acc) 0\n"
+        "\n")
+
+
+def test_envelope_framing_fingerprint_is_comment_insensitive() -> None:
+    print("round-15 review: envelope framing fingerprint ignores whitespace/"
+          "comment-only changes")
+    with tempfile.TemporaryDirectory() as d:
+        types_p = Path(d) / "Types.hs"
+        codec_p = Path(d) / "Codec.hs"
+        types_p.write_text(_synthetic_envelope_types_text())
+        codec_p.write_text("-- the codec\nencodeEnvelope x = x\n")
+        fp1 = sca.envelope_framing_fingerprint(types_p, codec_p)
+        types_p.write_text(
+            "-- a totally different, much longer comment\n"
+            + _synthetic_envelope_types_text())
+        codec_p.write_text(
+            "-- the codec, now with a longer explanatory comment\n"
+            "encodeEnvelope x = x\n")
+        fp2 = sca.envelope_framing_fingerprint(types_p, codec_p)
+        expect(fp1 == fp2,
+               "expected envelope framing fingerprint to ignore comment-only changes")
+
+
+def test_envelope_framing_fingerprint_changes_on_layout_change() -> None:
+    print("round-15 review: envelope framing fingerprint changes when "
+          "ComponentDescriptor's own field order changes -- exactly the "
+          "byte-layout-change-with-no-version-bump scenario this fingerprint "
+          "exists to catch")
+    with tempfile.TemporaryDirectory() as d:
+        types_p = Path(d) / "Types.hs"
+        codec_p = Path(d) / "Codec.hs"
+        codec_p.write_text("encodeEnvelope x = x\n")
+        types_p.write_text(_synthetic_envelope_types_text(reordered=False))
+        fp1 = sca.envelope_framing_fingerprint(types_p, codec_p)
+        types_p.write_text(_synthetic_envelope_types_text(reordered=True))
+        fp2 = sca.envelope_framing_fingerprint(types_p, codec_p)
+        expect(fp1 != fp2,
+               "expected envelope framing fingerprint to change when "
+               "ComponentDescriptor's field order changes")
+
+
+def test_detects_envelope_framing_fingerprint_mismatch() -> None:
+    print("manifest envelopeFramingFingerprint disagrees with the real source")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        manifest["envelopeFramingFingerprint"] = "0" * 64
+        violations = sca.audit(manifest)
+        expect(any("envelopeFramingFingerprint" in v for v in violations),
+               f"expected an envelope-framing-fingerprint violation, got {violations}")
 
 
 class _Args:
@@ -960,6 +1054,9 @@ def main() -> int:
         test_detects_baseline_with_no_fixtures,
         test_frozen_dto_fingerprint_is_comment_insensitive,
         test_frozen_dto_fingerprint_changes_on_field_reorder,
+        test_envelope_framing_fingerprint_is_comment_insensitive,
+        test_envelope_framing_fingerprint_changes_on_layout_change,
+        test_detects_envelope_framing_fingerprint_mismatch,
         test_add_baseline_creates_a_new_baseline_and_fixture_atomically,
         test_add_baseline_refuses_new_baseline_missing_required_fields,
         test_add_baseline_refuses_to_overwrite_without_force,

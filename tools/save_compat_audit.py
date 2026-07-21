@@ -163,6 +163,10 @@ MANIFEST_PATH = REPO_ROOT / "docs" / "save_compat" / "manifest.json"
 ENVELOPE_SOURCE_PATH = REPO_ROOT / "src" / "World" / "Save" / "Envelope.hs"
 SESSION_V90_SOURCE_PATH = (
     REPO_ROOT / "src" / "World" / "Save" / "Compat" / "SessionV90.hs")
+ENVELOPE_TYPES_SOURCE_PATH = (
+    REPO_ROOT / "src" / "World" / "Save" / "Envelope" / "Types.hs")
+ENVELOPE_CODEC_SOURCE_PATH = (
+    REPO_ROOT / "src" / "World" / "Save" / "Envelope" / "Codec.hs")
 
 # Every source file that declares a Haskell-owned gameplay component's
 # ComponentId literal and/or its ComponentCodec (serializeCodec or a
@@ -199,6 +203,15 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _normalize_haskell_block(block: str) -> str:
+    """Strip line comments and collapse whitespace, so a documentation-
+    only edit never moves a fingerprint but a REAL structural change
+    (field added/removed/reordered, logic changed) always does."""
+    no_comments = "\n".join(
+        re.sub(r"--.*$", "", line) for line in block.splitlines())
+    return re.sub(r"\s+", " ", no_comments).strip()
+
+
 def frozen_dto_fingerprint(source_path: Path = SESSION_V90_SOURCE_PATH) -> str:
     """A stable fingerprint over the frozen DTO type declarations in
     World.Save.Compat.SessionV90 -- every `data ... = ...` block up to
@@ -214,13 +227,72 @@ def frozen_dto_fingerprint(source_path: Path = SESSION_V90_SOURCE_PATH) -> str:
         raise ValueError(
             f"no frozen `data ... deriving (...)` blocks found in "
             f"{source_path} -- did the module get restructured?")
+    normalized = "\n---\n".join(_normalize_haskell_block(b) for b in blocks)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
-    def normalize(block: str) -> str:
-        no_comments = "\n".join(
-            re.sub(r"--.*$", "", line) for line in block.splitlines())
-        return re.sub(r"\s+", " ", no_comments).strip()
 
-    normalized = "\n---\n".join(normalize(b) for b in blocks)
+# Every top-level Types.hs binding that determines the envelope's actual
+# ON-DISK byte layout (round-15 review): the manifest's own wire shape
+# (ComponentId/ComponentDescriptor/EnvelopeManifest -- field order is
+# the cereal-derived positional layout), the 4-byte magic prefix, and
+# the hand-rolled (non-cereal) header scalar codec (fnv1a64/
+# encodeW32/decodeW32/encodeW64/decodeW64) World.Save.Envelope.Codec's
+# header construction/parsing calls directly. Deliberately EXCLUDES
+# EnvelopeLimits/EnvelopeError -- soft config and Haskell-side error
+# reporting, neither of which changes what the bytes on disk MEAN.
+ENVELOPE_FRAMING_WIRE_BINDINGS = [
+    "ComponentId", "ComponentDescriptor", "EnvelopeManifest",
+    "envelopeMagic", "fnv1a64", "encodeW32", "decodeW32", "encodeW64",
+    "decodeW64",
+]
+
+
+def _extract_toplevel_block(text: str, name: str) -> str:
+    """Extract one top-level Haskell type declaration or binding by name
+    -- from its own `data name`/`newtype name` header, or its
+    `name ::`/`name =` line, through the next BLANK line (this
+    codebase's own convention: every top-level item is followed by a
+    blank line before the next comment/definition), so a multi-line
+    `deriving stock (...)` / `deriving anyclass (...)` split, or a
+    `where`-clause, is captured along with it."""
+    m = re.search(
+        rf"^(?:data|newtype)\s+{re.escape(name)}\b.*?(?=\n\n)|"
+        rf"^{re.escape(name)}\s*(?:∷|=).*?(?=\n\n)",
+        text, re.MULTILINE | re.DOTALL)
+    if not m:
+        raise ValueError(
+            f"could not find top-level binding '{name}' -- did it get "
+            f"renamed or restructured?")
+    return m.group(0)
+
+
+def envelope_framing_fingerprint(
+        types_path: Path = ENVELOPE_TYPES_SOURCE_PATH,
+        codec_path: Path = ENVELOPE_CODEC_SOURCE_PATH) -> str:
+    """Round-15 review: envelopeFramingVersion alone is just an integer
+    someone has to remember to bump -- it says nothing about whether the
+    ACTUAL on-disk byte layout (header/manifest/checksum framing) still
+    matches what the manifest was declared against. A framing-layout
+    change (reordering ComponentDescriptor's fields, changing the magic
+    bytes, altering the checksum algorithm, restructuring
+    encodeEnvelope/decodeEnvelope's header construction) could ship
+    while leaving envelopeFramingVersion untouched, silently producing a
+    new wire format with nothing catching it -- exactly the "new wire
+    format without the required format epoch" gap this fingerprint
+    closes, mirroring frozen_dto_fingerprint's identical technique
+    (comment/haddock-insensitive, reacts to any real structural change)
+    applied to the envelope's OWN framing instead of a component's
+    frozen DTO. Covers every wire-relevant Types.hs binding
+    (ENVELOPE_FRAMING_WIRE_BINDINGS) plus the ENTIRE Codec.hs module --
+    every line of that file IS the framing contract (its own module
+    docstring: "the pure, side-effect-free tagged-envelope codec"), so
+    there is no non-wire-relevant content there to exclude."""
+    types_text = types_path.read_text(encoding="utf-8")
+    blocks = [_extract_toplevel_block(types_text, name)
+              for name in ENVELOPE_FRAMING_WIRE_BINDINGS]
+    codec_text = codec_path.read_text(encoding="utf-8")
+    normalized = "\n---\n".join(
+        _normalize_haskell_block(b) for b in blocks + [codec_text])
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -649,6 +721,22 @@ def audit(manifest: dict) -> list[str]:
             f"layout ({real_fingerprint}) -- a field was added/removed/"
             f"reordered on an already-shipped frozen DTO (requirement 10), or "
             f"the manifest needs a deliberate update alongside the change")
+
+    declared_framing_fingerprint = manifest.get("envelopeFramingFingerprint")
+    real_framing_fingerprint = envelope_framing_fingerprint()
+    if declared_framing_fingerprint != real_framing_fingerprint:
+        violations.append(
+            f"manifest envelopeFramingFingerprint ({declared_framing_fingerprint}) "
+            f"disagrees with the current World.Save.Envelope.Codec/.Types wire "
+            f"layout ({real_framing_fingerprint}) -- round-15 review: "
+            f"envelopeFramingVersion alone is just an integer someone has to "
+            f"remember to bump; this fingerprint catches an actual byte-layout "
+            f"change (ComponentDescriptor's fields, the magic bytes, the "
+            f"checksum algorithm, encodeEnvelope/decodeEnvelope's header "
+            f"construction) shipping with envelopeFramingVersion left "
+            f"untouched -- a new wire format with no format epoch. Bump "
+            f"envelopeFramingVersion (a deliberate, reviewed format epoch) and "
+            f"update this fingerprint together, or revert the framing change")
 
     real_registry = real_component_registry()
     verified_tracked, descriptor_violations = verify_fixture_descriptors(manifest)
