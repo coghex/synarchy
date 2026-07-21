@@ -237,6 +237,43 @@ def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2
     return False, last
 
 
+def wait_save_complete(port: int, request_id: int, seconds: float = 60.0,
+                        interval: float = 0.2):
+    """Poll ``engine.getSaveStatus()`` until the save identified by
+    ``request_id`` reaches a terminal phase.
+
+    ``engine.saveWorld`` only ACCEPTS the request synchronously (issue
+    #758's ``SaveEncoding`` window runs the real encode + disk write
+    AFTER the capture barrier already released, so other state owners
+    can resume before the file is actually durable) -- the appearance of
+    the save file on disk is a proxy for completion, not the authoritative
+    signal engine.getSaveStatus() itself is. ``SaveCaptureComplete`` is
+    the terminal phase 'finishSave'/'failSave' set once encoding AND disk
+    I/O both finish (see Engine.Save.Barrier), so waiting for it (or the
+    terminal 'SaveFailed') ties inspection to a completed, request-
+    specific save boundary rather than a same-named-but-possibly-stale
+    status left behind by an EARLIER save.
+
+    Returns ``(succeeded: bool, status: dict | None)`` -- ``status`` is
+    the last observed ``engine.getSaveStatus()`` table for THIS
+    ``request_id`` (``None`` if the console never returned a status for
+    it at all before the deadline).
+    """
+    deadline = time.time() + seconds
+    last = None
+    while time.time() < deadline:
+        status = send_json(port, "return engine.getSaveStatus()")
+        if isinstance(status, dict) and status.get("id") == request_id:
+            last = status
+            phase = status.get("phase")
+            if phase == "SaveCaptureComplete":
+                return True, status
+            if phase == "SaveFailed":
+                return False, status
+        time.sleep(interval)
+    return False, last
+
+
 # --------------------------------------------------------------------------
 # Common bootstrap: AI scripts, worlds, acolytes
 # --------------------------------------------------------------------------

@@ -68,7 +68,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import boot, quit_engine, send, send_json, wait_load_published
+from probelib import (boot, quit_engine, send, send_json, wait_load_published,
+                       wait_save_complete)
 from persistence_snapshot import compare_session_files
 from save_compat_audit import dump_canonical_summary
 
@@ -146,6 +147,28 @@ def wait_for_file(path: str, seconds: float = 30.0) -> bool:
             return True
         time.sleep(0.1)
     return False
+
+
+def save_and_wait(chk: Checks, port: int, page: str, slot: str) -> str:
+    """engine.saveWorld, then tie completion to THIS save's own request id
+    via engine.getSaveStatus() reaching SaveCaptureComplete (round-4
+    review: the appearance of world.synworld on disk is a proxy, not the
+    authoritative completion signal -- see wait_save_complete). Returns
+    the accepted-request-vs-status-mismatch-safe result label used in the
+    check message; asserts acceptance, request-id capture, and terminal
+    success as three separate checks so a failure names exactly which
+    step broke."""
+    saved = send(port, f"return engine.saveWorld('{page}', '{slot}')")
+    chk.ok(saved.strip() == "true", f"engine.saveWorld('{slot}') accepted (got {saved!r})")
+    status = send_json(port, "return engine.getSaveStatus()")
+    request_id = status.get("id") if isinstance(status, dict) else None
+    chk.ok(request_id is not None,
+           f"engine.getSaveStatus() reports a request id right after saveWorld('{slot}') "
+           f"(got {status!r})")
+    ok, final_status = wait_save_complete(port, request_id)
+    chk.ok(ok, f"save '{slot}' (request {request_id}) reached SaveCaptureComplete "
+                f"(got {final_status!r})")
+    return final_status
 
 
 def as_int(s: str):
@@ -367,10 +390,10 @@ def main() -> int:
         print("=== engine A: build scenario + save 'gen1' ===")
         proc = boot_probe(root, port, os.path.join(tmpdir, "engineA.log"))
         portal_bid, atk, tgt = build_scenario(chk, port)
-        saved = send(port, f"return engine.saveWorld('{PAGE}', 'gen1')")
-        chk.ok(saved.strip() == "true", f"engine.saveWorld('gen1') accepted (got {saved!r})")
+        save_and_wait(chk, port, PAGE, "gen1")
         gen1_path = os.path.join(root, "saves", "gen1", "world.synworld")
-        chk.ok(wait_for_file(gen1_path), f"save file appeared at {gen1_path}")
+        chk.ok(wait_for_file(gen1_path, seconds=5.0),
+               f"save file appeared at {gen1_path}")
         # #767 requirement 5: exclude slot name/timestamp/path from the
         # structural comparison, but smTimestamp is still a real, well-
         # formed field on the wire -- check it exists and looks like a
@@ -423,11 +446,10 @@ def main() -> int:
                        f"inspection during a 2s paused dwell produces the "
                        f"SAME persistent state ({before} -> {after})")
 
-            saved = send(port, f"return engine.saveWorld('{PAGE}', '{next_slot}')")
-            chk.ok(saved.strip() == "true",
-                   f"re-saving to '{next_slot}' succeeded (got {saved!r})")
+            save_and_wait(chk, port, PAGE, next_slot)
             next_path = os.path.join(root, "saves", next_slot, "world.synworld")
-            chk.ok(wait_for_file(next_path), f"save file appeared at {next_path}")
+            chk.ok(wait_for_file(next_path, seconds=5.0),
+                   f"save file appeared at {next_path}")
             gen_paths.append(next_path)
 
             if letter == "D":
