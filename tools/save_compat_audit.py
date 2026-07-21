@@ -469,12 +469,15 @@ def audit_component_versions(
 # World.Save.Compat.SessionV90.migrateSessionV90, which threads every
 # page-scoped modern component's construction through one of these named
 # helpers (see the function's own source: `base = basePageSnapshots
-# (...); afterEdits <- applyWorldEdits 1 (...) base; ...`) -- global
-# fields (core-session's allocators/camera, texture-palette) are instead
-# built directly as part of the one SessionSnapshot record literal
-# GHC already forces to be total, so THEY can never silently go
-# unconstructed the way a forgotten apply* call for a NEW page-scoped
-# component could.
+# (...); afterEdits <- applyWorldEdits 1 (...) base; ...`) -- this
+# mapping is a maintained LOOKUP (Python cannot itself discover a
+# Haskell helper's name), but round-13 review: whether a REQUIRED
+# component even NEEDS an entry here at all is no longer trusted to
+# whoever edits this dict by hand -- audit_b1_migration_covers_
+# page_scoped_components (below) now derives the set of components that
+# need SOME accounted policy directly from the REAL registry, so a
+# brand-new required component that nobody added here shows up as its
+# own violation, not silent gap.
 SESSION_V90_APPLY_HELPER_FOR_COMPONENT = {
     "world-edits":    "applyWorldEdits",
     "world-activity": "applyWorldActivity",
@@ -485,9 +488,32 @@ SESSION_V90_APPLY_HELPER_FOR_COMPONENT = {
     "power-nodes":    "applyPowerNodes",
 }
 
+# Components migrateSessionV90 constructs WITHOUT a named per-component
+# apply* helper, because they are built directly as part of the ONE
+# SessionSnapshot/PageSnapshot record literal GHC already forces to be
+# total (so they can never silently go unconstructed the way a
+# forgotten apply* call for a page-scoped component could):
+#   - "core-session"/"texture-palette": global (not page-scoped) fields
+#     -- allocators/camera and the texture palette -- set directly in
+#     that one record literal.
+#   - "world-pages": the FOUNDATION every page is built from
+#     (basePageSnapshots, from the frozen v90 blob's own worldgen
+#     params) -- not a component layered ON TOP of that foundation via
+#     an apply* call the way every other page-scoped component is.
+# "metadata"/"session" are B1's own INPUT being migrated FROM, not a
+# component migrateSessionV90 constructs; "lua-state"/"lua.*" are B2/B3
+# concerns entirely -- B1 predates Lua persistence altogether and
+# always defaults every current Lua module via isMigratingLegacyBaseline,
+# unrelated to any page-scoped Haskell helper.
+SESSION_V90_GLOBAL_OR_INPUT_COMPONENTS = {
+    "core-session", "texture-palette", "world-pages", "metadata", "session",
+    "lua-state",
+}
+
 
 def audit_b1_migration_covers_page_scoped_components(
-        source_path: Path = SESSION_V90_SOURCE_PATH) -> list[str]:
+        real_registry: dict, source_path: Path = SESSION_V90_SOURCE_PATH,
+) -> list[str]:
     """Requirement 5 (issue #766): "introducing a new required component
     requires a migration/default policy for every supported older
     baseline". The b1-initial-session baseline can never simply declare
@@ -499,9 +525,22 @@ def audit_b1_migration_covers_page_scoped_components(
     literally compiling Haskell: if a future required page-scoped
     component's helper name isn't referenced anywhere in this file,
     something was renamed/removed/forgotten with nothing left to prove
-    B1 sessions still migrate it."""
+    B1 sessions still migrate it.
+
+    Round-13 review: previously only checked the FIXED
+    SESSION_V90_APPLY_HELPER_FOR_COMPONENT dict's own entries against the
+    source -- a brand-new required Haskell component that nobody
+    remembered to ALSO add to that dict was invisible to this audit
+    entirely (modern-baseline completeness explicitly exempts the
+    b1-shaped baseline from needing full components[] coverage, so
+    nothing else would catch it either). Now derives the set of
+    components requiring SOME accounted B1 policy directly from
+    real_registry (every REQUIRED, non-Lua id minus the explicitly
+    justified SESSION_V90_GLOBAL_OR_INPUT_COMPONENTS exemptions above),
+    so an unclassified new required component is its own violation
+    rather than a silent gap."""
     text = source_path.read_text(encoding="utf-8")
-    return [
+    violations = [
         f"World.Save.Compat.SessionV90.migrateSessionV90 (the "
         f"b1-initial-session baseline's ONLY migration path) no longer "
         f"references '{helper}' for component '{comp_id}' -- a new "
@@ -511,6 +550,25 @@ def audit_b1_migration_covers_page_scoped_components(
         for comp_id, helper in SESSION_V90_APPLY_HELPER_FOR_COMPONENT.items()
         if helper not in text
     ]
+    for comp_id, real in real_registry.items():
+        if (not real.get("required") or comp_id.startswith("lua.")
+                or comp_id in SESSION_V90_GLOBAL_OR_INPUT_COMPONENTS
+                or comp_id in SESSION_V90_APPLY_HELPER_FOR_COMPONENT):
+            continue
+        violations.append(
+            f"component '{comp_id}' is REQUIRED in the real registry but "
+            f"has NO known migration-helper mapping in "
+            f"SESSION_V90_APPLY_HELPER_FOR_COMPONENT and is not listed in "
+            f"SESSION_V90_GLOBAL_OR_INPUT_COMPONENTS either -- B1 "
+            f"compatibility for this component has never been verified at "
+            f"all (round-13 review: this is exactly the 'a brand-new "
+            f"required component nobody classified' gap this audit exists "
+            f"to catch); add its migrateSessionV90 helper name to "
+            f"SESSION_V90_APPLY_HELPER_FOR_COMPONENT, or -- if it is "
+            f"genuinely built directly into the base record literal like "
+            f"core-session/texture-palette/world-pages -- add it to "
+            f"SESSION_V90_GLOBAL_OR_INPUT_COMPONENTS instead")
+    return violations
 
 
 def audit_modern_baseline_components_complete(
@@ -598,7 +656,7 @@ def audit(manifest: dict) -> list[str]:
     violations.extend(
         audit_component_versions(manifest, real_registry, verified_tracked))
     violations.extend(audit_modern_baseline_components_complete(manifest, real_registry))
-    violations.extend(audit_b1_migration_covers_page_scoped_components())
+    violations.extend(audit_b1_migration_covers_page_scoped_components(real_registry))
 
     for baseline, fixture in _iter_fixtures(manifest):
         fid = fixture.get("id", "<unnamed>")

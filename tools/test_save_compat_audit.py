@@ -869,11 +869,49 @@ def test_detects_b1_migration_missing_apply_helper() -> None:
             "afterUnits <- applyUnits 1 nextUnitId (...) afterBuildings\n"
             "afterSim <- applyUnitSim 1 (...) afterUnits\n"
             "afterPower <- applyPowerNodes 1 (...) afterSim\n")
-        violations = sca.audit_b1_migration_covers_page_scoped_components(p)
+        violations = sca.audit_b1_migration_covers_page_scoped_components(
+            sca.real_component_registry(), p)
         expect(any("applyCraftBills" in v and "craft-bills" in v for v in violations),
                f"expected a missing-apply-helper violation, got {violations}")
         expect(len(violations) == 1,
                f"expected exactly one violation (only craft-bills' helper is missing), got {violations}")
+
+
+def test_detects_unclassified_new_required_component_for_b1() -> None:
+    print("round-13 review: a brand-new REQUIRED Haskell component that nobody "
+          "added to SESSION_V90_APPLY_HELPER_FOR_COMPONENT or "
+          "SESSION_V90_GLOBAL_OR_INPUT_COMPONENTS is its own violation, not a "
+          "silent gap in B1 compatibility coverage")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        p = tmp / "SessionV90.hs"
+        # The real source text, unmodified -- every REAL known component's
+        # helper genuinely IS referenced here. The only injected fault is
+        # a brand-new REQUIRED registry entry this dict/exemption set was
+        # never told about.
+        p.write_text(sca.SESSION_V90_SOURCE_PATH.read_text(encoding="utf-8"))
+        registry = dict(sca.real_component_registry())
+        registry["future-thing"] = {
+            "currentVersion": 1, "inputVersions": [1], "required": True}
+        violations = sca.audit_b1_migration_covers_page_scoped_components(registry, p)
+        expect(any("future-thing" in v and "NO known migration-helper" in v
+                   for v in violations),
+               f"expected an unclassified-required-component violation, got {violations}")
+
+
+def test_b1_migration_check_ignores_unrequired_new_component() -> None:
+    print("a brand-new OPTIONAL Haskell component needs no B1 migration policy "
+          "at all (requirement 9's legitimate absence case)")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        p = tmp / "SessionV90.hs"
+        p.write_text(sca.SESSION_V90_SOURCE_PATH.read_text(encoding="utf-8"))
+        registry = dict(sca.real_component_registry())
+        registry["future-optional-thing"] = {
+            "currentVersion": 1, "inputVersions": [1], "required": False}
+        violations = sca.audit_b1_migration_covers_page_scoped_components(registry, p)
+        expect(not any("future-optional-thing" in v for v in violations),
+               f"expected no violation for an optional new component, got {violations}")
 
 
 def test_real_manifest_passes_the_audit() -> None:
@@ -941,6 +979,8 @@ def main() -> int:
         test_detects_modern_baseline_missing_required_component,
         test_modern_baseline_check_skips_b1_shaped_baselines,
         test_detects_b1_migration_missing_apply_helper,
+        test_detects_unclassified_new_required_component_for_b1,
+        test_b1_migration_check_ignores_unrequired_new_component,
         test_real_manifest_passes_the_audit,
         test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes,
     ]:
