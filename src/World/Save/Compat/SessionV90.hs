@@ -105,7 +105,7 @@ import World.Save.Snapshot
 import World.Save.Component.Session
     ( TexPaletteDTO(..), fromTexPaletteDTO )
 import World.Save.Component.Page
-    ( WorldGenParamsDTO, fromWorldGenParamsDTO
+    ( WorldGenParamsDTO
     , WorldIdentityDTO(..), WorldEditDTO(..), MineDesignationDTO(..)
     , ConstructDesignationDTO(..), ChopDesignationDTO(..)
     , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)

@@ -884,6 +884,29 @@ def test_real_manifest_passes_the_audit() -> None:
            f"expected the real manifest to be clean, got {violations}")
 
 
+def test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes() -> None:
+    print("round-12 review: a baseline's declared components[] version bump "
+          "is rejected when NO real, tracked fixture's own decoded envelope "
+          "actually carries a matching descriptor -- catches a manifest-only "
+          "edit with no fixture ever re-encoded at the claimed version")
+    manifest = sca.load_manifest()
+    for baseline in manifest["baselines"]:
+        # b2-split-haskell-lua-state has exactly ONE fixture (unlike
+        # c3-raw-reference-v1, whose OTHER fixtures happen to carry
+        # craft-bills at both v1 and v2 already) -- its single real
+        # fixture genuinely carries craft-bills at v1 (round-10/11
+        # review fixed it FROM the wrong v2), so claiming v2 here is
+        # backed by NO real fixture at all in this baseline.
+        if baseline["id"] == "b2-split-haskell-lua-state":
+            for comp in baseline["components"]:
+                if comp["id"] == "craft-bills":
+                    comp["version"] = 2
+    violations = sca.audit(manifest)
+    expect(any("craft-bills" in v and "not backed by any tracked fixture's bytes" in v
+               for v in violations),
+           f"expected a fixture-backed-claim violation, got {violations}")
+
+
 def main() -> int:
     for fn in [
         test_clean_manifest_has_no_violations,
@@ -919,6 +942,7 @@ def main() -> int:
         test_modern_baseline_check_skips_b1_shaped_baselines,
         test_detects_b1_migration_missing_apply_helper,
         test_real_manifest_passes_the_audit,
+        test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes,
     ]:
         fn()
     if FAILURES:

@@ -333,7 +333,9 @@ def real_component_registry() -> dict[str, dict]:
     return registry
 
 
-def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
+def audit_component_versions(
+        manifest: dict, real_registry: dict,
+        verified_tracked: dict[str, set[int]] | None = None) -> list[str]:
     """Cross-check every baseline's declared components[] against the
     REAL current registry (requirement 19):
 
@@ -375,16 +377,30 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
         with NO baseline tracking it at all is unaffected here (that is
         either the required-zero-coverage violation above, or a
         legitimate optional component requirement 9 already allows to
-        have no fixture at all)."""
+        have no fixture at all).
+
+    Round-12 review: @verified_tracked@ (from 'verify_fixture_descriptors',
+    which decodes every tracked "complete-session" fixture's REAL
+    envelope manifest) replaces the manifest-JSON-parsed tracked-versions
+    map below for the required-zero-coverage/oldest/current checks below
+    when available (i.e. some complete-session fixture actually exists to
+    verify against) -- a baseline's components[] claim is no longer
+    trusted at face value for THOSE checks, only for the unknown-id/
+    invalid-version checks immediately below (which are about the CLAIM's
+    own internal consistency against the real codec registry, independent
+    of whether any fixture backs it -- still worth catching even when no
+    real fixture exists yet to verify against). @None@ (no complete-
+    session fixture found anywhere, e.g. a synthetic test manifest) falls
+    back to the prior manifest-JSON-trusting behavior unchanged."""
     violations: list[str] = []
-    tracked_versions: dict[str, set[int]] = {}
+    manifest_tracked_versions: dict[str, set[int]] = {}
 
     for baseline in manifest.get("baselines", []):
         bid = baseline.get("id")
         for comp in baseline.get("components", []):
             comp_id = comp.get("id")
             comp_ver = comp.get("version")
-            tracked_versions.setdefault(comp_id, set()).add(comp_ver)
+            manifest_tracked_versions.setdefault(comp_id, set()).add(comp_ver)
             real = real_registry.get(comp_id)
             if real is None:
                 violations.append(
@@ -401,6 +417,10 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
                     f"{sorted(real['inputVersions'])} -- support for that "
                     f"historical version was removed without retiring or "
                     f"updating this baseline")
+
+    tracked_versions = (
+        verified_tracked if verified_tracked is not None
+        else manifest_tracked_versions)
 
     for comp_id, real in real_registry.items():
         tracked = tracked_versions.get(comp_id, set())
@@ -573,7 +593,10 @@ def audit(manifest: dict) -> list[str]:
             f"the manifest needs a deliberate update alongside the change")
 
     real_registry = real_component_registry()
-    violations.extend(audit_component_versions(manifest, real_registry))
+    verified_tracked, descriptor_violations = verify_fixture_descriptors(manifest)
+    violations.extend(descriptor_violations)
+    violations.extend(
+        audit_component_versions(manifest, real_registry, verified_tracked))
     violations.extend(audit_modern_baseline_components_complete(manifest, real_registry))
     violations.extend(audit_b1_migration_covers_page_scoped_components())
 
@@ -1153,6 +1176,202 @@ def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:
     if "NORMALIZE_OK" not in output:
         return False, "\n".join(output.splitlines()[-60:])
     return True, ""
+
+
+# A small, permanent GHCi program (run via `cabal repl`, mirroring the
+# other GHCI_*_TEMPLATE constants' subprocess pattern) that decodes a
+# batch of REAL tracked fixture files' RAW envelope manifests -- their
+# actual on-disk (id, version, required) descriptors, exactly as the
+# real codec sees them -- and writes them all out as one JSON object
+# keyed by fixture path. A single, UNIVERSAL known-id set (every
+# Haskell/live-Lua modern id, plus BOTH retired legacy ids "session"
+# and "lua-state") is used for every fixture regardless of which shape
+# it actually is, since this only needs the envelope's STRUCTURAL
+# manifest -- no application-level decode/migration -- to succeed for
+# any of B1/B2/B3/C3's tracked shapes (round-12 review).
+#
+# Round-12 review: tools/save_compat_audit.py's version-coverage checks
+# (audit_component_versions) previously trusted a baseline's declared
+# components[] versions as-is, entirely from the manifest JSON -- never
+# cross-checked against what a fixture's OWN bytes actually contain.
+# Bumping only the manifest's declared version (with no fixture change
+# at all) satisfied every coverage check while validating nothing.
+# verify_fixture_descriptors (below) uses this dump to grind that
+# claim against real, decoded descriptors before trusting it.
+GHCI_DUMP_DESCRIPTORS_TEMPLATE = r"""
+:set -XOverloadedStrings
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Aeson as Aeson
+import Data.Aeson ((.=))
+import qualified Data.Aeson.Key as AK
+import World.Save.Envelope.Codec
+import World.Save.Envelope.Types
+import World.Save.Envelope (currentEnvelopeVersion, metadataComponentId)
+import World.Save.Component (componentKnownIds)
+import World.Save.Compat.SessionV90 (sessionComponentId)
+
+:{
+let universalKnown = HS.insert metadataComponentId
+        (HS.insert sessionComponentId
+            (HS.insert (ComponentId "lua-state")
+                (HS.insert (ComponentId "lua.unit_ai")
+                    (HS.insert (ComponentId "lua.building_spawn")
+                        componentKnownIds))))
+    cidText (ComponentId t) = t
+    dumpOne path = do
+      bytes <- BS.readFile path
+      pure $ case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                     universalKnown HS.empty bytes of
+        Left e -> (path, Left (show e))
+        Right decoded -> (path, Right
+          [ Aeson.object
+              [ "id" .= cidText (cdId d), "version" .= cdVersion d
+              , "required" .= cdRequired d ]
+          | d <- emComponents (deManifest decoded) ])
+in do
+  results <- mapM dumpOne ("__FIXTURE_PATHS__" :: [FilePath])
+  let failed = [ (p, e) | (p, Left e) <- results ]
+  if not (null failed)
+    then putStrLn ("DESCRIPTOR_DUMP_FAILED: " ++ show failed)
+    else do
+      let obj = Aeson.object
+            [ AK.fromString p .= descs | (p, Right descs) <- results ]
+      BSL.writeFile "__OUTPUT_PATH__" (Aeson.encode obj)
+      putStrLn "DESCRIPTOR_DUMP_OK"
+:}
+"""
+
+
+def dump_fixture_descriptors(
+        fixture_paths: list[Path]) -> tuple[dict[str, list[dict]] | None, str]:
+    """Run GHCI_DUMP_DESCRIPTORS_TEMPLATE via a single `cabal repl`
+    subprocess to decode every path in fixture_paths' RAW envelope
+    manifest. Returns (path-string -> [{"id","version","required"}, ...]
+    for every fixture, "") on success, or (None, diagnostic) on any
+    decode/subprocess failure."""
+    if not fixture_paths:
+        return {}, ""
+    haskell_list = "[" + ",".join(
+        json.dumps(str(p)) for p in fixture_paths) + "]"
+    with tempfile.NamedTemporaryFile(
+            suffix=".json", dir=REPO_ROOT, delete=False) as tf:
+        output_path = Path(tf.name)
+    try:
+        script = (GHCI_DUMP_DESCRIPTORS_TEMPLATE
+            .replace('"__FIXTURE_PATHS__"', haskell_list)
+            .replace("__OUTPUT_PATH__", str(output_path)))
+        try:
+            proc = subprocess.run(
+                ["cabal", "repl", "test:synarchy-test-headless"],
+                input=script, cwd=REPO_ROOT, capture_output=True, text=True,
+                timeout=1800)
+        except FileNotFoundError:
+            return None, "'cabal' was not found on PATH"
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if "DESCRIPTOR_DUMP_OK" not in output or not output_path.exists():
+            return None, "\n".join(output.splitlines()[-60:])
+        return json.loads(output_path.read_text(encoding="utf-8")), ""
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+def verify_fixture_descriptors(
+        manifest: dict) -> tuple[dict[str, set[int]] | None, list[str]]:
+    """Round-12 review: ground audit_component_versions' coverage checks
+    in REAL fixture bytes, not a baseline's self-reported components[]
+    claim. Decodes every "complete-session" fixture with a tracked
+    checksum (the only fixtures whose bytes genuinely carry a full,
+    real component manifest -- a "component-focused" fixture may be an
+    isolated Lua payload or inline source, not a full envelope) and:
+
+      - flags any baseline components[] entry (id, version, required)
+        that does NOT match ANY of that baseline's own real, decoded
+        fixtures' descriptors -- catching a manifest edit that claims a
+        version bump with no fixture ever actually re-encoded at it;
+      - returns the VERIFIED (fixture-backed) id -> {tracked versions}
+        map for audit_component_versions to use instead of trusting the
+        manifest JSON directly.
+
+    Returns (None, []) when there is nothing to verify against at all
+    (no complete-session fixture anywhere -- e.g. a synthetic test
+    manifest exercising an unrelated check), telling the caller to fall
+    back to the manifest-JSON-trusting behavior unchanged. Returns
+    (None, [diagnostic]) if the decode step itself fails (no cabal on
+    PATH, a genuinely corrupt fixture, etc.) -- the caller's other,
+    unrelated checks still run normally, but every version-coverage
+    check this powers falls back too until fixed, with that fact
+    surfaced as its own violation rather than silently trusting
+    unverified claims."""
+    complete_session_paths: dict[str, tuple[str, Path]] = {}
+    for baseline, fixture in _iter_fixtures(manifest):
+        if fixture.get("kind") != "complete-session" or not fixture.get("sha256"):
+            continue
+        path_str = fixture.get("path")
+        if not path_str:
+            continue
+        fpath = REPO_ROOT / path_str
+        if not fpath.exists():
+            continue
+        complete_session_paths[path_str] = (baseline.get("id"), fpath)
+
+    if not complete_session_paths:
+        return None, []
+
+    dumped, tail = dump_fixture_descriptors(
+        [p for (_, p) in complete_session_paths.values()])
+    if dumped is None:
+        return None, [
+            "could not verify manifest components[] against real fixture "
+            "descriptors (every version-coverage check below falls back to "
+            "trusting the manifest's own claim until this is fixed): " + tail]
+
+    violations: list[str] = []
+    verified_tracked: dict[str, set[int]] = {}
+    for path_str, (bid, fpath) in complete_session_paths.items():
+        descs = dumped.get(str(fpath))
+        if descs is None:
+            violations.append(
+                f"baseline '{bid}' fixture at '{path_str}' was not decoded "
+                f"(missing from the descriptor dump's own output) -- "
+                f"cannot verify its declared components[] against real bytes")
+            continue
+        for d in descs:
+            verified_tracked.setdefault(d["id"], set()).add(d["version"])
+
+    for baseline in manifest.get("baselines", []):
+        bid = baseline.get("id")
+        this_baseline_descs = [
+            dumped[str(fpath)]
+            for (owner_bid, fpath) in complete_session_paths.values()
+            if owner_bid == bid and str(fpath) in dumped
+        ]
+        if not this_baseline_descs:
+            # Nothing to verify against (e.g. this baseline's only
+            # fixtures are "component-focused" or checksum-less) --
+            # audit_component_versions' own existing checks still cover
+            # id/version-validity against the real codec registry.
+            continue
+        for comp in baseline.get("components", []):
+            comp_id, comp_ver, comp_req = (
+                comp.get("id"), comp.get("version"), comp.get("required"))
+            if not any(
+                    any(d["id"] == comp_id and d["version"] == comp_ver
+                        and d["required"] == comp_req for d in descs)
+                    for descs in this_baseline_descs):
+                violations.append(
+                    f"baseline '{bid}' declares component '{comp_id}' at "
+                    f"version {comp_ver} (required={comp_req}), but NONE of "
+                    f"its own real, decoded fixtures actually carry a "
+                    f"matching descriptor -- this baseline's components[] "
+                    f"claim is not backed by any tracked fixture's bytes "
+                    f"(round-12 review: a manifest-only version bump with "
+                    f"no fixture re-encoded at it must not silently satisfy "
+                    f"this baseline's own coverage)")
+
+    return verified_tracked, violations
 
 
 def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool, str]:
