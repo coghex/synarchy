@@ -501,6 +501,23 @@ decodeB2SessionMetadata bytes =
 --   honestly migrated -- the pre-#761 Lua deserializer that could
 --   interpret it was removed -- and is refused rather than silently
 --   discarded.
+--
+--   Round-18 review: "empty" means a genuinely-decoded, empty
+--   @HashMap Text Text@ (the documented pre-#761 @sdLuaModules@/
+--   @snapLuaModules@ shape -- see 'World.Save.Compat.SessionV90'\'s own
+--   identical @sd90LuaModules@ field), NOT a literal zero-byte payload:
+--   a real #760-era writer cereal-encodes even a genuinely empty map as
+--   its length-prefix bytes (8 bytes of zero for a 'Word64' count of 0),
+--   never as a truly empty 'BS.ByteString'. The previous 'BS.null' check
+--   would have wrongly REFUSED that exact real, empty-Lua-state case as
+--   "non-empty", while ALSO never validating that a non-null payload is
+--   even a well-formed map at all before rejecting it as "non-empty".
+--   Now decodes the payload as that map first: a decode failure
+--   (genuinely malformed bytes) is refused as malformed, not silently
+--   treated as either empty or acceptable; a successfully-decoded but
+--   NON-empty map is refused exactly as before (real persisted Lua
+--   state this build can no longer interpret); only a successfully-
+--   decoded, genuinely empty map migrates cleanly.
 decodeB2SessionEnvelope
     ∷ BS.ByteString → LegacyDecodeResult (SaveMetadata, SessionSnapshot)
 decodeB2SessionEnvelope bytes =
@@ -514,7 +531,14 @@ decodeB2SessionEnvelope bytes =
                 luaStatePayload ←
                     maybe (Left "lua-state component payload missing") Right
                           (HM.lookup luaStateComponentId (dePayloads decoded))
-                when (not (BS.null luaStatePayload)) $
+                luaModules ← either
+                    (\err → Left ("legacy save's opaque \"lua-state\" blob \
+                                  \is malformed (expected the frozen v1 \
+                                  \HashMap Text Text shape): "
+                                  <> T.pack err))
+                    Right
+                    (S.decode luaStatePayload ∷ Either String (HM.HashMap Text Text))
+                when (not (HM.null luaModules)) $
                     Left "legacy save carries a non-empty pre-#761 opaque \
                          \\"lua-state\" blob that this build can no longer \
                          \interpret (the pre-#761 Lua deserializer was \

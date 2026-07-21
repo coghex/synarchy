@@ -267,10 +267,23 @@ dropping the in-progress stamp.
   `tools/save_compat_migration_probe.py` proves a tracked fixture
   survives a real load→publish→resave→restart→reload round trip.
   The intervening #760-only transitional shape (Haskell already split
-  into components, but Lua state still the pre-#761 opaque blob map)
-  was never itself declared a compatibility baseline — no manifest or
-  fixture existed for it before it was superseded within the same
-  development arc — so there is no separate migration for it.
+  into components, but Lua state still the pre-#761 opaque blob map) IS
+  a declared compatibility baseline (`b2-split-haskell-lua-state`,
+  requirement 3): `World.Save.Envelope.decodeB2SessionEnvelope`
+  recognizes an envelope shaped exactly `{metadata, every Haskell
+  gameplay component, "lua-state"}` (every descriptor required, at its
+  genuine historical version — the same exact-shape precision B1's own
+  fallback uses) and reuses `assembleSnapshot` UNCHANGED for the
+  Haskell side, since it's already the modern per-component registry.
+  The opaque `"lua-state"` blob (the documented pre-#761
+  `sdLuaModules`/`snapLuaModules` shape, a cereal-encoded `HashMap Text
+  Text`) is decoded and validated as that map: a genuinely EMPTY map
+  (the common real case) migrates cleanly, defaulting every current Lua
+  module the same way a migrated B1 session does; a well-formed but
+  NON-empty map, or genuinely malformed bytes, are both refused rather
+  than silently discarding or misinterpreting persisted Lua state — the
+  pre-#761 Lua deserializer that could honestly interpret non-empty
+  state was removed by #761 and never comes back.
 - From the B1 baseline on, every subsequent format change requires an
   explicit per-component migration: translate changed fields, supply
   deliberate defaults for new fields. No more silent breaks. The
@@ -325,7 +338,7 @@ persistence envelope itself:
 | `tools/transactional_load_probe.py` | The genuinely new session-replacement-not-merge case, mutual exclusion, missing-def rejection, no-ghost-on-repeat (#763) | **Added by #763.** A same-process load test the multiworld probe structurally cannot be (that probe starts every run with zero pre-load pages): builds a live pre-load page never part of ANY save and proves it does not survive a real published load. | Done (#763) |
 | `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite by A2/#757.** A coordinated save keeps the engine paused and must not restore a prior simulation speed; the positional compatibility field remains decode-compatible until format work. | A2/#757 |
 | `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
-| `tools/save_compat_migration_probe.py` | Tracked pre-#760 B1 fixture load→publish→resave→restart→reload round trip (#766) | **Added by #766.** The one thing the pure hspec "save components"/"save compatibility" gates cannot prove: a real fixture on disk survives the normal whole-session transaction and a genuine process restart. | Done (#766) |
+| `tools/save_compat_migration_probe.py` | Every tracked complete-session baseline's fixture(s) (B1, the #760-only B2 transitional shape, C3's typed-reference/multi-page/items variants, B3's Lua-versioned session) load→publish→resave→restart→reload round trip (#766) | **Added by #766.** The one thing the pure hspec "save components"/"save compatibility" gates cannot prove: a real fixture on disk survives the normal whole-session transaction and a genuine process restart. | Done (#766) |
 
 **Secondary probes** — domain probes whose own gate happens to include
 a save→quit→restart→load round trip as one assertion among several

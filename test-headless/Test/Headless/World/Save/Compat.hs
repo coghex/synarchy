@@ -833,18 +833,56 @@ spec = do
             foreignOptionalComponentIds HS.empty bytes `shouldBe` []
 
         it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
-           \blob is NON-EMPTY -- the pre-#761 Lua deserializer that could \
-           \interpret it was removed, so it cannot be honestly migrated, \
-           \mirroring migrateSessionV90's identical policy for B1's own \
-           \legacy Lua blob" $ do
+           \blob decodes to a WELL-FORMED but NON-EMPTY HashMap Text Text \
+           \(round-18 review: the real pre-#761 sdLuaModules/ \
+           \snapLuaModules shape, not a hand-wavy 'non-empty bytes' stand-\
+           \in) -- the pre-#761 Lua deserializer that could interpret it \
+           \was removed, so it cannot be honestly migrated, mirroring \
+           \migrateSessionV90's identical policy for B1's own legacy Lua \
+           \blob" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let realNonEmptyMap =
+                    HM.fromList [("unit_ai", "some real persisted AI state")]
+                tampered = replaceB2LuaStateSpec bytes 1 True (S.encode realNonEmptyMap)
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames tampered of
+                Right _  → expectationFailure
+                    "expected a non-empty lua-state map to be refused"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "lua-state"
+
+        it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
+           \blob is genuinely MALFORMED -- not a valid HashMap Text Text \
+           \at all (round-18 review: distinct from the well-formed-but-\
+           \non-empty case above; malformed bytes must be refused as \
+           \malformed, never silently treated as an acceptable empty \
+           \state)" $ do
             bytes ← BS.readFile
                 "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
             let tampered = replaceB2LuaStateSpec bytes 1 True (BS.pack [1, 2, 3])
                 luaNames = HS.fromList ["unit_ai", "building_spawn"]
             case decodeSessionEnvelope luaNames luaNames tampered of
                 Right _  → expectationFailure
-                    "expected a non-empty lua-state blob to be refused"
+                    "expected a malformed lua-state blob to be refused"
                 Left msg → msg `shouldSatisfy` T.isInfixOf "lua-state"
+
+        it "migrates a B2-shaped envelope whose \"lua-state\" blob is the \
+           \REAL cereal-encoded empty HashMap Text Text (round-18 review: \
+           \8 bytes -- a Word64 zero length-prefix -- NOT a literal zero-\
+           \byte BS.empty payload, which a genuine #760 writer's cereal \
+           \encoder never actually produces for an empty map)" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let realEmptyMap = HM.empty ∷ HM.HashMap Text Text
+                tampered = replaceB2LuaStateSpec bytes 1 True (S.encode realEmptyMap)
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames tampered of
+                Left err → expectationFailure
+                    ("expected the real cereal-encoded empty map to migrate "
+                     <> "cleanly: " <> T.unpack err)
+                Right (_, _, luaComponents, isMigrated) → do
+                    isMigrated `shouldBe` True
+                    luaComponents `shouldBe` []
 
         it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
            \descriptor is marked OPTIONAL, not required -- mirrors the B1 \
