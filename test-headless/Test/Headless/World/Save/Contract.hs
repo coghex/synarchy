@@ -68,7 +68,7 @@ import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Structure.Palette (emptyTexPalette)
+import Structure.Palette (TexPalette(..))
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Item.Types (ItemInstance(..))
 import World.Spoil.Types (emptySpoilPiles, SpoilPile(..))
@@ -88,7 +88,7 @@ import Craft.Bills (emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), 
 import Power.Types (emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..), PowerRole(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..), Wound(..), Scar(..), StatModifier(..))
-import Unit.Sim.Types (UnitSimState(..), Pose(..), UnitActivity(..))
+import Unit.Sim.Types (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..))
 import Unit.Direction (Direction(..))
 
 page1, page2 ∷ WorldPageId
@@ -162,17 +162,23 @@ richBuilding = BuildingInstanceSnapshot
     , bisStorage = [richItem 990]
     }
 
+-- | Populated with a real move target, a multi-step local path, a
+--   non-Idle activity, a pending drink timer, and an in-progress pose
+--   transition -- round-2 review: an all-Nothing/all-empty fixture's Eq
+--   comparison can't detect a dropped or mis-mapped POPULATED field.
 richSimState ∷ UnitSimState
 richSimState = UnitSimState
     { usRealX = 12.5, usRealY = 7.5, usGridZ = 2, usRealZ = 2.0
-    , usTarget = Nothing, usPose = Standing, usState = Idle, usFacing = DirS
-    , usLocalPath = []
-    , usDrinkUntil = Nothing, usEatUntil = Nothing, usPickupUntil = Nothing
-    , usTransitionUntil = Nothing, usTransitionStride = 0, usPostTransition = []
+    , usTarget = Just (MoveTarget 20.0 15.0 1.5)
+    , usPose = Standing, usState = Walking, usFacing = DirS
+    , usLocalPath = [(13.0, 7.5), (14.0, 8.0), (15.0, 8.5)]
+    , usDrinkUntil = Just 54321.0, usEatUntil = Nothing, usPickupUntil = Nothing
+    , usTransitionUntil = Just 500.0, usTransitionStride = 2
+    , usPostTransition = [Crouching, Standing]
     , usClimbFromTile = Nothing, usClimbToTile = Nothing, usClimbStartTime = Nothing
     , usClimbSlipAt = Nothing, usFallFromTile = Nothing, usFallToTile = Nothing
-    , usPendingClimbXP = 0, usGetUpAt = Nothing, usPendingFallDrop = Nothing
-    , usJumpApex = Nothing, usMoveGrade = 0
+    , usPendingClimbXP = 0.4, usGetUpAt = Nothing, usPendingFallDrop = Nothing
+    , usJumpApex = Nothing, usMoveGrade = 0.75
     }
 
 richBills ∷ CraftBills
@@ -221,7 +227,7 @@ richPage = PageSnapshot
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton (UnitId 1) richUnit, usnNextId = 2 }
     , pgsUnitSimStates = HM.singleton (UnitId 1) richSimState
-    , pgsFloraHarvests = emptyFloraHarvests
+    , pgsFloraHarvests = HM.singleton (15, 16) 1234.5
     , pgsChopDesignations = HM.singleton (7, 8) (ChopDesignation 0)
     , pgsCraftBills   = richBills
     , pgsPowerNodes   = richNodes
@@ -262,7 +268,10 @@ minimalPage2 = PageSnapshot
 richGlobals ∷ SessionGlobals
 richGlobals = SessionGlobals
     { sgGameTime       = 50000.5
-    , sgTexPalette     = emptyTexPalette
+    , sgTexPalette     = TexPalette
+        { tpPathToId = HM.singleton "structures/test_wall.png" 1
+        , tpIdToPath = HM.singleton 1 "structures/test_wall.png"
+        , tpNextId   = 2 }
     , sgNextItemId     = 1000
     , sgNextBuildingId = 2
     , sgNextUnitId     = 2

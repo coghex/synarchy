@@ -235,18 +235,43 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
     # moment to apply it before the save captures state.
     time.sleep(0.5)
 
-    # Round-2 review: the reset-policy check only proves something if a
-    # REAL non-default selection/tool exists before the save -- seed both
-    # so "cleared after load" is a meaningful assertion, not a vacuous one
-    # (nothing was ever selected/armed to begin with).
+    # Round-2/3 review: the reset-policy check only proves something if
+    # REAL non-default selections/tool exist before the save -- seed all
+    # three selection classes requirement 6 names (unit, building, tile)
+    # plus the tool mode, so "cleared after load" is a meaningful
+    # assertion, not a vacuous one (nothing was ever selected/armed to
+    # begin with). Each selection is verified IMMEDIATELY after it's set,
+    # not batched up and checked only at the end: with a real acolyte_ai
+    # combat loop and a roster sequencer both actively ticking in the
+    # background (this scenario deliberately keeps both non-vacuous, see
+    # above), umSelected/bmSelected are live, frequently-read engine state
+    # that a slow batch of several round-tripped debug-console calls can
+    # observe mid-flux -- checking right after each individual set keeps
+    # the window between "set" and "verify" as small as a single
+    # request/response round trip, matching how a real player's click and
+    # its own immediate visual feedback would never race a save several
+    # seconds later.
     selected = send(port, f"return unit.select({atk})").strip()
     chk.ok(selected == "true", f"unit.select({atk}) succeeded before saving (got {selected!r})")
-    send(port, f"world.setToolMode('{PAGE}', 'tool_mine'); return 'ok'")
-    time.sleep(0.3)
     sel_before = send(port, "return unit.getSelected()")
-    tool_before = send(port, "return world.getToolMode()").strip().strip('"')
     chk.ok(atk_in_selection(sel_before, atk),
            f"unit {atk} is genuinely selected before saving (got {sel_before!r})")
+
+    # building.select(bid) returns no Lua value (0 results) -- verify via
+    # building.getSelected() instead, which reports a bare bid (or nil),
+    # NOT an array like unit.getSelected().
+    send(port, f"building.select({portal_bid}); return 'ok'")
+    bsel_before = as_int(send(port, "return building.getSelected()"))
+    chk.ok(bsel_before == portal_bid,
+           f"building {portal_bid} is genuinely selected before saving (got {bsel_before!r})")
+
+    send(port, f"world.selectTile('{PAGE}', 3, 4, 2); return 'ok'")
+    tile_before = send(port, f"return world.getSelectedTile('{PAGE}')")
+    chk.ok(tile_before.strip() not in ("nil", "null", ""),
+           f"a tile is genuinely selected before saving (got {tile_before!r})")
+
+    send(port, f"world.setToolMode('{PAGE}', 'tool_mine'); return 'ok'")
+    tool_before = send(port, "return world.getToolMode()").strip().strip('"')
     chk.ok(tool_before == "mine",
            f"tool mode is genuinely non-default before saving (got {tool_before!r})")
 
@@ -296,6 +321,14 @@ def assert_reset_policy(chk: Checks, port: int, when: str) -> None:
     sel = send(port, "return unit.getSelected()")
     chk.ok(sel.strip() in ("nil", "null", "[]", "{}", ""),
            f"{when}: unit selection is empty (got {sel!r})")
+    # Round-3 review: requirement 6 names building and tile selections
+    # too, not just unit selection.
+    bsel = send(port, "return building.getSelected()")
+    chk.ok(bsel.strip() in ("nil", "null", ""),
+           f"{when}: building selection is empty (got {bsel!r})")
+    tile = send(port, f"return world.getSelectedTile('{PAGE}')")
+    chk.ok(tile.strip() in ("nil", "null", ""),
+           f"{when}: tile selection is empty (got {tile!r})")
 
 
 def assert_nondefault_map_mode(chk: Checks, tmpdir: str, save_path: str, page: str) -> None:

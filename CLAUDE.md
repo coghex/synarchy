@@ -3744,8 +3744,10 @@ remains the standalone save-COMPATIBILITY audit (baseline/fixture
 fingerprints, requirement 13's maintained-migration guarantee).
 
 Two real-process harness levels (requirement 15), both against isolated
-resource roots, unique ports, and fresh processes — never the
-developer's real `saves/`:
+resource roots, unique ports, and fresh processes for their OWN
+scenario — never the developer's real `saves/` (the sweep's
+cross-referenced sub-probes are a documented exception by default, see
+below):
 - **`python3 tools/persistence_contract_probe.py`** — the compact,
   CI-eligible smoke gate: a tiny (worldSize 8) real generated page, one
   building, one unit, three real fresh-process save→load→save cycles
@@ -3781,15 +3783,25 @@ developer's real `saves/`:
   definition, invalid Haskell/Lua reference, required Lua decode
   failure) that already have their own maintained, real-process
   regression probes; instead it actually RUNS them, via `tools/
-  run_probes.py --only ... --exact` (`chop`/`till`/`crop`/`plant`/
-  `construction`/`craft_bill`/`power`/`transactional_load`/
-  `save_storage`/`save_barrier`/`persistence_integrity`/
-  `save_compat_migration`), propagating any failure — matching
-  requirement 14's "avoid retaining multiple expensive probes that test
-  the same final behavior" without reducing to a no-op existence check.
-  `--cross-probe-keys`/`--skip-cross-probes` narrow this for local
-  iteration on the sweep's own scenario; skipping is loudly reported as
-  reduced coverage, never silently. Registered manual-only
+  run_probes.py --only ... --exact` — matching requirement 14's "avoid
+  retaining multiple expensive probes that test the same final
+  behavior" without reducing to a no-op existence check. This sweep's
+  OWN scenario always uses an isolated resource root (requirement 15),
+  but the 12 cross-referenced probes don't all: only `save_storage`,
+  `persistence_integrity`, and `save_compat_migration` pass their own
+  `--resource-root`, and those 3 are the DEFAULT `--cross-probe-keys`
+  set. The other 8 (`chop`/`till`/`crop`/`plant`/`construction`/
+  `power`/`transactional_load`/`save_barrier`) call `engine.saveWorld`/
+  `loadSave` straight against this repo's real `saves/` directory
+  (cleaned up afterward, but transiently present), so running them is
+  opt-in only via `--include-unisolated-probes`, never the default.
+  `craft_bill` touches no `saves/` at all but is ALSO excluded from the
+  default: `tools/ci_probes.py --status` classifies it `manual-only
+  [flaky]` for reasons unrelated to persistence, so it must be listed
+  explicitly in `--cross-probe-keys` to opt in.
+  `--cross-probe-keys`/`--skip-cross-probes` narrow this further for
+  local iteration on the sweep's own scenario; skipping is loudly
+  reported as reduced coverage, never silently. Registered manual-only
   (`slow/worldgen-heavy`) in
   `tools/ci_probes.py`.
 

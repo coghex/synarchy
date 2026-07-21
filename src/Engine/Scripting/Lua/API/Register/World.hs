@@ -53,6 +53,7 @@ registerWorldAPI env = do
   registerLuaFunction "setWorldCursorHover" (worldSetWorldCursorHoverFn env)
   registerLuaFunction "setWorldCursorSelect" (worldSetWorldCursorSelectFn env)
   registerLuaFunction "selectTile" (worldSelectTileFn env)
+  registerLuaFunction "getSelectedTile" (worldGetSelectedTileFn env)
   registerLuaFunction "selectChunk" (worldSelectChunkFn env)
   registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)
   registerLuaFunction "setToolMode" (worldSetToolModeFn env)

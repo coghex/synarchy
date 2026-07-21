@@ -43,16 +43,33 @@ engine-boot/worldgen cost on top of this sweep's own scenario) -- that
 is the whole point of the compact/broad two-tier split (requirement 15):
 the compact probe stays CI-eligible, this sweep does not.
 ``--cross-probe-keys`` (comma-separated, ``--exact`` semantics) can
-narrow the set for local iteration on this script's OWN scenario;
-``--skip-cross-probes`` skips them entirely -- neither is the default,
-and skipping is loudly reported as reduced coverage, never silently.
+narrow or widen the set for local iteration on this script's OWN
+scenario; ``--skip-cross-probes`` skips them entirely (loudly reported
+as reduced coverage, never silently).
+
+This sweep's OWN scenario always uses an isolated resource root, a
+unique port, and a fresh process, and never touches the developer's
+real saves/ (requirement 15). The 12 cross-referenced probes are NOT
+all isolated the same way, though: only save_storage/
+persistence_integrity/save_compat_migration pass their own
+--resource-root -- those 3 are the DEFAULT ``--cross-probe-keys`` set.
+The other 8 (chop/till/crop/plant/construction/power/
+transactional_load/save_barrier) call engine.saveWorld/loadSave against
+this repo's real saves/ directory (cleaned up afterward, but
+transiently present) and are opt-in only, via
+``--include-unisolated-probes`` or by listing their keys explicitly in
+``--cross-probe-keys``. craft_bill_probe.py never touches saves/ at
+all, but is ALSO excluded from the default set: it's independently
+flaky (`tools/ci_probes.py --status` classifies it `manual-only
+[flaky]`, confirmed live while validating this exclusion) for reasons
+unrelated to persistence, so running it by default would make this
+sweep spuriously fail on unrelated AI timing; list it explicitly in
+``--cross-probe-keys`` to opt in anyway.
 
 Usage:
   python3 tools/persistence_contract_sweep.py [--port 9278] \\
-      [--world-size 64] [--seed 20260721] [--cross-probe-jobs 2]
-
-Both probe levels use isolated resource roots, unique ports, and fresh
-processes, and never touch the developer's real saves/ (requirement 15).
+      [--world-size 64] [--seed 20260721] [--cross-probe-jobs 2] \\
+      [--include-unisolated-probes]
 """
 from __future__ import annotations
 
@@ -88,11 +105,38 @@ AI_SCRIPTS = (
 # tools/run_probes.py --only <these keys> --exact, not merely documented
 # (round-1 review: an existence-only check proves nothing). Keys, not
 # filenames, since that is what run_probes.py --exact matches against.
-CROSS_REFERENCED_PROBE_KEYS = [
-    "chop", "till", "crop", "plant", "construction", "craft_bill", "power",
-    "transactional_load", "save_storage", "save_barrier",
-    "persistence_integrity", "save_compat_migration",
+#
+# These 12 probes are NOT all isolated the way this sweep's own scenario
+# is (`make_isolated_root` + `--resource-root`, requirement 15): only
+# save_storage/persistence_integrity/save_compat_migration pass their own
+# `--resource-root`. The other 9 -- chop/till/crop/plant/construction/
+# power/transactional_load/save_barrier/craft_bill -- call
+# engine.saveWorld/loadSave straight against this repo's real saves/
+# directory (a randomly-named or uuid-suffixed slot, cleaned up in a
+# `finally`, but still transiently present there while the probe runs)
+# -- EXCEPT craft_bill_probe.py, which never touches saves/ at all (its
+# own docstring: "Not covered here: a real save/quit/restart/load
+# round-trip") but IS independently flaky (`tools/ci_probes.py --status`
+# classifies it `manual-only [flaky]`: "craft_job AI claim/work timing
+# flakes run-to-run on CI" -- confirmed live while validating this fix,
+# unrelated to anything this issue touches). Auto-running the
+# saves/-touching 8 by default would violate requirement 15's "never
+# touch the developer's real saves/" for a routine sweep invocation, and
+# auto-running the flaky craft_bill by default would make this sweep
+# spuriously fail on unrelated AI timing -- both are SEPARATED from the
+# default set (round-3/round-4 review) rather than silently accepted.
+ISOLATED_CROSS_REFERENCED_PROBE_KEYS = [
+    "save_storage", "persistence_integrity", "save_compat_migration",
 ]
+FLAKY_ISOLATED_PROBE_KEYS = ["craft_bill"]
+UNISOLATED_CROSS_REFERENCED_PROBE_KEYS = [
+    "chop", "till", "crop", "plant", "construction", "power",
+    "transactional_load", "save_barrier",
+]
+CROSS_REFERENCED_PROBE_KEYS = (
+    ISOLATED_CROSS_REFERENCED_PROBE_KEYS + FLAKY_ISOLATED_PROBE_KEYS
+    + UNISOLATED_CROSS_REFERENCED_PROBE_KEYS
+)
 
 
 class Checks:
@@ -255,17 +299,39 @@ def build_rich_scenario(chk: Checks, port: int, seed: int, size: int, plates: in
     send(port, f"world.setMapMode('{PAGE}', 'map_pressure'); return 'ok'")
     time.sleep(0.5)
 
-    # Round-2 review: the reset-policy check only proves something if a
-    # REAL non-default selection/tool exists before the save -- seed both
-    # so "cleared after load" is a meaningful assertion, not a vacuous one.
+    # Round-2/3 review: the reset-policy check only proves something if
+    # REAL non-default selections/tool exist before the save -- seed all
+    # three selection classes requirement 6 names (unit, building, tile)
+    # plus the tool mode, so "cleared after load" is a meaningful
+    # assertion, not a vacuous one. Each selection is verified IMMEDIATELY
+    # after it's set (matching persistence_contract_probe.py's identical
+    # fix): with a real acolyte_ai combat loop and a roster sequencer both
+    # actively ticking in the background, umSelected/bmSelected are live,
+    # frequently-read engine state that a slow batch of several
+    # round-tripped debug-console calls can observe mid-flux -- checking
+    # right after each individual set keeps the window between "set" and
+    # "verify" as small as a single request/response round trip.
     selected = send(port, f"return unit.select({atk})").strip()
     chk.ok(selected == "true", f"unit.select({atk}) succeeded before saving (got {selected!r})")
-    send(port, f"world.setToolMode('{PAGE}', 'tool_mine'); return 'ok'")
-    time.sleep(0.3)
     sel_before = send(port, "return unit.getSelected()")
-    tool_before = send(port, "return world.getToolMode()").strip().strip('"')
     chk.ok(atk_in_selection(sel_before, atk),
            f"unit {atk} is genuinely selected before saving (got {sel_before!r})")
+
+    # building.select(bid) returns no Lua value (0 results) -- verify via
+    # building.getSelected() instead, which reports a bare bid (or nil),
+    # NOT an array like unit.getSelected().
+    send(port, f"building.select({portal_bid}); return 'ok'")
+    bsel_before = as_int(send(port, "return building.getSelected()"))
+    chk.ok(bsel_before == portal_bid,
+           f"building {portal_bid} is genuinely selected before saving (got {bsel_before!r})")
+
+    send(port, f"world.selectTile('{PAGE}', 3, 4, 2); return 'ok'")
+    tile_before = send(port, f"return world.getSelectedTile('{PAGE}')")
+    chk.ok(tile_before.strip() not in ("nil", "null", ""),
+           f"a tile is genuinely selected before saving (got {tile_before!r})")
+
+    send(port, f"world.setToolMode('{PAGE}', 'tool_mine'); return 'ok'")
+    tool_before = send(port, "return world.getToolMode()").strip().strip('"')
     chk.ok(tool_before == "mine",
            f"tool mode is genuinely non-default before saving (got {tool_before!r})")
 
@@ -305,6 +371,14 @@ def assert_reset_policy(chk: Checks, port: int, when: str) -> None:
     sel = send(port, "return unit.getSelected()")
     chk.ok(sel.strip() in ("nil", "null", "[]", "{}", ""),
            f"{when}: unit selection is empty (got {sel!r})")
+    # Round-3 review: requirement 6 names building and tile selections
+    # too, not just unit selection.
+    bsel = send(port, "return building.getSelected()")
+    chk.ok(bsel.strip() in ("nil", "null", ""),
+           f"{when}: building selection is empty (got {bsel!r})")
+    tile = send(port, f"return world.getSelectedTile('{PAGE}')")
+    chk.ok(tile.strip() in ("nil", "null", ""),
+           f"{when}: tile selection is empty (got {tile!r})")
 
 
 def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int) -> None:
@@ -317,10 +391,20 @@ def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int) -> None
                        "-- requirement 11/13 coverage is NOT exercised by this run")
         return
     print(f"=== running {len(keys)} cross-referenced probe(s) via "
-          f"run_probes.py --only ... --exact --jobs {jobs} (this is slow) ===")
+          f"run_probes.py --only ... --exact --jobs {jobs} --retries 1 "
+          f"(this is slow) ===")
+    # --retries 1 matches CI's own convention for a parallel --jobs run
+    # (see CLAUDE.md's CI probe-gate section): running probes pairwise
+    # risks the SAME parallel-engine-contention flake CI's own gate
+    # absorbs with a solo re-run, so this sweep must absorb it the same
+    # way rather than spuriously failing on contention unrelated to
+    # persistence (observed live while validating this fix: a probe
+    # failed "engine exited before READY" under --jobs 2, then passed
+    # cleanly run alone).
     proc = subprocess.run(
         [sys.executable, str(REPO / "tools" / "run_probes.py"),
-         "--only", ",".join(keys), "--exact", "--jobs", str(jobs)],
+         "--only", ",".join(keys), "--exact", "--jobs", str(jobs),
+         "--retries", "1"],
         cwd=REPO)
     chk.ok(proc.returncode == 0,
            f"cross-referenced probes ({', '.join(keys)}) all passed via "
@@ -334,13 +418,24 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20260721)
     ap.add_argument("--world-size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=5)
-    ap.add_argument("--cross-probe-keys", default=",".join(CROSS_REFERENCED_PROBE_KEYS),
+    ap.add_argument("--cross-probe-keys",
+                     default=",".join(ISOLATED_CROSS_REFERENCED_PROBE_KEYS),
                      help="comma-separated exact tools/run_probes.py probe keys to "
-                          "actually run for requirement 11/13 coverage (default: all "
-                          "of them -- narrow this only for local iteration on this "
-                          "script's OWN scenario)")
+                          "actually run for requirement 11/13 coverage (default: only "
+                          "the 3 that are isolated AND deterministic -- save_storage/"
+                          "persistence_integrity/save_compat_migration; pass "
+                          "--include-unisolated-probes for the 8 that touch this "
+                          "repo's real saves/, or list keys explicitly to also add "
+                          "craft_bill, which is isolated but independently flaky)")
     ap.add_argument("--cross-probe-jobs", type=int, default=2,
                      help="run_probes.py --jobs for the cross-referenced probes")
+    ap.add_argument("--include-unisolated-probes", action="store_true",
+                     help="also run chop/till/crop/plant/construction/power/"
+                          "transactional_load/save_barrier -- these are NOT "
+                          "isolated (they call engine.saveWorld/loadSave against "
+                          "this repo's real saves/ directory, requirement 15), so "
+                          "this is opt-in, not the default; only pass it if you "
+                          "understand it transiently touches real project state")
     ap.add_argument("--skip-cross-probes", action="store_true",
                      help="skip the cross-referenced probes entirely (loudly reported "
                           "as reduced coverage, never the default)")
@@ -432,8 +527,25 @@ def main() -> int:
             quit_engine(port, proc)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    keys = [] if args.skip_cross_probes else [
-        k for k in args.cross_probe_keys.split(",") if k.strip()]
+    if args.skip_cross_probes:
+        keys: list[str] = []
+    else:
+        keys = [k for k in args.cross_probe_keys.split(",") if k.strip()]
+        if args.include_unisolated_probes:
+            keys += [k for k in UNISOLATED_CROSS_REFERENCED_PROBE_KEYS
+                     if k not in keys]
+        else:
+            skipped_unisolated = [k for k in UNISOLATED_CROSS_REFERENCED_PROBE_KEYS
+                                   if k not in keys]
+            if skipped_unisolated:
+                print(f"  (not run: {', '.join(skipped_unisolated)} -- these are NOT "
+                      f"isolated from this repo's real saves/ directory; pass "
+                      f"--include-unisolated-probes to also run them)")
+        skipped_flaky = [k for k in FLAKY_ISOLATED_PROBE_KEYS if k not in keys]
+        if skipped_flaky:
+            print(f"  (not run: {', '.join(skipped_flaky)} -- isolated but "
+                  f"independently flaky per `tools/ci_probes.py --status`; "
+                  f"list it explicitly in --cross-probe-keys to also run it)")
     run_cross_referenced_probes(chk, keys, args.cross_probe_jobs)
 
     print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: {chk.failed} check(s) failed")
