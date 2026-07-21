@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -319,6 +320,21 @@ def test_frozen_dto_fingerprint_changes_on_transitively_embedded_leaf_dto_reorde
                    "embedded leaf DTO's own fields are reordered")
         finally:
             sca.HASKELL_COMPONENT_SOURCE_PATHS = old_paths
+
+
+def test_frozen_dto_fingerprint_covers_save_metadata_v90() -> None:
+    print("round-17 review: SaveDataV90's own sd90Metadata field is now the "
+          "frozen SaveMetadataV90 type (not the live, ever-evolving "
+          "SaveMetadata) -- confirm its own data...deriving block is "
+          "genuinely captured by the real frozen_dto_fingerprint scan, not "
+          "merely present in the source file coincidentally")
+    text = sca.SESSION_V90_SOURCE_PATH.read_text(encoding="utf-8")
+    own_blocks = re.findall(
+        r"^data \w+ = \w+.*?deriving\s*\([^)]*\)", text,
+        re.MULTILINE | re.DOTALL)
+    expect(any("SaveMetadataV90" in b and "sm90Name" in b for b in own_blocks),
+           "expected SaveMetadataV90's own block to be captured by the "
+           "frozen_dto_fingerprint scan")
 
 
 def _synthetic_envelope_types_text(reordered: bool = False) -> str:
@@ -1199,6 +1215,7 @@ def main() -> int:
         test_frozen_dto_fingerprint_is_comment_insensitive,
         test_frozen_dto_fingerprint_changes_on_field_reorder,
         test_frozen_dto_fingerprint_changes_on_transitively_embedded_leaf_dto_reorder,
+        test_frozen_dto_fingerprint_covers_save_metadata_v90,
         test_envelope_framing_fingerprint_is_comment_insensitive,
         test_envelope_framing_fingerprint_changes_on_layout_change,
         test_detects_envelope_framing_fingerprint_mismatch,

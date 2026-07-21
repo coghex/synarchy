@@ -186,6 +186,18 @@ minimalSaveMetadataV90 = SaveMetadata
     , smTimestamp = "2026-07-16T00:00:00.000000Z"
     , smWorldName = Nothing, smWorldGloss = Nothing }
 
+-- | The SAME values as 'minimalSaveMetadataV90', but as the frozen
+--   'SaveMetadataV90' type (round-17 review) -- the "session" payload's
+--   OWN embedded metadata field, distinct from the envelope's
+--   separately-decoded @"metadata"@ component 'migrateSessionV90'
+--   actually takes as its first argument (still 'SaveMetadata').
+minimalFrozenSaveMetadataV90 ∷ SaveMetadataV90
+minimalFrozenSaveMetadataV90 = SaveMetadataV90
+    { sm90Name = "b1-hand-built", sm90Seed = wgpSeed defaultGP
+    , sm90WorldSize = wgpWorldSize defaultGP, sm90PlateCount = wgpPlateCount defaultGP
+    , sm90Timestamp = "2026-07-16T00:00:00.000000Z"
+    , sm90WorldName = Nothing, sm90WorldGloss = Nothing }
+
 -- | A minimal, otherwise-valid frozen v90 'SaveDataV90' (issue #766,
 --   save-overhaul C4) — the exact shape a real #759-era @"session"@
 --   component payload took. Used to prove the ENVELOPE-level dispatch
@@ -194,7 +206,7 @@ minimalSaveMetadataV90 = SaveMetadata
 --   "Test.Headless.World.Save.Compat".
 minimalSaveDataV90 ∷ SaveDataV90
 minimalSaveDataV90 = SaveDataV90
-    { sd90Metadata     = minimalSaveMetadataV90
+    { sd90Metadata     = minimalFrozenSaveMetadataV90
     , sd90GameTime     = 0
     , sd90EnginePaused = True
     , sd90LuaModules   = HM.empty

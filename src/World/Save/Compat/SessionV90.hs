@@ -68,6 +68,7 @@ module World.Save.Compat.SessionV90
     ( sessionComponentId
     , sessionComponentVersion
     , SaveDataV90(..)
+    , SaveMetadataV90(..)
     , WorldPageSaveV90(..)
     , BuildingSnapshotV90(..)
     , UnitSnapshotV90(..)
@@ -194,6 +195,30 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90Identity     ∷ !(Maybe WorldIdentityDTO)
     } deriving (Show, Generic, Serialize)
 
+-- | Frozen mirror of the v90 'World.Save.Types.SaveMetadata' (round-17
+--   review): unlike every OTHER field 'SaveDataV90' below composes from
+--   an already-frozen leaf DTO, this field previously embedded the LIVE,
+--   ever-evolving 'SaveMetadata' directly -- a field added/removed/
+--   reordered there in the future would silently corrupt this frozen
+--   type's positional wire layout (everything AFTER 'sd90Metadata' in
+--   'SaveDataV90' decodes relative to where its bytes end), with
+--   nothing catching it: this field's own DECODED VALUE is never even
+--   used by 'migrateSessionV90' (the real metadata comes from the
+--   envelope's separately-decoded @"metadata"@ component instead), so
+--   no assertion on it would incidentally notice either. Field order
+--   matches 'SaveMetadata''s CURRENT declaration, which has been stable
+--   since v82 (#707, predating this v90 baseline) — see
+--   'World.Save.Types.SaveMetadata''s own haddock.
+data SaveMetadataV90 = SaveMetadataV90
+    { sm90Name       ∷ !Text
+    , sm90Seed       ∷ !Word64
+    , sm90WorldSize  ∷ !Int
+    , sm90PlateCount ∷ !Int
+    , sm90Timestamp  ∷ !Text
+    , sm90WorldName  ∷ !(Maybe Text)
+    , sm90WorldGloss ∷ !(Maybe Text)
+    } deriving (Show, Eq, Generic, Serialize)
+
 -- | Frozen mirror of the v90 'World.Save.Types.SaveData' — the exact
 --   shape #759's single @"session"@ component payload was
 --   ('S.encode'd directly from the then-current 'SaveData'). Field order
@@ -201,7 +226,7 @@ data WorldPageSaveV90 = WorldPageSaveV90
 --   sat between 'sd90EnginePaused' and 'sd90TexPalette' until #761 (v91)
 --   removed it (see 'World.Save.Types.currentSaveVersion's changelog).
 data SaveDataV90 = SaveDataV90
-    { sd90Metadata     ∷ !SaveMetadata
+    { sd90Metadata     ∷ !SaveMetadataV90
     , sd90GameTime     ∷ !Double
     , sd90EnginePaused ∷ !Bool
     , sd90LuaModules   ∷ !(HM.HashMap Text Text)

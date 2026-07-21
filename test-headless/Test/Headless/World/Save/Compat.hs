@@ -556,6 +556,20 @@ spec = do
             case decodeSessionV90 (extractSessionPayload fixtureBytes) of
                 Left err → expectationFailure (show err)
                 Right sd → do
+                    -- Round-17 review: sd90Metadata was previously never
+                    -- asserted at all -- its own decoded VALUE is unused
+                    -- by migrateSessionV90 (the real metadata comes from
+                    -- the envelope's separate "metadata" component
+                    -- instead), so a positional wire-layout regression on
+                    -- SaveMetadataV90's frozen shape would have decoded
+                    -- successfully into garbage with nothing to notice.
+                    sd90Metadata sd `shouldBe` SaveMetadataV90
+                        { sm90Name = "envelope_test_save", sm90Seed = 42
+                        , sm90WorldSize = 64, sm90PlateCount = 3
+                        , sm90Timestamp = "2026-07-16T00:00:00.000000Z"
+                        , sm90WorldName = Just "Test World"
+                        , sm90WorldGloss = Just "a fixture world"
+                        }
                     sd90ActivePage sd `shouldBe` WorldPageId "main_world"
                     sd90VisiblePages sd `shouldBe` [WorldPageId "main_world"]
                     sd90EnginePaused sd `shouldBe` True
