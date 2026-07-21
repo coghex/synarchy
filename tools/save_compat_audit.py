@@ -561,7 +561,40 @@ def audit(manifest: dict) -> list[str]:
                 f"baseline '{baseline.get('id')}' fixture '{fid}' path "
                 f"'{path_str}' does not exist")
             continue
+        fixture_kind = fixture.get("kind")
         expected_sha = fixture.get("sha256")
+        summary_path_str = fixture.get("expectedCanonicalSummary")
+        if fixture_kind == "complete-session":
+            missing = [
+                name for name, val in
+                (("sha256", expected_sha), ("expectedCanonicalSummary", summary_path_str))
+                if not val]
+            if missing:
+                # Round-9 review: a checksum-less and/or summary-less
+                # "complete-session" entry bypasses BOTH this audit (the
+                # checksum/summary checks below are skipped entirely when
+                # sha256 is None) AND Test.Headless.World.Save.Compat's own
+                # manifest-driven hspec gate (which only iterates
+                # complete-session fixtures that HAVE a checksum) --
+                # letting a baseline claim full end-to-end migration
+                # coverage with no tracked binary, no expected canonical
+                # summary, and no decode/migrate/assemble validation ever
+                # run against it. Only "component-focused" fixtures (a
+                # real hspec gate elsewhere is the audit trail instead --
+                # see b3-lua-versioned-hspec-coverage/historical-b1-
+                # session-recovered) may legitimately omit either.
+                violations.append(
+                    f"baseline '{baseline.get('id')}' fixture '{fid}' is "
+                    f"declared \"kind\": \"complete-session\" but is "
+                    f"missing {' and '.join(missing)} -- a complete-session "
+                    f"fixture with no tracked checksum and/or no expected "
+                    f"canonical summary is never actually decoded/migrated/"
+                    f"validated by ANY gate (this audit skips checksum-less "
+                    f"fixtures entirely, and the hspec manifest gate only "
+                    f"selects complete-session fixtures WITH a checksum) -- "
+                    f"either supply both through --add-baseline, or mark "
+                    f"this fixture \"component-focused\" if its real "
+                    f"coverage genuinely lives elsewhere")
         if expected_sha is None:
             # A component-focused fixture recorded as inline source (e.g.
             # recovered git history embedded as a hex literal) rather than
@@ -584,7 +617,6 @@ def audit(manifest: dict) -> list[str]:
                 f"baseline '{baseline.get('id')}' fixture '{fid}' size "
                 f"{actual_size} != manifest's recorded {expected_size}")
 
-        summary_path_str = fixture.get("expectedCanonicalSummary")
         if summary_path_str:
             summary_path = REPO_ROOT / summary_path_str
             if not summary_path.exists():

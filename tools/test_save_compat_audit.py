@@ -146,6 +146,55 @@ def test_decode_only_fixture_skips_checksum() -> None:
         expect(violations == [], f"expected no violations, got {violations}")
 
 
+def test_detects_complete_session_fixture_missing_checksum() -> None:
+    print("round-9 review: a \"kind\": \"complete-session\" fixture with "
+          "sha256=null bypasses both this audit's checksum check and the "
+          "hspec manifest gate's own fixture selection -- must be rejected")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fpath = make_fixture(tmp, "fixture.bin", b"hello world")
+        manifest = base_manifest(tmp, fpath, b"hello world")
+        manifest["baselines"][0]["fixtures"][0]["kind"] = "complete-session"
+        manifest["baselines"][0]["fixtures"][0]["sha256"] = None
+        manifest["baselines"][0]["fixtures"][0]["sizeBytes"] = None
+        manifest["baselines"][0]["fixtures"][0]["expectedCanonicalSummary"] = \
+            "test-headless/data/save-compat/does-not-need-to-exist.json"
+        violations = sca.audit(manifest)
+        expect(any("sha256" in v and "complete-session" in v for v in violations),
+               f"expected a checksum-less complete-session violation, got {violations}")
+
+
+def test_detects_complete_session_fixture_missing_summary() -> None:
+    print("round-9 review: a \"kind\": \"complete-session\" fixture with no "
+          "expectedCanonicalSummary is never actually validated by the "
+          "hspec manifest gate either -- must be rejected")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        manifest["baselines"][0]["fixtures"][0]["kind"] = "complete-session"
+        violations = sca.audit(manifest)
+        expect(any("expectedCanonicalSummary" in v and "complete-session" in v
+                   for v in violations),
+               f"expected a summary-less complete-session violation, got {violations}")
+
+
+def test_component_focused_fixture_may_skip_checksum_and_summary() -> None:
+    print("a \"kind\": \"component-focused\" fixture legitimately has "
+          "neither sha256 nor expectedCanonicalSummary (its real coverage "
+          "lives in a named hspec gate instead)")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fpath = make_fixture(tmp, "fixture.hs", b"-- source file, not a binary blob")
+        manifest = base_manifest(tmp, fpath, b"unused")
+        manifest["baselines"][0]["fixtures"][0]["kind"] = "component-focused"
+        manifest["baselines"][0]["fixtures"][0]["sha256"] = None
+        manifest["baselines"][0]["fixtures"][0]["sizeBytes"] = None
+        violations = sca.audit(manifest)
+        expect(violations == [], f"expected no violations, got {violations}")
+
+
 def test_detects_framing_version_mismatch() -> None:
     print("manifest envelopeFramingVersion disagrees with the real source")
     with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
@@ -706,6 +755,9 @@ def main() -> int:
         test_detects_checksum_drift,
         test_detects_size_mismatch_alone,
         test_decode_only_fixture_skips_checksum,
+        test_detects_complete_session_fixture_missing_checksum,
+        test_detects_complete_session_fixture_missing_summary,
+        test_component_focused_fixture_may_skip_checksum_and_summary,
         test_detects_framing_version_mismatch,
         test_detects_frozen_dto_fingerprint_mismatch,
         test_detects_baseline_with_no_fixtures,

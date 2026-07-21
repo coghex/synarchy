@@ -291,7 +291,7 @@ checkItemInstance actual expected = do
 spec ∷ Spec
 spec = do
     describe "manifest-declared fixtures decode and migrate to their \
-             \expected canonical result (requirement 14)" $
+             \expected canonical result (requirement 14)" $ do
         it "every complete-session fixture with a tracked checksum \
            \matches docs/save_compat/manifest.json's own expected \
            \canonical summary" $ do
@@ -350,6 +350,20 @@ spec = do
                         lcsY cam `shouldBe` ecY ec
                         lcsZoom cam `shouldBe` ecZoom ec
                         T.pack (show (lcsFacing cam)) `shouldBe` ecFacing ec
+
+                        -- Round-9 review: the loop below only proved every
+                        -- EXPECTED page exists -- a migration that creates
+                        -- or retains an extra, undeclared page would pass
+                        -- it (and the self-reencode equality check, which
+                        -- only proves the migrated snapshot is consistent
+                        -- with ITSELF) silently. Compare the exact set of
+                        -- migrated page ids against the exact set the
+                        -- fixture declares, so a hidden extra (or missing)
+                        -- page is caught here, not just individually
+                        -- present-or-absent ones.
+                        HS.fromList (HM.keys (snapPages snap))
+                            `shouldBe` HS.fromList
+                                (map (WorldPageId . epPageId) (esPages expected))
 
                         forM_ (esPages expected) $ \ep →
                             case HM.lookup (WorldPageId (epPageId ep)) (snapPages snap) of
@@ -494,6 +508,32 @@ spec = do
                             Right (meta', snap', _, _) → do
                                 meta' `shouldBe` meta
                                 snap' `shouldBe` snap
+
+        it "the manifest-driven canonical check's page-set comparison \
+           \genuinely distinguishes an incomplete/extra page set from the \
+           \real migrated one (round-9 review) -- the per-expected-page \
+           \lookup loop above only proves every EXPECTED page exists; it \
+           \never proved the migrated snapshot carries NO extra, \
+           \undeclared page, so a migration that creates or retains one \
+           \would previously have passed silently" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/c3-typed-reference-v1-multipage.bin"
+            let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames bytes of
+                Left err → expectationFailure
+                    ("expected the tracked multipage fixture to migrate \
+                     \cleanly: " <> T.unpack err)
+                Right (_, snap, _, _) → do
+                    let realPageIds = HS.fromList (HM.keys (snapPages snap))
+                        incompleteExpected = HS.fromList [WorldPageId "page1"]
+                    -- The real fixture genuinely carries a second page
+                    -- ("page2") this incomplete set omits -- proving the
+                    -- exact-set comparison this test relies on would
+                    -- actually have caught that extra page as a mismatch,
+                    -- not silently passed it the way the old
+                    -- every-expected-page-exists-only loop did.
+                    realPageIds `shouldNotBe` incompleteExpected
+                    HS.member (WorldPageId "page2") realPageIds `shouldBe` True
 
     describe "frozen v90 DTO (issue #766, save-overhaul C4)" $ do
         it "decodes the real, tracked B1 envelope fixture's metadata \
@@ -654,6 +694,32 @@ spec = do
             foreignOptionalComponentIds HS.empty bytes
                 `shouldBe` [ComponentId "session"]
 
+        it "the overwrite guard does NOT exempt \"session\" when it is \
+           \\"metadata\" (not \"session\") whose descriptor is marked \
+           \optional (round-9 review) -- decodeLegacyStructureAndMetadata \
+           \checks BOTH descriptors' required flag, so an envelope with a \
+           \perfectly exact, required \"session\" alongside an OPTIONAL \
+           \\"metadata\" is not real B1 shape either, and the guard must \
+           \independently reach that same conclusion rather than exempt \
+           \\"session\" merely because IT happens to be exact" $ do
+            let optionalMetadataSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, False
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, True
+                      , extractSessionPayload fixtureBytes)
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion optionalMetadataSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Right _  → expectationFailure
+                    "expected an envelope with an OPTIONAL metadata \
+                    \descriptor to be rejected, not migrated"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "required"
+            foreignOptionalComponentIds HS.empty bytes
+                `shouldBe` [ComponentId "session"]
+
     describe "the #760-era (\"B2\") fallback (issue #766 requirement 3, \
              \round-7 review)" $ do
         it "migrates the real, tracked B2-shaped fixture (empty lua-state \
@@ -721,39 +787,83 @@ spec = do
             foreignOptionalComponentIds HS.empty tampered
                 `shouldBe` [ComponentId "lua-state"]
 
--- | Rebuild the tracked B2 fixture's envelope with its "lua-state"
---   component's (version, required, payload) replaced -- every OTHER
---   component's id/version/required/payload carried over verbatim from
---   the real fixture -- so a test can exercise exactly one tampered
---   descriptor at a time against otherwise-genuine bytes.
-replaceB2LuaStateSpec
-    ∷ BS.ByteString → Word32 → Bool → BS.ByteString → BS.ByteString
-replaceB2LuaStateSpec bytes ver req payload =
+        it "refuses to migrate a B2-shaped envelope whose \"core-session\" \
+           \descriptor (a Haskell component OTHER than \"lua-state\") is \
+           \marked OPTIONAL -- round-9 review: decodeB2StructureAndMetadata \
+           \checks EVERY id in the B2 set for required, not merely \
+           \\"lua-state\", and the overwrite guard must reach the \
+           \identical conclusion rather than exempt the whole shape just \
+           \because \"lua-state\" itself is exact" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2ComponentSpec bytes
+                    (ComponentId "core-session") 1 False
+                    (payloadOfB2Component bytes (ComponentId "core-session"))
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames tampered of
+                Right _  → expectationFailure
+                    "expected an optional \"core-session\" descriptor to \
+                    \be refused, not treated as the genuine B2 shape"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "required"
+            foreignOptionalComponentIds HS.empty tampered
+                `shouldNotBe` []
+
+-- | Rebuild the tracked B2 fixture's envelope with ONE component's
+--   (version, required, payload) replaced -- every OTHER component's
+--   id/version/required/payload carried over verbatim from the real
+--   fixture -- so a test can exercise exactly one tampered descriptor at
+--   a time against otherwise-genuine bytes.
+replaceB2ComponentSpec
+    ∷ BS.ByteString → ComponentId → Word32 → Bool → BS.ByteString
+    → BS.ByteString
+replaceB2ComponentSpec bytes targetCid ver req payload =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-             knownAll HS.empty bytes of
-        Left e → error ("test setup: replaceB2LuaStateSpec: decode: " <> show e)
+             knownAllB2Ids HS.empty bytes of
+        Left e → error ("test setup: replaceB2ComponentSpec: decode: " <> show e)
         Right decoded →
             let otherSpecs =
                     [ (cdId d, cdVersion d, cdRequired d, payloadFor decoded (cdId d))
                     | d ← emComponents (deManifest decoded)
-                    , cdId d ≢ ComponentId "lua-state" ]
-                newSpecs = otherSpecs ⧺ [(ComponentId "lua-state", ver, req, payload)]
+                    , cdId d ≢ targetCid ]
+                newSpecs = otherSpecs ⧺ [(targetCid, ver, req, payload)]
             in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion newSpecs of
                 Right b → b
-                Left e  → error ("test setup: replaceB2LuaStateSpec: encode: " <> show e)
+                Left e  → error ("test setup: replaceB2ComponentSpec: encode: " <> show e)
   where
     payloadFor decoded cid = HM.lookupDefault
         (error ("test setup: payload missing for " <> show cid)) cid
         (dePayloads decoded)
-    -- The exact id set the tracked B2 fixture carries -- see its own
-    -- manifest entry's components[] list.
-    knownAll = HS.fromList
-        [ ComponentId "metadata", ComponentId "core-session"
-        , ComponentId "texture-palette", ComponentId "world-pages"
-        , ComponentId "world-edits", ComponentId "world-activity"
-        , ComponentId "buildings", ComponentId "units"
-        , ComponentId "unit-sim", ComponentId "craft-bills"
-        , ComponentId "power-nodes", ComponentId "lua-state" ]
+
+-- | The tracked B2 fixture's own already-encoded payload for one
+--   component id, unchanged -- so a test tampering with only that
+--   component's (version, required) flags can carry its real payload
+--   forward verbatim rather than fabricate one.
+payloadOfB2Component ∷ BS.ByteString → ComponentId → BS.ByteString
+payloadOfB2Component bytes cid =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             knownAllB2Ids HS.empty bytes of
+        Left e → error ("test setup: payloadOfB2Component: decode: " <> show e)
+        Right decoded → HM.lookupDefault
+            (error ("test setup: payload missing for " <> show cid)) cid
+            (dePayloads decoded)
+
+-- | The exact id set the tracked B2 fixture carries -- see its own
+--   manifest entry's components[] list.
+knownAllB2Ids ∷ HS.HashSet ComponentId
+knownAllB2Ids = HS.fromList
+    [ ComponentId "metadata", ComponentId "core-session"
+    , ComponentId "texture-palette", ComponentId "world-pages"
+    , ComponentId "world-edits", ComponentId "world-activity"
+    , ComponentId "buildings", ComponentId "units"
+    , ComponentId "unit-sim", ComponentId "craft-bills"
+    , ComponentId "power-nodes", ComponentId "lua-state" ]
+
+-- | 'replaceB2ComponentSpec' specialized to "lua-state", preserved as its
+--   own name since every existing lua-state-focused test reads more
+--   clearly calling it directly.
+replaceB2LuaStateSpec
+    ∷ BS.ByteString → Word32 → Bool → BS.ByteString → BS.ByteString
+replaceB2LuaStateSpec bytes = replaceB2ComponentSpec bytes (ComponentId "lua-state")
 
 -- | A metadata value that agrees with the extracted fixture session's own
 --   gameplay gen params (seed 42 / world size 128 / plate count 10 — see
