@@ -43,22 +43,29 @@ def make_fixture(tmp: Path, name: str, content: bytes) -> Path:
 
 def _oldest_version_components() -> list[dict]:
     """A components[] list covering every REAL required component's
-    oldest accepted version (round-3 review: required components need
-    coverage regardless of how many versions they accept, not just
-    multi-version ones), satisfying audit_component_versions' full
-    coverage check with entries that are trivially true of THIS repo's
-    actual registry. audit_component_versions cross-checks against the
-    real source unconditionally (there is no "test mode" -- that's the
-    whole point), so a synthetic manifest aimed at ONE specific,
-    unrelated violation class must still declare this or it would
-    incidentally also fail on every real component's coverage check,
-    which has nothing to do with what that test is exercising."""
+    oldest AND current accepted version (round-3 review: required
+    components need coverage regardless of how many versions they
+    accept, not just multi-version ones; round-10 review: a component's
+    CURRENT version needs its own tracked coverage too, distinct from
+    its oldest), satisfying audit_component_versions' full coverage
+    check with entries that are trivially true of THIS repo's actual
+    registry. audit_component_versions cross-checks against the real
+    source unconditionally (there is no "test mode" -- that's the whole
+    point), so a synthetic manifest aimed at ONE specific, unrelated
+    violation class must still declare this or it would incidentally
+    also fail on every real component's coverage check, which has
+    nothing to do with what that test is exercising."""
     registry = sca.real_component_registry()
-    return [
-        {"id": cid, "version": min(info["inputVersions"]), "required": True}
-        for cid, info in registry.items()
-        if info.get("required")
-    ]
+    entries = []
+    for cid, info in registry.items():
+        if not info.get("required"):
+            continue
+        oldest = min(info["inputVersions"])
+        current = info["currentVersion"]
+        entries.append({"id": cid, "version": oldest, "required": True})
+        if current != oldest:
+            entries.append({"id": cid, "version": current, "required": True})
+    return entries
 
 
 def base_manifest(tmp: Path, fixture_path: Path, content: bytes) -> dict:
@@ -663,6 +670,36 @@ def test_detects_untracked_oldest_version() -> None:
                f"expected an untracked-oldest-version violation, got {violations}")
 
 
+def test_detects_untracked_current_version() -> None:
+    print("round-10 review: a component's OLDEST version is tracked, but "
+          "its CURRENT (bumped) version has no fixture coverage at all")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        # craft-bills really accepts {1, 2} and its current version is 2;
+        # drop every entry tracking it at its CURRENT version, leaving
+        # only its oldest (1) -- simulates a version bump (e.g. to a
+        # hypothetical v3) that shipped with no fixture ever exercising
+        # the new shape, even though the OLD historical migration is
+        # still validly tracked.
+        real = sca.real_component_registry()
+        craft_bills_current = real["craft-bills"]["currentVersion"]
+        manifest["baselines"][0]["components"] = [
+            c for c in manifest["baselines"][0]["components"]
+            if not (c["id"] == "craft-bills" and c["version"] == craft_bills_current)
+        ]
+        violations = sca.audit(manifest)
+        expect(any("craft-bills" in v and "CURRENT version" in v
+                    for v in violations),
+               f"expected an untracked-current-version violation, got {violations}")
+        expect(not any("craft-bills" in v and "a migration exists from" in v
+                       for v in violations),
+               f"did not expect an untracked-OLDEST-version violation too "
+               f"(the oldest version 1 is still tracked), got {violations}")
+
+
 def test_detects_required_component_with_zero_coverage() -> None:
     print("a required component (even single-version) has no baseline tracking it at all")
     with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
@@ -776,6 +813,7 @@ def main() -> int:
         test_detects_unknown_component_id_in_baseline,
         test_detects_removed_input_version,
         test_detects_untracked_oldest_version,
+        test_detects_untracked_current_version,
         test_detects_required_component_with_zero_coverage,
         test_detects_modern_baseline_missing_required_component,
         test_modern_baseline_check_skips_b1_shaped_baselines,

@@ -362,7 +362,20 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
         tracked by at least one baseline's components[] -- proving
         that historical migration is exercised by a real fixture, not
         merely present in code (catches "a component-version bump
-        without a migration/frozen DTO" ever being validated)."""
+        without a migration/frozen DTO" ever being validated);
+      - round-10 review: a component's CURRENT version must ALSO be
+        tracked by some baseline, once ANY version of it is tracked at
+        all -- the oldest-version check above proves the OLD shape has
+        coverage, but says nothing about the NEW one. Bumping e.g.
+        craft-bills from v2 to v3 (inputVersions=[1,2,3]) while the
+        manifest still only tracks v1/v2 previously passed silently:
+        v1 (oldest) was covered, so the only other check that ever ran
+        found nothing wrong, despite v3 having no frozen DTO, fixture,
+        or migration ever declared or validated anywhere. A component
+        with NO baseline tracking it at all is unaffected here (that is
+        either the required-zero-coverage violation above, or a
+        legitimate optional component requirement 9 already allows to
+        have no fixture at all)."""
     violations: list[str] = []
     tracked_versions: dict[str, set[int]] = {}
 
@@ -402,6 +415,22 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
                 f"baseline's components[] (backed by a fixture covering "
                 f"it) before this gap ships")
             continue
+        if not tracked:
+            # An optional component with NO baseline tracking it at all
+            # is requirement 9's legitimate "a legacy save may simply
+            # lack this" case -- no obligation, same as before.
+            continue
+        current = real["currentVersion"]
+        if current not in tracked:
+            violations.append(
+                f"component '{comp_id}' is currently at version {current} "
+                f"(tracked versions: {sorted(tracked)}), but no manifest "
+                f"baseline declares/tracks a fixture at its CURRENT "
+                f"version {current} -- a version bump with no fixture/"
+                f"frozen-DTO/migration ever exercising the NEW version has "
+                f"no compatibility coverage proving that shape was "
+                f"actually validated, even though an older input version "
+                f"is tracked elsewhere (round-10 review)")
         if len(real["inputVersions"]) <= 1:
             continue
         oldest = min(real["inputVersions"])

@@ -633,6 +633,22 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   helpers the decoders themselves use, over every relevant id, so a
 --   future precision fix to either shape's recognition can never again
 --   land in only one of the two places.
+--
+--   Round-10 review: even with that precision, @"lua-state"@ was STILL
+--   being exempted whenever the envelope merely LOOKED B1-shaped,
+--   because @knownIdsForDecode@ (the known-set the INITIAL
+--   'decodeEnvelope' call needs so a genuine B2 session's own required
+--   "lua-state" doesn't trip 'UnknownRequiredComponent') was reused
+--   VERBATIM as the B1 branch's exemption set too -- so an envelope
+--   shaped @{metadata, session, lua-state}@ (not genuine B1 -- B1 never
+--   carries "lua-state" -- nor genuine B2 -- B2 never carries "session")
+--   had "lua-state" silently exempted anyway, purely because it always
+--   rides along in that shared known-set. The two roles are now split:
+--   'knownIdsForDecode' still widens what the INITIAL decode tolerates
+--   (both ids, so neither shape's own required id trips decode failure
+--   outright), but the FINAL per-shape exemption below only ever grants
+--   "session" under B1 and "lua-state" under B2 -- never both from one
+--   shape's recognition.
 foreignOptionalComponentIds ∷ HS.HashSet Text → BS.ByteString → [ComponentId]
 foreignOptionalComponentIds luaKnownNames bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
@@ -660,7 +676,7 @@ foreignOptionalComponentIds luaKnownNames bytes =
                               luaStateComponentId luaStateComponentVersion
 
                 effectiveKnownIds
-                    | looksLikeB1Shape = knownIdsForDecode
+                    | looksLikeB1Shape = HS.insert sessionComponentId modernKnownIds
                     | looksLikeB2Shape = HS.insert luaStateComponentId modernKnownIds
                     | otherwise        = modernKnownIds
             in [ cdId d | d ← emComponents (deManifest decoded)

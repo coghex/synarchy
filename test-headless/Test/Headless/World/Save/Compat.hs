@@ -720,6 +720,34 @@ spec = do
             foreignOptionalComponentIds HS.empty bytes
                 `shouldBe` [ComponentId "session"]
 
+        it "the overwrite guard does NOT exempt \"lua-state\" merely \
+           \because the envelope alongside it LOOKS B1-shaped (round-10 \
+           \review) -- an envelope {metadata required v1, session \
+           \required v90, lua-state optional v1} is neither genuine B1 \
+           \(B1 never carries \"lua-state\") nor genuine B2 (B2 never \
+           \carries \"session\"), so \"lua-state\" must be reported as \
+           \foreign data, not silently exempted just because it always \
+           \rides along in the shared known-set the INITIAL decode needs" $ do
+            let extraLuaStateSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, True
+                      , extractSessionPayload fixtureBytes)
+                    , (ComponentId "lua-state", 1, False, BS.empty)
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion extraLuaStateSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Right _  → expectationFailure
+                    "expected an envelope carrying \"lua-state\" alongside \
+                    \{metadata, session} to be rejected -- it is neither \
+                    \the exact B1 nor the exact B2 shape"
+                Left _   → pure ()
+            foreignOptionalComponentIds HS.empty bytes
+                `shouldBe` [ComponentId "lua-state"]
+
     describe "the #760-era (\"B2\") fallback (issue #766 requirement 3, \
              \round-7 review)" $ do
         it "migrates the real, tracked B2-shaped fixture (empty lua-state \

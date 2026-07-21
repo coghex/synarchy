@@ -88,17 +88,17 @@
         },
         {
           "id": "unit-sim",
-          "version": 2,
+          "version": 1,
           "required": true
         },
         {
           "id": "craft-bills",
-          "version": 2,
+          "version": 1,
           "required": true
         },
         {
           "id": "power-nodes",
-          "version": 2,
+          "version": 1,
           "required": true
         },
         {
@@ -112,9 +112,9 @@
           "id": "b2-split-haskell-lua-state-minimal",
           "path": "test-headless/data/save-compat/b2-split-haskell-lua-state.bin",
           "kind": "complete-session",
-          "sha256": "a1b604aef9aef2a94d7c14fb627f3289dfd288ccdd20b7220d46538551d1f7ba",
+          "sha256": "1e91b78dc8c56b0e7f4de351e6ec2d0a20a9dd0c62777b6da30cee549d80894a",
           "sizeBytes": 296475,
-          "provenance": "Generated through the real codec: c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot) -- the same real cargo_hold_S building, acolyte unit, forge_steel_dagger craft bill, and power node -- then re-encoded via World.Save.Component.encodeComponentSpecs (every Haskell component at its CURRENT input version, e.g. unit-sim/craft-bills/power-nodes at v2 rather than c3's own historical v1 -- this fixture's whole point is the Lua-shape difference, not re-proving the v1 Haskell dispatch c3 already covers) plus a single, EMPTY, required 'lua-state' component (the pre-#761 opaque blob, replacing the modern lua.unit_ai/lua.building_spawn components entirely), assembled via World.Save.Envelope.Codec.encodeEnvelope directly (not encodeSessionSnapshot, which always writes the modern 'lua.'-prefixed component names).",
+          "provenance": "Generated through the real codec (round-10 review: the prior fixture wrongly encoded unit-sim/craft-bills/power-nodes at CURRENT v2, a hybrid shape #760 never actually wrote): c3-typed-reference-v1-minimal's fixture was decoded via the RAW envelope codec (World.Save.Envelope.Codec.decodeEnvelope, not the high-level decodeSessionEnvelope) to recover its REAL component descriptors and payload bytes AS-STORED -- including unit-sim/craft-bills/power-nodes genuinely encoded at their historical v1 (bare-id) shape, exactly as a real #760 writer produced them, since c3's own fixture already carries those exact v1 bytes verbatim (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1's wire encoding is byte-identical to their v2 counterparts -- SamePageRef is a transparent newtype -- so only the DESCRIPTOR's version number actually needed to change, not the payload bytes) -- then every OTHER Haskell component's descriptor/payload was carried over verbatim (metadata, core-session, texture-palette, world-pages, world-edits, world-activity, buildings, units, all single-version so v1 is already current), the two modern lua.unit_ai/lua.building_spawn components were dropped, and a single, EMPTY, required 'lua-state' v1 component was added (the pre-#761 opaque blob) -- assembled via World.Save.Envelope.Codec.encodeEnvelope directly (not encodeSessionSnapshot, which always writes the modern 'lua.'-prefixed component names, nor encodeComponentSpecs, which always writes every Haskell component at its CURRENT version). The decoded canonical VALUES are unchanged from the prior fixture (migrateCraftBillDTOv1/migratePowerNodesDTOv1/migrateUnitSimDTOv1 only add the SamePageRef wrapper, not a value change), so expectedCanonicalSummary needed no content changes -- only this fixture's own bytes and this baseline's declared component versions did.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/b2-split-haskell-lua-state.expected.json"
         }
       ]
