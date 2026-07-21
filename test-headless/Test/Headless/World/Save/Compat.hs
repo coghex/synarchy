@@ -678,7 +678,7 @@ spec = do
            \legacy Lua blob" $ do
             bytes ← BS.readFile
                 "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
-            let tampered = replaceB2LuaStateSpec bytes True (BS.pack [1, 2, 3])
+            let tampered = replaceB2LuaStateSpec bytes 1 True (BS.pack [1, 2, 3])
                 luaNames = HS.fromList ["unit_ai", "building_spawn"]
             case decodeSessionEnvelope luaNames luaNames tampered of
                 Right _  → expectationFailure
@@ -691,20 +691,44 @@ spec = do
            \#760 writer always marked it required" $ do
             bytes ← BS.readFile
                 "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
-            let tampered = replaceB2LuaStateSpec bytes False BS.empty
+            let tampered = replaceB2LuaStateSpec bytes 1 False BS.empty
                 luaNames = HS.fromList ["unit_ai", "building_spawn"]
             case decodeSessionEnvelope luaNames luaNames tampered of
                 Right _  → expectationFailure
                     "expected an optional lua-state descriptor to be refused"
                 Left msg → msg `shouldSatisfy` T.isInfixOf "required"
 
+        it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
+           \descriptor claims a schema version OTHER than the one genuine \
+           \#760 writers always used, even though it is required and \
+           \EMPTY -- round-8 review: an unsupported/future lua-state \
+           \schema must not be silently accepted (and then re-saved \
+           \without ever recording that unknown version) just because it \
+           \happens to share the required flag and an empty payload with \
+           \the recognized v1 shape" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2LuaStateSpec bytes 2 True BS.empty
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames tampered of
+                Right _  → expectationFailure
+                    "expected a wrong-version (v2) lua-state descriptor to \
+                    \be refused rather than treated as the known v1 shape"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "lua-state"
+            -- The overwrite guard must independently reach the same
+            -- conclusion: this is NOT the recognized B2 shape, so
+            -- "lua-state" is ordinary foreign data, not exempted.
+            foreignOptionalComponentIds HS.empty tampered
+                `shouldBe` [ComponentId "lua-state"]
+
 -- | Rebuild the tracked B2 fixture's envelope with its "lua-state"
---   component's (required, payload) replaced -- every OTHER component's
---   id/version/required/payload carried over verbatim from the real
---   fixture -- so a test can exercise exactly one tampered descriptor
---   at a time against otherwise-genuine bytes.
-replaceB2LuaStateSpec ∷ BS.ByteString → Bool → BS.ByteString → BS.ByteString
-replaceB2LuaStateSpec bytes req payload =
+--   component's (version, required, payload) replaced -- every OTHER
+--   component's id/version/required/payload carried over verbatim from
+--   the real fixture -- so a test can exercise exactly one tampered
+--   descriptor at a time against otherwise-genuine bytes.
+replaceB2LuaStateSpec
+    ∷ BS.ByteString → Word32 → Bool → BS.ByteString → BS.ByteString
+replaceB2LuaStateSpec bytes ver req payload =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
              knownAll HS.empty bytes of
         Left e → error ("test setup: replaceB2LuaStateSpec: decode: " <> show e)
@@ -713,7 +737,7 @@ replaceB2LuaStateSpec bytes req payload =
                     [ (cdId d, cdVersion d, cdRequired d, payloadFor decoded (cdId d))
                     | d ← emComponents (deManifest decoded)
                     , cdId d ≢ ComponentId "lua-state" ]
-                newSpecs = otherSpecs ⧺ [(ComponentId "lua-state", 1, req, payload)]
+                newSpecs = otherSpecs ⧺ [(ComponentId "lua-state", ver, req, payload)]
             in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion newSpecs of
                 Right b → b
                 Left e  → error ("test setup: replaceB2LuaStateSpec: encode: " <> show e)

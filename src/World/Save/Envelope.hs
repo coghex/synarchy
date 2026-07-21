@@ -360,6 +360,18 @@ decodeLegacyStructureAndMetadata bytes =
 luaStateComponentId ∷ ComponentId
 luaStateComponentId = ComponentId "lua-state"
 
+-- | The only schema version a genuine #760-era writer ever produced for
+--   the opaque blob above (round-8 review): this fallback only knows how
+--   to interpret THIS version's meaning of "empty payload migrates
+--   cleanly, non-empty is refused" -- an envelope claiming some OTHER
+--   version is not the recognized #760 shape at all (a hypothetical
+--   future schema change to the opaque blob could reuse the same
+--   required flag and an empty payload while meaning something entirely
+--   different), so it must not be silently accepted and re-saved without
+--   that unknown version ever being recorded again.
+luaStateComponentVersion ∷ Word32
+luaStateComponentVersion = 1
+
 -- | Shared structural step for the "B2" (#760-era) fallback: an
 --   envelope whose component set is EXACTLY the modern Haskell registry
 --   ("metadata" plus every @saveComponentRegistry@ entry -- core-
@@ -372,7 +384,16 @@ luaStateComponentId = ComponentId "lua-state"
 --   components (#761 hadn't landed yet). Every descriptor must be
 --   marked required, matching the real #760 writer -- an optional one
 --   is not that genuine historical shape (mirrors the B1 fallback's
---   identical precision, round-7 review). 'Nothing' means defer
+--   identical precision, round-7 review). The @"lua-state"@ descriptor's
+--   own version must ALSO match 'luaStateComponentVersion' exactly
+--   (round-8 review): the Haskell components are decoded through the
+--   real ccInputVers dispatch, which already validates their own
+--   historical version, but the opaque Lua blob is never actually
+--   interpreted, only checked for emptiness below -- so an envelope
+--   claiming some OTHER lua-state schema version must not be silently
+--   accepted as if it meant the same "empty migrates, non-empty
+--   refuses" contract this build knows, and then re-saved without that
+--   unknown version ever being recorded again. 'Nothing' means defer
 --   entirely to whatever error the caller already has (this envelope
 --   is not #760-shaped at all); a 'Just' is no longer "maybe", so the
 --   caller must surface it.
@@ -393,6 +414,15 @@ decodeB2StructureAndMetadata bytes =
                              \the real #760 shape always does -- refusing \
                              \to migrate rather than treat an optional \
                              \payload as the required one")
+                luaStateDesc ← maybe (Left "lua-state descriptor missing")
+                                     Right
+                                     (findDescriptor luaStateComponentId
+                                                      (deManifest decoded))
+                when (cdVersion luaStateDesc ≢ luaStateComponentVersion) $
+                    Left ("Save format incompatible: expected legacy \
+                          \\"lua-state\" component v"
+                          <> T.pack (show luaStateComponentVersion)
+                          <> ", got v" <> T.pack (show (cdVersion luaStateDesc)))
                 meta ← decodeMetadataComponent decoded
                 pure (decoded, meta)
   where
@@ -531,6 +561,18 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   is foreign data about to be lost, even though the migration already
 --   proved it can be honestly handled (or refused the load outright, in
 --   which case this function is never reached for that generation).
+--
+--   Round-8 review: the required-flag check alone still isn't the full
+--   "genuinely #760-shaped" precision — @decodeB2StructureAndMetadata@
+--   now also requires @"lua-state"@'s OWN descriptor version to match
+--   'luaStateComponentVersion' exactly (not merely a version this reader
+--   happens to already know how to decode, since the opaque blob is
+--   never actually interpreted, only checked for emptiness). This guard
+--   applies the identical version check, so a hand-crafted or genuinely
+--   future envelope claiming some OTHER lua-state schema version can
+--   never be exempted here even though the migration itself already
+--   refuses to decode it — the two must never disagree about what counts
+--   as "genuinely B2-shaped", exactly as B1's pairing already ensures.
 foreignOptionalComponentIds ∷ HS.HashSet Text → BS.ByteString → [ComponentId]
 foreignOptionalComponentIds luaKnownNames bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
@@ -554,10 +596,13 @@ foreignOptionalComponentIds luaKnownNames bytes =
                         ∧ not hasModernComponentBesidesSession
                         ∧ sessionDescIsExactB1
 
-                luaStateDescIsRequired =
-                    maybe False cdRequired (descOf luaStateComponentId)
+                luaStateDescIsExactB2 =
+                    case descOf luaStateComponentId of
+                        Nothing → False
+                        Just d  → cdRequired d
+                                      ∧ cdVersion d ≡ luaStateComponentVersion
                 looksLikeB2Shape =
-                    presentIds ≡ b2Ids ∧ luaStateDescIsRequired
+                    presentIds ≡ b2Ids ∧ luaStateDescIsExactB2
 
                 effectiveKnownIds
                     | looksLikeB1Shape = knownIdsForDecode
