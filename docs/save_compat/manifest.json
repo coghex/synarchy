@@ -38,6 +38,88 @@
       ]
     },
     {
+      "id": "b2-split-haskell-lua-state",
+      "description": "The #760-era shape (issue #766 requirement 3: 'the independently split Haskell components from #760', round-7 review): Haskell persistence ALREADY split into the modern per-component registry (core-session/texture-palette/world-pages/world-edits/world-activity/buildings/units/unit-sim/craft-bills/power-nodes -- already decodable at their historical input versions via the SAME ccInputVers dispatch the modern path uses), but Lua state still the single opaque \"lua-state\" blob map predating #761's versioned Lua components. This window was previously (incorrectly) treated as 'never declared, no removal needed' in retiredBaselines -- but issue #766 requirement 3 explicitly lists it as history THIS epic must support, regardless of whether a manifest existed to declare it at the time (the manifest is what #766 itself creates). World.Save.Envelope.decodeB2SessionEnvelope recognizes an envelope shaped EXACTLY {metadata, core-session, texture-palette, world-pages, world-edits, world-activity, buildings, units, unit-sim, craft-bills, power-nodes, lua-state} (every descriptor required, mirroring the B1 fallback's exact-shape precision), reassembles every Haskell component through World.Save.Component.assembleSnapshot UNCHANGED, then handles \"lua-state\" the SAME way migrateSessionV90 already handles B1's own legacy Lua blob: an EMPTY payload migrates cleanly (defaulting current Lua modules via the engine's existing isMigratingLegacyBaseline mechanism), a NON-EMPTY one is refused (the pre-#761 Lua deserializer that could interpret it was removed).",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Envelope.decodeB2SessionEnvelope",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua-state",
+          "version": 1,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "b2-split-haskell-lua-state-minimal",
+          "path": "test-headless/data/save-compat/b2-split-haskell-lua-state.bin",
+          "kind": "complete-session",
+          "sha256": "a1b604aef9aef2a94d7c14fb627f3289dfd288ccdd20b7220d46538551d1f7ba",
+          "sizeBytes": 296475,
+          "provenance": "Generated through the real codec: c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot) -- the same real cargo_hold_S building, acolyte unit, forge_steel_dagger craft bill, and power node -- then re-encoded via World.Save.Component.encodeComponentSpecs (every Haskell component at its CURRENT input version, e.g. unit-sim/craft-bills/power-nodes at v2 rather than c3's own historical v1 -- this fixture's whole point is the Lua-shape difference, not re-proving the v1 Haskell dispatch c3 already covers) plus a single, EMPTY, required 'lua-state' component (the pre-#761 opaque blob, replacing the modern lua.unit_ai/lua.building_spawn components entirely), assembled via World.Save.Envelope.Codec.encodeEnvelope directly (not encodeSessionSnapshot, which always writes the modern 'lua.'-prefixed component names).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/b2-split-haskell-lua-state.expected.json"
+        }
+      ]
+    },
+    {
       "id": "c3-raw-reference-v1",
       "description": "The raw-to-typed persistent-reference transition (issue #764, save-overhaul C3): craft-bills/power-nodes/unit-sim were bumped from v1 (bare BuildingId/UnitId references) to v2 (SamePageRef-typed references), each with an explicit v1->v2 migration (migrateCraftBillDTOv1/migratePowerNodesDTOv1/migrateUnitSimDTOv1). This baseline needs NO new migration code from this issue -- the existing ccInputVers=[1,2]-dispatched decode in World.Save.Component.Entities already fully supports it; this entry exists so removing that v1 decode support (or the migration functions) fails the compatibility audit, and so the fixture proves the dispatch through the REAL envelope/registry path, not just the isolated migrate* unit tests.",
       "declaredAt": "2026-07-20",
@@ -130,6 +212,15 @@
           "sizeBytes": 591736,
           "provenance": "Generated through the real codec (issue #766 requirement 11: 'Include multi-page ... coverage', round-4 review): c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot), a SECOND page ('page2', deliberately empty -- no entities, so no building/unit id needs a fresh cross-page-unique allocation -- with its own distinct clock, 08:30 vs page1's 12:00) was inserted into snapPages/snapVisiblePages, then the whole session was re-encoded via World.Save.Envelope.encodeSessionSnapshot with page1's real content and Lua components (lua.unit_ai/lua.building_spawn, v3) carried over unchanged. Proves the manifest-driven hspec gate and the fresh-process migration probe genuinely assemble/reassemble/structurally-compare EVERY page in a session, not merely the first/only page every other tracked fixture happens to have.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1-multipage.expected.json"
+        },
+        {
+          "id": "c3-typed-reference-v1-with-items",
+          "path": "test-headless/data/save-compat/c3-typed-reference-v1-with-items.bin",
+          "kind": "complete-session",
+          "sha256": "3b34d7f5d29afbd2f2ede2496c312b0a7ca7d629b04056eae942757808d5e6a6",
+          "sizeBytes": 296709,
+          "provenance": "Generated through the real codec (issue #766 requirement 12: canonical coverage includes items, round-7 review): c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot), then the unit's uisInventory was populated with two REAL items (defs 'canteen_steel_2l' and 'first_aid_kit', both genuinely registered in data/items/*.yaml -- 'first_aid_kit' is a real ITEM-CONTAINER, holding one nested 'bandage' instance in its iiContents, so nested/container placement is exercised too, not just a flat item list) and snapNextItemId bumped past the new instance ids, then the whole session was re-encoded via World.Save.Envelope.encodeSessionSnapshot. Proves the manifest-driven hspec gate's per-item (defName/instanceId/currentFill/quality/condition/weight, recursing into contents) assertions and the fresh-process migration probe's real dumped-state comparison both catch a migration that drops or mis-maps a real item, not merely 'zero ground items, nothing to check'.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1-with-items.expected.json"
         }
       ]
     },
@@ -280,11 +371,6 @@
       ]
     }
   ],
-  "retiredBaselines": [
-    {
-      "id": "b2-transitional-lua-state",
-      "description": "The brief #760-only shape (Haskell persistence already split into independently-versioned components, but Lua state still the single opaque \"lua-state\" blob map predating #761's versioned Lua components). This window was NEVER declared a compatibility baseline -- no manifest existed yet, and no fixture for it was ever tracked outside the same-day #760/#761 development arc it was superseded within (#760's own fixture was itself replaced before this manifest's first version). Per requirement 1 (\"removing support for a baseline is never incidental cleanup\"), that rule protects a baseline that was actually DECLARED; this one never was, so there is nothing to migrate or remove support for.",
-      "supportStatus": "never declared -- not a removal"
-    }
-  ]
+  "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",
+  "retiredBaselines": []
 }

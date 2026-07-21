@@ -37,6 +37,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Numeric (readHex)
@@ -45,8 +46,10 @@ import World.Save.Envelope
     ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope, encodeSessionSnapshot
     , metadataComponentId, metadataComponentVersion, currentEnvelopeVersion
     , foreignOptionalComponentIds )
-import World.Save.Envelope.Codec (decodeEnvelope, encodeEnvelope, dePayloads)
-import World.Save.Envelope.Types (defaultEnvelopeLimits, ComponentId(..))
+import World.Save.Envelope.Codec
+    (decodeEnvelope, encodeEnvelope, dePayloads, deManifest)
+import World.Save.Envelope.Types
+    (defaultEnvelopeLimits, ComponentId(..), emComponents, cdId, cdVersion, cdRequired)
 import World.Save.Compat.SessionV90
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
@@ -62,6 +65,7 @@ import Unit.Sim.Types (UnitSimState(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
+import Item.Types (ItemInstance(..))
 
 hexDecode ∷ String → BS.ByteString
 hexDecode = BS.pack . go
@@ -156,15 +160,34 @@ instance Aeson.FromJSON ExpectedBuilding where
         <$> o .: "id" <*> o .: "defName" <*> o .: "anchorX" <*> o .: "anchorY"
         <*> o .: "gridZ" <*> o .: "buildProgress"
 
+-- | An inventory/storage item's canonical values (round-7 review:
+--   "canonical fixture validation records only groundItemCount... a
+--   migration that drops or mis-maps a real item can pass"). Recurses
+--   into 'eiiContents' so an ITEM-container (a first-aid kit) and its
+--   nested contents are both checked, not just the outer instance.
+data ExpectedItemInstance = ExpectedItemInstance
+    { eiiDefName ∷ !Text, eiiInstanceId ∷ !Word64, eiiCurrentFill ∷ !Float
+    , eiiQuality ∷ !Float, eiiCondition ∷ !Float, eiiWeight ∷ !Float
+    , eiiContents ∷ ![ExpectedItemInstance]
+    }
+
+instance Aeson.FromJSON ExpectedItemInstance where
+    parseJSON = Aeson.withObject "item" $ \o → ExpectedItemInstance
+        <$> o .: "defName" <*> o .: "instanceId" <*> o .: "currentFill"
+        <*> o .: "quality" <*> o .: "condition" <*> o .: "weight"
+        <*> o .:? "contents" .!= []
+
 data ExpectedUnit = ExpectedUnit
     { euId ∷ !Word32, euDefName ∷ !Text, euGridX ∷ !Float, euGridY ∷ !Float
     , euGridZ ∷ !Int, euFacing ∷ !Text, euActivity ∷ !Text, euPose ∷ !Text
+    , euInventory ∷ ![ExpectedItemInstance]
     }
 
 instance Aeson.FromJSON ExpectedUnit where
     parseJSON = Aeson.withObject "unit" $ \o → ExpectedUnit
         <$> o .: "id" <*> o .: "defName" <*> o .: "gridX" <*> o .: "gridY"
         <*> o .: "gridZ" <*> o .: "facing" <*> o .: "activity" <*> o .: "pose"
+        <*> o .:? "inventory" .!= []
 
 data ExpectedUnitSimState = ExpectedUnitSimState
     { eusUnitId ∷ !Word32, eusRealX ∷ !Float, eusRealY ∷ !Float
@@ -248,6 +271,22 @@ instance Aeson.FromJSON ExpectedSummary where
 
 decodeJSONFile ∷ Aeson.FromJSON a ⇒ FilePath → IO (Either String a)
 decodeJSONFile path = Aeson.eitherDecode <$> BSL.readFile path
+
+-- | Compare one real 'ItemInstance' against its declared canonical
+--   values, recursing into 'iiContents' (round-7 review) so a
+--   migration that maps a valid item to the wrong def, quantity, or
+--   nested-container placement is caught -- not just "an item exists".
+checkItemInstance ∷ ItemInstance → ExpectedItemInstance → Expectation
+checkItemInstance actual expected = do
+    iiDefName actual `shouldBe` eiiDefName expected
+    iiInstanceId actual `shouldBe` eiiInstanceId expected
+    iiCurrentFill actual `shouldBe` eiiCurrentFill expected
+    iiQuality actual `shouldBe` eiiQuality expected
+    iiCondition actual `shouldBe` eiiCondition expected
+    iiWeight actual `shouldBe` eiiWeight expected
+    length (iiContents actual) `shouldBe` length (eiiContents expected)
+    forM_ (zip (iiContents actual) (eiiContents expected))
+          (uncurry checkItemInstance)
 
 spec ∷ Spec
 spec = do
@@ -372,6 +411,18 @@ spec = do
                                                 T.pack (show (uisFacing u)) `shouldBe` euFacing eu
                                                 uisActivity u `shouldBe` euActivity eu
                                                 uisPose u `shouldBe` euPose eu
+                                                length (uisInventory u)
+                                                    `shouldBe` length (euInventory eu)
+                                                forM_ (euInventory eu) $ \eii →
+                                                    case L.find
+                                                             (\i → iiInstanceId i ≡ eiiInstanceId eii)
+                                                             (uisInventory u) of
+                                                        Nothing → expectationFailure
+                                                            ("unit #" <> show (euId eu)
+                                                             <> ": inventory item instance #"
+                                                             <> show (eiiInstanceId eii)
+                                                             <> " missing from migrated inventory")
+                                                        Just item → checkItemInstance item eii
 
                                     forM_ (epUnitSimStates ep) $ \eus →
                                         case HM.lookup (UnitId (eusUnitId eus))
@@ -560,6 +611,125 @@ spec = do
                     Left e  → error ("test setup: " <> show e)
             foreignOptionalComponentIds HS.empty bytes
                 `shouldBe` [ComponentId "session"]
+
+        it "refuses to migrate an envelope shaped {metadata, session} \
+           \whose \"session\" descriptor is marked OPTIONAL, not \
+           \required (round-7 review) -- a genuine B1 envelope's writer \
+           \always marks BOTH descriptors required; an envelope that \
+           \merely matches the id set and version but not the required \
+           \flag is not the real frozen shape, and must not be silently \
+           \migrated as if it were" $ do
+            let optionalSessionSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, False
+                      , extractSessionPayload fixtureBytes)
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion optionalSessionSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Right _  → expectationFailure
+                    "expected an envelope with an OPTIONAL session \
+                    \descriptor to be rejected, not migrated"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "required"
+
+        it "the overwrite guard does NOT exempt \"session\" when its OWN \
+           \descriptor is marked optional (round-7 review) -- otherwise \
+           \this exact envelope shape would be treated as \"no foreign \
+           \data\" and get silently overwritten on the next save, \
+           \discarding whatever the optional session payload actually \
+           \was" $ do
+            let optionalSessionSpecs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "session", sessionComponentVersion, False
+                      , extractSessionPayload fixtureBytes)
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion optionalSessionSpecs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            foreignOptionalComponentIds HS.empty bytes
+                `shouldBe` [ComponentId "session"]
+
+    describe "the #760-era (\"B2\") fallback (issue #766 requirement 3, \
+             \round-7 review)" $ do
+        it "migrates the real, tracked B2-shaped fixture (empty lua-state \
+           \blob), and the overwrite guard recognizes it as carrying no \
+           \foreign data" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames bytes of
+                Left err → expectationFailure
+                    ("expected the B2 fixture to migrate cleanly: "
+                     <> T.unpack err)
+                Right (_, _, luaComponents, isMigrated) → do
+                    isMigrated `shouldBe` True
+                    luaComponents `shouldBe` []
+            foreignOptionalComponentIds HS.empty bytes `shouldBe` []
+
+        it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
+           \blob is NON-EMPTY -- the pre-#761 Lua deserializer that could \
+           \interpret it was removed, so it cannot be honestly migrated, \
+           \mirroring migrateSessionV90's identical policy for B1's own \
+           \legacy Lua blob" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2LuaStateSpec bytes True (BS.pack [1, 2, 3])
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames tampered of
+                Right _  → expectationFailure
+                    "expected a non-empty lua-state blob to be refused"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "lua-state"
+
+        it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
+           \descriptor is marked OPTIONAL, not required -- mirrors the B1 \
+           \fallback's identical precision (round-7 review): a genuine \
+           \#760 writer always marked it required" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2LuaStateSpec bytes False BS.empty
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelope luaNames luaNames tampered of
+                Right _  → expectationFailure
+                    "expected an optional lua-state descriptor to be refused"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "required"
+
+-- | Rebuild the tracked B2 fixture's envelope with its "lua-state"
+--   component's (required, payload) replaced -- every OTHER component's
+--   id/version/required/payload carried over verbatim from the real
+--   fixture -- so a test can exercise exactly one tampered descriptor
+--   at a time against otherwise-genuine bytes.
+replaceB2LuaStateSpec ∷ BS.ByteString → Bool → BS.ByteString → BS.ByteString
+replaceB2LuaStateSpec bytes req payload =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             knownAll HS.empty bytes of
+        Left e → error ("test setup: replaceB2LuaStateSpec: decode: " <> show e)
+        Right decoded →
+            let otherSpecs =
+                    [ (cdId d, cdVersion d, cdRequired d, payloadFor decoded (cdId d))
+                    | d ← emComponents (deManifest decoded)
+                    , cdId d ≢ ComponentId "lua-state" ]
+                newSpecs = otherSpecs ⧺ [(ComponentId "lua-state", 1, req, payload)]
+            in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion newSpecs of
+                Right b → b
+                Left e  → error ("test setup: replaceB2LuaStateSpec: encode: " <> show e)
+  where
+    payloadFor decoded cid = HM.lookupDefault
+        (error ("test setup: payload missing for " <> show cid)) cid
+        (dePayloads decoded)
+    -- The exact id set the tracked B2 fixture carries -- see its own
+    -- manifest entry's components[] list.
+    knownAll = HS.fromList
+        [ ComponentId "metadata", ComponentId "core-session"
+        , ComponentId "texture-palette", ComponentId "world-pages"
+        , ComponentId "world-edits", ComponentId "world-activity"
+        , ComponentId "buildings", ComponentId "units"
+        , ComponentId "unit-sim", ComponentId "craft-bills"
+        , ComponentId "power-nodes", ComponentId "lua-state" ]
 
 -- | A metadata value that agrees with the extracted fixture session's own
 --   gameplay gen params (seed 42 / world size 128 / plate count 10 — see

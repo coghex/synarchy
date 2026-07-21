@@ -272,6 +272,17 @@ def real_component_registry() -> dict[str, dict]:
         "currentVersion": int(m.group(1)), "inputVersions": [int(m.group(1))],
         "required": True}
 
+    # "lua-state" is the OTHER retired, hardcoded-in-Envelope.hs legacy
+    # id (round-7 review, issue #766 requirement 3's "#760" baseline):
+    # the single opaque pre-#761 Lua blob, recognized only by
+    # World.Save.Envelope.decodeB2SessionEnvelope's fallback, never by
+    # the modern registry or the live Lua registry. Its internal payload
+    # is never actually decoded (only checked for emptiness), so unlike
+    # "session" there is no real "version" to parse from source -- this
+    # is a fixed bookkeeping placeholder matching what every tracked
+    # fixture for it is encoded at.
+    registry["lua-state"] = {"currentVersion": 1, "inputVersions": [1], "required": True}
+
     id_literals: dict[str, str] = {}
     for path in HASKELL_COMPONENT_SOURCE_PATHS:
         text = path.read_text(encoding="utf-8")
@@ -458,21 +469,25 @@ def audit_modern_baseline_components_complete(
     """Requirement 5's other half: a baseline that is NOT b1-shaped (its
     components[] doesn't declare the frozen legacy "session" component)
     is, by construction, a MODERN per-component-registry session -- and
-    every one of those components (except "session" itself, which is
-    B1-exclusive: a session is either the frozen legacy blob or the
-    modern per-component split, never both) is unconditionally REQUIRED
-    (decodeEnvelope refuses a modern envelope missing one outright, see
-    componentRequiredIds/MissingRequiredComponent). So a valid tracked
-    "current"-target modern-shaped fixture cannot possibly omit any of
-    them -- if a baseline's own components[] doesn't declare one, that
-    baseline's manifest entry is under-documenting what its own fixture
-    genuinely contains, precisely the gap round-5 review flagged (a
-    future required component could be added to only ONE such baseline
-    and never show up as a coverage gap in the OTHERS, since the
+    every one of those components (except "session"/"lua-state", each
+    RETIRED, mutually-exclusive ALTERNATE representations for state the
+    modern registry also covers: the frozen v90 blob vs the split
+    Haskell components, and the single opaque pre-#761 Lua blob vs
+    lua.unit_ai/lua.building_spawn -- a baseline declaring one is exempt
+    from needing the modern equivalent it stands in for) is
+    unconditionally REQUIRED (decodeEnvelope refuses a modern envelope
+    missing one outright, see componentRequiredIds/
+    MissingRequiredComponent). So a valid tracked "current"-target
+    modern-shaped fixture cannot possibly omit any of them -- if a
+    baseline's own components[] doesn't declare one, that baseline's
+    manifest entry is under-documenting what its own fixture genuinely
+    contains, precisely the gap round-5 review flagged (a future
+    required component could be added to only ONE such baseline and
+    never show up as a coverage gap in the OTHERS, since the
     all-baselines-aggregate check alone can't see that)."""
     modern_required_ids = {
         cid for cid, info in real_registry.items()
-        if info.get("required") and cid != "session"
+        if info.get("required") and cid not in ("session", "lua-state")
     }
     violations: list[str] = []
     for baseline in manifest.get("baselines", []):
@@ -483,7 +498,9 @@ def audit_modern_baseline_components_complete(
         if baseline.get("migrationTarget") != "current":
             continue  # e.g. decode-only historical evidence, not a
                        # migration-acceptance baseline at all
-        missing = sorted(modern_required_ids - declared_ids)
+        exempt_ids = ({"lua.unit_ai", "lua.building_spawn"}
+                      if "lua-state" in declared_ids else set())
+        missing = sorted(modern_required_ids - exempt_ids - declared_ids)
         if missing:
             violations.append(
                 f"baseline '{bid}' is modern-shaped (its components[] "
@@ -881,6 +898,7 @@ import Unit.Sim.Types (UnitSimState(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
+import Item.Types (ItemInstance(..))
 
 bytes <- BS.readFile "{fixture_path}"
 
@@ -893,7 +911,12 @@ let luaNames = HS.fromList ["unit_ai", "building_spawn"]
 case decoded of
   Left err -> putStrLn ("DUMP_FAILED: decode: " ++ T.unpack err)
   Right (meta, snap, luaComponents, isMig) -> do
-    let dumpBuilding (bid, b) = Aeson.object
+    let dumpItem i = Aeson.object
+          [ "defName" .= iiDefName i, "instanceId" .= iiInstanceId i
+          , "currentFill" .= iiCurrentFill i, "quality" .= iiQuality i
+          , "condition" .= iiCondition i, "weight" .= iiWeight i
+          , "contents" .= map dumpItem (iiContents i) ]
+        dumpBuilding (bid, b) = Aeson.object
           [ "id" .= unBuildingId bid, "defName" .= bisDefName b
           , "anchorX" .= bisAnchorX b, "anchorY" .= bisAnchorY b
           , "gridZ" .= bisGridZ b, "buildProgress" .= bisBuildProgress b ]
@@ -901,7 +924,8 @@ case decoded of
           [ "id" .= unUnitId uid, "defName" .= uisDefName u
           , "gridX" .= uisGridX u, "gridY" .= uisGridY u
           , "gridZ" .= uisGridZ u, "facing" .= T.pack (show (uisFacing u))
-          , "activity" .= uisActivity u, "pose" .= uisPose u ]
+          , "activity" .= uisActivity u, "pose" .= uisPose u
+          , "inventory" .= map dumpItem (uisInventory u) ]
         dumpSim (uid, s) = Aeson.object
           [ "unitId" .= unUnitId uid, "realX" .= usRealX s, "realY" .= usRealY s
           , "gridZ" .= usGridZ s, "pose" .= T.pack (show (usPose s))

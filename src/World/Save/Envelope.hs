@@ -180,7 +180,7 @@ decodeSaveEnvelopeMetadata luaKnownNames bytes =
     case decodeValidatedEnvelope luaKnownNames HS.empty bytes
              >>= decodeMetadataComponent of
         Right meta     → Right meta
-        Left modernErr → case decodeLegacySessionMetadata bytes of
+        Left modernErr → case tryLegacyMetadataFallbacks bytes of
             NotLegacyShaped         → Left modernErr
             LegacyShapedButFailed e → Left e
             LegacyDecoded meta      → Right meta
@@ -206,7 +206,7 @@ decodeSessionEnvelope
 decodeSessionEnvelope luaKnownNames luaRequiredNames bytes =
     case decodeModern of
         Right result   → Right result
-        Left modernErr → case decodeLegacySessionEnvelope bytes of
+        Left modernErr → case tryLegacyEnvelopeFallbacks bytes of
             NotLegacyShaped         → Left modernErr
             LegacyShapedButFailed e → Left e
             LegacyDecoded (meta, snap) → Right (meta, snap, [], True)
@@ -278,16 +278,28 @@ decodeLegacySessionMetadata bytes =
         Just (Right (_, meta)) → LegacyDecoded meta
 
 -- | Shared structural step for both legacy entry points above: validate
---   the envelope against exactly @{metadata, session}@ and confirm the
---   @"session"@ descriptor's version is the one frozen shape this build
---   recognizes, without touching its payload bytes. 'Nothing' means the
---   envelope's manifest itself is not @{metadata, session}@ (or is
---   otherwise structurally invalid under that known/required set) — not
---   a B1 envelope at all, so the caller must defer entirely to the
---   modern attempt's own error. A 'Just' — structurally confirmed
---   B1-shaped — carries either the metadata (component-version check
---   passed) or the specific reason it didn't; either way, this is no
---   longer "maybe not legacy", so the caller must surface it.
+--   the envelope against exactly @{metadata, session}@ AND confirm both
+--   descriptors' own flags/versions match the ONE frozen B1 shape this
+--   build recognizes (round-7 review) — not merely that those two ids
+--   are the only ones PRESENT. 'decodeEnvelope' only ever refuses a
+--   descriptor marked @cdRequired@ that ISN'T in the known-id set, or an
+--   id in the reader's OWN required set that's altogether absent — it
+--   never checks whether a PRESENT descriptor's own @cdRequired@ flag
+--   matches what a genuine writer would have marked. So an envelope
+--   shaped @{metadata (required), session (OPTIONAL, v90)}@ would
+--   otherwise satisfy the exact-id-set check below and get migrated as
+--   if it were the real, always-required B1 shape — silently replacing
+--   an unsupported/foreign optional payload rather than retaining or
+--   refusing it (requirement 9), since 'foreignOptionalComponentIds'
+--   would ALSO recognize it as "known" via the very same shape check.
+--   'Nothing' means the envelope's manifest itself is not @{metadata,
+--   session}@ (or is otherwise structurally invalid under that known/
+--   required set) — not a B1 envelope at all, so the caller must defer
+--   entirely to the modern attempt's own error. A 'Just' — structurally
+--   confirmed B1-shaped, both descriptors' flags/versions matching —
+--   carries either the metadata (component-version check passed) or the
+--   specific reason it didn't; either way, this is no longer "maybe not
+--   legacy", so the caller must surface it.
 decodeLegacyStructureAndMetadata
     ∷ BS.ByteString → Maybe (Either Text (DecodedEnvelope, SaveMetadata))
 decodeLegacyStructureAndMetadata bytes =
@@ -311,18 +323,144 @@ decodeLegacyStructureAndMetadata bytes =
                       <> T.intercalate ", " (map cidText (HS.toList present))
                       <> ") -- refusing to migrate rather than silently \
                          \drop the extra component")
-            meta ← decodeMetadataComponent decoded
-            desc ← maybe (Left "legacy session component descriptor missing")
-                         Right
-                         (findDescriptor sessionComponentId (deManifest decoded))
-            when (cdVersion desc ≢ sessionComponentVersion) $
+            metaDesc ← maybe (Left "legacy metadata component descriptor missing")
+                              Right
+                              (findDescriptor metadataComponentId (deManifest decoded))
+            sessionDesc ← maybe (Left "legacy session component descriptor missing")
+                                 Right
+                                 (findDescriptor sessionComponentId (deManifest decoded))
+            -- Both descriptors must be marked REQUIRED, exactly as this
+            -- build's own (never-written-again) B1 writer always marked
+            -- them -- an OPTIONAL "session" (or "metadata") is not the
+            -- real frozen shape, even though its id and version match.
+            when (not (cdRequired metaDesc) ∨ not (cdRequired sessionDesc)) $
+                Left "legacy envelope's metadata/session descriptors are \
+                     \not both marked required, as the real frozen B1 \
+                     \shape always does -- refusing to migrate rather \
+                     \than treat an optional payload as the required one"
+            when (cdVersion metaDesc ≢ metadataComponentVersion) $
+                Left ("Save format incompatible: expected legacy metadata \
+                      \component v" <> T.pack (show metadataComponentVersion)
+                      <> ", got v" <> T.pack (show (cdVersion metaDesc)))
+            when (cdVersion sessionDesc ≢ sessionComponentVersion) $
                 Left ("Save format incompatible: expected legacy session \
                       \component v" <> T.pack (show sessionComponentVersion)
-                      <> ", got v" <> T.pack (show (cdVersion desc)))
+                      <> ", got v" <> T.pack (show (cdVersion sessionDesc)))
+            meta ← decodeMetadataComponent decoded
             pure (decoded, meta)
   where
     legacyIds = HS.fromList [metadataComponentId, sessionComponentId]
     cidText (ComponentId t) = t
+
+-- | The pre-#761 single opaque Lua persistence blob (issue #766,
+--   requirement 3's "#760" baseline): every registered Lua module's
+--   state serialized together into one component, before #761 split it
+--   into independently-versioned per-module components
+--   ("lua.unit_ai"/"lua.building_spawn" etc.).
+luaStateComponentId ∷ ComponentId
+luaStateComponentId = ComponentId "lua-state"
+
+-- | Shared structural step for the "B2" (#760-era) fallback: an
+--   envelope whose component set is EXACTLY the modern Haskell registry
+--   ("metadata" plus every @saveComponentRegistry@ entry -- core-
+--   session/texture-palette/world-pages/world-edits/world-activity/
+--   buildings/units/unit-sim/craft-bills/power-nodes, each already
+--   decodable at its historical input version via the SAME
+--   ccInputVers-dispatched codecs the modern path uses) plus the single
+--   opaque @"lua-state"@ blob -- i.e. Haskell ALREADY split per-
+--   component (#760), but Lua NOT YET split into its own versioned
+--   components (#761 hadn't landed yet). Every descriptor must be
+--   marked required, matching the real #760 writer -- an optional one
+--   is not that genuine historical shape (mirrors the B1 fallback's
+--   identical precision, round-7 review). 'Nothing' means defer
+--   entirely to whatever error the caller already has (this envelope
+--   is not #760-shaped at all); a 'Just' is no longer "maybe", so the
+--   caller must surface it.
+decodeB2StructureAndMetadata
+    ∷ BS.ByteString → Maybe (Either Text (DecodedEnvelope, SaveMetadata))
+decodeB2StructureAndMetadata bytes =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             b2Ids b2Ids bytes of
+        Left _ → Nothing
+        Right decoded →
+            let present = HS.fromList (map cdId (emComponents (deManifest decoded)))
+            in if present ≢ b2Ids then Nothing else Just $ do
+                forM_ (HS.toList b2Ids) $ \cid → do
+                    desc ← maybe (Left (cidText cid <> " descriptor missing"))
+                                 Right (findDescriptor cid (deManifest decoded))
+                    when (not (cdRequired desc)) $
+                        Left (cidText cid <> " is not marked required, as \
+                             \the real #760 shape always does -- refusing \
+                             \to migrate rather than treat an optional \
+                             \payload as the required one")
+                meta ← decodeMetadataComponent decoded
+                pure (decoded, meta)
+  where
+    b2Ids = HS.insert metadataComponentId
+                (HS.insert luaStateComponentId componentKnownIds)
+    cidText (ComponentId t) = t
+
+-- | Metadata-only counterpart to 'decodeB2SessionEnvelope', mirroring
+--   'decodeLegacySessionMetadata''s identical contract for the B1 case:
+--   a #760-era save is listable without decoding/migrating its (opaque,
+--   possibly-unmigratable) Lua state.
+decodeB2SessionMetadata ∷ BS.ByteString → LegacyDecodeResult SaveMetadata
+decodeB2SessionMetadata bytes =
+    case decodeB2StructureAndMetadata bytes of
+        Nothing                → NotLegacyShaped
+        Just (Left e)          → LegacyShapedButFailed e
+        Just (Right (_, meta)) → LegacyDecoded meta
+
+-- | Recognize and migrate a #760-era envelope (issue #766, requirement
+--   3): reuses 'assembleSnapshot' UNCHANGED for every Haskell component
+--   (they are already the modern per-component registry, historical
+--   input versions and all), then handles the one genuinely legacy
+--   piece -- the opaque @"lua-state"@ blob -- the SAME way
+--   'migrateSessionV90' already handles B1's own legacy Lua blob map: an
+--   EMPTY payload (the common real case -- most #760-era saves predate
+--   any meaningfully persisted Lua state) migrates cleanly, defaulting
+--   every current Lua module via the engine's existing
+--   @isMigratingLegacyBaseline@ mechanism (the trailing 'True' this
+--   returns, exactly like a migrated B1 session, tells the caller no
+--   live Lua components were decoded). A NON-EMPTY blob cannot be
+--   honestly migrated -- the pre-#761 Lua deserializer that could
+--   interpret it was removed -- and is refused rather than silently
+--   discarded.
+decodeB2SessionEnvelope
+    ∷ BS.ByteString → LegacyDecodeResult (SaveMetadata, SessionSnapshot)
+decodeB2SessionEnvelope bytes =
+    case decodeB2StructureAndMetadata bytes of
+        Nothing → NotLegacyShaped
+        Just (Left e) → LegacyShapedButFailed e
+        Just (Right (decoded, meta)) →
+            either LegacyShapedButFailed LegacyDecoded $ do
+                snap ← either (Left . renderComponentErrors) Right
+                              (assembleSnapshot meta decoded)
+                luaStatePayload ←
+                    maybe (Left "lua-state component payload missing") Right
+                          (HM.lookup luaStateComponentId (dePayloads decoded))
+                when (not (BS.null luaStatePayload)) $
+                    Left "legacy save carries a non-empty pre-#761 opaque \
+                         \\"lua-state\" blob that this build can no longer \
+                         \interpret (the pre-#761 Lua deserializer was \
+                         \removed) -- refusing to migrate rather than \
+                         \silently discard persisted Lua state"
+                pure (meta, snap)
+
+-- | Try the B1 legacy fallback, then the B2 one, in that order --
+--   shared by every decode entry point below so a fallback chain can
+--   never drift out of sync between them.
+tryLegacyEnvelopeFallbacks
+    ∷ BS.ByteString → LegacyDecodeResult (SaveMetadata, SessionSnapshot)
+tryLegacyEnvelopeFallbacks bytes = case decodeLegacySessionEnvelope bytes of
+    NotLegacyShaped → decodeB2SessionEnvelope bytes
+    other           → other
+
+tryLegacyMetadataFallbacks
+    ∷ BS.ByteString → LegacyDecodeResult SaveMetadata
+tryLegacyMetadataFallbacks bytes = case decodeLegacySessionMetadata bytes of
+    NotLegacyShaped → decodeB2SessionMetadata bytes
+    other           → other
 
 -- | Every component in the decoded envelope whose id carries the
 --   reserved @"lua."@ prefix, with that prefix stripped back to the bare
@@ -373,6 +511,26 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   Otherwise a genuinely unknown optional component that merely
 --   happens to be NAMED @"session"@ inside a modern-shaped save would
 --   pass this guard and be silently dropped on the very next save.
+--
+--   Round-7 review: presence of the id alone is not enough either — a
+--   @"session"@ descriptor marked OPTIONAL (or at the wrong version)
+--   is NOT the real, always-required frozen B1 shape ('decodeEnvelope'
+--   never checks a PRESENT descriptor's own @cdRequired@ flag against
+--   what a genuine writer would mark, only whether an id claiming
+--   @cdRequired@ is unknown, or a reader-required id is altogether
+--   missing) — so this also cross-checks the descriptor's own required
+--   flag and version, mirroring 'decodeLegacyStructureAndMetadata'
+--   exactly, so the two functions can never disagree about what counts
+--   as "genuinely B1-shaped".
+--
+--   Round-7 review: the SAME reasoning applies to the #760-era ("B2")
+--   shape 'decodeB2SessionEnvelope' recognizes — its own opaque
+--   @"lua-state"@ id must ALSO be exempted here (with the SAME
+--   exact-shape/required-flag precision), or a freshly-migrated #760
+--   session's very first re-save would refuse, believing "lua-state"
+--   is foreign data about to be lost, even though the migration already
+--   proved it can be honestly handled (or refused the load outright, in
+--   which case this function is never reached for that generation).
 foreignOptionalComponentIds ∷ HS.HashSet Text → BS.ByteString → [ComponentId]
 foreignOptionalComponentIds luaKnownNames bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
@@ -381,19 +539,38 @@ foreignOptionalComponentIds luaKnownNames bytes =
         Right decoded →
             let presentIds =
                     HS.fromList [ cdId d | d ← emComponents (deManifest decoded) ]
-                otherIds = HS.delete sessionComponentId presentIds
-                hasModernComponent =
+                descOf cid = findDescriptor cid (deManifest decoded)
+
+                otherThanSession = HS.delete sessionComponentId presentIds
+                hasModernComponentBesidesSession =
                     any (\i → i ≢ metadataComponentId ∧ HS.member i modernKnownIds)
-                        (HS.toList otherIds)
-                looksLikeLegacyShape =
-                    HS.member sessionComponentId presentIds ∧ not hasModernComponent
-                effectiveKnownIds =
-                    if looksLikeLegacyShape then knownIdsForDecode else modernKnownIds
+                        (HS.toList otherThanSession)
+                sessionDescIsExactB1 =
+                    case descOf sessionComponentId of
+                        Nothing → False
+                        Just d  → cdRequired d ∧ cdVersion d ≡ sessionComponentVersion
+                looksLikeB1Shape =
+                    HS.member sessionComponentId presentIds
+                        ∧ not hasModernComponentBesidesSession
+                        ∧ sessionDescIsExactB1
+
+                luaStateDescIsRequired =
+                    maybe False cdRequired (descOf luaStateComponentId)
+                looksLikeB2Shape =
+                    presentIds ≡ b2Ids ∧ luaStateDescIsRequired
+
+                effectiveKnownIds
+                    | looksLikeB1Shape = knownIdsForDecode
+                    | looksLikeB2Shape = HS.insert luaStateComponentId modernKnownIds
+                    | otherwise        = modernKnownIds
             in [ cdId d | d ← emComponents (deManifest decoded)
                , not (HS.member (cdId d) effectiveKnownIds) ]
   where
     modernKnownIds    = knownComponentIds luaKnownNames
-    knownIdsForDecode = HS.insert sessionComponentId modernKnownIds
+    knownIdsForDecode =
+        HS.insert sessionComponentId (HS.insert luaStateComponentId modernKnownIds)
+    b2Ids = HS.insert metadataComponentId
+                (HS.insert luaStateComponentId componentKnownIds)
 
 -- | Load-time generation-validity classification (issue #762, storage-
 --   overhaul C1): whether a structurally-invalid file is safe to treat as
@@ -481,7 +658,7 @@ decodeSaveEnvelopeMetadataClassified
 decodeSaveEnvelopeMetadataClassified luaKnownNames bytes =
     case decodeModern of
         Right meta     → Right meta
-        Left modernErr → case decodeLegacySessionMetadata bytes of
+        Left modernErr → case tryLegacyMetadataFallbacks bytes of
             NotLegacyShaped         → Left modernErr
             LegacyShapedButFailed e → Left (GenerationIncompatible e)
             LegacyDecoded meta      → Right meta
@@ -508,7 +685,7 @@ decodeSessionEnvelopeClassified
 decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes =
     case decodeModern of
         Right result   → Right result
-        Left modernErr → case decodeLegacySessionEnvelope bytes of
+        Left modernErr → case tryLegacyEnvelopeFallbacks bytes of
             NotLegacyShaped            → Left modernErr
             LegacyShapedButFailed e    → Left (GenerationIncompatible e)
             LegacyDecoded (meta, snap) → Right (meta, snap, [], True)
