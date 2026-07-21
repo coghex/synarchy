@@ -129,6 +129,8 @@ module World.Save.Component.Entities
     , applyUnitSim
     , applyCraftBills
     , applyPowerNodes
+    , validateCraftBills
+    , validatePowerNodes
     ) where
 
 import UPrelude

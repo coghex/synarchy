@@ -50,6 +50,7 @@ import World.Save.Envelope.Codec
     (decodeEnvelope, encodeEnvelope, dePayloads, deManifest)
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), emComponents, cdId, cdVersion, cdRequired)
+import World.Save.Component.Types (ComponentError(..))
 import World.Save.Compat.SessionV90
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
@@ -62,7 +63,8 @@ import World.Page.Types (WorldPageId(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..))
-import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
+import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..), BillMode(..))
+import World.Save.Component.Entities (BillQueueDTOv1(..), CraftBillDTOv1(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
@@ -579,6 +581,57 @@ spec = do
                     "expected the pre-existing metadata/gameplay mismatch \
                     \to be rejected"
                 Left msg  → msg `shouldSatisfy` T.isInfixOf "disagrees"
+
+        it "migrateSessionV90 rejects a B1 save with DUPLICATE page ids \
+           \(round-14 review) -- basePageSnapshots' HashMap.fromList over \
+           \the raw page list would otherwise silently COLLAPSE two \
+           \same-id pages into one before any CROSS-component check ever \
+           \saw the duplication (validateSessionSnapshot only ever \
+           \inspects the already-collapsed map), so only a component-\
+           \local validator running on the raw page list first can catch \
+           \it -- exactly the 'silently collapsed' failure mode this \
+           \round's review named" $
+            case decodeSessionV90 (extractSessionPayload fixtureBytes) of
+                Left err → expectationFailure (show err)
+                Right sd → do
+                    let duplicated = sd { sd90Worlds = sd90Worlds sd ⧺ sd90Worlds sd }
+                    case migrateSessionV90 minimalSaveMetadataForExtra duplicated of
+                        Right _    → expectationFailure
+                            "expected duplicate page ids to be rejected, \
+                            \not silently collapsed into one page"
+                        Left errs → any (T.isInfixOf "duplicate page id" . ceMessage) errs
+                            `shouldBe` True
+
+        it "migrateSessionV90 rejects a B1 save whose craft-bill queue \
+           \carries a bill id AT OR ABOVE that page's own allocator \
+           \(round-14 review) -- validateCraftBills' allocator/key-\
+           \identity check previously never ran anywhere on the B1 path" $
+            case decodeSessionV90 (extractSessionPayload fixtureBytes) of
+                Left err → expectationFailure (show err)
+                Right sd → case sd90Worlds sd of
+                    []      → expectationFailure "expected at least one page"
+                    (p : ps) → do
+                        let malformedBill = CraftBillDTOv1
+                                { bil1Id = BillId 5, bil1Station = BuildingId 1
+                                , bil1Recipe = "forge_steel_dagger"
+                                , bil1Remaining = 1, bil1Claimant = Nothing
+                                , bil1ClaimedAt = 0, bil1Progress = 0
+                                , bil1Seq = 0, bil1Paused = False
+                                , bil1Working = False, bil1Mode = FixedCount
+                                , bil1Target = 0, bil1OutputItem = "" }
+                            malformedQueue = BillQueueDTOv1
+                                { bq1Bills = HM.singleton (BillId 5) malformedBill
+                                , bq1NextId = 0 }
+                            malformedPage = p { wp90CraftBills = malformedQueue }
+                            malformed = sd { sd90Worlds = malformedPage : ps }
+                        case migrateSessionV90 minimalSaveMetadataForExtra malformed of
+                            Right _    → expectationFailure
+                                "expected a craft-bill id at/above its \
+                                \page's own allocator to be rejected"
+                            Left errs →
+                                any (T.isInfixOf "not below the page's bill \
+                                                  \allocator" . ceMessage) errs
+                                    `shouldBe` True
 
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
         it "refuses to migrate a legacy envelope carrying an extra \

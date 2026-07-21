@@ -103,7 +103,7 @@ import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..)
     , validateSessionSnapshot, structureEditPaletteErrors )
 import World.Save.Component.Session
-    ( TexPaletteDTO(..), fromTexPaletteDTO )
+    ( TexPaletteDTO(..), fromTexPaletteDTO, validateTexPalette )
 import World.Save.Component.Page
     ( WorldGenParamsDTO
     , WorldIdentityDTO(..), WorldEditDTO(..), MineDesignationDTO(..)
@@ -113,7 +113,8 @@ import World.Save.Component.Page
     , PageCoreDTO(..), WorldPagesDTO(..)
     , PageEditsDTO(..), WorldEditsDTO(..)
     , PageActivityDTO(..), WorldActivityDTO(..)
-    , basePageSnapshots, applyWorldEdits, applyWorldActivity )
+    , basePageSnapshots, applyWorldEdits, applyWorldActivity
+    , validatePages, validateWorldActivity )
 import World.Save.Component.Entities
     ( BuildingInstanceDTO, PageBuildingsDTO(..), BuildingsDTO(..)
     , applyBuildings
@@ -122,8 +123,10 @@ import World.Save.Component.Entities
     , migrateUnitSimDTOv1, applyUnitSim
     , BillQueueDTOv1(..), PageCraftBillsDTOv1(..)
     , CraftBillsDTOv1(..), migrateCraftBillsDTOv1, applyCraftBills
+    , validateCraftBills
     , NodeRegistryDTOv1(..), PagePowerNodesDTOv1(..)
-    , PowerNodesDTOv1(..), migratePowerNodesDTOv1, applyPowerNodes )
+    , PowerNodesDTOv1(..), migratePowerNodesDTOv1, applyPowerNodes
+    , validatePowerNodes )
 
 -- | The legacy B1 envelope's single gameplay component id (#759) — never
 --   written by this build, only recognized on decode as a migration
@@ -227,6 +230,23 @@ decodeSessionV90 bytes = case S.decode bytes of
 --   documented on the module haddock, then run the identical
 --   cross-component + manifest-agreement checks
 --   'World.Save.Component.assembleSnapshot' runs on a modern envelope.
+--
+--   Round-14 review: unlike 'World.Save.Component.assembleSnapshot',
+--   this path previously only ran CROSS-component checks
+--   ('validateSessionSnapshot'/'structureEditPaletteErrors'/
+--   'sessionIntegrityErrors') and skipped every COMPONENT-LOCAL
+--   validator entirely ('validatePages'/'validateTexPalette'/
+--   'validateWorldActivity'/'validateCraftBills'/'validatePowerNodes' —
+--   duplicate/empty page ids, a non-bijective texture palette, a
+--   ground-item/craft-bill/power-node id at or above its own page
+--   allocator, or a map key that disagrees with its own value's id). A
+--   semantically malformed B1 save (hand-edited, corrupted, or from a
+--   buggy historical writer) carrying one of those defects would
+--   previously migrate/publish anyway, since nothing here ever ran the
+--   SAME checks a modern envelope's decode always does. Now runs every
+--   one of those five validators, all-or-nothing exactly like
+--   'assembleSnapshot''s own decode-phase pass, BEFORE folding anything
+--   onto a snapshot.
 migrateSessionV90
     ∷ SaveMetadata → SaveDataV90 → Either [ComponentError] SessionSnapshot
 migrateSessionV90 meta sd = do
@@ -250,23 +270,31 @@ migrateSessionV90 meta sd = do
                     \Lua deserializer was removed) -- refusing to migrate \
                     \rather than silently discard persisted Lua state")]
     let ps = sd90Worlds sd
-        base = basePageSnapshots (WorldPagesDTO (map toPageCoreV90 ps))
+        pagesDTO = WorldPagesDTO (map toPageCoreV90 ps)
+        activityDTO = WorldActivityDTO (map toPageActivityV90 ps)
+        craftBillsDTO =
+            migrateCraftBillsDTOv1 (CraftBillsDTOv1 (map toPageCraftBillsV90 ps))
+        powerNodesDTO =
+            migratePowerNodesDTOv1 (PowerNodesDTOv1 (map toPagePowerNodesV90 ps))
+        componentLocalErrs = capComponentErrors $
+            validatePages pagesDTO
+            ++ validateTexPalette (sd90TexPalette sd)
+            ++ validateWorldActivity activityDTO
+            ++ validateCraftBills craftBillsDTO
+            ++ validatePowerNodes powerNodesDTO
+    when (not (null componentLocalErrs)) $ Left componentLocalErrs
+    let base = basePageSnapshots pagesDTO
     afterEdits ← applyWorldEdits 1
         (WorldEditsDTO (map toPageEditsV90 ps)) base
-    afterActivity ← applyWorldActivity 1
-        (WorldActivityDTO (map toPageActivityV90 ps)) afterEdits
+    afterActivity ← applyWorldActivity 1 activityDTO afterEdits
     afterBuildings ← applyBuildings 1 nextBuildingId
         (BuildingsDTO (map toPageBuildingsV90 ps)) afterActivity
     afterUnits ← applyUnits 1 nextUnitId
         (UnitsDTO (map toPageUnitsV90 ps)) afterBuildings
     afterSim ← applyUnitSim 1
         (migrateUnitSimDTOv1 (UnitSimDTOv1 (map toPageSimV90 ps))) afterUnits
-    afterCraft ← applyCraftBills 1
-        (migrateCraftBillsDTOv1 (CraftBillsDTOv1 (map toPageCraftBillsV90 ps)))
-        afterSim
-    afterPower ← applyPowerNodes 1
-        (migratePowerNodesDTOv1 (PowerNodesDTOv1 (map toPagePowerNodesV90 ps)))
-        afterCraft
+    afterCraft ← applyCraftBills 1 craftBillsDTO afterSim
+    afterPower ← applyPowerNodes 1 powerNodesDTO afterCraft
     let snap = SessionSnapshot
             { snapGameTime       = sd90GameTime sd
             , snapTexPalette     = fromTexPaletteDTO (sd90TexPalette sd)
