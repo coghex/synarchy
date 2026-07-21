@@ -10,9 +10,17 @@
 # Any pre-existing cabal.project.local is backed up and restored on exit,
 # so your dev config is left untouched whether the gate passes or fails.
 #
-# Uses the default (prod) build profile and the default dist-newstyle, so
-# it reuses your warm build instead of forcing a rebuild, and the exe it
-# builds is the one world_check drives.
+# Also scoped alongside -Werror: -fforce-recomp. GHC's recompilation
+# avoidance does not treat warning flags as affecting object code, so a
+# module already compiled warm *without* -Werror is never re-checked just
+# because -Werror is added afterwards via cabal.project.local -- a warning
+# that would fail a clean CI checkout can silently pass here otherwise
+# (confirmed by hand: this let an unused-field warning ship past `make ci`
+# and fail CI, issue #869). -fforce-recomp forces every module of the
+# `synarchy` package to be genuinely rechecked every run, trading warm-
+# build reuse for a result you can actually trust; already-built
+# dependencies are unaffected and stay cached, so this is not as costly as
+# a full clean build. The exe it builds is the one world_check drives.
 set -euo pipefail
 
 # Run from the repo root regardless of caller CWD.
@@ -35,36 +43,41 @@ if [ -e "$LOCAL" ]; then
   cp "$LOCAL" "$BACKUP"
 fi
 
-# Identical to the CI "Configure" step: -Werror for the local package only.
-printf 'package synarchy\n  ghc-options: -Werror\n' > "$LOCAL"
+# Like the CI "Configure" step (-Werror for the local package only), plus
+# -fforce-recomp so a warm build can't mask a warning CI would catch fresh.
+printf 'package synarchy\n  ghc-options: -Werror -fforce-recomp\n' > "$LOCAL"
 
-echo "==> [1/9] build (library + executable, -Werror)"
+echo "==> [1/10] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/9] build test suites"
+echo "==> [2/10] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/9] headless hspec suite"
+echo "==> [3/10] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/9] test audit"
+echo "==> [4/10] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/9] lua module line budget"
+echo "==> [5/10] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [6/9] lua duplicate function audit"
+echo "==> [6/10] lua duplicate function audit"
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [7/9] haskell module line budget"
+echo "==> [7/10] haskell module line budget"
 python3 tools/haskell_module_budget.py
 
-echo "==> [8/9] persistence inventory audit"
+echo "==> [8/10] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [9/9] world_check --quick"
+echo "==> [9/10] save compatibility audit"
+python3 tools/test_save_compat_audit.py
+python3 tools/save_compat_audit.py
+
+echo "==> [10/10] world_check --quick"
 python3 tools/world_check.py --quick
 
 echo "==> make ci: all gates passed"

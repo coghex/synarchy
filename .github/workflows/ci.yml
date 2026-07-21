@@ -317,6 +317,17 @@ jobs:
           python3 tools/test_persistence_inventory_audit.py
           python3 tools/persistence_inventory_audit.py
 
+      # Cheap, no-engine guard (issue #766, save-overhaul C4 requirement
+      # 14): fails if a tracked save-compatibility fixture drifts, goes
+      # missing, or the frozen-DTO/envelope-framing fingerprints recorded
+      # in docs/save_compat/manifest.json disagree with the current
+      # source. See tools/save_compat_audit.py's module docstring for
+      # exactly what this does and does not guarantee.
+      - name: Save compatibility audit
+        run: |
+          python3 tools/test_save_compat_audit.py
+          python3 tools/save_compat_audit.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.

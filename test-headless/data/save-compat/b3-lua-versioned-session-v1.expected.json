@@ -1,0 +1,113 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b3-lua-versioned-session-v1 fixture (issue #766, round-3 review). Byte-identical Haskell-side content to c3-typed-reference-v1-minimal (same real building/unit/craft-bill/power-node/gen-params, extracted via decodeSessionEnvelope then re-encoded via encodeSessionSnapshot) -- the ONLY difference is its lua.unit_ai/lua.building_spawn components are encoded at their historical v1 (bare-number reference field) wire shape instead of the modern v3 shape, keyed by this SAME session's real unit id (1) and building id (1) so the reference actually resolves. This is what proves a legacy Lua payload version end-to-end inside a REAL, content-valid complete session: Test.Headless.World.Save.Compat's manifest-driven gate decodes/migrates/reassembles it exactly like any other complete-session fixture, AND tools/save_compat_migration_probe.py's fresh-process round trip (load -> publish -> resave -> restart -> reload) drives it through the real engine's Lua VM, where saveModules.prepareLoad's v1->v3 migration for BOTH modules fires for real -- closing the gap where only component-focused (single-Lua-payload, no full envelope) fixtures existed for the b3-lua-versioned baseline.",
+  "metadata": {
+    "seed": 42,
+    "worldSize": 8,
+    "plateCount": 3,
+    "worldName": null,
+    "worldGloss": null
+  },
+  "gameTime": 42.0,
+  "nextItemId": 1,
+  "nextBuildingId": 10,
+  "nextUnitId": 10,
+  "camera": {
+    "ownerPage": "page1",
+    "x": 7.0,
+    "y": 8.0,
+    "zoom": 3.0,
+    "facing": "FaceEast"
+  },
+  "activePage": "page1",
+  "visiblePages": ["page1"],
+  "pages": [
+    {
+      "pageId": "page1",
+      "buildingCount": 1,
+      "unitCount": 1,
+      "unitSimStateCount": 1,
+      "craftBillCount": 1,
+      "powerNodeCount": 1,
+      "groundItemCount": 0,
+      "timeHour": 12,
+      "timeMinute": 0,
+      "dateYear": 1,
+      "dateMonth": 1,
+      "dateDay": 1,
+      "mapMode": "ZMDefault",
+      "buildings": [
+        {
+          "id": 1,
+          "defName": "cargo_hold_S",
+          "anchorX": 0,
+          "anchorY": 0,
+          "gridZ": 0,
+          "buildProgress": 100.0
+        }
+      ],
+      "units": [
+        {
+          "id": 1,
+          "defName": "acolyte",
+          "gridX": 0.0,
+          "gridY": 0.0,
+          "gridZ": 0,
+          "facing": "DirS",
+          "activity": "idle",
+          "pose": "standing"
+        }
+      ],
+      "unitSimStates": [
+        {
+          "unitId": 1,
+          "realX": 0.0,
+          "realY": 0.0,
+          "gridZ": 0,
+          "pose": "Standing",
+          "state": "Idle",
+          "facing": "DirS"
+        }
+      ],
+      "craftBills": [
+        {
+          "id": 3,
+          "station": 1,
+          "recipe": "forge_steel_dagger",
+          "remaining": 1,
+          "claimant": null,
+          "mode": "FixedCount"
+        }
+      ],
+      "powerNodes": [
+        {
+          "id": 2,
+          "building": 1,
+          "role": "PowerStorage",
+          "peakWatts": 0.0,
+          "capacityWh": 5000.0,
+          "storedWh": 1234.5
+        }
+      ]
+    }
+  ],
+  "luaComponentCount": 2,
+  "isMigratedLegacyBaseline": false,
+  "luaStateChecks": [
+    {
+      "expr": "require('scripts.unit_ai').aiState[1].buildTarget",
+      "expected": 1
+    },
+    {
+      "expr": "type(require('scripts.unit_ai').aiState[1].buildTarget)",
+      "expected": "number"
+    },
+    {
+      "expr": "require('scripts.building_spawn').state[1].lastUid",
+      "expected": 1
+    },
+    {
+      "expr": "type(require('scripts.building_spawn').state[1].lastUid)",
+      "expected": "number"
+    }
+  ]
+}

@@ -1,0 +1,379 @@
+{
+  "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py (--add-baseline registers a fixture's checksum/summary together).",
+  "envelopeFramingVersion": 1,
+  "frozenDtoFingerprint": "19f98dc669c3aac00778f6c26a8246b649b6101b43919455999c1dc7d3bb2e5b",
+  "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs, plus every leaf DTO its frozen types embed, transitively resolved wherever actually defined (World.Save.Component.Page/.Entities/.Session/.WorldGen)",
+  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\"",
+  "envelopeFramingFingerprint": "582c54fe18f585b36a28acc552339851d1e54db5812db0a384de416bbec99198",
+  "envelopeFramingFingerprintOf": "src/World/Save/Envelope/Codec.hs + the wire-relevant bindings in src/World/Save/Envelope/Types.hs (ComponentId/ComponentDescriptor/EnvelopeManifest/envelopeMagic/fnv1a64/encodeW32/decodeW32/encodeW64/decodeW64)",
+  "envelopeFramingFingerprintComment": "round-15 review: envelopeFramingVersion alone is just an integer someone has to remember to bump -- this sha256 (whitespace-normalized, comment-insensitive, same technique as frozenDtoFingerprint) catches an ACTUAL byte-layout change (header/manifest/checksum framing) shipping with envelopeFramingVersion left untouched, which would otherwise be a new wire format with no format epoch. See tools/save_compat_audit.py's envelope_framing_fingerprint(). Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import envelope_framing_fingerprint; print(envelope_framing_fingerprint())\"",
+  "baselines": [
+    {
+      "id": "b1-initial-session",
+      "description": "The first tracked envelope (issue #759, save-overhaul B1): a single required \"session\" component wrapping the then-current SaveData/WorldPageSave shape (save-version 90) verbatim, alongside the ordinary \"metadata\" component. This is the compatibility baseline requirement 1 designates as the starting point -- every later baseline builds on it.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Compat.SessionV90.migrateSessionV90",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "session",
+          "version": 90,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "b1-initial-session-minimal",
+          "path": "test-headless/data/save-compat/b1-initial-session.bin",
+          "kind": "complete-session",
+          "sha256": "0f365f8f6d05e64210d7a144af200bf0e6cc909cb50e30af61e880cd23430570",
+          "sizeBytes": 295495,
+          "provenance": "Generated through the real codec: a genuine world.init('main_world', 42, 8, 3) small world was generated and saved through a real headless engine boot (so its WorldGenParams/plate data is staging-valid, unlike a hand-built defaultWorldGenParams value), its 'world-pages' component's real PageCoreDTO gen params were extracted, then wrapped as a v90-shaped SaveDataV90 value and encoded via World.Save.Envelope.Codec.encodeEnvelope into a single required 'session' component -- see tools/save_compat_audit.py --add-baseline to re-register after regenerating.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/b1-initial-session.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "b2-split-haskell-lua-state",
+      "description": "The #760-era shape (issue #766 requirement 3: 'the independently split Haskell components from #760', round-7 review): Haskell persistence ALREADY split into the modern per-component registry (core-session/texture-palette/world-pages/world-edits/world-activity/buildings/units/unit-sim/craft-bills/power-nodes -- already decodable at their historical input versions via the SAME ccInputVers dispatch the modern path uses), but Lua state still the single opaque \"lua-state\" blob map predating #761's versioned Lua components. This window was previously (incorrectly) treated as 'never declared, no removal needed' in retiredBaselines -- but issue #766 requirement 3 explicitly lists it as history THIS epic must support, regardless of whether a manifest existed to declare it at the time (the manifest is what #766 itself creates). World.Save.Envelope.decodeB2SessionEnvelope recognizes an envelope shaped EXACTLY {metadata, core-session, texture-palette, world-pages, world-edits, world-activity, buildings, units, unit-sim, craft-bills, power-nodes, lua-state} (every descriptor required, mirroring the B1 fallback's exact-shape precision), reassembles every Haskell component through World.Save.Component.assembleSnapshot UNCHANGED, then handles \"lua-state\" the SAME way migrateSessionV90 already handles B1's own legacy Lua blob: an EMPTY payload migrates cleanly (defaulting current Lua modules via the engine's existing isMigratingLegacyBaseline mechanism), a NON-EMPTY one is refused (the pre-#761 Lua deserializer that could interpret it was removed).",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Envelope.decodeB2SessionEnvelope",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "lua-state",
+          "version": 1,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "b2-split-haskell-lua-state-minimal",
+          "path": "test-headless/data/save-compat/b2-split-haskell-lua-state.bin",
+          "kind": "complete-session",
+          "sha256": "fa1fd4344db53a8dc0a1c4d49dbf946da31eeaa73cbc9b658094cc87472b0043",
+          "sizeBytes": 296483,
+          "provenance": "Generated through the real codec (round-10 review: the prior fixture wrongly encoded unit-sim/craft-bills/power-nodes at CURRENT v2, a hybrid shape #760 never actually wrote): c3-typed-reference-v1-minimal's fixture was decoded via the RAW envelope codec (World.Save.Envelope.Codec.decodeEnvelope, not the high-level decodeSessionEnvelope) to recover its REAL component descriptors and payload bytes AS-STORED -- including unit-sim/craft-bills/power-nodes genuinely encoded at their historical v1 (bare-id) shape, exactly as a real #760 writer produced them, since c3's own fixture already carries those exact v1 bytes verbatim (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1's wire encoding is byte-identical to their v2 counterparts -- SamePageRef is a transparent newtype -- so only the DESCRIPTOR's version number actually needed to change, not the payload bytes) -- then every OTHER Haskell component's descriptor/payload was carried over verbatim (metadata, core-session, texture-palette, world-pages, world-edits, world-activity, buildings, units, all single-version so v1 is already current), the two modern lua.unit_ai/lua.building_spawn components were dropped, and a single, required 'lua-state' v1 component was added -- ROUND-18 REVIEW: its payload is the REAL cereal-encoded EMPTY 'HashMap Text Text' (the documented pre-#761 sdLuaModules/snapLuaModules shape -- 8 bytes, a Word64 zero length-prefix), not a hand-inserted zero-byte BS.empty as prior rounds wrongly used (a genuine #760 writer's cereal encoder never produces a literal zero-byte payload for an empty map) -- assembled via World.Save.Envelope.Codec.encodeEnvelope directly (not encodeSessionSnapshot, which always writes the modern 'lua.'-prefixed component names, nor encodeComponentSpecs, which always writes every Haskell component at its CURRENT version). The decoded canonical VALUES are unchanged from the prior fixture (migrateCraftBillDTOv1/migratePowerNodesDTOv1/migrateUnitSimDTOv1 only add the SamePageRef wrapper, not a value change; the lua-state payload's own 8 bytes never surface in the canonical summary), so expectedCanonicalSummary needed no content changes -- only this fixture's own bytes (8 bytes larger) and this baseline's declared component versions did.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/b2-split-haskell-lua-state.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "c3-raw-reference-v1",
+      "description": "The raw-to-typed persistent-reference transition (issue #764, save-overhaul C3): craft-bills/power-nodes/unit-sim were bumped from v1 (bare BuildingId/UnitId references) to v2 (SamePageRef-typed references), each with an explicit v1->v2 migration (migrateCraftBillDTOv1/migratePowerNodesDTOv1/migrateUnitSimDTOv1). This baseline needs NO new migration code from this issue -- the existing ccInputVers=[1,2]-dispatched decode in World.Save.Component.Entities already fully supports it; this entry exists so removing that v1 decode support (or the migration functions) fails the compatibility audit, and so the fixture proves the dispatch through the REAL envelope/registry path, not just the isolated migrate* unit tests.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Entities.craftBillsCodec/powerNodesCodec/unitSimCodec (ccInputVers=[1,2], already existing since issue #764)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "c3-typed-reference-v1-minimal",
+          "path": "test-headless/data/save-compat/c3-typed-reference-v1.bin",
+          "kind": "complete-session",
+          "sha256": "ff9894e08ecb194ad81c6e7a560f43f9d8acad920192113bdd09a4b20417bd04",
+          "sizeBytes": 296538,
+          "provenance": "Generated through the real codec: a single page (real, staging-valid WorldGenParams extracted from a genuine world.init('main_world', 42, 8, 3) headless-engine boot, same source as the b1-initial-session fixture) carrying one REAL-content building (def 'cargo_hold_S'), one REAL-content unit (def 'acolyte', matching what tools/multiworld_save_probe.py spawns), one unit-sim state, one craft bill (a real recipe id 'forge_steel_dagger', FixedCount mode so no output-item def is needed), and one power node -- built via World.Save.Snapshot.captureSessionSnapshot, encoded via World.Save.Component.encodeComponentSpecs, with craft-bills/power-nodes/unit-sim's payloads swapped for their historical v1 (bare-id) DTOs (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1, already exported by World.Save.Component.Entities), PLUS the real lua.unit_ai/lua.building_spawn components (empty AI/spawn state, version 3) extracted from that same real engine boot's save. Real content definitions (not the pure-hspec 'test_building'/'test_unit' placeholders) are required so the real engine's content-reference validation (Engine.Scripting.Lua.API.Save's continueLoad, issue #760 requirement 9) accepts this fixture in the fresh-process migration probe, not just the pure hspec decode path.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1.expected.json"
+        },
+        {
+          "id": "c3-typed-reference-v1-multipage",
+          "path": "test-headless/data/save-compat/c3-typed-reference-v1-multipage.bin",
+          "kind": "complete-session",
+          "sha256": "2e78c920d4b0b630009738a2a58659c147039606c65822e2a54a1f118d3acc1a",
+          "sizeBytes": 591736,
+          "provenance": "Generated through the real codec (issue #766 requirement 11: 'Include multi-page ... coverage', round-4 review): c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot), a SECOND page ('page2', deliberately empty -- no entities, so no building/unit id needs a fresh cross-page-unique allocation -- with its own distinct clock, 08:30 vs page1's 12:00) was inserted into snapPages/snapVisiblePages, then the whole session was re-encoded via World.Save.Envelope.encodeSessionSnapshot with page1's real content and Lua components (lua.unit_ai/lua.building_spawn, v3) carried over unchanged. Proves the manifest-driven hspec gate and the fresh-process migration probe genuinely assemble/reassemble/structurally-compare EVERY page in a session, not merely the first/only page every other tracked fixture happens to have.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1-multipage.expected.json"
+        },
+        {
+          "id": "c3-typed-reference-v1-with-items",
+          "path": "test-headless/data/save-compat/c3-typed-reference-v1-with-items.bin",
+          "kind": "complete-session",
+          "sha256": "3b34d7f5d29afbd2f2ede2496c312b0a7ca7d629b04056eae942757808d5e6a6",
+          "sizeBytes": 296709,
+          "provenance": "Generated through the real codec (issue #766 requirement 12: canonical coverage includes items, round-7 review): c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot), then the unit's uisInventory was populated with two REAL items (defs 'canteen_steel_2l' and 'first_aid_kit', both genuinely registered in data/items/*.yaml -- 'first_aid_kit' is a real ITEM-CONTAINER, holding one nested 'bandage' instance in its iiContents, so nested/container placement is exercised too, not just a flat item list) and snapNextItemId bumped past the new instance ids, then the whole session was re-encoded via World.Save.Envelope.encodeSessionSnapshot. Proves the manifest-driven hspec gate's per-item (defName/instanceId/currentFill/quality/condition/weight, recursing into contents) assertions and the fresh-process migration probe's real dumped-state comparison both catch a migration that drops or mis-maps a real item, not merely 'zero ground items, nothing to check'.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1-with-items.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "b3-lua-versioned",
+      "description": "The first versioned Lua persistence components (issue #761, save-overhaul B3): each registered persistent Lua module (unit_ai, building_spawn) became its own dynamically-added envelope component with an explicit version/inputVersions/decode/validate contract, mirroring the Haskell registry. Issue #764 (save-overhaul C3) then added a v1->v3 reference-typing migration on TOP of that same Lua contract (wrapUnitState/addOwnerToAiState etc. in scripts/unit_ai_save_refs.lua). This baseline's tracked fixtures below are REAL v1-shaped payloads (bare-number reference fields, no __owner) for both modules, encoded through the genuine scripts/lib/data_codec.lua M.encode via a real HsLua VM (not a hand-rolled reimplementation of the wire format, and not re-synthesized inline the way every OTHER Lua persistence test in this suite does) -- see Test.Headless.Lua.SaveModules's \"tracked v1 fixtures from disk\" describe block, which reads these exact bytes off disk and runs them through the real saveModules.prepareLoad/applyAll path, asserting the canonical unwrapped result these fixtures' .expected.json files record. The version recorded below (1) is deliberately the OLDEST accepted input version, not the current one (3) -- mirroring the c3-raw-reference-v1 baseline's convention -- since proving the oldest migration still works is this manifest's whole point; the current v1/v2/v3 contract itself remains exercised by every other 'Lua persistence components' test.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "scripts/unit_ai_save.lua / scripts/building_spawn.lua's decode() (v1/v2/v3), scripts/unit_ai_save_refs.lua's wrapUnitState/addOwnerToAiState",
+      "components": [
+        {
+          "id": "lua.unit_ai",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "lua-unit-ai-v1",
+          "path": "test-headless/data/save-compat/lua-unit-ai-v1.bin",
+          "kind": "component-focused",
+          "sha256": "497a5ea086397e68fd407cc9d1d3efe1990beff58031d5939a38ca0f29153915",
+          "sizeBytes": 106,
+          "provenance": "Generated through the real codec: a v1-shaped unit_ai payload table ({[7] = {attackTargetUid=8, buildTarget=20, craftJob={billId=3, bid=21, recipeId='x'}}}, matching the same shape Test.Headless.Lua.SaveModules's inline v1-payload tests already use) encoded via scripts/lib/data_codec.lua's M.encode, run through a genuine HsLua VM (cabal repl, Lua.run/Lua.dostring -- the SAME entry points collectLuaComponents uses in Engine.Scripting.Lua.API.Save), not a Python or hand-written reimplementation of the wire format.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/lua-unit-ai-v1.expected.json"
+        },
+        {
+          "id": "lua-building-spawn-v1",
+          "path": "test-headless/data/save-compat/lua-building-spawn-v1.bin",
+          "kind": "component-focused",
+          "sha256": "46176a584a187dc4968780f8c893263486a2348823240fbe298ffa5f1289728e",
+          "sizeBytes": 50,
+          "provenance": "Generated through the real codec: a v1-shaped building_spawn payload table ({[12] = {lastUid=4, lastSpawnedAt=123.5}}, bare-number lastUid) encoded via scripts/lib/data_codec.lua's M.encode, run through a genuine HsLua VM the same way as lua-unit-ai-v1 above.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/lua-building-spawn-v1.expected.json"
+        },
+        {
+          "id": "b3-lua-versioned-session-v1",
+          "path": "test-headless/data/save-compat/b3-lua-versioned-session-v1.bin",
+          "kind": "complete-session",
+          "sha256": "87b6a08be723d5c7d551ffa00945e761bea0330ffd4c3483bba076daf63ab5eb",
+          "sizeBytes": 296577,
+          "provenance": "Generated through the real codec (round-3 review: a component-focused Lua fixture alone left the manifest-driven hspec gate and the fresh-process migration probe both skipping legacy Lua coverage entirely): docs/save_compat/manifest.json's c3-typed-reference-v1-minimal fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot) -- the same real cargo_hold_S building (id 1) and acolyte unit (id 1) -- then re-encoded via World.Save.Envelope.encodeSessionSnapshot with its lua.unit_ai/lua.building_spawn components replaced by v1-shaped payloads ({[1]={buildTarget=1}} / {[1]={lastUid=1}}, referencing that SAME real building/unit id) encoded through scripts/lib/data_codec.lua's M.encode via a genuine HsLua VM, mirroring lua-unit-ai-v1/lua-building-spawn-v1's generation above. This is a full complete-session envelope, not a lone component payload, so it is picked up automatically by BOTH Test.Headless.World.Save.Compat's manifest-driven \"manifest-declared fixtures\" gate (proving the Haskell envelope layer preserves a v1-tagged Lua component through decode/re-encode) and tools/save_compat_migration_probe.py's real-engine load->publish->resave->restart->reload round trip (proving saveModules.prepareLoad's real v1->v3 Lua migration fires inside a genuine engine boot, for a session the real content-reference validator also accepts).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/b3-lua-versioned-session-v1.expected.json"
+        },
+        {
+          "id": "b3-lua-versioned-hspec-coverage",
+          "path": "test-headless/Test/Headless/Lua/SaveModules.hs",
+          "kind": "component-focused",
+          "sha256": null,
+          "sizeBytes": null,
+          "provenance": "Not a tracked binary fixture -- this points at the existing, already-blocking hspec gate (\"Lua persistence components\", part of cabal test synarchy-test-headless) that exercises unit_ai/building_spawn's FULL v1/v2/v3 decode+migrate+validate contract (including the two tracked fixtures above, plus every other historical shape and rejection case) directly through a standalone Lua VM (HsLua). Removing that coverage, or the v1/v2 decode branches it tests, fails the SAME cabal test synarchy-test-headless gate this manifest's own fixtures run under.",
+          "expectedCanonicalSummary": null
+        }
+      ]
+    },
+    {
+      "id": "historical-b1-session-recovered",
+      "description": "A REAL B1-era envelope recovered from git history (commit 988c2727, the tracked fixture Test.Headless.World.Save.Envelope carried before #760 replaced it) -- proves World.Save.Compat.SessionV90's frozen DTO decodes genuine pre-#760 bytes, not merely this codebase's own encoder output. This fixture's own \"metadata\" component was hand-picked independently of its gameplay gen params by the original test author (world size 64 / plate count 3, vs. the page's real defaultWorldGenParams 128 / 10) -- B1 predates requirement 12's manifest/gameplay agreement check entirely, so the FULL migration (decodeSessionEnvelope) correctly rejects it on that pre-existing mismatch. It is tracked as decode-only evidence, not as a fixture the full migration pipeline must accept.",
+      "declaredAt": "2026-07-20",
+      "declaredByIssue": 766,
+      "supportStatus": "decode-only (component-focused; not a migration-acceptance fixture -- see description)",
+      "migrationTarget": "n/a (frozen-DTO byte-compatibility evidence only)",
+      "migratedBy": "World.Save.Compat.SessionV90.decodeSessionV90",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "session",
+          "version": 90,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "historical-b1-session-recovered",
+          "path": "test-headless/Test/Headless/World/Save/Compat.hs",
+          "kind": "component-focused",
+          "sha256": null,
+          "sizeBytes": null,
+          "provenance": "Recovered verbatim from git history: commit 988c2727 (\"Introduce the tagged, checksummed save envelope (#759, save-overhaul B1)\"), Test.Headless.World.Save.Envelope's trackedEnvelopeFixtureHex constant. Stored as an inline hex literal (matching that historical file's own convention) rather than a tracked binary blob, since a `git show` of that exact commit is the authoritative, independently-reproducible source -- see the module haddock.",
+          "expectedCanonicalSummary": null
+        }
+      ]
+    }
+  ],
+  "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",
+  "retiredBaselines": []
+}

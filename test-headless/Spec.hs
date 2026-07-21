@@ -37,6 +37,7 @@ import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
 import qualified Test.Headless.World.Save.Components as SaveComponents
+import qualified Test.Headless.World.Save.Compat as SaveCompat
 import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Identity as WorldIdentity
@@ -183,6 +184,7 @@ main = hspec $ do
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "save envelope" SaveEnvelope.spec
     describe "save components" SaveComponents.spec
+    describe "save migrations" SaveCompat.spec
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "atomic save storage" SaveStorage.spec
     describe "Save.Barrier" SaveBarrier.spec

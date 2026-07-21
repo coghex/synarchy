@@ -116,6 +116,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),
     "power": (SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
                               "day/night balance + save/restart/load round-trip scenario"),
+    "save_compat_migration": (SCENARIO_HEAVY, "two real engine boots plus a real "
+                                               "process restart exercising a tracked "
+                                               "legacy-fixture load/publish/resave/"
+                                               "reload round trip (#766)"),
     "save_pause": (SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),
     "save_barrier": (SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),
     "save_storage": (SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "

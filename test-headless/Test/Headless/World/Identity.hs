@@ -172,7 +172,7 @@ spec = do
             -- Decode the file directly: identities and metadata are in
             -- the save exactly as stored.
             logger ← readIORef (loggerRef env)
-            (sdA, _) ← loadWorld logger slotA HS.empty HS.empty ⌦ either
+            (sdA, _, _) ← loadWorld logger slotA HS.empty HS.empty ⌦ either
                 (\(_, e) → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure
@@ -239,7 +239,7 @@ spec = do
             waitForFile ("saves/" <> slotB <> "/world.synworld")
 
             logger ← readIORef (loggerRef env)
-            (sdB, _) ← loadWorld logger slotB HS.empty HS.empty ⌦ either
+            (sdB, _, _) ← loadWorld logger slotB HS.empty HS.empty ⌦ either
                 (\(_, e) → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure
@@ -319,7 +319,7 @@ spec = do
             waitForFile ("saves/" <> slotC <> "/world.synworld")
 
             logger ← readIORef (loggerRef env)
-            (sdC, _) ← loadWorld logger slotC HS.empty HS.empty ⌦ either
+            (sdC, _, _) ← loadWorld logger slotC HS.empty HS.empty ⌦ either
                 (\(_, e) → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure

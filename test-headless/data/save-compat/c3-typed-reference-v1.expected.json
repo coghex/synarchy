@@ -1,0 +1,95 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's c3-typed-reference-v1-minimal fixture (issue #766/#764). Proves the ALREADY-EXISTING per-component v1->v2 raw-to-typed-reference dispatch (World.Save.Component.Entities' craftBillsCodec/powerNodesCodec/unitSimCodec ccInputVers=[1,2]) without any new migration code -- this fixture goes through the ORDINARY modern registry-driven decode path (isMigratedLegacyBaseline=false), just with three components encoded at their historical v1 (bare-id) shape. Real content definitions (cargo_hold_S/acolyte/forge_steel_dagger) so the real-engine fresh-process migration probe can load it too, not just the pure hspec decode path. Cross-checked by Test.Headless.World.Save.Compat's manifest-driven gate, which ALSO re-encodes the migrated snapshot and fresh-decodes it (asserting full structural equality), AND (round-3 review) checks each entity's OWN field values below by id -- not just the aggregate counts -- so a v1->v2 migration that maps a valid reference to the WRONG typed target (e.g. swapping station/claimant) would be caught even though it would still re-encode/decode self-consistently.",
+  "metadata": {
+    "seed": 42,
+    "worldSize": 8,
+    "plateCount": 3,
+    "worldName": null,
+    "worldGloss": null
+  },
+  "gameTime": 42.0,
+  "nextItemId": 1,
+  "nextBuildingId": 10,
+  "nextUnitId": 10,
+  "camera": {
+    "ownerPage": "page1",
+    "x": 7.0,
+    "y": 8.0,
+    "zoom": 3.0,
+    "facing": "FaceEast"
+  },
+  "activePage": "page1",
+  "visiblePages": ["page1"],
+  "pages": [
+    {
+      "pageId": "page1",
+      "buildingCount": 1,
+      "unitCount": 1,
+      "unitSimStateCount": 1,
+      "craftBillCount": 1,
+      "powerNodeCount": 1,
+      "groundItemCount": 0,
+      "timeHour": 12,
+      "timeMinute": 0,
+      "dateYear": 1,
+      "dateMonth": 1,
+      "dateDay": 1,
+      "mapMode": "ZMDefault",
+      "buildings": [
+        {
+          "id": 1,
+          "defName": "cargo_hold_S",
+          "anchorX": 0,
+          "anchorY": 0,
+          "gridZ": 0,
+          "buildProgress": 100.0
+        }
+      ],
+      "units": [
+        {
+          "id": 1,
+          "defName": "acolyte",
+          "gridX": 0.0,
+          "gridY": 0.0,
+          "gridZ": 0,
+          "facing": "DirS",
+          "activity": "idle",
+          "pose": "standing"
+        }
+      ],
+      "unitSimStates": [
+        {
+          "unitId": 1,
+          "realX": 0.0,
+          "realY": 0.0,
+          "gridZ": 0,
+          "pose": "Standing",
+          "state": "Idle",
+          "facing": "DirS"
+        }
+      ],
+      "craftBills": [
+        {
+          "id": 3,
+          "station": 1,
+          "recipe": "forge_steel_dagger",
+          "remaining": 1,
+          "claimant": null,
+          "mode": "FixedCount"
+        }
+      ],
+      "powerNodes": [
+        {
+          "id": 2,
+          "building": 1,
+          "role": "PowerStorage",
+          "peakWatts": 0.0,
+          "capacityWh": 5000.0,
+          "storedWh": 1234.5
+        }
+      ]
+    }
+  ],
+  "luaComponentCount": 2,
+  "isMigratedLegacyBaseline": false
+}

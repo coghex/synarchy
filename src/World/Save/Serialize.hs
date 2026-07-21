@@ -135,7 +135,8 @@ writeSaveFiles rawName meta encoded luaKnownNames luaRequiredNames =
 --   'phaseFor' below for how that's read back out after the fact.
 loadWorld
     ∷ LoggerState → Text → HS.HashSet Text → HS.HashSet Text
-    → IO (Either (LoadPhase, Text) (SaveData, [(Text, Word32, BS.ByteString)]))
+    → IO (Either (LoadPhase, Text)
+                 (SaveData, [(Text, Word32, BS.ByteString)], Bool))
 loadWorld logger rawName luaKnownNames luaRequiredNames =
     case sanitizeSaveName rawName of
     Left err   → return (Left (LoadPaused, "Invalid save name: " <> err))
@@ -222,7 +223,8 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                         logWarn logger CatWorld $
                             "loadWorld: '" <> name <> "': "
                                 <> Storage.lsDetail sel
-                return (Right (Storage.lsSaveData sel, Storage.lsLuaComponents sel))
+                return (Right (Storage.lsSaveData sel, Storage.lsLuaComponents sel
+                              , Storage.lsIsMigratedLegacyBaseline sel))
 
     -- Reconstruct the complete, cross-validated 'SessionSnapshot' from
     -- the component envelope (issue #760), then bridge it back into the
@@ -238,12 +240,13 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     decodeLegacyFile path = do
         bytes ← BS.readFile path
         let result = do
-                (meta, snap, luaComponents) ←
+                (meta, snap, luaComponents, isMigrated) ←
                     decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
                 let req = SaveRequestMeta { srmSlotName  = smName meta
                                           , srmTimestamp = smTimestamp meta }
                 sd ← checkWorldCount (snapshotToSaveData req snap)
-                pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ])
+                pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ]
+                     , isMigrated)
         return $ either (\err → Left (LoadPaused, err)) Right result
 
 -- | One entry in 'listSaves''s result. 'slRecovered' is 'True' when the

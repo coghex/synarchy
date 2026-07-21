@@ -73,7 +73,8 @@
 --                              validates these against the just-captured
 --                              live snapshot.
 --                              (requirement 7)
---   prepareLoad(components, requestId) -- {ok=true, references={...}} or
+--   prepareLoad(components, requestId, isMigratingLegacyBaseline) --
+--                              {ok=true, references={...}} or
 --                              {ok=false, errors={...}} -- decode +
 --                              migrate + component-local-validate EVERY
 --                              component with NO live mutation
@@ -82,6 +83,13 @@
 --                              prepared data so a later
 --                              abortPreparedLoad(requestId) can tell a
 --                              stale cleanup for an OLD request apart
+--                              isMigratingLegacyBaseline (issue #766,
+--                              save-overhaul C4) defaults every
+--                              component absent from `components`
+--                              instead of hard-failing on "missing" --
+--                              set only for a recognized pre-#760
+--                              compatibility migration, which predates
+--                              every currently-registered component.
 --                              from state a NEWER request just prepared.
 --                              references (issue #764, save-overhaul C3)
 --                              is every {component=,kind=,id=,owner=,path=}
@@ -545,7 +553,7 @@ local function isVersionSupported(reg, version)
     return false
 end
 
-local function prepareLoadImpl(componentsList)
+local function prepareLoadImpl(componentsList, isMigratingLegacyBaseline)
     local structErrs = saveModules.registryStaticErrors()
     if #structErrs > 0 then
         return { ok = false, errors = structErrs }
@@ -568,7 +576,38 @@ local function prepareLoadImpl(componentsList)
     for _, id in ipairs(sortedIds(saveModules.registry)) do
         local reg = saveModules.registry[id]
         local entry = byId[id]
-        if entry == nil then
+        if entry == nil and isMigratingLegacyBaseline then
+            -- Issue #766 (save-overhaul C4) requirement 5: a recognized
+            -- pre-#760 compatibility migration predates EVERY currently-
+            -- registered persistent Lua component, so "missing" here
+            -- means "this baseline is honestly older than this
+            -- component", never a corrupt/incomplete save -- reuse the
+            -- component's own decode() with no data (every registered
+            -- decode() already tolerates a nil/absent payload, the same
+            -- contract an ordinary v1-payload-with-no-optional-fields
+            -- already relies on) rather than the hard-required error
+            -- below, giving an honest empty-state default without
+            -- requiring every component to ALSO define its own
+            -- optional-only default().
+            local dok, decoded = pcall(reg.decode, reg.version, nil)
+            if not dok then
+                errors[#errors + 1] = "'" .. id
+                    .. "': decode(version, nil) failed while defaulting a "
+                    .. "pre-existing compatibility baseline: " .. tostring(decoded)
+            else
+                local vok, verrs = pcall(reg.validate, decoded)
+                if not vok then
+                    errors[#errors + 1] = "'" .. id .. "': validate crashed: "
+                        .. tostring(verrs)
+                elseif verrs ~= nil and #verrs > 0 then
+                    for _, e in ipairs(verrs) do
+                        errors[#errors + 1] = "'" .. id .. "': " .. tostring(e)
+                    end
+                else
+                    prepared[id] = decoded
+                end
+            end
+        elseif entry == nil then
             if reg.required then
                 errors[#errors + 1] = "'" .. id
                     .. "': required component missing from save"
@@ -653,11 +692,14 @@ end
 -- following `applyAll()` call and returns {ok=true}; on any failure,
 -- returns {ok=false, errors={...}} and stashes nothing, so a caller
 -- that aborts the load can never accidentally apply a partial result.
-function saveModules.prepareLoad(componentsList, requestId)
+-- `isMigratingLegacyBaseline` (issue #766, save-overhaul C4) defaults
+-- every component absent from `componentsList` instead of hard-failing
+-- on "missing" -- see `prepareLoadImpl`.
+function saveModules.prepareLoad(componentsList, requestId, isMigratingLegacyBaseline)
     saveModules._loadActive = true
     saveModules._pendingApply = nil
     saveModules._pendingRequestId = nil
-    local ok, result = pcall(prepareLoadImpl, componentsList)
+    local ok, result = pcall(prepareLoadImpl, componentsList, isMigratingLegacyBaseline)
     if not ok then
         saveModules._loadActive = false
         return { ok = false, errors = { tostring(result) } }

@@ -1,0 +1,95 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b2-split-haskell-lua-state fixture (issue #766 requirement 3: 'the independently split Haskell components from #760', round-10 review). Byte-identical Haskell-side content to c3-typed-reference-v1-minimal (same real building/unit/craft-bill/power-node/gen-params) -- the fixture's unit-sim/craft-bills/power-nodes are genuinely encoded at their REAL historical v1 (bare-id) shape (copied verbatim from c3-typed-reference-v1-minimal's own real envelope, not re-derived at current v2 -- round-7/8/9's fixture wrongly used v2, a hybrid #760 never wrote; round-10 fixed this), and the two modern lua.unit_ai/lua.building_spawn components are replaced by a single, EMPTY opaque 'lua-state' component (the pre-#761 shape), all descriptors marked required exactly as a genuine #760 writer always did. The decoded VALUES here are unchanged from the prior (v2-encoded) fixture's -- migrateCraftBillDTOv1/migratePowerNodesDTOv1/migrateUnitSimDTOv1 only add the SamePageRef wrapper, not a value change -- so only the fixture's own bytes and the manifest's declared component versions needed correcting, not this summary. Proves World.Save.Envelope.decodeB2SessionEnvelope's fallback (tried after the modern path fails on the missing modern Lua ids, and after the B1 fallback defers since this isn't {metadata,session}) reassembles every Haskell component through the SAME real registry/ccInputVers dispatch the modern path uses -- including its GENUINE historical v1 dispatch for unit-sim/craft-bills/power-nodes, not merely re-proving current-version decode -- defaulting current Lua modules the same way a migrated B1 session does (isMigratedLegacyBaseline=true, luaComponentCount=0) since the lua-state blob is empty.",
+  "metadata": {
+    "seed": 42,
+    "worldSize": 8,
+    "plateCount": 3,
+    "worldName": null,
+    "worldGloss": null
+  },
+  "gameTime": 42.0,
+  "nextItemId": 1,
+  "nextBuildingId": 10,
+  "nextUnitId": 10,
+  "camera": {
+    "ownerPage": "page1",
+    "x": 7.0,
+    "y": 8.0,
+    "zoom": 3.0,
+    "facing": "FaceEast"
+  },
+  "activePage": "page1",
+  "visiblePages": ["page1"],
+  "pages": [
+    {
+      "pageId": "page1",
+      "buildingCount": 1,
+      "unitCount": 1,
+      "unitSimStateCount": 1,
+      "craftBillCount": 1,
+      "powerNodeCount": 1,
+      "groundItemCount": 0,
+      "timeHour": 12,
+      "timeMinute": 0,
+      "dateYear": 1,
+      "dateMonth": 1,
+      "dateDay": 1,
+      "mapMode": "ZMDefault",
+      "buildings": [
+        {
+          "id": 1,
+          "defName": "cargo_hold_S",
+          "anchorX": 0,
+          "anchorY": 0,
+          "gridZ": 0,
+          "buildProgress": 100.0
+        }
+      ],
+      "units": [
+        {
+          "id": 1,
+          "defName": "acolyte",
+          "gridX": 0.0,
+          "gridY": 0.0,
+          "gridZ": 0,
+          "facing": "DirS",
+          "activity": "idle",
+          "pose": "standing"
+        }
+      ],
+      "unitSimStates": [
+        {
+          "unitId": 1,
+          "realX": 0.0,
+          "realY": 0.0,
+          "gridZ": 0,
+          "pose": "Standing",
+          "state": "Idle",
+          "facing": "DirS"
+        }
+      ],
+      "craftBills": [
+        {
+          "id": 3,
+          "station": 1,
+          "recipe": "forge_steel_dagger",
+          "remaining": 1,
+          "claimant": null,
+          "mode": "FixedCount"
+        }
+      ],
+      "powerNodes": [
+        {
+          "id": 2,
+          "building": 1,
+          "role": "PowerStorage",
+          "peakWatts": 0.0,
+          "capacityWh": 5000.0,
+          "storedWh": 1234.5
+        }
+      ]
+    }
+  ],
+  "luaComponentCount": 0,
+  "isMigratedLegacyBaseline": true
+}

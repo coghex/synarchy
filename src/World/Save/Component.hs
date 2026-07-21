@@ -32,6 +32,7 @@ module World.Save.Component
     , assembleSnapshot
     , dependencyOrder
     , capComponentErrors
+    , metadataErrors
     ) where
 
 import UPrelude

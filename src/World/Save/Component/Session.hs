@@ -34,6 +34,7 @@ module World.Save.Component.Session
     , toTexPaletteDTO
     , fromTexPaletteDTO
     , coreSessionTexPalette
+    , validateTexPalette
     ) where
 
 import UPrelude

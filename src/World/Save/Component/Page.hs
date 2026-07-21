@@ -103,6 +103,8 @@ module World.Save.Component.Page
     , basePageSnapshots
     , applyWorldEdits
     , applyWorldActivity
+    , validatePages
+    , validateWorldActivity
     ) where
 
 import UPrelude
@@ -502,16 +504,21 @@ worldPagesCodec = serializeCodec
         , pcMapMode    = pgsMapMode p
         , pcIdentity   = toWorldIdentityDTO <$> pgsIdentity p
         }
-    -- Component-local invariant (requirement 3): the page-set authority
-    -- must not itself carry a duplicate or empty page set.
-    validatePages (WorldPagesDTO ps)
-        | null ps = [ ComponentError worldPagesComponentId 1 ValidatePhase
-                        "no world pages in save" ]
-        | otherwise =
-            [ ComponentError worldPagesComponentId 1 ValidatePhase
-                ("duplicate page id " <> tshow pid)
-            | (pid, n) ← HM.toList
-                          (HM.fromListWith (+) [ (pcPageId p, 1 ∷ Int) | p ← ps ])
+
+-- | Component-local invariant (requirement 3): the page-set authority
+--   must not itself carry a duplicate or empty page set. Hoisted to top
+--   level (round-14 review) so "World.Save.Compat.SessionV90"'s B1
+--   migration path can run the SAME validator a modern envelope's
+--   decode always does, rather than skip it entirely.
+validatePages ∷ WorldPagesDTO → [ComponentError]
+validatePages (WorldPagesDTO ps)
+    | null ps = [ ComponentError worldPagesComponentId 1 ValidatePhase
+                    "no world pages in save" ]
+    | otherwise =
+        [ ComponentError worldPagesComponentId 1 ValidatePhase
+            ("duplicate page id " <> tshow pid)
+        | (pid, n) ← HM.toList
+                      (HM.fromListWith (+) [ (pcPageId p, 1 ∷ Int) | p ← ps ])
             , n > 1 ]
 
 -- | Turn the decoded page cores into the base 'PageSnapshot' map every

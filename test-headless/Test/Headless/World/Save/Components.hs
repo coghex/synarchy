@@ -28,6 +28,7 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Compat.SessionV90
 import World.Save.Integrity (integrityErrorCap)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
@@ -134,6 +135,86 @@ minimalPage pid = PageSnapshot
     , pgsCropPlots    = emptyCropPlots
     , pgsPlantDesignations = HM.empty
     , pgsIdentity     = Nothing
+    }
+
+-- | A minimal, otherwise-valid frozen v90 (#759 B1-era) page — mirrors
+--   'minimalPage' one layer down the wire, built directly from the
+--   frozen leaf DTOs "World.Save.Compat.SessionV90" composes (issue
+--   #766, save-overhaul C4).
+minimalWorldPageSaveV90 ∷ WorldPageId → WorldPageSaveV90
+minimalWorldPageSaveV90 pid = WorldPageSaveV90
+    { wp90PageId       = pid
+    , wp90GenParams    = toWorldGenParamsDTO defaultGP
+    , wp90CameraX      = 0
+    , wp90CameraY      = 0
+    , wp90CameraZoom   = 1
+    , wp90CameraFacing = FaceSouth
+    , wp90TimeHour     = 12
+    , wp90TimeMinute   = 0
+    , wp90DateYear     = 1
+    , wp90DateMonth    = 1
+    , wp90DateDay      = 1
+    , wp90TimeScale    = 1
+    , wp90MapMode      = ZMDefault
+    , wp90ToolMode     = DefaultTool
+    , wp90Edits        = HM.empty
+    , wp90MineDesignations      = HM.empty
+    , wp90ConstructDesignations = HM.empty
+    , wp90GroundItems  = GroundItemsDTO 0 HM.empty
+    , wp90SpoilPiles   = HM.empty
+    , wp90Buildings    = BuildingSnapshotV90 HM.empty 1
+    , wp90Units        = UnitSnapshotV90 HM.empty 1
+    , wp90UnitSimStates = HM.empty
+    , wp90FloraHarvests = emptyFloraHarvests
+    , wp90ChopDesignations = HM.empty
+    , wp90CraftBills   = BillQueueDTOv1 HM.empty 1
+    , wp90PowerNodes   = NodeRegistryDTOv1 HM.empty 1
+    , wp90TillDesignations = HM.empty
+    , wp90CropPlots    = HM.empty
+    , wp90PlantDesignations = HM.empty
+    , wp90Identity     = Nothing
+    }
+
+-- | Metadata that AGREES with 'minimalSaveDataV90's page (requirement
+--   12's manifest/gameplay agreement check applies to a migrated
+--   session exactly like a modern one) — seed/size/plates come from
+--   'defaultGP', name/gloss from the page's 'Nothing' identity.
+minimalSaveMetadataV90 ∷ SaveMetadata
+minimalSaveMetadataV90 = SaveMetadata
+    { smName = "b1-hand-built", smSeed = wgpSeed defaultGP
+    , smWorldSize = wgpWorldSize defaultGP, smPlateCount = wgpPlateCount defaultGP
+    , smTimestamp = "2026-07-16T00:00:00.000000Z"
+    , smWorldName = Nothing, smWorldGloss = Nothing }
+
+-- | The SAME values as 'minimalSaveMetadataV90', but as the frozen
+--   'SaveMetadataV90' type (round-17 review) -- the "session" payload's
+--   OWN embedded metadata field, distinct from the envelope's
+--   separately-decoded @"metadata"@ component 'migrateSessionV90'
+--   actually takes as its first argument (still 'SaveMetadata').
+minimalFrozenSaveMetadataV90 ∷ SaveMetadataV90
+minimalFrozenSaveMetadataV90 = SaveMetadataV90
+    { sm90Name = "b1-hand-built", sm90Seed = wgpSeed defaultGP
+    , sm90WorldSize = wgpWorldSize defaultGP, sm90PlateCount = wgpPlateCount defaultGP
+    , sm90Timestamp = "2026-07-16T00:00:00.000000Z"
+    , sm90WorldName = Nothing, sm90WorldGloss = Nothing }
+
+-- | A minimal, otherwise-valid frozen v90 'SaveDataV90' (issue #766,
+--   save-overhaul C4) — the exact shape a real #759-era @"session"@
+--   component payload took. Used to prove the ENVELOPE-level dispatch
+--   recognizes and migrates a hand-built B1 envelope; the historical
+--   byte-for-byte fixture (recovered from git history) lives in
+--   "Test.Headless.World.Save.Compat".
+minimalSaveDataV90 ∷ SaveDataV90
+minimalSaveDataV90 = SaveDataV90
+    { sd90Metadata     = minimalFrozenSaveMetadataV90
+    , sd90GameTime     = 0
+    , sd90EnginePaused = True
+    , sd90LuaModules   = HM.empty
+    , sd90TexPalette   = toTexPaletteDTO emptyTexPalette
+    , sd90NextItemInstanceId = 1
+    , sd90ActivePage   = WorldPageId "main_world"
+    , sd90VisiblePages = [WorldPageId "main_world"]
+    , sd90Worlds       = [minimalWorldPageSaveV90 (WorldPageId "main_world")]
     }
 
 -- | A page carrying a distinctive seed + identity + one building, one
@@ -628,7 +709,7 @@ spec = do
                 bytes = encodeSessionSnapshot meta fullSnapshot []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
-                Right (m, snap, _luaComponents) → do
+                Right (m, snap, _luaComponents, _isMigrated) → do
                     m    `shouldBe` meta
                     snap `shouldBe` fullSnapshot
 
@@ -699,7 +780,7 @@ spec = do
            \the EXACT snapshot" $
             case decodeSessionEnvelope HS.empty HS.empty encodeRich of
                 Left err → expectationFailure (T.unpack err)
-                Right (meta, snap, _luaComponents) → do
+                Right (meta, snap, _luaComponents, _isMigrated) → do
                     meta `shouldBe` richMeta
                     snap `shouldBe` richSnapshot
 
@@ -851,7 +932,7 @@ spec = do
                 bytes = encodeSessionSnapshot meta snap []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
-                Right (_, snap', _luaComponents) → snap' `shouldBe` snap
+                Right (_, snap', _luaComponents, _isMigrated) → snap' `shouldBe` snap
 
         -- #760 round 9 (new item 2a): the texture-palette component's own
         -- local bijection/allocator invariant, exercised through the FULL
@@ -942,45 +1023,59 @@ spec = do
             decodeSaveEnvelopeMetadata HS.empty bytes `shouldBe` Right richMeta
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
-                Right (meta, snap, _luaComponents) → do
+                Right (meta, snap, _luaComponents, isMigrated) → do
                     meta `shouldBe` richMeta
                     snap `shouldBe` richSnapshot
+                    isMigrated `shouldBe` False
 
-    -- | B2's acceptance criteria: "preserve a fixture for the
-    --   transitional payload only if it is deliberately supported by an
-    --   explicit migration; otherwise document and test its intentional
-    --   incompatibility." B2 does not add a migration (out of scope,
-    --   also see the module's B1->B2 note above @knownComponentIds@ in
-    --   "World.Save.Envelope") -- a real save written by B1-era
-    --   'master' (a single required @"session"@ component, no gameplay
-    --   components at all) is INTENTIONALLY no longer loadable once B2
-    --   lands. Both entry points reject it identically, with the SAME
-    --   structural reason (an unknown REQUIRED component): full-session
-    --   decode ('decodeSessionEnvelope') AND metadata-only inspection
+    -- | Issue #766 (save-overhaul C4) completes what #760's acceptance
+    --   explicitly deferred: "preserve a fixture for the transitional
+    --   payload only if it is deliberately supported by an explicit
+    --   migration; otherwise document and test its intentional
+    --   incompatibility." A real B1-era envelope (metadata + a single
+    --   required @"session"@ component, no gameplay components at all)
+    --   is now RECOGNIZED and migrated, both for full decode
+    --   ('decodeSessionEnvelope') and metadata-only listing
     --   ('decodeSaveEnvelopeMetadata', what 'World.Save.Serialize.listSaves'
-    --   calls) both run the envelope's structural validation first, so
-    --   a B1-era save also can't be listed under B2 -- there is no
-    --   partial "still shows up in the save browser" case to preserve.
-    describe "B1 -> B2 intentional incompatibility (no migration, by design)" $
-        it "rejects a real B1-shaped envelope (metadata + a required, \
-           \now-unknown 'session' component) as an unknown required \
-           \component, both for full decode and metadata-only listing" $ do
-            let b1Specs =
+    --   calls) — a B1-era save is listable and loadable again, reporting
+    --   its true, then-authoritative metadata unchanged.
+    --   See "Test.Headless.World.Save.Compat" for the frozen fixture
+    --   coverage (a real B1 envelope recovered from git history).
+    describe "B1 -> current migration (issue #766, save-overhaul C4)" $ do
+        it "a hand-built B1-shaped envelope (metadata + a required \
+           \'session' component) migrates and lists under the current \
+           \build rather than being rejected as unknown" $ do
+            let b1Meta = minimalSaveMetadataV90
+                b1Specs =
                     [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode richMeta)
-                    , (ComponentId "session", 90, True, BS.pack [1,2,3]) ]
+                      , S.encode b1Meta)
+                    , (ComponentId "session", 90, True
+                      , S.encode minimalSaveDataV90) ]
                 bytes = case encodeEnvelope defaultEnvelopeLimits
                             currentEnvelopeVersion b1Specs of
                     Right b → b
                     Left e  → error ("test setup: " <> show e)
-            case decodeSaveEnvelopeMetadata HS.empty bytes of
-                Right _  → expectationFailure
-                    "a B1-era save must not be listable under B2 either"
-                Left msg → msg `shouldSatisfy` T.isInfixOf "session"
+            decodeSaveEnvelopeMetadata HS.empty bytes `shouldBe` Right b1Meta
             case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Left err → expectationFailure (T.unpack err)
+                Right (meta, snap, luaComponents, isMigrated) → do
+                    meta `shouldBe` b1Meta
+                    luaComponents `shouldBe` []
+                    isMigrated `shouldBe` True
+                    snapActivePage snap `shouldBe` WorldPageId "main_world"
+
+        it "refuses to migrate a B1 session carrying non-empty legacy Lua \
+           \module state, rather than silently discarding it (requirement \
+           \7: the pre-#761 Lua deserializer that could interpret it is \
+           \gone, so there is no honest translation left)" $ do
+            let luaSd = minimalSaveDataV90
+                    { sd90LuaModules = HM.singleton "unit_ai" "opaque legacy blob" }
+            case migrateSessionV90 minimalSaveMetadataV90 luaSd of
                 Right _   → expectationFailure
-                    "a B1-era save must not silently decode under B2"
-                Left msg  → msg `shouldSatisfy` T.isInfixOf "session"
+                    "expected non-empty legacy Lua state to be rejected"
+                Left errs → do
+                    errs `shouldSatisfy` (not . null)
+                    map cePhase errs `shouldSatisfy` all (≡ MigratePhase)
 
     -- #760 requirement 9: a saved building/unit whose content DEFINITION
     -- is no longer registered must be a LOAD-VALIDATION FAILURE (the

@@ -1,0 +1,19 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b3-lua-versioned baseline's lua-unit-ai-v1 fixture (issue #766). The tracked .bin is a REAL v1-shaped unit_ai payload -- bare-number reference fields, no __owner -- encoded through the genuine scripts/lib/data_codec.lua M.encode (via a real HsLua VM, not a hand-rolled reimplementation of the wire format; see Test.Headless.Lua.SaveModules's 'tracked v1 fixtures from disk' describe block for the generation chunk and the real saveModules.prepareLoad/applyAll round trip this checks it against).",
+  "componentId": "unit_ai",
+  "encodedVersion": 1,
+  "afterApply": {
+    "7": {
+      "attackTargetUid": 8,
+      "buildTarget": 20,
+      "craftJob": { "billId": 3, "bid": 21, "recipeId": "x" }
+    }
+  },
+  "references": [
+    { "kind": "unit", "id": 7, "owner": 7 },
+    { "kind": "unit", "id": 8, "owner": 7 },
+    { "kind": "building", "id": 20, "owner": 7 },
+    { "kind": "craft_bill", "id": 3, "owner": 7 },
+    { "kind": "building", "id": 21, "owner": 7 }
+  ]
+}
