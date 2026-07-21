@@ -35,6 +35,22 @@ through explicit migrations -- against silent drift:
     have its OLDEST one tracked by some baseline (catches a version bump
     that shipped with no compatibility fixture ever validating the
     historical shape it migrates from).
+  - Round-6 review's per-baseline (not merely aggregate-across-baselines)
+    required-component coverage (see audit_modern_baseline_components_
+    complete() / audit_b1_migration_covers_page_scoped_components()):
+    every "current"-target baseline whose components[] doesn't declare
+    the frozen legacy "session" id is a MODERN per-component-registry
+    session, and a valid one of those can never structurally omit any
+    required component (decodeEnvelope refuses an incomplete modern
+    envelope outright) -- so its components[] must declare ALL of them,
+    or the manifest is under-documenting what its own fixture actually
+    contains. The b1-initial-session baseline can never declare that
+    full set (it IS the frozen {metadata, session} alternative), so its
+    real guarantee is checked differently: World.Save.Compat.SessionV90.
+    migrateSessionV90's own source must still reference the named apply*
+    helper for every current page-scoped component -- the closest a
+    static Python audit can get to "this legacy migration still threads
+    every required component through", short of literally compiling it.
 
 This is a static presence/fingerprint check, not itself a proof that a
 fixture migrates correctly -- that real decode/migrate/assemble/
@@ -117,6 +133,13 @@ Usage:
   stays the manual decode/splice-then---add-baseline workflow this
   manifest's own fixtures' "provenance" fields document (see
   b3-lua-versioned-session-v1 for the most recent worked example).
+
+  Stages the fixture, its summary, AND the manifest together (round-6
+  review): a failure at ANY stage -- generation, canonical-summary
+  derivation, or the real-codec registration/validation --add-baseline
+  itself runs -- restores ALL THREE to their exact prior state (or
+  removes whichever ones didn't exist before this invocation), never
+  leaving an orphaned or stale-but-checksum-mismatched file behind.
 
 Exit codes: 0 = every declared fixture/fingerprint is intact,
 1 = one or more violations (see printed detail).
@@ -382,6 +405,99 @@ def audit_component_versions(manifest: dict, real_registry: dict) -> list[str]:
     return violations
 
 
+# The b1-initial-session baseline's ONLY migration path is
+# World.Save.Compat.SessionV90.migrateSessionV90, which threads every
+# page-scoped modern component's construction through one of these named
+# helpers (see the function's own source: `base = basePageSnapshots
+# (...); afterEdits <- applyWorldEdits 1 (...) base; ...`) -- global
+# fields (core-session's allocators/camera, texture-palette) are instead
+# built directly as part of the one SessionSnapshot record literal
+# GHC already forces to be total, so THEY can never silently go
+# unconstructed the way a forgotten apply* call for a NEW page-scoped
+# component could.
+SESSION_V90_APPLY_HELPER_FOR_COMPONENT = {
+    "world-edits":    "applyWorldEdits",
+    "world-activity": "applyWorldActivity",
+    "buildings":      "applyBuildings",
+    "units":          "applyUnits",
+    "unit-sim":       "applyUnitSim",
+    "craft-bills":    "applyCraftBills",
+    "power-nodes":    "applyPowerNodes",
+}
+
+
+def audit_b1_migration_covers_page_scoped_components(
+        source_path: Path = SESSION_V90_SOURCE_PATH) -> list[str]:
+    """Requirement 5 (issue #766): "introducing a new required component
+    requires a migration/default policy for every supported older
+    baseline". The b1-initial-session baseline can never simply declare
+    coverage for a page-scoped component in its manifest components[]
+    (it is structurally {metadata, session} only) -- its ACTUAL
+    guarantee lives in migrateSessionV90's source threading every
+    current page-scoped component through its own named apply* helper.
+    This is the closest thing a static Python audit can check without
+    literally compiling Haskell: if a future required page-scoped
+    component's helper name isn't referenced anywhere in this file,
+    something was renamed/removed/forgotten with nothing left to prove
+    B1 sessions still migrate it."""
+    text = source_path.read_text(encoding="utf-8")
+    return [
+        f"World.Save.Compat.SessionV90.migrateSessionV90 (the "
+        f"b1-initial-session baseline's ONLY migration path) no longer "
+        f"references '{helper}' for component '{comp_id}' -- a new "
+        f"required page-scoped component, or one whose construction "
+        f"helper was renamed/removed, would silently have no accounted "
+        f"default/migration policy for a session predating it"
+        for comp_id, helper in SESSION_V90_APPLY_HELPER_FOR_COMPONENT.items()
+        if helper not in text
+    ]
+
+
+def audit_modern_baseline_components_complete(
+        manifest: dict, real_registry: dict) -> list[str]:
+    """Requirement 5's other half: a baseline that is NOT b1-shaped (its
+    components[] doesn't declare the frozen legacy "session" component)
+    is, by construction, a MODERN per-component-registry session -- and
+    every one of those components (except "session" itself, which is
+    B1-exclusive: a session is either the frozen legacy blob or the
+    modern per-component split, never both) is unconditionally REQUIRED
+    (decodeEnvelope refuses a modern envelope missing one outright, see
+    componentRequiredIds/MissingRequiredComponent). So a valid tracked
+    "current"-target modern-shaped fixture cannot possibly omit any of
+    them -- if a baseline's own components[] doesn't declare one, that
+    baseline's manifest entry is under-documenting what its own fixture
+    genuinely contains, precisely the gap round-5 review flagged (a
+    future required component could be added to only ONE such baseline
+    and never show up as a coverage gap in the OTHERS, since the
+    all-baselines-aggregate check alone can't see that)."""
+    modern_required_ids = {
+        cid for cid, info in real_registry.items()
+        if info.get("required") and cid != "session"
+    }
+    violations: list[str] = []
+    for baseline in manifest.get("baselines", []):
+        bid = baseline.get("id")
+        declared_ids = {c.get("id") for c in baseline.get("components", [])}
+        if "session" in declared_ids:
+            continue  # b1-shaped: the frozen legacy alternative, exempt
+        if baseline.get("migrationTarget") != "current":
+            continue  # e.g. decode-only historical evidence, not a
+                       # migration-acceptance baseline at all
+        missing = sorted(modern_required_ids - declared_ids)
+        if missing:
+            violations.append(
+                f"baseline '{bid}' is modern-shaped (its components[] "
+                f"omits the legacy 'session' id) and targets 'current', "
+                f"but a valid modern complete-session fixture cannot "
+                f"structurally omit a required component -- yet its "
+                f"components[] doesn't declare {missing}. Either this "
+                f"baseline's own tracked fixture genuinely lacks them "
+                f"(impossible for a real modern session) or its "
+                f"components[] list is under-documented relative to "
+                f"what the fixture actually contains -- add them")
+    return violations
+
+
 def _iter_fixtures(manifest: dict):
     for baseline in manifest.get("baselines", []):
         for fixture in baseline.get("fixtures", []):
@@ -410,8 +526,10 @@ def audit(manifest: dict) -> list[str]:
             f"reordered on an already-shipped frozen DTO (requirement 10), or "
             f"the manifest needs a deliberate update alongside the change")
 
-    violations.extend(
-        audit_component_versions(manifest, real_component_registry()))
+    real_registry = real_component_registry()
+    violations.extend(audit_component_versions(manifest, real_registry))
+    violations.extend(audit_modern_baseline_components_complete(manifest, real_registry))
+    violations.extend(audit_b1_migration_covers_page_scoped_components())
 
     for baseline, fixture in _iter_fixtures(manifest):
         fid = fixture.get("id", "<unnamed>")
@@ -839,7 +957,8 @@ case decoded of
               , "facing" .= T.pack (show (lcsFacing cam)) ]
           , "activePage" .= activePageText
           , "visiblePages" .= map (\(WorldPageId p) -> p) (snapVisiblePages snap)
-          , "pages" .= map dumpPage (HM.toList (snapPages snap))
+          , "pages" .= map dumpPage
+              (sortOn (\(WorldPageId p, _) -> p) (HM.toList (snapPages snap)))
           , "luaComponentCount" .= length luaComponents
           , "isMigratedLegacyBaseline" .= isMig
           ]
@@ -874,13 +993,42 @@ def cmd_generate(args: argparse.Namespace) -> int:
     then delegate straight to cmd_add_baseline for the SAME atomic
     registration + real-codec validation --add-baseline already does
     (this only ever produces a "complete-session" fixture, so args.kind
-    is fixed here rather than asked for)."""
+    is fixed here rather than asked for).
+
+    Round-6 review: stages fixture + summary + manifest together and
+    rolls ALL of them back on ANY downstream failure (dump derivation or
+    manifest real-codec validation) -- not just the manifest. Without
+    this, a validation failure left new fixture/summary bytes sitting on
+    disk unregistered, or (with --force) clobbered a PREVIOUSLY-tracked
+    fixture's bytes with new-but-invalid content while the manifest
+    (correctly rolled back on its own) still pointed at the OLD
+    checksum -- either way, a state the NEXT audit run would immediately
+    flag as drifted, or that would simply litter the repo with orphaned
+    files."""
     fixture_path = REPO_ROOT / args.path
     summary_path = REPO_ROOT / args.summary
-    if fixture_path.exists() and not args.force:
-        print(f"refusing to overwrite existing file '{args.path}' -- "
-              f"pass --force if this is deliberate", file=sys.stderr)
+    if (fixture_path.exists() or summary_path.exists()) and not args.force:
+        print(f"refusing to overwrite an existing file at '{args.path}' "
+              f"or '{args.summary}' -- pass --force if this is deliberate",
+              file=sys.stderr)
         return 1
+
+    # Captured BEFORE any write, so a failure at ANY stage below can
+    # restore both files to their EXACT prior state (or remove them, if
+    # they didn't exist before this invocation) -- never leaving a
+    # half-written or stale-but-mismatched pair behind.
+    orig_fixture = fixture_path.read_bytes() if fixture_path.exists() else None
+    orig_summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else None
+
+    def restore_files() -> None:
+        if orig_fixture is None:
+            fixture_path.unlink(missing_ok=True)
+        else:
+            fixture_path.write_bytes(orig_fixture)
+        if orig_summary is None:
+            summary_path.unlink(missing_ok=True)
+        else:
+            summary_path.write_text(orig_summary, encoding="utf-8")
 
     try:
         generate_current_format_session(
@@ -889,14 +1037,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
             spawn_building=args.spawn_building, spawn_unit=args.spawn_unit,
             out_path=fixture_path)
     except GenerationError as e:
+        # generate_current_format_session only ever writes fixture_path
+        # as its LAST step (shutil.copyfile), after every real-engine
+        # check above already succeeded -- a GenerationError here means
+        # fixture_path was never touched, so there is nothing to restore.
         print(f"fixture generation failed: {e}", file=sys.stderr)
         return 1
 
     ok, tail = dump_canonical_summary(fixture_path, summary_path)
     if not ok:
-        fixture_path.unlink(missing_ok=True)
-        print(f"canonical-summary derivation failed (generated fixture "
-              f"bytes discarded): {tail}", file=sys.stderr)
+        restore_files()
+        print(f"canonical-summary derivation failed (fixture/summary "
+              f"restored to their prior state): {tail}", file=sys.stderr)
         return 1
 
     args.kind = "complete-session"
@@ -914,7 +1066,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
               f"an ordinary player save takes. Its canonical summary was "
               f"derived directly from the real decoded SessionSnapshot "
               f"(dump_canonical_summary), not hand-transcribed.")
-    return cmd_add_baseline(args)
+    rc = cmd_add_baseline(args)
+    if rc != 0:
+        restore_files()
+        print(f"registration/validation failed -- fixture/summary "
+              f"restored to their prior state too (not just the "
+              f"manifest)", file=sys.stderr)
+    return rc
 
 
 def cmd_add_baseline(args: argparse.Namespace) -> int:

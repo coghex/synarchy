@@ -52,6 +52,21 @@ unit_ai/building_spawn payloads really did unwrap to the exact bare
 numbers the v1 payload encoded, inside a genuine running engine, not
 merely that the pure hspec decode path accepted the envelope structurally.
 
+Additionally (round-6 review), at BOTH load boundaries this probe visits
+(right after the initial migration-load's resave, and again after a
+SECOND resave taken from engine B's freshly-reloaded state), the real
+saved bytes on disk are run through the same Haskell decode-and-dump
+logic tools/save_compat_audit.py's --generate-session command uses
+(dump_canonical_summary, a real `cabal repl` subprocess), and the result
+is structurally compared -- metadata, allocators, camera, EVERY page's
+clock/map-mode, and every declared building/unit/unit-sim-state/craft-
+bill/power-node -- against the fixture's own expectedCanonicalSummary.
+Aggregate page/pause/time-scale checks (and fixture-declared Lua-state
+checks) alone can never prove a migration didn't silently lose or
+corrupt some OTHER piece of persistent Haskell state (a second page, an
+entity, a craft bill) during publish/resave/reload -- only that loading
+didn't outright fail.
+
 Usage:
   python3 tools/save_compat_migration_probe.py [--port 9276]
 
@@ -71,9 +86,20 @@ import time
 from pathlib import Path
 
 from probelib import boot, quit_engine, send, wait_load_published
+from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO / "docs" / "save_compat" / "manifest.json"
+
+# Fields whose value legitimately differs between a fixture's own
+# ORIGINAL bytes and ANY real resave of it -- a resave is always
+# CURRENT-format (never legacy) and always carries live Lua state from
+# a real running VM (a migrated legacy session has none, pre-#761),
+# so comparing them against a real post-resave dump would be comparing
+# apples to oranges, not catching an actual migration bug. Also strips
+# the two keys that aren't part of the dump schema at all.
+_DUMP_COMPARE_EXCLUDED_KEYS = frozenset(
+    {"$comment", "luaStateChecks", "isMigratedLegacyBaseline", "luaComponentCount"})
 
 
 def bootstrap_defs(port: int) -> None:
@@ -131,6 +157,9 @@ def declared_complete_session_fixtures() -> list[dict]:
                 "fixture_id": fixture["id"],
                 "path": REPO / fixture["path"],
                 "active_page": summary["activePage"],
+                # Round-6 review: the FULL declared canonical summary,
+                # for dump_and_compare -- not just activePage.
+                "expected_summary": summary,
                 # Round-4 review: aggregate page/pause/time-scale checks
                 # alone never prove a fixture's ACTUAL persistent state
                 # (in particular a migrated Lua module's real, unwrapped
@@ -195,6 +224,72 @@ def run_lua_state_checks(chk: Checks, port: int, checks: list[dict], when: str) 
         actual = send(port, f"return {expr}").strip()
         chk.ok(_values_match(actual, expected),
                f"{when}: `{expr}` == {expected!r} (got {actual!r})")
+
+
+def _canonicalize_for_compare(d: dict) -> dict:
+    return {k: v for k, v in d.items() if k not in _DUMP_COMPARE_EXCLUDED_KEYS}
+
+
+def _first_diff(actual, expected, path: str = "") -> str:
+    """A short description of the first structural difference between an
+    ACTUAL (real-dumped) and EXPECTED (fixture-declared) canonical-
+    summary value, recursing into nested dicts/lists -- or "" if they
+    match. Not a full diff, just enough for a probe failure message to
+    point at the specific field a migration lost or corrupted."""
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return f"{path}: expected an object, got {actual!r}"
+        for k, v in expected.items():
+            if k not in actual:
+                return f"{path}.{k}: missing from the real dump"
+            d = _first_diff(actual[k], v, f"{path}.{k}")
+            if d:
+                return d
+        return ""
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return f"{path}: expected an array, got {actual!r}"
+        if len(actual) != len(expected):
+            return (f"{path}: real dump has {len(actual)} entries, "
+                     f"expected {len(expected)}")
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            d = _first_diff(a, e, f"{path}[{i}]")
+            if d:
+                return d
+        return ""
+    if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+        if float(actual) != float(expected):
+            return f"{path}: real dump has {actual!r}, expected {expected!r}"
+        return ""
+    if actual != expected:
+        return f"{path}: real dump has {actual!r}, expected {expected!r}"
+    return ""
+
+
+def dump_and_compare(chk: Checks, tmp_dir: str, file_path: str,
+                      expected_summary: dict, when: str) -> None:
+    """Derive `file_path`'s REAL canonical summary via the SAME Haskell
+    decode-and-dump logic tools/save_compat_audit.py's --generate-session
+    uses (World.Save.Envelope.decodeSessionEnvelope, run through a real
+    `cabal repl` subprocess), then structurally compare EVERY field the
+    fixture declares -- metadata, allocators, camera, and every page's
+    clock/map-mode/entity slices -- against it (round-6 review: the
+    aggregate page/pause/time-scale checks above, and fixture-declared
+    Lua-state checks, can never prove a migration didn't lose or corrupt
+    some OTHER piece of persistent Haskell state -- only that loading/
+    publishing/resaving didn't outright fail)."""
+    out_path = os.path.join(tmp_dir, f"dumped_{abs(hash(when))}.json")
+    ok, tail = dump_canonical_summary(Path(file_path), Path(out_path))
+    if not ok:
+        chk.ok(False, f"{when}: dump_canonical_summary failed: {tail}")
+        return
+    dumped = json.loads(Path(out_path).read_text(encoding="utf-8"))
+    diff = _first_diff(_canonicalize_for_compare(dumped),
+                        _canonicalize_for_compare(expected_summary))
+    chk.ok(diff == "",
+           f"{when}: real dumped Haskell state matches the fixture's "
+           f"declared canonical summary"
+           + (f" -- MISMATCH at {diff}" if diff else ""))
 
 
 def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
@@ -265,6 +360,9 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
             chk.ok(resaved_bytes != fixture_bytes,
                    "re-saved file is a real current-format re-encode, not "
                    "a copy of the input fixture's bytes")
+            dump_and_compare(chk, tmpdir, resaved_path,
+                              fixture["expected_summary"],
+                              "after the initial migration-load")
 
         quit_engine(port, procA)
         procA = None
@@ -294,6 +392,27 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                "reloaded session begins paused")
 
         run_lua_state_checks(chk, port, fixture["lua_state_checks"],
+                              "after the resave/restart/reload round trip")
+
+        # A second resave, from engine B's freshly-reloaded state, gives
+        # dump_and_compare real bytes reflecting the RELOAD boundary --
+        # the first dump (above) only proves migrate-then-resave was
+        # correct, never that a restart+reload round trip preserves it.
+        resaved_slot_b = f"probe_{fixture['fixture_id']}_resaved_b"
+        saved_b = send(port, f"return engine.saveWorld('{active_page}', '{resaved_slot_b}')")
+        chk.ok(saved_b.strip() == "true",
+               f"re-saving the reloaded session under a new slot "
+               f"succeeded (got {saved_b!r})")
+        resaved_path_b = os.path.join(root, "saves", resaved_slot_b, "world.synworld")
+        for _ in range(100):
+            if os.path.isfile(resaved_path_b):
+                break
+            time.sleep(0.1)
+        chk.ok(os.path.isfile(resaved_path_b),
+               f"reloaded session's re-saved file appeared at {resaved_path_b}")
+        if os.path.isfile(resaved_path_b):
+            dump_and_compare(chk, tmpdir, resaved_path_b,
+                              fixture["expected_summary"],
                               "after the resave/restart/reload round trip")
 
         # Unpause ONLY to confirm the default time scale -- never

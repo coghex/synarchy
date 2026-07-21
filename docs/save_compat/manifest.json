@@ -100,6 +100,16 @@
           "id": "power-nodes",
           "version": 1,
           "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
         }
       ],
       "fixtures": [
@@ -140,6 +150,61 @@
         {
           "id": "lua.building_spawn",
           "version": 1,
+          "required": true
+        },
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
           "required": true
         }
       ],
