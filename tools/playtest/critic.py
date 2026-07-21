@@ -240,9 +240,21 @@ def widget_at(widgets, x, y):
         if w.get("control") is False or w.get("visible") is False:
             continue
         # #749: prefer the effective interactive bounds (the rect a real
-        # hit resolves against) when present; fall back to content bounds.
-        b = w.get("interactiveBounds")
-        if not isinstance(b, dict):
+        # hit resolves against). A value of False is the engine's DISTINCT
+        # "non-hittable" marker (fully clipped / collapsed control) — skip
+        # it entirely rather than falling back to content bounds, which
+        # the real router could never hit. A dict with a non-positive
+        # extent is likewise degenerate and non-hittable. Only a MISSING
+        # key (None — an older trace / hand-built fixture that predates
+        # this field) falls back to content `bounds`.
+        ib = w.get("interactiveBounds")
+        if ib is False:
+            continue
+        if isinstance(ib, dict):
+            if ib.get("w", 0) <= 0 or ib.get("h", 0) <= 0:
+                continue
+            b = ib
+        else:
             b = w.get("bounds")
         if not isinstance(b, dict):
             continue
@@ -1202,6 +1214,21 @@ def selftest() -> int:
     check("a record with no interactiveBounds falls back to content bounds (#749)",
           widget_at([content_only], 10, 10) is None
           and widget_at([content_only], 30, 30) is content_only)
+    # #749 (review r2): a fully-clipped / collapsed control is marked
+    # non-hittable (interactiveBounds == False) by the engine — the
+    # oracle must NOT correlate a click over its content bounds to it,
+    # because the real router cannot hit it either.
+    nonhittable = {"id": "button:nh", "control": True, "paintKey": 999,
+                   "bounds": {"x": 20, "y": 20, "w": 60, "h": 60},
+                   "interactiveBounds": False}
+    check("a non-hittable (False interactiveBounds) control is skipped, never falls back to content bounds (#749)",
+          widget_at([nonhittable], 30, 30) is None
+          and widget_at([nonhittable, content_only], 30, 30) is content_only)
+    degenerate = {"id": "button:dg", "control": True, "paintKey": 999,
+                  "bounds": {"x": 20, "y": 20, "w": 60, "h": 60},
+                  "interactiveBounds": {"x": 20, "y": 20, "w": 60, "h": 0}}
+    check("a degenerate (zero-extent) interactiveBounds is skipped (#749)",
+          widget_at([degenerate], 30, 20) is None)
 
     with tempfile.TemporaryDirectory() as tmp:
         tdir = build_canned_trace(os.path.join(tmp, "trace"))

@@ -40,6 +40,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
+import UI.Clipping (boxTileRects)
 import UI.ControlActivation
 import UI.Focus (createFocusManager)
 import UI.InputOwnership
@@ -137,6 +138,11 @@ spec = do
             clampOverflow (100, 100) (-1/0) `shouldBe` 0
         it "sanitizes NaN overflow to zero" $
             clampOverflow (100, 100) (0/0) `shouldBe` 0
+        it "caps a finite-extreme positive overflow so the expanded extent stays finite (no 3e38*2 -> Infinity)" $
+            let capped = clampOverflow (100, 100) 3.0e38
+            in do
+                capped `shouldBe` 1.0e6
+                isInfinite (100 + 2 * capped) `shouldBe` False
 
     describe "content / visual / interactive rects (#749)" $ do
         it "content rect is position + size, independent of any overflow" $
@@ -239,6 +245,16 @@ spec = do
             isPointInElement center (lookupEl eh m3) m3 `shouldBe` True
         it "effectiveInteractiveBounds reports the clip-intersected rect (border trimmed to content)" $
             effectiveInteractiveBounds eh m3 `shouldBe` Just (100, 100, 100, 100)
+        it "effectiveInteractiveBounds is Nothing for a fully clipped-away element (distinct non-hittable signal)" $
+            let (hudH, n1)  = basePage
+                (cont2, n2) = clipContainerAt "clip2" (100, 100) (100, 100) hudH n1
+                -- child sits entirely outside its clipping ancestor.
+                (far, n3)   = childControlBox cont2 "far" (300, 300) (50, 50) 0 True "onFar" hudH n2
+            in effectiveInteractiveBounds far n3 `shouldBe` Nothing
+        it "effectiveInteractiveBounds is Nothing for a collapsed (zero-area) interactive box" $
+            let (hudH, n1) = basePage
+                (col, n2)  = controlBox "col" (100, 100) (100, 40) (-20) True "onCol" hudH n1
+            in effectiveInteractiveBounds col n2 `shouldBe` Nothing
 
     describe "geometry updates apply on the very next query (#749)" $ do
         it "moving the control moves its interactive border immediately" $
@@ -310,6 +326,17 @@ spec = do
         it "a zero-HEIGHT visual box tiles nothing" $
             V.length (makeBoxBatches texSet 0 0 40 0 10 (1,1,1,1) (LayerId 0) Nothing)
                 `shouldBe` 0
+        -- A box smaller than 2*tileSize (a valid-negative overflow
+        -- shrinking a 20x20 box to a 10x10 visual rect at tileSize 16)
+        -- must not tile its fixed-size corners PAST its visual rect —
+        -- render and interactive geometry would otherwise disagree.
+        it "constrains the 9-slice to a sub-2*tileSize visual rect (no corner overrun)" $
+            let tiles = boxTileRects 5 5 10 10 16 Nothing
+                within (rx, ry, rw, rh) =
+                    rx ≥ 5 ∧ ry ≥ 5 ∧ rx + rw ≤ 15 ∧ ry + rh ≤ 15
+            in do
+                tiles `shouldNotBe` []
+                all (\(_, rect, _) → within rect) tiles `shouldBe` True
 
     -- Wire-level integration: the same contract through the REAL
     -- press/release dispatch (mirrors ControlActivation/ElementInputPolicy).

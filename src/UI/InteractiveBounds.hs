@@ -60,6 +60,13 @@ import UI.Clipping (ClipRect, effectiveClip, intersectRect, hasArea)
 --       rather than producing an unbounded (or NaN) render/interactive
 --       rect. This is the "cannot create ... unbounded geometry" half
 --       of the #749 guard.
+--     * A finite but ASTRONOMICAL positive overflow is capped to
+--       'maxOverflow' so the expanded extent @content + 2*overflow@
+--       stays finitely representable — a value like @3e38@ would
+--       otherwise double to @+Infinity@ in 'visualRect'/rendering, the
+--       same unbounded-geometry failure as a raw @Infinity@. The cap is
+--       orders of magnitude beyond any real framebuffer, so it never
+--       constrains a genuine border width.
 --     * A finite overflow that would invert the box (@≤@ minus half the
 --       SMALLER content extent) clamps UP to exactly that limit — a
 --       zero-extent, non-inverted degenerate rect, never a negative-size
@@ -78,8 +85,16 @@ import UI.Clipping (ClipRect, effectiveClip, intersectRect, hasArea)
 clampOverflow ∷ (Float, Float) → Float → Float
 clampOverflow (w, h) ovf
     | isNaN ovf ∨ isInfinite ovf = 0
-    | otherwise                  = max ovf lowerLimit
+    | otherwise                  = min maxOverflow (max ovf lowerLimit)
   where lowerLimit = negate (min (max 0 w) (max 0 h) / 2)
+
+-- | Upper cap on a positive overflow (see 'clampOverflow'): keeps
+--   @content + 2*overflow@ finitely representable in 'Float' (a raw
+--   @3e38@ would double to @+Infinity@) while sitting orders of
+--   magnitude beyond any conceivable framebuffer, so no real UI border
+--   is ever constrained by it.
+maxOverflow ∷ Float
+maxOverflow = 1.0e6
 
 -- | The raw box overflow of an element — 'ubsOverflow' for a
 --   'RenderBox', @0@ for anything else (text, sprite, plain container).
@@ -148,18 +163,23 @@ absolutePosition handle mgr = go (0 ∷ Int) handle
 -- | The EFFECTIVE interactive bounds actually used for hit-testing: the
 --   element's 'interactiveRect' (content or expanded-visual per its
 --   opt-in) intersected with every #747 ancestor clip
---   ('UI.Clipping.effectiveClip'). 'Nothing' when the handle is
---   unknown, or the interactive rect is entirely clipped away (no
---   positive-area intersection) — clipped overflow neither renders nor
---   interacts, so such an element can never be hit. Exposed to Lua as
---   @interactiveBounds@ on @UI.getElementInfo@ so introspection
---   (@ui.dumpWidgets@) and the playtest oracle join clicks against the
---   same rect a real hit resolves, not the raw content bounds.
+--   ('UI.Clipping.effectiveClip'). 'Nothing' whenever the element is
+--   NON-HITTABLE — the handle is unknown, the interactive rect itself
+--   has no positive area (a collapsed/inverting overflow, #749), or it
+--   is entirely clipped away — matching 'UI.Manager.Query.isPointInElement''s
+--   own 'UI.Clipping.hasArea' gate exactly, so a 'Just' is returned iff
+--   a real click could land. Exposed to Lua as @interactiveBounds@ on
+--   @UI.getElementInfo@ so introspection (@ui.dumpWidgets@) and the
+--   playtest oracle join clicks against the same rect a real hit
+--   resolves, not the raw content bounds — and a 'Nothing' is a
+--   distinct known-non-hittable signal the oracle skips rather than
+--   falling back to content bounds.
 effectiveInteractiveBounds ∷ ElementHandle → UIPageManager → Maybe ClipRect
 effectiveInteractiveBounds handle mgr = do
     el ← Map.lookup handle (upmElements mgr)
     let rect = interactiveRect (absolutePosition handle mgr) el
-    case effectiveClip handle mgr of
+    if not (hasArea rect) then Nothing
+    else case effectiveClip handle mgr of
         Nothing   → Just rect
         Just clip →
             let region = intersectRect rect clip

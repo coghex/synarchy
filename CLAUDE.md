@@ -559,13 +559,18 @@ it's set (`UI.newBox` creation — there's no runtime overflow setter)
 AND re-clamped live against current size when bounds are computed, so an
 invalid overflow can never invert/unbound geometry: a non-finite
 overflow (NaN/±Infinity, e.g. Lua `math.huge`) sanitizes to `0` (expands
-nothing), and a finite inverting overflow (≤ minus half the smaller
-content extent) clamps to a zero-extent rect that both `isPointInElement`
-(via `hasArea`, clipped and unclipped alike) and `UI.Render.makeBoxBatches`
-(non-positive extent short-circuits) treat as genuinely non-hittable AND
-non-rendering — not merely bounded. A validly-negative overflow shrinks
-the interactive rect below content bounds, in lockstep with what it
-renders.
+nothing), a finite-astronomical positive overflow caps to `maxOverflow`
+(so `content + 2*overflow` stays finitely representable — a raw `3e38`
+would otherwise double to `+Infinity`), and a finite inverting overflow
+(≤ minus half the smaller content extent) clamps to a zero-extent rect
+that both `isPointInElement` (via `hasArea`, clipped and unclipped
+alike) and `UI.Render.makeBoxBatches` (non-positive extent
+short-circuits) treat as genuinely non-hittable AND non-rendering — not
+merely bounded. A validly-negative overflow shrinks the interactive rect
+below content bounds, in lockstep with what it renders; when that shrinks
+the visual rect below `2*tileSize`, `UI.Clipping.boxTileRects` folds the
+box's own visual rect into the clip so the fixed-size 9-slice corners
+can't render past it either (render and interactive stay equal).
 Everything recomputes fresh from live `uePosition`/`ueSize`/render data,
 so a move/resize/policy change (the geometry-update tests drive
 `setElementPosition`/`setElementSize`/`setElementInteractiveOverflow`)
@@ -585,6 +590,13 @@ bounds so existing center-click/geometry consumers are unchanged — and
 the playtest oracle's phantom-affordance join
 (`tools/playtest/critic.py`'s `widget_at`) prefers `interactiveBounds`
 so a click on a migrated control's visible border correlates to it.
+`effectiveInteractiveBounds` is `Nothing` for ANY non-hittable element
+(collapsed OR fully clipped — matching `isPointInElement`'s own
+`hasArea` gate), surfaced to the oracle as a DISTINCT `false` marker
+(`scripts/ui/registry.lua`) that `widget_at` skips outright, rather than
+a bare `nil` it would mistake for an old record and fall back to content
+bounds — so the oracle never correlates a click to a control the real
+router can't hit.
 Whether a migrated border FEELS responsive and whether adjacent
 expanded borders create targeting ambiguity are subjective, deferred to
 user GUI feel-testing under the `ui` label (no automated probe).
