@@ -168,17 +168,48 @@ ENVELOPE_TYPES_SOURCE_PATH = (
 ENVELOPE_CODEC_SOURCE_PATH = (
     REPO_ROOT / "src" / "World" / "Save" / "Envelope" / "Codec.hs")
 
-# Every source file that declares a Haskell-owned gameplay component's
-# ComponentId literal and/or its ComponentCodec (serializeCodec or a
-# hand-rolled multi-version record) -- see real_component_registry().
-HASKELL_COMPONENT_SOURCE_PATHS = [
-    REPO_ROOT / "src" / "World" / "Save" / "Component" / "Types.hs",
-    REPO_ROOT / "src" / "World" / "Save" / "Component" / "Session.hs",
-    REPO_ROOT / "src" / "World" / "Save" / "Component" / "Page.hs",
-    REPO_ROOT / "src" / "World" / "Save" / "Component" / "Entities.hs",
-]
-LUA_UNIT_AI_SOURCE_PATH = REPO_ROOT / "scripts" / "unit_ai_save.lua"
-LUA_BUILDING_SPAWN_SOURCE_PATH = REPO_ROOT / "scripts" / "building_spawn.lua"
+# The ONE authoritative list of Haskell-owned gameplay components (round-
+# 16 review): World.Save.Component.saveComponentRegistry itself, not a
+# hand-maintained guess at which files declare them.
+COMPONENT_REGISTRY_SOURCE_PATH = (
+    REPO_ROOT / "src" / "World" / "Save" / "Component.hs")
+
+# Every source file that MIGHT declare a Haskell-owned gameplay
+# component's ComponentId literal and/or its ComponentCodec
+# (serializeCodec or a hand-rolled multi-version record) -- see
+# real_component_registry(). Round-16 review: previously a hand-
+# maintained fixed list of exactly 4 files, so a brand-new component
+# added in a NEW file under this same directory (the established
+# convention every existing component already follows) was invisible to
+# this audit with no error raised at all. Globbing the directory
+# `saveComponentRegistry` itself draws every codec from means a new file
+# is picked up automatically; real_component_registry() ALSO cross-
+# checks every codec name saveComponentRegistry actually references
+# against what this scan found, so even a component defined somewhere
+# ELSE entirely still fails loudly instead of silently vanishing.
+HASKELL_COMPONENT_SOURCE_PATHS = sorted(
+    (REPO_ROOT / "src" / "World" / "Save" / "Component").glob("*.hs"))
+
+REGISTER_COMPONENT_RE = re.compile(r"registerComponent\s+(\w+)")
+
+# Every genuine Lua-module save-persistence registration call site
+# (round-16 review): globbed across ALL of scripts/ rather than a fixed
+# 2-file list, so a new registered Lua module in ANY file is discovered
+# automatically -- mirrors the Haskell-side fix's identical reasoning.
+LUA_SAVE_MODS_REGISTER_RE = re.compile(r'saveMods\.register\(\s*"(\w+)"')
+
+
+def discover_lua_save_modules(scripts_root: Path = REPO_ROOT / "scripts") -> list[tuple[Path, str]]:
+    """Every (file, module id) pair where a REAL `saveMods.register("id",
+    {...})` call site exists, discovered by scanning every .lua file
+    under scripts/ -- not a hand-maintained guess at which 2 files do
+    this (round-16 review)."""
+    found = []
+    for path in sorted(scripts_root.rglob("*.lua")):
+        text = path.read_text(encoding="utf-8")
+        for lua_id in LUA_SAVE_MODS_REGISTER_RE.findall(text):
+            found.append((path, lua_id))
+    return found
 
 CURRENT_ENVELOPE_VERSION_RE = re.compile(
     r"^currentEnvelopeVersion\s*=\s*(\d+)", re.MULTILINE)
@@ -191,7 +222,8 @@ COMPONENT_ID_LITERAL_RE = re.compile(
 SERIALIZE_CODEC_RE = re.compile(
     r"(\w+)\s*=\s*serializeCodec\s*\n?\s*(\w+)\s+(\d+)\s+(True|False)")
 RECORD_CODEC_RE = re.compile(
-    r"ccId\s*=\s*(\w+)\s*\n\s*,\s*ccVersion\s*=\s*(\d+)\s*\n\s*,\s*"
+    r"(\w+)\s*=\s*ComponentCodec\s*\n\s*\{\s*ccId\s*=\s*(\w+)\s*\n\s*,\s*"
+    r"ccVersion\s*=\s*(\d+)\s*\n\s*,\s*"
     r"ccInputVers\s*=\s*\[([^\]]*)\]\s*\n\s*,\s*ccRequired\s*=\s*(True|False)")
 LUA_MODULE_VERSION_RE = re.compile(r"\bversion\s*=\s*(\d+)")
 LUA_MODULE_INPUT_VERSIONS_RE = re.compile(
@@ -212,22 +244,78 @@ def _normalize_haskell_block(block: str) -> str:
     return re.sub(r"\s+", " ", no_comments).strip()
 
 
+DTO_TYPE_NAME_RE = re.compile(r"\b(\w+DTO(?:v\d+)?)\b")
+
+
+def _find_type_definition(name: str, search_paths: list) -> str | None:
+    """Find one type's `data`/`newtype` declaration by name across
+    multiple files, trying each until found. Returns None (not a raise)
+    if genuinely absent everywhere searched -- the caller decides
+    whether that's expected (a name that merely CONTAINS "DTO" as part
+    of a longer identifier, e.g. a function name, rather than being
+    itself a locally-defined type) or worth investigating."""
+    for path in search_paths:
+        text = path.read_text(encoding="utf-8")
+        if re.search(rf"^(?:data|newtype)\s+{re.escape(name)}\b", text, re.MULTILINE):
+            try:
+                return _extract_toplevel_block(text, name)
+            except ValueError:
+                continue
+    return None
+
+
+def _transitive_dto_blocks(seed_blocks_text: str, search_paths: list) -> list:
+    """Starting from every DTO-named type REFERENCED inside
+    seed_blocks_text, recursively resolve each one's own `data`/
+    `newtype` block (searching search_paths), plus every DTO name IT in
+    turn references, to a fixed point (round-16 review: a frozen type's
+    wire layout depends on every LEAF DTO it embeds, not just its own
+    immediately-visible field types)."""
+    resolved: dict[str, str] = {}
+    pending = list(dict.fromkeys(DTO_TYPE_NAME_RE.findall(seed_blocks_text)))
+    while pending:
+        name = pending.pop(0)
+        if name in resolved:
+            continue
+        block = _find_type_definition(name, search_paths)
+        if block is None:
+            continue
+        resolved[name] = block
+        for referenced in DTO_TYPE_NAME_RE.findall(block):
+            if referenced not in resolved:
+                pending.append(referenced)
+    return [resolved[name] for name in sorted(resolved)]
+
+
 def frozen_dto_fingerprint(source_path: Path = SESSION_V90_SOURCE_PATH) -> str:
     """A stable fingerprint over the frozen DTO type declarations in
     World.Save.Compat.SessionV90 -- every `data ... = ...` block up to
-    its closing `deriving` line. Comment/haddock changes don't move this
-    (a documentation-only edit shouldn't force a manifest update);
-    reordering, adding, or removing a FIELD does, since that changes the
-    positional cereal wire layout requirement 10 is guarding."""
+    its closing `deriving` line -- PLUS every leaf DTO type those
+    declarations embed, transitively resolved wherever it's actually
+    defined (World.Save.Component.Page/.Entities/.Session/.WorldGen, per
+    SessionV90's own module docstring: "every non-global-allocator field
+    composes EXISTING frozen leaf/component DTOs ... rather than
+    re-freezing them"). Round-16 review: SessionV90.hs's own blocks
+    alone said nothing about a field reordered on one of THOSE embedded
+    types (WorldGenParamsDTO, WorldEditDTO, GroundItemsDTO, ...) -- the
+    actual B1 wire bytes for that leaf type would silently change with
+    nothing here noticing. Comment/haddock changes don't move this (a
+    documentation-only edit shouldn't force a manifest update);
+    reordering, adding, or removing a FIELD anywhere in this transitive
+    closure does, since that changes a positional cereal wire layout
+    requirement 10 is guarding."""
     text = source_path.read_text(encoding="utf-8")
-    blocks = re.findall(
+    own_blocks = re.findall(
         r"^data \w+ = \w+.*?deriving\s*\([^)]*\)", text,
         re.MULTILINE | re.DOTALL)
-    if not blocks:
+    if not own_blocks:
         raise ValueError(
             f"no frozen `data ... deriving (...)` blocks found in "
             f"{source_path} -- did the module get restructured?")
-    normalized = "\n---\n".join(_normalize_haskell_block(b) for b in blocks)
+    leaf_blocks = _transitive_dto_blocks(
+        "\n".join(own_blocks), HASKELL_COMPONENT_SOURCE_PATHS)
+    normalized = "\n---\n".join(
+        _normalize_haskell_block(b) for b in own_blocks + leaf_blocks)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -361,19 +449,21 @@ def real_component_registry() -> dict[str, dict]:
         for ident, sid in COMPONENT_ID_LITERAL_RE.findall(text):
             id_literals[ident] = sid
 
+    discovered_codec_names: set[str] = set()
     for path in HASKELL_COMPONENT_SOURCE_PATHS:
         text = path.read_text(encoding="utf-8")
-        for _codec_name, cid_ident, ver, req in SERIALIZE_CODEC_RE.findall(text):
+        for codec_name, cid_ident, ver, req in SERIALIZE_CODEC_RE.findall(text):
             sid = id_literals.get(cid_ident)
             if sid is None:
                 raise ValueError(
                     f"{path}: serializeCodec references unknown component "
                     f"id identifier '{cid_ident}' -- did a ComponentId "
                     f"binding get renamed without updating this parser?")
+            discovered_codec_names.add(codec_name)
             registry[sid] = {
                 "currentVersion": int(ver), "inputVersions": [int(ver)],
                 "required": req == "True"}
-        for cid_ident, ver, vers_str, req in RECORD_CODEC_RE.findall(text):
+        for codec_name, cid_ident, ver, vers_str, req in RECORD_CODEC_RE.findall(text):
             sid = id_literals.get(cid_ident)
             if sid is None:
                 raise ValueError(
@@ -381,12 +471,52 @@ def real_component_registry() -> dict[str, dict]:
                     f"component id identifier '{cid_ident}'")
             input_versions = [int(v.strip()) for v in vers_str.split(",")
                                if v.strip()]
+            discovered_codec_names.add(codec_name)
             registry[sid] = {
                 "currentVersion": int(ver), "inputVersions": input_versions,
                 "required": req == "True"}
 
-    for path, lua_id in [(LUA_UNIT_AI_SOURCE_PATH, "unit_ai"),
-                          (LUA_BUILDING_SPAWN_SOURCE_PATH, "building_spawn")]:
+    # Round-16 review: cross-check against the ONE authoritative list --
+    # World.Save.Component.saveComponentRegistry's own entries -- rather
+    # than trust that HASKELL_COMPONENT_SOURCE_PATHS' glob (or, before
+    # that, its hand-maintained fixed file list) happened to find
+    # everything registered. A codec referenced there that this scan
+    # never actually discovered ANYWHERE (a new file outside the globbed
+    # directory, a rename, a typo) fails loudly here instead of silently
+    # leaving that component out of the entire registry with no error at
+    # all -- exactly the "new required component registered from another
+    # module" gap this closes.
+    registry_source_text = COMPONENT_REGISTRY_SOURCE_PATH.read_text(encoding="utf-8")
+    registry_list_block = _extract_toplevel_block(
+        registry_source_text, "saveComponentRegistry")
+    authoritative_codec_names = REGISTER_COMPONENT_RE.findall(registry_list_block)
+    if not authoritative_codec_names:
+        raise ValueError(
+            f"no 'registerComponent <codec>' entries found in "
+            f"saveComponentRegistry ({COMPONENT_REGISTRY_SOURCE_PATH}) -- "
+            f"did the registry get restructured?")
+    missing_codec_names = [
+        name for name in authoritative_codec_names
+        if name not in discovered_codec_names]
+    if missing_codec_names:
+        raise ValueError(
+            f"saveComponentRegistry references "
+            f"{', '.join(missing_codec_names)}, but no matching codec "
+            f"definition was found anywhere under "
+            f"{HASKELL_COMPONENT_SOURCE_PATHS[0].parent} -- a component "
+            f"registered from a module this scan never looked at (or a "
+            f"renamed/typo'd codec binding) would otherwise be silently "
+            f"absent from the ENTIRE real_component_registry() with no "
+            f"error at all")
+
+    discovered_lua_modules = discover_lua_save_modules()
+    if not discovered_lua_modules:
+        raise ValueError(
+            f"no 'saveMods.register(\"...\", {{...}})' call sites found "
+            f"anywhere under {REPO_ROOT / 'scripts'} -- did every "
+            f"registered Lua save module get removed, or did the call "
+            f"site's shape change?")
+    for path, lua_id in discovered_lua_modules:
         text = path.read_text(encoding="utf-8")
         vm = LUA_MODULE_VERSION_RE.search(text)
         ivm = LUA_MODULE_INPUT_VERSIONS_RE.search(text)
@@ -1589,11 +1719,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
             spawn_building=args.spawn_building, spawn_unit=args.spawn_unit,
             out_path=fixture_path)
     except GenerationError as e:
-        # generate_current_format_session only ever writes fixture_path
-        # as its LAST step (shutil.copyfile), after every real-engine
-        # check above already succeeded -- a GenerationError here means
-        # fixture_path was never touched, so there is nothing to restore.
-        print(f"fixture generation failed: {e}", file=sys.stderr)
+        # Round-16 review: generate_current_format_session no longer
+        # ONLY writes fixture_path as an untouchable-if-failed last step
+        # -- since round-11's normalize_fixture_timestamp call, a
+        # GenerationError can ALSO be raised AFTER shutil.copyfile has
+        # already overwritten fixture_path with newly-generated (but
+        # not-yet-normalized) bytes, e.g. clobbering a previously-tracked
+        # fixture under --force with no rollback. restore_files() is
+        # always safe to call here regardless of which stage failed --
+        # it is a no-op when fixture_path was never actually touched.
+        restore_files()
+        print(f"fixture generation failed (fixture/summary restored to "
+              f"their prior state): {e}", file=sys.stderr)
         return 1
 
     ok, tail = dump_canonical_summary(fixture_path, summary_path)

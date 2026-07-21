@@ -285,6 +285,42 @@ def test_frozen_dto_fingerprint_changes_on_field_reorder() -> None:
                "expected fingerprint to change on field reorder")
 
 
+def test_frozen_dto_fingerprint_changes_on_transitively_embedded_leaf_dto_reorder() -> None:
+    print("round-16 review: fingerprint changes when a LEAF DTO SessionV90 "
+          "embeds (not one of its own top-level blocks) has its OWN fields "
+          "reordered in whatever OTHER file actually defines it -- the exact "
+          "transitive-coverage gap this closes")
+    with tempfile.TemporaryDirectory() as d:
+        session_p = Path(d) / "SessionV90.hs"
+        session_p.write_text(
+            "data Foo = Foo\n"
+            "    { fooLeaf ∷ !LeafDTO\n"
+            "    } deriving (Show, Generic, Serialize)\n")
+        leaf_p = Path(d) / "Leaf.hs"
+        leaf_p.write_text(
+            "data LeafDTO = LeafDTO\n"
+            "    { leafA ∷ !Int\n"
+            "    , leafB ∷ !Text\n"
+            "    } deriving (Show, Generic, Serialize)\n"
+            "\n")
+        old_paths = sca.HASKELL_COMPONENT_SOURCE_PATHS
+        sca.HASKELL_COMPONENT_SOURCE_PATHS = [leaf_p]
+        try:
+            fp1 = sca.frozen_dto_fingerprint(session_p)
+            leaf_p.write_text(
+                "data LeafDTO = LeafDTO\n"
+                "    { leafB ∷ !Text\n"
+                "    , leafA ∷ !Int\n"
+                "    } deriving (Show, Generic, Serialize)\n"
+                "\n")
+            fp2 = sca.frozen_dto_fingerprint(session_p)
+            expect(fp1 != fp2,
+                   "expected fingerprint to change when a transitively-"
+                   "embedded leaf DTO's own fields are reordered")
+        finally:
+            sca.HASKELL_COMPONENT_SOURCE_PATHS = old_paths
+
+
 def _synthetic_envelope_types_text(reordered: bool = False) -> str:
     descriptor_fields = (
         "    { cdVersion ∷ !Word32\n    , cdId ∷ !ComponentId\n"
@@ -631,6 +667,45 @@ def test_generate_session_refuses_when_summary_exists_without_force() -> None:
             sca.generate_current_format_session = old_gen
 
 
+def test_generate_session_rolls_back_on_generation_error_after_fixture_written() -> None:
+    print("round-16 review: --generate-session restores the fixture even when "
+          "GenerationError is raised AFTER the new bytes were already written "
+          "(e.g. normalize_fixture_timestamp failing post-copyfile) -- not "
+          "just when generation fails before ever touching the file")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        fixture_path = tmp / "gen.bin"
+        summary_path = tmp / "gen.expected.json"
+        original_fixture = b"pre-existing fixture bytes"
+        fixture_path.write_bytes(original_fixture)
+        old_gen = sca.generate_current_format_session
+
+        def fake_gen(**kw):
+            # Simulates generate_current_format_session's real shape since
+            # round-11: engine.saveWorld/shutil.copyfile succeeds and
+            # writes new bytes FIRST, then normalize_fixture_timestamp
+            # (a separate, later step) fails.
+            kw["out_path"].write_bytes(b"newly generated but un-normalized bytes")
+            raise sca.GenerationError("simulated timestamp-normalization failure")
+
+        sca.generate_current_format_session = fake_gen
+        try:
+            rc = sca.cmd_generate(_Args(
+                baseline_id="b", fixture_id="f",
+                path=str(fixture_path.relative_to(sca.REPO_ROOT)),
+                summary=str(summary_path.relative_to(sca.REPO_ROOT)),
+                force=True))
+            expect(rc == 1, f"expected failure, got exit code {rc}")
+            expect(fixture_path.read_bytes() == original_fixture,
+                   "expected the fixture to be restored to its ORIGINAL "
+                   "bytes, not left as the newly-written-but-failed content")
+            expect(not summary_path.exists(),
+                   "expected the summary (which never existed before) to "
+                   "still not exist")
+        finally:
+            sca.generate_current_format_session = old_gen
+
+
 def test_generate_session_rolls_back_fixture_and_summary_on_dump_failure() -> None:
     print("--generate-session restores BOTH fixture and summary if canonical-summary derivation fails")
     with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
@@ -809,6 +884,75 @@ def test_normalize_fixture_timestamp_makes_generation_reproducible() -> None:
                "normalize_fixture_timestamp, proving repeat generation over "
                "identical inputs is now reproducible regardless of wall-clock "
                "drift between runs")
+
+
+def test_detects_registered_component_missing_from_source_scan() -> None:
+    print("round-16 review: a component registered in saveComponentRegistry's "
+          "own authoritative list, but whose codec definition can't be found "
+          "anywhere the scan looked, fails loudly rather than silently "
+          "vanishing from the entire registry with no error at all")
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        registry_path = tmp / "Component.hs"
+        registry_path.write_text(
+            "saveComponentRegistry ∷ [RegisteredComponent]\n"
+            "saveComponentRegistry =\n"
+            "    [ registerComponent coreSessionCodec\n"
+            "        (\\_ d snap -> Right snap)\n"
+            "    , registerComponent totallyMissingCodec\n"
+            "        (\\_ d snap -> Right snap)\n"
+            "    ]\n"
+            "  where\n"
+            "    unused = ()\n"
+            "\n"
+            "-- next binding\n")
+        component_dir = tmp / "Component"
+        component_dir.mkdir()
+        only_file = component_dir / "Session.hs"
+        only_file.write_text(
+            "coreSessionComponentId = ComponentId \"core-session\"\n"
+            "coreSessionCodec = serializeCodec\n"
+            "    coreSessionComponentId 1 True\n")
+        old_registry_path = sca.COMPONENT_REGISTRY_SOURCE_PATH
+        old_haskell_paths = sca.HASKELL_COMPONENT_SOURCE_PATHS
+        sca.COMPONENT_REGISTRY_SOURCE_PATH = registry_path
+        sca.HASKELL_COMPONENT_SOURCE_PATHS = [only_file]
+        try:
+            try:
+                sca.real_component_registry()
+                expect(False,
+                       "expected real_component_registry() to raise for a "
+                       "codec referenced in saveComponentRegistry but never "
+                       "found by the source scan")
+            except ValueError as e:
+                expect("totallyMissingCodec" in str(e),
+                       f"expected the error to name the missing codec, got: {e}")
+        finally:
+            sca.COMPONENT_REGISTRY_SOURCE_PATH = old_registry_path
+            sca.HASKELL_COMPONENT_SOURCE_PATHS = old_haskell_paths
+
+
+def test_haskell_component_source_paths_discovers_new_files_automatically() -> None:
+    print("round-16 review: HASKELL_COMPONENT_SOURCE_PATHS globs the "
+          "Component/ directory rather than a fixed file list -- a brand-new "
+          "file placed there is picked up with no code change needed")
+    expect(len(sca.HASKELL_COMPONENT_SOURCE_PATHS) >= 4,
+           f"expected at least the 4 known Component/*.hs files, got "
+           f"{sca.HASKELL_COMPONENT_SOURCE_PATHS}")
+    expect(all(p.suffix == ".hs" and p.parent.name == "Component"
+               for p in sca.HASKELL_COMPONENT_SOURCE_PATHS),
+           f"expected every discovered path to be a .hs file directly under "
+           f"a Component/ directory, got {sca.HASKELL_COMPONENT_SOURCE_PATHS}")
+
+
+def test_discover_lua_save_modules_finds_the_real_two_modules() -> None:
+    print("round-16 review: discover_lua_save_modules scans scripts/ rather "
+          "than trusting a fixed 2-file list -- confirm it still finds the "
+          "real, currently-registered unit_ai/building_spawn modules")
+    discovered = sca.discover_lua_save_modules()
+    discovered_ids = {lua_id for _path, lua_id in discovered}
+    expect({"unit_ai", "building_spawn"} <= discovered_ids,
+           f"expected both real modules discovered, got {discovered_ids}")
 
 
 def test_detects_unknown_component_id_in_baseline() -> None:
@@ -1054,6 +1198,7 @@ def main() -> int:
         test_detects_baseline_with_no_fixtures,
         test_frozen_dto_fingerprint_is_comment_insensitive,
         test_frozen_dto_fingerprint_changes_on_field_reorder,
+        test_frozen_dto_fingerprint_changes_on_transitively_embedded_leaf_dto_reorder,
         test_envelope_framing_fingerprint_is_comment_insensitive,
         test_envelope_framing_fingerprint_changes_on_layout_change,
         test_detects_envelope_framing_fingerprint_mismatch,
@@ -1065,9 +1210,13 @@ def main() -> int:
         test_add_baseline_keeps_registration_on_passed_real_codec_validation,
         test_add_baseline_skips_validation_for_component_focused_kind,
         test_generate_session_refuses_when_summary_exists_without_force,
+        test_generate_session_rolls_back_on_generation_error_after_fixture_written,
         test_generate_session_rolls_back_fixture_and_summary_on_dump_failure,
         test_generate_session_rolls_back_fixture_and_summary_on_validation_failure,
         test_normalize_fixture_timestamp_makes_generation_reproducible,
+        test_detects_registered_component_missing_from_source_scan,
+        test_haskell_component_source_paths_discovers_new_files_automatically,
+        test_discover_lua_save_modules_finds_the_real_two_modules,
         test_detects_unknown_component_id_in_baseline,
         test_detects_removed_input_version,
         test_detects_untracked_oldest_version,
