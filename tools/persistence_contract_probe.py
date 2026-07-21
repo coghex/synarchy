@@ -15,14 +15,19 @@ save -> load -> save cycles" is exercised even at smoke scale.
 Flow (isolated resource root -- see ``tools/save_storage_probe.py``'s
 identical pattern -- never the developer's real ``saves/``):
 
-  1. Engine A: boot, load defs, ``world.init`` a small (worldSize 8) REAL
-     generated world with a meaningful seed + player-facing identity,
-     spawn one building + one unit, set the map mode + camera, save to
-     slot "gen1".
+  1. Engine A: boot, load defs + the AI script stack, ``world.init`` a
+     small (worldSize 8) REAL generated world with a meaningful seed +
+     player-facing identity, spawn an ``acolyte_portal`` (real,
+     non-vacuous ``lua.building_spawn`` state once its roster starts
+     spawning) and two units with one issued a real ``unitAi.
+     commandAttack`` against the other (real, non-vacuous ``lua.unit_ai``
+     state), a non-default map mode, save to slot "gen1".
   2. Quit A. Boot engine B (fresh process). Load "gen1"; assert the
      reset policy (paused, default tool, empty selections) and a short
-     paused dwell where a live sample (date, unit position) is identical
-     before and after. Re-save (no mutation in between) to "gen2".
+     paused dwell where a live sample (date, unit position, the real
+     unit_ai attack-target reference, the building_spawn roster
+     countdown) is identical before and after. Re-save (no mutation in
+     between) to "gen2".
   3. Quit B. Boot engine C (fresh process). Load "gen2"; re-save to
      "gen3".
   4. Quit C. ``persistence_snapshot.compare_session_files`` decodes all
@@ -35,7 +40,10 @@ identical pattern -- never the developer's real ``saves/``):
      tied to each save/load boundary by waiting for
      ``engine.getSaveStatus()``/``engine.getLoadStatus()`` to reach a
      terminal phase before ever touching the resulting file
-     (requirement 2).
+     (requirement 2). The non-default map mode is additionally checked
+     directly via ``save_compat_audit.dump_canonical_summary`` (there is
+     no live ``world.getMapMode`` query to assert it through the debug
+     console instead).
 
 Registered CI-eligible in ``tools/ci_probes.py`` -- ``src/World/Save/*``/
 ``src/World/Load/*``/``src/Engine/Save/*``/``src/Engine/Load/*`` are
@@ -62,6 +70,7 @@ from pathlib import Path
 
 from probelib import boot, quit_engine, send, send_json, wait_load_published
 from persistence_snapshot import compare_session_files
+from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -69,6 +78,16 @@ SEED = 424242
 WORLD_SIZE = 8
 PLATE_COUNT = 3
 PAGE = "contract_page"
+
+# The AI/stats script stack the loading screen would load in a real GUI
+# session -- headless boots skip the loading screen entirely (CLAUDE.md),
+# so any probe driving unit_ai (commandAttack/getState) must load these
+# itself. Mirrors probelib.AI_STACK exactly.
+AI_SCRIPTS = (
+    ("scripts/unit_stats.lua", 0.1),
+    ("scripts/unit_resources.lua", 0.2),
+    ("scripts/unit_ai.lua", 0.1),
+)
 
 
 class Checks:
@@ -110,6 +129,11 @@ def bootstrap_defs(port: int) -> None:
             send(port, f"{fn}('{path}'); return 'ok'")
 
 
+def load_ai_stack(port: int) -> None:
+    for path, delay in AI_SCRIPTS:
+        send(port, f"engine.loadScript('{path}', {delay}); return 'ok'")
+
+
 def boot_probe(root: str, port: int, log: str):
     return boot(port, log=log, args=["--resource-root", root], ready_timeout=180)
 
@@ -130,10 +154,15 @@ def as_int(s: str):
         return None
 
 
-def build_scenario(chk: Checks, port: int) -> None:
+def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
     """Engine A: a small real generated world with a meaningful seed +
-    identity, one building, one unit, a non-default map mode + camera."""
+    identity, a built acolyte_portal with a real roster countdown
+    (non-vacuous lua.building_spawn state), two units with a real
+    unitAi.commandAttack between them (non-vacuous lua.unit_ai state),
+    and a non-default map mode. Returns (portal_bid, attacker_uid,
+    target_uid)."""
     bootstrap_defs(port)
+    load_ai_stack(port)
     inited = send(
         port,
         f"world.init('{PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
@@ -154,15 +183,67 @@ def build_scenario(chk: Checks, port: int) -> None:
         chk.ok(False, f"'{PAGE}' never became the active world")
     send(port, "return world.waitForInit(30)", timeout=35)
 
-    bid = as_int(send(port, "return building.spawn('cargo_hold_S', 0, 0)"))
-    chk.ok(bid is not None and bid >= 0, f"building.spawn succeeded (got {bid!r})")
-    uid = as_int(send(port, "return unit.spawn('acolyte', 2, 2, 0, 'player')"))
-    chk.ok(uid is not None and uid >= 0, f"unit.spawn succeeded (got {uid!r})")
+    # A real, non-vacuous lua.building_spawn state: acolyte_portal is the
+    # ONE building_spawn.lua-configured def (an ordinary building like
+    # furnace/cargo_hold_S creates no per-building sequencer state at all
+    # -- round-1 review finding). building.setSpawnRemaining seeds the
+    # roster countdown directly rather than reverse-engineering the
+    # build-tool "stake" placement flow.
+    portal_bid = as_int(send(port, f"return building.spawn('acolyte_portal', 0, 0)"))
+    chk.ok(portal_bid is not None and portal_bid >= 0,
+           f"building.spawn('acolyte_portal') succeeded (got {portal_bid!r})")
+    send(port, f"building.setSpawnRemaining({portal_bid}, 6); return 'ok'")
+    remaining_before = as_int(send(port, f"return building.getSpawnRemaining({portal_bid})"))
+    chk.ok(remaining_before == 6,
+           f"acolyte_portal roster seeded to 6 (got {remaining_before!r})")
+    # Give building_spawn.lua's sequencer a moment to fire its first
+    # roster spawn -- proves the Lua sequencer (not just the engine-side
+    # countdown) actually ran, so its per-building state entry is real.
+    deadline = time.time() + 10.0
+    remaining_after = remaining_before
+    while time.time() < deadline:
+        remaining_after = as_int(send(port, f"return building.getSpawnRemaining({portal_bid})"))
+        if remaining_after is not None and remaining_after < remaining_before:
+            break
+        time.sleep(0.3)
+    chk.ok(remaining_after is not None and remaining_after < remaining_before,
+           f"acolyte_portal's roster sequencer spawned at least one unit "
+           f"(remaining {remaining_before} -> {remaining_after})")
 
-    send(port, "world.setMapMode('map_pressure'); return 'ok'", expect_result=False)
+    # A real, non-vacuous lua.unit_ai state: a real commandAttack sets
+    # attackTargetUid, verifiable live via unitAi.getState (round-1 review
+    # finding -- a freshly spawned, idle unit's AI state is otherwise
+    # near-empty).
+    atk = as_int(send(port, "return unit.spawn('acolyte', 2, 2, 0, 'player')"))
+    chk.ok(atk is not None and atk >= 0, f"attacker unit.spawn succeeded (got {atk!r})")
+    tgt = as_int(send(port, "return unit.spawn('acolyte', 5, 5, 0, 'wildlife')"))
+    chk.ok(tgt is not None and tgt >= 0, f"target unit.spawn succeeded (got {tgt!r})")
+    send(port, f"require('scripts.unit_ai').commandAttack({atk}, {tgt}); return 'ok'")
+    time.sleep(0.5)
+    attack_target = get_attack_target(port, atk)
+    chk.ok(attack_target == tgt,
+           f"commandAttack set a real, live attackTargetUid ({attack_target} "
+           f"vs expected {tgt})")
+
+    # world.setMapMode(pageId, mode) -- a bare-mode call (missing pageId)
+    # is a silent no-op (round-1 review finding); there is no live
+    # world.getMapMode query, so the non-default value is verified via
+    # dump_canonical_summary once the save file exists (see main()).
+    send(port, f"world.setMapMode('{PAGE}', 'map_pressure'); return 'ok'")
+    # setMapMode is queued (worldQueue, async) -- give the world thread a
+    # moment to apply it before the save captures state.
+    time.sleep(0.5)
+
+    return portal_bid, atk, tgt
 
 
-def sample_live_state(port: int) -> dict:
+def get_attack_target(port: int, uid: int):
+    raw = send(port, f"local s = require('scripts.unit_ai').getState({uid}); "
+                      f"return s and s.attackTargetUid or nil")
+    return as_int(raw)
+
+
+def sample_live_state(port: int, portal_bid: int, atk: int) -> dict:
     """A small, cheap live sample used for the paused-stability dwell
     check (requirement 7) -- repeating this during a paused dwell must
     yield identical values. This scenario never places a player-faction
@@ -176,6 +257,8 @@ def sample_live_state(port: int) -> dict:
         "activePage": send(port, "return world.getActiveWorldId()"),
         "paused": send(port, "return engine.isPaused()"),
         "toolMode": send(port, "return world.getToolMode()"),
+        "spawnRemaining": send(port, f"return building.getSpawnRemaining({portal_bid})"),
+        "attackTargetUid": get_attack_target(port, atk),
     }
 
 
@@ -188,6 +271,25 @@ def assert_reset_policy(chk: Checks, port: int, when: str) -> None:
     sel = send(port, "return unit.getSelected()")
     chk.ok(sel.strip() in ("nil", "null", "[]", "{}", ""),
            f"{when}: unit selection is empty (got {sel!r})")
+
+
+def assert_nondefault_map_mode(chk: Checks, tmpdir: str, save_path: str, page: str) -> None:
+    """world.setMapMode has no live query counterpart, so the non-default
+    value is verified through the same dump_canonical_summary decode
+    tools/save_compat_migration_probe.py already uses -- its per-page
+    dump already includes "mapMode" (GHCI_DUMP_SUMMARY_TEMPLATE)."""
+    import json
+    out_path = os.path.join(tmpdir, "map_mode_check.json")
+    ok, tail = dump_canonical_summary(Path(save_path), Path(out_path))
+    if not ok:
+        chk.ok(False, f"dump_canonical_summary failed for map-mode check: {tail}")
+        return
+    summary = json.loads(Path(out_path).read_text(encoding="utf-8"))
+    page_entry = next((p for p in summary.get("pages", []) if p.get("pageId") == page), None)
+    chk.ok(bool(page_entry) and page_entry.get("mapMode") == "ZMPressure",
+           f"world.setMapMode('{page}', 'map_pressure') actually took effect "
+           f"(decoded pgsMapMode = {page_entry.get('mapMode') if page_entry else None!r}, "
+           f"expected 'ZMPressure')")
 
 
 def main() -> int:
@@ -206,7 +308,7 @@ def main() -> int:
         # ── Engine A: build the scenario, save ───────────────────────────
         print("=== engine A: build scenario + save 'gen1' ===")
         proc = boot_probe(root, port, os.path.join(tmpdir, "engineA.log"))
-        build_scenario(chk, port)
+        portal_bid, atk, tgt = build_scenario(chk, port)
         saved = send(port, f"return engine.saveWorld('{PAGE}', 'gen1')")
         chk.ok(saved.strip() == "true", f"engine.saveWorld('gen1') accepted (got {saved!r})")
         gen1_path = os.path.join(root, "saves", "gen1", "world.synworld")
@@ -221,6 +323,7 @@ def main() -> int:
         chk.ok(bool(gen1_entry and gen1_entry.get("timestamp")),
                f"engine.listSaves() reports a well-formed timestamp for 'gen1' "
                f"(got {gen1_entry!r})")
+        assert_nondefault_map_mode(chk, tmpdir, gen1_path, PAGE)
         quit_engine(port, proc)
         proc = None
 
@@ -228,16 +331,21 @@ def main() -> int:
         print("=== engine B: fresh process, load 'gen1', dwell, save 'gen2' ===")
         proc = boot_probe(root, port, os.path.join(tmpdir, "engineB.log"))
         bootstrap_defs(port)
+        load_ai_stack(port)
         loaded = send(port, "return engine.loadSave('gen1')")
         chk.ok(loaded.strip() == "true", f"engine.loadSave('gen1') accepted (got {loaded!r})")
         published, status = wait_load_published(port)
         chk.ok(published, f"load transaction published (status={status})")
 
         assert_reset_policy(chk, port, "after loading gen1")
+        attack_target_b = get_attack_target(port, atk)
+        chk.ok(attack_target_b == tgt,
+               f"lua.unit_ai's attackTargetUid survived the fresh-process load "
+               f"({attack_target_b} vs expected {tgt})")
 
-        before = sample_live_state(port)
+        before = sample_live_state(port, portal_bid, atk)
         time.sleep(2.0)
-        after = sample_live_state(port)
+        after = sample_live_state(port, portal_bid, atk)
         chk.ok(before == after,
                f"requirement 7: repeating the canonical live inspection during "
                f"a 2s paused dwell produces the SAME persistent state "
@@ -254,11 +362,16 @@ def main() -> int:
         print("=== engine C: fresh process, load 'gen2', save 'gen3' ===")
         proc = boot_probe(root, port, os.path.join(tmpdir, "engineC.log"))
         bootstrap_defs(port)
+        load_ai_stack(port)
         loaded_c = send(port, "return engine.loadSave('gen2')")
         chk.ok(loaded_c.strip() == "true", f"engine.loadSave('gen2') accepted (got {loaded_c!r})")
         published_c, status_c = wait_load_published(port)
         chk.ok(published_c, f"second load transaction published (status={status_c})")
         assert_reset_policy(chk, port, "after loading gen2")
+        attack_target_c = get_attack_target(port, atk)
+        chk.ok(attack_target_c == tgt,
+               f"lua.unit_ai's attackTargetUid survived a SECOND fresh-process "
+               f"load ({attack_target_c} vs expected {tgt})")
 
         saved_c = send(port, f"return engine.saveWorld('{PAGE}', 'gen3')")
         chk.ok(saved_c.strip() == "true", f"re-saving to 'gen3' succeeded (got {saved_c!r})")

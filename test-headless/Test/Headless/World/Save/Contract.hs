@@ -51,6 +51,7 @@ module Test.Headless.World.Save.Contract (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
@@ -277,6 +278,34 @@ representativeSnapshot = case captureSessionSnapshot richGlobals [richPage, mini
     Right s   → s
     Left errs → error ("representativeSnapshot invalid: " <> show errs)
 
+-- | Synthetic, opaque Lua component payloads -- standing in for the
+--   REAL @scripts/lib/data_codec.lua@-encoded bytes a live Lua VM would
+--   produce (this module is pure, no HsLua/engine). The envelope layer
+--   never interprets a Lua component's internal bytes at all (that's
+--   entirely the registered Lua module's own `decode`/`apply`), so an
+--   opaque marker string is exactly as meaningful a test of "does the
+--   envelope carry a named Lua component through encode/decode
+--   byte-identically" as real canonical bytes would be -- proving the
+--   ENVELOPE half of Lua persistence here, complementing the REAL,
+--   live-engine `unitAi.getState`/`building.getSpawnRemaining`
+--   round-trip checks in `tools/persistence_contract_probe.py`/
+--   `_sweep.py` (which a pure, engine-less module cannot perform).
+syntheticLuaComponents ∷ [(Text, Word32, Bool, BS.ByteString)]
+syntheticLuaComponents =
+    [ ("unit_ai", 3, True, "synthetic-unit_ai-payload")
+    , ("building_spawn", 3, True, "synthetic-building_spawn-payload")
+    ]
+
+-- | The real Lua persistence registry's module names (mirrors
+--   'save_compat_audit.GHCI_DUMP_SUMMARY_TEMPLATE'/
+--   'save_compat_migration_probe.py''s identical @luaNames@) -- decode
+--   must be told which component ids are known/required the same way
+--   encode declared them, or an unrecognized-but-required component id
+--   fails decode outright (the same "unknown required component" gate
+--   requirement 11 exercises deliberately elsewhere).
+luaNames ∷ HS.HashSet Text
+luaNames = HS.fromList ["unit_ai", "building_spawn"]
+
 spec ∷ Spec
 spec = do
     describe "fresh-process structural equivalence (pure round trip, \
@@ -287,33 +316,37 @@ spec = do
            \building with storage, a craft bill, a power node, and a \
            \world identity -- through the REAL production codec \
            \(encodeSessionSnapshot / decodeSessionEnvelope), comparing \
-           \EVERY persistent field via SessionSnapshot's derived Eq" $ do
+           \EVERY persistent field via SessionSnapshot's derived Eq, \
+           \PLUS every lua.<module> component payload byte-for-byte" $ do
             let req = SaveRequestMeta { srmSlotName = "contract_test", srmTimestamp = "ts" }
                 meta = snapshotSaveMetadata req representativeSnapshot
-                encoded = encodeSessionSnapshot meta representativeSnapshot []
-            case decodeSessionEnvelope HS.empty HS.empty encoded of
+                encoded = encodeSessionSnapshot meta representativeSnapshot
+                              syntheticLuaComponents
+            case decodeSessionEnvelope luaNames luaNames encoded of
                 Left err → expectationFailure (show err)
-                Right (_meta, snap, _luaComponents, isMigrated) → do
+                Right (_meta, snap, luaComponents, isMigrated) → do
                     snap `shouldBe` representativeSnapshot
                     isMigrated `shouldBe` False
+                    luaComponents `shouldMatchList` syntheticLuaComponents
 
     describe "repeated-cycle stability (pure, requirement 9)" $ do
         it "three successive encode -> decode -> re-encode cycles never \
            \drift -- no cycle accumulates ghost pages, duplicate \
-           \entities, or allocator drift" $ do
+           \entities, or allocator drift, INCLUDING the lua.<module> \
+           \component payloads" $ do
             let req = SaveRequestMeta { srmSlotName = "cycle_test", srmTimestamp = "ts" }
-                cycleOnce snap =
+                cycleOnce (snap, lua) =
                     let meta = snapshotSaveMetadata req snap
-                        encoded = encodeSessionSnapshot meta snap []
-                    in case decodeSessionEnvelope HS.empty HS.empty encoded of
+                        encoded = encodeSessionSnapshot meta snap lua
+                    in case decodeSessionEnvelope luaNames luaNames encoded of
                         Left err → error (show err)
-                        Right (_, snap', _, _) → snap'
-                gen1 = cycleOnce representativeSnapshot
+                        Right (_, snap', lua', _) → (snap', lua')
+                gen1 = cycleOnce (representativeSnapshot, syntheticLuaComponents)
                 gen2 = cycleOnce gen1
                 gen3 = cycleOnce gen2
-            gen1 `shouldBe` representativeSnapshot
-            gen2 `shouldBe` representativeSnapshot
-            gen3 `shouldBe` representativeSnapshot
+            forM_ [gen1, gen2, gen3] $ \(snap, lua) → do
+                snap `shouldBe` representativeSnapshot
+                lua `shouldMatchList` syntheticLuaComponents
 
     describe "reset/rebuild policy at the type level (requirement 6)" $ do
         it "the adapter fabricates the documented reset defaults for \

@@ -3767,21 +3767,30 @@ developer's real `saves/`:
 - **`python3 tools/persistence_contract_sweep.py`** — the broader
   manual sweep: the SAME three-cycle fresh-process structural
   comparison against a REAL (not tiny) generated world populated with a
-  built craft station running a real bill, a mine designation, and a
-  non-default map mode. It deliberately does NOT re-implement the
-  domain-specific scenarios (chop/till/crop/plant designations, power-
-  node placement, or the assembled failure contract's individual cases
-  — interrupted write, corrupt envelope, missing required component,
-  failed migration, missing gameplay definition, invalid Haskell/Lua
-  reference, required Lua decode failure) that already have their own
-  maintained, real-process regression probes; it cross-references them
-  instead (`tools/chop_probe.py`/`till_probe.py`/`crop_probe.py`/
-  `plant_probe.py`/`construction_probe.py`/`craft_bill_probe.py`/
-  `power_probe.py`/`transactional_load_probe.py`/`save_storage_probe.py`/
-  `save_barrier_probe.py`/`persistence_integrity_probe.py`/
-  `save_compat_migration_probe.py`), matching requirement 14's "avoid
-  retaining multiple expensive probes that test the same final
-  behavior." Registered manual-only (`slow/worldgen-heavy`) in
+  built craft station running a real bill, an `acolyte_portal` with a
+  real roster countdown (non-vacuous `lua.building_spawn` state) plus a
+  real `unitAi.commandAttack` between two units (non-vacuous
+  `lua.unit_ai` state, verified live via `unitAi.getState` across each
+  fresh-process load), a mine designation, and a non-default map mode
+  (verified via `dump_canonical_summary`, since no live
+  `world.getMapMode` query exists). It deliberately does NOT
+  re-implement the domain-specific scenarios (chop/till/crop/plant
+  designations, power-node placement, or the assembled failure
+  contract's individual cases — interrupted write, corrupt envelope,
+  missing required component, failed migration, missing gameplay
+  definition, invalid Haskell/Lua reference, required Lua decode
+  failure) that already have their own maintained, real-process
+  regression probes; instead it actually RUNS them, via `tools/
+  run_probes.py --only ... --exact` (`chop`/`till`/`crop`/`plant`/
+  `construction`/`craft_bill`/`power`/`transactional_load`/
+  `save_storage`/`save_barrier`/`persistence_integrity`/
+  `save_compat_migration`), propagating any failure — matching
+  requirement 14's "avoid retaining multiple expensive probes that test
+  the same final behavior" without reducing to a no-op existence check.
+  `--cross-probe-keys`/`--skip-cross-probes` narrow this for local
+  iteration on the sweep's own scenario; skipping is loudly reported as
+  reduced coverage, never silently. Registered manual-only
+  (`slow/worldgen-heavy`) in
   `tools/ci_probes.py`.
 
 ## AI Asset Generation
