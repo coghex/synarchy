@@ -327,8 +327,14 @@ makeBoxBatches ∷ BoxTextureSet
                → Float → Float → Float → Float → Float
                → (Float, Float, Float, Float) → LayerId → Maybe ClipRect
                → V.Vector RenderBatch
-makeBoxBatches texSet x y w h tileSize color layerId clip =
-    V.fromList $ map toBatch (boxTileRects x y w h tileSize clip)
+makeBoxBatches texSet x y w h tileSize color layerId clip
+    -- #749: a collapsed/degenerate box (a validly-negative or
+    -- inverting overflow clamped to a non-positive visual extent —
+    -- see 'UI.InteractiveBounds.clampOverflow') tiles nothing, rather
+    -- than still emitting its four corner batches at a zero-area rect.
+    -- Matches the hit test, which treats the same rect as non-hittable.
+    | w ≤ 0 ∨ h ≤ 0 = V.empty
+    | otherwise = V.fromList $ map toBatch (boxTileRects x y w h tileSize clip)
   where
     toBatch (tile, (cx, cy, cw, ch), uv) =
         let tex = tileTexture texSet tile

@@ -53,19 +53,32 @@ import UI.Types
 import UI.Clipping (ClipRect, effectiveClip, intersectRect, hasArea)
 
 -- | Clamp an overflow value so expanding a @(w, h)@ content rect by it
---   on every side can never invert geometry: the visual extents
---   @w + 2*ovf@ and @h + 2*ovf@ stay @≥ 0@. Invalid overflow (@≤@ minus
---   half the SMALLER content extent, which would invert the box) clamps
---   UP to exactly that limit — a zero-extent, non-inverted degenerate
---   rect that 'UI.Clipping.hasArea' already treats as hitting/rendering
---   nothing, never a negative-size rect. A validly-negative overflow (a
---   genuine shrink that keeps positive area) passes through unchanged,
---   so a box opted into expanded-visual interaction with a negative
---   overflow shrinks its interactive bounds below content bounds, in
---   lockstep with what it renders. Deterministic and pure — the #749
---   "invalid overflow cannot create inverted/unbounded geometry" guard.
+--   on every side can never invert OR unbound geometry:
+--
+--     * A non-finite overflow (NaN / ±Infinity — e.g. Lua @math.huge@
+--       reaching 'UI.newBox') is treated as @0@: it expands nothing
+--       rather than producing an unbounded (or NaN) render/interactive
+--       rect. This is the "cannot create ... unbounded geometry" half
+--       of the #749 guard.
+--     * A finite overflow that would invert the box (@≤@ minus half the
+--       SMALLER content extent) clamps UP to exactly that limit — a
+--       zero-extent, non-inverted degenerate rect, never a negative-size
+--       one. A collapsed box renders nothing ('UI.Render.makeBoxBatches'
+--       short-circuits a non-positive extent) and is not hittable (the
+--       hit test requires positive area — 'UI.Clipping.hasArea' in
+--       'UI.Manager.Query.isPointInElement', both the clipped and the
+--       unclipped branch), so this really is non-rendering/non-hittable,
+--       not merely bounded.
+--
+--   A validly-negative overflow (a genuine shrink that keeps positive
+--   area) passes through unchanged, so a box opted into expanded-visual
+--   interaction with a negative overflow shrinks its interactive bounds
+--   below content bounds, in lockstep with what it renders.
+--   Deterministic and pure.
 clampOverflow ∷ (Float, Float) → Float → Float
-clampOverflow (w, h) ovf = max ovf lowerLimit
+clampOverflow (w, h) ovf
+    | isNaN ovf ∨ isInfinite ovf = 0
+    | otherwise                  = max ovf lowerLimit
   where lowerLimit = negate (min (max 0 w) (max 0 h) / 2)
 
 -- | The raw box overflow of an element — 'ubsOverflow' for a

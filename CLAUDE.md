@@ -557,16 +557,24 @@ interaction still intersects every #747 ancestor clip
 nor interacts. Overflow is validated (`clampOverflow`) at the ONE point
 it's set (`UI.newBox` creation — there's no runtime overflow setter)
 AND re-clamped live against current size when bounds are computed, so an
-invalid overflow (≤ minus half the smaller content extent) can never
-invert/unbound geometry; a validly-negative overflow shrinks the
-interactive rect below content bounds, in lockstep with what it renders.
+invalid overflow can never invert/unbound geometry: a non-finite
+overflow (NaN/±Infinity, e.g. Lua `math.huge`) sanitizes to `0` (expands
+nothing), and a finite inverting overflow (≤ minus half the smaller
+content extent) clamps to a zero-extent rect that both `isPointInElement`
+(via `hasArea`, clipped and unclipped alike) and `UI.Render.makeBoxBatches`
+(non-positive extent short-circuits) treat as genuinely non-hittable AND
+non-rendering — not merely bounded. A validly-negative overflow shrinks
+the interactive rect below content bounds, in lockstep with what it
+renders.
 Everything recomputes fresh from live `uePosition`/`ueSize`/render data,
 so a move/resize/policy change (the geometry-update tests drive
 `setElementPosition`/`setElementSize`/`setElementInteractiveOverflow`)
 takes effect on the very next query with nothing cached. Migrated
 box-backed control families opt in (`scripts/ui/button.lua` — covering
 settings/create/save actions — `scripts/main_menu.lua`,
-`scripts/pause_menu.lua`, `scripts/ui/tabbar.lua`); decorative
+`scripts/pause_menu.lua`, `scripts/ui/tabbar.lua`, and
+`scripts/build_tool_remote_warning.lua`'s Establish/Cancel buttons);
+decorative
 panels/frames/tooltips/separators stay content-only (an audit, not a
 default flip — scroll arrows ship as sprites with no overflow, so
 they're content-only by nature). `UI.getElementInfo`/`ui.dumpWidgets`

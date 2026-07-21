@@ -275,6 +275,12 @@ local function createUI(distance, thresholdTiles)
         table.insert(buildToolRemoteWarning.ownedBoxes, boxH)
         UI.setClickable(boxH, true)
         UI.setOnClick(boxH, "onBuildToolRemoteWarningClick")
+        -- #749: these Establish/Cancel buttons carry a real
+        -- (buttonOverflow = 12) visible border — opt it into interaction
+        -- so a click on the drawn edge activates the button instead of
+        -- landing in a phantom dead zone (same migration as the other
+        -- box-backed control families).
+        UI.setInteractiveOverflow(boxH, true)
         buildToolRemoteWarning.clickHandlers[boxH] = onClick
 
         local fontScale = (naturalWidth > 0) and math.min(1.0, width / naturalWidth) or 1.0

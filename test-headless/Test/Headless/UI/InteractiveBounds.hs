@@ -25,8 +25,12 @@ import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Vector as V
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
+import Engine.Scene.Base (LayerId(..))
+import UI.Render (makeBoxBatches)
 import Engine.Input.Bindings (defaultKeyBindings)
 import Engine.Input.Thread (processInputs)
 import Engine.Input.Types
@@ -127,6 +131,12 @@ spec = do
             clampOverflow (100, 40) (-1000) `shouldBe` (-20)
         it "treats a zero-size box's negative overflow as zero (no negative expansion)" $
             clampOverflow (0, 0) (-5) `shouldBe` 0
+        it "sanitizes +Infinity overflow to zero (no unbounded expansion)" $
+            clampOverflow (100, 100) (1/0) `shouldBe` 0
+        it "sanitizes -Infinity overflow to zero" $
+            clampOverflow (100, 100) (-1/0) `shouldBe` 0
+        it "sanitizes NaN overflow to zero" $
+            clampOverflow (100, 100) (0/0) `shouldBe` 0
 
     describe "content / visual / interactive rects (#749)" $ do
         it "content rect is position + size, independent of any overflow" $
@@ -147,6 +157,10 @@ spec = do
                 (eh, m2)   = controlBox "bad" (100, 100) (100, 40) (-1000) True "onB" hudH m1
                 (_, _, w, h) = interactiveRect (100, 100) (lookupEl eh m2)
             in (w ≥ 0 ∧ h ≥ 0) `shouldBe` True
+        it "a box created with a non-finite overflow expands nothing (sanitized at creation, never unbounded)" $
+            let (hudH, m1) = basePage
+                (eh, m2)   = controlBox "huge" (100, 100) (100, 100) (1/0) True "onH" hudH m1
+            in interactiveRect (100, 100) (lookupEl eh m2) `shouldBe` (100, 100, 100, 100)
         it "a non-box element is content-only even with the flag set (no overflow to expand)" $
             let (hudH, m1) = basePage
                 (eh, m2)   = clickablePlain "plain" (100, 100) (100, 100) "onP" hudH m1
@@ -172,6 +186,15 @@ spec = do
             isPointInElement leftBorder (lookupEl eh mCon) mCon `shouldBe` False
         it "...but IS hit on its content center" $
             isPointInElement center (lookupEl eh mCon) mCon `shouldBe` True
+        it "a collapsed (zero-extent, invalid-overflow) interactive box is not hit, even on its degenerate line" $
+            let (hudH, m1) = basePage
+                -- overflow -20 collapses the 40px-tall box to zero height:
+                -- interactive rect (120,120,60,0). (140,120) sits on that line.
+                (ch, m2) = controlBox "collapse" (100, 100) (100, 40) (-20) True "onC" hudH m1
+            in do
+                interactiveRect (100, 100) (lookupEl ch m2) `shouldBe` (120, 120, 60, 0)
+                isPointInElement (140, 120) (lookupEl ch m2) m2 `shouldBe` False
+                routePointer PointerLeftClick (140, 120) m2 `shouldBe` RouteMiss
 
     describe "same bounds across every hit-test entry point (#749)" $ do
         -- A single border point must resolve identically for pointer
@@ -266,6 +289,28 @@ spec = do
         it "...nor block the middle-click surface" $
             isPointerSurfaceBlocked leftBorder m2 `shouldBe` False
 
+    describe "collapsed visual box renders nothing (#749)" $ do
+        -- The real RenderBox call site: a clamped-to-zero (or otherwise
+        -- non-positive) visual extent tiles no batches, matching the hit
+        -- test's own hasArea guard — so an invalid/collapsed overflow is
+        -- genuinely non-rendering AND non-hittable, not merely bounded.
+        let texSet = BoxTextureSet
+                { btsCenter = TextureHandle 5, btsN = TextureHandle 2
+                , btsS = TextureHandle 8, btsE = TextureHandle 6
+                , btsW = TextureHandle 4, btsNE = TextureHandle 3
+                , btsNW = TextureHandle 1, btsSE = TextureHandle 9
+                , btsSW = TextureHandle 7
+                }
+        it "a positive-extent box tiles its nine batches (sanity)" $
+            V.length (makeBoxBatches texSet 0 0 40 40 10 (1,1,1,1) (LayerId 0) Nothing)
+                `shouldBe` 9
+        it "a zero-WIDTH visual box tiles nothing" $
+            V.length (makeBoxBatches texSet 0 0 0 40 10 (1,1,1,1) (LayerId 0) Nothing)
+                `shouldBe` 0
+        it "a zero-HEIGHT visual box tiles nothing" $
+            V.length (makeBoxBatches texSet 0 0 40 0 10 (1,1,1,1) (LayerId 0) Nothing)
+                `shouldBe` 0
+
     -- Wire-level integration: the same contract through the REAL
     -- press/release dispatch (mirrors ControlActivation/ElementInputPolicy).
     around withHeadlessEngine $
@@ -331,6 +376,21 @@ spec = do
                     "local b = UI.getElementInfo(_G.__box).interactiveBounds; return b.x==100 and b.y==100 and b.w==100 and b.h==100"
                 ib `shouldBe` "true"
 
+            it "UI.newBox with a non-finite overflow (math.huge) produces bounded, finite interactiveBounds" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                -- The reviewer's exact scenario: math.huge reaching UI.newBox
+                -- must not yield an unbounded/NaN interactive rect.
+                _ ← evalDebug ls
+                    "local pg = UI.newPage('h', 'hud'); \
+                    \local bx = UI.newBox('hb', 100, 100, 0, 8, 1,1,1,1, math.huge, pg); \
+                    \UI.addToPage(pg, bx, 100, 100); \
+                    \UI.setClickable(bx, true); UI.setOnClick(bx, 'cb'); \
+                    \UI.setInteractiveOverflow(bx, true); _G.__hb = bx; return 'ok'"
+                ib ← evalDebug ls
+                    "local b = UI.getElementInfo(_G.__hb).interactiveBounds; return b.x==100 and b.y==100 and b.w==100 and b.h==100"
+                ib `shouldBe` "true"
+
     describe "migrated / non-migrated control families (#749 audit)" $ do
         it "the migrated box-backed control families opt their border into interaction" $ do
             sources ← mapM TIO.readFile
@@ -338,6 +398,7 @@ spec = do
                 , "scripts/main_menu.lua"      -- main menu items
                 , "scripts/pause_menu.lua"     -- pause menu items
                 , "scripts/ui/tabbar.lua"      -- tabs
+                , "scripts/build_tool_remote_warning.lua" -- remote-settlement modal buttons (12px border)
                 ]
             mapM_ (\src → T.isInfixOf "UI.setInteractiveOverflow" src `shouldBe` True) sources
         it "a decorative frame widget stays content-only (no interactive-overflow opt-in)" $ do

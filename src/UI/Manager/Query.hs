@@ -136,9 +136,14 @@ getElementChildren handle mgr =
 --   reachable. Recomputed live from 'uePosition'/'ueSize'/render data,
 --   so a move/resize/policy change takes effect on the very next query.
 --
---   When a clip is in effect, membership is decided against the
---   POSITIVE-AREA intersection of the element's interactive bounds and
---   the clip (via 'intersectRect'/'hasArea') rather than two
+--   Membership requires the interactive rect to have POSITIVE AREA
+--   ('UI.Clipping.hasArea') — a degenerate rect (an inverting/collapsed
+--   overflow clamped to a zero extent, #749; or a zero-size element)
+--   is never a hit, matching the renderer, which draws nothing there
+--   ('UI.Render.makeBoxBatches' short-circuits a non-positive extent).
+--   When a clip is additionally in effect, membership is decided
+--   against the POSITIVE-AREA intersection of the interactive bounds
+--   and the clip (via 'intersectRect'/'hasArea') rather than two
 --   independent inclusive-both-edges checks — the same test
 --   'UI.Clipping.clipQuadUV' already applies before drawing anything.
 --   An element flush against a clip edge overlaps it in a
@@ -152,12 +157,13 @@ isPointInElement (px, py) element mgr =
         Nothing → False
         Just abs' →
             let elemRect@(ex, ey, w, h) = interactiveRect abs' element
-            in case effectiveClip (ueHandle element) mgr of
+            in hasArea elemRect ∧
+               (case effectiveClip (ueHandle element) mgr of
                 Nothing →
                     px ≥ ex ∧ px ≤ (ex + w) ∧ py ≥ ey ∧ py ≤ (ey + h)
                 Just clip →
                     let region = intersectRect elemRect clip
-                    in hasArea region ∧ pointInClip (Just region) (px, py)
+                    in hasArea region ∧ pointInClip (Just region) (px, py))
 
 -- | Walk every visible element in paint order, yielding the elements
 --   that contain the point together with their paint key (page band +
