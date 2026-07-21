@@ -27,6 +27,7 @@ import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatch(..))
 import UI.Types
 import UI.Clipping (ClipRect, effectiveClip, clipQuadUV, boxTileRects, BoxTile(..))
+import UI.InteractiveBounds (elementOverflow)
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
 import World.Grid (uiLayerThreshold)
 
@@ -200,9 +201,18 @@ renderElementData mgr fontCache layerId elem absX absY clip =
                     let (w, h) = ueSize elem
                         tileSize = ubsTileSize style
                         color = ubsColor style
-                        overflow = ubsOverflow style
-                        -- Expand the visual box by overflow on each side
-                        -- Element position/size stays the same for hit testing
+                        -- #749: the clamped, size-aware overflow (the
+                        -- ONE shared expansion both this render path and
+                        -- 'UI.Manager.Query.isPointInElement' consult, so
+                        -- visual and interactive bounds can't drift). The
+                        -- element's LOGICAL position/size ('uePosition'/
+                        -- 'ueSize') is unchanged — this only expands what
+                        -- draws. Hit-testing uses this SAME expanded rect
+                        -- only when the box opts its border in via
+                        -- 'ueInteractiveOverflow'; a decorative box still
+                        -- hit-tests content-only (overflow never creates
+                        -- a target on its own).
+                        overflow = elementOverflow elem
                         vx = absX - overflow
                         vy = absY - overflow
                         vw = w + overflow * 2

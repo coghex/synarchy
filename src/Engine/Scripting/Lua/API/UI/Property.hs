@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiSetDragActivationFn
   , uiSetSteppableFn
   , uiSetTabIndexFn
+  , uiSetInteractiveOverflowFn
+  , uiIsInteractiveOverflowFn
   , uiSetClipChildrenFn
   , uiIsClipChildrenFn
   , uiGetEffectiveClipFn
@@ -44,6 +46,7 @@ import UI.Types
 import UI.Manager
 import UI.InputOwnership (isGameplayBlocked, isPageInScope)
 import UI.Clipping (effectiveClip)
+import UI.InteractiveBounds (effectiveInteractiveBounds)
 
 -- | UI.setPosition(elementHandle, x, y)
 uiSetPositionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -176,6 +179,19 @@ uiIsPageInScopeFn env = do
 --   authoritative "does this element actually consume a click/wheel
 --   event right now" answer, not just the raw opt-in flags.
 --
+--   x/y/width/height stay the CONTENT/layout bounds every existing
+--   consumer (center-click math, 'Test.Headless.UI.Slider',
+--   tools/playtest, tools/offscreen_probe.py) already reads them as.
+--   #749 adds interactiveOverflow (the 'ueInteractiveOverflow' opt-in)
+--   and interactiveBounds — the EFFECTIVE clip-intersected interactive
+--   rect a real pointer/hover/scroll/release hit resolves against
+--   ('UI.InteractiveBounds.effectiveInteractiveBounds'), as a separate
+--   @{x, y, w, h}@ sub-table (or @nil@ when the element is entirely
+--   clipped away, so it can't be hit) — additively, never by
+--   redefining the content fields. ui.dumpWidgets/the playtest oracle
+--   join clicks against interactiveBounds so a click on a migrated
+--   control's visible border correlates correctly.
+--
 --   paintKey (#783) is 'elementPaintKey' — the page-band + accumulated-
 --   zIndex ordering key 'topHitBy' actually resolves overlapping hits
 --   with, unlike the raw per-element 'zIndex' below (which ignores the
@@ -201,6 +217,7 @@ pushElementInfoTable handle el mgr = do
         pointerBlocking = elementBlocksPointer el
         scrollCapturing = elementCapturesScroll el
         clipsChildren = ueClipChildren el
+        interactiveOverflow = ueInteractiveOverflow el
         paintKey = fromMaybe 0 (elementPaintKey handle mgr)
         paintOrder = fromMaybe 0 (elementPaintOrder handle mgr)
     Lua.newtable
@@ -248,8 +265,12 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "scrollCapturing"
     Lua.pushboolean clipsChildren
     Lua.setfield (Lua.nth 2) "clipsChildren"
+    Lua.pushboolean interactiveOverflow
+    Lua.setfield (Lua.nth 2) "interactiveOverflow"
     pushEffectiveClipField handle mgr
     Lua.setfield (Lua.nth 2) "effectiveClip"
+    pushInteractiveBoundsField handle mgr
+    Lua.setfield (Lua.nth 2) "interactiveBounds"
 
 -- | Push the #747 effective-clip value for 'pushElementInfoTable': a
 --   @{x, y, w, h}@ table when an ancestor clips this element, or
@@ -258,6 +279,27 @@ pushElementInfoTable handle el mgr = do
 --   what rendering/hit-testing actually used.
 pushEffectiveClipField ∷ ElementHandle → UIPageManager → Lua.LuaE Lua.Exception ()
 pushEffectiveClipField handle mgr = case effectiveClip handle mgr of
+    Nothing → Lua.pushnil
+    Just (x, y, w, h) → do
+        Lua.newtable
+        Lua.pushnumber (realToFrac x)
+        Lua.setfield (Lua.nth 2) "x"
+        Lua.pushnumber (realToFrac y)
+        Lua.setfield (Lua.nth 2) "y"
+        Lua.pushnumber (realToFrac w)
+        Lua.setfield (Lua.nth 2) "w"
+        Lua.pushnumber (realToFrac h)
+        Lua.setfield (Lua.nth 2) "h"
+
+-- | Push the #749 effective interactive-bounds value for
+--   'pushElementInfoTable': a @{x, y, w, h}@ table (the clip-intersected
+--   interactive rect a real hit resolves against), or Lua @nil@ when the
+--   element is entirely clipped away — mirrors
+--   'UI.InteractiveBounds.effectiveInteractiveBounds' exactly so
+--   introspection (@ui.dumpWidgets@, the playtest oracle) joins clicks
+--   against the same rect hit-testing does.
+pushInteractiveBoundsField ∷ ElementHandle → UIPageManager → Lua.LuaE Lua.Exception ()
+pushInteractiveBoundsField handle mgr = case effectiveInteractiveBounds handle mgr of
     Nothing → Lua.pushnil
     Just (x, y, w, h) → do
         Lua.newtable
@@ -430,6 +472,36 @@ uiSetTabIndexFn env = do
         _ → pure ()
 
     return 0
+
+-- | UI.setInteractiveOverflow(elementHandle, interactive) (#749) — opt
+--   this element's VISIBLE BORDER into interaction: its interactive
+--   pointer/hover/tooltip/scroll/release bounds become its expanded
+--   visual bounds (content + box overflow) instead of content-only.
+--   See 'ueInteractiveOverflow'. A decorative box that stays 'False'
+--   keeps bleeding without becoming a hit target.
+uiSetInteractiveOverflowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetInteractiveOverflowFn env = do
+    elemArg  ← Lua.tointeger 1
+    interArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementInteractiveOverflow (ElementHandle $ fromIntegral e) interArg mgr, ())
+        Nothing → pure ()
+
+    return 0
+
+-- | UI.isInteractiveOverflow(elementHandle) -> boolean (#749) — the raw
+--   'ueInteractiveOverflow' opt-in on THIS element.
+uiIsInteractiveOverflowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsInteractiveOverflowFn env = do
+    elemArg ← Lua.tointeger 1
+    case elemArg of
+        Just e → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            Lua.pushboolean (isElementInteractiveOverflow (ElementHandle $ fromIntegral e) mgr)
+        Nothing → Lua.pushboolean False
+    return 1
 
 -- | UI.isClipChildren(elementHandle) -> boolean (#747) — the raw
 --   'ueClipChildren' opt-in on THIS element (whether it clips its own

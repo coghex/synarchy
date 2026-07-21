@@ -118,6 +118,14 @@ function button.new(params)
     UI.setClickable(btn.boxId, true)
     UI.setZIndex(btn.boxId, params.zIndex or 20)
     UI.setOnClick(btn.boxId, btn.callbackName)
+    -- #749: a button is a genuine box-backed control whose visible
+    -- 9-slice border is meant to be clickable, so its interactive
+    -- bounds are its expanded VISUAL bounds (content + overflow), not
+    -- content-only. No-op when overflow is 0 (interactive == content);
+    -- for a bordered button (e.g. save_browser's 16px actions) it makes
+    -- the drawn border reachable instead of a phantom noninteractive
+    -- strip. Covers settings/create/save action buttons uniformly.
+    UI.setInteractiveOverflow(btn.boxId, true)
     
     buttons[id] = btn
     

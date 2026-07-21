@@ -131,6 +131,11 @@ function tabbar.new(params)
         UI.addToPage(tb.page, tab.boxId, currentX, tb.y)
         UI.setClickable(tab.boxId, true)
         UI.setOnClick(tab.boxId, TAB_CALLBACK)
+        -- #749: a tab is a genuine box-backed control — opt its visible
+        -- border into interaction (no-op at the current 0 overflow;
+        -- keeps the drawn edge clickable if a bordered tab texture is
+        -- ever used).
+        UI.setInteractiveOverflow(tab.boxId, true)
         UI.setZIndex(tab.boxId, tb.zIndex + 1)
         
         local txtColor = isSelected and selectedTextColor or textColor
