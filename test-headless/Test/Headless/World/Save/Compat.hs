@@ -111,12 +111,12 @@ instance Aeson.FromJSON ManifestFixtureRef where
         <$> o .: "path" <*> o .: "kind" <*> o .:? "sha256"
         <*> o .:? "expectedCanonicalSummary"
 
-data ManifestBaseline = ManifestBaseline
-    { mbId ∷ !Text, mbFixtures ∷ ![ManifestFixtureRef] }
+newtype ManifestBaseline = ManifestBaseline
+    { mbFixtures ∷ [ManifestFixtureRef] }
 
 instance Aeson.FromJSON ManifestBaseline where
     parseJSON = Aeson.withObject "baseline" $ \o →
-        ManifestBaseline <$> o .: "id" <*> o .: "fixtures"
+        ManifestBaseline <$> o .: "fixtures"
 
 newtype Manifest = Manifest { mBaselines ∷ [ManifestBaseline] }
 
