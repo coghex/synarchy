@@ -102,7 +102,7 @@ def test_clean_manifest_has_no_violations() -> None:
         content = b"hello world"
         fpath = make_fixture(tmp, "fixture.bin", content)
         manifest = base_manifest(tmp, fpath, content)
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(violations == [], f"expected no violations, got {violations}")
 
 
@@ -113,7 +113,7 @@ def test_detects_missing_fixture_file() -> None:
         content = b"hello world"
         fpath = tmp / "does_not_exist.bin"
         manifest = base_manifest(tmp, fpath, content)
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("does not exist" in v for v in violations),
                f"expected a missing-path violation, got {violations}")
 
@@ -126,7 +126,7 @@ def test_detects_checksum_drift() -> None:
         fpath = make_fixture(tmp, "fixture.bin", original)
         manifest = base_manifest(tmp, fpath, original)
         fpath.write_bytes(b"HELLO WORLD -- tampered")
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("drifted" in v for v in violations),
                f"expected a drift violation, got {violations}")
 
@@ -139,7 +139,7 @@ def test_detects_size_mismatch_alone() -> None:
         fpath = make_fixture(tmp, "fixture.bin", content)
         manifest = base_manifest(tmp, fpath, content)
         manifest["baselines"][0]["fixtures"][0]["sizeBytes"] = len(content) + 1
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("size" in v for v in violations),
                f"expected a size-mismatch violation, got {violations}")
 
@@ -152,7 +152,7 @@ def test_decode_only_fixture_skips_checksum() -> None:
         manifest = base_manifest(tmp, fpath, b"unused")
         manifest["baselines"][0]["fixtures"][0]["sha256"] = None
         manifest["baselines"][0]["fixtures"][0]["sizeBytes"] = None
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(violations == [], f"expected no violations, got {violations}")
 
 
@@ -169,7 +169,7 @@ def test_detects_complete_session_fixture_missing_checksum() -> None:
         manifest["baselines"][0]["fixtures"][0]["sizeBytes"] = None
         manifest["baselines"][0]["fixtures"][0]["expectedCanonicalSummary"] = \
             "test-headless/data/save-compat/does-not-need-to-exist.json"
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("sha256" in v and "complete-session" in v for v in violations),
                f"expected a checksum-less complete-session violation, got {violations}")
 
@@ -184,7 +184,7 @@ def test_detects_complete_session_fixture_missing_summary() -> None:
         fpath = make_fixture(tmp, "fixture.bin", content)
         manifest = base_manifest(tmp, fpath, content)
         manifest["baselines"][0]["fixtures"][0]["kind"] = "complete-session"
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("expectedCanonicalSummary" in v and "complete-session" in v
                    for v in violations),
                f"expected a summary-less complete-session violation, got {violations}")
@@ -201,7 +201,7 @@ def test_component_focused_fixture_may_skip_checksum_and_summary() -> None:
         manifest["baselines"][0]["fixtures"][0]["kind"] = "component-focused"
         manifest["baselines"][0]["fixtures"][0]["sha256"] = None
         manifest["baselines"][0]["fixtures"][0]["sizeBytes"] = None
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(violations == [], f"expected no violations, got {violations}")
 
 
@@ -213,7 +213,7 @@ def test_detects_framing_version_mismatch() -> None:
         fpath = make_fixture(tmp, "fixture.bin", content)
         manifest = base_manifest(tmp, fpath, content)
         manifest["envelopeFramingVersion"] = sca.current_envelope_version() + 1
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("envelopeFramingVersion" in v for v in violations),
                f"expected a framing-version violation, got {violations}")
 
@@ -226,7 +226,7 @@ def test_detects_frozen_dto_fingerprint_mismatch() -> None:
         fpath = make_fixture(tmp, "fixture.bin", content)
         manifest = base_manifest(tmp, fpath, content)
         manifest["frozenDtoFingerprint"] = "0" * 64
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("frozenDtoFingerprint" in v for v in violations),
                f"expected a fingerprint violation, got {violations}")
 
@@ -424,7 +424,7 @@ def test_detects_envelope_framing_fingerprint_mismatch() -> None:
         fpath = make_fixture(tmp, "fixture.bin", content)
         manifest = base_manifest(tmp, fpath, content)
         manifest["envelopeFramingFingerprint"] = "0" * 64
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("envelopeFramingFingerprint" in v for v in violations),
                f"expected an envelope-framing-fingerprint violation, got {violations}")
 
@@ -980,7 +980,7 @@ def test_detects_unknown_component_id_in_baseline() -> None:
         manifest = base_manifest(tmp, fpath, content)
         manifest["baselines"][0]["components"].append(
             {"id": "totally-made-up-component", "version": 1, "required": True})
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("no longer exists in the real component registry" in v
                     for v in violations),
                f"expected an unknown-component violation, got {violations}")
@@ -996,7 +996,7 @@ def test_detects_removed_input_version() -> None:
         # craft-bills really accepts {1, 2} -- 99 has never existed.
         manifest["baselines"][0]["components"].append(
             {"id": "craft-bills", "version": 99, "required": True})
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("currently accepted input versions" in v
                     and "craft-bills" in v for v in violations),
                f"expected a removed-decoder violation, got {violations}")
@@ -1017,7 +1017,7 @@ def test_detects_untracked_oldest_version() -> None:
         for c in manifest["baselines"][0]["components"]:
             if c["id"] == "craft-bills":
                 c["version"] = 2
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("craft-bills" in v and "no manifest baseline declares" in v
                     for v in violations),
                f"expected an untracked-oldest-version violation, got {violations}")
@@ -1043,7 +1043,7 @@ def test_detects_untracked_current_version() -> None:
             c for c in manifest["baselines"][0]["components"]
             if not (c["id"] == "craft-bills" and c["version"] == craft_bills_current)
         ]
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("craft-bills" in v and "CURRENT version" in v
                     for v in violations),
                f"expected an untracked-current-version violation, got {violations}")
@@ -1066,7 +1066,7 @@ def test_detects_required_component_with_zero_coverage() -> None:
         manifest["baselines"][0]["components"] = [
             c for c in manifest["baselines"][0]["components"]
             if c["id"] != "core-session"]
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("core-session" in v and "is REQUIRED" in v
                     and "not tracked by ANY" in v for v in violations),
                f"expected a required-zero-coverage violation, got {violations}")
@@ -1087,7 +1087,7 @@ def test_detects_modern_baseline_missing_required_component() -> None:
         manifest["baselines"][0]["components"] = [
             c for c in manifest["baselines"][0]["components"]
             if c["id"] not in ("session", "world-pages")]
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(any("is modern-shaped" in v and "world-pages" in v
                     for v in violations),
                f"expected a modern-baseline-incomplete violation, got {violations}")
@@ -1104,7 +1104,7 @@ def test_modern_baseline_check_skips_b1_shaped_baselines() -> None:
         # required component, via _oldest_version_components) -- this is
         # the b1-shaped case, which can never declare the full modern set
         # and must not be flagged for that.
-        violations = sca.audit(manifest)
+        violations = sca.audit(manifest, fixture_dir=tmp)
         expect(not any("is modern-shaped" in v for v in violations),
                f"expected no modern-shape violation for a session-shaped baseline, got {violations}")
 
@@ -1166,6 +1166,52 @@ def test_b1_migration_check_ignores_unrequired_new_component() -> None:
         violations = sca.audit_b1_migration_covers_page_scoped_components(registry, p)
         expect(not any("future-optional-thing" in v for v in violations),
                f"expected no violation for an optional new component, got {violations}")
+
+
+def test_detects_orphaned_fixture_file() -> None:
+    print("round-19 (post-approval) review: a file exists under the "
+          "fixture directory but is not referenced by any baseline's "
+          "fixture path or expectedCanonicalSummary")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        make_fixture(tmp, "orphaned.bin", b"nobody references me")
+        violations = sca.audit(manifest, fixture_dir=tmp)
+        expect(any("orphaned.bin" in v and "not referenced" in v
+                   for v in violations),
+               f"expected an orphaned-fixture violation, got {violations}")
+
+
+def test_no_orphan_violation_when_every_file_is_referenced() -> None:
+    print("a fixture's own path AND its expectedCanonicalSummary both "
+          "count as references -- neither is misclassified as an orphan")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        summary_path = make_fixture(tmp, "fixture.expected.json", b"{}")
+        manifest["baselines"][0]["fixtures"][0]["expectedCanonicalSummary"] = \
+            str(summary_path.relative_to(sca.REPO_ROOT))
+        violations = sca.audit(manifest, fixture_dir=tmp)
+        expect(not any("not referenced" in v for v in violations),
+               f"expected no orphan violation, got {violations}")
+
+
+def test_orphan_check_is_skipped_when_fixture_dir_does_not_exist() -> None:
+    print("a fixture_dir that doesn't exist yet (e.g. a from-scratch "
+          "synthetic manifest with no directory at all) is not itself a "
+          "violation -- the check has nothing to scan, not a missing dir")
+    with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
+        tmp = Path(d)
+        content = b"hello world"
+        fpath = make_fixture(tmp, "fixture.bin", content)
+        manifest = base_manifest(tmp, fpath, content)
+        violations = sca.audit(manifest, fixture_dir=tmp / "does-not-exist")
+        expect(not any("not referenced" in v for v in violations),
+               f"expected no orphan violation, got {violations}")
 
 
 def test_real_manifest_passes_the_audit() -> None:
@@ -1244,6 +1290,9 @@ def main() -> int:
         test_detects_b1_migration_missing_apply_helper,
         test_detects_unclassified_new_required_component_for_b1,
         test_b1_migration_check_ignores_unrequired_new_component,
+        test_detects_orphaned_fixture_file,
+        test_no_orphan_violation_when_every_file_is_referenced,
+        test_orphan_check_is_skipped_when_fixture_dir_does_not_exist,
         test_real_manifest_passes_the_audit,
         test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes,
     ]:

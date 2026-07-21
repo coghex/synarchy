@@ -160,6 +160,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = REPO_ROOT / "docs" / "save_compat" / "manifest.json"
+FIXTURE_DATA_DIR = REPO_ROOT / "test-headless" / "data" / "save-compat"
 ENVELOPE_SOURCE_PATH = REPO_ROOT / "src" / "World" / "Save" / "Envelope.hs"
 SESSION_V90_SOURCE_PATH = (
     REPO_ROOT / "src" / "World" / "Save" / "Compat" / "SessionV90.hs")
@@ -830,7 +831,43 @@ def _iter_fixtures(manifest: dict):
             yield baseline, fixture
 
 
-def audit(manifest: dict) -> list[str]:
+def audit_no_orphaned_fixture_files(
+        manifest: dict, fixture_dir: Path = FIXTURE_DATA_DIR) -> list[str]:
+    """Round-19 (post-approval) review: every check above verifies a
+    DECLARED fixture's path exists and matches -- none of them verify the
+    other direction, that every file actually sitting in fixture_dir is
+    declared by SOME baseline. An orphaned file (left over from a rename,
+    or a --generate-session/--add-baseline run that wrote bytes but was
+    never wired into a baseline) gives no compatibility guarantee at all:
+    it is never decoded, never migrated, never checksummed -- silently
+    inert, yet sitting right alongside real tracked fixtures where it
+    looks tracked."""
+    if not fixture_dir.is_dir():
+        return []
+    referenced = set()
+    for _baseline, fixture in _iter_fixtures(manifest):
+        for key in ("path", "expectedCanonicalSummary"):
+            val = fixture.get(key)
+            if val:
+                referenced.add((REPO_ROOT / val).resolve())
+    violations = []
+    for path in sorted(fixture_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.resolve() not in referenced:
+            violations.append(
+                f"'{path.relative_to(REPO_ROOT)}' exists under "
+                f"{fixture_dir.relative_to(REPO_ROOT)}/ but is not "
+                f"referenced by any manifest baseline's fixture 'path' or "
+                f"'expectedCanonicalSummary' -- an orphaned fixture file is "
+                f"never decoded, migrated, or checksummed by this audit or "
+                f"the manifest-driven hspec gate, giving no compatibility "
+                f"guarantee at all despite looking tracked; register it in "
+                f"a baseline's fixtures[] (see --add-baseline) or delete it")
+    return violations
+
+
+def audit(manifest: dict, fixture_dir: Path = FIXTURE_DATA_DIR) -> list[str]:
     violations: list[str] = []
 
     declared_framing = manifest.get("envelopeFramingVersion")
@@ -875,6 +912,7 @@ def audit(manifest: dict) -> list[str]:
         audit_component_versions(manifest, real_registry, verified_tracked))
     violations.extend(audit_modern_baseline_components_complete(manifest, real_registry))
     violations.extend(audit_b1_migration_covers_page_scoped_components(real_registry))
+    violations.extend(audit_no_orphaned_fixture_files(manifest, fixture_dir))
 
     for baseline, fixture in _iter_fixtures(manifest):
         fid = fixture.get("id", "<unnamed>")
