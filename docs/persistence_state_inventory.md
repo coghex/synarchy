@@ -91,7 +91,7 @@ the affected fields as unclassified.
 | `utsRef` | global | Rebuild | `wpsUnits`/`wpsUnitSimStates` after load | sim-side per-unit pos/pose/target/path rebuilt from the restored `UnitInstance`/`UnitSimState` snapshot, not itself directly serialized | `tools/movement_probe.py` (post-load steering sanity) |
 | `statRNGRef` | global | Exclude | — | explicitly non-deterministic, not save-seeded (contract §1) | none yet |
 | `buildingManagerRef` | global | Rebuild | see §5 (`BuildingManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `BuildingManager`'s own fields (§5) | none yet |
-| `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | none yet |
+| `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | `tools/persistence_contract_probe.py` (see §12) |
 | `texPaletteHandlesRef` | global | Exclude | `texPaletteRef` | runtime GPU translation table rebuilt from `texPaletteRef` | none yet |
 | `buildingQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `combatQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
@@ -165,7 +165,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
 | `wsTilesRef` | Rebuild | `wpsGenParams` + `wpsEdits` | chunk regen followed by edit replay must reproduce the pre-save surface exactly for every edited tile | `tools/world_check.py` (determinism), `tools/multiworld_save_probe.py` |
-| `wsCameraRef` | Persist exactly | — | `wpsCameraX`/`wpsCameraY` | none yet |
+| `wsCameraRef` | Persist exactly | — | `wpsCameraX`/`wpsCameraY` | `tools/persistence_contract_probe.py` (see §12) |
 | `wsTexturesRef` | Exclude | — | runtime GPU handles | none yet |
 | `wsGenParamsRef` | Persist exactly | — | `wpsGenParams`; deliberately meaningful seed data (contract §1) | `tools/multiworld_save_probe.py` |
 | `wsTimeRef` | Persist exactly | — | `wpsTimeHour`/`wpsTimeMinute` | `tools/save_pause_probe.py` |
@@ -179,7 +179,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsBakedZoomRef` | Rebuild | loaded chunk data | render cache | none yet |
 | `wsBakedBgRef` | Rebuild | loaded chunk data | render cache | none yet |
 | `wsInitQueueRef` | Reset to default | — | page load-progress queue, always starts fresh | none yet |
-| `wsMapModeRef` | Persist exactly | — | `wpsMapMode` (contract §1: visible world/page state) | none yet |
+| `wsMapModeRef` | Persist exactly | — | `wpsMapMode` (contract §1: visible world/page state) | `tools/persistence_contract_probe.py` (see §12) |
 | `wsCursorRef` | Exclude | — | transient hover/cursor state (contract §5 exclusion list) | none yet |
 | `wsToolModeRef` | **Reset to default** | — | `DefaultTool`, per #103; matches existing runtime behavior already, this just formalizes it as the contract classification | none yet |
 | `wsCursorSnapshotRef` | Exclude | — | transient | none yet |
@@ -187,9 +187,9 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsZoomAtlasRef` | Exclude | — | GPU atlas handle | none yet |
 | `wsEditsRef` | Persist exactly | — | `wpsEdits`; core gameplay data (player terrain edits) | `tools/multiworld_save_probe.py`, `tools/world_check.py` |
 | `wsOreSurveyRef` | Rebuild | loaded chunk/ore data | zoom-map survey memo, derived | none yet |
-| `wsMineDesignationsRef` | Persist exactly | — | `wpsMineDesignations` | none yet |
+| `wsMineDesignationsRef` | Persist exactly | — | `wpsMineDesignations` | `tools/persistence_contract_probe.py` (see §12) |
 | `wsGroundItemsRef` | Persist exactly | — | `wpsGroundItems` | `tools/item_instance_probe.py` |
-| `wsSpoilRef` | Persist exactly | — | `wpsSpoilPiles` | none yet |
+| `wsSpoilRef` | Persist exactly | — | `wpsSpoilPiles` | `tools/persistence_contract_probe.py` (see §12) |
 | `wsStructureStageRef` | Exclude | — | explicitly never saved; in-progress structure placement must finish or be abandoned by the snapshot boundary (contract §3) | `tools/location_stamp_idempotent_probe.py` (idempotency, not this state directly) |
 | `wsConstructDesignationsRef` | Persist exactly | — | `wpsConstructDesignations` | `tools/construction_probe.py` |
 | `wsFloraHarvestsRef` | Persist exactly | — | `wpsFloraHarvests` | `tools/flora_growth_probe.py`, `tools/foraging_probe.py` |
@@ -256,7 +256,7 @@ record to classify:
 | `smSeed` | Persist exactly | — | none beyond type-correctness (listing metadata only; the authoritative seed for a page is its own `wpsGenParams`) | `tools/multiworld_save_probe.py` |
 | `smWorldSize` | Persist exactly | — | none beyond type-correctness (listing metadata only) | `tools/multiworld_save_probe.py` |
 | `smPlateCount` | Persist exactly | — | none beyond type-correctness (listing metadata only) | `tools/multiworld_save_probe.py` |
-| `smTimestamp` | Persist exactly | — | none beyond type-correctness (display only) | none yet |
+| `smTimestamp` | Persist exactly | — | none beyond type-correctness (display only) | `tools/persistence_contract_probe.py` (well-formed timestamp string; see §12) |
 | `smWorldName` | Persist exactly | the active page's `wpsIdentity` at save time | mirrors that page's identity; `Nothing` for an unnamed world | `tools/multiworld_save_probe.py` |
 | `smWorldGloss` | Persist exactly | `smWorldName` | must be `Nothing` whenever `smWorldName` is `Nothing` (a gloss cannot exist without a display name) | `tools/multiworld_save_probe.py` |
 
@@ -270,23 +270,23 @@ prior fields (no cross-page ordering requirement):
 |---|---|---|---|---|
 | `wpsPageId` | Persist as identity/reference | — | restored verbatim, unchanged (#763: no remap, no collision rename — `assignRestoreIds`/`RestoreIds.hs` are gone, since replacement never collides with anything) | `tools/multiworld_save_probe.py`, `tools/transactional_load_probe.py` |
 | `wpsGenParams` | Persist exactly | — | none beyond type-correctness (chunk regen is not re-validated against it at load) | `tools/multiworld_save_probe.py` |
-| `wpsCameraX` | Persist exactly | — | none beyond type-correctness | none yet |
-| `wpsCameraY` | Persist exactly | — | none beyond type-correctness | none yet |
-| `wpsCameraZoom` | Persist exactly | — | none beyond type-correctness | none yet |
-| `wpsCameraFacing` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsCameraX` | Persist exactly | — | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
+| `wpsCameraY` | Persist exactly | — | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
+| `wpsCameraZoom` | Persist exactly | — | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
+| `wpsCameraFacing` | Persist exactly | — | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
 | `wpsTimeHour` | Persist exactly | — | none beyond type-correctness (not range-checked against 0-23 at load) | `tools/save_pause_probe.py` |
 | `wpsTimeMinute` | Persist exactly | — | none beyond type-correctness (not range-checked against 0-59 at load) | `tools/save_pause_probe.py` |
 | `wpsDateYear` | Persist exactly | — | none beyond type-correctness | `tools/flora_growth_probe.py` |
 | `wpsDateMonth` | Persist exactly | — | none beyond type-correctness (not range-checked against the world's calendar at load) | `tools/flora_growth_probe.py` |
 | `wpsDateDay` | Persist exactly | — | none beyond type-correctness (not range-checked against the world's calendar at load) | `tools/flora_growth_probe.py` |
 | `wpsTimeScale` | Exclude (legacy field fabricated by the adapter) | n/a | n/a | **Implemented by #757, cleanly modeled by #758** (contract §1, "the pre-save speed is not persisted"): the field is still WRITTEN — v88's positional format can't drop it — but `World.Save.Snapshot.Adapter.snapshotToSaveData` always fabricates `1`, never a captured value (#757 already hardcoded this at the old inline call site; #758 gives it an explicit, tested home). `tools/save_pause_probe.py` was updated by #757 to match. |
-| `wpsMapMode` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsMapMode` | Persist exactly | — | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
 | `wpsToolMode` | Reset to default (legacy field fabricated by the adapter) | n/a (reset, not restored) | always `DefaultTool` regardless of the stored value | v82 writes the field, but load already ignores it and resets to `DefaultTool` per #103 — a currently-dead field. **#758**: `World.Save.Snapshot.PageSnapshot` has no tool-mode field at all; the adapter fabricates `DefaultTool` for every page, so the "no captured value, only a fixed default" contract is now explicit at the type level, not just at load time. |
 | `wpsEdits` | Persist exactly | `wpsGenParams` (edits replay onto regenerated terrain) | replayed edits must reproduce the pre-save surface exactly for every edited tile | `tools/multiworld_save_probe.py`, `tools/world_check.py` (determinism) |
 | `wpsMineDesignations` | Persist exactly | referenced tile coordinates must be within the page | a claimant referencing a unit that failed to restore is not currently detected/cleared | none yet |
 | `wpsConstructDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/construction_probe.py` |
 | `wpsGroundItems` | Persist exactly | — | instance ids must be below `sdNextItemInstanceId` (enforced by the max'd-never-lowered restore rule on the allocator, not by validating each item) | `tools/item_instance_probe.py` |
-| `wpsSpoilPiles` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | none yet |
+| `wpsSpoilPiles` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
 | `wpsBuildings` | Persist exactly | `bmDefs` must already have every referenced building def (contract §4: missing def fails load) | referenced def names must resolve | `tools/multiworld_save_probe.py` |
 | `wpsUnits` | Persist exactly | `umDefs` must already have every referenced unit def (contract §4: missing def fails load) | referenced def names must resolve | `tools/multiworld_save_probe.py` |
 | `wpsUnitSimStates` | Persist exactly | `wpsUnits` (sim state is keyed by `UnitId`, restored after unit instances) | every sim-state key should correspond to a restored unit id (an orphaned key is not currently detected) | `tools/movement_probe.py` (post-load) |
@@ -311,7 +311,7 @@ field either has no cross-field dependency or is noted below:
 | `sdMetadata` | Persist exactly | — | none beyond type-correctness | `tools/multiworld_save_probe.py` |
 | `sdGameTime` | Persist exactly | — | none beyond type-correctness | `tools/save_pause_probe.py` |
 | `sdEnginePaused` | Persist exactly | — | authoritative over any Lua-side copy (contract, §7 `pause` module) | `tools/save_pause_probe.py` |
-| `sdTexPalette` | Persist exactly | must restore before any page replays a `WeSetStructure` edit (palette-id → path resolution) | none beyond type-correctness | none yet |
+| `sdTexPalette` | Persist exactly | must restore before any page replays a `WeSetStructure` edit (palette-id → path resolution) | none beyond type-correctness | `tools/persistence_contract_probe.py` (see §12) |
 | `sdNextItemInstanceId` | Persist exactly | — | restored as `max(current, saved)`, never lowered (#67), so post-load item creation can't collide with a loaded id | `tools/item_instance_probe.py` |
 | `sdActivePage` | Persist as identity/reference | must name a page present in `sdWorlds` (falls back to the first page if not, per `activeWorldPage`) | resolves to a real restored page | `tools/multiworld_save_probe.py` |
 | `sdVisiblePages` | Persist as identity/reference | pages must exist post-restore | none beyond type-correctness | `tools/multiworld_save_probe.py` |
@@ -345,7 +345,7 @@ navigability, same as everything else.
 |---|---|---|---|---|
 | `bmDefs` | Rebuild | `data/buildings/*.yaml` | none beyond type-correctness | see §9 |
 | `bmInstances` | Persist exactly | via `BuildingSnapshot`/`wpsBuildings`, needs `bmDefs` resolved first | missing building def fails load (contract §4) | `tools/multiworld_save_probe.py` |
-| `bmNextId` | Persist exactly | — | must exceed every restored `BuildingId` so post-load spawns can't collide | none yet |
+| `bmNextId` | Persist exactly | — | must exceed every restored `BuildingId` so post-load spawns can't collide | `tools/persistence_contract_probe.py` (see §12) |
 | `bmSelected` | Exclude | — | selections are cleared on load (contract §1) | none yet |
 
 ### UnitInstance (reset-on-load fields)
@@ -598,6 +598,77 @@ the `{__ref=kind, id=N}` wire shape and the v1→v2 migration.
 | `craft_bill` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `craft-bills` component (`BillId`) | Persist as identity/reference |
 | `item_instance` | `unit_ai_save_refs.lua` | session-wide (global allocator) | carried inventory, owned by the `units` component's own snapshot | Persist as identity/reference |
 | `ground_item` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `world-activity` component (ground items) | Persist as identity/reference |
+
+---
+
+## 12. Test coverage map (#767, save-overhaul D1)
+
+The machine-readable map from every persistent §10/§7 owner to its
+contract coverage, at COMPONENT granularity (requirement 3's own
+"Owning component" column) rather than per-field — a single whole-
+session structural comparison discharges every field a component owns
+in one assertion, so per-field rows would only restate the same
+pointer over and over. `tools/persistence_inventory_audit.py` enforces
+that every §10 component classified `Persist exactly` and every §7 Lua
+module classified `Persist exactly` has a row here (see "The
+persistence-inventory audit" in `persistence_contract.md`).
+
+"Canonical inspection path" is one of:
+- **`SessionSnapshot` field(s) (`World.Save.Snapshot`)** — the Haskell
+  components. `World.Save.Snapshot.SessionSnapshot`/`PageSnapshot`
+  derive `Eq`, so structural equality of two assembled snapshots IS the
+  canonical, order-independent (every collection is `HashMap`-keyed)
+  comparison — no separate JSON/dump schema needed for these.
+  `tools/persistence_snapshot.py`'s `compare_session_files` decodes N
+  save files through the real `World.Save.Envelope.decodeSessionEnvelope`
+  and asserts every decoded `SessionSnapshot` is pairwise `≡`, GPU-less
+  and engine-less (a `cabal repl` subprocess against raw files).
+- **`lua.<module>` canonical component payload bytes** — the Lua
+  components. `scripts/lib/data_codec.lua`'s canonical (sorted-key)
+  encoding means identical logical state always re-encodes to identical
+  bytes, so byte-equality of the raw `lua.unit_ai`/`lua.building_spawn`
+  envelope payloads across independently-produced saves is exactly as
+  strong a structural proof as `SessionSnapshot`'s derived `Eq` — no
+  separate decode step needed either.
+
+"Round-trip assertion" for every row below is the SAME structural
+comparison (either the pure in-process hspec round trip — encode then
+decode then `≡`, see `Test.Headless.World.Save.Contract`'s
+"persistence contract" describe group — or the real fresh-process
+comparison across independently-produced save generations, see
+`tools/persistence_contract_probe.py`/`tools/persistence_contract_sweep.py`)
+unless noted otherwise. "Reset/rebuild assertion" is left "—" for a
+component with nothing reset/rebuilt at its OWN boundary (the reset/
+rebuild fields living beside these components — tool mode, time scale,
+selections, UI-transient state — are §1/§3/§8 rows, not components, and
+are separately asserted by the reset-policy checks the same probe/test
+group runs, per contract requirement 6).
+
+### Test coverage map
+
+| Component | Canonical inspection path | Round-trip assertion | Reset/rebuild assertion | Focused test |
+|---|---|---|---|---|
+| `metadata` | `SaveMetadata` fields via `dump_canonical_summary`/`engine.listSaves()` (request-adjacent, excluded from the strict `SessionSnapshot` comparison per contract requirement 5 — seed/worldSize/plateCount are re-verified via the authoritative `pgsGenParams`/`wgpSeed` instead) | `tools/multiworld_save_probe.py`, `tools/persistence_contract_probe.py` (`smTimestamp` is a well-formed timestamp string) | — | `tools/save_compat_migration_probe.py` |
+| `core-session` | `SessionSnapshot`'s global fields (`snapGameTime`/`snapNextItemId`/`snapNextBuildingId`/`snapNextUnitId`/`snapActivePage`/`snapVisiblePages`/`snapLiveCamera`) | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | `sgLiveCamera`'s owner-page reset on an empty visible set is asserted structurally (type has no stale-owner state to reset) | `tools/multiworld_save_probe.py` |
+| `texture-palette` | `SessionSnapshot.snapTexPalette` (`TexPalette`) | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | — | `Test.Headless.World.Save.Components` |
+| `world-pages` | `PageSnapshot`'s identity/gen-params/dates/clocks/map-mode/per-page-camera fields | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract`; `wpsGenParams`' full fidelity (incl. `GeoTimeline`) is additionally cross-checked by chunk-regen determinism | `wsToolModeRef`/`wsTimeScaleRef` reset-to-default is asserted live (`engine.getToolMode()`/`world.getTimeScale()` post-load) | `tools/world_check.py`, `tools/multiworld_save_probe.py` |
+| `world-edits` | `PageSnapshot.pgsEdits` | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | — | `tools/world_check.py` (determinism), `tools/location_overlay_probe.py` |
+| `world-activity` | `PageSnapshot`'s designation/ground-item/spoil-pile fields (`pgsMineDesignations`/`pgsConstructDesignations`/`pgsChopDesignations`/`pgsTillDesignations`/`pgsCropPlots`/`pgsPlantDesignations`/`pgsGroundItems`/`pgsSpoilPiles`) | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | — | `tools/chop_probe.py`, `tools/till_probe.py`, `tools/crop_probe.py`, `tools/plant_probe.py`, `tools/item_instance_probe.py` |
+| `buildings` | `PageSnapshot.pgsBuildings` | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | `bmSelected` reset is asserted live (`building.getSelected()` post-load) | `tools/multiworld_save_probe.py`, `tools/construction_probe.py` |
+| `units` | `PageSnapshot.pgsUnits` | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | `umSelected`/reset-on-load `UnitInstance` fields (`uiLastAttackerUid`/`uiAnimOverride`/etc.) asserted live | `tools/multiworld_save_probe.py` |
+| `unit-sim` | `PageSnapshot.pgsUnitSimStates` | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | — | `tools/movement_probe.py` |
+| `craft-bills` | `PageSnapshot.pgsCraftBills` | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | — | `tools/craft_bill_probe.py` |
+| `power-nodes` | `PageSnapshot.pgsPowerNodes` | `tools/persistence_contract_probe.py`, `Test.Headless.World.Save.Contract` | — | `tools/power_probe.py` |
+| `lua.unit_ai` | `lua.unit_ai` canonical component payload bytes | `tools/persistence_contract_probe.py` (byte-equality across independently-produced saves); `Test.Headless.Lua.SaveModules` (encode/decode/apply contract) | pre-load-snapshot reconcile (`_preLoadState`) asserted by `tools/lua_orphan_prune_probe.py` | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
+| `lua.building_spawn` | `lua.building_spawn` canonical component payload bytes | same as `lua.unit_ai` | same as `lua.unit_ai` | `tools/lua_orphan_prune_probe.py`, `Test.Headless.Lua.SaveModules` |
+
+Every entry not covered by `SessionSnapshot`'s own comparison (visual-
+asset fallback policy, the reset-only fields listed in §1/§3/§8, and
+the assembled failure contract) is covered directly by
+`tools/persistence_contract_probe.py`/`_sweep.py` and
+`Test.Headless.World.Save.Contract`'s own "persistence contract"
+describe group — see `docs/persistence_contract.md`'s updated §6/§10
+for the consolidated final test matrix.
 
 ---
 

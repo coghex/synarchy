@@ -139,6 +139,16 @@ PROBES = [
      "multi-world save -> quit -> restart -> load; cross-page survival (#214, #219)"),
     ("offscreen", "offscreen_probe.py",
      "--offscreen render mode: windowless Vulkan boot, UI flow, screenshots, input injection, parallel instances (#650; needs a GPU)"),
+    ("persistence_contract", "persistence_contract_probe.py",
+     "compact fresh-process persistence contract smoke: three real "
+     "save->load->save cycles compared structurally (SessionSnapshot Eq + "
+     "lua.* payload byte-equality) through the real production codec, "
+     "plus reset-policy and paused-stability checks (#767)"),
+    ("persistence_contract_sweep", "persistence_contract_sweep.py",
+     "broader persistence contract sweep: a real generated-world "
+     "representative scenario (craft bill, mine designation, identity) "
+     "through the same three-cycle fresh-process structural comparison "
+     "(#767)"),
     ("persistence_integrity", "persistence_integrity_probe.py",
      "shared save/load integrity graph: a genuinely dangling Lua AI reference "
      "survives a save/restart/load round trip as a non-blocking diagnostic, "

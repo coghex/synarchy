@@ -1399,6 +1399,76 @@ def derive_registered_component_ids(
     return registered
 
 
+COVERAGE_MAP_HEADING = "Test coverage map"
+
+
+def parse_coverage_map_component_names(inventory_text: str) -> set[str]:
+    """Every backtick-quoted first-column name under the
+    `### Test coverage map` heading (docs/persistence_state_inventory.md
+    SS12, issue #767 requirement 3) -- a save ComponentId
+    (e.g. `core-session`) or a Lua persistence module reference
+    (`lua.unit_ai`), one row per persistent §10/§7 owner."""
+    names: set[str] = set()
+    in_section = False
+    for line in inventory_text.splitlines():
+        heading = OWNER_HEADING_RE.match(line)
+        if heading:
+            in_section = heading.group(1) == COVERAGE_MAP_HEADING
+            continue
+        if not in_section or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells or set(cells[0]) <= {"-", ":"}:
+            continue  # separator row
+        names.update(BACKTICK_RE.findall(cells[0]))
+    return names
+
+
+def find_coverage_map_violations(
+        inventory_text: str) -> list[str]:
+    """Requirement 3 (issue #767, save-overhaul D1): every persistent
+    §10 save component and every `Persist exactly` §7 Lua persistence
+    module must have a row in the `### Test coverage map` heading (SS12)
+    naming its owning component, canonical inspection path, round-trip
+    assertion, reset/rebuild assertion, and focused test -- an
+    inventory entry with a classification decision but no contract
+    coverage entry fails here, mirroring how a missing classification
+    decision itself already fails `find_component_registration_violations`/
+    the root-owner-field checks above."""
+    violations: list[str] = []
+    covered = parse_coverage_map_component_names(inventory_text)
+
+    for name, cid, classification in parse_component_owner_rows(inventory_text):
+        if _classification_core(classification) not in PERSISTENT_CLASSIFICATIONS:
+            continue  # rebuilt/reset/excluded owners need no coverage-map row
+        if cid is None:
+            continue  # already reported by find_component_registration_violations
+        if cid not in covered:
+            violations.append(
+                f"save component {name!r} (ComponentId {cid!r}) is classified "
+                f"persistent but has no row under the "
+                f"'### {COVERAGE_MAP_HEADING}' heading in {INVENTORY_PATH.name} "
+                f"-- add a coverage-map entry naming its canonical inspection "
+                f"path, round-trip assertion, and focused test "
+                f"(docs/persistence_contract.md requirement 3)")
+
+    classified_lua = parse_classified_names(inventory_text).get(LUA_OWNER_HEADING, {})
+    for name, classification in classified_lua.items():
+        if _classification_core(classification) != "Persist exactly":
+            continue  # reset-hook/excluded Lua modules need no coverage-map row
+        lua_ref = f"lua.{name}"
+        if lua_ref not in covered:
+            violations.append(
+                f'Lua save module "{name}" is classified persistent but has '
+                f"no row (as {lua_ref!r}) under the "
+                f"'### {COVERAGE_MAP_HEADING}' heading in {INVENTORY_PATH.name} "
+                f"-- add a coverage-map entry naming its canonical inspection "
+                f"path, round-trip assertion, and focused test "
+                f"(docs/persistence_contract.md requirement 3)")
+
+    return violations
+
+
 def find_component_registration_violations(
         inventory_text: str, registered: set[str]) -> list[str]:
     """The #760 registry linkage check: every save-component owner the
@@ -1522,6 +1592,8 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
     if registered_ids is not None:
         violations.extend(
             find_component_registration_violations(inventory_text, registered_ids))
+
+    violations.extend(find_coverage_map_violations(inventory_text))
 
     # Issue #764 requirement 15: a new typed-reference DTO field or Lua
     # reference kind with no documented classification fails the audit,

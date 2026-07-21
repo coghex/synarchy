@@ -991,6 +991,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
+                   Test.Headless.World.Save.Contract
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot
