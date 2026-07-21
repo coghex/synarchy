@@ -195,9 +195,11 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                               "three engines (build+save, dangling-reference load, "
                               "corrupted-load-vs-live-session) (#764)"),
     "persistence_contract_sweep": (SLOW_WORLDGEN, "real worldSize-64 generation plus "
-                              "three real engine boots for the broader representative-"
-                              "scenario fresh-process comparison (#767); the compact "
-                              "persistence_contract probe is CI-eligible instead"),
+                              "four real engine boots (three fresh-process save->load-"
+                              "save cycles) for the broader representative-scenario "
+                              "comparison, plus every cross-referenced probe it runs "
+                              "(#767); the compact persistence_contract probe is "
+                              "CI-eligible instead"),
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
     "portal_location": (SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small to test starting-building exclusion against (#778)"),

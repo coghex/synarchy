@@ -24,12 +24,27 @@ module Test.Headless.Asset.TextureFallback (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (finally)
+import Data.IORef (newIORef, readIORef)
+import System.Directory
+    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+import System.FilePath ((</>))
+import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
-import Engine.Core.State (EngineEnv)
+import Engine.Core.State (EngineEnv, floraCatalogRef, luaToEngineQueue, luaQueue
+    , assetPoolRef, nextObjectIdRef, inputStateRef, loggerRef)
+import Engine.Core.Thread (ThreadControl(..))
+import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.YamlTextures (resolveTexturePath)
 import Engine.Scripting.Lua.API.Units (unknownUnitTexture, unknownUnitAnimFrame)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Undefined (undefinedTextureData)
 import Unit.Direction (Direction(..))
+import World.Flora.Types (FloraCatalog(..), FloraId(..), FloraSpecies(..)
+    , FloraHarvest(..), lookupSpecies)
 
 -- A real, always-present repo asset — stands in for both "the preferred
 -- path" (existing case) and "the fallback path" (missing case) so the
@@ -84,3 +99,87 @@ spec = do
                 black   = Vec.fromList [0, 0, 0, 255]
             any (≡ magenta) texels `shouldBe` True
             any (≡ black) texels `shouldBe` True
+
+    -- Round-2 review: the checkerboard-pixel tests above prove the
+    -- fallback ASSET's own shape, but never exercise a real "missing
+    -- specialized placeholder" asset-resolution route reaching it. The
+    -- one such route this codebase actually implements (registerFloraSpecies,
+    -- Engine.Scripting.Lua.API.YamlTextures) is a flora harvest whose YAML
+    -- omits `harvested_texture` entirely: `fyhHarvestedTexture = Nothing`
+    -- resolves DIRECTLY to `TextureHandle 0` -- the Undefined/magenta
+    -- texture's own reserved bindless slot -- with no file-path resolution
+    -- attempt at all (never mind one that could fail). This is the
+    -- concrete, headless-reachable proof of contract requirement 12's
+    -- "missing specialized placeholders fall through to magenta
+    -- checkerboard": no GPU/render pipeline involved, so it holds
+    -- regardless of whether this build can even open a window.
+    describe "missing specialized-placeholder asset resolution (#767 \
+             \requirement 12, round-2 review)" $ do
+        it "a flora species with no harvested_texture resolves DIRECTLY \
+           \to the Undefined texture's slot 0 -- never a file-path \
+           \resolution attempt that could itself fail" $ \env → do
+            tmp ← getTemporaryDirectory
+            let dir = tmp </> "synarchy-texture-fallback-spec"
+                path = dir </> "no_harvest_texture.yaml"
+            createDirectoryIfMissing True dir
+            writeFile path noHarvestedTextureYaml
+            (`finally` removeDirectoryRecursive dir) $ do
+                idBefore ← fcNextId <$> readIORef (floraCatalogRef env)
+                ls ← newBareLuaBackend env
+                result ← evalDebug ls
+                    ("return engine.loadFloraYaml('" <> pathToLua path <> "')")
+                result `shouldSatisfy` (`elem` ["1", "1.0"])
+                catalog ← readIORef (floraCatalogRef env)
+                case lookupSpecies (FloraId idBefore) catalog of
+                    Nothing → expectationFailure
+                        "the newly-registered species is missing from the catalog"
+                    Just species → case fsHarvest species of
+                        Nothing → expectationFailure
+                            "the species was registered with no harvest block at all"
+                        Just harvest →
+                            fhHarvestedTexture harvest `shouldBe` TextureHandle 0
+
+pathToLua ∷ FilePath → Text
+pathToLua = T.pack
+
+noHarvestedTextureYaml ∷ String
+noHarvestedTextureYaml = unlines
+    [ "flora:"
+    , "  - name: test_fallback_species"
+    , "    type: groundcover"
+    , "    texDir: assets/textures/flora/unknown_flora_test_dir"
+    , "    phases: []"
+    , "    harvestable:"
+    , "      tags: [leaves]"
+    , "      yield:"
+    , "        - id: test_item"
+    , "          count: [1, 1]"
+    , "      regrowth_time: 100"
+    , "      # harvested_texture deliberately omitted"
+    , "    worldGen:"
+    , "      category: groundcover"
+    , "      minTemp: 0"
+    , "      maxTemp: 40"
+    , "      idealTemp: 20"
+    , "      minPrecip: 0"
+    , "      maxPrecip: 100"
+    , "      idealPrecip: 50"
+    ]
+
+-- | A bare Lua backend wired to a real engine, no world/window --
+--   mirrors the identical pattern several other test-headless modules
+--   already establish (e.g. Test.Headless.UI.Clipping's own
+--   'newBareLuaBackend').
+newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
+newBareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                (assetPoolRef env) (nextObjectIdRef env)
+                                (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls
+
+-- | Run one command through the exact loadstring+pcall primitive the
+--   real TCP debug console itself uses ('executeDebugLua').
+evalDebug ∷ LuaBackendState → Text → IO Text
+evalDebug ls = executeDebugLua (lbsLuaState ls)

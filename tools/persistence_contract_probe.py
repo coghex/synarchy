@@ -87,6 +87,7 @@ AI_SCRIPTS = (
     ("scripts/unit_stats.lua", 0.1),
     ("scripts/unit_resources.lua", 0.2),
     ("scripts/unit_ai.lua", 0.1),
+    ("scripts/building_spawn.lua", 0.2),
 )
 
 
@@ -234,7 +235,31 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
     # moment to apply it before the save captures state.
     time.sleep(0.5)
 
+    # Round-2 review: the reset-policy check only proves something if a
+    # REAL non-default selection/tool exists before the save -- seed both
+    # so "cleared after load" is a meaningful assertion, not a vacuous one
+    # (nothing was ever selected/armed to begin with).
+    selected = send(port, f"return unit.select({atk})").strip()
+    chk.ok(selected == "true", f"unit.select({atk}) succeeded before saving (got {selected!r})")
+    send(port, f"world.setToolMode('{PAGE}', 'tool_mine'); return 'ok'")
+    time.sleep(0.3)
+    sel_before = send(port, "return unit.getSelected()")
+    tool_before = send(port, "return world.getToolMode()").strip().strip('"')
+    chk.ok(atk_in_selection(sel_before, atk),
+           f"unit {atk} is genuinely selected before saving (got {sel_before!r})")
+    chk.ok(tool_before == "mine",
+           f"tool mode is genuinely non-default before saving (got {tool_before!r})")
+
     return portal_bid, atk, tgt
+
+
+def atk_in_selection(raw: str, uid: int) -> bool:
+    try:
+        import json
+        parsed = json.loads(raw)
+        return isinstance(parsed, list) and float(uid) in [float(x) for x in parsed]
+    except (TypeError, ValueError):
+        return False
 
 
 def get_attack_target(port: int, uid: int):
@@ -327,75 +352,74 @@ def main() -> int:
         quit_engine(port, proc)
         proc = None
 
-        # ── Engine B: fresh process, load gen1, reset-policy + dwell, resave ──
-        print("=== engine B: fresh process, load 'gen1', dwell, save 'gen2' ===")
-        proc = boot_probe(root, port, os.path.join(tmpdir, "engineB.log"))
-        bootstrap_defs(port)
-        load_ai_stack(port)
-        loaded = send(port, "return engine.loadSave('gen1')")
-        chk.ok(loaded.strip() == "true", f"engine.loadSave('gen1') accepted (got {loaded!r})")
-        published, status = wait_load_published(port)
-        chk.ok(published, f"load transaction published (status={status})")
+        # ── Requirement 9: at least THREE fresh-process save->load->save
+        # cycles. Engine A's save above is the INITIAL save, not itself a
+        # cycle -- each of the three engines below is one complete fresh-
+        # process "load prior generation -> save the next one" cycle
+        # (round-2 review: two engines only complete two cycles, not
+        # three) -----------------------------------------------------────
+        gen_paths = [gen1_path]
+        prev_slot = "gen1"
+        for i, letter in enumerate("BCD", start=2):
+            next_slot = f"gen{i}"
+            print(f"=== engine {letter}: fresh process, load '{prev_slot}', "
+                  f"save '{next_slot}' ===")
+            proc = boot_probe(root, port, os.path.join(tmpdir, f"engine{letter}.log"))
+            bootstrap_defs(port)
+            load_ai_stack(port)
+            loaded = send(port, f"return engine.loadSave('{prev_slot}')")
+            chk.ok(loaded.strip() == "true",
+                   f"engine.loadSave('{prev_slot}') accepted (got {loaded!r})")
+            published, status = wait_load_published(port)
+            chk.ok(published, f"load transaction published (status={status})")
 
-        assert_reset_policy(chk, port, "after loading gen1")
-        attack_target_b = get_attack_target(port, atk)
-        chk.ok(attack_target_b == tgt,
-               f"lua.unit_ai's attackTargetUid survived the fresh-process load "
-               f"({attack_target_b} vs expected {tgt})")
+            assert_reset_policy(chk, port, f"after loading {prev_slot}")
+            attack_target = get_attack_target(port, atk)
+            chk.ok(attack_target == tgt,
+                   f"lua.unit_ai's attackTargetUid survived the fresh-process "
+                   f"load of '{prev_slot}' ({attack_target} vs expected {tgt})")
 
-        before = sample_live_state(port, portal_bid, atk)
-        time.sleep(2.0)
-        after = sample_live_state(port, portal_bid, atk)
-        chk.ok(before == after,
-               f"requirement 7: repeating the canonical live inspection during "
-               f"a 2s paused dwell produces the SAME persistent state "
-               f"({before} -> {after})")
+            if letter == "B":
+                # requirement 7's paused-stability dwell -- only needs
+                # proving once, right after the first fresh-process load.
+                before = sample_live_state(port, portal_bid, atk)
+                time.sleep(2.0)
+                after = sample_live_state(port, portal_bid, atk)
+                chk.ok(before == after,
+                       f"requirement 7: repeating the canonical live "
+                       f"inspection during a 2s paused dwell produces the "
+                       f"SAME persistent state ({before} -> {after})")
 
-        saved_b = send(port, f"return engine.saveWorld('{PAGE}', 'gen2')")
-        chk.ok(saved_b.strip() == "true", f"re-saving to 'gen2' succeeded (got {saved_b!r})")
-        gen2_path = os.path.join(root, "saves", "gen2", "world.synworld")
-        chk.ok(wait_for_file(gen2_path), f"save file appeared at {gen2_path}")
-        quit_engine(port, proc)
-        proc = None
+            saved = send(port, f"return engine.saveWorld('{PAGE}', '{next_slot}')")
+            chk.ok(saved.strip() == "true",
+                   f"re-saving to '{next_slot}' succeeded (got {saved!r})")
+            next_path = os.path.join(root, "saves", next_slot, "world.synworld")
+            chk.ok(wait_for_file(next_path), f"save file appeared at {next_path}")
+            gen_paths.append(next_path)
 
-        # ── Engine C: fresh process, load gen2, resave gen3 ─────────────
-        print("=== engine C: fresh process, load 'gen2', save 'gen3' ===")
-        proc = boot_probe(root, port, os.path.join(tmpdir, "engineC.log"))
-        bootstrap_defs(port)
-        load_ai_stack(port)
-        loaded_c = send(port, "return engine.loadSave('gen2')")
-        chk.ok(loaded_c.strip() == "true", f"engine.loadSave('gen2') accepted (got {loaded_c!r})")
-        published_c, status_c = wait_load_published(port)
-        chk.ok(published_c, f"second load transaction published (status={status_c})")
-        assert_reset_policy(chk, port, "after loading gen2")
-        attack_target_c = get_attack_target(port, atk)
-        chk.ok(attack_target_c == tgt,
-               f"lua.unit_ai's attackTargetUid survived a SECOND fresh-process "
-               f"load ({attack_target_c} vs expected {tgt})")
+            if letter == "D":
+                # Unpause ONLY to confirm the default speed (requirement 8)
+                # -- never comparing any subsequent random gameplay outcome.
+                send(port, "require('scripts.pause').set(false); return 'ok'",
+                     expect_result=False)
+                time.sleep(0.5)
+                ts = send(port, f"return world.getTimeScale('{PAGE}')")
+                chk.ok(ts.strip() in ("1", "1.0"),
+                       f"unpausing resumes at the default simulation speed "
+                       f"(got {ts})")
 
-        saved_c = send(port, f"return engine.saveWorld('{PAGE}', 'gen3')")
-        chk.ok(saved_c.strip() == "true", f"re-saving to 'gen3' succeeded (got {saved_c!r})")
-        gen3_path = os.path.join(root, "saves", "gen3", "world.synworld")
-        chk.ok(wait_for_file(gen3_path), f"save file appeared at {gen3_path}")
-
-        # Unpause ONLY to confirm the default speed (requirement 8) --
-        # never comparing any subsequent random gameplay outcome.
-        send(port, "require('scripts.pause').set(false); return 'ok'", expect_result=False)
-        time.sleep(0.5)
-        ts = send(port, f"return world.getTimeScale('{PAGE}')")
-        chk.ok(ts.strip() in ("1", "1.0"),
-               f"unpausing resumes at the default simulation speed (got {ts})")
-
-        quit_engine(port, proc)
-        proc = None
+            quit_engine(port, proc)
+            proc = None
+            prev_slot = next_slot
 
         # ── Requirement 1/5/9: canonical persistence-state comparison ───
-        print("=== comparing gen1/gen2/gen3 through the real production codec ===")
-        ok, detail = compare_session_files(
-            [Path(gen1_path), Path(gen2_path), Path(gen3_path)])
-        chk.ok(ok, "gen1/gen2/gen3 are structurally IDENTICAL (SessionSnapshot "
-                   f"Eq + lua.* payload byte-equality) across three real "
-                   f"fresh-process save->load->save cycles"
+        print(f"=== comparing {len(gen_paths)} generations through the real "
+              f"production codec ===")
+        ok, detail = compare_session_files([Path(p) for p in gen_paths])
+        chk.ok(ok, f"all {len(gen_paths)} generations are structurally "
+                   f"IDENTICAL (SessionSnapshot Eq + lua.* payload "
+                   f"byte-equality) across three real fresh-process "
+                   f"save->load->save cycles"
                + (f" -- {detail}" if not ok else ""))
 
     finally:
