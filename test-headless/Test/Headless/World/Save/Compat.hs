@@ -541,6 +541,26 @@ spec = do
             foreignOptionalComponentIds HS.empty bytes
                 `shouldBe` [ComponentId "future-thing"]
 
+        it "the overwrite guard does NOT exempt an id merely spelled \
+           \\"session\" when the envelope ISN'T the exact {metadata, \
+           \session} legacy shape (round-4 review) -- a modern-shaped \
+           \envelope carrying an unrelated optional component that \
+           \happens to be named \"session\" is genuinely foreign, and \
+           \exempting it just because of that name would silently drop \
+           \it on the next save" $ do
+            let modernShapedWithSessionNamedExtra =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode minimalSaveMetadataForExtra)
+                    , (ComponentId "world-pages", 1, True, BS.pack [1, 2, 3])
+                    , (ComponentId "session", 1, False, BS.pack [4, 5, 6])
+                    ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion modernShapedWithSessionNamedExtra of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            foreignOptionalComponentIds HS.empty bytes
+                `shouldBe` [ComponentId "session"]
+
 -- | A metadata value that agrees with the extracted fixture session's own
 --   gameplay gen params (seed 42 / world size 128 / plate count 10 — see
 --   the frozen v90 DTO test above), used by the requirement-9 tests: they

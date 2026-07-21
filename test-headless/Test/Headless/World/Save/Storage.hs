@@ -37,7 +37,11 @@ import Engine.Core.Log
 import World.Save.Serialize
     (listSaves, loadWorld, savesDirectory, SaveListing(..))
 import World.Save.Storage
-import World.Save.Envelope (encodeSessionSnapshot)
+import World.Save.Envelope
+    ( encodeSessionSnapshot, metadataComponentId, metadataComponentVersion
+    , currentEnvelopeVersion )
+import World.Save.Envelope.Codec (encodeEnvelope)
+import World.Save.Envelope.Types (defaultEnvelopeLimits, ComponentId(..))
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
@@ -152,6 +156,24 @@ emptyPagesBytes =
     let snap = (snapshotWithSeed 1) { snapPages = HM.empty }
         meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-empty") snap
     in encodeSessionSnapshot meta snap []
+
+-- | A STRUCTURALLY VALID envelope carrying a genuinely unrecognized
+--   OPTIONAL component (round-4 review) -- exactly what a corrupted-
+--   authoritative-with-a-valid-.prev recovery scenario would leave
+--   behind if that .prev generation predates some now-retired optional
+--   component. Only "metadata" (required) is a real, known id; the
+--   payload bytes themselves are never decoded by
+--   'foreignOptionalDataCheck', only the manifest's own component id
+--   list matters.
+foreignBytesFor ∷ Word64 → Text → BS.ByteString
+foreignBytesFor seed name =
+    let (meta, _) = buildEncoded seed name "t-foreign"
+        specs = [ (metadataComponentId, metadataComponentVersion, True
+                  , S.encode meta)
+                , (ComponentId "retired-thing", 1, False, BS.pack [7, 7, 7]) ]
+    in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion specs of
+        Right b → b
+        Left e  → error ("foreignBytesFor: test setup: " <> show e)
 
 -- ---------------------------------------------------------------------
 -- Scratch directory
@@ -309,6 +331,44 @@ spec = do
                 entries ← listDirectory dir
                 entries `shouldMatchList`
                     [authoritativeFileName, previousGenerationFileName]
+
+        it "refuses to publish when the PREVIOUS generation (not just \
+           \the authoritative one) carries an optional component this \
+           \build does not recognize (round-4 review) -- a real \
+           \corrupted-authoritative recovery leaves the actually-loaded, \
+           \still-valid generation sitting at .prev, where an ordinary \
+           \publish would otherwise stage it aside and sweep it away \
+           \(cleanupAfterPublish) without this check ever having looked \
+           \at it" $
+            withTempSlotDir $ \dir → do
+                let (_metaA, bytesA) = buildEncoded 1 "slot" "t1"
+                    foreignPrevBytes = foreignBytesFor 2 "slot"
+                createDirectoryIfMissing True dir
+                BS.writeFile (authPath dir) bytesA
+                BS.writeFile (prevPath dir) foreignPrevBytes
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
+                case r of
+                    Left f  → do
+                        pfPhase f `shouldBe` PhaseForeignOptionalData
+                        pfReason f `shouldSatisfy` T.isInfixOf "retired-thing"
+                    Right _ → expectationFailure
+                        "expected a foreign-optional-data refusal"
+                -- Refusing must happen BEFORE any rotation -- both
+                -- generations stay exactly as they were, never staged.
+                BS.readFile (authPath dir) `shouldReturn` bytesA
+                BS.readFile (prevPath dir) `shouldReturn` foreignPrevBytes
+
+        it "still publishes normally when an ORDINARY previous \
+           \generation (no foreign data) sits at .prev -- the round-4 \
+           \fix must not add friction to the routine rotation case" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesC
 
         it "never publishes a candidate that fails to decode, leaving \
            \an existing authoritative generation untouched" $

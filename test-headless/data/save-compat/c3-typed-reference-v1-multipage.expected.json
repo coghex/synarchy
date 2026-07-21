@@ -1,5 +1,5 @@
 {
-  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's b3-lua-versioned-session-v1 fixture (issue #766, round-3 review). Byte-identical Haskell-side content to c3-typed-reference-v1-minimal (same real building/unit/craft-bill/power-node/gen-params, extracted via decodeSessionEnvelope then re-encoded via encodeSessionSnapshot) -- the ONLY difference is its lua.unit_ai/lua.building_spawn components are encoded at their historical v1 (bare-number reference field) wire shape instead of the modern v3 shape, keyed by this SAME session's real unit id (1) and building id (1) so the reference actually resolves. This is what proves a legacy Lua payload version end-to-end inside a REAL, content-valid complete session: Test.Headless.World.Save.Compat's manifest-driven gate decodes/migrates/reassembles it exactly like any other complete-session fixture, AND tools/save_compat_migration_probe.py's fresh-process round trip (load -> publish -> resave -> restart -> reload) drives it through the real engine's Lua VM, where saveModules.prepareLoad's v1->v3 migration for BOTH modules fires for real -- closing the gap where only component-focused (single-Lua-payload, no full envelope) fixtures existed for the b3-lua-versioned baseline.",
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's c3-typed-reference-v1-multipage fixture (issue #766 requirement 11: 'Include multi-page ... coverage', round-4 review). Byte-identical page1 content to c3-typed-reference-v1-minimal (same real cargo_hold_S/acolyte/forge_steel_dagger, extracted via decodeSessionEnvelope then re-encoded via encodeSessionSnapshot with a SECOND page added: 'page2', a deliberately empty page -- no entities, so no building/unit id needs a fresh unique allocation across pages -- with its own distinct clock (08:30 vs page1's 12:00) proving each page's own PageSnapshot fields (clock, map mode, entity slices) are captured, assembled, and reassembled independently, not merged or confused across pages. visiblePages lists both; activePage stays 'page1'. This is what proves the manifest-driven hspec gate and the fresh-process migration probe's structural assertions genuinely iterate every page in snapPages, not just the first/only one every other tracked fixture happens to have.",
   "metadata": {
     "seed": 42,
     "worldSize": 8,
@@ -19,7 +19,7 @@
     "facing": "FaceEast"
   },
   "activePage": "page1",
-  "visiblePages": ["page1"],
+  "visiblePages": ["page1", "page2"],
   "pages": [
     {
       "pageId": "page1",
@@ -88,26 +88,28 @@
           "storedWh": 1234.5
         }
       ]
+    },
+    {
+      "pageId": "page2",
+      "buildingCount": 0,
+      "unitCount": 0,
+      "unitSimStateCount": 0,
+      "craftBillCount": 0,
+      "powerNodeCount": 0,
+      "groundItemCount": 0,
+      "timeHour": 8,
+      "timeMinute": 30,
+      "dateYear": 1,
+      "dateMonth": 1,
+      "dateDay": 1,
+      "mapMode": "ZMDefault",
+      "buildings": [],
+      "units": [],
+      "unitSimStates": [],
+      "craftBills": [],
+      "powerNodes": []
     }
   ],
   "luaComponentCount": 2,
-  "isMigratedLegacyBaseline": false,
-  "luaStateChecks": [
-    {
-      "expr": "require('scripts.unit_ai').aiState[1].buildTarget",
-      "expected": 1
-    },
-    {
-      "expr": "type(require('scripts.unit_ai').aiState[1].buildTarget)",
-      "expected": "number"
-    },
-    {
-      "expr": "require('scripts.building_spawn').state[1].lastUid",
-      "expected": 1
-    },
-    {
-      "expr": "type(require('scripts.building_spawn').state[1].lastUid)",
-      "expected": "number"
-    }
-  ]
+  "isMigratedLegacyBaseline": false
 }

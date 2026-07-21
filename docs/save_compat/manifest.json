@@ -111,6 +111,15 @@
           "sizeBytes": 296538,
           "provenance": "Generated through the real codec: a single page (real, staging-valid WorldGenParams extracted from a genuine world.init('main_world', 42, 8, 3) headless-engine boot, same source as the b1-initial-session fixture) carrying one REAL-content building (def 'cargo_hold_S'), one REAL-content unit (def 'acolyte', matching what tools/multiworld_save_probe.py spawns), one unit-sim state, one craft bill (a real recipe id 'forge_steel_dagger', FixedCount mode so no output-item def is needed), and one power node -- built via World.Save.Snapshot.captureSessionSnapshot, encoded via World.Save.Component.encodeComponentSpecs, with craft-bills/power-nodes/unit-sim's payloads swapped for their historical v1 (bare-id) DTOs (CraftBillDTOv1/PowerNodeDTOv1/PageSimDTOv1, already exported by World.Save.Component.Entities), PLUS the real lua.unit_ai/lua.building_spawn components (empty AI/spawn state, version 3) extracted from that same real engine boot's save. Real content definitions (not the pure-hspec 'test_building'/'test_unit' placeholders) are required so the real engine's content-reference validation (Engine.Scripting.Lua.API.Save's continueLoad, issue #760 requirement 9) accepts this fixture in the fresh-process migration probe, not just the pure hspec decode path.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1.expected.json"
+        },
+        {
+          "id": "c3-typed-reference-v1-multipage",
+          "path": "test-headless/data/save-compat/c3-typed-reference-v1-multipage.bin",
+          "kind": "complete-session",
+          "sha256": "2e78c920d4b0b630009738a2a58659c147039606c65822e2a54a1f118d3acc1a",
+          "sizeBytes": 591736,
+          "provenance": "Generated through the real codec (issue #766 requirement 11: 'Include multi-page ... coverage', round-4 review): c3-typed-reference-v1-minimal's fixture was decoded via World.Save.Envelope.decodeSessionEnvelope to recover its REAL (SaveMetadata, SessionSnapshot), a SECOND page ('page2', deliberately empty -- no entities, so no building/unit id needs a fresh cross-page-unique allocation -- with its own distinct clock, 08:30 vs page1's 12:00) was inserted into snapPages/snapVisiblePages, then the whole session was re-encoded via World.Save.Envelope.encodeSessionSnapshot with page1's real content and Lua components (lua.unit_ai/lua.building_spawn, v3) carried over unchanged. Proves the manifest-driven hspec gate and the fresh-process migration probe genuinely assemble/reassemble/structurally-compare EVERY page in a session, not merely the first/only page every other tracked fixture happens to have.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/c3-typed-reference-v1-multipage.expected.json"
         }
       ]
     },

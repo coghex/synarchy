@@ -352,23 +352,48 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   ('UnknownRequiredComponent'), which this function reports as "no
 --   foreign data" (an empty list) rather than attempt to peek past a
 --   structurally-rejected envelope. @luaKnownNames@ widens the known set
---   the SAME way every other decode entry point does; the legacy
---   @"session"@ id is ALSO always treated as known here (issue #766) —
---   it is a recognized, migratable legacy shape, not foreign data, so a
---   B1-shaped generation's OWN session/metadata pair must never itself
---   trigger a refusal, while anything genuinely beyond that pair still
---   does. Used by "World.Save.Storage" to refuse overwriting a
---   generation carrying data this build cannot round-trip, rather than
---   silently discarding it on the next save.
+--   the SAME way every other decode entry point does.
+--
+--   The legacy @"session"@ id is included in the set passed to
+--   'decodeEnvelope' itself so a genuine B1-shaped generation's OWN
+--   REQUIRED session/metadata pair doesn't itself trip
+--   'UnknownRequiredComponent' and refuse EVERY legacy session's first
+--   re-save (the scenario this function exists for). But @"session"@ is
+--   only actually EXEMPTED from the returned foreign-id list when the
+--   decoded envelope's OTHER present ids contain no genuine MODERN
+--   gameplay component (round-4 review) — @"session"@ may legitimately
+--   appear alongside @"metadata"@ and/or genuinely-unrecognized optional
+--   data (that's exactly the B1-plus-extra-optional-data scenario this
+--   requirement protects), but if it appears alongside an ACTUAL modern
+--   component (e.g. @"world-pages"@), this is NOT the recognized legacy
+--   shape at all — a foreign/hand-crafted file could still construct
+--   one even though this build's own writer never would — so it must be
+--   treated as ordinary unrecognized data like any other id, not
+--   silently exempted just because it happens to share that name.
+--   Otherwise a genuinely unknown optional component that merely
+--   happens to be NAMED @"session"@ inside a modern-shaped save would
+--   pass this guard and be silently dropped on the very next save.
 foreignOptionalComponentIds ∷ HS.HashSet Text → BS.ByteString → [ComponentId]
 foreignOptionalComponentIds luaKnownNames bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-             knownIds HS.empty bytes of
+             knownIdsForDecode HS.empty bytes of
         Left _        → []
         Right decoded →
-            [ cdId d | d ← emComponents (deManifest decoded)
-            , not (HS.member (cdId d) knownIds) ]
-  where knownIds = HS.insert sessionComponentId (knownComponentIds luaKnownNames)
+            let presentIds =
+                    HS.fromList [ cdId d | d ← emComponents (deManifest decoded) ]
+                otherIds = HS.delete sessionComponentId presentIds
+                hasModernComponent =
+                    any (\i → i ≢ metadataComponentId ∧ HS.member i modernKnownIds)
+                        (HS.toList otherIds)
+                looksLikeLegacyShape =
+                    HS.member sessionComponentId presentIds ∧ not hasModernComponent
+                effectiveKnownIds =
+                    if looksLikeLegacyShape then knownIdsForDecode else modernKnownIds
+            in [ cdId d | d ← emComponents (deManifest decoded)
+               , not (HS.member (cdId d) effectiveKnownIds) ]
+  where
+    modernKnownIds    = knownComponentIds luaKnownNames
+    knownIdsForDecode = HS.insert sessionComponentId modernKnownIds
 
 -- | Load-time generation-validity classification (issue #762, storage-
 --   overhaul C1): whether a structurally-invalid file is safe to treat as

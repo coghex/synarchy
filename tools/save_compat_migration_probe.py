@@ -39,6 +39,19 @@ player's saves, see make_isolated_root):
      probe already uses) ONLY to confirm the default time scale --
      never comparing any subsequent random gameplay outcome.
 
+Additionally (round-4 review), a fixture may declare "luaStateChecks" in
+its OWN expectedCanonicalSummary -- a list of {"expr", "expected"} pairs
+evaluated live through the debug console at EVERY load boundary above
+(right after the initial migration-load, and again after the resave/
+restart/reload round trip). Aggregate page/pause/time-scale checks alone
+can never prove a migrated Lua module's actual unwrapped values and
+reference edges came out correct, only that loading didn't outright
+fail -- see declared_complete_session_fixtures' docstring. The
+b3-lua-versioned-session-v1 fixture uses this to confirm its legacy v1
+unit_ai/building_spawn payloads really did unwrap to the exact bare
+numbers the v1 payload encoded, inside a genuine running engine, not
+merely that the pure hspec decode path accepted the envelope structurally.
+
 Usage:
   python3 tools/save_compat_migration_probe.py [--port 9276]
 
@@ -118,6 +131,23 @@ def declared_complete_session_fixtures() -> list[dict]:
                 "fixture_id": fixture["id"],
                 "path": REPO / fixture["path"],
                 "active_page": summary["activePage"],
+                # Round-4 review: aggregate page/pause/time-scale checks
+                # alone never prove a fixture's ACTUAL persistent state
+                # (in particular a migrated Lua module's real, unwrapped
+                # values and reference edges) came out correct -- just
+                # that loading/publishing/resaving didn't outright fail.
+                # A fixture opts into this by declaring "luaStateChecks"
+                # in its OWN expectedCanonicalSummary: a list of
+                # {"expr": <Lua expression, evaluated via the debug
+                # console>, "expected": <expected return-value string>}
+                # pairs, each re-checked at every load boundary this
+                # probe already visits (right after the initial
+                # migration-load AND after the resave/restart/reload) --
+                # so a migration that produces a self-consistent but
+                # WRONG value (which the pure hspec re-encode/decode
+                # equivalence check alone cannot catch either) fails
+                # here for real, inside a genuine running engine.
+                "lua_state_checks": summary.get("luaStateChecks", []),
             })
     if not out:
         sys.exit("FAIL: docs/save_compat/manifest.json declares no "
@@ -137,6 +167,34 @@ class Checks:
         print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
         if not cond:
             self.failed += 1
+
+
+def _values_match(actual: str, expected) -> bool:
+    """Numeric-tolerant comparison: the debug console's number-to-string
+    formatting can render an integer-valued Lua number as either "1" or
+    "1.0" depending on path (mirrors this same file's existing
+    ("1", "1.0")-tolerant world.getTimeScale check) -- comparing as
+    floats when both sides parse avoids a spurious failure over pure
+    formatting, while still catching an actually wrong value."""
+    try:
+        return float(actual) == float(expected)
+    except (TypeError, ValueError):
+        return actual.strip('"') == str(expected)
+
+
+def run_lua_state_checks(chk: Checks, port: int, checks: list[dict], when: str) -> None:
+    """Evaluate each fixture-declared {"expr", "expected"} pair for real,
+    through the live engine's debug console -- see
+    declared_complete_session_fixtures' docstring for why this exists.
+    `when` (e.g. "after initial migration-load" / "after resave/reload")
+    only labels the printed check, since the SAME expression is checked
+    at multiple load boundaries."""
+    for check in checks:
+        expr = check["expr"]
+        expected = check["expected"]
+        actual = send(port, f"return {expr}").strip()
+        chk.ok(_values_match(actual, expected),
+               f"{when}: `{expr}` == {expected!r} (got {actual!r})")
 
 
 def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
@@ -185,6 +243,9 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                f"no gameplay time advanced during a 2s paused dwell "
                f"({date_a} -> {date_b})")
 
+        run_lua_state_checks(chk, port, fixture["lua_state_checks"],
+                              "after the initial migration-load")
+
         saved = send(port, f"return engine.saveWorld('{active_page}', '{resaved_slot}')")
         chk.ok(saved.strip() == "true",
                f"re-saving the session under a new slot succeeded "
@@ -231,6 +292,9 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                f"(got {active_b!r}, expected {active_page!r})")
         chk.ok(send(port, "return engine.isPaused()") == "true",
                "reloaded session begins paused")
+
+        run_lua_state_checks(chk, port, fixture["lua_state_checks"],
+                              "after the resave/restart/reload round trip")
 
         # Unpause ONLY to confirm the default time scale -- never
         # comparing any subsequent random gameplay outcome.

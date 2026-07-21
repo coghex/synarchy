@@ -393,22 +393,40 @@ publishFailureFor slotName phase path reason =
 --   job is narrower: protect a generation that WOULD otherwise load
 --   cleanly today. No existing authoritative file (first-ever publish,
 --   or one already lost to storage corruption) is trivially safe.
+--
+--   Checks BOTH @world.synworld@ and @world.synworld.prev@ (round-4
+--   review) — not merely the authoritative file. If the authoritative
+--   generation is corrupt (present but undecodable), a real load
+--   actually reads through to 'previousGenerationFileName' instead
+--   ('selectLoadGeneration'\'s fallback), and 'publishValidated' then
+--   stages THAT file aside and, once the new candidate durably lands,
+--   sweeps the staged copy away for good ('cleanupAfterPublish') —
+--   discarding whatever it carried without this check ever having
+--   looked at it, since it only ever read the (corrupt, foreign-data-
+--   free-by-construction) authoritative file. Checking @.prev@ too
+--   closes that gap; an ordinary @.prev@ (the routine previous
+--   generation from the last publish) never carries foreign data in
+--   practice, so this adds no friction to the common case.
 foreignOptionalDataCheck ∷ FilePath → HS.HashSet Text → IO (Either Text ())
 foreignOptionalDataCheck dir luaKnownNames = do
-    let authPath = dir </> authoritativeFileName
-    exists ← doesFileExist authPath
-    if not exists then pure (Right ()) else do
-        readResult ← try (BS.readFile authPath)
-        case readResult of
-            Left (_ ∷ IOException) → pure (Right ())
-            Right bytes → case foreignOptionalComponentIds luaKnownNames bytes of
-                []  → pure (Right ())
-                ids → pure (Left
-                    ("existing generation carries data this build does not \
-                     \recognize (" <> T.intercalate ", " (map cidText ids)
-                     <> ") -- refusing to overwrite it; save to a different \
-                        \name to keep both"))
-  where cidText (ComponentId t) = t
+    authIds ← foreignIdsIn (dir </> authoritativeFileName)
+    prevIds ← foreignIdsIn (dir </> previousGenerationFileName)
+    case authIds ⧺ prevIds of
+        [] → pure (Right ())
+        ids → pure (Left
+            ("existing generation carries data this build does not \
+             \recognize (" <> T.intercalate ", " (map cidText (L.nub ids))
+             <> ") -- refusing to overwrite it; save to a different name \
+                \to keep both"))
+  where
+    cidText (ComponentId t) = t
+    foreignIdsIn path = do
+        exists ← doesFileExist path
+        if not exists then pure [] else do
+            readResult ← try (BS.readFile path)
+            case readResult of
+                Left (_ ∷ IOException) → pure []
+                Right bytes → pure (foreignOptionalComponentIds luaKnownNames bytes)
 
 writeValidateAndPublish
     ∷ FilePath → Text → SaveMetadata → BS.ByteString
