@@ -3783,26 +3783,37 @@ below):
   definition, invalid Haskell/Lua reference, required Lua decode
   failure) that already have their own maintained, real-process
   regression probes; instead it actually RUNS them, via `tools/
-  run_probes.py --only ... --exact` — matching requirement 14's "avoid
-  retaining multiple expensive probes that test the same final
-  behavior" without reducing to a no-op existence check. This sweep's
-  OWN scenario always uses an isolated resource root (requirement 15),
-  but the 12 cross-referenced probes don't all: only `save_storage`,
-  `persistence_integrity`, and `save_compat_migration` pass their own
-  `--resource-root`, and those 3 are the DEFAULT `--cross-probe-keys`
-  set. The other 8 (`chop`/`till`/`crop`/`plant`/`construction`/
-  `power`/`transactional_load`/`save_barrier`) call `engine.saveWorld`/
-  `loadSave` straight against this repo's real `saves/` directory
-  (cleaned up afterward, but transiently present), so running them is
-  opt-in only via `--include-unisolated-probes`, never the default.
-  `craft_bill` touches no `saves/` at all but is ALSO excluded from the
-  default: `tools/ci_probes.py --status` classifies it `manual-only
-  [flaky]` for reasons unrelated to persistence, so it must be listed
-  explicitly in `--cross-probe-keys` to opt in.
+  run_probes.py --only ... --exact --retries 1` (the `--retries 1`
+  matches CI's own convention for the parallel-engine-contention flake
+  class its own probe gate already absorbs with a solo re-run) —
+  matching requirement 14's "avoid retaining multiple expensive probes
+  that test the same final behavior" without reducing to a no-op
+  existence check. This sweep's OWN scenario, AND every cross-
+  referenced probe it can actually invoke, always uses an isolated
+  resource root (requirement 15) — with no opt-in escape hatch (round-5
+  review: an opt-in flag that could still reach the real `saves/`
+  directory doesn't satisfy "never touch" for a routine invocation).
+  Only `save_storage`/`persistence_integrity`/`save_compat_migration`
+  (their own `--resource-root`) and `craft_bill` (touches no `saves/`
+  at all) are ever selectable via `--cross-probe-keys` — an
+  unrecognized or known-unsafe key exits immediately with an error, not
+  a silent run. The default is the first 3 only: `craft_bill` is
+  independently flaky per `tools/ci_probes.py --status` (`manual-only
+  [flaky]`, unrelated to persistence), so it must be listed explicitly
+  to opt in. The other 8 (`chop`/`till`/`crop`/`plant`/`construction`/
+  `power`/`transactional_load`/`save_barrier`, which call
+  `engine.saveWorld`/`loadSave` straight against this repo's real
+  `saves/` directory) are never invocable from this script at all; use
+  `run_probes.py` directly or CI's own probe gate for that coverage.
   `--cross-probe-keys`/`--skip-cross-probes` narrow this further for
   local iteration on the sweep's own scenario; skipping is loudly
-  reported as reduced coverage, never silently. Registered manual-only
-  (`slow/worldgen-heavy`) in
+  reported as reduced coverage, never silently. Both harnesses also
+  seed a throwaway pre-load-only page before their first fresh-process
+  load and assert it does NOT survive publication — proving a load
+  REPLACES the whole session rather than merging into it (#763), inside
+  each harness's own isolated scenario rather than relying solely on
+  the excluded-by-default `transactional_load` cross-probe. Registered
+  manual-only (`slow/worldgen-heavy`) in
   `tools/ci_probes.py`.
 
 ## AI Asset Generation

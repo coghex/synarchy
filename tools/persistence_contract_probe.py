@@ -69,7 +69,7 @@ import time
 from pathlib import Path
 
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
-                       wait_save_complete)
+                       wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files
 from save_compat_audit import dump_canonical_summary
 
@@ -79,6 +79,10 @@ SEED = 424242
 WORLD_SIZE = 8
 PLATE_COUNT = 3
 PAGE = "contract_page"
+# A page that only ever exists in a fresh, PRE-load live session -- never
+# part of any save this suite writes -- used once (round-5 review) to
+# prove a load replaces the whole session rather than merging into it.
+GHOST_PAGE = "contract_preload_ghost"
 
 # The AI/stats script stack the loading screen would load in a real GUI
 # session -- headless boots skip the loading screen entirely (CLAUDE.md),
@@ -153,18 +157,14 @@ def save_and_wait(chk: Checks, port: int, page: str, slot: str) -> str:
     """engine.saveWorld, then tie completion to THIS save's own request id
     via engine.getSaveStatus() reaching SaveCaptureComplete (round-4
     review: the appearance of world.synworld on disk is a proxy, not the
-    authoritative completion signal -- see wait_save_complete). Returns
-    the accepted-request-vs-status-mismatch-safe result label used in the
-    check message; asserts acceptance, request-id capture, and terminal
-    success as three separate checks so a failure names exactly which
-    step broke."""
+    authoritative completion signal -- see wait_save_complete). Asserts
+    acceptance, request-id capture, and terminal success as three
+    separate checks so a failure names exactly which step broke."""
     saved = send(port, f"return engine.saveWorld('{page}', '{slot}')")
     chk.ok(saved.strip() == "true", f"engine.saveWorld('{slot}') accepted (got {saved!r})")
-    status = send_json(port, "return engine.getSaveStatus()")
-    request_id = status.get("id") if isinstance(status, dict) else None
+    request_id = capture_request_id(port, "return engine.getSaveStatus()")
     chk.ok(request_id is not None,
-           f"engine.getSaveStatus() reports a request id right after saveWorld('{slot}') "
-           f"(got {status!r})")
+           f"engine.getSaveStatus() reports a request id right after saveWorld('{slot}')")
     ok, final_status = wait_save_complete(port, request_id)
     chk.ok(ok, f"save '{slot}' (request {request_id}) reached SaveCaptureComplete "
                 f"(got {final_status!r})")
@@ -176,6 +176,14 @@ def as_int(s: str):
         return int(float(s))
     except (TypeError, ValueError):
         return None
+
+
+def page_exists(port: int, page: str) -> bool:
+    """A page's registration oracle (mirrors transactional_load_probe.py's
+    identical helper): world.getDate returns nil for a page that isn't
+    (or is no longer) registered."""
+    r = send(port, f"return world.getDate('{page}')")
+    return r not in ("nil", "null", "")
 
 
 def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
@@ -423,11 +431,38 @@ def main() -> int:
             proc = boot_probe(root, port, os.path.join(tmpdir, f"engine{letter}.log"))
             bootstrap_defs(port)
             load_ai_stack(port)
+
+            if letter == "B":
+                # Round-5 review: prove a load REPLACES the whole session
+                # rather than merging into it -- a page that exists only
+                # in this fresh, pre-load session (never part of the
+                # save being loaded) must NOT survive publication (#763,
+                # mirrors transactional_load_probe.py's "complete
+                # replacement (not a merge)" scenario, but exercised here
+                # inside THIS suite's own isolated resource root/scenario
+                # rather than relying solely on that excluded-by-default
+                # cross-probe). A no-generator arena is enough -- its
+                # own content is irrelevant, only its registration is.
+                send(port, f"world.initArena('{GHOST_PAGE}'); return 'ok'")
+                chk.ok(page_exists(port, GHOST_PAGE),
+                       f"setup: pre-load-only page '{GHOST_PAGE}' is live "
+                       f"before the load")
+
             loaded = send(port, f"return engine.loadSave('{prev_slot}')")
             chk.ok(loaded.strip() == "true",
                    f"engine.loadSave('{prev_slot}') accepted (got {loaded!r})")
-            published, status = wait_load_published(port)
-            chk.ok(published, f"load transaction published (status={status})")
+            load_id = capture_request_id(port, "return engine.getLoadStatus()")
+            chk.ok(load_id is not None,
+                   f"engine.getLoadStatus() reports a request id right after "
+                   f"loadSave('{prev_slot}')")
+            published, status = wait_load_published(port, request_id=load_id)
+            chk.ok(published, f"load transaction {load_id} published (status={status})")
+
+            if letter == "B":
+                chk.ok(not page_exists(port, GHOST_PAGE),
+                       f"pre-load-only page '{GHOST_PAGE}' (never part of "
+                       f"'{prev_slot}') did NOT survive the load -- a load "
+                       f"replaces the whole session, it does not merge")
 
             assert_reset_policy(chk, port, f"after loading {prev_slot}")
             attack_target = get_attack_target(port, atk)

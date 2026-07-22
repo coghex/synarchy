@@ -206,7 +206,8 @@ def poll_until(seconds: float, fn, interval: float = 0.3):
     return None
 
 
-def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2):
+def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2,
+                         request_id: int | None = None):
     """Poll ``engine.getLoadStatus()`` (issue #763, save-overhaul C2)
     until a whole-session load transaction reaches a terminal phase.
 
@@ -218,15 +219,26 @@ def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2
     drives a real ``engine.loadSave`` call must wait for this before
     touching the loaded state.
 
+    ``request_id``, if given, requires the observed status's own ``id``
+    to match — otherwise (the default, preserving every pre-existing
+    caller's behavior unchanged) the first terminal phase observed is
+    accepted regardless of which load produced it. Pass the id captured
+    from ``engine.getLoadStatus()`` immediately after ``engine.loadSave``
+    accepts the request (round-5 review: without this, a stale terminal
+    status left behind by an EARLIER load could satisfy the wait before
+    the load this call is actually waiting for ever reaches one).
+
     Returns ``(published: bool, status: dict | None)`` — ``status`` is
-    the last observed ``engine.getLoadStatus()`` table (``None`` only if
-    the debug console never returned one at all).
+    the last observed ``engine.getLoadStatus()`` table matching
+    ``request_id`` when given (``None`` only if the debug console never
+    returned a matching one at all).
     """
     deadline = time.time() + seconds
     last = None
     while time.time() < deadline:
         status = send_json(port, "return engine.getLoadStatus()")
-        if isinstance(status, dict):
+        if isinstance(status, dict) and (request_id is None
+                                          or status.get("id") == request_id):
             last = status
             phase = status.get("phase")
             if phase == "LoadPublished":
@@ -235,6 +247,33 @@ def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2
                 return False, status
         time.sleep(interval)
     return False, last
+
+
+def capture_request_id(port: int, status_lua: str, seconds: float = 5.0,
+                        interval: float = 0.1):
+    """Poll a ``getSaveStatus``/``getLoadStatus``-shaped debug-console
+    call (``status_lua``, e.g. ``"return engine.getLoadStatus()"``) until
+    it returns a status TABLE with an ``id`` field, tolerating transient
+    non-table responses.
+
+    A load transaction REPLACES the whole live session (#763) -- a
+    ``getLoadStatus()`` query queued right as that replacement lands can
+    come back as the literal string ``"REJECTED: a load transaction
+    replaced the session while this command was queued"`` instead of a
+    status table (observed live: a single immediate query right after
+    ``engine.loadSave`` returns ``true`` is NOT reliable for a fast,
+    e.g. tiny-world, load). Retrying past that transient rejection is
+    what makes request-id capture reliable for both saves and loads.
+
+    Returns the captured ``id`` (an int), or ``None`` on timeout.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        status = send_json(port, status_lua)
+        if isinstance(status, dict) and status.get("id") is not None:
+            return status.get("id")
+        time.sleep(interval)
+    return None
 
 
 def wait_save_complete(port: int, request_id: int, seconds: float = 60.0,
