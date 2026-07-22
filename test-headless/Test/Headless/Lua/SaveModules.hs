@@ -239,6 +239,174 @@ spec = do
             , "assert(ok == nil, 'exceeding max table entries should be rejected')"
             ]
 
+        -- Issue #865: %.17g always coerced a number to a float before
+        -- formatting, so an integer above 2^53 silently lost precision
+        -- and a whole-valued float's subtype flattened to an integer on
+        -- decode. The cases below drive the fixed I/D-tag encoding
+        -- directly, plus the legacy N-tag's frozen decode-compatibility
+        -- contract for already-written saves.
+        it "round-trips a Lua integer above 2^53 exactly, preserving both \
+           \value and subtype (issue #865)" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local v = 9007199254740993"
+            , "local back = codec.decode(codec.encode(v))"
+            , "assert(back == v, 'expected exact round-trip of 2^53+1, got ' .. tostring(back))"
+            , "assert(math.type(back) == 'integer',"
+            , "  'expected integer subtype, got ' .. tostring(math.type(back)))"
+            ]
+
+        it "round-trips math.maxinteger and math.mininteger exactly, both \
+           \staying integers (issue #865) -- mininteger's decimal \
+           \magnitude overflows Lua's own SOURCE-literal integer parser \
+           \to a float, which is exactly where a naive digit-based fix \
+           \fails; data_codec's tonumber()-based string-to-number path \
+           \is not the source-literal parser and handles it correctly" $
+            runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local maxi = math.maxinteger"
+            , "local backMax = codec.decode(codec.encode(maxi))"
+            , "assert(backMax == maxi, 'maxinteger round-trip failed: ' .. tostring(backMax))"
+            , "assert(math.type(backMax) == 'integer',"
+            , "  'maxinteger subtype must stay integer, got ' .. tostring(math.type(backMax)))"
+            , "local mini = math.mininteger"
+            , "local backMin = codec.decode(codec.encode(mini))"
+            , "assert(backMin == mini, 'mininteger round-trip failed: ' .. tostring(backMin))"
+            , "assert(math.type(backMin) == 'integer',"
+            , "  'mininteger subtype must stay integer, got ' .. tostring(math.type(backMin)))"
+            ]
+
+        it "keeps a whole-valued float's subtype on decode instead of \
+           \collapsing it to an integer (issue #865)" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local backF = codec.decode(codec.encode(3.0))"
+            , "assert(backF == 3.0, 'expected 3.0 to round-trip')"
+            , "assert(math.type(backF) == 'float',"
+            , "  'expected float subtype to survive, got ' .. tostring(math.type(backF)))"
+            ]
+
+        it "preserves -0.0's sign through a round trip (issue #865)" $
+            runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local backZ = codec.decode(codec.encode(-0.0))"
+            , "assert(math.type(backZ) == 'float', 'expected -0.0 to decode as a float')"
+            , "assert(1 / backZ == -math.huge,"
+            , "  'expected -0.0 sign to survive, got 1/x = ' .. tostring(1 / backZ))"
+            ]
+
+        it "keeps two distinct integer map keys above 2^53 as two distinct \
+           \entries, in canonical ascending order regardless of insertion \
+           \order (issue #865) -- the pre-fix %.17g encoding formatted \
+           \both keys identically, so encode() itself produced a payload \
+           \its own decode() rejected as a duplicate key" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local m1 = { [9007199254740993] = 'a', [9007199254740992] = 'b' }"
+            , "local back = codec.decode(codec.encode(m1))"
+            , "assert(back[9007199254740993] == 'a', 'expected distinct key 2^53+1 to survive')"
+            , "assert(back[9007199254740992] == 'b', 'expected distinct key 2^53 to survive')"
+            , "local count = 0"
+            , "for _ in pairs(back) do count = count + 1 end"
+            , "assert(count == 2, 'expected exactly 2 distinct map entries, got ' .. count)"
+            , "local m2 = { [9007199254740992] = 'b', [9007199254740993] = 'a' }"
+            , "assert(codec.encode(m1) == codec.encode(m2),"
+            , "  'insertion order must not affect canonical byte output')"
+            ]
+
+        it "round-trips finite-float boundaries: the smallest positive \
+           \subnormal and the largest finite double (issue #865)" $
+            runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local subnormal = 2^-1074"
+            , "local backSub = codec.decode(codec.encode(subnormal))"
+            , "assert(backSub == subnormal, 'smallest positive subnormal must round-trip exactly')"
+            , "assert(math.type(backSub) == 'float', 'subnormal must decode as float')"
+            , "local hugeFinite = 1.7976931348623157e+308"
+            , "local backHuge = codec.decode(codec.encode(hugeFinite))"
+            , "assert(backHuge == hugeFinite, 'largest finite double must round-trip exactly')"
+            , "assert(math.type(backHuge) == 'float', 'largest finite double must decode as float')"
+            ]
+
+        it "rejects a hand-crafted I-tag payload whose digits overflow the \
+           \64-bit integer range, and a D-tag payload that is not exactly \
+           \8 bytes or that decodes to a non-finite value (issue #865) -- \
+           \the new wire forms get the same loud, path-named rejection as \
+           \every other malformed/subtype-inconsistent shape" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local d1, e1 = codec.decode('I20:99999999999999999999')"
+            , "assert(d1 == nil and e1 ~= nil,"
+            , "  'decode must reject out-of-int64-range I-tag digits')"
+            , "local d2, e2 = codec.decode('D3:abc')"
+            , "assert(d2 == nil and e2 ~= nil,"
+            , "  'decode must reject a D-tag payload that is not exactly 8 bytes')"
+            , "local nanBytes = string.pack('<d', 0/0)"
+            , "local d3, e3 = codec.decode('D' .. #nanBytes .. ':' .. nanBytes)"
+            , "assert(d3 == nil and e3 ~= nil,"
+            , "  'decode must reject a hand-crafted D-tag NaN payload')"
+            , "local infBytes = string.pack('<d', 1/0)"
+            , "local d4, e4 = codec.decode('D' .. #infBytes .. ':' .. infBytes)"
+            , "assert(d4 == nil and e4 ~= nil,"
+            , "  'decode must reject a hand-crafted D-tag +inf payload')"
+            ]
+
+        it "rejects an I-tag body that is lexically not the exact %d form \
+           \data_codec's own encoder produces, even though plain \
+           \tonumber() would accept it (round-1 review, issue #865) -- \
+           \hex, a leading '+', interior whitespace, and a leading zero \
+           \must all be rejected, not silently coerced to an integer" $
+            runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local badForms = {'I4:0x10', 'I2: 1', 'I3:+42', 'I2:01', 'I2:-0'}"
+            , "for _, payload in ipairs(badForms) do"
+            , "  local d, e = codec.decode(payload)"
+            , "  assert(d == nil and e ~= nil,"
+            , "    'expected rejection for non-canonical I-tag body: ' .. payload)"
+            , "end"
+            ]
+
+        it "encodes a representative integer and float to their exact, \
+           \hard-coded canonical wire bytes (round-1 review, issue #865) \
+           \-- locks the tag, length prefix, and byte content/order \
+           \themselves, independently of string.pack, so a tag or \
+           \byte-order regression cannot hide behind a round-trip-only \
+           \assertion" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "assert(codec.encode(42) == 'I2:42',"
+            , "  'expected the canonical I-tag encoding of 42: ' .. tostring(codec.encode(42)))"
+            , "-- 1.5 as IEEE-754 binary64 is the well-known bit pattern"
+            , "-- 0x3FF8000000000000; little-endian byte order is that"
+            , "-- reversed, i.e. bytes {0,0,0,0,0,0,0xF8,0x3F} -- spelled"
+            , "-- out via string.char, independently of string.pack, so"
+            , "-- this catches a byte-order or packing regression rather"
+            , "-- than merely re-deriving the same bytes the encoder used."
+            , "local expectedFloatBytes = string.char(0, 0, 0, 0, 0, 0, 0xF8, 0x3F)"
+            , "local expected = 'D8:' .. expectedFloatBytes"
+            , "assert(codec.encode(1.5) == expected,"
+            , "  'expected the canonical D-tag encoding of 1.5')"
+            ]
+
+        it "decodes legacy (pre-#865) N-tag payloads to exactly the values \
+           \today's decoder already produces -- wire compatibility with \
+           \already-written saves (issue #865 requirement 5): a whole \
+           \digit string stays an integer, a decimal/exponent form stays \
+           \a float, and a legacy negative-zero digit string loses its \
+           \sign, all unchanged by this fix" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local v1 = codec.decode('N1:3')"
+            , "assert(v1 == 3 and math.type(v1) == 'integer',"
+            , "  'legacy N1:3 must still decode to integer 3')"
+            , "local v2 = codec.decode('N2:-0')"
+            , "assert(v2 == 0 and math.type(v2) == 'integer' and 1 / v2 == math.huge,"
+            , "  'legacy N2:-0 must still decode to positive integer zero (sign lost)')"
+            , "local v3 = codec.decode('N16:9007199254740992')"
+            , "assert(v3 == 9007199254740992 and math.type(v3) == 'integer',"
+            , "  'legacy N16:9007199254740992 must still decode to that exact integer')"
+            , "local v4 = codec.decode('N22:9.2233720368547758e+18')"
+            , "assert(v4 == 9.2233720368547758e+18 and math.type(v4) == 'float',"
+            , "  'legacy N22 maxinteger-corruption digits must still decode to that exact float')"
+            , "local v5 = codec.decode('N23:-9.2233720368547758e+18')"
+            , "assert(v5 == -9.2233720368547758e+18 and math.type(v5) == 'float',"
+            , "  'legacy N23 mininteger-corruption digits must still decode to that exact float')"
+            ]
+
     describe "save_modules registry (issue #761 requirements 2/3/4)" $ do
         it "accepts a valid required registration and a valid optional \
            \registration" $ runsOk $ lns
