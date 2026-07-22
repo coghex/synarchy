@@ -224,6 +224,11 @@ function pauseMenu.createUI()
 
         UI.setClickable(boxH, true)
         UI.setOnClick(boxH, "onPauseMenuItem")
+        -- #749: pause-menu items are genuine box-backed controls with a
+        -- real (buttonOverflow = 16) visible border — opt that border
+        -- into interaction (mirrors main_menu.lua) so a click on the
+        -- drawn edge activates the item.
+        UI.setInteractiveOverflow(boxH, true)
 
         pauseMenu.clickHandlers[boxH] = item.onClick
 

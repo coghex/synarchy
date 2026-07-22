@@ -545,6 +545,116 @@ spec = do
             , "assert(snap.ok, 'the snapshot itself must still succeed')"
             ]
 
+        it "recovers the registry after a crashing component apply() \
+           \(issue #864): the original crash marker survives in the \
+           \surfaced failure, register/registerResetHook are still \
+           \rejected from inside the active apply, the registry is \
+           \immediately usable again with no intervening successful \
+           \load, a stale re-applyAll (with no fresh prepareLoad) still \
+           \fails with the single-line no-prepared-load diagnostic, and \
+           \a later full round trip -- including the previously-crashed \
+           \component and newly-registered late components -- succeeds" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local crashCompCalls = 0"
+            , "local crashCompApplied = nil"
+            , "saveModules.register('crash_apply_comp', { version=1, inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot = function() return { n = 1 } end,"
+            , "  decode = function(v, d) return d end,"
+            , "  validate = function(d) return nil end,"
+            , "  apply = function(d)"
+            , "    crashCompCalls = crashCompCalls + 1"
+            , "    if crashCompCalls == 1 then"
+            , "      local okReg = pcall(saveModules.register, 'sneaky_during_apply', " <> validSpecLua "sneaky_during_apply" <> ")"
+            , "      assert(not okReg, 'register during an active apply must be rejected')"
+            , "      local okHook = pcall(saveModules.registerResetHook, 'sneaky_hook_during_apply', function() end)"
+            , "      assert(not okHook, 'registerResetHook during an active apply must be rejected')"
+            , "      error('CRASH_APPLY_MARKER_12345')"
+            , "    end"
+            , "    crashCompApplied = d"
+            , "  end })"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, 'snapshotAll should succeed')"
+            , "local prep = saveModules.prepareLoad(snap.components)"
+            , "assert(prep.ok, 'prepareLoad should succeed')"
+            , "local ok1, err1 = pcall(saveModules.applyAll)"
+            , "assert(not ok1, 'applyAll must fail when a component apply() crashes')"
+            , "assert(string.find(tostring(err1), 'CRASH_APPLY_MARKER_12345', 1, true) ~= nil,"
+            , "  'the original crash marker must survive in the surfaced failure: ' .. tostring(err1))"
+            , "local ok2, err2 = pcall(saveModules.applyAll)"
+            , "assert(not ok2, 'applyAll must fail again with no fresh prepareLoad')"
+            , "local msg2 = tostring(err2)"
+            , "assert(string.find(msg2, 'no prepared load', 1, true) ~= nil,"
+            , "  'expected the no-prepared-load diagnostic, got: ' .. msg2)"
+            , "assert(not string.find(msg2, '\\n', 1, true), 'diagnostic must not contain a newline: ' .. msg2)"
+            , "assert(not string.find(msg2, '\\r', 1, true), 'diagnostic must not contain a carriage return: ' .. msg2)"
+            , "saveModules.register('crash_apply_late', " <> validSpecLua "crash_apply_late" <> ")"
+            , "local lateResetRan = false"
+            , "saveModules.registerResetHook('crash_apply_late_reset', function() lateResetRan = true end)"
+            , "local snap2 = saveModules.snapshotAll()"
+            , "assert(snap2.ok, 'snapshotAll should succeed after recovery')"
+            , "local prep2 = saveModules.prepareLoad(snap2.components)"
+            , "assert(prep2.ok, 'prepareLoad should succeed after recovery')"
+            , "saveModules.applyAll()"
+            , "assert(crashCompApplied ~= nil and crashCompApplied.n == 1,"
+            , "  'the previously-crashing component must apply successfully this time')"
+            , "assert(_G.crash_apply_late_applied.x == 1, 'the newly-registered late component must apply')"
+            , "assert(lateResetRan, 'the newly-registered late reset hook must run')"
+            ]
+
+        it "recovers the registry after a crashing reset hook (issue \
+           \#864): the original crash marker survives in the surfaced \
+           \failure, register/registerResetHook are still rejected from \
+           \inside the active reset hook, the registry is immediately \
+           \usable again with no intervening successful load, a stale \
+           \re-applyAll (with no fresh prepareLoad) still fails with the \
+           \single-line no-prepared-load diagnostic, and a later full \
+           \round trip -- including the previously-crashed reset hook \
+           \and newly-registered late components -- succeeds" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "saveModules.register('reset_crash_comp', " <> validSpecLua "reset_crash_comp" <> ")"
+            , "local resetCrashCalls = 0"
+            , "local resetCrashRan = false"
+            , "saveModules.registerResetHook('reset_crash_hook', function()"
+            , "  resetCrashCalls = resetCrashCalls + 1"
+            , "  if resetCrashCalls == 1 then"
+            , "    local okReg = pcall(saveModules.register, 'sneaky_during_reset', " <> validSpecLua "sneaky_during_reset" <> ")"
+            , "    assert(not okReg, 'register during an active reset hook must be rejected')"
+            , "    local okHook = pcall(saveModules.registerResetHook, 'sneaky_hook_during_reset', function() end)"
+            , "    assert(not okHook, 'registerResetHook during an active reset hook must be rejected')"
+            , "    error('CRASH_RESET_MARKER_67890')"
+            , "  end"
+            , "  resetCrashRan = true"
+            , "end)"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, 'snapshotAll should succeed')"
+            , "local prep = saveModules.prepareLoad(snap.components)"
+            , "assert(prep.ok, 'prepareLoad should succeed')"
+            , "local ok1, err1 = pcall(saveModules.applyAll)"
+            , "assert(not ok1, 'applyAll must fail when a reset hook crashes')"
+            , "assert(string.find(tostring(err1), 'CRASH_RESET_MARKER_67890', 1, true) ~= nil,"
+            , "  'the original crash marker must survive in the surfaced failure: ' .. tostring(err1))"
+            , "local ok2, err2 = pcall(saveModules.applyAll)"
+            , "assert(not ok2, 'applyAll must fail again with no fresh prepareLoad')"
+            , "local msg2 = tostring(err2)"
+            , "assert(string.find(msg2, 'no prepared load', 1, true) ~= nil,"
+            , "  'expected the no-prepared-load diagnostic, got: ' .. msg2)"
+            , "assert(not string.find(msg2, '\\n', 1, true), 'diagnostic must not contain a newline: ' .. msg2)"
+            , "assert(not string.find(msg2, '\\r', 1, true), 'diagnostic must not contain a carriage return: ' .. msg2)"
+            , "saveModules.register('reset_crash_late', " <> validSpecLua "reset_crash_late" <> ")"
+            , "local lateResetRan = false"
+            , "saveModules.registerResetHook('reset_crash_late_reset', function() lateResetRan = true end)"
+            , "local snap2 = saveModules.snapshotAll()"
+            , "assert(snap2.ok, 'snapshotAll should succeed after recovery')"
+            , "local prep2 = saveModules.prepareLoad(snap2.components)"
+            , "assert(prep2.ok, 'prepareLoad should succeed after recovery')"
+            , "saveModules.applyAll()"
+            , "assert(resetCrashRan, 'the previously-crashing reset hook must run successfully this time')"
+            , "assert(_G.reset_crash_late_applied.x == 1, 'the newly-registered late component must apply')"
+            , "assert(lateResetRan, 'the newly-registered late reset hook must run')"
+            ]
+
         it "keeps an optional component's default() distinct from a \
            \required component's hard failure, and never uses \
            \optionality to hide a validation error" $ runsOk $ lns

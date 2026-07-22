@@ -267,6 +267,11 @@ function mainMenu.createUI()
         -- Make it clickable with the generic callback
         UI.setClickable(boxH, true)
         UI.setOnClick(boxH, "onMainMenuItem")
+        -- #749: main-menu items are genuine box-backed controls with a
+        -- real (buttonOverflow = 16) visible border — opt that border
+        -- into interaction so a click on the drawn edge activates the
+        -- item instead of falling through as a phantom dead zone.
+        UI.setInteractiveOverflow(boxH, true)
 
         -- Register the onClick handler
         mainMenu.clickHandlers[boxH] = item.onClick

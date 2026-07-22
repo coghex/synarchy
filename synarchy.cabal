@@ -371,6 +371,7 @@ library
                      UI.ControlActivation
                      UI.FocusNavigation
                      UI.Clipping
+                     UI.InteractiveBounds
                      UI.PopupPlacement
                      UI.Manager
                      UI.Manager.Core
@@ -1035,6 +1036,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.FocusNavigation
                    Test.Headless.UI.Clipping
+                   Test.Headless.UI.InteractiveBounds
                    Test.Headless.UI.PopupPlacement
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay

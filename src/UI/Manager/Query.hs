@@ -19,6 +19,7 @@ module UI.Manager.Query
   , isElementScrollCapturing
   , isElementDragActivation
   , isElementClipChildren
+  , isElementInteractiveOverflow
   , elementPaintKey
   , elementPaintOrder
   , paintTraversalOrder
@@ -31,6 +32,7 @@ import qualified Data.Set as Set
 import Data.List (sortOn, elemIndex)
 import UI.Types
 import UI.Clipping (effectiveClip, pointInClip, intersectRect, hasArea)
+import UI.InteractiveBounds (interactiveRect)
 import UI.Manager.Page (getVisiblePages)
 
 -- * Queries
@@ -115,36 +117,53 @@ getElementChildren handle mgr =
 
 -- * Click Detection
 
--- | Check if a point is inside an element's bounds (in screen
---   coordinates) AND inside every ancestor's effective clip (#747 —
---   see "UI.Clipping"). This is the ONE shared clip check every
---   hit-test entry point below goes through via 'hitsAtPointBy', so a
---   clipped-out row can never register a click/hover/tooltip/scroll
---   hit even though its own bounds still overlap the point.
+-- | Check if a point is inside an element's INTERACTIVE bounds (in
+--   screen coordinates) AND inside every ancestor's effective clip
+--   (#747 — see "UI.Clipping"). This is the ONE shared membership check
+--   every hit-test entry point below goes through via 'hitsAtPointBy',
+--   so #743 click/scroll routing, hover/tooltips, and #745 press/
+--   release all resolve against exactly the same rect, and a clipped-
+--   out row can never register a hit even though its own bounds still
+--   overlap the point.
 --
---   When a clip is in effect, membership is decided against the
---   POSITIVE-AREA intersection of the element's own bounds and the
---   clip (via 'intersectRect'/'hasArea') rather than two independent
---   inclusive-both-edges checks — the same test 'UI.Clipping.clipQuadUV'
---   already applies before drawing anything. An element flush against
---   a clip edge overlaps it in a zero-width/zero-height sliver only;
---   treating each rect's own edge as independently inclusive would let
---   a point on that sliver hit even though the renderer draws nothing
---   there (review round 5, #857).
+--   The interactive rect (#749 — 'UI.InteractiveBounds.interactiveRect')
+--   is the element's CONTENT bounds by default, or its expanded VISUAL
+--   bounds when it opts its visible border in via
+--   'UI.Types.ueInteractiveOverflow'. So this deliberately no longer
+--   equals the raw 'ueSize' rect for a migrated box: a decorative box
+--   still hit-tests content-only (overflow alone never creates a
+--   target), but a genuine box-backed control's visible border is
+--   reachable. Recomputed live from 'uePosition'/'ueSize'/render data,
+--   so a move/resize/policy change takes effect on the very next query.
+--
+--   Membership requires the interactive rect to have POSITIVE AREA
+--   ('UI.Clipping.hasArea') — a degenerate rect (an inverting/collapsed
+--   overflow clamped to a zero extent, #749; or a zero-size element)
+--   is never a hit, matching the renderer, which draws nothing there
+--   ('UI.Render.makeBoxBatches' short-circuits a non-positive extent).
+--   When a clip is additionally in effect, membership is decided
+--   against the POSITIVE-AREA intersection of the interactive bounds
+--   and the clip (via 'intersectRect'/'hasArea') rather than two
+--   independent inclusive-both-edges checks — the same test
+--   'UI.Clipping.clipQuadUV' already applies before drawing anything.
+--   An element flush against a clip edge overlaps it in a
+--   zero-width/zero-height sliver only; treating each rect's own edge as
+--   independently inclusive would let a point on that sliver hit even
+--   though the renderer draws nothing there (review round 5, #857).
 isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
 isPointInElement (px, py) element mgr =
     if not (ueVisible element) then False
     else case getElementAbsolutePosition (ueHandle element) mgr of
         Nothing → False
-        Just (ex, ey) →
-            let (w, h) = ueSize element
-                elemRect = (ex, ey, w, h)
-            in case effectiveClip (ueHandle element) mgr of
+        Just abs' →
+            let elemRect@(ex, ey, w, h) = interactiveRect abs' element
+            in hasArea elemRect ∧
+               (case effectiveClip (ueHandle element) mgr of
                 Nothing →
                     px ≥ ex ∧ px ≤ (ex + w) ∧ py ≥ ey ∧ py ≤ (ey + h)
                 Just clip →
                     let region = intersectRect elemRect clip
-                    in hasArea region ∧ pointInClip (Just region) (px, py)
+                    in hasArea region ∧ pointInClip (Just region) (px, py))
 
 -- | Walk every visible element in paint order, yielding the elements
 --   that contain the point together with their paint key (page band +
@@ -370,3 +389,10 @@ isElementDragActivation h mgr =
 isElementClipChildren ∷ ElementHandle → UIPageManager → Bool
 isElementClipChildren h mgr =
     maybe False ueClipChildren (Map.lookup h (upmElements mgr))
+
+-- | #749: handle-based lookup of the raw 'ueInteractiveOverflow' opt-in
+--   — an unknown/deleted handle is content-only (never interactive-
+--   overflow).
+isElementInteractiveOverflow ∷ ElementHandle → UIPageManager → Bool
+isElementInteractiveOverflow h mgr =
+    maybe False ueInteractiveOverflow (Map.lookup h (upmElements mgr))
