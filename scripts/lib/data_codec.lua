@@ -69,6 +69,17 @@ local function isFiniteNumber(v)
     return v == v and v ~= math.huge and v ~= -math.huge
 end
 
+-- Whether `digits` is EXACTLY what string.format("%d", v) can produce:
+-- an optional leading "-", then either a lone "0" or a nonzero digit
+-- followed by more digits (no leading zeros, no leading "+", no
+-- interior whitespace, no hex). tonumber() alone is too permissive for
+-- an I-tag body -- it also accepts "0x10", " 1", and "+42", none of
+-- which the encoder ever produces, so a hand-crafted payload using
+-- those forms must be rejected rather than silently accepted.
+local function isCanonicalIntegerDigits(digits)
+    return digits == "0" or digits:match("^%-?[1-9]%d*$") ~= nil
+end
+
 -- A strict UTF-8 validator (RFC 3629): walks byte-by-byte checking not
 -- just the leading-byte / continuation-byte COUNT but the exact
 -- allowed range of the first continuation byte per leading byte, which
@@ -279,6 +290,12 @@ local function decodeValue(s, pos, depth, path)
         local digits = s:sub(rest, rest + len - 1)
         if #digits ~= len then
             error("data_codec: truncated number at " .. path)
+        end
+        -- Reject anything that isn't the exact %d form BEFORE calling
+        -- tonumber -- tonumber alone would also accept "0x10", " 1",
+        -- and "+42", none of which encode() ever produces.
+        if not isCanonicalIntegerDigits(digits) then
+            error("data_codec: malformed integer at " .. path)
         end
         local num = tonumber(digits)
         -- A well-formed I-tag payload always parses back to an integer

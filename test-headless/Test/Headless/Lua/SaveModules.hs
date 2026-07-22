@@ -347,6 +347,42 @@ spec = do
             , "  'decode must reject a hand-crafted D-tag +inf payload')"
             ]
 
+        it "rejects an I-tag body that is lexically not the exact %d form \
+           \data_codec's own encoder produces, even though plain \
+           \tonumber() would accept it (round-1 review, issue #865) -- \
+           \hex, a leading '+', interior whitespace, and a leading zero \
+           \must all be rejected, not silently coerced to an integer" $
+            runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local badForms = {'I4:0x10', 'I2: 1', 'I3:+42', 'I2:01', 'I2:-0'}"
+            , "for _, payload in ipairs(badForms) do"
+            , "  local d, e = codec.decode(payload)"
+            , "  assert(d == nil and e ~= nil,"
+            , "    'expected rejection for non-canonical I-tag body: ' .. payload)"
+            , "end"
+            ]
+
+        it "encodes a representative integer and float to their exact, \
+           \hard-coded canonical wire bytes (round-1 review, issue #865) \
+           \-- locks the tag, length prefix, and byte content/order \
+           \themselves, independently of string.pack, so a tag or \
+           \byte-order regression cannot hide behind a round-trip-only \
+           \assertion" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "assert(codec.encode(42) == 'I2:42',"
+            , "  'expected the canonical I-tag encoding of 42: ' .. tostring(codec.encode(42)))"
+            , "-- 1.5 as IEEE-754 binary64 is the well-known bit pattern"
+            , "-- 0x3FF8000000000000; little-endian byte order is that"
+            , "-- reversed, i.e. bytes {0,0,0,0,0,0,0xF8,0x3F} -- spelled"
+            , "-- out via string.char, independently of string.pack, so"
+            , "-- this catches a byte-order or packing regression rather"
+            , "-- than merely re-deriving the same bytes the encoder used."
+            , "local expectedFloatBytes = string.char(0, 0, 0, 0, 0, 0, 0xF8, 0x3F)"
+            , "local expected = 'D8:' .. expectedFloatBytes"
+            , "assert(codec.encode(1.5) == expected,"
+            , "  'expected the canonical D-tag encoding of 1.5')"
+            ]
+
         it "decodes legacy (pre-#865) N-tag payloads to exactly the values \
            \today's decoder already produces -- wire compatibility with \
            \already-written saves (issue #865 requirement 5): a whole \
