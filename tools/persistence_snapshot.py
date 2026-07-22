@@ -79,14 +79,15 @@ case sequence [ either (const Nothing) Just d | (_, d) <- decodedList ] of
     let snaps = [ (p, snap) | ((p, _), (_, snap, _, _)) <- zip decodedList decoded ]
         luaPayloads = [ (p, HM.fromList [ (name, bytes) | (name, _, _, bytes) <- comps ])
                       | ((p, _), (_, _, comps, _)) <- zip decodedList decoded ]
-        firstSnap = snd (head snaps)
-        snapMismatches = [ p | (p, s) <- tail snaps, s /= firstSnap ]
-        firstLua = snd (head luaPayloads)
-        luaMismatches = [ p | (p, m) <- tail luaPayloads, m /= firstLua ]
-    if null snapMismatches && null luaMismatches
-      then putStrLn "COMPARE_OK"
-      else putStrLn ("COMPARE_MISMATCH: snapshot-differs=" ++ show snapMismatches
-                      ++ " lua-component-differs=" ++ show luaMismatches)
+    case (snaps, luaPayloads) of
+      ((_, firstSnap) : snapRest, (_, firstLua) : luaRest) -> do
+        let snapMismatches = [ p | (p, s) <- snapRest, s /= firstSnap ]
+            luaMismatches = [ p | (p, m) <- luaRest, m /= firstLua ]
+        if null snapMismatches && null luaMismatches
+          then putStrLn "COMPARE_OK"
+          else putStrLn ("COMPARE_MISMATCH: snapshot-differs=" ++ show snapMismatches
+                          ++ " lua-component-differs=" ++ show luaMismatches)
+      _ -> putStrLn "COMPARE_EMPTY: fewer than one path decoded"
 :}}
 """
 
