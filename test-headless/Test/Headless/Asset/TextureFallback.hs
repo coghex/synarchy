@@ -31,7 +31,7 @@ import System.Directory
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
-import qualified Engine.Core.Queue as Q
+import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv, floraCatalogRef, luaToEngineQueue, luaQueue
     , assetPoolRef, nextObjectIdRef, inputStateRef, loggerRef)
 import Engine.Core.Thread (ThreadControl(..))
@@ -118,24 +118,30 @@ spec = do
              \requirement 12, round-2 review)" $ do
         it "a flora species with no harvested_texture resolves DIRECTLY \
            \to the Undefined texture's slot 0 -- never a file-path \
-           \resolution attempt that could itself fail" $ \env → do
+           \resolution attempt that could itself fail" $ \_sharedEnv → do
+            -- Round-7/8 review: engine.loadFloraYaml permanently mutates
+            -- SHARED engine state well beyond what a `finally` can cleanly
+            -- undo -- floraCatalogRef gains a real species + worldGen
+            -- entry, and registering its ground texture allocates a
+            -- handle in the asset pool and a name in the texture-name
+            -- registry. Reverting an insert into all of those correctly
+            -- (rather than just flushing the one queue message round-7
+            -- caught) risks missing another one down the line. A private,
+            -- lightweight `initializeEngineHeadless` env (the same
+            -- primitive Test.Headless.World.LocationDiscovery/CursorInfo/
+            -- Unit.LineOfSight already use for exactly this "needs its
+            -- own throwaway engine state" case, no world/unit thread
+            -- spawned) sidesteps the whole class of gap: this test's
+            -- mutations only ever touch its own engine, discarded whole
+            -- when the test ends, and the aroundAll-shared `_sharedEnv`
+            -- above is deliberately unused.
+            EngineInitResult env ← initializeEngineHeadless
             tmp ← getTemporaryDirectory
             let dir = tmp </> "synarchy-texture-fallback-spec"
                 path = dir </> "no_harvest_texture.yaml"
             createDirectoryIfMissing True dir
             writeFile path noHarvestedTextureYaml
-            -- engine.loadFloraYaml queues a LuaLoadTextureRequest on the
-            -- SHARED luaToEngineQueue for the species' own ground/phase
-            -- texture (unrelated to the harvested_texture fallback this
-            -- test targets) -- this env is shared across the whole
-            -- aroundAll block (round-7 review), so a message left behind
-            -- here would still be sitting in the queue when
-            -- Test.Headless.Lua.RenderQueue's own discard-count test runs
-            -- later and expects to start from empty. Flush it
-            -- unconditionally in the finally, alongside the directory
-            -- cleanup, so a failed assertion above still restores shared
-            -- queue state for later specs.
-            (`finally` cleanup dir env) $ do
+            (`finally` removeDirectoryRecursive dir) $ do
                 idBefore ← fcNextId <$> readIORef (floraCatalogRef env)
                 ls ← newBareLuaBackend env
                 result ← evalDebug ls
@@ -150,17 +156,6 @@ spec = do
                             "the species was registered with no harvest block at all"
                         Just harvest →
                             fhHarvestedTexture harvest `shouldBe` TextureHandle 0
-
--- | Removes the temp fixture directory and flushes whatever
---   engine.loadFloraYaml queued onto the SHARED luaToEngineQueue (round-7
---   review: a leftover LuaLoadTextureRequest here would still be sitting
---   in the queue when a later spec's own discard-count assertion runs
---   against the same shared 'env'). Runs unconditionally via 'finally'
---   so a failed assertion above still restores shared queue state.
-cleanup ∷ FilePath → EngineEnv → IO ()
-cleanup dir env = do
-    removeDirectoryRecursive dir
-    void (Q.flushQueue (luaToEngineQueue env))
 
 pathToLua ∷ FilePath → Text
 pathToLua = T.pack
