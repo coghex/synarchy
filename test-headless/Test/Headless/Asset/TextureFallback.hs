@@ -31,6 +31,7 @@ import System.Directory
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
+import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv, floraCatalogRef, luaToEngineQueue, luaQueue
     , assetPoolRef, nextObjectIdRef, inputStateRef, loggerRef)
 import Engine.Core.Thread (ThreadControl(..))
@@ -123,7 +124,18 @@ spec = do
                 path = dir </> "no_harvest_texture.yaml"
             createDirectoryIfMissing True dir
             writeFile path noHarvestedTextureYaml
-            (`finally` removeDirectoryRecursive dir) $ do
+            -- engine.loadFloraYaml queues a LuaLoadTextureRequest on the
+            -- SHARED luaToEngineQueue for the species' own ground/phase
+            -- texture (unrelated to the harvested_texture fallback this
+            -- test targets) -- this env is shared across the whole
+            -- aroundAll block (round-7 review), so a message left behind
+            -- here would still be sitting in the queue when
+            -- Test.Headless.Lua.RenderQueue's own discard-count test runs
+            -- later and expects to start from empty. Flush it
+            -- unconditionally in the finally, alongside the directory
+            -- cleanup, so a failed assertion above still restores shared
+            -- queue state for later specs.
+            (`finally` cleanup dir env) $ do
                 idBefore ← fcNextId <$> readIORef (floraCatalogRef env)
                 ls ← newBareLuaBackend env
                 result ← evalDebug ls
@@ -138,6 +150,17 @@ spec = do
                             "the species was registered with no harvest block at all"
                         Just harvest →
                             fhHarvestedTexture harvest `shouldBe` TextureHandle 0
+
+-- | Removes the temp fixture directory and flushes whatever
+--   engine.loadFloraYaml queued onto the SHARED luaToEngineQueue (round-7
+--   review: a leftover LuaLoadTextureRequest here would still be sitting
+--   in the queue when a later spec's own discard-count assertion runs
+--   against the same shared 'env'). Runs unconditionally via 'finally'
+--   so a failed assertion above still restores shared queue state.
+cleanup ∷ FilePath → EngineEnv → IO ()
+cleanup dir env = do
+    removeDirectoryRecursive dir
+    void (Q.flushQueue (luaToEngineQueue env))
 
 pathToLua ∷ FilePath → Text
 pathToLua = T.pack
