@@ -9,6 +9,7 @@ module Combat.Resolution.Wear
     , applyWeaponWear
     , applyArmorWear
     , staminaCostFraction
+    , staminaDrainStats
     , applyStaminaDrain
     ) where
 
@@ -141,15 +142,33 @@ staminaCostFraction ∷ AttackMode → Float
 staminaCostFraction Quick = 0.05
 staminaCostFraction Heavy = 0.25
 
--- | Drain the attacker's stamina by `cost × max_stamina`. Floors at
---   0 — the collapse / kill thresholds are enforced by unit_resources.lua
---   (the same tick path that handles walking drain), so we don't fire
---   UnitCollapse / UnitKill from here.
+-- | Pure core of 'applyStaminaDrain' — the attacker's post-swing
+--   stamina/stance, drained by `cost × max_stamina` and the mode's
+--   flat stance cost. Floors at 0 each — the collapse / kill
+--   thresholds are enforced by unit_resources.lua (the same tick path
+--   that handles walking drain), so this doesn't fire UnitCollapse /
+--   UnitKill. Split out (#353) so it's directly unit-testable without
+--   an EngineEnv/IORef — e.g. to confirm mental effectiveness (which
+--   this never reads) leaves it untouched.
 --
 --   max_stamina comes from 'Combat.Resolution.Common.maxStaminaFor' (the
 --   mirror of Lua's unit_stats derivation), computed from the live stats
 --   so a unit with a fresh buff or wound to endurance pays the right
 --   fraction.
+staminaDrainStats ∷ AttackMode → UnitInstance → HM.HashMap Text Float
+staminaDrainStats mode inst =
+    let stamina   = HM.lookupDefault 0.0 "stamina" (uiStats inst)
+        maxStam   = maxStaminaFor inst
+        cost      = staminaCostFraction mode * maxStam
+        new       = max 0.0 (stamina - cost)
+        -- Stance spent on the swing (absent ⇒ full 1.0).
+        -- Floors at 0; unit_resources.lua regenerates it.
+        stance    = HM.lookupDefault 1.0 "stance" (uiStats inst)
+        stance'   = max 0.0 (stance - stanceAttackCost mode)
+    in HM.insert "stance" stance' $ HM.insert "stamina" new (uiStats inst)
+
+-- | Drain the attacker's stamina + stance from one swing (hit or
+--   miss). See 'staminaDrainStats' for the pure formula.
 applyStaminaDrain ∷ EngineEnv → Word32 → AttackMode → IO ()
 applyStaminaDrain env atkRaw mode =
     atomicModifyIORef' (unitManagerRef env) $ \um →
@@ -157,17 +176,6 @@ applyStaminaDrain env atkRaw mode =
         in case HM.lookup uid (umInstances um) of
             Nothing → (um, ())
             Just inst →
-                let stamina   = HM.lookupDefault 0.0 "stamina"
-                                                  (uiStats inst)
-                    maxStam   = maxStaminaFor inst
-                    cost      = staminaCostFraction mode * maxStam
-                    new       = max 0.0 (stamina - cost)
-                    -- Stance spent on the swing (absent ⇒ full 1.0).
-                    -- Floors at 0; unit_resources.lua regenerates it.
-                    stance    = HM.lookupDefault 1.0 "stance" (uiStats inst)
-                    stance'   = max 0.0 (stance - stanceAttackCost mode)
-                    inst'     = inst
-                        { uiStats = HM.insert "stance" stance'
-                                  $ HM.insert "stamina" new (uiStats inst) }
-                    ins       = HM.insert uid inst' (umInstances um)
+                let inst' = inst { uiStats = staminaDrainStats mode inst }
+                    ins   = HM.insert uid inst' (umInstances um)
                 in (um { umInstances = ins }, ())

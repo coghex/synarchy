@@ -29,6 +29,11 @@ top of that math:
      lives in the hspec suite (computeAttackerSkill/computeDefenderEvasion
      invariance to concentration/mental_state); this is an end-to-end
      sanity check on top of it.
+  5. Attack recovery/cooldown (``scripts/unit_ai_combat.lua``'s
+     ``computeAttackCooldown``, Lua-only — the hspec suite's
+     ``staminaDrainStats`` test is its Haskell-side stamina/stance
+     counterpart) is bit-identical across effectiveness, driven
+     white-box on a real unit.
 
 ``scripts/brain.lua``'s ``brain.tick``/``scripts/mental_state.lua``'s
 ``mental.tick`` are neutralised for the probe's duration so a pinned
@@ -521,6 +526,32 @@ def main():
             passed = check(passed, 0.95 < ratio < 1.0526,
                            "mean landed-hit raw damage energy is not shifted by effectiveness",
                            f"mean(eff=0.75)={mean_lo:.3f} mean(eff=1.10)={mean_hi:.3f} ratio={ratio:.3f}")
+
+        # --- 5. Attack recovery/cooldown (Lua, scripts/unit_ai_combat.lua)
+        #        unchanged across effectiveness. computeAttackCooldown
+        #        reads unit.getAttackCooldown/getEquippedWeaponWeight/
+        #        getStat("strength")/staminaPct/getWoundSeverityOn/
+        #        getStat("agility","dexterity") only — never concentration
+        #        or mental_state (the hspec suite's staminaDrainStats test
+        #        is the Haskell-side counterpart; this is the real Lua
+        #        function itself, driven white-box like craft_progress_via_ai).
+        cooldown_uid = spawn_acolyte(port, 2, 2, clear_water=False)
+        send(port,
+             f"unit.setStat({cooldown_uid}, 'strength', 1.3); "
+             f"unit.setStat({cooldown_uid}, 'agility', 1.1); "
+             f"unit.setStat({cooldown_uid}, 'dexterity', 1.2); "
+             f"return 'ok'")
+        pin(port, cooldown_uid, 0.0, False)   # effectiveness 0.75
+        cd_lo = send(port,
+            f"return require('scripts.unit_ai_combat')"
+            f".computeAttackCooldown({cooldown_uid}, 'quick')")
+        pin(port, cooldown_uid, 1.0, True)    # effectiveness 1.10
+        cd_hi = send(port,
+            f"return require('scripts.unit_ai_combat')"
+            f".computeAttackCooldown({cooldown_uid}, 'quick')")
+        passed = check(passed, cd_lo == cd_hi,
+                       "attack cooldown (recovery) is unaffected by effectiveness",
+                       f"cooldown(eff=0.75)={cd_lo} cooldown(eff=1.10)={cd_hi}")
 
         print("\n" + ("ALL MENTAL EFFECTIVENESS CHECKS PASSED" if passed
                       else "SOME FAILED"))

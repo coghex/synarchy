@@ -24,6 +24,7 @@ import Combat.Resolution.Strike
     , defenderDodgeChance )
 import Combat.Resolution.Constants (dodgeMaxChance)
 import Combat.Resolution.Damage (computeSeverity)
+import Combat.Resolution.Wear (staminaDrainStats)
 import Substance.Types (emptySubstanceManager)
 import Item.Types (emptyItemManager)
 import Craft.Execute (craftQuality, applyMentalQuality)
@@ -269,6 +270,40 @@ spec = describe "Mental effectiveness" $ do
                         (HM.insert "concentration" 1.0 base))
                     HM.empty
             maxStaminaFor calm `shouldBe` maxStaminaFor euphoric
+
+        -- Combat.Resolution.Wear.applyStaminaDrain's actual post-swing
+        -- stamina/stance UPDATE (not just the max_stamina pool it draws
+        -- against): staminaDrainStats is its pure core (#353), reading
+        -- only "stamina"/"stance" plus maxStaminaFor's own inputs —
+        -- never concentration/mental_state — so the resulting stat map
+        -- must be identical for two attackers differing ONLY in those.
+        it "staminaDrainStats (applyStaminaDrain's real update) is unaffected by concentration/mental_state" $ do
+            let base = HM.fromList
+                    [ ("endurance", 1.4), ("stamina", 8.0), ("stance", 1.0) ]
+                calm       = mkInst base HM.empty
+                distracted = mkInst
+                    (HM.insert "mental_state" 3.0
+                        (HM.insert "concentration" 0.0 base))
+                    HM.empty
+                -- staminaDrainStats returns the crafter's WHOLE stat
+                -- map (it's just the post-swing uiStats), so it
+                -- trivially echoes back calm/distracted's differing
+                -- concentration/mental_state entries — project onto
+                -- the two keys the swing actually updates.
+                drained mode inst =
+                    ( HM.lookup "stamina" (staminaDrainStats mode inst)
+                    , HM.lookup "stance"  (staminaDrainStats mode inst) )
+            drained Quick calm `shouldBe` drained Quick distracted
+            drained Heavy calm `shouldBe` drained Heavy distracted
+
+        -- unit_ai_combat.lua's computeAttackCooldown (attack recovery
+        -- time) is the Lua-side counterpart — pure Haskell can't drive
+        -- Lua, so its own concentration/mental_state invariance is
+        -- verified against a REAL headless engine by
+        -- tools/mental_efficiency_probe.py instead (it reads no
+        -- concentration/mental_state stat at all: base cooldown, weapon
+        -- weight, strength, staminaPct, wound severity, agility/
+        -- dexterity only).
 
     -- ---- 6: craft-quality delta ----
     describe "craft-quality mental-effectiveness delta (Craft.Execute.applyMentalQuality)" $ do
