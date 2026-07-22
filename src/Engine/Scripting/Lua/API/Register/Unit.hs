@@ -85,6 +85,7 @@ registerUnitAPI env = do
   registerLuaFunction "dropItemById"     (unitDropItemByIdFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)
+  registerLuaFunction "getMentalEffectiveness" (unitGetMentalEffectivenessFn env)
   registerLuaFunction "getLastAttacker" (unitGetLastAttackerFn env)
   registerLuaFunction "getWeaponClass"  (unitGetWeaponClassFn env)
   registerLuaFunction "modifyItemFill" (unitModifyItemFillFn env)

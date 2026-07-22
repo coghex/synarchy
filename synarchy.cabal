@@ -1004,6 +1004,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Spoil
                    Test.Headless.World.LocationDiscovery
                    Test.Headless.Combat.Damage
+                   Test.Headless.Combat.MentalEffectiveness
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape

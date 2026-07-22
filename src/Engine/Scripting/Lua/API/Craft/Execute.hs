@@ -19,7 +19,8 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
 import Craft.Bills (BillId(..))
 import Craft.Types
-import Craft.Execute (consumeIngredients, craftQuality)
+import Craft.Execute (consumeIngredients, craftQuality, applyMentalQuality)
+import Combat.Resolution.Common (mentalEffectiveness)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
                    lookupItemDef)
@@ -188,7 +189,11 @@ executeCraft env uid rid = do
 --   Skill-tagged recipes (#343) overwrite the outputs' rolled quality
 --   with craftQuality from the crafter's skill (absent skill = 0) and
 --   the gated knowledge's level, read here inside the same atomic
---   update, so quality can't race a concurrent skill change.
+--   update, so quality can't race a concurrent skill change. #353 then
+--   applies the crafter's mental-effectiveness quality delta on top of
+--   EVERY output — tagged or untagged alike — sampled from the same
+--   UnitInstance snapshot `u` that supplies skill/knowledge, so
+--   completion stays atomic.
 applyCraft ∷ RecipeDef → [ItemInstance] → UnitId → UnitManager
            → (UnitManager, Either Text [Word64])
 applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
@@ -199,7 +204,7 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
         _ → case consumeIngredients recipe (uiInventory u) of
             Left err   → (um, Left err)
             Right inv' →
-                let outs' = case rdSkill recipe of
+                let baseOuts = case rdSkill recipe of
                         Nothing → outs
                         Just s  →
                             let q = craftQuality
@@ -207,6 +212,10 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
                                      ((\k → HM.lookup k (uiKnowledge u))
                                         =≪ rdKnowledge recipe)
                             in map (\o → o { iiQuality = q }) outs
+                    eff   = mentalEffectiveness u
+                    outs' = map (\o → o { iiQuality =
+                                    applyMentalQuality eff (iiQuality o) })
+                                baseOuts
                     u' = u { uiInventory = inv' ⧺ outs' }
                 in ( um { umInstances = HM.insert uid u' (umInstances um) }
                    , Right (map iiInstanceId outs') )

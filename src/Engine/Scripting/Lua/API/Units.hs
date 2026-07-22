@@ -100,6 +100,7 @@ module Engine.Scripting.Lua.API.Units
     , unitDropItemByIdFn
     , unitGetBloodFn
     , unitGetPainFn
+    , unitGetMentalEffectivenessFn
     , unitGetLastAttackerFn
     , unitGetWeaponClassFn
     , unitModifyItemFillFn
