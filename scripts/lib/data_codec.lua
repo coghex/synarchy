@@ -21,13 +21,36 @@
 -- only ever WALKED, never evaluated:
 --
 --   T / F                      -- true / false
---   N<len>:<digits>            -- number, %.17g-formatted ASCII digits
+--   I<len>:<digits>            -- Lua integer, exact base-10 ASCII digits
+--                                  (via %d, never %g) -- every int64 value
+--                                  round-trips bit-for-bit, including
+--                                  math.mininteger/math.maxinteger, and
+--                                  decodes back as an integer
+--   D<len>:<bytes>             -- Lua float, IEEE-754 binary64 packed as
+--                                  8 raw bytes in FIXED little-endian order
+--                                  (string.pack("<d", v)/string.unpack) --
+--                                  round-trips every finite float
+--                                  bit-for-bit (whole-valued floats like
+--                                  3.0 included) and decodes back as a
+--                                  float, sign of -0.0 preserved
+--   N<len>:<digits>            -- LEGACY number tag: %.17g-formatted ASCII
+--                                  digits decoded via plain tonumber().
+--                                  Never produced by the encoder any more
+--                                  (issue #865) -- integers above 2^53 lose
+--                                  precision through this path, and a
+--                                  whole-valued float collapses to an
+--                                  integer on decode. Still ACCEPTED on
+--                                  decode, reproducing exactly the value
+--                                  today's (pre-#865) decoder would have
+--                                  produced, so an already-written save
+--                                  keeps loading unchanged.
 --   S<len>:<bytes>             -- string, raw UTF-8 bytes (len = byte count)
 --   A<count>:<elem>...         -- array, `count` encoded values in order
 --   M<count>:<key><val>...     -- map, `count` (key,value) pairs; a key is
---                                  itself an N or S value; canonical order:
---                                  numeric keys ascending, then string keys
---                                  ascending
+--                                  itself an I, D, N, or S value; canonical
+--                                  order: numeric keys ascending (by value,
+--                                  regardless of I/D/N tag), then string
+--                                  keys ascending
 --
 -- Every string/array/map body is length- or count-prefixed so decode
 -- never scans for a delimiter inside arbitrary payload bytes, and every
@@ -125,8 +148,23 @@ local function encodeValue(v, path, seen, depth)
         if not isFiniteNumber(v) then
             error("data_codec: non-finite number not supported at " .. path)
         end
-        local digits = string.format("%.17g", v)
-        return "N" .. #digits .. ":" .. digits
+        if math.type(v) == "integer" then
+            -- %d formats the integer directly (no float coercion), so
+            -- this is exact across the full 64-bit signed range --
+            -- unlike %g, which %.17g used to route every number
+            -- (integer included) through first (issue #865).
+            local digits = string.format("%d", v)
+            return "I" .. #digits .. ":" .. digits
+        else
+            -- Fixed-width, fixed-byte-order binary64 -- exact and
+            -- platform-independent, unlike a native-endian pack would
+            -- be. Guarantees bit-for-bit float round-trips (whole
+            -- values, -0.0's sign, subnormals) that decimal-digit
+            -- formatting can't: %.17g strips the fractional part of a
+            -- whole-valued float, so it decodes back as an integer.
+            local bytes = string.pack("<d", v)
+            return "D" .. #bytes .. ":" .. bytes
+        end
     elseif t == "string" then
         if not isValidUtf8(v) then
             error("data_codec: invalid UTF-8 string at " .. path)
@@ -236,7 +274,46 @@ local function decodeValue(s, pos, depth, path)
         return true, pos + 1
     elseif tag == "F" then
         return false, pos + 1
+    elseif tag == "I" then
+        local len, rest = readPrefix(s, pos + 1, path)
+        local digits = s:sub(rest, rest + len - 1)
+        if #digits ~= len then
+            error("data_codec: truncated number at " .. path)
+        end
+        local num = tonumber(digits)
+        -- A well-formed I-tag payload always parses back to an integer
+        -- (encode() only ever emits exact %d digits); a hand-crafted or
+        -- corrupted payload with out-of-int64-range digits would
+        -- silently promote to a float via tonumber's own overflow
+        -- handling, which must be rejected rather than smuggled through
+        -- as a subtype-inconsistent "integer".
+        if num == nil or math.type(num) ~= "integer" then
+            error("data_codec: malformed integer at " .. path)
+        end
+        return num, rest + len
+    elseif tag == "D" then
+        local len, rest = readPrefix(s, pos + 1, path)
+        local bytes = s:sub(rest, rest + len - 1)
+        if #bytes ~= len then
+            error("data_codec: truncated number at " .. path)
+        end
+        if len ~= 8 then
+            error("data_codec: malformed float at " .. path)
+        end
+        local ok, num = pcall(string.unpack, "<d", bytes)
+        if not ok then
+            error("data_codec: malformed float at " .. path)
+        end
+        if not isFiniteNumber(num) then
+            error("data_codec: non-finite number not supported at " .. path)
+        end
+        return num, rest + len
     elseif tag == "N" then
+        -- Legacy-only: never produced by encode() any more (issue
+        -- #865), but decode-compatible with any payload the pre-fix
+        -- encoder could have written -- reproduces exactly the value
+        -- today's (pre-#865) decoder would have produced, subtype
+        -- quirks included.
         local len, rest = readPrefix(s, pos + 1, path)
         local digits = s:sub(rest, rest + len - 1)
         if #digits ~= len then
