@@ -529,6 +529,78 @@ there is horizontal. Tooltip placement (`UI.Tooltip.Layout`/`Render`)
 deliberately stays on its own separate cursor-relative clamp,
 untouched by this change.
 
+**Interactive bounds** (#749, Phase C child C3, pure — see
+`UI.InteractiveBounds` and `Test.Headless.UI.InteractiveBounds`): a
+box's `ubsOverflow` expands what it RENDERS on every side without
+changing its stored layout (`uePosition`/`ueSize`), which draws a
+visible border the pre-#749 hit-test could never reach. C3 splits three
+bounds apart: LOGICAL/content (`uePosition`+`ueSize`, unchanged),
+VISUAL/render (content expanded by the clamped overflow — the rect
+`UI.Render` draws within), and INTERACTIVE (what pointer/hover/tooltip/
+scroll/release hit-testing uses). A box opts its visible border into
+interaction via `UI.Types.ueInteractiveOverflow` (Lua
+`UI.setInteractiveOverflow`/`isInteractiveOverflow`, default `False`);
+`UI.InteractiveBounds.interactiveRect` is content bounds by default and
+the expanded visual rect only when opted in — overflow ALONE never
+enlarges a target, so a decorative box keeps bleeding without becoming
+a blocker, and the opt-in only changes WHICH rect the #743
+pointer-block/scroll-capture policies test, not whether they apply.
+This is the ONE rect every hit-test entry point resolves against:
+`UI.Manager.Query.isPointInElement` (the shared membership check all of
+#743 routing, hover/tooltips, and #745 press/release funnel through)
+reads it, and `UI.Render` expands by the SAME
+`UI.InteractiveBounds.elementOverflow`, so visual and interactive
+geometry can't drift — the discipline `uiLayerBand` enforces for
+z-order and `UI.Clipping.effectiveClip` for clipping. Effective
+interaction still intersects every #747 ancestor clip
+(`effectiveInteractiveBounds`): clipped-away overflow neither renders
+nor interacts. Overflow is validated (`clampOverflow`) at the ONE point
+it's set (`UI.newBox` creation — there's no runtime overflow setter)
+AND re-clamped live against current size when bounds are computed, so an
+invalid overflow can never invert/unbound geometry: a non-finite
+overflow (NaN/±Infinity, e.g. Lua `math.huge`) sanitizes to `0` (expands
+nothing), a finite-astronomical positive overflow caps to `maxOverflow`
+(so `content + 2*overflow` stays finitely representable — a raw `3e38`
+would otherwise double to `+Infinity`), and a finite inverting overflow
+(≤ minus half the smaller content extent) clamps to a zero-extent rect
+that both `isPointInElement` (via `hasArea`, clipped and unclipped
+alike) and `UI.Render.makeBoxBatches` (non-positive extent
+short-circuits) treat as genuinely non-hittable AND non-rendering — not
+merely bounded. A validly-negative overflow shrinks the interactive rect
+below content bounds, in lockstep with what it renders; when that shrinks
+the visual rect below `2*tileSize`, `UI.Clipping.boxTileRects` folds the
+box's own visual rect into the clip so the fixed-size 9-slice corners
+can't render past it either (render and interactive stay equal).
+Everything recomputes fresh from live `uePosition`/`ueSize`/render data,
+so a move/resize/policy change (the geometry-update tests drive
+`setElementPosition`/`setElementSize`/`setElementInteractiveOverflow`)
+takes effect on the very next query with nothing cached. Migrated
+box-backed control families opt in (`scripts/ui/button.lua` — covering
+settings/create/save actions — `scripts/main_menu.lua`,
+`scripts/pause_menu.lua`, `scripts/ui/tabbar.lua`, and
+`scripts/build_tool_remote_warning.lua`'s Establish/Cancel buttons);
+decorative
+panels/frames/tooltips/separators stay content-only (an audit, not a
+default flip — scroll arrows ship as sprites with no overflow, so
+they're content-only by nature). `UI.getElementInfo`/`ui.dumpWidgets`
+add `interactiveOverflow` + an `interactiveBounds` `{x,y,w,h}` (the
+effective clip-intersected rect a real hit resolves against, `nil` when
+fully clipped) as ADDITIONAL fields — `x/y/width/height` stay content
+bounds so existing center-click/geometry consumers are unchanged — and
+the playtest oracle's phantom-affordance join
+(`tools/playtest/critic.py`'s `widget_at`) prefers `interactiveBounds`
+so a click on a migrated control's visible border correlates to it.
+`effectiveInteractiveBounds` is `Nothing` for ANY non-hittable element
+(collapsed OR fully clipped — matching `isPointInElement`'s own
+`hasArea` gate), surfaced to the oracle as a DISTINCT `false` marker
+(`scripts/ui/registry.lua`) that `widget_at` skips outright, rather than
+a bare `nil` it would mistake for an old record and fall back to content
+bounds — so the oracle never correlates a click to a control the real
+router can't hit.
+Whether a migrated border FEELS responsive and whether adjacent
+expanded borders create targeting ambiguity are subjective, deferred to
+user GUI feel-testing under the `ui` label (no automated probe).
+
 **Responsive menu lifecycle** (#748, Phase C child C2, see
 `Test.Headless.UI.ResponsiveMenus`): `scripts/ui/responsive.lua` is the
 one shared framebuffer/UI-scale notification contract every C2 menu
