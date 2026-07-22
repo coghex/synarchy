@@ -11,7 +11,6 @@ module Test.Headless.Combat.MentalEffectiveness (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Monad (forM_)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..))
@@ -19,11 +18,14 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Combat.Types (AttackMode(..))
-import Combat.Resolution.Common (mentalEffectiveness)
+import Combat.Resolution.Common (mentalEffectiveness, maxStaminaFor)
 import Combat.Resolution.Strike
     ( computeAttackerSkill, computeDefenderEvasion, hitChance
     , defenderDodgeChance )
 import Combat.Resolution.Constants (dodgeMaxChance)
+import Combat.Resolution.Damage (computeSeverity)
+import Substance.Types (emptySubstanceManager)
+import Item.Types (emptyItemManager)
 import Craft.Execute (craftQuality, applyMentalQuality)
 
 -- A minimal unit carrying exactly the given stats/skills; every other
@@ -44,6 +46,35 @@ mkInst stats skills = UnitInstance
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing }
+
+-- A minimal single-part target body for computeSeverity — mirrors
+-- Test.Headless.Combat.Wounds's `def` fixture. bpLayers = [] is
+-- deliberate: Combat.Resolution.Damage.resolvePartLayersNamed falls
+-- back to one synthetic 40mm flesh layer for an unlayered part, giving
+-- a fully deterministic, non-crashing result with no substance catalog
+-- needed (Combat.Resolution.Damage's own layer-absorb defaults handle
+-- an unresolved "flesh" substance the same way, and this exact fallback
+-- is already asserted by Test.Headless.Combat.Damage).
+targetDef ∷ UnitDef
+targetDef = UnitDef
+    { udName = "t", udNamePool = Nothing, udDisplayName = Nothing
+    , udTexture = TextureHandle 0, udPortrait = Nothing, udDirSprites = Map.empty
+    , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
+    , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
+    , udStatTemplates = HM.empty, udBodyTemplates = HM.empty
+    , udSkillTemplates = HM.empty, udKnowledgeTemplates = HM.empty
+    , udStartingInventory = []
+    , udEquipmentClass = Nothing, udStartingEquipment = HM.empty
+    , udStartingAccessories = []
+    , udBodyParts =
+        [ BodyPart
+            { bpId = "torso", bpName = "torso", bpParent = Nothing
+            , bpVital = False, bpAreaWeight = 0.3, bpTacticalValue = 0.5
+            , bpBleedFactor = 1.0, bpHeightLow = 0, bpHeightHigh = 2
+            , bpLayers = [], bpTargetable = True, bpDepth = 0.0
+            , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
+    , udNaturalResistance = defaultNaturalResistance
+    , udNaturalWeapon = Nothing, udModifiers = [] }
 
 -- A unit with only concentration (and, optionally, an EUPHORIC
 -- mental_state = 3) set — everything mentalEffectiveness reads.
@@ -196,6 +227,48 @@ spec = describe "Mental effectiveness" $ do
                     HM.empty
             computeDefenderEvasion calm 0.1
                 `shouldBe` computeDefenderEvasion euphoric 0.1
+
+        -- Direct proof for damage energy itself (not just the terms
+        -- that feed it): computeSeverity never reads "concentration" or
+        -- "mental_state" from uiStats anywhere in its body, so its full
+        -- result — severity, "raw" driver energy, "eff" post-resistance
+        -- damage, weapon load, and weapon hardness alike — must be
+        -- bit-identical for two attackers differing ONLY in those two
+        -- stats. Unarmed (mEquipped = natW = Nothing) keeps the strike
+        -- profile a fixed function of bodyMass alone (pinned via
+        -- body_mass on both fixtures), matching this suite's combat
+        -- damage-sampling probe technique.
+        it "computeSeverity (damage energy itself) is unaffected by concentration/mental_state" $ do
+            let base = HM.fromList
+                    [ ("strength", 1.0), ("dexterity", 1.0)
+                    , ("body_mass", 70.0), ("height", 1.8) ]
+                calm       = mkInst base HM.empty
+                distracted = mkInst
+                    (HM.insert "mental_state" 3.0
+                        (HM.insert "concentration" 0.0 base))
+                    HM.empty
+                tgt = mkInst (HM.fromList [("body_mass", 70.0)]) HM.empty
+                severityOf atk = computeSeverity emptySubstanceManager emptyItemManager
+                    atk targetDef Nothing Nothing tgt "torso" "blunt" Quick 0.5 1.0 0.0
+            severityOf calm `shouldBe` severityOf distracted
+
+        -- The Haskell-side resource-cost analogue of "recovery": the
+        -- stamina pool applyStaminaDrain (Combat.Resolution.Wear) draws
+        -- against is maxStaminaFor, and its cost fraction
+        -- (staminaCostFraction) is a plain function of AttackMode
+        -- alone — it doesn't even take a UnitInstance, so it structurally
+        -- cannot vary with concentration/mental_state. Lua-side attack
+        -- cooldown (scripts/unit_ai_combat.lua) is untouched by #353's
+        -- diff and isn't Haskell-pure-testable; this is the Haskell
+        -- combat-thread's own recovery-cost path.
+        it "maxStaminaFor (the recovery/stamina-drain pool) is unaffected by concentration/mental_state" $ do
+            let base = HM.fromList [("endurance", 1.4)]
+                calm     = mkInst base HM.empty
+                euphoric = mkInst
+                    (HM.insert "mental_state" 3.0
+                        (HM.insert "concentration" 1.0 base))
+                    HM.empty
+            maxStaminaFor calm `shouldBe` maxStaminaFor euphoric
 
     -- ---- 6: craft-quality delta ----
     describe "craft-quality mental-effectiveness delta (Craft.Execute.applyMentalQuality)" $ do
