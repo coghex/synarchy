@@ -48,6 +48,7 @@ import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.Combat.Damage as CombatDamage
+import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffectiveness
 import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
@@ -202,6 +203,7 @@ main = hspec $ do
     describe "WorldGen.SoilShed" SoilShed.spec
     describe "WorldGen.SoilRedistribution" SoilRedistribution.spec
     describe "Combat.Damage" CombatDamage.spec
+    CombatMentalEffectiveness.spec
     describe "Combat.Severing" CombatSevering.spec
     describe "Combat.Wounds" CombatWounds.spec
     describe "World.Magma.Shape" MagmaShape.spec

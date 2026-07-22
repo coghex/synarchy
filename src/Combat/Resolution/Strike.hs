@@ -7,6 +7,7 @@
 module Combat.Resolution.Strike
     ( computeAttackerSkill
     , computeDefenderEvasion
+    , hitChance
     , defenderDodgeChance
     , naturalAttackName
     , pickPartKind
@@ -76,19 +77,37 @@ computeDefenderEvasion tgt pain =
        - 0.001 * massExc
        - 0.30 * pain
 
+-- | Attacker hit chance (#353 mental-effectiveness-scaled). @rawHit@ is
+--   the existing pre-clamp value (0.70 + (attackerSkill − defenderEvasion)
+--   × 0.30); @effectiveness@ scales its departure from the 0.05 floor
+--   rather than multiplying rawHit directly, so pHit is guaranteed
+--   non-increasing as effectiveness falls even when rawHit itself is
+--   negative (a pained/heavy attacker) — a bare multiply would instead
+--   raise pHit toward the floor in that case. effectiveness = 1.00
+--   reproduces the pre-#353 formula exactly.
+hitChance ∷ Float → Float → Float → Float
+hitChance effectiveness atkSkill defEva =
+    let rawHit = 0.7 + (atkSkill - defEva) * 0.3
+    in clamp 0.05 0.95 (0.05 + effectiveness * (rawHit - 0.05))
+
 -- | Active-dodge chance BEFORE the awareness scale (caller multiplies by
 --   'Unit.LineOfSight.unitAwareness'). Agility + the learned `dodge`
 --   skill drive it; pain slows it; a telegraphed lunge reads easier.
---   Clamped to 'dodgeMaxChance'.
-defenderDodgeChance ∷ UnitInstance → Bool → Float → Float
-defenderDodgeChance tgt isLunge pain =
+--   @effectiveness@ (#353, defender's mental effectiveness) multiplies
+--   the uncapped expression BEFORE the 'dodgeMaxChance' clamp, so
+--   euphoria (1.10) still can't push the final result past the cap —
+--   applying it after the clamp would. effectiveness = 1.00 reproduces
+--   the pre-#353 result exactly.
+defenderDodgeChance ∷ Float → UnitInstance → Bool → Float → Float
+defenderDodgeChance effectiveness tgt isLunge pain =
     let agi   = statOr "agility" 1.0 tgt
         dodge = skillOr "dodge" 0.0 tgt / 100.0
         base  = dodgeBase
               + dodgeAgiScale   * (agi - 1.0)
               + dodgeSkillScale * dodge
         lungeM = if isLunge then dodgeLungeMult else 1.0
-    in clamp 0.0 dodgeMaxChance (base * lungeM - dodgePainScale * pain)
+    in clamp 0.0 dodgeMaxChance
+             (effectiveness * (base * lungeM - dodgePainScale * pain))
 
 -- | Joint body-part + wound-kind picker. Intelligence-blended:
 --

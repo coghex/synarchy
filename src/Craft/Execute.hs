@@ -8,6 +8,7 @@ module Craft.Execute
     ( consumeIngredients
     , takeItemsByName
     , craftQuality
+    , applyMentalQuality
     ) where
 
 import UPrelude
@@ -43,6 +44,18 @@ craftQuality ∷ Float → Maybe Float → Float
 craftQuality skill mKnow = clamp 0 100 $ case mKnow of
     Nothing → skill
     Just k  → 0.7 * skill + 0.3 * k
+
+-- | The #353 mental-effectiveness quality delta, applied identically
+--   atop a skill-tagged recipe's 'craftQuality' output and an untagged
+--   recipe's item-def-rolled quality — the one place either base-quality
+--   path meets #353. @effectiveness@ (0.75..1.10, from
+--   'Combat.Resolution.Common.mentalEffectiveness') scales 1:1 with its
+--   departure from the neutral 1.00, clamped to ±10 quality points; the
+--   result is float-valued and deliberately unrounded. effectiveness =
+--   1.00 leaves @baseQuality@ unchanged.
+applyMentalQuality ∷ Float → Float → Float
+applyMentalQuality effectiveness baseQuality =
+    clamp 0 100 (baseQuality + clamp (-10) 10 (100 * (effectiveness - 1.0)))
 
 -- | Consume everything a recipe demands (inputs + fuel) from an
 --   inventory. Right = the inventory after consumption; Left = a

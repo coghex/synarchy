@@ -441,11 +441,11 @@ local function craftExecute(uid, s, params)
         s.lastCraftAt = now
         local progress = bill.progress or 0
         if elapsed > 0 and job.work > 0 then
-            -- The trade skill scales the pour rate the same way
-            -- mining scales dig and construction scales build:
-            -- level 50 ≈ baseline, level 0 half rate (#265).
+            -- Trade skill scales the rate (#265); #353 folds in the
+            -- crafter's canonical mental effectiveness (1.00 = unchanged).
             local level = unit.getSkill(uid, job.skill) or 0.0
             local delta = params.craft_rate * (0.5 + level / 100.0)
+                        * (unit.getMentalEffectiveness(uid) or 1.0)
                         * elapsed / job.work
             progress = craft.addBillProgress(job.billId, delta) or progress
         end

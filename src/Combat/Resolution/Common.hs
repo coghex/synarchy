@@ -11,6 +11,7 @@ module Combat.Resolution.Common
     , statOr
     , skillOr
     , maxStaminaFor
+    , mentalEffectiveness
     , weightedReachFactor
     , bodyPartIndex
     ) where
@@ -64,6 +65,26 @@ maxStaminaFor ∷ UnitInstance → Float
 maxStaminaFor inst = case HM.lookup "max_stamina" (uiStats inst) of
     Just m  → m
     Nothing → statOr "endurance" 1.0 inst * 10.0
+
+-- | The #353 canonical mental-effectiveness multiplier — the ONE
+--   authoritative calculation every combat (hit chance, active dodge),
+--   craft-progress (Lua, via the @unit.getMentalEffectiveness@ verb
+--   that calls straight into this function), and craft-quality
+--   consumer reads, so none of the three can drift from the others.
+--
+--   @concentration@ is clamped to 0..1 (missing ⇒ 1.0, neutral); a
+--   missing or non-euphoric @mental_state@ confers no bonus (0 =
+--   STABLE in @scripts/mental_state.lua@; only 3 = EUPHORIC qualifies).
+--   Normal concentration without euphoria is neutral at 1.00; zero
+--   concentration bottoms out at a 25% penalty; euphoria is the sole
+--   above-baseline bonus (capped at 1.10).
+mentalEffectiveness ∷ UnitInstance → Float
+mentalEffectiveness inst =
+    let concentration = clamp 0.0 1.0 (statOr "concentration" 1.0 inst)
+        euphoric       = statOr "mental_state" 0.0 inst ≡ 3.0
+        base           = 0.75 + 0.25 * concentration
+        withEuphoria   = if euphoric then base * 1.10 else base
+    in clamp 0.75 1.10 withEuphoria
 
 weightedReachFactor ∷ Float → Float
 weightedReachFactor bladeCm = clamp 0.0 1.0 (bladeCm / 100.0)

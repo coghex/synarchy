@@ -17,7 +17,10 @@
 --                  + 0.10·reach_factor - 0.001·mass_excess - 0.30·pain
 --   defender_evasion = 0.25·agi + 0.25·refl + 0.15·bal + 0.15·perc
 --                    + 0.10·dex - 0.001·mass_excess - 0.30·pain
---   p_hit = clamp(0.7 + (attacker - defender) × 0.3, 0.05, 0.95)
+--   raw_hit = 0.7 + (attacker - defender) × 0.3
+--   p_hit = clamp(0.05 + mental_effectiveness × (raw_hit - 0.05), 0.05, 0.95)
+--   (#353 — 'Combat.Resolution.Common.mentalEffectiveness'; = 1.00
+--   reproduces the pre-#353 clamp(raw_hit, 0.05, 0.95) exactly)
 --
 -- **Body-part picker** (intelligence-blended weighted random):
 --   intel_factor = clamp(intelligence / 2.0, 0.0, 1.0)
@@ -91,10 +94,11 @@ import Unit.Injury (penetrate, woundFactor)
 import Unit.LineOfSight (unitAwareness)
 import Blood.Impact (pickImpactWound, spawnImpactBlood)
 import Combat.Resolution.Constants (kindStanceFactor)
-import Combat.Resolution.Common (painFor, isAlreadyDead, bodyPartIndex)
+import Combat.Resolution.Common
+    ( painFor, isAlreadyDead, bodyPartIndex, mentalEffectiveness )
 import Combat.Resolution.Strike
-    ( computeAttackerSkill, computeDefenderEvasion, defenderDodgeChance
-    , naturalAttackName, pickPartKind )
+    ( computeAttackerSkill, computeDefenderEvasion, hitChance
+    , defenderDodgeChance, naturalAttackName, pickPartKind )
 import Combat.Resolution.Damage
     ( ResolvedStrike(..), swingKinematics, weaponPenetration, computeSeverity )
 import Combat.Resolution.Wear
@@ -172,11 +176,17 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
         pTgt = painFor tgt
         atkSkill = computeAttackerSkill atk mWeapon natW bladeCm pAtk mode
         defEva   = computeDefenderEvasion tgt pTgt
+        -- #353: mental effectiveness (concentration + euphoria) scales
+        -- both saves. Sampled once per side, straight off the same
+        -- atk/tgt UnitInstance snapshots the rest of this resolution
+        -- already uses.
+        atkEff = mentalEffectiveness atk
+        defEff = mentalEffectiveness tgt
         -- Baseline 0.7 (most melee swings connect somehow); stat gap
         -- shifts ±0.30. Same RNG budget — one roll — but combat
         -- resolves in reasonable time even when defender stats are
         -- moderately better than attacker.
-        pHit = clamp 0.05 0.95 (0.7 + (atkSkill - defEva) * 0.3)
+        pHit = hitChance atkEff atkSkill defEva
 
     -- Active dodge: an aware defender gets a SECOND save against a
     -- would-be hit. Awareness (LOS + facing cone + perception range)
@@ -185,7 +195,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
     -- is drawn inside the atomic block below.
     awareness ← unitAwareness env tgt atk
     let pDodge = awareness
-               * defenderDodgeChance tgt (lungeSpeed > 0) pTgt
+               * defenderDodgeChance defEff tgt (lungeSpeed > 0) pTgt
 
     -- Single RNG transaction: draw hit-roll + (if hit) the joint
     -- body-part + wound-kind decision from the same generator,

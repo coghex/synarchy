@@ -140,6 +140,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "lua_strict_msg": (TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),
     "machine_shop": (TARGETED, "electric furnace + machine_shop content regression, narrower "
                                "than the generic #590 power-draw mechanism probe"),
+    "mental_efficiency": (TARGETED, "narrow #353 mental-effectiveness combat/craft tie-in "
+                                    "regression: getMentalEffectiveness, craft-bill progress "
+                                    "rate, craft-quality delta, damage-energy invariance"),
     "mental_state": (TARGETED, "narrow #352 mental-state ladder/hysteresis/break-AI regression"),
     "movement": (TARGETED, "registered CI invocation takes no arguments, so it runs only "
                            "movement_probe.py's default corner_trap diagonal-routing "

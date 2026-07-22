@@ -8,6 +8,7 @@ module Engine.Scripting.Lua.API.Units.Combat
   , unitGetBloodFn
   , unitGetLastAttackerFn
   , unitGetPainFn
+  , unitGetMentalEffectivenessFn
   , unitInjureFn
   )
     where
@@ -24,6 +25,7 @@ import Infection.Types (InfectionDef(..), lookupInfection)
 import Unit.Types
 import Combat.Wounds (bleedRateFor)
 import Combat.Types (pushInjuryEvent)
+import Combat.Resolution.Common (mentalEffectiveness)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
 import Item.Types (ItemInstance(..), ItemDef(..), lookupItemDef)
 
@@ -387,6 +389,29 @@ unitGetPainFn env = do
     kindPainFactor "stab"  = 1.2
     kindPainFactor "blunt" = 1.5
     kindPainFactor _       = 1.0
+
+-- | unit.getMentalEffectiveness(uid) → number | nil
+--
+--   The #353 canonical mental-effectiveness multiplier (0.75..1.10),
+--   read straight off 'Combat.Resolution.Common.mentalEffectiveness' —
+--   the SAME function combat's hit/active-dodge rolls and craft-quality
+--   consume, so this getter can never drift from either. Used by the
+--   craft-bill AI (scripts/unit_ai_craft.lua) to scale its per-tick
+--   progress pour.
+unitGetMentalEffectivenessFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetMentalEffectivenessFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mEff ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                return $ mentalEffectiveness ⊚ HM.lookup uid (umInstances um)
+            case mEff of
+                Just e  → Lua.pushnumber (Lua.Number (realToFrac e))
+                                >> return 1
+                Nothing → Lua.pushnil >> return 1
 
 -- | unit.injure(uid, part, kind, severity [, bandage]) → bool
 --   Stamp an arbitrary wound onto a unit — the Lua hook into the

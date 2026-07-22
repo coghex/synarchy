@@ -131,6 +131,9 @@ PROBES = [
      "electric furnace smelt recipe + machine_shop wiring/motor recipes, real content (#591)"),
     ("medic_coord", "medic_coord_probe.py",
      "bestMedicFor/medicAvailable distance-discounted selection fix"),
+    ("mental_efficiency", "mental_efficiency_probe.py",
+     "mental-effectiveness combat/craft tie-ins: getMentalEffectiveness, "
+     "craft-bill progress rate, craft-quality delta, damage-energy invariance (#353)"),
     ("mental_state", "mental_state_probe.py",
      "mental-state ladder: stressed hysteresis, break episodes + wander/flee AI, euphoria (#352)"),
     ("movement", "movement_probe.py",
