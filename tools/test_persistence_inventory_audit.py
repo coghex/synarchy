@@ -78,6 +78,14 @@ SYNTHETIC_INVENTORY_COMPLETE = """\
 | Field | Classification |
 |---|---|
 | `unit_ai` | Persist exactly (opaque blob) |
+
+## 12. Test coverage map
+
+### Test coverage map
+
+| Component | Canonical inspection path | Round-trip assertion | Reset/rebuild assertion | Focused test |
+|---|---|---|---|---|
+| `lua.unit_ai` | fake path | fake probe | — | fake test |
 """
 
 SYNTHETIC_INVENTORY_MISSING_ONE = """\
@@ -3018,6 +3026,129 @@ def test_component_check_flags_registered_component_missing_a_row():
            f"the audit, got {v}")
 
 
+# ----- #767 test-coverage-map checks --------------------------------------
+#
+# Requirement 3 (issue #767, save-overhaul D1): a persistent §10 save
+# component, or a `Persist exactly` §7 Lua persistence module, with no
+# row under the `### Test coverage map` heading fails the audit --
+# mirroring the existing "detects an intentionally introduced
+# unclassified root state owner" pattern for a MISSING CONTRACT-COVERAGE
+# entry rather than a missing classification decision.
+
+SYNTHETIC_INVENTORY_COVERAGE_MAP_OK = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+
+### Lua persistence registry
+
+| Module | Owner | Scope | Classification |
+|---|---|---|---|
+| `unit_ai` | fake.lua | global | Persist exactly |
+
+### Test coverage map
+
+| Component | Canonical inspection path | Round-trip assertion | Reset/rebuild assertion | Focused test |
+|---|---|---|---|---|
+| `registered-comp` | fake path | fake probe | — | fake test |
+| `lua.unit_ai` | fake path | fake probe | — | fake test |
+"""
+
+SYNTHETIC_INVENTORY_COVERAGE_MAP_MISSING_COMPONENT = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+
+### Test coverage map
+
+| Component | Canonical inspection path | Round-trip assertion | Reset/rebuild assertion | Focused test |
+|---|---|---|---|---|
+"""
+
+SYNTHETIC_INVENTORY_COVERAGE_MAP_MISSING_LUA = """\
+# Fake inventory
+
+### Lua persistence registry
+
+| Module | Owner | Scope | Classification |
+|---|---|---|---|
+| `unit_ai` | fake.lua | global | Persist exactly |
+
+### Test coverage map
+
+| Component | Canonical inspection path | Round-trip assertion | Reset/rebuild assertion | Focused test |
+|---|---|---|---|---|
+"""
+
+# A rebuilt/reset/excluded owner needs no coverage-map row either.
+SYNTHETIC_INVENTORY_COVERAGE_MAP_RESET_OK = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `GhostDTO` | `ghost-comp` | Reset to default |
+
+### Lua persistence registry
+
+| Module | Owner | Scope | Classification |
+|---|---|---|---|
+| `unit_resources` | fake.lua | global | Reset to default |
+
+### Test coverage map
+
+| Component | Canonical inspection path | Round-trip assertion | Reset/rebuild assertion | Focused test |
+|---|---|---|---|---|
+"""
+
+
+def test_coverage_map_check_accepts_fully_covered_components():
+    from persistence_inventory_audit import (  # type: ignore
+        find_coverage_map_violations)
+    v = find_coverage_map_violations(SYNTHETIC_INVENTORY_COVERAGE_MAP_OK)
+    expect(v == [],
+           f"a persistent Haskell component and a persistent Lua module "
+           f"both documented in the Test coverage map pass, got {v}")
+
+
+def test_coverage_map_check_flags_missing_haskell_component_row():
+    from persistence_inventory_audit import (  # type: ignore
+        find_coverage_map_violations)
+    v = find_coverage_map_violations(
+        SYNTHETIC_INVENTORY_COVERAGE_MAP_MISSING_COMPONENT)
+    expect(any("registered-comp" in x for x in v),
+           f"a persistent save component with no Test coverage map row "
+           f"fails the audit, got {v}")
+
+
+def test_coverage_map_check_flags_missing_lua_module_row():
+    from persistence_inventory_audit import (  # type: ignore
+        find_coverage_map_violations)
+    v = find_coverage_map_violations(
+        SYNTHETIC_INVENTORY_COVERAGE_MAP_MISSING_LUA)
+    expect(any("lua.unit_ai" in x or "unit_ai" in x for x in v),
+           f"a persistent Lua save module with no Test coverage map row "
+           f"fails the audit, got {v}")
+
+
+def test_coverage_map_check_reset_owners_need_no_row():
+    from persistence_inventory_audit import (  # type: ignore
+        find_coverage_map_violations)
+    v = find_coverage_map_violations(SYNTHETIC_INVENTORY_COVERAGE_MAP_RESET_OK)
+    expect(v == [],
+           f"a reset/rebuilt/excluded Haskell component or Lua module "
+           f"requires no coverage-map row and does NOT fail, got {v}")
+
+
 # ----- #760 registry-DERIVATION checks (round-4 review) ------------------
 #
 # The audit must derive its registered set from real registry membership,
@@ -3273,6 +3404,10 @@ def main() -> int:
         test_component_check_flags_unregistered_persistent_owner,
         test_component_check_reset_owner_needs_no_registration,
         test_component_check_flags_registered_component_missing_a_row,
+        test_coverage_map_check_accepts_fully_covered_components,
+        test_coverage_map_check_flags_missing_haskell_component_row,
+        test_coverage_map_check_flags_missing_lua_module_row,
+        test_coverage_map_check_reset_owners_need_no_row,
         test_derive_registered_ids_traces_real_membership_not_literals,
         test_derive_registered_ids_excludes_defined_but_unregistered_and_audit_flags_it,
     ]

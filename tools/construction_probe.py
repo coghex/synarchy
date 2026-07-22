@@ -57,13 +57,34 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 LOG = "/tmp/construction_probe_engine.log"
+REPO = Path(__file__).resolve().parent.parent
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root: real scripts/assets/data/config
+    (symlinked -- read-only content, safe to share) plus its OWN empty
+    saves/ directory, so this probe never touches a real player's saves
+    (round-6 review, issue #767 requirement 15's cross-referenced-probe
+    isolation gap)."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 
 
 def bootstrap(port: int) -> None:
@@ -794,7 +815,16 @@ def main() -> int:
     ap.add_argument("--phase", default="all", choices=["all"] + list(PHASES))
     args = ap.parse_args()
 
-    proc = boot(args.port, log=LOG)
+    tmpdir = tempfile.mkdtemp(prefix="construction_probe_")
+    try:
+        root = make_isolated_root(tmpdir)
+        proc = boot(args.port, log=LOG, args=["--resource-root", root])
+        return _run(args, proc)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run(args, proc) -> int:
     try:
         bootstrap(args.port)
         if not wid(args.port):

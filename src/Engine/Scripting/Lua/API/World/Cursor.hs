@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.World.Cursor
     , worldSetWorldCursorSelectFn
     , worldClearWorldCursorSelectFn
     , worldSelectTileFn
+    , worldGetSelectedTileFn
     , worldSelectChunkFn
     , worldSetWorldCursorSelectBgTextureFn
     , worldSetWorldCursorHoverBgTextureFn
@@ -19,6 +20,7 @@ module Engine.Scripting.Lua.API.World.Cursor
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
+import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
@@ -150,6 +152,44 @@ worldSelectTileFn env = do
                 WorldSelectTileByCoord pageId (round gx) (round gy) mz
         _ → pure ()
     return 0
+
+-- | world.getSelectedTile(pageId) -> {gx,gy,z} | nil -- the tile
+--   'worldSelectTileFn' (or ordinary click-selection) last committed
+--   into 'worldSelectedTile'. Reads 'wsCursorRef' directly (synchronous;
+--   mirrors 'worldGetMineDesignationCountFn''s exact page-lookup
+--   pattern) -- headless diagnostics for the persistence contract's
+--   reset-policy check (#767, requirement 6: tile selection is
+--   transient/Excluded state, never persisted, so it must read back
+--   empty after any load).
+worldGetSelectedTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSelectedTileFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws → do
+                    cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
+                    case worldSelectedTile cs of
+                        Just (gx, gy, z) → do
+                            Lua.newtable
+                            Lua.pushinteger (fromIntegral gx)
+                            Lua.setfield (-2) "gx"
+                            Lua.pushinteger (fromIntegral gy)
+                            Lua.setfield (-2) "gy"
+                            Lua.pushinteger (fromIntegral z)
+                            Lua.setfield (-2) "z"
+                            return 1
+                        Nothing → do
+                            Lua.pushnil
+                            return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
 
 worldSetWorldCursorSelectTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetWorldCursorSelectTextureFn env = do

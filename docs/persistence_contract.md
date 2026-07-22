@@ -323,11 +323,22 @@ dropping the in-progress stamp.
 
 ## 6. Existing save/load test & probe disposition
 
-No hspec suite exercises save/load — a saved/loaded session spans the
-Lua thread, the world thread, the unit/building threads, and an
-on-disk file, which is inherently a multi-process, disk-touching
-scenario outside hspec's scope. Coverage lives entirely in headless
-Python probes (`tools/*.py`).
+**Correction (#767):** the claim below that "no hspec suite exercises
+save/load" was accurate when A1 wrote it, but every subsequent child
+(A3, B2, B3, C3, C4) added extensive PURE hspec coverage for the parts
+of the pipeline that don't need a real multi-thread engine —
+`Test.Headless.Save.Snapshot`/`.Barrier`, `Test.Headless.World.Save.
+Components`/`.Compat`/`.Integrity`/`.Storage`, `Test.Headless.Lua.
+SaveModules`, and now (#767, save-overhaul D1)
+`Test.Headless.World.Save.Contract`'s "persistence contract" describe
+group — a representative multi-page session (every designation kind,
+nested items, a unit with wounds/skills/equipment, unit-sim state, a
+building, a craft bill, a power node, and an identity) round-tripped
+through the REAL production codec and compared via `SessionSnapshot`'s
+derived `Eq`. What genuinely still can't run under hspec is the actual
+multi-thread, multi-process, disk-touching FULL save/load transaction —
+that remains headless Python probes (`tools/*.py`), including the two
+new ones below.
 
 **Primary save/load probes** — their whole purpose is testing the
 persistence envelope itself:
@@ -339,6 +350,8 @@ persistence envelope itself:
 | `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite by A2/#757.** A coordinated save keeps the engine paused and must not restore a prior simulation speed; the positional compatibility field remains decode-compatible until format work. | A2/#757 |
 | `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
 | `tools/save_compat_migration_probe.py` | Every tracked complete-session baseline's fixture(s) (B1, the #760-only B2 transitional shape, C3's typed-reference/multi-page/items variants, B3's Lua-versioned session) load→publish→resave→restart→reload round trip (#766) | **Added by #766.** The one thing the pure hspec "save components"/"save compatibility" gates cannot prove: a real fixture on disk survives the normal whole-session transaction and a genuine process restart. | Done (#766) |
+| `tools/persistence_contract_probe.py` | The compact, CI-eligible fresh-process end-to-end gate (#767): three real save→load→save cycles (a tiny worldSize-8 page) compared structurally (`SessionSnapshot` `Eq` + `lua.*` payload byte-equality) via `tools/persistence_snapshot.compare_session_files`, plus reset-policy and paused-stability-dwell checks | **Added by #767 (final Phase-4 child).** The final integration gate: proves the ASSEMBLED system (every A1-C4 piece together) honors the player-facing contract, not merely that each piece's own focused test passes. | Done (#767) |
+| `tools/persistence_contract_sweep.py` | The broader manual sweep (#767): the SAME three-cycle fresh-process comparison against a real generated-world representative scenario (craft bill, an acolyte_portal roster + a real unitAi.commandAttack for non-vacuous Lua-owned state, mine designation, identity) | **Added by #767.** Requirement 15's "broader" tier — real (not tiny) worldgen scale; actually RUNS (via `tools/run_probes.py --only ... --exact`) the domain-specific probes below and the assembled-failure-contract probes for requirement 11/13 coverage, propagating any failure. | Done (#767) |
 
 **Secondary probes** — domain probes whose own gate happens to include
 a save→quit→restart→load round trip as one assertion among several

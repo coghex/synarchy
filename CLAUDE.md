@@ -3770,6 +3770,123 @@ Turnkey harness: **`python3 tools/transactional_load_probe.py`** — the #763 ga
 
 Multi-world save regression: **`python3 tools/multiworld_save_probe.py`** — the #214/#219 gate, and since #707 also the world-identity gate. Generates two real world pages ("main_world" + "second_world", both kept under their own saved ids — issue #763 removed the old active-page-remap-to-main_world behavior), spawns a unit + building on each, saves, then does the gold-standard **save → quit → fresh restart → load** and asserts both pages' entities survive on the right page (cross-page negative checks included), each identity stays on its own page, and `engine.listSaves()` reports the save-slot name separately from `worldName`/`worldGloss`. `--port`/`--seed`/`--seed2`/`--size`/`--plates`. NB: it uses two `world.init` pages, not `world.initArena` — loading a save that contains an arena page currently hangs the world thread (#365), so arenas can't be a save-test secondary page.
 
+**Persistence contract end-to-end suite (#767, save-overhaul D1 — the
+final Phase-4 child of the persistence-overhaul epic, #768):** A1-C4
+(#756-#766) each own a focused slice of the save/load pipeline; this
+issue is the one gate proving the ASSEMBLED system honors the player-
+facing contract together — a fresh process loads the same persistent
+gameplay state captured at the save boundary, publishes it paused,
+stays unchanged while paused, and resumes at default speed **without
+promising the same random future** (contract §1 — two independently
+resumed copies of a save are never required or expected to evolve
+identically; damage rolls, AI choices, scheduling order, and random
+stats are explicitly excluded from every comparison below, and no test
+in this suite pins a gameplay seed merely to make itself repeatable —
+only a world's OWN generation seed, a meaningful domain fact, is ever
+asserted exactly).
+
+The canonical persistence-contract test command (pure, in-process, no
+engine):
+```bash
+cabal test synarchy-test-headless --test-options='--match "persistence contract"'
+```
+`Test.Headless.World.Save.Contract` builds ONE representative multi-
+page session — every designation kind, nested ground/inventory items, a
+unit with stats/skills/equipment/wounds, unit-sim state, a building
+with storage, a craft bill, a power node, and a world identity — and
+round-trips it through the REAL production codec
+(`encodeSessionSnapshot`/`decodeSessionEnvelope`), comparing EVERY
+field via `SessionSnapshot`'s own derived `Eq` (never a hand-picked
+subset), across three successive cycles (repeated-cycle stability),
+plus the reset-policy (`wpsTimeScale`/`wpsToolMode` fabrication) and
+nondeterministic-continuation (no RNG/thread-schedule field, only the
+domain seed) contracts. The visual-fallback policy (equipment/material/
+flora placeholders, and the magenta-checkerboard fall-through for
+anything else — including a currently-nonexistent terrain-specific
+placeholder, a separately-tracked asset gap, not a load-validity one)
+lives in `Test.Headless.Asset.TextureFallback`.
+
+The machine-readable coverage map from #756's state inventory to its
+owning component, canonical inspection path, round-trip assertion, and
+focused test is `docs/persistence_state_inventory.md` §12 — extended
+`tools/persistence_inventory_audit.py` (the SAME standalone audit
+wired into `make ci`/CI) fails if a persistent save component or Lua
+save module has no coverage-map row. `tools/save_compat_audit.py`
+remains the standalone save-COMPATIBILITY audit (baseline/fixture
+fingerprints, requirement 13's maintained-migration guarantee).
+
+Two real-process harness levels (requirement 15), both against isolated
+resource roots, unique ports, and fresh processes — never the
+developer's real `saves/`, including every cross-referenced probe the
+sweep invokes (see below):
+- **`python3 tools/persistence_contract_probe.py`** — the compact,
+  CI-eligible smoke gate: a tiny (worldSize 8) real generated page, one
+  building, one unit, three real fresh-process save→load→save cycles
+  (a genuine `quit` + a brand-new headless process between each), reset-
+  policy checks, and a paused-stability dwell (repeating the same live
+  inspection produces the same result). The three resulting save
+  generations are compared via `tools/persistence_snapshot.
+  compare_session_files` — the canonical persistence-state inspection/
+  comparison surface: it decodes each file through the real
+  `World.Save.Envelope.decodeSessionEnvelope` and asserts every
+  `SessionSnapshot` is pairwise `≡` AND every `lua.<module>` canonical
+  component payload is pairwise byte-identical (no bespoke JSON schema
+  needed for either half — `SessionSnapshot`'s derived `Eq` and
+  `scripts/lib/data_codec.lua`'s canonical sorted-key encoding already
+  make both sides directly comparable). Registered CI-eligible in
+  `tools/ci_probes.py` (`src/World/Save/*`/`src/World/Load/*`/
+  `src/Engine/Save/*`/`src/Engine/Load/*` are already in `CORE_GLOBS`,
+  so any persistence-related source change already selects it).
+- **`python3 tools/persistence_contract_sweep.py`** — the broader
+  manual sweep: the SAME three-cycle fresh-process structural
+  comparison against a REAL (not tiny) generated world populated with a
+  built craft station running a real bill, an `acolyte_portal` with a
+  real roster countdown (non-vacuous `lua.building_spawn` state) plus a
+  real `unitAi.commandAttack` between two units (non-vacuous
+  `lua.unit_ai` state, verified live via `unitAi.getState` across each
+  fresh-process load), a mine designation, and a non-default map mode
+  (verified via `dump_canonical_summary`, since no live
+  `world.getMapMode` query exists). It deliberately does NOT
+  re-implement the domain-specific scenarios (chop/till/crop/plant
+  designations, power-node placement, or the assembled failure
+  contract's individual cases — interrupted write, corrupt envelope,
+  missing required component, failed migration, missing gameplay
+  definition, invalid Haskell/Lua reference, required Lua decode
+  failure) that already have their own maintained, real-process
+  regression probes; instead it actually RUNS them, via `tools/
+  run_probes.py --only ... --exact --retries 1` (the `--retries 1`
+  matches CI's own convention for the parallel-engine-contention flake
+  class its own probe gate already absorbs with a solo re-run) —
+  matching requirement 14's "avoid retaining multiple expensive probes
+  that test the same final behavior" without reducing to a no-op
+  existence check. This sweep's OWN scenario, AND every one of the 12
+  cross-referenced probes, always uses an isolated resource root
+  (requirement 15): `chop`/`till`/`crop`/`plant`/`construction`/`power`/
+  `transactional_load`/`save_barrier` each gained their own
+  `make_isolated_root`/`--resource-root` wiring (round-6 review — they
+  used to call `engine.saveWorld`/`loadSave` straight against this
+  repo's real `saves/` directory, which is why round-5's fix had made
+  them entirely uninvocable from this script instead; verified
+  individually against real engines that none of them touch real
+  `saves/` any more), joining `save_storage`/`persistence_integrity`/
+  `save_compat_migration` (their own pre-existing `--resource-root`) and
+  `craft_bill` (touches no `saves/` at all). All 12 are therefore
+  SELECTABLE via `--cross-probe-keys` — an unrecognized key exits
+  immediately with an error, not a silent run. The DEFAULT is all 12
+  except `craft_bill`, which is independently flaky per `tools/
+  ci_probes.py --status` (`manual-only [flaky]`, unrelated to
+  persistence) and must be listed explicitly to opt in.
+  `--cross-probe-keys`/`--skip-cross-probes` narrow this further for
+  local iteration on the sweep's own scenario; skipping is loudly
+  reported as reduced coverage, never silently. Both harnesses also
+  seed a throwaway pre-load-only page before their first fresh-process
+  load and assert it does NOT survive publication — proving a load
+  REPLACES the whole session rather than merging into it (#763), inside
+  each harness's own isolated scenario rather than relying solely on
+  the excluded-by-default `transactional_load` cross-probe. Registered
+  manual-only (`slow/worldgen-heavy`) in
+  `tools/ci_probes.py`.
+
 ## AI Asset Generation
 
 Textures (flora, units, buildings, tiles) can be generated via the PixelLab MCP server.

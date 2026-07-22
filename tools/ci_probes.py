@@ -50,6 +50,7 @@ CI_ELIGIBLE = {
     "consumable_effects",
     "craft",
     "medic_coord",
+    "persistence_contract",
     "repair",
     "repair_item",
 }
@@ -193,6 +194,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "persistence_integrity": (SLOW_WORLDGEN, "generates a real world page and boots "
                               "three engines (build+save, dangling-reference load, "
                               "corrupted-load-vs-live-session) (#764)"),
+    "persistence_contract_sweep": (SLOW_WORLDGEN, "real worldSize-64 generation plus "
+                              "four real engine boots (three fresh-process save->load-"
+                              "save cycles) for the broader representative-scenario "
+                              "comparison, plus every cross-referenced probe it runs "
+                              "(#767); the compact persistence_contract probe is "
+                              "CI-eligible instead"),
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
     "portal_location": (SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small to test starting-building exclusion against (#778)"),

@@ -40,6 +40,7 @@ import qualified Test.Headless.World.Save.Components as SaveComponents
 import qualified Test.Headless.World.Save.Compat as SaveCompat
 import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
+import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
@@ -188,6 +189,7 @@ main = hspec $ do
     describe "save migrations" SaveCompat.spec
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "atomic save storage" SaveStorage.spec
+    describe "persistence contract" SaveContract.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
