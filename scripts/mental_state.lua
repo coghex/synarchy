@@ -51,7 +51,9 @@ local brain = require("scripts.brain")
 local mental = package.loaded["scripts.mental_state"] or {}
 package.loaded["scripts.mental_state"] = mental
 
--- State codes (the "mental_state" stat's values).
+-- State codes (the "mental_state" stat's values). EUPHORIC's value (3)
+-- is hardcoded in Haskell's Combat.Resolution.Common.mentalEffectiveness
+-- (#353, the euphoria bonus gate) — change both in lockstep.
 mental.STABLE, mental.STRESSED, mental.BREAK, mental.EUPHORIC = 0, 1, 2, 3
 local STATE_NAMES = { [0] = "stable", [1] = "stressed",
                       [2] = "break",  [3] = "euphoric" }

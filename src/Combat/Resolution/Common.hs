@@ -81,6 +81,10 @@ maxStaminaFor inst = case HM.lookup "max_stamina" (uiStats inst) of
 mentalEffectiveness ∷ UnitInstance → Float
 mentalEffectiveness inst =
     let concentration = clamp 0.0 1.0 (statOr "concentration" 1.0 inst)
+        -- 3.0 = EUPHORIC. Mirrors the mental.STABLE/STRESSED/BREAK/
+        -- EUPHORIC = 0,1,2,3 ordering in scripts/mental_state.lua —
+        -- change both in lockstep; the Lua side carries the matching
+        -- cross-reference on its own definition.
         euphoric       = statOr "mental_state" 0.0 inst ≡ 3.0
         base           = 0.75 + 0.25 * concentration
         withEuphoria   = if euphoric then base * 1.10 else base
