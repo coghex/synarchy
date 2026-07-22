@@ -3744,10 +3744,9 @@ remains the standalone save-COMPATIBILITY audit (baseline/fixture
 fingerprints, requirement 13's maintained-migration guarantee).
 
 Two real-process harness levels (requirement 15), both against isolated
-resource roots, unique ports, and fresh processes for their OWN
-scenario — never the developer's real `saves/` (the sweep's
-cross-referenced sub-probes are a documented exception by default, see
-below):
+resource roots, unique ports, and fresh processes — never the
+developer's real `saves/`, including every cross-referenced probe the
+sweep invokes (see below):
 - **`python3 tools/persistence_contract_probe.py`** — the compact,
   CI-eligible smoke gate: a tiny (worldSize 8) real generated page, one
   building, one unit, three real fresh-process save→load→save cycles
@@ -3788,23 +3787,23 @@ below):
   class its own probe gate already absorbs with a solo re-run) —
   matching requirement 14's "avoid retaining multiple expensive probes
   that test the same final behavior" without reducing to a no-op
-  existence check. This sweep's OWN scenario, AND every cross-
-  referenced probe it can actually invoke, always uses an isolated
-  resource root (requirement 15) — with no opt-in escape hatch (round-5
-  review: an opt-in flag that could still reach the real `saves/`
-  directory doesn't satisfy "never touch" for a routine invocation).
-  Only `save_storage`/`persistence_integrity`/`save_compat_migration`
-  (their own `--resource-root`) and `craft_bill` (touches no `saves/`
-  at all) are ever selectable via `--cross-probe-keys` — an
-  unrecognized or known-unsafe key exits immediately with an error, not
-  a silent run. The default is the first 3 only: `craft_bill` is
-  independently flaky per `tools/ci_probes.py --status` (`manual-only
-  [flaky]`, unrelated to persistence), so it must be listed explicitly
-  to opt in. The other 8 (`chop`/`till`/`crop`/`plant`/`construction`/
-  `power`/`transactional_load`/`save_barrier`, which call
-  `engine.saveWorld`/`loadSave` straight against this repo's real
-  `saves/` directory) are never invocable from this script at all; use
-  `run_probes.py` directly or CI's own probe gate for that coverage.
+  existence check. This sweep's OWN scenario, AND every one of the 12
+  cross-referenced probes, always uses an isolated resource root
+  (requirement 15): `chop`/`till`/`crop`/`plant`/`construction`/`power`/
+  `transactional_load`/`save_barrier` each gained their own
+  `make_isolated_root`/`--resource-root` wiring (round-6 review — they
+  used to call `engine.saveWorld`/`loadSave` straight against this
+  repo's real `saves/` directory, which is why round-5's fix had made
+  them entirely uninvocable from this script instead; verified
+  individually against real engines that none of them touch real
+  `saves/` any more), joining `save_storage`/`persistence_integrity`/
+  `save_compat_migration` (their own pre-existing `--resource-root`) and
+  `craft_bill` (touches no `saves/` at all). All 12 are therefore
+  SELECTABLE via `--cross-probe-keys` — an unrecognized key exits
+  immediately with an error, not a silent run. The DEFAULT is all 12
+  except `craft_bill`, which is independently flaky per `tools/
+  ci_probes.py --status` (`manual-only [flaky]`, unrelated to
+  persistence) and must be listed explicitly to opt in.
   `--cross-probe-keys`/`--skip-cross-probes` narrow this further for
   local iteration on the sweep's own scenario; skipping is loudly
   reported as reduced coverage, never silently. Both harnesses also

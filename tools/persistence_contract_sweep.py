@@ -48,25 +48,26 @@ narrow the set for local iteration on this script's OWN scenario;
 coverage, never silently).
 
 This sweep's OWN scenario, AND every cross-referenced probe it can
-actually invoke, always uses an isolated resource root, a unique port,
-and a fresh process, and never touches the developer's real saves/
-(requirement 15) -- with no opt-in escape hatch (round-5 review: an
-opt-in flag that COULD reach the real saves/ directory still violates
-"never touch" for a routine invocation). Of the 12 domain probes this
-sweep cross-references in its own docstring above, only 4 satisfy that:
-save_storage/persistence_integrity/save_compat_migration pass their own
---resource-root, and craft_bill_probe.py never touches saves/ at all
-(though it's independently flaky per `tools/ci_probes.py --status`,
-unrelated to persistence, so it's excluded from the DEFAULT set anyway
--- see FLAKY_ISOLATED_PROBE_KEYS below). ``--cross-probe-keys`` only
-ever ACCEPTS keys from this isolated set (SELECTABLE_CROSS_
-REFERENCED_PROBE_KEYS) -- an unrecognized or known-unsafe key exits
-with an error rather than silently running it. The other 8 (chop/till/
-crop/plant/construction/power/transactional_load/save_barrier) call
-engine.saveWorld/loadSave against this repo's real saves/ directory and
-are NOT invocable from this script at all; their own domain coverage
-comes from CI's own probe gate and a manual `run_probes.py` run, not
-this sweep.
+invoke, always uses an isolated resource root, a unique port, and a
+fresh process, and never touches the developer's real saves/
+(requirement 15). Round-5 found only 3 of the 12 cross-referenced
+probes satisfied that (save_storage/persistence_integrity/
+save_compat_migration) and made the other 9 entirely uninvocable from
+this script rather than risk them touching real saves/ -- but that left
+this sweep unable to fulfil its own stated requirement-11/13 coverage.
+Round-6's real fix: those 9 probes (chop/till/crop/plant/construction/
+power/transactional_load/save_barrier/craft_bill) now take
+--resource-root themselves and use an isolated root exactly like this
+sweep's own scenario (verified individually against real engines --
+none of them touch this repo's real saves/ any more). All 12 are
+therefore SELECTABLE via ``--cross-probe-keys``
+(SELECTABLE_CROSS_REFERENCED_PROBE_KEYS) -- an unrecognized key exits
+with an error rather than silently running it. craft_bill is the one
+exception kept OUT of the DEFAULT set (not out of selectability): it's
+independently flaky per `tools/ci_probes.py --status` ("craft_job AI
+claim/work timing flakes run-to-run on CI"), unrelated to persistence,
+and would make this sweep spuriously fail on unrelated AI timing if
+defaulted on.
 
 Usage:
   python3 tools/persistence_contract_sweep.py [--port 9278] \\
@@ -95,6 +96,19 @@ PAGE = "contract_sweep_page"
 # part of any save this suite writes -- used once (round-5 review) to
 # prove a load replaces the whole session rather than merging into it.
 GHOST_PAGE = "contract_sweep_preload_ghost"
+# Round-6 review: a SECOND real, saved page with its own identity and
+# visibility (hidden, not active, unlike PAGE) -- proves a multi-page
+# session round-trips through save/load with each page's own state and
+# the active/visible relationship between them intact, not just a
+# single-page shape (multiworld_save_probe.py's own gate, exercised here
+# inside this suite's own isolated scenario too). Deliberately NOT a
+# camera check: camera is a single GLOBAL live value duplicated across
+# every page's own field at save time (see this repo's own documented
+# save-overhaul notes: "no per-page zoom/facing exists in that format")
+# -- a hidden page's camera is not an independently-preserved guarantee
+# to test (confirmed live while validating this fix: it read back
+# {0,0}, not the value set on the page before saving).
+BETA_PAGE = "contract_sweep_page_beta"
 
 # The AI/stats script stack the loading screen would load in a real GUI
 # session -- headless boots skip it entirely (CLAUDE.md), so any probe
@@ -112,48 +126,33 @@ AI_SCRIPTS = (
 # (round-1 review: an existence-only check proves nothing). Keys, not
 # filenames, since that is what run_probes.py --exact matches against.
 #
-# These 12 probes are NOT all isolated the way this sweep's own scenario
-# is (`make_isolated_root` + `--resource-root`, requirement 15): only
-# save_storage/persistence_integrity/save_compat_migration pass their own
-# `--resource-root`. The other 9 -- chop/till/crop/plant/construction/
-# power/transactional_load/save_barrier/craft_bill -- call
-# engine.saveWorld/loadSave straight against this repo's real saves/
-# directory (a randomly-named or uuid-suffixed slot, cleaned up in a
-# `finally`, but still transiently present there while the probe runs)
-# -- EXCEPT craft_bill_probe.py, which never touches saves/ at all (its
-# own docstring: "Not covered here: a real save/quit/restart/load
-# round-trip") but IS independently flaky (`tools/ci_probes.py --status`
-# classifies it `manual-only [flaky]`: "craft_job AI claim/work timing
-# flakes run-to-run on CI" -- confirmed live while validating this fix,
-# unrelated to anything this issue touches).
-#
-# Round-5 review: an OPT-IN flag that could still reach the real saves/
-# directory does not satisfy requirement 15's "never touch the
-# developer's real saves/" for a routine invocation of this script --
-# there must be NO path from this sweep's own CLI to any of the 8
-# saves/-touching probes at all, not merely a default that excludes
-# them. UNISOLATED_CROSS_REFERENCED_PROBE_KEYS is kept ONLY as
-# documentation of which of the 12 cross-referenced probes those are
-# (matching the module docstring's own enumeration above) -- it is never
-# read by any argument-parsing or dispatch code below.
-# SELECTABLE_CROSS_REFERENCED_PROBE_KEYS is the actual universe
-# `--cross-probe-keys` may draw from; ISOLATED_CROSS_REFERENCED_PROBE_KEYS
-# (the DEFAULT) excludes craft_bill too, since it's independently flaky
-# for reasons unrelated to persistence and would make this sweep
-# spuriously fail on unrelated AI timing -- craft_bill remains
-# SELECTABLE (never a saves/ violation) for anyone who explicitly wants
-# it via `--cross-probe-keys`.
-ISOLATED_CROSS_REFERENCED_PROBE_KEYS = [
+# Round-6 review: previously only save_storage/persistence_integrity/
+# save_compat_migration passed their own --resource-root, and the other
+# 9 (chop/till/crop/plant/construction/power/transactional_load/
+# save_barrier/craft_bill) called engine.saveWorld/loadSave straight
+# against this repo's real saves/ directory -- so round-5 made them
+# entirely uninvocable from this script (no opt-in escape hatch), which
+# left this sweep unable to fulfil its own stated requirement-11/13
+# coverage for anything past the 3 isolated probes. The real fix (this
+# round): those 9 probes themselves now take --resource-root and use an
+# isolated root exactly like this sweep's own scenario (verified live,
+# each individually, against a real engine -- none of them touch this
+# repo's real saves/ any more). All 12 are therefore SELECTABLE via
+# --cross-probe-keys now. craft_bill is still excluded from the DEFAULT
+# (not from selectability): it's independently flaky per
+# `tools/ci_probes.py --status` ("craft_job AI claim/work timing flakes
+# run-to-run on CI"), unrelated to persistence, and would make this
+# sweep spuriously fail on unrelated AI timing if defaulted on.
+SELECTABLE_CROSS_REFERENCED_PROBE_KEYS = [
+    "chop", "till", "crop", "plant", "construction", "power",
+    "transactional_load", "save_barrier", "craft_bill",
     "save_storage", "persistence_integrity", "save_compat_migration",
 ]
-FLAKY_ISOLATED_PROBE_KEYS = ["craft_bill"]
-UNISOLATED_CROSS_REFERENCED_PROBE_KEYS = [
-    "chop", "till", "crop", "plant", "construction", "power",
-    "transactional_load", "save_barrier",
+FLAKY_CROSS_REFERENCED_PROBE_KEYS = ["craft_bill"]
+DEFAULT_CROSS_REFERENCED_PROBE_KEYS = [
+    k for k in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS
+    if k not in FLAKY_CROSS_REFERENCED_PROBE_KEYS
 ]
-SELECTABLE_CROSS_REFERENCED_PROBE_KEYS = (
-    ISOLATED_CROSS_REFERENCED_PROBE_KEYS + FLAKY_ISOLATED_PROBE_KEYS
-)
 
 
 class Checks:
@@ -266,14 +265,16 @@ def page_exists(port: int, page: str) -> bool:
     return r not in ("nil", "null", "")
 
 
-def build_rich_scenario(chk: Checks, port: int, seed: int, size: int, plates: int) -> tuple[int, int, int]:
+def build_rich_scenario(chk: Checks, port: int, seed: int, size: int, plates: int) -> tuple[int, int, int, int]:
     """A REAL generated world (not a tiny arena) with a meaningful seed +
     identity, a built craft station running a real bill, an acolyte_portal
     with a real roster countdown (non-vacuous lua.building_spawn state), a
     unitAi.commandAttack between two units (non-vacuous lua.unit_ai
-    state), a mine designation, and a non-default map mode -- the
-    representative scenario requirement 4 asks for, at real worldgen
-    scale. Returns (portal_bid, attacker_uid, target_uid)."""
+    state), a mine designation, a non-default map mode, and (round-6
+    review) a SECOND real saved page with its own identity/camera/
+    visibility -- the representative scenario requirement 4 asks for, at
+    real worldgen scale. Returns (portal_bid, attacker_uid, target_uid,
+    beta_uid)."""
     bootstrap_defs(port)
     load_ai_stack(port)
     inited = send(
@@ -341,6 +342,44 @@ def build_rich_scenario(chk: Checks, port: int, seed: int, size: int, plates: in
     send(port, f"world.setMapMode('{PAGE}', 'map_pressure'); return 'ok'")
     time.sleep(0.5)
 
+    # Round-6 review: a second REAL saved page (not an arena -- world.init's
+    # own identity args, unlike world.initArena, are what let this page's
+    # identity genuinely differ from PAGE's). A small fixed size keeps this
+    # affordable regardless of --world-size. It ends up hidden-but-loaded
+    # (not destroyed) when the save runs -- engine.saveWorld captures every
+    # loaded page, not just the active one (mirrors multiworld_save_probe.py's
+    # own "beta WAS live (hidden, not destroyed)" pattern) -- so its
+    # identity/visibility relationship to PAGE is a real thing to round-trip,
+    # not a merge artifact.
+    beta_inited = send(
+        port,
+        f"world.init('{BETA_PAGE}', {seed + 1}, 8, 3, "
+        f"'Sweep Beta World', 'the second persisted page'); return 'ok'")
+    chk.ok("ok" in beta_inited, f"world.init('{BETA_PAGE}') accepted (got {beta_inited!r})")
+    send(port, f"world.show('{BETA_PAGE}'); return 'ok'")
+    deadline = time.time() + 60.0
+    while time.time() < deadline:
+        if send(port, "return world.getActiveWorldId()").strip('"') == BETA_PAGE:
+            break
+        time.sleep(0.2)
+    else:
+        chk.ok(False, f"'{BETA_PAGE}' never became the active world")
+    send(port, "return world.waitForInit(60)", timeout=65)
+    beta_uid = as_int(send(port, "return unit.spawn('acolyte', 2, 2, 0, 'player')"))
+    chk.ok(beta_uid is not None and beta_uid >= 0,
+           f"beta page unit.spawn succeeded (got {beta_uid!r})")
+    # Distinct VISIBILITY: beta ends up hidden, PAGE ends up active again --
+    # the relationship a load must restore, not just each page in isolation.
+    send(port, f"world.hide('{BETA_PAGE}'); return 'ok'")
+    send(port, f"world.show('{PAGE}'); return 'ok'")
+    deadline = time.time() + 60.0
+    while time.time() < deadline:
+        if send(port, "return world.getActiveWorldId()").strip('"') == PAGE:
+            break
+        time.sleep(0.2)
+    else:
+        chk.ok(False, f"'{PAGE}' did not become active again after building beta")
+
     # Round-2/3 review: the reset-policy check only proves something if
     # REAL non-default selections/tool exist before the save -- seed all
     # three selection classes requirement 6 names (unit, building, tile)
@@ -377,7 +416,7 @@ def build_rich_scenario(chk: Checks, port: int, seed: int, size: int, plates: in
     chk.ok(tool_before == "mine",
            f"tool mode is genuinely non-default before saving (got {tool_before!r})")
 
-    return portal_bid, atk, tgt
+    return portal_bid, atk, tgt, beta_uid
 
 
 def atk_in_selection(raw: str, uid: int) -> bool:
@@ -461,17 +500,14 @@ def main() -> int:
     ap.add_argument("--world-size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=5)
     ap.add_argument("--cross-probe-keys",
-                     default=",".join(ISOLATED_CROSS_REFERENCED_PROBE_KEYS),
+                     default=",".join(DEFAULT_CROSS_REFERENCED_PROBE_KEYS),
                      help="comma-separated exact tools/run_probes.py probe keys to "
                           "actually run for requirement 11/13 coverage -- ONLY keys "
                           "from " + ",".join(SELECTABLE_CROSS_REFERENCED_PROBE_KEYS) +
-                          " are accepted (every one isolated/saves/-free, requirement "
-                          "15); default: the 3 that are also deterministic -- "
-                          "save_storage/persistence_integrity/save_compat_migration. "
-                          "The 8 that touch this repo's real saves/ (chop/till/crop/"
-                          "plant/construction/power/transactional_load/save_barrier) "
-                          "are never invocable from this script at all -- see CI's own "
-                          "probe gate or a manual run_probes.py run for that coverage")
+                          " are accepted (every one isolated, requirement 15); "
+                          "default: all of them except craft_bill, which is isolated "
+                          "but independently flaky per `ci_probes.py --status` and "
+                          "must be listed explicitly to opt in")
     ap.add_argument("--cross-probe-jobs", type=int, default=2,
                      help="run_probes.py --jobs for the cross-referenced probes")
     ap.add_argument("--skip-cross-probes", action="store_true",
@@ -483,17 +519,13 @@ def main() -> int:
 
     if not args.skip_cross_probes:
         requested_keys = [k for k in args.cross_probe_keys.split(",") if k.strip()]
-        unsafe = [k for k in requested_keys
-                  if k not in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS]
-        if unsafe:
+        unrecognized = [k for k in requested_keys
+                         if k not in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS]
+        if unrecognized:
             sys.exit(
-                f"--cross-probe-keys names {unsafe!r}, which this script refuses to "
-                f"run: only {SELECTABLE_CROSS_REFERENCED_PROBE_KEYS!r} are isolated "
-                f"(or touch no saves/ at all) and selectable here (requirement 15 -- "
-                f"'never touch the developer's real saves/'). The 8 saves/-touching "
-                f"domain probes are not invocable from this sweep at all; use "
-                f"tools/run_probes.py directly (with a real understanding of the "
-                f"tradeoff) or rely on CI's own probe gate instead.")
+                f"--cross-probe-keys names {unrecognized!r}, which this script does "
+                f"not recognize: only {SELECTABLE_CROSS_REFERENCED_PROBE_KEYS!r} are "
+                f"registered cross-referenced probes.")
 
     tmpdir = tempfile.mkdtemp(prefix="persistence_contract_sweep_")
     proc = None
@@ -502,7 +534,7 @@ def main() -> int:
 
         print("=== engine A: build the representative scenario, save 'gen1' ===")
         proc = boot_probe(root, port, os.path.join(tmpdir, "engineA.log"))
-        portal_bid, atk, tgt = build_rich_scenario(
+        portal_bid, atk, tgt, beta_uid = build_rich_scenario(
             chk, port, args.seed, args.world_size, args.plates)
         save_and_wait(chk, port, PAGE, "gen1")
         gen1_path = os.path.join(root, "saves", "gen1", "world.synworld")
@@ -560,6 +592,32 @@ def main() -> int:
                        f"'{prev_slot}') did NOT survive the load -- a load "
                        f"replaces the whole session, it does not merge")
 
+                # Round-6 review: the multi-page relationship -- PAGE
+                # active, BETA_PAGE hidden-but-loaded, EXACTLY as saved --
+                # must survive the load, not just each page's own state in
+                # isolation. Checked without ever switching the active
+                # page away from PAGE (world.getIdentity/unit.exists both
+                # take an explicit page/id argument): the checks below
+                # this block assume PAGE stays active throughout, and a
+                # real page switch to a full-sized generated world can
+                # take longer than is worth risking here.
+                active_after_load = send(port, "return world.getActiveWorldId()").strip('"')
+                chk.ok(active_after_load == PAGE,
+                       f"'{PAGE}' (not '{BETA_PAGE}') is active immediately after "
+                       f"the load, matching the visibility relationship as saved "
+                       f"(got {active_after_load!r})")
+                chk.ok(page_exists(port, BETA_PAGE),
+                       f"beta page '{BETA_PAGE}' (part of the save) survived the load")
+                beta_exists = send(port, f"return unit.exists({beta_uid})").strip()
+                chk.ok(beta_exists == "true",
+                       f"beta page's unit {beta_uid} survived the load "
+                       f"(got {beta_exists!r})")
+                beta_identity = send_json(port, f"return world.getIdentity('{BETA_PAGE}')")
+                chk.ok(isinstance(beta_identity, dict)
+                       and beta_identity.get("name") == "Sweep Beta World",
+                       f"beta page's own identity (distinct from '{PAGE}''s) survived "
+                       f"the load (got {beta_identity!r})")
+
             assert_reset_policy(chk, port, f"after loading {prev_slot}")
             attack_target = get_attack_target(port, atk)
             chk.ok(attack_target == tgt,
@@ -610,16 +668,9 @@ def main() -> int:
         keys: list[str] = []
     else:
         # Already validated above (before ANY engine boot) to be a subset
-        # of SELECTABLE_CROSS_REFERENCED_PROBE_KEYS -- no unsafe key can
-        # reach this point (round-5 review: no opt-in path to the 8
-        # saves/-touching probes exists at all).
+        # of SELECTABLE_CROSS_REFERENCED_PROBE_KEYS.
         keys = requested_keys
-        never_selectable = [k for k in UNISOLATED_CROSS_REFERENCED_PROBE_KEYS
-                             if k not in keys]
-        print(f"  (never run by this script: {', '.join(never_selectable)} -- these "
-              f"touch this repo's real saves/ directory; see CI's own probe gate or "
-              f"a manual run_probes.py invocation for that coverage)")
-        skipped_flaky = [k for k in FLAKY_ISOLATED_PROBE_KEYS if k not in keys]
+        skipped_flaky = [k for k in FLAKY_CROSS_REFERENCED_PROBE_KEYS if k not in keys]
         if skipped_flaky:
             print(f"  (not run: {', '.join(skipped_flaky)} -- isolated but "
                   f"independently flaky per `tools/ci_probes.py --status`; "

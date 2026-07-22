@@ -64,11 +64,30 @@ import glob
 import os
 import shutil
 import sys
+import tempfile
 import time
 import uuid
+from pathlib import Path
 from probelib import boot, quit_engine, send, send_json, wait_load_published
 
 SAVE_PREFIX = "tload_probe_"
+REPO = Path(__file__).resolve().parent.parent
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root: real scripts/assets/data/config
+    (symlinked -- read-only content, safe to share) plus its OWN empty
+    saves/ directory, so this probe never touches a real player's saves
+    (round-6 review, issue #767 requirement 15's cross-referenced-probe
+    isolation gap)."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 
 # Round 13 review: a custom material registered at runtime via
 # engine.loadMaterialYaml (never present under data/materials/*.yaml)
@@ -184,8 +203,8 @@ def populate_page(port: int, page: str, seed: int, size: int = 64,
     return uid, bid
 
 
-def do_save(port: int, page: str, slot: str) -> str:
-    save_file = os.path.join("saves", slot, "world.synworld")
+def do_save(port: int, page: str, slot: str, root: str) -> str:
+    save_file = os.path.join(root, "saves", slot, "world.synworld")
     saved = send(port, f"return engine.saveWorld('{page}', '{slot}')")
     if saved.strip() != "true":
         sys.exit(f"FAIL: engine.saveWorld returned {saved!r}")
@@ -210,11 +229,20 @@ def main() -> int:
     ap.add_argument("--size", type=int, default=64)
     args = ap.parse_args()
 
+    tmpdir = tempfile.mkdtemp(prefix="transactional_load_probe_")
+    try:
+        root = make_isolated_root(tmpdir)
+        return _run(args, root)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run(args, root: str) -> int:
     run_id = uuid.uuid4().hex[:12]
     slot_valid = f"{SAVE_PREFIX}valid_{run_id}"
     slot_corrupt = f"{SAVE_PREFIX}corrupt_{run_id}"
     slot_valid2 = f"{SAVE_PREFIX}valid2_{run_id}"
-    save_dirs = [os.path.join("saves", s)
+    save_dirs = [os.path.join(root, "saves", s)
                  for s in (slot_valid, slot_corrupt, slot_valid2)]
     for d in save_dirs:
         if os.path.exists(d):
@@ -225,7 +253,7 @@ def main() -> int:
     chk = Checks()
 
     try:
-        proc = boot(args.port, log=log, label="engine")
+        proc = boot(args.port, log=log, label="engine", args=["--resource-root", root])
         bootstrap_defs(args.port)
 
         # ── Build the baseline session: two real pages, real entities ──
@@ -248,7 +276,7 @@ def main() -> int:
         # captured by engine.saveWorld (which snapshots every live page,
         # not only the requested one) — it's the "survives because it
         # WAS in the save" half of the replacement-vs-merge check.
-        do_save(args.port, "alpha", slot_valid)
+        do_save(args.port, "alpha", slot_valid, root)
         print(f"saved valid session -> {slot_valid} (alpha + beta)")
 
         # "gamma" is created AFTER the save above, so it is live at load
@@ -268,8 +296,8 @@ def main() -> int:
 
         # A corrupt save: a real slot directory whose world.synworld is
         # garbage bytes, not a valid envelope at all.
-        os.makedirs(os.path.join("saves", slot_corrupt), exist_ok=True)
-        with open(os.path.join("saves", slot_corrupt, "world.synworld"), "wb") as f:
+        os.makedirs(os.path.join(root, "saves", slot_corrupt), exist_ok=True)
+        with open(os.path.join(root, "saves", slot_corrupt, "world.synworld"), "wb") as f:
             f.write(b"not a real save file, deliberately corrupt for #763")
 
         # ── 1. Deliberately invalid loads leave the session untouched ──
@@ -489,7 +517,7 @@ def main() -> int:
 
         # ── 7. Missing content definition rejects the load outright ─────
         print("\n--- missing gameplay definition rejects the load ---")
-        do_save(args.port, "alpha", slot_valid2)
+        do_save(args.port, "alpha", slot_valid2, root)
         # Simulate "the def is no longer registered" without a second
         # process: temporarily clear the live unit registry's def for
         # 'acolyte' via a throwaway world.init-free path isn't exposed to
@@ -498,7 +526,8 @@ def main() -> int:
         proc2_log = f"/tmp/transactional_load_probe_{args.port + 1}.log"
         quit_engine(args.port, proc)
         proc = None
-        proc2 = boot(args.port, log=proc2_log, label="engine (no unit defs)")
+        proc2 = boot(args.port, log=proc2_log, label="engine (no unit defs)",
+                     args=["--resource-root", root])
         try:
             bootstrap_defs(args.port, include_units=False)
             pre_active = send(args.port, "return world.getActiveWorldId()")
@@ -519,7 +548,8 @@ def main() -> int:
 
         # ── 8. No ghost accumulation across repeated loads ──────────────
         print("\n--- repeated loads don't accumulate ghost pages ---")
-        proc = boot(args.port, log=log, label="engine (repeat-load)")
+        proc = boot(args.port, log=log, label="engine (repeat-load)",
+                    args=["--resource-root", root])
         bootstrap_defs(args.port)
         for i in range(2):
             loaded = send(args.port, f"return engine.loadSave('{slot_valid}')")
@@ -551,11 +581,11 @@ def main() -> int:
                           "non-visible-primary scenario")
         else:
             slot_primary = f"{SAVE_PREFIX}primary_{run_id}"
-            save_dirs.append(os.path.join("saves", slot_primary))
+            save_dirs.append(os.path.join(root, "saves", slot_primary))
             saved = send(args.port, f"return engine.saveWorld('alpha', '{slot_primary}')")
             chk.ok(saved.strip() == "true",
                    "saving 'alpha' (hidden, non-visible) as primary is accepted")
-            save_file = os.path.join("saves", slot_primary, "world.synworld")
+            save_file = os.path.join(root, "saves", slot_primary, "world.synworld")
             for _ in range(100):
                 if os.path.exists(save_file):
                     break
@@ -601,8 +631,8 @@ def main() -> int:
             chk.ok(set_ok.strip() == "true",
                    "world.setCell accepts the custom (registered) id 210")
             slot_custom = f"{SAVE_PREFIX}custommat_{run_id}"
-            save_dirs.append(os.path.join("saves", slot_custom))
-            do_save(args.port, "alpha", slot_custom)
+            save_dirs.append(os.path.join(root, "saves", slot_custom))
+            do_save(args.port, "alpha", slot_custom, root)
             loaded = send(args.port, f"return engine.loadSave('{slot_custom}')")
             chk.ok(loaded.strip() == "true",
                    "a load referencing the custom material id is accepted, "
@@ -629,8 +659,8 @@ def main() -> int:
                            "id 210 still accepted by world.setCell after "
                            "the reload")
                     slot_custom2 = f"{SAVE_PREFIX}custommat2_{run_id}"
-                    save_dirs.append(os.path.join("saves", slot_custom2))
-                    do_save(args.port, "alpha", slot_custom2)
+                    save_dirs.append(os.path.join(root, "saves", slot_custom2))
+                    do_save(args.port, "alpha", slot_custom2, root)
                     loaded2 = send(args.port,
                         f"return engine.loadSave('{slot_custom2}')")
                     chk.ok(loaded2.strip() == "true",
@@ -674,8 +704,8 @@ def main() -> int:
             chk.ok(set_ok.strip() == "true",
                    "world.setCell accepts the raw (unregistered) id 200")
             slot_badmat = f"{SAVE_PREFIX}badmat_{run_id}"
-            save_dirs.append(os.path.join("saves", slot_badmat))
-            do_save(args.port, "alpha", slot_badmat)
+            save_dirs.append(os.path.join(root, "saves", slot_badmat))
+            do_save(args.port, "alpha", slot_badmat, root)
             pre_active = send(args.port, "return world.getActiveWorldId()")
             loaded = send(args.port,
                 f"return engine.loadSave('{slot_badmat}')")
@@ -707,7 +737,7 @@ def main() -> int:
         for d in save_dirs:
             if os.path.basename(d).startswith(SAVE_PREFIX) and os.path.isdir(d):
                 shutil.rmtree(d, ignore_errors=True)
-        race_dir = os.path.join("saves", f"{SAVE_PREFIX}race_{run_id}")
+        race_dir = os.path.join(root, "saves", f"{SAVE_PREFIX}race_{run_id}")
         if os.path.isdir(race_dir):
             shutil.rmtree(race_dir, ignore_errors=True)
 

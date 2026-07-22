@@ -73,11 +73,30 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+from pathlib import Path
 from probelib import quit_engine, boot, send, wait_load_published
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
+REPO = Path(__file__).resolve().parent.parent
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root: real scripts/assets/data/config
+    (symlinked -- read-only content, safe to share) plus its OWN empty
+    saves/ directory, so this probe never touches a real player's saves
+    (round-6 review, issue #767 requirement 15's cross-referenced-probe
+    isolation gap)."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 
 
 def jget(port: int, lua: str, timeout: float = 10.0):
@@ -137,10 +156,20 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9358)
     args = ap.parse_args()
     port = args.port
+
+    tmpdir = tempfile.mkdtemp(prefix="power_probe_")
+    try:
+        root = make_isolated_root(tmpdir)
+        return _run(port, root)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run(port: int, root: str) -> int:
     passed = True
 
     save_name = f"{SAVE_PREFIX}{uuid.uuid4().hex[:12]}"
-    save_dir = os.path.join("saves", save_name)
+    save_dir = os.path.join(root, "saves", save_name)
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
 
@@ -149,7 +178,7 @@ def main() -> int:
     procA = procB = None
     try:
         # ── Engine A: place nodes through the build tool, save ──────────
-        procA = boot(port, log=logA, label="engine A")
+        procA = boot(port, log=logA, label="engine A", args=["--resource-root", root])
         bootstrap_defs(port)
         send(port, "world.initArena('power_probe'); return 'ok'")
         send(port, "world.show('power_probe'); return 'ok'")
@@ -385,7 +414,7 @@ def main() -> int:
         quit_engine(port, procA)
         procA = None
 
-        procB = boot(port, log=logB, label="engine B")
+        procB = boot(port, log=logB, label="engine B", args=["--resource-root", root])
         bootstrap_defs(port)
         pre = send(port, "return world.getActiveWorldId()")
         loaded = send(port, f"return engine.loadSave('{save_name}')")

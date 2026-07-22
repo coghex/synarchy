@@ -25,10 +25,28 @@ checks:
 Usage: python3 tools/till_probe.py [--port 9178] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, glob, json, os, shutil, socket, subprocess, sys, tempfile, time
+from pathlib import Path
 from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
+REPO = Path(__file__).resolve().parent.parent
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root: real scripts/assets/data/config
+    (symlinked -- read-only content, safe to share) plus its OWN empty
+    saves/ directory, so this probe never touches a real player's saves
+    (round-6 review, issue #767 requirement 15's cross-referenced-probe
+    isolation gap)."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 TILLED_SOIL_VEG_ID = 77
 
 
@@ -92,7 +110,17 @@ def main():
     port = args.port
     passed = True
 
-    proc = boot(port, f"{SPROOT}/till_probe_engine.log")
+    tmpdir = tempfile.mkdtemp(prefix="till_probe_")
+    try:
+        root = make_isolated_root(tmpdir)
+        proc = boot(port, f"{SPROOT}/till_probe_engine.log",
+                    args=["--resource-root", root])
+        return _run(port, proc, args, passed)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run(port, proc, args, passed):
     try:
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "

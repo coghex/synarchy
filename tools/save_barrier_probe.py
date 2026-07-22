@@ -11,12 +11,29 @@ proves (#758 review round 2 follow-up) that a genuine disk-level write
 failure surfaces as a real SaveFailed outcome rather than crashing the
 world thread or wedging the barrier open forever."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys, time, uuid
+import argparse, json, os, shutil, subprocess, sys, tempfile, time, uuid
+from pathlib import Path
 from probelib import boot, quit_engine, send, wait_load_published
 
 SAVE = "probe_barrier_" + uuid.uuid4().hex[:12]
 RESAVE = SAVE + "_resave"
 SAVE2 = SAVE + "_later"
+REPO = Path(__file__).resolve().parent.parent
+
+def make_isolated_root(base):
+    """A throwaway resource root: real scripts/assets/data/config
+    (symlinked -- read-only content, safe to share) plus its OWN empty
+    saves/ directory, so this probe never touches a real player's saves
+    (round-6 review, issue #767 requirement 15's cross-referenced-probe
+    isolation gap)."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 
 def wait(predicate, what, timeout=30):
     end = time.time() + timeout
@@ -44,7 +61,16 @@ def other_kind(natural_type):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=9143); ap.add_argument("--seed", type=int, default=42)
-    a = ap.parse_args(); path = os.path.join("saves", SAVE); resave_path = os.path.join("saves", RESAVE); path2 = os.path.join("saves", SAVE2); p = boot(a.port, log="/tmp/save_barrier_probe.log")
+    a = ap.parse_args()
+    tmpdir = tempfile.mkdtemp(prefix="save_barrier_probe_")
+    try:
+        root = make_isolated_root(tmpdir)
+        _run(a, root)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+def _run(a, root):
+    path = os.path.join(root, "saves", SAVE); resave_path = os.path.join(root, "saves", RESAVE); path2 = os.path.join(root, "saves", SAVE2); p = boot(a.port, log="/tmp/save_barrier_probe.log", args=["--resource-root", root])
     try:
         send(a.port, f'world.init("barrier",{a.seed},64,3)', expect_result=False); send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False)
         # The post-release-mutation check below touches tiles well
@@ -118,7 +144,7 @@ def main():
         # would create, since it runs AFTER the barrier's capture lock has
         # already released.
         WFAIL = SAVE + "_writefail"
-        wfail_path = os.path.join("saves", WFAIL)
+        wfail_path = os.path.join(root, "saves", WFAIL)
         if os.path.isdir(wfail_path): shutil.rmtree(wfail_path)
         elif os.path.exists(wfail_path): os.remove(wfail_path)
         with open(wfail_path, "w") as f: f.write("occupying this path with a plain file")
@@ -138,7 +164,7 @@ def main():
         # unblocked itself (saveInProgress back to False): an ordinary save
         # issued right after must still be accepted and actually complete.
         WFAIL_FOLLOWUP = SAVE + "_writefail_followup"
-        followup_path = os.path.join("saves", WFAIL_FOLLOWUP)
+        followup_path = os.path.join(root, "saves", WFAIL_FOLLOWUP)
         if send(a.port, f'return engine.saveWorld("barrier","{WFAIL_FOLLOWUP}")').strip() != "true":
             raise RuntimeError("save rejected right after a prior write failure -- barrier stuck open?")
         wait(lambda: os.path.isfile(os.path.join(followup_path, "world.synworld")), "follow-up save file")
@@ -147,7 +173,7 @@ def main():
         quit_engine(a.port, p)
         try: p.wait(timeout=15)
         except subprocess.TimeoutExpired: p.kill()
-    p = boot(a.port, log="/tmp/save_barrier_probe_reload.log")
+    p = boot(a.port, log="/tmp/save_barrier_probe_reload.log", args=["--resource-root", root])
     try:
         if send(a.port, f'return engine.loadSave("{SAVE}")').strip() != "true": raise RuntimeError("load rejected")
         # Issue #763: a load only ACCEPTS synchronously -- wait for the
@@ -189,7 +215,7 @@ def main():
             )
     finally:
         quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True); shutil.rmtree(resave_path, ignore_errors=True)
-    p = boot(a.port, log="/tmp/save_barrier_probe_reload2.log")
+    p = boot(a.port, log="/tmp/save_barrier_probe_reload2.log", args=["--resource-root", root])
     try:
         # The SECOND save -- taken AFTER the post-release mutation --
         # must capture it as its own distinct boundary.
