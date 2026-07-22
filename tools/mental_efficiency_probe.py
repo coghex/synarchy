@@ -11,10 +11,11 @@ top of that math:
   1. ``unit.getMentalEffectiveness(uid)`` returns the documented values
      for pinned concentration/mental_state combinations, read off a REAL
      UnitInstance (not a synthetic hspec fixture).
-  2. Craft-bill progress: ``craft.addBillProgress`` scaled by the SAME
-     real getter's return value produces progress proportional to
-     effectiveness (the exact factor scripts/unit_ai_craft.lua's
-     progress-pour line multiplies its own delta by).
+  2. Craft-bill progress: the REAL scripts/unit_ai_craft.lua progress-
+     pour code path (driven white-box via craftUtility/craftExecute,
+     exactly like tools/craft_bill_probe.py's own technique — not a
+     reimplementation of its formula in this probe) accrues progress,
+     over a known real-time gap, proportional to effectiveness.
   3. Craft completion applies the #353 quality delta on top of the
      existing #343 skill x knowledge base quality via a real
      ``craft.executeAt`` call, clamped, matching the exact formula the
@@ -222,6 +223,70 @@ def add_bill(port, bid, recipe, count=None):
     return None, raw
 
 
+def _craft_ai_tick(port, uid):
+    """One real scripts/unit_ai_craft.lua craftExecute(uid, state, params)
+    invocation against this probe's own per-unit state table (module-
+    scoped so it survives across separate debug-console lines, the same
+    reason tools/craft_bill_probe.py's white-box checks stash theirs on
+    ai.__probe_s rather than a plain Lua local)."""
+    send(port,
+         f"local ai = require('scripts.unit_ai_craft'); "
+         f"local p = require('scripts.unit_ai_tunables').acolyte; "
+         f"ai.craftExecute({uid}, ai.__probe_states[{uid}], p); return 'ok'")
+
+
+def craft_progress_via_ai(port, uid, sleep_s):
+    """Drive the REAL scripts/unit_ai_craft.lua progress-pour code path
+    (white-box, mirroring tools/craft_bill_probe.py's own
+    craftUtility/craftExecute technique) with a KNOWN elapsed real-time
+    gap, and return (billId, progressBefore, progressAfter). Exercising
+    the genuine module — rather than reimplementing its formula in this
+    probe — is what actually catches a regression in
+    unit_ai_craft.lua's own mental-effectiveness term (an omission,
+    wrong placement, or a stale multiplier).
+
+    `uid` must already be adjacent to the intended station's footprint
+    and carrying enough of the recipe's inputs, and that station must
+    have exactly one pending, unclaimed bill (whichever recipe) for
+    craftUtility's scan to find unambiguously.
+
+    Call sequence, each its own real craftExecute invocation:
+      1. craftUtility — scans, sets state.craftCandidate.
+      2. craftExecute — claims the bill; phase -> "fetch"; returns.
+      3. craftExecute — fetch (inputs already held -> instant) falls
+         through to walking (already adjacent -> instant); phase ->
+         "working", lastCraftAt = engine.gameTime() now; returns.
+      4. (sleep `sleep_s` real seconds)
+      5. craftExecute — phase "working": elapsed = gameTime() - the
+         lastCraftAt stamped in step 3, i.e. the real gap this
+         function actually slept — pours real progress via
+         craft.addBillProgress, scaled by params.craft_rate, skill,
+         AND unit.getMentalEffectiveness(uid), exactly as shipped.
+    """
+    send(port,
+         f"local ai = require('scripts.unit_ai_craft'); "
+         f"ai.__probe_states = ai.__probe_states or {{}}; "
+         f"ai.__probe_states[{uid}] = {{}}; return 'ok'")
+    send(port,
+         f"local ai = require('scripts.unit_ai_craft'); "
+         f"local p = require('scripts.unit_ai_tunables').acolyte; "
+         f"ai.craftUtility({uid}, ai.__probe_states[{uid}], p); return 'ok'")
+    _craft_ai_tick(port, uid)   # claim -> phase "fetch"
+    _craft_ai_tick(port, uid)   # fetch + walk (both instant) -> phase "working"
+    bill_id_raw = send(port,
+        f"local ai = require('scripts.unit_ai_craft'); "
+        f"local j = ai.__probe_states[{uid}].craftJob; "
+        f"return j and j.billId or 'nil'").strip('"')
+    if bill_id_raw in ("nil", ""):
+        return None, None, None
+    bill_id = int(float(bill_id_raw))
+    before = (jget(port, f"return craft.getBill({bill_id})") or {}).get("progress")
+    time.sleep(sleep_s)
+    _craft_ai_tick(port, uid)   # phase "working" -> real progress pour
+    after = (jget(port, f"return craft.getBill({bill_id})") or {}).get("progress")
+    return bill_id, before, after
+
+
 def craft_execute(port, uid, recipe, bid):
     """-> (ok, [instanceIds] or errText)."""
     raw = send(port,
@@ -364,38 +429,52 @@ def main():
         send(port, f"unit.setPos({crafter}, 8, 2); return 'ok'")
         send(port, f"unit.setSkill({crafter}, 'smithing', 50); return 'ok'")
 
-        # --- 2. Craft-bill progress scales by the real effectiveness ---
-        bill_lo, msg_lo = add_bill(port, bid, "mental_probe_forge", 5)
-        bill_hi, msg_hi = add_bill(port, bid, "mental_probe_forge", 5)
-        passed = check(passed, bill_lo is not None and bill_hi is not None,
-                       "two probe bills added", f"{msg_lo} {msg_hi}")
+        # --- 2. Craft-bill progress scales by the real effectiveness,
+        #        driven through the ACTUAL scripts/unit_ai_craft.lua
+        #        progress-pour code path (craftUtility/craftExecute),
+        #        not a reimplementation of its formula in this probe —
+        #        see craft_progress_via_ai's docstring. One bill at a
+        #        time so craftUtility's scan is unambiguous.
+        CRAFT_SLEEP_S = 2.0
 
+        send(port, f"unit.addItem({crafter}, 'steel_bar'); return 'ok'")
+        bill_lo, msg_lo = add_bill(port, bid, "mental_probe_forge", 5)
+        passed = check(passed, bill_lo is not None, "distracted probe bill added", msg_lo)
         pin(port, crafter, 0.0, False)   # effectiveness 0.75
         eff_lo = get_effectiveness(port, crafter)
-        send(port, f"craft.addBillProgress({bill_lo}, "
-                   f"unit.getMentalEffectiveness({crafter}) * 0.10); return 'ok'")
+        got_lo, before_lo, after_lo = craft_progress_via_ai(port, crafter, CRAFT_SLEEP_S)
+        passed = check(passed, got_lo == bill_lo,
+                       "the real AI claimed + worked the distracted probe bill",
+                       f"claimed={got_lo} want={bill_lo}")
+        send(port, f"craft.cancelBill({bill_lo}); return 'ok'")
 
+        send(port, f"unit.addItem({crafter}, 'steel_bar'); return 'ok'")
+        bill_hi, msg_hi = add_bill(port, bid, "mental_probe_forge", 5)
+        passed = check(passed, bill_hi is not None, "focused probe bill added", msg_hi)
         pin(port, crafter, 1.0, False)   # effectiveness 1.00
         eff_hi = get_effectiveness(port, crafter)
-        send(port, f"craft.addBillProgress({bill_hi}, "
-                   f"unit.getMentalEffectiveness({crafter}) * 0.10); return 'ok'")
+        got_hi, before_hi, after_hi = craft_progress_via_ai(port, crafter, CRAFT_SLEEP_S)
+        passed = check(passed, got_hi == bill_hi,
+                       "the real AI claimed + worked the focused probe bill",
+                       f"claimed={got_hi} want={bill_hi}")
+        send(port, f"craft.cancelBill({bill_hi}); return 'ok'")
 
-        prog_lo = (jget(port, f"return craft.getBill({bill_lo})") or {}).get("progress")
-        prog_hi = (jget(port, f"return craft.getBill({bill_hi})") or {}).get("progress")
+        delta_lo = (after_lo - before_lo) if None not in (before_lo, after_lo) else None
+        delta_hi = (after_hi - before_hi) if None not in (before_hi, after_hi) else None
         passed = check(passed, near(eff_lo, 0.75) and near(eff_hi, 1.00),
                        "distinct pinned effectiveness values read back correctly",
                        f"eff_lo={eff_lo} eff_hi={eff_hi}")
         passed = check(passed,
-                       prog_lo is not None and prog_hi is not None
-                       and near(prog_lo, 0.075) and near(prog_hi, 0.10),
-                       "craft-bill progress scales by the real getMentalEffectiveness value",
-                       f"prog_lo={prog_lo} prog_hi={prog_hi}")
+                       delta_lo is not None and delta_hi is not None
+                       and delta_lo > 0 and delta_hi > 0,
+                       "the real progress-pour tick accrued progress for both crafters",
+                       f"delta_lo={delta_lo} delta_hi={delta_hi}")
         passed = check(passed,
-                       prog_lo is not None and prog_hi is not None and prog_hi > 0
-                       and near(prog_lo / prog_hi, 0.75, tol=0.02),
-                       "progress ratio matches the effectiveness ratio (0.75)",
-                       f"ratio={(prog_lo / prog_hi) if prog_hi else None}")
-        send(port, f"craft.cancelBill({bill_lo}); craft.cancelBill({bill_hi}); return 'ok'")
+                       bool(delta_lo) and bool(delta_hi)
+                       and near(delta_lo / delta_hi, 0.75, tol=0.1),
+                       "real AI-driven progress-pour rate scales by the effectiveness "
+                       "ratio (0.75)",
+                       f"ratio={(delta_lo / delta_hi) if delta_hi else None}")
 
         # --- 3. Completion quality adjustment + clamping ---
         send(port, f"unit.addItem({crafter}, 'steel_bar'); return 'ok'")
