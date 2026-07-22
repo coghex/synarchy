@@ -175,6 +175,24 @@ data UIElement = UIElement
     --   'UI.FocusNavigation.focusableElements'. 'Nothing' (the
     --   default) uses this element's own paint-traversal position, so
     --   most controls never need to set this at all.
+  , ueInteractiveOverflow ∷ Bool
+    -- ^ #749: opt this element's VISIBLE BORDER into interaction. When
+    --   'True', its interactive pointer/hover/tooltip/scroll/release
+    --   bounds are its expanded VISUAL bounds (content + its box's
+    --   'ubsOverflow', clamped against inverted geometry) instead of its
+    --   content bounds — see "UI.InteractiveBounds.interactiveRect",
+    --   consulted by every hit-test entry point via
+    --   'UI.Manager.Query.isPointInElement'. Defaults to 'False': an
+    --   ordinary box stays content-only, so decorative overflow keeps
+    --   bleeding without becoming a blocker (overflow ALONE never
+    --   enlarges a target — a box must opt in). Genuine box-backed
+    --   controls (ordinary buttons, main/pause items, settings/create/
+    --   save actions, tabs) migrate to 'True'; decorative panels/frames/
+    --   tooltips/separators stay 'False'. Independent of the #743
+    --   'ueBlocksPointer'/'ueCapturesScroll' policies — this only
+    --   changes WHICH rect those policies test, not whether they apply.
+    --   A non-box element (no 'ubsOverflow' to expand by) is unaffected
+    --   even when this is set.
   , ueClipChildren ∷ Bool
     -- ^ #747: opt-in rectangular clipping of this element's
     --   DESCENDANTS to its own current absolute bounds (position +

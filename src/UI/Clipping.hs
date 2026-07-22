@@ -163,6 +163,18 @@ boxTileRects ∷ Float → Float → Float → Float → Float → Maybe ClipRec
              → [(BoxTile, ClipRect, (Float, Float, Float, Float))]
 boxTileRects x y w h tileSize clip =
     let ts = tileSize
+        -- #749: fold the box's OWN visual rect into the effective clip,
+        -- so a box smaller than 2*tileSize (e.g. a valid-negative
+        -- overflow shrinking the visual rect below the corner size)
+        -- doesn't tile its FIXED-size corner quads PAST its own visual/
+        -- interactive bounds — render and interactive geometry would
+        -- otherwise disagree. A no-op for a normal box (its tiles
+        -- already exactly fill (x,y,w,h)); composes with any ancestor
+        -- clip via intersection.
+        selfClip = case clip of
+            Nothing → (x, y, w, h)
+            Just c  → intersectRect (x, y, w, h) c
+        effClip  = Just selfClip
         -- Mirrors UI.Render.makeBoxBatches exactly: tiles overlap from
         -- the origin when the box is smaller than 2*tileSize.
         midW = max 0 (w - ts * 2)
@@ -192,7 +204,7 @@ boxTileRects x y w h tileSize clip =
             , (TileSE,     seX, seY, ts,   ts)
             ]
 
-        clipOne (tile, tx, ty, tw, th) = case clipQuadUV clip (tx, ty, tw, th) (0, 0, 1, 1) of
+        clipOne (tile, tx, ty, tw, th) = case clipQuadUV effClip (tx, ty, tw, th) (0, 0, 1, 1) of
             Nothing → Nothing
             Just (rect, uv) → Just (tile, rect, uv)
     in mapMaybe clipOne tiles

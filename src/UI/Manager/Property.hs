@@ -9,6 +9,7 @@ module UI.Manager.Property
   , setElementDragActivation
   , setElementSteppable
   , setElementTabIndex
+  , setElementInteractiveOverflow
   , setElementClipChildren
   , setElementZIndex
   , setElementOnClick
@@ -98,6 +99,15 @@ setElementSteppable handle steppable = modifyElement handle `flip`
 setElementTabIndex ∷ ElementHandle → Int → UIPageManager → UIPageManager
 setElementTabIndex handle idx = modifyElement handle `flip`
     (\elem → elem { ueTabIndex = Just idx })
+
+-- | #749: opt this element's visible border into interaction — its
+--   interactive bounds become its expanded visual bounds instead of its
+--   content bounds; see 'ueInteractiveOverflow'. Recomputed live at
+--   hit-test time, so this takes effect on the very next query with
+--   nothing cached.
+setElementInteractiveOverflow ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementInteractiveOverflow handle interactive = modifyElement handle `flip`
+    (\elem → elem { ueInteractiveOverflow = interactive })
 
 -- | #747: explicit opt-in that this element clips its DESCENDANTS to
 --   its own current bounds — see 'ueClipChildren'.

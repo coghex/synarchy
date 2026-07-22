@@ -69,6 +69,8 @@ registerUIAPI env = do
   registerLuaFunction "setDragActivation"  (uiSetDragActivationFn env)
   registerLuaFunction "setSteppable"       (uiSetSteppableFn env)
   registerLuaFunction "setTabIndex"        (uiSetTabIndexFn env)
+  registerLuaFunction "setInteractiveOverflow" (uiSetInteractiveOverflowFn env)
+  registerLuaFunction "isInteractiveOverflow"  (uiIsInteractiveOverflowFn env)
   registerLuaFunction "setClipChildren"    (uiSetClipChildrenFn env)
   registerLuaFunction "isClipChildren"     (uiIsClipChildrenFn env)
   registerLuaFunction "getEffectiveClip"   (uiGetEffectiveClipFn env)

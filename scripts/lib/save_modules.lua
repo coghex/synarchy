@@ -779,8 +779,7 @@ function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
         saveModules._loadActive = false
-        error("saveModules.applyAll: no prepared load (call prepareLoad \
-              first and check its ok field)")
+        error("saveModules.applyAll: no prepared load (call prepareLoad first and check its ok field)")
     end
 
     local rollback = {}

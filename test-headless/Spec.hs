@@ -84,6 +84,7 @@ import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
+import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
@@ -231,6 +232,7 @@ main = hspec $ do
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI.FocusNavigation" UIFocusNavigation.spec
     describe "UI.Clipping" UIClipping.spec
+    describe "UI.InteractiveBounds" UIInteractiveBounds.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec

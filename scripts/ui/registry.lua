@@ -93,6 +93,20 @@ function registry.dumpWidgets()
             -- (like paintKey/paintOrder above) so every widget family
             -- reports it without a per-family dump() change.
             widget.controlFocused = (info and info.controlFocused) or false
+            -- #749: the effective (clip-intersected) interactive rect a
+            -- real pointer hit resolves against — the phantom-affordance
+            -- join (tools/playtest/critic.py's widget_at) prefers this
+            -- over the content `bounds` above so a click on a migrated
+            -- control's visible border correlates to the control. When
+            -- the engine says the control is non-hittable (fully clipped
+            -- or collapsed), getElementInfo.interactiveBounds is nil; we
+            -- record a DISTINCT `false` marker so the oracle skips the
+            -- control entirely rather than mistaking a bare nil for an
+            -- old record and falling back to content `bounds`. Left
+            -- unset only when there's no live handle to consult.
+            if info then
+                widget.interactiveBounds = info.interactiveBounds or false
+            end
             table.insert(out, widget)
             if widget.handle then known[widget.handle] = true end
         end
@@ -105,6 +119,11 @@ function registry.dumpWidgets()
                 name = el.name,
                 type = "button",
                 bounds = { x = el.x, y = el.y, w = el.width, h = el.height },
+                -- #749: effective interactive rect, or the distinct
+                -- `false` non-hittable marker (see the first pass above)
+                -- — el came from the engine, so a nil here means fully
+                -- clipped / collapsed, not "no info".
+                interactiveBounds = el.interactiveBounds or false,
                 label = el.text or el.name,
                 enabled = el.clickable,
                 visible = el.visible,

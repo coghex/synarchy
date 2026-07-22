@@ -12,6 +12,7 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import UI.Types
+import UI.InteractiveBounds (clampOverflow)
 import UI.Manager.Core (deleteElementTree, removeElementReference)
 
 -- * Element Creation
@@ -29,7 +30,13 @@ createBox name width height texHandle tileSize color overflow pageHandle mgr =
           { ubsTextures = texHandle
           , ubsTileSize = tileSize
           , ubsColor    = color
-          , ubsOverflow = overflow
+          -- #749: clamp overflow at the point it's set (creation is the
+          -- only overflow-mutation surface today) so a stored value can
+          -- never invert geometry; 'UI.InteractiveBounds.elementOverflow'
+          -- re-clamps against the live size for robustness across a
+          -- later resize. A valid overflow (every shipped widget uses
+          -- 0 or 16) passes through unchanged.
+          , ubsOverflow = clampOverflow (width, height) overflow
           }
     in createElementInternal name width height pageHandle (RenderBox style) mgr
 
@@ -69,6 +76,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueRouteEpoch  = 0
           , ueSteppable   = False
           , ueTabIndex    = Nothing
+          , ueInteractiveOverflow = False
           , ueClipChildren = False
           , ueTextBuffer  = Nothing
           , ueTooltip     = Nothing
