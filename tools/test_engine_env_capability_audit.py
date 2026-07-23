@@ -147,6 +147,34 @@ def test_row_with_no_enclosing_heading_detected():
            "be flagged, not silently ignored")
 
 
+def test_malformed_capability_heading_resets_scope():
+    # Round-10 review: a malformed '### ' heading (blank, or otherwise
+    # not matching HEADING_RE) between two valid capability sections
+    # used to be silently ignored, leaving `current_capability` holding
+    # the PRECEDING section's value -- rows after it wrongly inherited
+    # that capability instead of being flagged as unclassified. A bare
+    # "###" (no name at all) is the malformed heading here.
+    doc = (
+        "# Fake capability inventory\n\n"
+        "## 5. Field inventory\n\n"
+        f"### core-init\n\n{_HEADER}{FIELD_ONE_ROW}\n"
+        "###\n\n"
+        f"{_HEADER}{FIELD_TWO_ROW}{FIELD_THREE_ROW}\n"
+        "## 6. Something else entirely\n\n"
+    )
+    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    expect(any("malformed" in v.lower() and "###" in v for v in violations),
+           "a malformed '### ' heading itself must be reported")
+    expect(any("no enclosing" in v for v in violations),
+           "rows after a malformed heading must NOT silently inherit the "
+           "preceding section's capability -- they must be reported as "
+           "having no enclosing heading in scope")
+    expect(any("fieldTwo" in v and "has no row" in v for v in violations),
+           "fieldTwo must end up with no valid classification at all (not "
+           "wrongly attributed to core-init), since its row was skipped "
+           "for lacking an enclosing heading")
+
+
 def test_unknown_lifecycle_detected():
     bad_row = FIELD_ONE_ROW.replace("boot-process", "some-made-up-lifecycle")
     doc = _doc(core_init_rows=bad_row)
@@ -414,6 +442,7 @@ def main() -> int:
         test_stale_row_detected,
         test_unknown_capability_heading_detected,
         test_row_with_no_enclosing_heading_detected,
+        test_malformed_capability_heading_resets_scope,
         test_unknown_lifecycle_detected,
         test_unknown_thread_role_detected,
         test_mixed_valid_and_unknown_role_detected,

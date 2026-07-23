@@ -255,6 +255,22 @@ def parse_inventory(text: str) -> tuple[list[ParsedRow], list[str]]:
             current_capability = heading.group(1)
             header_idx = None
             continue
+        if line.strip().startswith("###"):
+            # A line that starts a `###` heading but doesn't match
+            # HEADING_RE at all (blank, malformed, stray punctuation) --
+            # round-10 review: silently falling through here left
+            # `current_capability` holding the PRECEDING valid section's
+            # value, so rows after a malformed heading wrongly inherited
+            # it instead of being flagged. Reset scope explicitly and
+            # report the malformed heading itself, exactly like a table
+            # row with no enclosing heading is already reported below.
+            violations.append(
+                f"{INVENTORY_PATH.name}:{line_no}: malformed '### ' "
+                f"capability heading (matches no known capability "
+                f"pattern): {line.strip()!r}")
+            current_capability = None
+            header_idx = None
+            continue
 
         if not line.startswith("|"):
             continue
