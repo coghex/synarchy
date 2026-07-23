@@ -103,49 +103,41 @@ BACKTICK_RE = re.compile(r"`([^`]+)`")
 # the row -- e.g. `` `src/Engine/Core/Init.hs:157` `` or
 # `` `scripts/init.lua` ``.
 EVIDENCE_RE = re.compile(r"`[^`]*\.(?:hs|lua)[^`]*`")
-# The LEADING run of a top-level (comma-separated, paren-depth-0)
-# segment: one or more identifier-shaped tokens (each optionally
-# backtick-quoted), chained by "/" or " and ", anchored at the
-# segment's start -- e.g. the whole of "`MainRender`",
-# "`LuaThread`/`WorldThread`", or "`MainRender` and AlienThread", or
-# just the "`MainRender`" prefix of "`MainRender` — read via ...
-# (`x.hs:1`)". This is the FOURTH iteration on this check; each prior
-# design closed one bypass the review process found while leaving
-# another open:
-#   - backtick-only scan: missed a bare/unquoted role (round 2).
-#   - case-sensitive leading match: missed a lower-camel-cased one,
-#     "alienThread" (round 3).
-#   - leading match joined only by "/": missed one joined by the word
-#     "and" instead (round 7).
-#   - whole-cell scan for tokens ending in "Thread"/"Render"/"Boot":
-#     missed a WRONG-SHAPED token like "AlienWorker"/"Mainrender"/
-#     "LuaThreadish" (round 8) -- and widening that scan to catch ANY
-#     bare backtick span (not just Thread/Render/Boot-shaped) was tried
-#     and REJECTED: this document routinely cites bare function/field
-#     names as evidence (`` `handleSetVSync` ``, `` `writeIORef` ``,
-#     `` `wmVisible` ``, ~70 of them checked before adopting this
-#     design), and every one of those would false-positive as an
-#     "attempted role."
-# This design returns to a POSITION-anchored leading-run scan (round
-# 6's shape, since shape alone can't discriminate a role attempt from a
-# citation) but chains through BOTH "/" and " and " as continuation
-# joiners, closing round 7's gap by POSITION rather than by shape --
-# and because leading-run detection never restricts the token's own
-# shape (unlike round 7's design), it also independently closes round
-# 8's gap: `` `AlienWorker` ``/`` `Mainrender` ``/`` `LuaThreadish` ``
-# in LEADING position of their own comma-segment are validated
-# regardless of not ending in Thread/Render/Boot. What a leading-run
-# scan does NOT do -- catch a role-shaped word buried mid-citation,
-# inside a parenthetical, unconnected to any leading mention -- is
-# deliberately out of scope: that's not a DECLARED role (requirement
-# 8's own wording), just incidental prose, and this document's own
-# grammar (every Readers/Writers segment either starts with a real
-# role mention or is trailing commentary folded into a preceding one --
-# enforced by hand, verified with zero exceptions before adopting each
-# revision of this check) is what makes leading-position the correct
-# place to look.
-_LEADING_ROLE_RUN_RE = re.compile(
-    r"^`?[A-Za-z][a-zA-Z]*`?(?:(?:/|\s+and\s+)`?[A-Za-z][a-zA-Z]*`?)*")
+# STRICT role-cell grammar (fifth and FINAL iteration on this check --
+# rounds 2/3/7/8 each closed one bypass while leaving another open via
+# a slightly different joiner or token shape: a bare/unquoted role, a
+# lower-camel-cased one, one joined by the word "and" instead of "/",
+# a wrong-shaped-but-quoted one, and (round 9) one joined by ";" or
+# "plus" instead. Rather than keep enumerating joiners -- an unbounded
+# list -- this enforces an EXPLICIT, narrow grammar on every
+# Readers/Writers cell, checked exactly, with no heuristic guessing
+# about what "looks like" a declared role:
+#
+#   cell     := "None" (`?) WS "(" ... ")"
+#             | segment ("," segment)*
+#   segment  := role ("/" role)* (WS "(" ... ")")?
+#   role     := "`" LETTERS "`"
+#
+# i.e. every top-level comma-separated segment must EITHER be exactly
+# one or more backtick-quoted, slash-joined role names, optionally
+# followed by nothing but a single trailing "(...)" parenthetical -- or
+# the cell is the special justified-`None` form. There is no
+# "and"/";"/"plus"-joined alternative to special-case and no way to
+# miss "the next one": anything that isn't backtick-quoted-role(s)-
+# then-optional-paren is a GRAMMAR VIOLATION on its own, reported
+# directly, never a candidate for further heuristic parsing. All
+# explanatory prose (what a role does, why, supporting citations)
+# belongs INSIDE that one trailing parenthetical, never bare between
+# the role and the paren and never after the paren closes -- e.g.
+# "`InputThread` (drains; `Engine.Input.Thread`)" is well-formed,
+# "`InputThread` drains (`Engine.Input.Thread`)" is not (the bare word
+# "drains" sits outside the parenthetical). Verified against the real
+# inventory doc: every one of its ~160 Readers/Writers cells was
+# rewritten to conform before this grammar was adopted, with zero
+# remaining violations.
+_STRICT_SEGMENT_RE = re.compile(
+    r"^(?:`[A-Za-z]+`(?:/`[A-Za-z]+`)*)(?:\s*\(.*\))?$")
+_ROLE_TOKEN_RE = re.compile(r"`([A-Za-z]+)`")
 
 
 def _is_placeholder(cell: str) -> bool:
@@ -153,10 +145,7 @@ def _is_placeholder(cell: str) -> bool:
 
 
 def _split_top_level_commas(cell: str) -> list[str]:
-    """Split `cell` on commas at parenthesis-depth 0. Sufficient for
-    this document's Readers/Writers prose: a backtick-quoted citation
-    here never itself contains an unbalanced paren or a bare comma
-    outside of one."""
+    """Split `cell` on commas at parenthesis-depth 0."""
     segments: list[str] = []
     depth = 0
     current: list[str] = []
@@ -174,52 +163,54 @@ def _split_top_level_commas(cell: str) -> list[str]:
     return segments
 
 
-def _attempted_roles(cell: str) -> list[str]:
-    """Every DECLARED role attempt in `cell`, in order -- see
-    `_LEADING_ROLE_RUN_RE` for why a per-segment leading-run scan,
-    chained through both "/" and " and ", is what catches a bad role
-    regardless of its own shape or which of those two joiners connects
-    it to a valid one, while never mistaking a citation deeper in the
-    segment's own commentary for a declared role."""
+def _attempted_roles(cell: str) -> tuple[list[str], list[str]]:
+    """Every DECLARED role token in `cell` (see `_STRICT_SEGMENT_RE`),
+    plus every top-level segment that does not conform to the required
+    grammar at all. A cell with any malformed segment is invalid
+    regardless of what roles it also names -- a malformed segment
+    could be hiding an unrecognized role in a form this checker has
+    never seen before, so "the rest of the cell looks fine" is not a
+    reason to let it through."""
     attempted: list[str] = []
+    malformed: list[str] = []
     for segment in _split_top_level_commas(cell):
         stripped = segment.strip()
-        if stripped.lower().startswith("none"):
+        if not stripped:
             continue
-        m = _LEADING_ROLE_RUN_RE.match(stripped)
-        if m:
-            attempted.extend(
-                tok.strip("`") for tok in re.split(r"/|\s+and\s+", m.group(0)))
-    return attempted
+        if _STRICT_SEGMENT_RE.match(stripped):
+            paren_idx = stripped.find("(")
+            role_part = stripped if paren_idx == -1 else stripped[:paren_idx]
+            attempted.extend(_ROLE_TOKEN_RE.findall(role_part))
+        else:
+            malformed.append(stripped)
+    return attempted, malformed
 
 
-def _validate_role_cell(cell: str) -> tuple[bool, list[str]]:
+def _validate_role_cell(cell: str) -> tuple[bool, list[str], list[str]]:
     """Validate a Readers/Writers cell. Returns (is_valid,
-    unknown_role_attempts).
+    unknown_roles, malformed_segments).
 
-    A cell is valid iff it is `None` (optionally backtick-quoted)
-    immediately followed by a non-empty parenthetical justification,
-    OR every role-shaped token it contains anywhere (see
-    `_attempted_roles` -- backtick-quoted or not, however it's joined
-    to the rest of the cell) is a recognized `THREAD_ROLES` identifier,
-    AND at least one such token is present. Critically, a cell with ONE
-    valid role attempt and ONE invalid one (e.g. `` `MainRender` `` and
-    a typo'd `AlienThread`, joined by "and" rather than "/" or ",") is
-    REJECTED, not silently accepted on the strength of the valid one --
-    requirement 8 demands every declared role be recognized, not merely
-    at least one."""
+    A cell is valid iff it is `None` immediately followed by a
+    non-empty parenthetical justification, OR every top-level segment
+    conforms to `_STRICT_SEGMENT_RE` AND every role token it declares
+    is a recognized `THREAD_ROLES` identifier, AND at least one role is
+    declared somewhere in the cell. A malformed segment is reported on
+    its own and short-circuits the unknown-role check -- it's a
+    grammar violation, not a "maybe it's fine" situation."""
     stripped = cell.strip()
     bare_start = stripped.lstrip("`")
     if bare_start.lower().startswith("none"):
         rest = bare_start[4:].lstrip("`").strip()
         justified = (rest.startswith("(") and rest.rstrip().endswith(")")
                      and len(rest) > 2)
-        return justified, []
-    attempted = _attempted_roles(stripped)
+        return justified, [], []
+    attempted, malformed = _attempted_roles(stripped)
+    if malformed:
+        return False, [], malformed
     unknown = [t for t in attempted if t not in THREAD_ROLES]
     if unknown:
-        return False, unknown
-    return bool(attempted), []
+        return False, unknown, []
+    return bool(attempted), [], []
 
 
 class ParsedRow:
@@ -356,8 +347,16 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
                 violations.append(
                     f"`{row.field}` has no {role_col} decision recorded")
                 continue
-            ok, unknown = _validate_role_cell(cell)
-            if unknown:
+            ok, unknown, malformed = _validate_role_cell(cell)
+            if malformed:
+                violations.append(
+                    f"`{row.field}`'s {role_col} cell has a segment that "
+                    f"does not conform to the required role-list grammar "
+                    f"(one or more backtick-quoted, slash-joined role names "
+                    f"optionally followed by a single trailing parenthetical "
+                    f"-- see the module docstring): {malformed!r} "
+                    f"(cell: {cell!r})")
+            elif unknown:
                 violations.append(
                     f"`{row.field}`'s {role_col} cell declares unrecognized "
                     f"thread/execution role(s) {unknown} not in "

@@ -266,6 +266,30 @@ def test_wrong_shaped_quoted_role_detected():
                f"still be rejected")
 
 
+def test_arbitrary_joiner_unknown_role_detected():
+    # Round-9 review: the reviewer keeps finding a new joiner word each
+    # round ("and" in round 7, then ";"/"plus" here) -- rather than
+    # enumerate yet another one, the strict grammar rejects ANY text
+    # between roles/after a role's own trailing paren that isn't a bare
+    # "/"-joined role list, so no joiner word is special-cased at all.
+    # Exercises semicolon- and "plus"-joined forms explicitly, since
+    # those are the literal words this round's review named.
+    for joiner in ("; ", " plus "):
+        bad_row = (
+            "| `fieldOne` | boot-process "
+            f"| `MainRender`{joiner}`AlienThread` (`src/Fake/Reader.hs:1`) "
+            "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
+            "| None | — |\n")
+        doc = _doc(core_init_rows=bad_row)
+        violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+        expect(any("fieldOne" in v and "Readers cell" in v
+                   and ("grammar" in v or "AlienThread" in v)
+                   for v in violations),
+               f"an unknown role joined by {joiner!r} rather than '/' or a "
+               f"comma must still be rejected -- the segment doesn't match "
+               f"the required grammar at all, which is itself a violation")
+
+
 def test_blank_reader_decision_detected():
     bad_row = (
         "| `fieldOne` | boot-process |  "
@@ -397,6 +421,7 @@ def main() -> int:
         test_lower_camel_unknown_role_detected,
         test_conjunction_joined_unknown_role_detected,
         test_wrong_shaped_quoted_role_detected,
+        test_arbitrary_joiner_unknown_role_detected,
         test_blank_reader_decision_detected,
         test_unjustified_none_writer_detected,
         test_justified_none_writer_accepted,
