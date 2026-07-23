@@ -226,10 +226,8 @@ def test_lower_camel_unknown_role_detected():
 def test_conjunction_joined_unknown_role_detected():
     # Round-7 review's literal shape: a valid role and an invalid one
     # joined by the word "and" within the SAME segment, rather than by
-    # "/" or a comma -- a leading-position-only scan never looks past
-    # the first joiner it doesn't recognize, but a whole-cell shape scan
-    # (every real role ends in Thread/Render or is exactly Boot) finds
-    # it regardless of how it's joined to its neighbor.
+    # "/" or a comma -- the leading-run scan must chain through " and "
+    # as a continuation joiner, not just "/".
     bad_row = (
         "| `fieldOne` | boot-process "
         "| `MainRender` and AlienThread (`src/Fake/Reader.hs:10`) "
@@ -243,6 +241,29 @@ def test_conjunction_joined_unknown_role_detected():
            "valid one (MainRender) in the same segment must still be "
            "rejected, not silently accepted because 'and' isn't a "
            "recognized joiner")
+
+
+def test_wrong_shaped_quoted_role_detected():
+    # Round-8 review's literal shapes: a backtick-quoted role attempt
+    # that does NOT end in "Thread"/"Render" and isn't "Boot" --
+    # AlienWorker, Mainrender (lowercase r), and LuaThreadish (extra
+    # suffix) -- must still be rejected. A shape-restricted check
+    # (round 7's design) missed these; a leading-run scan catches them
+    # regardless of shape, since it validates WHATEVER token occupies
+    # the leading position, not just ones matching a fixed suffix.
+    for bad_token in ("AlienWorker", "Mainrender", "LuaThreadish"):
+        bad_row = (
+            "| `fieldOne` | boot-process "
+            f"| `MainRender`, `{bad_token}` (`src/Fake/Reader.hs:10`) "
+            "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
+            "| None | — |\n")
+        doc = _doc(core_init_rows=bad_row)
+        violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+        expect(any("fieldOne" in v and "Readers cell" in v
+                   and bad_token in v for v in violations),
+               f"a wrong-shaped quoted role ({bad_token}) sitting beside a "
+               f"valid one (MainRender) in its own comma segment must "
+               f"still be rejected")
 
 
 def test_blank_reader_decision_detected():
@@ -375,6 +396,7 @@ def main() -> int:
         test_bare_unquoted_unknown_role_detected,
         test_lower_camel_unknown_role_detected,
         test_conjunction_joined_unknown_role_detected,
+        test_wrong_shaped_quoted_role_detected,
         test_blank_reader_decision_detected,
         test_unjustified_none_writer_detected,
         test_justified_none_writer_accepted,

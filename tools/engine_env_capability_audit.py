@@ -103,48 +103,94 @@ BACKTICK_RE = re.compile(r"`([^`]+)`")
 # the row -- e.g. `` `src/Engine/Core/Init.hs:157` `` or
 # `` `scripts/init.lua` ``.
 EVIDENCE_RE = re.compile(r"`[^`]*\.(?:hs|lua)[^`]*`")
-# A role-SHAPED token, matched ANYWHERE in a Readers/Writers cell --
-# not anchored to a segment's leading position, not dependent on which
-# punctuation/conjunction joins it to its neighbors ("/", ",", " and ",
-# or nothing at all). This replaces two earlier, narrower designs (a
-# backtick-only scan, then a per-segment "leading run" scan) that each
-# closed one bypass the review process found while leaving another:
-# round 2 found a bare/unquoted role slipping through when only
-# backtick-quoted spans were checked; round 3 found a lower-camel-cased
-# one slipping through a case-sensitive leading match; round 7 found
-# `` `MainRender` and AlienThread (...) `` slipping through because
-# "and" isn't "/" or "," -- a leading-run scan never looks past the
-# first joiner it doesn't recognize. Rather than keep patching the
-# joiner list, this scans the WHOLE cell for the token SHAPE itself:
-# every one of THREAD_ROLES ends in "Thread" or "Render", or is
-# exactly "Boot" -- a closed, principled shape no incidental English
-# word or qualified citation shares. The lookbehind/lookahead exclude a
-# dot or word character immediately adjacent, so "Render" is never
-# pulled out of a qualified citation like `` `UI.Render` `` or
-# `` `World.Render.Quads` `` (the preceding "." fails the lookbehind),
-# and "Boot" is never pulled out of an unrelated longer word (a
-# following word character fails the lookahead). Verified against the
-# real inventory doc before adopting: zero false positives and zero
-# cells with no match. Case-insensitive on "Boot" only (matching a
-# mistyped "boot" the same way a mistyped "alienThread" is caught);
-# "Thread"/"Render" stay fixed-case since every real role capitalizes
-# them, and a token bug that flips THEIR case too is already caught by
-# it no longer matching a real role in THREAD_ROLES.
-_ROLE_SHAPED_TOKEN_RE = re.compile(
-    r"(?<![.\w])(?:[A-Za-z][a-zA-Z]*(?:Thread|Render)|[Bb]oot)(?![.\w])")
+# The LEADING run of a top-level (comma-separated, paren-depth-0)
+# segment: one or more identifier-shaped tokens (each optionally
+# backtick-quoted), chained by "/" or " and ", anchored at the
+# segment's start -- e.g. the whole of "`MainRender`",
+# "`LuaThread`/`WorldThread`", or "`MainRender` and AlienThread", or
+# just the "`MainRender`" prefix of "`MainRender` — read via ...
+# (`x.hs:1`)". This is the FOURTH iteration on this check; each prior
+# design closed one bypass the review process found while leaving
+# another open:
+#   - backtick-only scan: missed a bare/unquoted role (round 2).
+#   - case-sensitive leading match: missed a lower-camel-cased one,
+#     "alienThread" (round 3).
+#   - leading match joined only by "/": missed one joined by the word
+#     "and" instead (round 7).
+#   - whole-cell scan for tokens ending in "Thread"/"Render"/"Boot":
+#     missed a WRONG-SHAPED token like "AlienWorker"/"Mainrender"/
+#     "LuaThreadish" (round 8) -- and widening that scan to catch ANY
+#     bare backtick span (not just Thread/Render/Boot-shaped) was tried
+#     and REJECTED: this document routinely cites bare function/field
+#     names as evidence (`` `handleSetVSync` ``, `` `writeIORef` ``,
+#     `` `wmVisible` ``, ~70 of them checked before adopting this
+#     design), and every one of those would false-positive as an
+#     "attempted role."
+# This design returns to a POSITION-anchored leading-run scan (round
+# 6's shape, since shape alone can't discriminate a role attempt from a
+# citation) but chains through BOTH "/" and " and " as continuation
+# joiners, closing round 7's gap by POSITION rather than by shape --
+# and because leading-run detection never restricts the token's own
+# shape (unlike round 7's design), it also independently closes round
+# 8's gap: `` `AlienWorker` ``/`` `Mainrender` ``/`` `LuaThreadish` ``
+# in LEADING position of their own comma-segment are validated
+# regardless of not ending in Thread/Render/Boot. What a leading-run
+# scan does NOT do -- catch a role-shaped word buried mid-citation,
+# inside a parenthetical, unconnected to any leading mention -- is
+# deliberately out of scope: that's not a DECLARED role (requirement
+# 8's own wording), just incidental prose, and this document's own
+# grammar (every Readers/Writers segment either starts with a real
+# role mention or is trailing commentary folded into a preceding one --
+# enforced by hand, verified with zero exceptions before adopting each
+# revision of this check) is what makes leading-position the correct
+# place to look.
+_LEADING_ROLE_RUN_RE = re.compile(
+    r"^`?[A-Za-z][a-zA-Z]*`?(?:(?:/|\s+and\s+)`?[A-Za-z][a-zA-Z]*`?)*")
 
 
 def _is_placeholder(cell: str) -> bool:
     return cell.strip().lower() in _PLACEHOLDER_CELLS
 
 
+def _split_top_level_commas(cell: str) -> list[str]:
+    """Split `cell` on commas at parenthesis-depth 0. Sufficient for
+    this document's Readers/Writers prose: a backtick-quoted citation
+    here never itself contains an unbalanced paren or a bare comma
+    outside of one."""
+    segments: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in cell:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    segments.append("".join(current))
+    return segments
+
+
 def _attempted_roles(cell: str) -> list[str]:
-    """Every DECLARED role attempt anywhere in `cell`, in order -- see
-    `_ROLE_SHAPED_TOKEN_RE` for why a whole-cell shape scan is what
-    catches a bad role regardless of how it's joined to its
-    neighbors (backtick-quoted or not, comma/slash/"and"-joined or
-    standing alone)."""
-    return _ROLE_SHAPED_TOKEN_RE.findall(cell)
+    """Every DECLARED role attempt in `cell`, in order -- see
+    `_LEADING_ROLE_RUN_RE` for why a per-segment leading-run scan,
+    chained through both "/" and " and ", is what catches a bad role
+    regardless of its own shape or which of those two joiners connects
+    it to a valid one, while never mistaking a citation deeper in the
+    segment's own commentary for a declared role."""
+    attempted: list[str] = []
+    for segment in _split_top_level_commas(cell):
+        stripped = segment.strip()
+        if stripped.lower().startswith("none"):
+            continue
+        m = _LEADING_ROLE_RUN_RE.match(stripped)
+        if m:
+            attempted.extend(
+                tok.strip("`") for tok in re.split(r"/|\s+and\s+", m.group(0)))
+    return attempted
 
 
 def _validate_role_cell(cell: str) -> tuple[bool, list[str]]:
