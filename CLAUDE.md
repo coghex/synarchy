@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/haskell_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), `tools/save_compat_audit.py` (+ its own `tools/test_save_compat_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). It is not an iteration loop and agents must not run it automatically before opening a PR; run it only when the user explicitly requests a full local CI/pre-push validation.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/haskell_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), `tools/engine_env_capability_audit.py` (+ its own `tools/test_engine_env_capability_audit.py`), `tools/save_compat_audit.py` (+ its own `tools/test_save_compat_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). It is not an iteration loop and agents must not run it automatically before opening a PR; run it only when the user explicitly requests a full local CI/pre-push validation.
 - **Debug output:** Set `ENGINE_DEBUG=Vulkan,Graphics,etc...` environment variable
 
 ## Testing Tiers
@@ -25,7 +25,9 @@ stays in seconds and the expensive gates run once, at the end.
    and add the focused probe named by the affected subsystem when one exists.
    Run `world_check.py --quick` only for worldgen-output changes; run the
    persistence inventory audit only when its root owners/registry or inventory
-   docs change; run a module-budget guard only when changing one of its capped
+   docs change; run the EngineEnv capability inventory audit only when
+   `EngineEnv`'s field set or `docs/engineenv_capability_inventory.md` changes;
+   run a module-budget guard only when changing one of its capped
    modules; and run `test_audit.py` only when changing `world_audit.py` or
    `world_check.py`. Do not run the whole headless suite, the 21-seed world
    check, or `make ci` by default. CI remains the full-suite authority; use
@@ -156,6 +158,17 @@ Modules are split into `Base.hs` and `Types.hs` files. Base files have **no loca
 
 ### Core monad: EngineM
 `Engine.Core.Monad` defines `EngineM ε σ α` — a continuation-passing-style monad transformer with environment (ε via Reader), mutable state (σ via State), IO, error handling, and logging. Most engine code runs in this monad.
+
+`Engine.Core.State`'s `EngineEnv` (the environment `EngineM` carries)
+is one shared record with every field currently reachable from any
+thread that imports it — a state the `EngineEnv` capability-split epic
+(#537) is working to narrow. `docs/engineenv_capability_inventory.md`
+(issue #876) is the authoritative capability/thread/lifecycle
+ownership inventory for every `EngineEnv` field — read it before adding
+a field, changing which thread touches one, or changing its lifecycle;
+`tools/engine_env_capability_audit.py` (wired into CI and `make ci`)
+fails if a field's classification drifts out of sync with the live
+record.
 
 ### Threading model
 The engine uses multiple worker threads communicating via STM (TVar, queues):
