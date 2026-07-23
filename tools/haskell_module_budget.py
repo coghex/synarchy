@@ -27,6 +27,8 @@ BUDGETS: list[tuple[str, list[str], int]] = [
      ["src/Engine/Input/Thread.hs", "src/Engine/Input/Thread/*.hs"], 500),
     ("timeline split (#588)",
      ["src/World/Generate/Timeline.hs", "src/World/Generate/Timeline/*.hs"], 500),
+    ("Unit.Types split (#575)",
+     ["src/Unit/Types.hs", "src/Unit/Types/*.hs"], 500),
 ]
 
 
