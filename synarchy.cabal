@@ -391,6 +391,11 @@ library
                      UI.Tooltip.Render
                      UI.Tooltip.State
                      Unit.Types
+                     Unit.Types.Wound
+                     Unit.Types.Combat
+                     Unit.Types.Def
+                     Unit.Types.Instance
+                     Unit.Types.Manager
                      Unit.Anim
                      Unit.Stats
                      Unit.Render
