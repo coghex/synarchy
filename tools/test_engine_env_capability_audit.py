@@ -223,6 +223,28 @@ def test_lower_camel_unknown_role_detected():
            "be rejected")
 
 
+def test_conjunction_joined_unknown_role_detected():
+    # Round-7 review's literal shape: a valid role and an invalid one
+    # joined by the word "and" within the SAME segment, rather than by
+    # "/" or a comma -- a leading-position-only scan never looks past
+    # the first joiner it doesn't recognize, but a whole-cell shape scan
+    # (every real role ends in Thread/Render or is exactly Boot) finds
+    # it regardless of how it's joined to its neighbor.
+    bad_row = (
+        "| `fieldOne` | boot-process "
+        "| `MainRender` and AlienThread (`src/Fake/Reader.hs:10`) "
+        "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
+        "| None | — |\n")
+    doc = _doc(core_init_rows=bad_row)
+    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    expect(any("fieldOne" in v and "Readers cell" in v
+               and "AlienThread" in v for v in violations),
+           "an 'and'-joined unknown role (AlienThread) sitting beside a "
+           "valid one (MainRender) in the same segment must still be "
+           "rejected, not silently accepted because 'and' isn't a "
+           "recognized joiner")
+
+
 def test_blank_reader_decision_detected():
     bad_row = (
         "| `fieldOne` | boot-process |  "
@@ -352,6 +374,7 @@ def main() -> int:
         test_mixed_valid_and_unknown_role_detected,
         test_bare_unquoted_unknown_role_detected,
         test_lower_camel_unknown_role_detected,
+        test_conjunction_joined_unknown_role_detected,
         test_blank_reader_decision_detected,
         test_unjustified_none_writer_detected,
         test_justified_none_writer_accepted,

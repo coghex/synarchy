@@ -103,83 +103,48 @@ BACKTICK_RE = re.compile(r"`([^`]+)`")
 # the row -- e.g. `` `src/Engine/Core/Init.hs:157` `` or
 # `` `scripts/init.lua` ``.
 EVIDENCE_RE = re.compile(r"`[^`]*\.(?:hs|lua)[^`]*`")
-# The LEADING run of a top-level (comma-separated, paren-depth-0)
-# segment: one or more slash-joined identifier-shaped tokens (each
-# optionally backtick-quoted), anchored at the segment's start -- e.g.
-# the whole of "`MainRender`" or "`LuaThread`/`WorldThread`", or just
-# the "`MainRender`" prefix of "`MainRender` — read via ... (`x.hs:1`)".
-# Matching a PREFIX (not the whole segment) is what lets a role mention
-# carry trailing explanatory prose or a parenthetical citation of any
-# shape. Case-INSENSITIVE on the leading letter (round-4 review): a
-# mistyped role can be lower-camel ("alienThread"), and the inventory
-# doc's own grammar (enforced by hand, not mechanically) requires every
-# Readers/Writers segment to either be pure trailing prose folded into
-# a PRECEDING role's own commentary/parenthetical, or to itself START
-# with a real role mention -- never a standalone segment that begins
-# with a lowercase word (ordinary prose like "load publish (...)" is
-# always folded into the nearest role's parenthetical in this document,
-# not left as its own comma-item). Given that discipline, matching any
-# leading identifier regardless of case is safe: a segment that begins
-# with a lowercase word is either a genuine attempted role (misspelled)
-# that must be validated, or a doc-grammar violation that itself needs
-# fixing -- never legitimate unchecked prose.
-_LEADING_ROLE_RUN_RE = re.compile(
-    r"^`?[A-Za-z][a-zA-Z]*`?(?:/`?[A-Za-z][a-zA-Z]*`?)*")
+# A role-SHAPED token, matched ANYWHERE in a Readers/Writers cell --
+# not anchored to a segment's leading position, not dependent on which
+# punctuation/conjunction joins it to its neighbors ("/", ",", " and ",
+# or nothing at all). This replaces two earlier, narrower designs (a
+# backtick-only scan, then a per-segment "leading run" scan) that each
+# closed one bypass the review process found while leaving another:
+# round 2 found a bare/unquoted role slipping through when only
+# backtick-quoted spans were checked; round 3 found a lower-camel-cased
+# one slipping through a case-sensitive leading match; round 7 found
+# `` `MainRender` and AlienThread (...) `` slipping through because
+# "and" isn't "/" or "," -- a leading-run scan never looks past the
+# first joiner it doesn't recognize. Rather than keep patching the
+# joiner list, this scans the WHOLE cell for the token SHAPE itself:
+# every one of THREAD_ROLES ends in "Thread" or "Render", or is
+# exactly "Boot" -- a closed, principled shape no incidental English
+# word or qualified citation shares. The lookbehind/lookahead exclude a
+# dot or word character immediately adjacent, so "Render" is never
+# pulled out of a qualified citation like `` `UI.Render` `` or
+# `` `World.Render.Quads` `` (the preceding "." fails the lookbehind),
+# and "Boot" is never pulled out of an unrelated longer word (a
+# following word character fails the lookahead). Verified against the
+# real inventory doc before adopting: zero false positives and zero
+# cells with no match. Case-insensitive on "Boot" only (matching a
+# mistyped "boot" the same way a mistyped "alienThread" is caught);
+# "Thread"/"Render" stay fixed-case since every real role capitalizes
+# them, and a token bug that flips THEIR case too is already caught by
+# it no longer matching a real role in THREAD_ROLES.
+_ROLE_SHAPED_TOKEN_RE = re.compile(
+    r"(?<![.\w])(?:[A-Za-z][a-zA-Z]*(?:Thread|Render)|[Bb]oot)(?![.\w])")
 
 
 def _is_placeholder(cell: str) -> bool:
     return cell.strip().lower() in _PLACEHOLDER_CELLS
 
 
-def _split_top_level_commas(cell: str) -> list[str]:
-    """Split `cell` on commas at parenthesis-depth 0. Sufficient for
-    this document's Readers/Writers prose: a backtick-quoted citation
-    here never itself contains an unbalanced paren or a bare comma
-    outside of one."""
-    segments: list[str] = []
-    depth = 0
-    current: list[str] = []
-    for ch in cell:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            segments.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-    segments.append("".join(current))
-    return segments
-
-
 def _attempted_roles(cell: str) -> list[str]:
-    """Every DECLARED role attempt in `cell`, in order.
-
-    For each top-level comma-separated segment, check whether it
-    STARTS WITH a role mention -- one or more slash-joined role-shaped
-    tokens, each optionally backtick-quoted. A leading role mention
-    counts REGARDLESS of whether it's backtick-quoted (`` `MainRender` ``
-    and a bare, unquoted `AlienThread` are both caught the same way),
-    since the point is to catch a declared-but-unrecognized role
-    wherever one is declared, not merely a quoted one (issue #876
-    round-3 review: an unquoted role-shaped word must not be silently
-    ignored). Whatever follows the leading run -- a parenthetical
-    citation, an em-dash explanation, anything -- is free-form
-    commentary and is not itself scanned.
-
-    This deliberately does NOT scan arbitrary prose for incidental
-    capitalized words -- a segment like "load publish (`x.hs:1`)" or
-    "once per frame (`y.hs:1`)" starts with an ordinary lowercase word
-    and never matches a leading role run, so it is never mistaken for
-    a role attempt. Only a segment that BEGINS with role-shaped
-    token(s) contributes any attempt at all."""
-    attempted: list[str] = []
-    for segment in _split_top_level_commas(cell):
-        m = _LEADING_ROLE_RUN_RE.match(segment.strip())
-        if m:
-            attempted.extend(tok.strip("`") for tok in m.group(0).split("/"))
-    return attempted
+    """Every DECLARED role attempt anywhere in `cell`, in order -- see
+    `_ROLE_SHAPED_TOKEN_RE` for why a whole-cell shape scan is what
+    catches a bad role regardless of how it's joined to its
+    neighbors (backtick-quoted or not, comma/slash/"and"-joined or
+    standing alone)."""
+    return _ROLE_SHAPED_TOKEN_RE.findall(cell)
 
 
 def _validate_role_cell(cell: str) -> tuple[bool, list[str]]:
@@ -188,13 +153,15 @@ def _validate_role_cell(cell: str) -> tuple[bool, list[str]]:
 
     A cell is valid iff it is `None` (optionally backtick-quoted)
     immediately followed by a non-empty parenthetical justification,
-    OR every backtick-quoted role-shaped token it contains (see
-    `_attempted_roles`) is a recognized `THREAD_ROLES` identifier, AND
-    at least one such token is present. Critically, a cell with ONE
-    valid role attempt and ONE invalid one (e.g. `` `MainRender` ``
-    beside a typo'd `` `AlienThread` ``) is REJECTED, not silently
-    accepted on the strength of the valid one -- requirement 8 demands
-    every declared role be recognized, not merely at least one."""
+    OR every role-shaped token it contains anywhere (see
+    `_attempted_roles` -- backtick-quoted or not, however it's joined
+    to the rest of the cell) is a recognized `THREAD_ROLES` identifier,
+    AND at least one such token is present. Critically, a cell with ONE
+    valid role attempt and ONE invalid one (e.g. `` `MainRender` `` and
+    a typo'd `AlienThread`, joined by "and" rather than "/" or ",") is
+    REJECTED, not silently accepted on the strength of the valid one --
+    requirement 8 demands every declared role be recognized, not merely
+    at least one."""
     stripped = cell.strip()
     bare_start = stripped.lstrip("`")
     if bare_start.lower().startswith("none"):
