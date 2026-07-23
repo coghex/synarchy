@@ -100,35 +100,52 @@ BACKTICK_RE = re.compile(r"`([^`]+)`")
 # the row -- e.g. `` `src/Engine/Core/Init.hs:157` `` or
 # `` `scripts/init.lua` ``.
 EVIDENCE_RE = re.compile(r"`[^`]*\.(?:hs|lua)[^`]*`")
-_ROLE_WORD_RE_CACHE: dict[str, re.Pattern] = {}
-
-
-def _role_word_re(role: str) -> re.Pattern:
-    pat = _ROLE_WORD_RE_CACHE.get(role)
-    if pat is None:
-        pat = re.compile(r"\b" + re.escape(role) + r"\b")
-        _ROLE_WORD_RE_CACHE[role] = pat
-    return pat
+# A backtick-quoted span shaped exactly like a role identifier: a bare
+# PascalCase word with no dot/slash/colon/space inside it. Every such
+# span in a Readers/Writers cell is treated as a DECLARED role attempt
+# -- see _validate_role_cell's docstring for why this must be checked
+# against every attempt, not merely require at least one valid one.
+_ROLE_SHAPED_RE = re.compile(r"^[A-Z][a-zA-Z]*$")
 
 
 def _is_placeholder(cell: str) -> bool:
     return cell.strip().lower() in _PLACEHOLDER_CELLS
 
 
-def _validate_role_cell(cell: str) -> bool:
-    """A Readers/Writers cell is valid iff it is `None` (optionally
-    backtick-quoted) immediately followed by a non-empty parenthetical
-    justification, OR it contains at least one recognized
-    THREAD_ROLES identifier as a whole word anywhere in the cell
-    (role names are themselves conventionally backtick-quoted in the
-    inventory doc, e.g. `` `LuaThread` ``, so this deliberately does
-    NOT strip backtick-quoted spans before searching)."""
+def _attempted_roles(cell: str) -> list[str]:
+    """Every backtick-quoted, role-shaped token in `cell`, in order.
+    A citation (a qualified name or file path) always contains a dot,
+    slash, or colon inside its backticks and is therefore never
+    mistaken for a role attempt; only a bare backtick-quoted PascalCase
+    word is."""
+    return [m for m in BACKTICK_RE.findall(cell) if _ROLE_SHAPED_RE.match(m)]
+
+
+def _validate_role_cell(cell: str) -> tuple[bool, list[str]]:
+    """Validate a Readers/Writers cell. Returns (is_valid,
+    unknown_role_attempts).
+
+    A cell is valid iff it is `None` (optionally backtick-quoted)
+    immediately followed by a non-empty parenthetical justification,
+    OR every backtick-quoted role-shaped token it contains (see
+    `_attempted_roles`) is a recognized `THREAD_ROLES` identifier, AND
+    at least one such token is present. Critically, a cell with ONE
+    valid role attempt and ONE invalid one (e.g. `` `MainRender` ``
+    beside a typo'd `` `AlienThread` ``) is REJECTED, not silently
+    accepted on the strength of the valid one -- requirement 8 demands
+    every declared role be recognized, not merely at least one."""
     stripped = cell.strip()
     bare_start = stripped.lstrip("`")
     if bare_start.lower().startswith("none"):
         rest = bare_start[4:].lstrip("`").strip()
-        return rest.startswith("(") and rest.rstrip().endswith(")") and len(rest) > 2
-    return any(_role_word_re(role).search(stripped) for role in THREAD_ROLES)
+        justified = (rest.startswith("(") and rest.rstrip().endswith(")")
+                     and len(rest) > 2)
+        return justified, []
+    attempted = _attempted_roles(stripped)
+    unknown = [t for t in attempted if t not in THREAD_ROLES]
+    if unknown:
+        return False, unknown
+    return bool(attempted), []
 
 
 class ParsedRow:
@@ -264,7 +281,15 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
             if not cell.strip():
                 violations.append(
                     f"`{row.field}` has no {role_col} decision recorded")
-            elif not _validate_role_cell(cell):
+                continue
+            ok, unknown = _validate_role_cell(cell)
+            if unknown:
+                violations.append(
+                    f"`{row.field}`'s {role_col} cell declares unrecognized "
+                    f"thread/execution role(s) {unknown} not in "
+                    f"{THREAD_ROLES} (cell: {cell!r}) -- every declared role "
+                    f"must be recognized, not merely one of several")
+            elif not ok:
                 violations.append(
                     f"`{row.field}`'s {role_col} cell {cell!r} names no "
                     f"recognized thread/execution role from {THREAD_ROLES} "
