@@ -100,25 +100,73 @@ BACKTICK_RE = re.compile(r"`([^`]+)`")
 # the row -- e.g. `` `src/Engine/Core/Init.hs:157` `` or
 # `` `scripts/init.lua` ``.
 EVIDENCE_RE = re.compile(r"`[^`]*\.(?:hs|lua)[^`]*`")
-# A backtick-quoted span shaped exactly like a role identifier: a bare
-# PascalCase word with no dot/slash/colon/space inside it. Every such
-# span in a Readers/Writers cell is treated as a DECLARED role attempt
-# -- see _validate_role_cell's docstring for why this must be checked
-# against every attempt, not merely require at least one valid one.
-_ROLE_SHAPED_RE = re.compile(r"^[A-Z][a-zA-Z]*$")
+# The LEADING run of a top-level (comma-separated, paren-depth-0)
+# segment: one or more slash-joined role-shaped tokens (each optionally
+# backtick-quoted), anchored at the segment's start -- e.g. the whole
+# of "`MainRender`" or "`LuaThread`/`WorldThread`", or just the "`MainRender`"
+# prefix of "`MainRender` — read via ... (`x.hs:1`)". Matching a PREFIX
+# (not the whole segment) is what lets a role mention carry trailing
+# explanatory prose or a parenthetical citation of any shape, while a
+# segment that doesn't start with a role-shaped token at all (ordinary
+# prose like "load publish (`x.hs:1`)", which starts with a lowercase
+# word) never matches and is correctly ignored. See `_attempted_roles`.
+_LEADING_ROLE_RUN_RE = re.compile(
+    r"^`?[A-Z][a-zA-Z]*`?(?:/`?[A-Z][a-zA-Z]*`?)*")
 
 
 def _is_placeholder(cell: str) -> bool:
     return cell.strip().lower() in _PLACEHOLDER_CELLS
 
 
+def _split_top_level_commas(cell: str) -> list[str]:
+    """Split `cell` on commas at parenthesis-depth 0. Sufficient for
+    this document's Readers/Writers prose: a backtick-quoted citation
+    here never itself contains an unbalanced paren or a bare comma
+    outside of one."""
+    segments: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in cell:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    segments.append("".join(current))
+    return segments
+
+
 def _attempted_roles(cell: str) -> list[str]:
-    """Every backtick-quoted, role-shaped token in `cell`, in order.
-    A citation (a qualified name or file path) always contains a dot,
-    slash, or colon inside its backticks and is therefore never
-    mistaken for a role attempt; only a bare backtick-quoted PascalCase
-    word is."""
-    return [m for m in BACKTICK_RE.findall(cell) if _ROLE_SHAPED_RE.match(m)]
+    """Every DECLARED role attempt in `cell`, in order.
+
+    For each top-level comma-separated segment, check whether it
+    STARTS WITH a role mention -- one or more slash-joined role-shaped
+    tokens, each optionally backtick-quoted. A leading role mention
+    counts REGARDLESS of whether it's backtick-quoted (`` `MainRender` ``
+    and a bare, unquoted `AlienThread` are both caught the same way),
+    since the point is to catch a declared-but-unrecognized role
+    wherever one is declared, not merely a quoted one (issue #876
+    round-3 review: an unquoted role-shaped word must not be silently
+    ignored). Whatever follows the leading run -- a parenthetical
+    citation, an em-dash explanation, anything -- is free-form
+    commentary and is not itself scanned.
+
+    This deliberately does NOT scan arbitrary prose for incidental
+    capitalized words -- a segment like "load publish (`x.hs:1`)" or
+    "once per frame (`y.hs:1`)" starts with an ordinary lowercase word
+    and never matches a leading role run, so it is never mistaken for
+    a role attempt. Only a segment that BEGINS with role-shaped
+    token(s) contributes any attempt at all."""
+    attempted: list[str] = []
+    for segment in _split_top_level_commas(cell):
+        m = _LEADING_ROLE_RUN_RE.match(segment.strip())
+        if m:
+            attempted.extend(tok.strip("`") for tok in m.group(0).split("/"))
+    return attempted
 
 
 def _validate_role_cell(cell: str) -> tuple[bool, list[str]]:

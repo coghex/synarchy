@@ -186,6 +186,24 @@ def test_mixed_valid_and_unknown_role_detected():
            "silently accepted on the strength of the valid one")
 
 
+def test_bare_unquoted_unknown_role_detected():
+    # The literal shape from round-3 review: a valid, backtick-quoted
+    # role followed by a BARE, unquoted, uncited role-shaped word. The
+    # audit must not silently ignore the unquoted one just because it
+    # isn't wrapped in backticks.
+    bad_row = (
+        "| `fieldOne` | boot-process "
+        "| `MainRender` (`src/Fake/Reader.hs:10`), AlienThread "
+        "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
+        "| None | — |\n")
+    doc = _doc(core_init_rows=bad_row)
+    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    expect(any("fieldOne" in v and "Readers cell" in v
+               and "AlienThread" in v for v in violations),
+           "a bare, unquoted, uncited role-shaped word (AlienThread) "
+           "sitting beside a valid quoted role must still be rejected")
+
+
 def test_blank_reader_decision_detected():
     bad_row = (
         "| `fieldOne` | boot-process |  "
@@ -286,6 +304,7 @@ def main() -> int:
         test_unknown_lifecycle_detected,
         test_unknown_thread_role_detected,
         test_mixed_valid_and_unknown_role_detected,
+        test_bare_unquoted_unknown_role_detected,
         test_blank_reader_decision_detected,
         test_unjustified_none_writer_detected,
         test_justified_none_writer_accepted,
