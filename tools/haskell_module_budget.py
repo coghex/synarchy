@@ -25,6 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGETS: list[tuple[str, list[str], int]] = [
     ("input-thread split (#787)",
      ["src/Engine/Input/Thread.hs", "src/Engine/Input/Thread/*.hs"], 500),
+    ("timeline split (#588)",
+     ["src/World/Generate/Timeline.hs", "src/World/Generate/Timeline/*.hs"], 500),
 ]
 
 
