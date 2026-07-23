@@ -341,6 +341,19 @@ def test_unjustified_none_writer_detected():
            "rejected -- only a JUSTIFIED no-writers claim is valid")
 
 
+def test_whitespace_only_none_justification_detected():
+    bad_row = (
+        "| `fieldOne` | boot-process | `MainRender` (`src/Fake/Reader.hs:10`) "
+        "| None (   ) | `IORef Int` | `src/Fake/Init.hs:5` | None | — |\n")
+    doc = _doc(core_init_rows=bad_row)
+    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    expect(any("fieldOne" in v and "Writers cell" in v for v in violations),
+           "a 'None ( )' cell whose parenthetical holds only whitespace "
+           "must be rejected -- it records no actual reason, so it is "
+           "just as unjustified as a bare 'None' with no parenthetical "
+           "at all")
+
+
 def test_justified_none_writer_accepted():
     # fieldThree in the complete fixture already exercises this; a
     # focused re-check in isolation guards against the two cases being
@@ -453,6 +466,7 @@ def main() -> int:
         test_arbitrary_joiner_unknown_role_detected,
         test_blank_reader_decision_detected,
         test_unjustified_none_writer_detected,
+        test_whitespace_only_none_justification_detected,
         test_justified_none_writer_accepted,
         test_missing_sync_contract_detected,
         test_blank_init_shutdown_notes_detected,

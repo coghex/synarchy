@@ -201,8 +201,8 @@ def _validate_role_cell(cell: str) -> tuple[bool, list[str], list[str]]:
     bare_start = stripped.lstrip("`")
     if bare_start.lower().startswith("none"):
         rest = bare_start[4:].lstrip("`").strip()
-        justified = (rest.startswith("(") and rest.rstrip().endswith(")")
-                     and len(rest) > 2)
+        inner = rest[1:-1] if (rest.startswith("(") and rest.endswith(")")) else ""
+        justified = bool(inner.strip())
         return justified, [], []
     attempted, malformed = _attempted_roles(stripped)
     if malformed:
