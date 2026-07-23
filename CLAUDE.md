@@ -2415,11 +2415,23 @@ default smithing — feeds the Smith role #265). Turnkey harness:
 **`python3 tools/craft_bill_probe.py`** — the #329 gate (backend verbs
 + the AI loop + the knowledge gate).
 
-A `skill`-tagged recipe sets output `iiQuality` deterministically from
-the crafter (#343): the skill level, blended 70/30 with the knowledge
-level when the recipe is knowledge-gated
+A `skill`-tagged recipe sets output `iiQuality`'s deterministic BASE
+from the crafter (#343): the skill level, blended 70/30 with the
+knowledge level when the recipe is knowledge-gated
 (`Craft.Execute.craftQuality`); untagged recipes keep the item-def
-quality roll. Applies to both `craft.execute` and `craft.executeAt`.
+quality roll instead. That base is then shifted by the crafter's live
+#353 mental effectiveness (`Craft.Execute.applyMentalQuality`, ±10
+clamped — the SAME `Combat.Resolution.Common.mentalEffectiveness`
+combat's hit/dodge rolls and craft-progress read via
+`unit.getMentalEffectiveness`), applied to both `craft.execute` and
+`craft.executeAt`. The #343 base is deterministic in the crafter's
+skill/knowledge alone only when effectiveness sits at its neutral 1.00
+(full concentration, non-euphoric `mental_state`) — an active euphoria
+episode or a concentration dip shifts the FINAL `iiQuality` by up to
+±10 on top of it. `tools/craft_probe.py`'s base-quality checks pin and
+witness this neutral precondition explicitly (#878) rather than
+asserting the base-derived numbers as final output — asserting them as
+final without pinning neutrality was the exact #877 flake.
 
 Until-stock bills (#795) are a third persisted `CraftBill` mode
 (`Craft.Bills.BillMode`: `FixedCount` | `RepeatForever` | `UntilStock`)

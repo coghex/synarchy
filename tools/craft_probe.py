@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Crafting probe (#325 + #326 + #343 + #327 + #328) — catalogue, execute,
-stations, quality, smelting, fabrication.
+"""Crafting probe (#325 + #326 + #343 + #327 + #328 + #353/#878) —
+catalogue, execute, stations, quality, smelting, fabrication.
 
 Boots a headless engine on a flat arena, loads defs + data/recipes +
 data/buildings, spawns an acolyte, then checks the craft.* Lua API
@@ -27,7 +27,17 @@ end-to-end:
      recipe is knowledge-gated, plain skill level when not (the shipped
      smithing-tagged dagger) — verified across two crafter builds via
      unit.setSkill / unit.setKnowledge, through both craft.execute and
-     craft.executeAt at a built station.
+     craft.executeAt at a built station. This is the #343 BASE quality
+     only — the crafter's live #353 mental effectiveness (euphoria
+     bonus / concentration penalty) then shifts the FINAL iiQuality by
+     up to +/-10 on top of it, so every base-quality check here pins
+     mental effectiveness to the neutral 1.00 baseline (full
+     concentration, non-euphoric mental_state) first and witnesses it
+     via unit.getMentalEffectiveness immediately before AND after each
+     craft (#878) — a failed precondition fails loudly with the
+     observed effectiveness/concentration/mental_state rather than
+     silently letting a mental-state swing pass or fail the base-
+     quality assertion for the wrong reason.
   7. Smelting tier (#327): the shipped data/recipes/smelting.yaml set —
      all six recipes in the catalogue, the coal-grade fuel ladder
      (3 lignite / 2 bituminous / 1 anthracite), steel smelted at the
@@ -38,7 +48,9 @@ end-to-end:
      set — all five recipes in the catalogue, shapes for a skill-tagged
      tool recipe and an untagged stock recipe, each executed at the
      built workbench (bars consumed, tool/stock produced), and the
-     skill-tagged tools carry crafter quality like the dagger (#343).
+     skill-tagged tools carry crafter quality like the dagger (#343) —
+     the fabricated axe's quality check is also mental-effectiveness-
+     neutral-pinned (#878), same as every phase-6 quality check.
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
@@ -116,6 +128,68 @@ def bootstrap(port):
     send(port,
          "pcall(function() require('scripts.unit_ai').update = function() end end); "
          "return 'ai-off'")
+    mental_off(port)
+
+
+def mental_off(port):
+    """Neutralise brain.tick/mental.tick (#353) for the probe's whole
+    duration — same "AI off" idiom tools/mental_efficiency_probe.py
+    already established for this exact plumbing. concentration is
+    recomputed live from physiology every tick (scripts/brain.lua) and
+    mental_state can autonomously enter a euphoria episode
+    (scripts/mental_state.lua) — either would let mental effectiveness
+    drift out from under the #343 base-quality assertions (phases 6+8)
+    between the neutral pin and the craft, which is exactly the #877/
+    #878 flake mechanism this probe must not reintroduce."""
+    send(port,
+         "local b = require('scripts.brain'); "
+         "if not b.__probe_orig_tick then b.__probe_orig_tick = b.tick end; "
+         "b.tick = function() end; return 'ok'")
+    send(port,
+         "local m = require('scripts.mental_state'); "
+         "if not m.__probe_orig_tick then m.__probe_orig_tick = m.tick end; "
+         "m.tick = function() end; return 'ok'")
+
+
+def mental_diag(port, uid):
+    """(effectiveness, concentration, mental_state) — the exact triple
+    Combat.Resolution.Common.mentalEffectiveness derives from, read via
+    unit.getMentalEffectiveness (the same Lua verb craft-quality/combat/
+    craft-progress all consume, #353) plus the raw unit.getStat mirrors,
+    so a failed neutrality precondition is distinguishable in probe
+    output from a genuine #343 base-quality regression."""
+    eff = float(send(port, f"return unit.getMentalEffectiveness({uid})"))
+    conc = float(send(port, f"return unit.getStat({uid}, 'concentration') or -1"))
+    ms = float(send(port, f"return unit.getStat({uid}, 'mental_state') or -1"))
+    return eff, conc, ms
+
+
+def pin_neutral_mental(port, uid):
+    """Force #353 mental effectiveness to its neutral 1.00 baseline:
+    full concentration, STABLE mental_state (0 in
+    scripts/mental_state.lua — only 3/EUPHORIC confers a bonus).
+    Overwrites the stats directly rather than only suppressing future
+    rolls, so an episode already in progress when this runs (a euphoria
+    episode holds for a fixed 60-120 game-second duration regardless of
+    future roll chances, scripts/mental_state.lua EPISODE_MIN/MAX) is
+    cleared too, not merely prevented from recurring."""
+    send(port,
+         f"unit.setStat({uid}, 'concentration', 1.0); "
+         f"unit.setStat({uid}, 'mental_state', 0); return 'ok'")
+
+
+def neutral_mental_check(port, uid):
+    """Establish + witness the #343 base-quality neutrality precondition
+    (#878 requirement 1/3): pin neutral, then confirm
+    unit.getMentalEffectiveness(uid) reads back exactly 1.00. Returns
+    (ok, diagnostic_str) — the diagnostic always names the observed
+    effectiveness/concentration/mental_state so a failure here reads as
+    a precondition failure, never a silently-shifted quality value."""
+    pin_neutral_mental(port, uid)
+    eff, conc, ms = mental_diag(port, uid)
+    ok = abs(eff - 1.0) < 0.01
+    detail = f"effectiveness={eff} concentration={conc} mental_state={ms}"
+    return ok, detail
 
 
 def count_item(port, uid, name):
@@ -357,7 +431,18 @@ def main():
         def craft_quality(recipe_id, bid=None):
             """Craft one dagger, return the new instance's quality.
             bid=None uses the station-less craft.execute debug verb;
-            a bid routes through craft.executeAt at that station."""
+            a bid routes through craft.executeAt at that station.
+
+            #878: the #343 base quality this checks is only
+            deterministic when the crafter's live #353 mental
+            effectiveness is neutral, so this pins + witnesses it via
+            unit.getMentalEffectiveness both immediately BEFORE (after
+            establishing/clearing any in-progress episode) and
+            immediately AFTER the craft — returning both precondition
+            results (ok, diagnostic) alongside the quality so a caller
+            can fail loudly on a precondition break instead of silently
+            absorbing it into the quality assertion."""
+            pre_ok, pre_detail = neutral_mental_check(port, uid)
             send(port, f"unit.addItem({uid},'steel_bar'); return 'ok'")
             if recipe_id == "forge_steel_dagger":
                 send(port, f"unit.addItem({uid},'steel_bar'); return 'ok'")
@@ -366,35 +451,60 @@ def main():
                 ok_e, msg = execute(port, uid, recipe_id)
             else:
                 ok_e, msg = execute_at(port, uid, recipe_id, bid)
+            post_eff, post_conc, post_ms = mental_diag(port, uid)
+            post_ok = abs(post_eff - 1.0) < 0.01
+            post_detail = (f"effectiveness={post_eff} concentration={post_conc} "
+                           f"mental_state={post_ms}")
             fresh = [d for d in instances_of(port, uid, "steel_dagger")
                      if d["id"] not in prior]
             if not ok_e or len(fresh) != 1:
-                return None, f"ok={ok_e} msg={msg} fresh={fresh}"
-            return fresh[0]["qual"], ""
+                return (None, f"ok={ok_e} msg={msg} fresh={fresh}",
+                        pre_ok, pre_detail, post_ok, post_detail)
+            return (fresh[0]["qual"], "",
+                    pre_ok, pre_detail, post_ok, post_detail)
+
+        def check_neutral(passed, pre_ok, pre_detail, post_ok, post_detail, label):
+            passed = check(passed, pre_ok,
+                            f"neutral mental effectiveness before craft ({label})",
+                            pre_detail)
+            passed = check(passed, post_ok,
+                            f"neutral mental effectiveness after craft ({label})",
+                            post_detail)
+            return passed
+
         # Skilled + learned: 0.7*90 + 0.3*80 = 87.
         send(port, f"unit.setSkill({uid},'probe_smith',90); "
                    f"unit.setKnowledge({uid},'metallurgy',80); return 'ok'")
-        q, detail = craft_quality("craft_test_quality")
+        q, detail, pre_ok, pre_d, post_ok, post_d = craft_quality("craft_test_quality")
+        passed = check_neutral(passed, pre_ok, pre_d, post_ok, post_d,
+                                "skill90/knowledge80")
         ok = q is not None and abs(q - 87.0) < 0.01
         passed = check(passed, ok, "skill 90 + knowledge 80 -> quality 87",
                        detail or f"qual={q}")
         # Clumsy + barely read the manual: 0.7*10 + 0.3*20 = 13.
         send(port, f"unit.setSkill({uid},'probe_smith',10); "
                    f"unit.setKnowledge({uid},'metallurgy',20); return 'ok'")
-        q, detail = craft_quality("craft_test_quality")
+        q, detail, pre_ok, pre_d, post_ok, post_d = craft_quality("craft_test_quality")
+        passed = check_neutral(passed, pre_ok, pre_d, post_ok, post_d,
+                                "skill10/knowledge20")
         ok = q is not None and abs(q - 13.0) < 0.01
         passed = check(passed, ok, "skill 10 + knowledge 20 -> quality 13",
                        detail or f"qual={q}")
         # Shipped recipe: skill-tagged, no knowledge gate -> plain skill.
         send(port, f"unit.setSkill({uid},'smithing',55); return 'ok'")
-        q, detail = craft_quality("forge_steel_dagger")
+        q, detail, pre_ok, pre_d, post_ok, post_d = craft_quality("forge_steel_dagger")
+        passed = check_neutral(passed, pre_ok, pre_d, post_ok, post_d,
+                                "shipped dagger via craft.execute")
         ok = q is not None and abs(q - 55.0) < 0.01
         passed = check(passed, ok,
                        "shipped dagger quality = smithing level 55",
                        detail or f"qual={q}")
         # Same formula through the station path (#326 + #343): executeAt
         # at the built workbench from phase 5.
-        q, detail = craft_quality("forge_steel_dagger", bid_w)
+        q, detail, pre_ok, pre_d, post_ok, post_d = craft_quality(
+            "forge_steel_dagger", bid_w)
+        passed = check_neutral(passed, pre_ok, pre_d, post_ok, post_d,
+                                "shipped dagger via craft.executeAt")
         ok = q is not None and abs(q - 55.0) < 0.01
         passed = check(passed, ok,
                        "executeAt at workbench carries quality 55",
@@ -509,11 +619,24 @@ def main():
                            msg)
 
         # Skill-tagged tools carry crafter quality like the dagger (#343);
-        # smithing is already set to 55 from phase 6.
+        # smithing is already set to 55 from phase 6. This is also a
+        # #343 base-quality assertion, so it gets the same #878
+        # neutral-mental-effectiveness precondition (established +
+        # witnessed before, re-witnessed after) as every phase-6 check.
+        pre_ok, pre_d = neutral_mental_check(port, uid)
+        passed = check(passed, pre_ok,
+                       "neutral mental effectiveness before craft (fabricated axe)",
+                       pre_d)
         before_ids = {d["id"] for d in instances_of(port, uid, "axe_steel")}
         send(port, f"unit.addItem({uid},'steel_bar'); "
                    f"unit.addItem({uid},'steel_bar'); return 'ok'")
         ok_e, msg = execute_at(port, uid, "forge_axe_steel", bid_w)
+        post_eff, post_conc, post_ms = mental_diag(port, uid)
+        post_ok = abs(post_eff - 1.0) < 0.01
+        passed = check(passed, post_ok,
+                       "neutral mental effectiveness after craft (fabricated axe)",
+                       f"effectiveness={post_eff} concentration={post_conc} "
+                       f"mental_state={post_ms}")
         fresh = [d for d in instances_of(port, uid, "axe_steel")
                  if d["id"] not in before_ids]
         ok = (ok_e and len(fresh) == 1 and abs(fresh[0]["qual"] - 55.0) < 0.01)
