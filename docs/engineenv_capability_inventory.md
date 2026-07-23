@@ -275,7 +275,7 @@ dependencies, cross-references, or compatibility-boundary remarks.
 | `engineConfig` | boot-process | `AnyThread` (read via the engine environment value itself from every thread — e.g. `ecHeadless` gates GPU-only paths in `Engine.Graphics.Vulkan.Command.Record`) | None (immutable after boot — each `app/App/*.hs` applies one record-update for `ecDebugPort`/`ecBootProfile`/`ecPreviewTarget`/`ecHeadless` from CLI args before any worker thread starts, e.g. `app/App/Graphical.hs:39-48`) | Plain `EngineConfig` record field, no `IORef` — safe from any thread precisely because it is never mutated after boot | `Engine.Core.Init.initializeEngineWith` sets `defaultEngineConfig` (`src/Engine/Core/Init.hs:259`) | None — plain data, reclaimed at process exit | Immutable-boot-configuration carve-out (no writers) is intentional, not a missing decision. |
 | `loggerRef` | boot-shutdown | `AnyThread` (every thread logs through it — `Unit.Thread`, `Combat.Thread`, `World.Thread`, `Sim.Thread`, `Engine.Scripting.Lua.Thread`, `Engine.Loop`) | `AnyThread` (`Engine.Core.Log`'s `logInfo`/`logDebug`/`logWarn` write through this ref from any thread) | `IORef LoggerState`; the logger backend batches/flushes internally | `Engine.Core.Init.initializeEngineWith` (`src/Engine/Core/Init.hs:157-158`); backend is `stdout` (graphical/headless) or `stderr` (dump, so stdout stays clean JSON) | Explicitly flushed via `shutdownLogger`, last, after every worker thread has stopped (`src/Engine/Loop/Shutdown.hs:104-107`) and in each `App.*` module's own error branch | Must outlive every other thread's own shutdown log line — hence torn down last, not merely GC'd. |
 | `lifecycleRef` | boot-process | `AnyThread` (every worker run-loop polls it each tick — `Unit.Thread`, `Combat.Thread`, `World.Thread`, `Sim.Thread`, `Engine.Scripting.Lua.Thread`, `Engine.Input.Thread`, `Engine.Loop`) | `AnyThread` (the initial-running transition), `MainRender` (sets the final stopped value) | `IORef EngineLifecycle` (`EngineStarting|EngineRunning|CleaningUp|EngineStopped`) | `Engine.Core.Init.initializeEngineWith` seeds `EngineStarting` (`src/Engine/Core/Init.hs:154`) | Set to `EngineStopped` as literally the last step of `Engine.Loop.Shutdown.shutdownEngine`, after every worker thread has stopped and the logger has flushed (`src/Engine/Loop/Shutdown.hs:106-108`) | — |
-| `inputThreadActiveRef` | boot-process | `LuaThread`/`WorldThread` (save-barrier owner-set computation — `Engine.Scripting.Lua.Thread.Dispatch`, `World.Thread.Command.Save` — consults it to decide whether the input owner slot belongs in a save/load transaction's owner set) | `Boot` (set to true exactly once by `Engine.Input.Thread.startInputThread` immediately after it forks; never written again) | `IORef Bool`, write-once | `Engine.Core.Init.initializeEngineWith` seeds `False` (`src/Engine/Core/Init.hs:232`) | None | Boot-profile-derived fact (only Graphical/Offscreen/Preview start an input thread — §4); primary owner is `core-init` even though its principal *consumer* is `save-load-coordination` — see §7. |
+| `inputThreadActiveRef` | boot-process | `LuaThread` (save-barrier owner-set computation — `API.Save:188`'s `saveWorldFn`, `Thread.Dispatch:408`'s `handleLoadStaged` — consults it to decide whether the input owner slot belongs in a save/load transaction's owner set) | `Boot` (set to true exactly once by `Engine.Input.Thread.startInputThread:49`, on the CALLING thread, immediately BEFORE it forks the actual input thread via `forkIO`; never written again) | `IORef Bool`, write-once | `Engine.Core.Init.initializeEngineWith` seeds `False` (`src/Engine/Core/Init.hs:232`) | None | Boot-profile-derived fact (only Graphical/Offscreen/Preview start an input thread — §4); primary owner is `core-init` even though its principal *consumer* is `save-load-coordination` — see §7. |
 
 ### `render-gpu-asset`
 
@@ -397,18 +397,20 @@ again afterward.
 
 ## 6. Full-`EngineEnv` compatibility boundary
 
-Today, all 217 files that import `Engine.Core.State` (160 of them
-importing `EngineEnv(..)` specifically) have unrestricted access to
-every field, because no capability-scoped type exists yet — that is
-exactly the gap #537 exists to close. This section names the intended
-*end state*: what should still legitimately construct, carry, or
-inspect the **complete** `EngineEnv` once the epic's capability split
-has landed, versus what merely has full access today because nothing
-narrower exists yet. It is deliberately narrow — narrow enough to
-become the literal allowlist for #537's final unrestricted-access
-audit (per requirement 6) — which means most of today's 160 importers
-are **not** listed as permanent below; they belong in the temporary
-column, each tied to one of §7's bounded follow-up issues.
+Today, all 222 files under `src/`/`app/` that import
+`Engine.Core.State` (165 of them importing `EngineEnv(..)`
+specifically — 160 under `src/` plus the 5 `app/App/*.hs` boot
+modules) have unrestricted access to every field, because no
+capability-scoped type exists yet — that is exactly the gap #537
+exists to close. This section names the intended *end state*: what
+should still legitimately construct, carry, or inspect the
+**complete** `EngineEnv` once the epic's capability split has landed,
+versus what merely has full access today because nothing narrower
+exists yet. It is deliberately narrow — narrow enough to become the
+literal allowlist for #537's final unrestricted-access audit (per
+requirement 6) — which means most of today's 165 importers are **not**
+listed as permanent below; they belong in the temporary column, each
+tied to one of §7's bounded follow-up issues.
 
 ### 6.1 Permanent (production)
 
@@ -425,7 +427,7 @@ is the second, by definition of the section.
 | `Engine.Core.Init` | Permanent initialization infrastructure | Constructs the single `EngineEnv` value; by construction, must name every field once. |
 | `Engine.Loop`, `Engine.Loop.Frame`, `Engine.Loop.Headless`, `Engine.Loop.Shutdown`, `Engine.Loop.Camera`, `Engine.Loop.Timing`, `Engine.Loop.Resource` | Permanent orchestration infrastructure | The main loop's job each frame is to coordinate render output with several other capabilities' queues/state (input barrier tokens, world quads, screenshot requests, ...), and `shutdownEngine` performs the one coordinated cross-capability teardown boundary described in §2.4/§3. |
 | `app/App/Graphical.hs`, `app/App/Offscreen.hs`, `app/App/Preview.hs`, `app/App/Headless.hs`, `app/App/Dump.hs` | Permanent orchestration infrastructure | Top-level boot/wire-up: each necessarily constructs the engine, starts every thread the profile needs, and wires them together — inherently whole-environment by job description. |
-| `Engine.Scripting.Lua.Thread`, `Engine.Scripting.Lua.Thread.Dispatch` | Permanent orchestration infrastructure | The Lua thread's own dispatch plumbing registers *every* Lua API module against the full environment (`registerLuaAPI`) — this wiring point is inherently cross-capability, even though each individual `Engine.Scripting.Lua.API.*`/`Message.*` module it wires (§6.2) is not. |
+| `Engine.Scripting.Lua.Thread`, `Engine.Scripting.Lua.Thread.Dispatch`, `Engine.Scripting.Lua.Thread.Console` | Permanent orchestration infrastructure | The Lua thread's own dispatch plumbing registers *every* Lua API module against the full environment (`registerLuaAPI`) — this wiring point is inherently cross-capability, even though each individual `Engine.Scripting.Lua.API.*`/`Message.*` module it wires (§6.2) is not. `Thread.Console` is the debug-console command handler living in the same package — TCP debug-server builtins and single-line Lua command execution, both reached from the same core Lua-thread loop as `Dispatch`. |
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 ### 6.2 Temporary compatibility boundary (production)
@@ -434,19 +436,30 @@ Everything else that imports `EngineEnv(..)` today is temporary: it
 has full access only because no narrower capability-scoped record
 exists yet, and is expected to migrate to one of §7's per-capability
 records as each bounded follow-up issue lands. Rather than enumerate
-all ~150 remaining files individually (a list that would be stale the
+all ~155 remaining files individually (a list that would be stale the
 moment any one of them is touched), they are grouped by family, each
 tied to the capability group whose §7 roadmap entry is expected to
-narrow it:
+narrow it. Every family below is a **verified, exhaustive** partition,
+not a loose glob: `grep -rlE
+'import Engine\.Core\.State.*EngineEnv\(\.\.\)|import Engine\.Core\.State \(EngineEnv\(\.\.\)\)'
+src app test tools` finds exactly 165 importers today (160 under
+`src/`, plus the 5 `app/App/*.hs` boot modules already named in
+§6.1); every one of the 165 is either a §6.1 permanent exception, one
+of the family prefixes below (including the standalone modules named
+alongside a family for not otherwise fitting its path prefix), or the
+catch-all row for the remaining Lua API/Message surface — none are
+left unclassified, and this partition was checked file-by-file against
+that grep output before landing.
 
-| Family (path prefix) | Target capability | Roadmap entry |
+| Family (path prefix, plus any standalone modules that share its capability but not its path) | Target capability | Roadmap entry |
 |---|---|---|
-| `Engine.Graphics.*`, `UI.Render` | `render-gpu-asset` | §7.2 |
+| `Engine.Core.Log.Monad` | `core-init` | §7.1 |
+| `Engine.Graphics.*`, `UI.Render`, `Engine.Scene.Batch.Text` (reads `fontCacheRef` directly, same as `UI.Render`/`Engine.Graphics.Vulkan.Command.Text`) | `render-gpu-asset` | §7.2 |
 | `Engine.Input.Thread.*`, `Engine.Input.Inject`, `Engine.Input.Callback` | `input-lua-transport` (writes cross into World/UI on dispatch — a genuine cross-capability dependency, not a migration blocker) | §7.3 |
-| `World.Thread.*`, `World.Render.*`, `World.Generate.*` | `world-sim-render-handoff` | §7.4 |
-| `Unit.Thread.*`, `Unit.Render`, `Unit.HitTest`, `Unit.LineOfSight`, `Building.Thread.Command`, `Building.Render`, `Building.HitTest`, `Combat.Thread`, `Combat.Resolution.*`, `Combat.Wounds.*`, `Sim.Thread` | `units-buildings-combat` | §7.5 |
+| `World.Thread` and `World.Thread.*`, `World.Render` and `World.Render.*`, `World.Generate.*`, `World.Log` (reads `worldManagerRef`/`texPaletteHandlesRef` for its own diagnostic dumps), `Structure.Render` (structure-quad building reached from `updateWorldTiles`, reading `texPaletteHandlesRef`/`textureSizeRef`/`textureSystemRef` exactly like `World.Render.*`'s own quad builders), `Blood.Impact` (reads only `worldManagerRef` to reach a page's `wsBloodStoreRef` — the mutation itself is `WorldState`-internal, out of `EngineEnv`'s scope per §1) | `world-sim-render-handoff` | §7.4 |
+| `Unit.Thread` and `Unit.Thread.*`, `Unit.Render`, `Unit.HitTest`, `Unit.LineOfSight`, `Unit.Selection` (reads/writes `unitManagerRef` directly), `Building.Thread.Command`, `Building.Render`, `Building.HitTest`, `Combat.Thread`, `Combat.Resolution.*`, `Combat.Wounds.*`, `Sim.Thread` | `units-buildings-combat` | §7.5 |
 | `Engine.Scripting.Lua.API.{Units,Buildings,Power,Forage,Craft}.*` and similar content-facing Lua API modules | `content-registries` | §7.6 |
-| `UI.Manager.*`, `UI.Focus`, `Engine.Scripting.Lua.API.UI.*`, `Engine.Scripting.Lua.API.Focus`, `Engine.PlayerEvent` | `ui-hud-events` | §7.7 |
+| `UI.Manager.*`, `UI.Focus`, `UI.Tooltip.State` (its central mutation is `uiManagerRef`, though it also reads `inputStateRef`/`fontCacheRef`/`windowSizeRef`/`framebufferSizeRef` to lay out the tooltip — the same kind of genuine cross-capability read the `input-lua-transport` row already documents for dispatch, not a migration blocker), `Engine.Scripting.Lua.API.UI.*`, `Engine.Scripting.Lua.API.Focus`, `Engine.PlayerEvent` and `Engine.PlayerEvent.*` | `ui-hud-events` | §7.7 |
 | `Engine.Scripting.Lua.API.Core` (the save/load-status-observing parts only — `Engine.Scripting.Lua.API.Save` itself is the permanent orchestration entry point, see §6.1) | `save-load-coordination` | §7.8 |
 
 `World.Load.Stage` is deliberately absent from this table: it is one
@@ -457,7 +470,14 @@ listing it here too would contradict that classification.
 Naming a whole family here, rather than each file, is itself a
 temporary convenience: as each capability group's migration issue
 narrows its actual imports, this table should shrink to name only what
-remains unmigrated, and eventually most of it should be empty.
+remains unmigrated, and eventually most of it should be empty. The
+standalone modules named alongside a family above are exactly the
+cases that don't share that family's path prefix but do share its
+target capability (confirmed by reading which `EngineEnv` field each
+one actually touches, not by its directory location) — the same
+distinction §5's `world-sim-render-handoff`/`render-gpu-asset` rows
+already draw between a module's package path and its real execution
+context (see e.g. the `World.Render.BloodQuads` note above).
 
 ### 6.3 Test-only exceptions
 
@@ -503,10 +523,15 @@ scope, per the issue text).
 - **Independent migration:** Yes, for the `MainRender`-only fields
   (`engineStateRef` and everything genuinely single-thread-owned).
   `textureSystemRef`/`textureSizeRef` are the one real complication —
-  they are read/written from `WorldThread` too (see §3's note on why
-  they moved to `EngineEnv` in the first place), so this capability's
-  record cannot be scoped to "things only the render thread touches";
-  it must be a record the world thread also legitimately imports.
+  `WorldThread` reads both (via `Unit.Render`/`World.Render.*`'s
+  quad-building pass; see §3's note on why they moved to `EngineEnv`
+  in the first place) even though writes stay confined to `MainRender`
+  (the `World.Render.BloodQuads` upload/dispose functions run via
+  `processLuaMessages`, not the world thread's own quad-building path —
+  see their §5 rows), so this capability's record cannot be scoped to
+  "things only the render thread touches"; it must be a record the
+  world thread can legitimately import for reading, even though it
+  never writes through it.
 - **Follow-up scope:** One issue narrowing `Engine.Graphics.*`/
   `UI.Render`/the render-adjacent `Engine.Scripting.Lua.Message.*`
   modules (`Video`, `Texture`, `WorldTexture`) to a `RenderCapability`
