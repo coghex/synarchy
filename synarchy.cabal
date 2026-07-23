@@ -605,6 +605,7 @@ library
                      World.Generate.InitTerrain
                      World.Generate.Timeline
                      World.Generate.Timeline.Fast
+                     World.Generate.Timeline.Spikes
                      World.Generate.Strata
                      World.Generate.Types
                      World.Generate.Config
