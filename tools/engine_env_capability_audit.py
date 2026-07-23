@@ -10,7 +10,10 @@ exactly one row in the capability inventory doc, under a `### `
 heading naming one of the eight known capability identifiers, with a
 valid Lifecycle category, a Readers and a Writers cell each naming a
 known thread/execution role (or an explicitly justified `None`), a
-non-placeholder Sync/Init/Shutdown/Notes cell, and at least one
+non-placeholder Sync/Init/Shutdown cell, a non-BLANK Notes cell (a
+deliberate "nothing further to add" -- this document uses a bare
+em-dash for that throughout -- is accepted there, since Notes is the
+one column where that is itself a legitimate answer), and at least one
 source-location citation somewhere in the row.
 
 This anchors on the EXACT SAME live-declaration parser
@@ -353,15 +356,23 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
                     f"recognized thread/execution role from {THREAD_ROLES} "
                     f"and is not a justified 'None (...)'")
 
-        # Requirement 8 names "synchronization contract" explicitly among
-        # the mandatory checks; Init/Shutdown/Notes are still required
-        # facts per requirement 2 but are free-text and not mechanically
-        # gated here beyond the role/lifecycle/evidence checks above --
-        # see the module docstring's stated scope.
-        if _is_placeholder(row.cells["Sync"]):
-            violations.append(
-                f"`{row.field}`'s Sync cell is blank or a bare "
-                f"placeholder -- record the actual synchronization contract")
+        # Requirement 2 requires Sync/Init/Shutdown to be recorded facts
+        # for every field, same as Readers/Writers/Lifecycle/Capability --
+        # a blank or bare-punctuation placeholder in any of them is a
+        # missing decision, not a real answer (round-4 review: this used
+        # to only check Sync, silently accepting an all-blank row on the
+        # other two).
+        for required_col in ("Sync", "Init", "Shutdown"):
+            if _is_placeholder(row.cells[required_col]):
+                violations.append(
+                    f"`{row.field}`'s {required_col} cell is blank or a "
+                    f"bare placeholder -- record the actual decision")
+        # Notes is the one column where "nothing further to add" is
+        # itself a legitimate, deliberate answer -- this document uses a
+        # bare em-dash for that throughout, so only a genuinely EMPTY
+        # cell (an oversight, not a decision) is rejected here.
+        if not row.cells["Notes"].strip():
+            violations.append(f"`{row.field}`'s Notes cell is blank")
 
         if not EVIDENCE_RE.search(row.raw):
             violations.append(

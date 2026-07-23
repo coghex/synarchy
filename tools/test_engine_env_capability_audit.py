@@ -264,6 +264,33 @@ def test_missing_sync_contract_detected():
            "a placeholder Sync cell ('-') must be rejected")
 
 
+def test_blank_init_shutdown_notes_detected():
+    # Round-4 review: a synthetic row with Init/Shutdown/Notes all blank
+    # used to return zero violations -- only Sync was ever checked.
+    bad_row = (
+        "| `fieldOne` | boot-process | `MainRender` (`src/Fake/Reader.hs:10`) "
+        "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` |  |  |  |\n")
+    doc = _doc(core_init_rows=bad_row)
+    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    expect(any("fieldOne" in v and "Init cell" in v for v in violations),
+           "a blank Init cell must be flagged")
+    expect(any("fieldOne" in v and "Shutdown cell" in v for v in violations),
+           "a blank Shutdown cell must be flagged")
+    expect(any("fieldOne" in v and "Notes cell" in v for v in violations),
+           "a blank Notes cell must be flagged")
+
+
+def test_em_dash_notes_accepted():
+    # Notes is the one column where "nothing further to add" is itself
+    # a legitimate, deliberate answer -- a bare em-dash there (this
+    # document's own convention throughout) must NOT be rejected the
+    # way a blank Sync/Init/Shutdown cell is.
+    violations = audit(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
+    expect(not any("Notes cell" in v for v in violations),
+           "an em-dash Notes cell (used throughout the complete fixture) "
+           "must be accepted, not flagged as blank")
+
+
 def test_missing_grounding_evidence_detected():
     bad_row = (
         "| `fieldOne` | boot-process | `MainRender` (somewhere) "
@@ -329,6 +356,8 @@ def main() -> int:
         test_unjustified_none_writer_detected,
         test_justified_none_writer_accepted,
         test_missing_sync_contract_detected,
+        test_blank_init_shutdown_notes_detected,
+        test_em_dash_notes_accepted,
         test_missing_grounding_evidence_detected,
         test_valid_multi_reader_multi_writer_field_passes,
         test_parse_inventory_only_scans_section_5,
