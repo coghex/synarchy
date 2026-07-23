@@ -101,17 +101,27 @@ BACKTICK_RE = re.compile(r"`([^`]+)`")
 # `` `scripts/init.lua` ``.
 EVIDENCE_RE = re.compile(r"`[^`]*\.(?:hs|lua)[^`]*`")
 # The LEADING run of a top-level (comma-separated, paren-depth-0)
-# segment: one or more slash-joined role-shaped tokens (each optionally
-# backtick-quoted), anchored at the segment's start -- e.g. the whole
-# of "`MainRender`" or "`LuaThread`/`WorldThread`", or just the "`MainRender`"
-# prefix of "`MainRender` — read via ... (`x.hs:1`)". Matching a PREFIX
-# (not the whole segment) is what lets a role mention carry trailing
-# explanatory prose or a parenthetical citation of any shape, while a
-# segment that doesn't start with a role-shaped token at all (ordinary
-# prose like "load publish (`x.hs:1`)", which starts with a lowercase
-# word) never matches and is correctly ignored. See `_attempted_roles`.
+# segment: one or more slash-joined identifier-shaped tokens (each
+# optionally backtick-quoted), anchored at the segment's start -- e.g.
+# the whole of "`MainRender`" or "`LuaThread`/`WorldThread`", or just
+# the "`MainRender`" prefix of "`MainRender` — read via ... (`x.hs:1`)".
+# Matching a PREFIX (not the whole segment) is what lets a role mention
+# carry trailing explanatory prose or a parenthetical citation of any
+# shape. Case-INSENSITIVE on the leading letter (round-4 review): a
+# mistyped role can be lower-camel ("alienThread"), and the inventory
+# doc's own grammar (enforced by hand, not mechanically) requires every
+# Readers/Writers segment to either be pure trailing prose folded into
+# a PRECEDING role's own commentary/parenthetical, or to itself START
+# with a real role mention -- never a standalone segment that begins
+# with a lowercase word (ordinary prose like "load publish (...)" is
+# always folded into the nearest role's parenthetical in this document,
+# not left as its own comma-item). Given that discipline, matching any
+# leading identifier regardless of case is safe: a segment that begins
+# with a lowercase word is either a genuine attempted role (misspelled)
+# that must be validated, or a doc-grammar violation that itself needs
+# fixing -- never legitimate unchecked prose.
 _LEADING_ROLE_RUN_RE = re.compile(
-    r"^`?[A-Z][a-zA-Z]*`?(?:/`?[A-Z][a-zA-Z]*`?)*")
+    r"^`?[A-Za-z][a-zA-Z]*`?(?:/`?[A-Za-z][a-zA-Z]*`?)*")
 
 
 def _is_placeholder(cell: str) -> bool:
