@@ -29,16 +29,28 @@ This is a static presence/well-formedness check, not a semantic proof:
 it cannot verify that a documented reader/writer/sync/lifecycle
 decision is actually TRUE of the code, only that a decision -- using
 recognized vocabulary -- has been recorded and stays in sync with the
-current field set. It also does not enforce any capability-scoped
-import boundary yet; #876 documents the intended boundary (see
-docs/engineenv_capability_inventory.md SS6) but this audit does not
-check that any module actually respects it. See that document's own
-introduction for the full scope statement.
+current field set.
+
+Since issue #889 (EngineEnv capability split E1), this module ALSO
+enforces the SS6 full-access ratchet: every production (`src/`/`app/`)
+Haskell module that imports `Engine.Core.State` either with an
+explicit `EngineEnv(..)` or as a bare import (no import list -- both
+grant unrestricted field-level access, see SS6's own methodology) must
+be either one of SS6.1's permanent modules (a hard, checked-in
+allowlist) or one of SS6.2's individually-assigned temporary modules
+(a checked-in, strict, shrink-only ceiling established by #889 and
+cross-checked against SS6.2's own documented accounting). A module
+newly gaining unrestricted access fails this ratchet even if SS6.2 is
+ALSO edited to document it -- growing the checked-in ceiling itself
+(in this file) is the only way to admit a new temporary full-access
+module, and doing so without a matching SS6.2 update fails the
+doc/ceiling consistency check below. `test/` sources remain outside
+this ratchet entirely (SS6.3's test-only exception).
 
 Usage:
   python3 tools/engine_env_capability_audit.py
-Exit codes: 0 = every live EngineEnv field is validly classified,
-1 = one or more violations found.
+Exit codes: 0 = every live EngineEnv field is validly classified and
+the SS6 ratchet holds, 1 = one or more violations found.
 """
 from __future__ import annotations
 
@@ -417,6 +429,354 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
     return violations
 
 
+# ===========================================================================
+# SS6 full-access ratchet (issue #889, EngineEnv capability split E1)
+# ===========================================================================
+#
+# docs/engineenv_capability_inventory.md SS6.1's permanent modules -- a
+# hard, checked-in allowlist. `Engine.Core.State` itself (the definer,
+# which imports nothing and so can never appear in a live importer
+# scan) is the 25th permanent module; PERMANENT_IMPORTERS below holds
+# only the 24 modules that actually IMPORT it.
+PERMANENT_DEFINER = "Engine.Core.State"
+
+PERMANENT_IMPORTERS = frozenset({
+    "Engine.Core.Monad",
+    "Engine.Core.Init",
+    "Engine.Core.Defaults",
+    "Engine.Loop", "Engine.Loop.Frame", "Engine.Loop.Headless",
+    "Engine.Loop.Shutdown", "Engine.Loop.Camera", "Engine.Loop.Timing",
+    "Engine.Loop.Resource",
+    "app/App/Graphical.hs", "app/App/Offscreen.hs", "app/App/Preview.hs",
+    "app/App/Headless.hs", "app/App/Dump.hs",
+    "Engine.Scripting.Lua.Thread", "Engine.Scripting.Lua.Thread.Dispatch",
+    "Engine.Scripting.Lua.Thread.Console",
+    "Engine.Scripting.Lua.Message",
+    "World.Thread.Command.Save", "World.Thread.Command.Save.WriteWorld",
+    "World.Load.Stage", "World.Load.Publish", "Engine.Scripting.Lua.API.Save",
+})
+
+# docs/engineenv_capability_inventory.md SS6.2 -- the checked-in,
+# strict, shrink-only post-E1 ceiling (issue #889 requirement 3): the
+# live temporary full-access production importer set as of this
+# migration, individually assigned to the same eight capabilities SS2.1
+# defines. A module may only be REMOVED from a capability's set here
+# (as later migration issues narrow it) -- adding one back, or adding a
+# new one, requires this file to change; merely documenting an addition
+# in SS6.2 without growing the matching set below still fails the
+# ratchet (see `audit_ratchet`).
+TEMPORARY_CEILING: dict[str, frozenset[str]] = {
+    "core-init": frozenset({
+        "Engine.Graphics.Vulkan.Command.Record", "Engine.Scripting.Lua.API.Log",
+    }),
+    "render-gpu-asset": frozenset({
+        "Building.HitTest", "Building.Render", "Engine.Asset.Manager",
+        "Engine.Graphics.Font.Draw", "Engine.Graphics.Font.Load",
+        "Engine.Graphics.Font.Upload", "Engine.Graphics.Vulkan.Command.Sprite",
+        "Engine.Graphics.Vulkan.Command.Text", "Engine.Graphics.Vulkan.Framebuffer",
+        "Engine.Graphics.Vulkan.Init", "Engine.Graphics.Vulkan.MSAA",
+        "Engine.Graphics.Vulkan.Offscreen", "Engine.Graphics.Vulkan.Pipeline",
+        "Engine.Graphics.Vulkan.Pipeline.Bindless", "Engine.Graphics.Vulkan.Recreate",
+        "Engine.Graphics.Vulkan.Swapchain", "Engine.Graphics.Vulkan.Sync",
+        "Engine.Graphics.Vulkan.Texture.Bindless",
+        "Engine.Graphics.Vulkan.Texture.DefaultFaceMap", "Engine.Graphics.Window.GLFW",
+        "Engine.Scene.Batch.Text", "Engine.Scene.Render",
+        "Engine.Scripting.Lua.API.Camera", "Engine.Scripting.Lua.API.Config",
+        "Engine.Scripting.Lua.API.Graphics", "Engine.Scripting.Lua.API.Input",
+        "Engine.Scripting.Lua.API.Items.Render", "Engine.Scripting.Lua.API.Screenshot",
+        "Engine.Scripting.Lua.API.Text", "Engine.Scripting.Lua.API.UI.Placement",
+        "Engine.Scripting.Lua.API.WorldQuery.Pick", "Engine.Scripting.Lua.API.YamlTextures",
+        "Engine.Scripting.Lua.Message.Texture", "Engine.Scripting.Lua.Message.Video",
+        "Engine.Scripting.Lua.Message.WorldTexture", "Structure.Render", "UI.Render",
+        "Unit.HitTest", "World.Render", "World.Render.BloodQuads",
+        "World.Render.CursorQuads", "World.Render.GroundItemQuads",
+        "World.Render.Quads", "World.Render.SpoilQuads", "World.Render.Zoom.Quads",
+    }),
+    "input-lua-transport": frozenset({
+        "Engine.Input.Callback", "Engine.Input.Thread", "Engine.Input.Thread.Char",
+        "Engine.Input.Thread.Dispatch", "Engine.Input.Thread.Keyboard",
+        "Engine.Input.Thread.Mouse.Activation", "Engine.Input.Thread.Scroll",
+        "Engine.Scripting.Lua.API.InputInject", "Engine.Scripting.Lua.API.Keybinds",
+        "World.Log", "World.Thread.Helpers",
+    }),
+    "world-sim-render-handoff": frozenset({
+        "Blood.Impact", "Engine.Scripting.Lua.API.Blood", "Engine.Scripting.Lua.API.Chop",
+        "Engine.Scripting.Lua.API.Construct", "Engine.Scripting.Lua.API.Core",
+        "Engine.Scripting.Lua.API.Flora", "Engine.Scripting.Lua.API.Forage.Crop",
+        "Engine.Scripting.Lua.API.Forage.Lookup", "Engine.Scripting.Lua.API.Forage.Query",
+        "Engine.Scripting.Lua.API.Plant", "Engine.Scripting.Lua.API.Structure",
+        "Engine.Scripting.Lua.API.Till", "Engine.Scripting.Lua.API.World.Clock",
+        "Engine.Scripting.Lua.API.World.Cursor", "Engine.Scripting.Lua.API.World.Designation",
+        "Engine.Scripting.Lua.API.World.Edit", "Engine.Scripting.Lua.API.World.GenConfig",
+        "Engine.Scripting.Lua.API.World.Lifecycle", "Engine.Scripting.Lua.API.World.Query",
+        "Engine.Scripting.Lua.API.World.Tools", "Engine.Scripting.Lua.API.WorldQuery.Chunk",
+        "Engine.Scripting.Lua.API.WorldQuery.Climate", "Engine.Scripting.Lua.API.WorldQuery.Fluid",
+        "Engine.Scripting.Lua.API.WorldQuery.Lookup", "Engine.Scripting.Lua.API.WorldQuery.River",
+        "Engine.Scripting.Lua.API.WorldQuery.Terrain", "Sim.Thread", "Unit.LineOfSight",
+        "Unit.Render", "Unit.Thread.Movement.PathAdvance", "World.Render.Zoom.Background",
+        "World.Thread", "World.Thread.ChunkLoading", "World.Thread.Command",
+        "World.Thread.Command.Basic", "World.Thread.Command.Cursor.Chop",
+        "World.Thread.Command.Cursor.Construct", "World.Thread.Command.Cursor.Mine",
+        "World.Thread.Command.Cursor.Plant", "World.Thread.Command.Cursor.Select",
+        "World.Thread.Command.Cursor.Till", "World.Thread.Command.Edit.Fluid",
+        "World.Thread.Command.Edit.Structure", "World.Thread.Command.Edit.Sync",
+        "World.Thread.Command.Edit.Terrain", "World.Thread.Command.Edit.Vegetation",
+        "World.Thread.Command.Init", "World.Thread.Command.Location",
+        "World.Thread.Command.Texture", "World.Thread.Command.Time",
+        "World.Thread.Command.UI", "World.Thread.Cursor", "World.Thread.Time",
+    }),
+    "units-buildings-combat": frozenset({
+        "Building.Thread.Command", "Combat.Resolution", "Combat.Resolution.Events",
+        "Combat.Resolution.Wear", "Combat.Thread", "Combat.Wounds.Tick",
+        "Engine.Input.State", "Engine.Scripting.Lua.API.ActionOutcome",
+        "Engine.Scripting.Lua.API.Buildings.Materials", "Engine.Scripting.Lua.API.Buildings.Progress",
+        "Engine.Scripting.Lua.API.Buildings.Query", "Engine.Scripting.Lua.API.Buildings.Selection",
+        "Engine.Scripting.Lua.API.Buildings.Spawn", "Engine.Scripting.Lua.API.Buildings.Yaml",
+        "Engine.Scripting.Lua.API.Combat", "Engine.Scripting.Lua.API.Craft.Bill",
+        "Engine.Scripting.Lua.API.Craft.Execute", "Engine.Scripting.Lua.API.Equipment.Accessory",
+        "Engine.Scripting.Lua.API.Equipment.Render", "Engine.Scripting.Lua.API.Equipment.Slot",
+        "Engine.Scripting.Lua.API.Forage.Harvest", "Engine.Scripting.Lua.API.Items.Ground",
+        "Engine.Scripting.Lua.API.Power", "Engine.Scripting.Lua.API.Units.Cargo",
+        "Engine.Scripting.Lua.API.Units.Combat", "Engine.Scripting.Lua.API.Units.Equipment",
+        "Engine.Scripting.Lua.API.Units.Inventory", "Engine.Scripting.Lua.API.Units.List",
+        "Engine.Scripting.Lua.API.Units.Medical", "Engine.Scripting.Lua.API.Units.Query",
+        "Engine.Scripting.Lua.API.Units.Selection", "Engine.Scripting.Lua.API.Units.Spawn",
+        "Engine.Scripting.Lua.API.Units.Stats", "Engine.Scripting.Lua.API.Units.Survival",
+        "Engine.Scripting.Lua.API.Units.Yaml", "Unit.Selection", "Unit.Thread",
+        "Unit.Thread.Command", "Unit.Thread.Command.Lifecycle", "Unit.Thread.Command.Motion",
+        "Unit.Thread.Command.Pose", "Unit.Thread.Command.Spawn", "Unit.Thread.Movement",
+        "Unit.Thread.Movement.Climb", "World.Thread.Command.Cursor.Common",
+        "World.Thread.Command.Edit.Dig", "World.Thread.Discovery", "World.Thread.ItemTemp",
+        "World.Thread.Power",
+    }),
+    "content-registries": frozenset({
+        "Engine.Scripting.Lua.API.Craft.Recipe", "Engine.Scripting.Lua.API.Equipment.Class",
+        "Engine.Scripting.Lua.API.Infection", "Engine.Scripting.Lua.API.Items.Defs",
+        "Engine.Scripting.Lua.API.Locations", "Engine.Scripting.Lua.API.LootTables",
+        "Engine.Scripting.Lua.API.Repair", "Engine.Scripting.Lua.API.Substance",
+        "Engine.Scripting.Lua.API.WorldQuery.Location",
+    }),
+    "ui-hud-events": frozenset({
+        "Engine.Input.Thread.Mouse", "Engine.PlayerEvent.Emit", "Engine.Scripting.Lua.API.Focus",
+        "Engine.Scripting.Lua.API.PlayerEvent", "Engine.Scripting.Lua.API.UI.Element",
+        "Engine.Scripting.Lua.API.UI.Focus", "Engine.Scripting.Lua.API.UI.Hierarchy",
+        "Engine.Scripting.Lua.API.UI.Page", "Engine.Scripting.Lua.API.UI.Property",
+        "Engine.Scripting.Lua.API.UI.TextInput", "Engine.Scripting.Lua.API.UI.Tooltip",
+        "Engine.Scripting.Lua.Message.Scene", "UI.Tooltip.State",
+    }),
+    "save-load-coordination": frozenset(),
+}
+
+PRODUCTION_DIRS = ("src", "app")
+STATE_MODULE = "Engine.Core.State"
+
+_IMPORT_LINE_RE = re.compile(r"^import\b")
+_IMPORT_HEAD_RE = re.compile(r"^import\s+(?:qualified\s+)?([A-Za-z][A-Za-z0-9_.']*)")
+_EXPLICIT_ENGINEENV_RE = re.compile(r"EngineEnv\s*\(\s*\.\.\s*\)")
+_BLOCK_COMMENT_RE = re.compile(r"\{-.*?-\}", re.DOTALL)
+
+
+def _strip_haskell_comments(text: str) -> str:
+    """Strip `{- -}` block comments (newline-count preserved, so line
+    numbers/column-0 checks downstream stay meaningful) and `--` line
+    comments."""
+    text = _BLOCK_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    lines = []
+    for line in text.split("\n"):
+        idx = line.find("--")
+        lines.append(line[:idx] if idx != -1 else line)
+    return "\n".join(lines)
+
+
+def _import_chunks(text: str) -> list[str]:
+    """Every top-level `import` declaration's FULL text (covering
+    multiline module names/import lists), bounded by Haskell's layout
+    rule: a continuation line is blank or indented; the declaration
+    ends at the first non-blank, column-0 line (the next import, or
+    the first non-import top-level declaration -- e.g. a bare import
+    that is the file's LAST import is bounded correctly either way)."""
+    lines = text.split("\n")
+    starts = [i for i, line in enumerate(lines) if _IMPORT_LINE_RE.match(line)]
+    chunks = []
+    for start in starts:
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            line = lines[j]
+            if line.strip() == "":
+                continue
+            if line[0] not in (" ", "\t"):
+                end = j
+                break
+        chunks.append("\n".join(lines[start:end]))
+    return chunks
+
+
+def _classify_state_import_chunk(chunk: str) -> str:
+    """`chunk` is already confirmed to import `Engine.Core.State`.
+    Returns "explicit" (`EngineEnv(..)`, any combination of qualified/
+    aliased/multiline), "bare" (no import list at all -- grants full
+    access to every export, qualified/aliased/multiline alike), or
+    "narrow" (an explicit list that names neither shape -- e.g. the
+    bare `EngineEnv` type, or individual field accessors)."""
+    if _EXPLICIT_ENGINEENV_RE.search(chunk):
+        return "explicit"
+    if "(" not in chunk:
+        return "bare"
+    return "narrow"
+
+
+def classify_state_import(source_text: str) -> str | None:
+    """The most permissive classification of every `Engine.Core.State`
+    import found in `source_text` ("explicit" > "bare" > "narrow"), or
+    `None` if the module doesn't import it at all."""
+    best: str | None = None
+    rank = {"narrow": 0, "bare": 1, "explicit": 2}
+    for chunk in _import_chunks(_strip_haskell_comments(source_text)):
+        head = _IMPORT_HEAD_RE.match(chunk)
+        if not head or head.group(1) != STATE_MODULE:
+            continue
+        cls = _classify_state_import_chunk(chunk)
+        if best is None or rank[cls] > rank[best]:
+            best = cls
+    return best
+
+
+def module_identifier(relpath: str) -> str:
+    """`src/Engine/Core/Log/Monad.hs` -> `Engine.Core.Log.Monad`
+    (matching SS6.2's dotted-name citations); an `app/*.hs` boot module
+    keeps its literal relative path (matching SS6.1's own citations --
+    every one of them is `module Main where`, so a dotted name would
+    collide)."""
+    parts = Path(relpath).parts
+    if parts[0] == "src":
+        return ".".join(parts[1:])[:-len(".hs")]
+    return relpath
+
+
+def classify_production_sources(sources: dict[str, str]) -> set[str]:
+    """Pure core of the ratchet scan: given `{relative_path: source_text}`
+    for every production Haskell file, the set of module identifiers
+    with unrestricted (`explicit`/`bare`) `Engine.Core.State` access."""
+    unrestricted = set()
+    for relpath, text in sources.items():
+        cls = classify_state_import(text)
+        if cls in ("explicit", "bare"):
+            unrestricted.add(module_identifier(relpath))
+    return unrestricted
+
+
+def scan_production_unrestricted_importers(repo_root: Path) -> set[str]:
+    """IO wrapper: walk every `src/**/*.hs` and `app/**/*.hs` file
+    under `repo_root` and classify it."""
+    sources: dict[str, str] = {}
+    for base in PRODUCTION_DIRS:
+        for path in sorted((repo_root / base).rglob("*.hs")):
+            relpath = str(path.relative_to(repo_root))
+            sources[relpath] = path.read_text(encoding="utf-8", errors="replace")
+    return classify_production_sources(sources)
+
+
+SECTION_6_2_HEADING = "### 6.2 Temporary compatibility boundary (production)"
+# A Modules cell that is ENTIRELY one italicized parenthetical --
+# `*(...)*` spanning the whole cell -- is explanatory prose (citing
+# other modules/fields for context), never a module assignment, no
+# matter what backtick-quoted names it contains; see the real
+# `save-load-coordination` row.
+_EXPLANATORY_CELL_RE = re.compile(r"^\*\(.*\)\*$", re.DOTALL)
+_SEPARATOR_ROW_RE = re.compile(r":?-{2,}:?")
+
+
+def parse_temporary_boundary(inventory_text: str) -> dict[str, set[str]]:
+    """Parse SS6.2's table: `{capability: {module, ...}}`, one entry
+    per capability row, individually parsed (never a glob/catch-all).
+    A capability whose Modules cell is pure explanatory prose (the
+    `save-load-coordination` row) maps to an empty set, not the
+    backtick-quoted names that prose happens to cite."""
+    lines = inventory_text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines)
+                     if line.strip() == SECTION_6_2_HEADING) + 1
+    except StopIteration:
+        return {}
+
+    result: dict[str, set[str]] = {}
+    header_seen = False
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            break  # SS6.3 (or any later heading) ends the table
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if not header_seen:
+            header_seen = True
+            continue
+        if all(_SEPARATOR_ROW_RE.fullmatch(c) for c in cells if c):
+            continue
+        if len(cells) < 2:
+            continue
+        cap_names = BACKTICK_RE.findall(cells[0])
+        if len(cap_names) != 1:
+            continue
+        capability = cap_names[0]
+        modules_cell = cells[1]
+        if _EXPLANATORY_CELL_RE.match(modules_cell):
+            result[capability] = set()
+        else:
+            result[capability] = set(BACKTICK_RE.findall(modules_cell))
+    return result
+
+
+def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
+                   *, permanent: frozenset[str] = PERMANENT_IMPORTERS,
+                   ceiling: dict[str, frozenset[str]] = TEMPORARY_CEILING
+                   ) -> list[str]:
+    """Pure ratchet core. `unrestricted` is a live-scanned production
+    importer set (`classify_production_sources`/
+    `scan_production_unrestricted_importers`); `doc_temporary` is
+    SS6.2 as documented (`parse_temporary_boundary`); `permanent`/
+    `ceiling` are the checked-in constants above (overridable so tests
+    can exercise this against small synthetic fixtures instead of the
+    real ~200-module repo state)."""
+    violations: list[str] = []
+    ceiling_all: set[str] = set()
+    for modules in ceiling.values():
+        ceiling_all |= modules
+    allowed = set(permanent) | ceiling_all
+
+    for module in sorted(unrestricted - allowed):
+        violations.append(
+            f"`{module}` has unrestricted `Engine.Core.State` access (a "
+            f"bare import or `EngineEnv(..)`) but is neither in the SS6.1 "
+            f"permanent allowlist nor the checked-in SS6.2 temporary "
+            f"ceiling (PERMANENT_IMPORTERS/TEMPORARY_CEILING in "
+            f"tools/engine_env_capability_audit.py) -- a newly full-access "
+            f"module must be narrowed, not merely documented; see "
+            f"docs/engineenv_capability_inventory.md SS6")
+
+    for cap in sorted(set(ceiling) | set(doc_temporary)):
+        ceiling_set = set(ceiling.get(cap, frozenset()))
+        doc_set = doc_temporary.get(cap, set())
+        missing_from_doc = ceiling_set - doc_set
+        extra_in_doc = doc_set - ceiling_set
+        if missing_from_doc or extra_in_doc:
+            detail = []
+            if missing_from_doc:
+                detail.append(
+                    f"checked-in ceiling has {sorted(missing_from_doc)} not "
+                    f"documented in SS6.2")
+            if extra_in_doc:
+                detail.append(
+                    f"SS6.2 documents {sorted(extra_in_doc)} not present in "
+                    f"the checked-in ceiling")
+            violations.append(
+                f"capability `{cap}`: the checked-in TEMPORARY_CEILING and "
+                f"docs/engineenv_capability_inventory.md SS6.2 disagree "
+                f"({'; '.join(detail)})")
+
+    return violations
+
+
 def main() -> int:
     engine_env_source = (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8")
     inventory_text = INVENTORY_PATH.read_text(encoding="utf-8")
@@ -430,9 +790,20 @@ def main() -> int:
               f"capability/thread-role/lifecycle vocabulary).")
         return 1
 
+    unrestricted = scan_production_unrestricted_importers(REPO_ROOT)
+    doc_temporary = parse_temporary_boundary(inventory_text)
+    ratchet_violations = audit_ratchet(unrestricted, doc_temporary)
+    if ratchet_violations:
+        print(f"{len(ratchet_violations)} SS6 full-access ratchet violation(s):")
+        for v in ratchet_violations:
+            print(f"  - {v}")
+        return 1
+
     total_fields = len(extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN))
     print(f"engine-env capability-inventory audit: {total_fields} EngineEnv "
-          f"field(s) all classified")
+          f"field(s) all classified, {len(unrestricted) + 1} full-access "
+          f"modules (incl. the {PERMANENT_DEFINER} definer) within the SS6 "
+          f"ratchet")
     return 0
 
 

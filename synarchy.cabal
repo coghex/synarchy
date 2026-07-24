@@ -329,6 +329,7 @@ library
                      Engine.Core.Init
                      Engine.Core.Monad
                      Engine.Core.State
+                     Engine.Core.Capability.Core
                      Engine.Save.Barrier
                      Engine.Load.Status
                      Engine.Core.Types

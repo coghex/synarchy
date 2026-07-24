@@ -130,6 +130,30 @@ it before adding a field, changing which thread touches one, or
 changing its lifecycle; `tools/engine_env_capability_audit.py` (in CI
 and `make ci`) fails if a classification drifts from the live record.
 
+**Capability records (#889, E1 landed):** each capability gets its own
+`Engine.Core.Capability.<Name>` module exporting one `<Name>Capability`
+record (fields sharing the SAME live `IORef`/queue handles `EngineEnv`
+already carries — a projection, never a copy) plus a total
+`to<Name>Capability ∷ EngineEnv → <Name>Capability`. One-way only
+(never reassembled back into an `EngineEnv`); no capability module
+imports its own consumers; don't introduce a record before the
+migration issue that actually narrows a real consumer to it. `EngineM`
+stays hard-wired to `MonadReader EngineEnv` (no capability typeclass
+layer), so a narrowed module's own public API is typically two layers:
+primitives taking the capability explicitly, plus thin `MonadReader
+EngineEnv` wrappers preserving existing call sites (see
+`Engine.Core.Log.Monad`/`Engine.Core.Capability.Core`) — narrowing the
+*module's own field access* is the goal, not rewriting every caller.
+The same audit also enforces a production-only (`src/`+`app/`, `test/`
+exempt) full-access ratchet: importing `Engine.Core.State` with
+`EngineEnv(..)` or as a bare import (either shape, regardless of
+`qualified`/`as`/multiline) is unrestricted access, allowed only for
+SS6.1's hard-coded permanent allowlist or SS6.2's checked-in,
+strict/shrink-only temporary ceiling (both mirrored as constants in
+`tools/engine_env_capability_audit.py`) — a module gaining unrestricted
+access fails the audit even if SS6.2 is also edited to document it;
+only growing the checked-in ceiling admits one.
+
 ### Threading model
 The engine uses multiple worker threads communicating via STM (TVar, queues):
 - **Main thread:** Vulkan render loop (`app/Main.hs` → `Engine.Loop`)
