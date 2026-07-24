@@ -22,7 +22,7 @@
 --
 --   == What is deliberately absent
 --
---   Beyond @engineStateRef@, the 20-field @render-gpu-asset@ set's
+--   Beyond @engineStateRef@, the 21-field @render-gpu-asset@ set's
 --   remaining @MainRender@-only fields are omitted because no
 --   non-@MainRender@ consumer reads them (SS5's Readers\/Writers
 --   cells): @windowStateRef@, @brightnessRef@, @samplerCacheRef@,
@@ -58,7 +58,7 @@ import Engine.Graphics.Types (ScreenshotRequest)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import Engine.Core.State
   ( EngineEnv
-  , videoConfigRef, windowSizeRef, framebufferSizeRef, pixelSnapRef
+  , videoConfigRef, windowSizeRef, windowPosRef, framebufferSizeRef, pixelSnapRef
   , textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
   , textureSystemRef, textureSizeRef, cameraRef, screenshotRequestQueue
   )
@@ -77,6 +77,7 @@ import Engine.Core.State
 data RenderViewCapability = RenderViewCapability
   { rvVideoConfigRef         ∷ IORef VideoConfig
   , rvWindowSizeRef          ∷ IORef (Int, Int)
+  , rvWindowPosRef           ∷ IORef (Int, Int)
   , rvFramebufferSizeRef     ∷ IORef (Int, Int)
   , rvPixelSnapRef           ∷ IORef Bool
   , rvTextureFilterRef       ∷ IORef TextureFilter
@@ -97,6 +98,7 @@ toRenderViewCapability ∷ EngineEnv → RenderViewCapability
 toRenderViewCapability env = RenderViewCapability
   { rvVideoConfigRef         = videoConfigRef env
   , rvWindowSizeRef          = windowSizeRef env
+  , rvWindowPosRef           = windowPosRef env
   , rvFramebufferSizeRef     = framebufferSizeRef env
   , rvPixelSnapRef           = pixelSnapRef env
   , rvTextureFilterRef       = textureFilterRef env

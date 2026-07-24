@@ -65,6 +65,7 @@ import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
+import qualified Test.Headless.Graphics.WindowMode as GraphicsWindowMode
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Construct.Corners as ConstructCorners
@@ -222,6 +223,7 @@ main = hspec $ do
     describe "Input.Inject" InputInject.spec
     describe "Input.WheelPolicy" InputWheelPolicy.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
+    describe "Graphics.WindowMode" GraphicsWindowMode.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
     describe "Construct.Corners" ConstructCorners.spec

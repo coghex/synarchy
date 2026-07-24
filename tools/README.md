@@ -490,14 +490,21 @@ through every branch. `fullscreen` is never chosen as the transition
 target — it switches the monitor's video mode; `borderless` reaches the
 same code shape without disrupting the desktop.
 
-It deliberately does NOT assert that the mode round trip restores the
-window's original geometry: it doesn't, due to the pre-existing engine
-bug in issue #907 (the cache guard in `handleSetWindowMode` reads a
-`vcWindowMode` that `setWindowModeFn` has already overwritten with the
-target mode). The script re-pins the window SIZE explicitly instead.
-Window POSITION is not settable from Lua, so running this from
-`windowed` can leave the window at `0,0` — drag it back. When #907 is
-fixed, that skipped assertion should become a real one.
+From a `windowed` start it is also the #907 regression gate: the round
+trip must land the window back on its exact pre-transition SIZE and
+POSITION. That bug had `handleSetWindowMode` decide whether to cache the
+windowed geometry by reading a `vcWindowMode` that `setWindowModeFn` had
+already overwritten with the target mode, so leaving `windowed` skipped
+the cache and coming back restored the borderless monitor geometry; the
+decision now keys off `wsAppliedMode`, the mode the render thread last
+actually applied. Position is read through `debug.getWindowPos()`, the
+narrow diagnostic seam added with that fix — `GLFW.getWindowPos` is
+main-thread-only, so the Lua thread reads a ref the render thread
+publishes, and the script forces a publish (a no-op `setResolution`)
+before sampling. From a `borderless` or `fullscreen` start the geometry
+is reported but not asserted: `defaultWindowConfig` only applies
+`fullscreen` at window creation, so a borderless-configured boot's
+reported mode and real window state disagree.
 
 Every setting it touches is captured from the LIVE config first and
 restored at the end — never to a hardcoded default, since a user's

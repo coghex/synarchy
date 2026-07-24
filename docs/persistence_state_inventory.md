@@ -41,6 +41,7 @@ the affected fields as unclassified.
 | `engineStateRef` | global | Rebuild | see §2 (`EngineState` fields classified individually) | the IORef itself is always freshly allocated at boot; it is never the pointer that's restored, only the value it comes to hold, which is why the interesting classification decisions live on `EngineState`'s own fields (§2), not here | none yet |
 | `videoConfigRef` | global | Exclude | — | local runtime config (`config/video.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `windowSizeRef` | global | Exclude | — | OS/window-owned | none yet |
+| `windowPosRef` | global | Exclude | — | OS/window-owned | none yet |
 | `windowStateRef` | global | Exclude | — | OS/window-owned | none yet |
 | `framebufferSizeRef` | global | Exclude | — | OS/window-owned | none yet |
 | `fpsRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |

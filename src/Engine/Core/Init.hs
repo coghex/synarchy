@@ -179,7 +179,9 @@ initializeEngineWith logBackend = do
   videoConfig ← loadVideoConfig logger videoConfigPath
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
+  windowPosRef ← newIORef (0, 0)
   windowStateRef ← newIORef defaultWindowState
+    { wsAppliedMode = bootAppliedWindowMode (vcWindowMode videoConfig) }
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   brightnessRef ← newIORef (vcBrightness videoConfig)
   pixelSnapRef ← newIORef (vcPixelSnap videoConfig)
@@ -260,6 +262,7 @@ initializeEngineWith logBackend = do
         , engineStateRef     = engineStateRef
         , videoConfigRef     = videoConfigRef
         , windowSizeRef      = windowSizeRef
+        , windowPosRef       = windowPosRef
         , windowStateRef     = windowStateRef
         , framebufferSizeRef = framebufferSizeRef
         , fpsRef             = fpsRef

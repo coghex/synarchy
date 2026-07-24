@@ -48,7 +48,7 @@ sameContainer projected live
 
 spec ∷ SpecWith EngineEnv
 spec = do
-  describe "toRenderCapability (all 20 render-gpu-asset fields)" $ do
+  describe "toRenderCapability (all 21 render-gpu-asset fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderCapability env)) (field env)
@@ -58,6 +58,7 @@ spec = do
     aliases "rcEngineStateRef"         rcEngineStateRef         engineStateRef
     aliases "rcVideoConfigRef"         rcVideoConfigRef         videoConfigRef
     aliases "rcWindowSizeRef"          rcWindowSizeRef          windowSizeRef
+    aliases "rcWindowPosRef"           rcWindowPosRef           windowPosRef
     aliases "rcWindowStateRef"         rcWindowStateRef         windowStateRef
     aliases "rcFramebufferSizeRef"     rcFramebufferSizeRef     framebufferSizeRef
     aliases "rcFpsRef"                 rcFpsRef                 fpsRef
@@ -74,7 +75,7 @@ spec = do
     aliases "rcCameraRef"              rcCameraRef              cameraRef
     aliases "rcUiCameraRef"            rcUiCameraRef            uiCameraRef
     -- The one non-IORef field in the set — an STM queue, and the
-    -- easiest of the 20 to omit from a hand-written check.
+    -- easiest of the 21 to omit from a hand-written check.
     aliases "rcScreenshotRequestQueue" rcScreenshotRequestQueue screenshotRequestQueue
     aliases "rcNextObjectIdRef"        rcNextObjectIdRef        nextObjectIdRef
 
@@ -85,26 +86,31 @@ spec = do
       sameContainer (rcTextureSystemRef a) (rcTextureSystemRef b)
       sameContainer (rcScreenshotRequestQueue a) (rcScreenshotRequestQueue b)
 
-    it "keeps the two same-typed size refs distinct" $ \env → do
-      -- windowSizeRef and framebufferSizeRef are the only two fields in
-      -- the set that share a type (IORef (Int, Int)), so they are the
-      -- one pair a projection could transpose and still COMPILE. The
+    it "keeps the three same-typed geometry refs distinct" $ \env → do
+      -- windowSizeRef, framebufferSizeRef and windowPosRef are the only
+      -- fields in the set that share a type (IORef (Int, Int)), so they
+      -- are the ones a projection could transpose and still COMPILE. The
       -- per-field examples above already pin each to its own named
       -- counterpart; this states the risk explicitly, and also asserts
-      -- the two are genuinely different containers (they hold
-      -- different values under a HiDPI/scaled framebuffer).
+      -- all three are genuinely different containers (they hold
+      -- different values under a HiDPI/scaled framebuffer, and a window
+      -- at any position but the origin).
       let cap = toRenderCapability env
       sameContainer (rcWindowSizeRef cap) (windowSizeRef env)
       sameContainer (rcFramebufferSizeRef cap) (framebufferSizeRef env)
+      sameContainer (rcWindowPosRef cap) (windowPosRef env)
       (windowSizeRef env == framebufferSizeRef env) `shouldBe` False
+      (windowSizeRef env == windowPosRef env) `shouldBe` False
+      (framebufferSizeRef env == windowPosRef env) `shouldBe` False
 
-  describe "toRenderViewCapability (the 12 worker-visible fields)" $ do
+  describe "toRenderViewCapability (the 13 worker-visible fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderViewCapability env)) (field env)
 
     aliases "rvVideoConfigRef"         rvVideoConfigRef         videoConfigRef
     aliases "rvWindowSizeRef"          rvWindowSizeRef          windowSizeRef
+    aliases "rvWindowPosRef"           rvWindowPosRef           windowPosRef
     aliases "rvFramebufferSizeRef"     rvFramebufferSizeRef     framebufferSizeRef
     aliases "rvPixelSnapRef"           rvPixelSnapRef           pixelSnapRef
     aliases "rvTextureFilterRef"       rvTextureFilterRef       textureFilterRef
@@ -126,5 +132,6 @@ spec = do
       sameContainer (rvTextureSystemRef view) (rcTextureSystemRef full)
       sameContainer (rvTextureSizeRef view) (rcTextureSizeRef full)
       sameContainer (rvCameraRef view) (rcCameraRef full)
+      sameContainer (rvWindowPosRef view) (rcWindowPosRef full)
       sameContainer (rvAssetPoolRef view) (rcAssetPoolRef full)
       sameContainer (rvScreenshotRequestQueue view) (rcScreenshotRequestQueue full)

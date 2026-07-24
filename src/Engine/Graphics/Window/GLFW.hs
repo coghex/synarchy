@@ -108,8 +108,10 @@ createWindow config = do
   liftIO $ do
     windowSize ← GLFW.getWindowSize win
     framebufferSize ← GLFW.getFramebufferSize win
+    windowPos ← GLFW.getWindowPos win
     writeIORef (rcWindowSizeRef (toRenderCapability env)) windowSize
     writeIORef (rcFramebufferSizeRef (toRenderCapability env)) framebufferSize
+    writeIORef (rcWindowPosRef (toRenderCapability env)) windowPos
     Q.writeQueue (luaQueue env) (LuaWindowResize (fst windowSize) (snd windowSize))
     Q.writeQueue (luaQueue env) (LuaFramebufferResize (fst framebufferSize) (snd framebufferSize))
     

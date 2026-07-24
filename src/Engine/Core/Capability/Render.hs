@@ -1,7 +1,7 @@
 {-# LANGUAGE UnicodeSyntax #-}
 -- | The @render-gpu-asset@ __main-render__ capability record of the
 --   @EngineEnv@ capability split (epic #537, issue #891 — E3): exactly
---   the 20 fields 'docs/engineenv_capability_inventory.md' SS5's
+--   the 21 fields 'docs/engineenv_capability_inventory.md' SS5's
 --   @render-gpu-asset@ table groups, in that table's own order.
 --
 --   Follows E1's convention (stated in full in
@@ -25,7 +25,7 @@
 --   So @render-gpu-asset@ is the first capability to be exposed as
 --   __two__ interfaces:
 --
---   * This module — the @MainRender@ interface, carrying all 20 fields
+--   * This module — the @MainRender@ interface, carrying all 21 fields
 --     including 'rcEngineStateRef'. Importable only by production
 --     modules classified @MainRender@ (see
 --     @tools/engine_env_capability_audit.py@'s
@@ -48,7 +48,7 @@
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'
---   and 'EngineState'\/'WindowState' types plus the 20 field
+--   and 'EngineState'\/'WindowState' types plus the 21 field
 --   accessors) rather than @EngineEnv(..)@ or a bare import, so it is
 --   not itself a full-@EngineEnv@-access consumer under
 --   @tools/engine_env_capability_audit.py@'s ratchet.
@@ -72,7 +72,7 @@ import Engine.Graphics.Vulkan.Sampler.Types (SamplerCache)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import Engine.Core.State
   ( EngineEnv, EngineState, WindowState
-  , engineStateRef, videoConfigRef, windowSizeRef, windowStateRef
+  , engineStateRef, videoConfigRef, windowSizeRef, windowPosRef, windowStateRef
   , framebufferSizeRef, fpsRef, brightnessRef, pixelSnapRef
   , textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
   , textureSystemRef, samplerCacheRef, textureSizeRef
@@ -100,6 +100,7 @@ data RenderCapability = RenderCapability
     rcEngineStateRef          ∷ IORef EngineState
   , rcVideoConfigRef          ∷ IORef VideoConfig
   , rcWindowSizeRef           ∷ IORef (Int, Int)
+  , rcWindowPosRef            ∷ IORef (Int, Int)
   , rcWindowStateRef          ∷ IORef WindowState
   , rcFramebufferSizeRef      ∷ IORef (Int, Int)
   , rcFpsRef                  ∷ IORef Double
@@ -126,6 +127,7 @@ toRenderCapability env = RenderCapability
   { rcEngineStateRef         = engineStateRef env
   , rcVideoConfigRef         = videoConfigRef env
   , rcWindowSizeRef          = windowSizeRef env
+  , rcWindowPosRef           = windowPosRef env
   , rcWindowStateRef         = windowStateRef env
   , rcFramebufferSizeRef     = framebufferSizeRef env
   , rcFpsRef                 = fpsRef env

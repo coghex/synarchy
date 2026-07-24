@@ -15,12 +15,12 @@ module Engine.Scripting.Lua.Message.Video
 
 import UPrelude
 import qualified Data.Text as T
-import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (readIORef, atomicModifyIORef', modifyIORef', writeIORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..)
-  , WindowState(..), luaQueue )
+  , WindowState(..), applyWindowModeTransition, luaQueue )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import qualified Engine.Core.Queue as Q
@@ -45,18 +45,42 @@ handleSetResolution w h = do
             -- the OS scales to framebuffer size on HiDPI displays.
             liftIO $ GLFW.setWindowSize win w h
             env ← ask
-            liftIO $ do
-                (winW, winH) ← GLFW.getWindowSize win
-                (fbW, fbH) ← GLFW.getFramebufferSize win
-                writeIORef (rcWindowSizeRef (toRenderCapability env)) (winW, winH)
-                writeIORef (rcFramebufferSizeRef (toRenderCapability env)) (fbW, fbH)
-
-                Q.writeQueue (luaQueue env) (LuaWindowResize winW winH)
-                Q.writeQueue (luaQueue env) (LuaFramebufferResize fbW fbH)
+            liftIO $ publishWindowGeometry (toRenderCapability env)
+                                           (luaQueue env) win
 
             logInfoM CatGraphics $ "Window resized to "
                 <> T.pack (show w) <> "x" <> T.pack (show h) <> " (logical pixels)"
 
+-- | Republish the live GLFW window\/framebuffer geometry: both size refs,
+--   the position ref, and both Lua resize notifications. Every successful
+--   mode branch (and 'handleSetResolution') ends here, exactly as each
+--   did inline before — #907 changed only the cache DECISION, never what
+--   a successful switch publishes.
+publishWindowGeometry ∷ RenderCapability → Q.Queue LuaMsg → GLFW.Window → IO ()
+publishWindowGeometry rc lq win = do
+    (winW, winH) ← GLFW.getWindowSize win
+    (fbW, fbH) ← GLFW.getFramebufferSize win
+    (wx, wy) ← GLFW.getWindowPos win
+    writeIORef (rcWindowSizeRef rc) (winW, winH)
+    writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
+    writeIORef (rcWindowPosRef rc) (wx, wy)
+    Q.writeQueue lq (LuaWindowResize winW winH)
+    Q.writeQueue lq (LuaFramebufferResize fbW fbH)
+
+-- | Apply a window-mode switch on the main render thread.
+--
+--   The windowed geometry cache is keyed off 'wsAppliedMode' — the mode
+--   THIS handler last applied — never off @vcWindowMode@. The Lua thread
+--   publishes the target mode into the video config the moment it
+--   enqueues the message, so reading it back here saw the mode being
+--   entered rather than the one being left: leaving @windowed@ skipped
+--   the cache entirely, and returning to @windowed@ overwrote it with the
+--   borderless monitor geometry and then "restored" that (#907).
+--
+--   'applyWindowModeTransition' is folded in only after the switch
+--   actually succeeded, from geometry sampled before it, so a branch that
+--   bails out (no monitor, no video mode) leaves both the cache and the
+--   applied mode untouched.
 handleSetWindowMode ∷ WindowMode → EngineM ε σ ()
 handleSetWindowMode mode = do
     state ← gets graphicsState
@@ -65,77 +89,54 @@ handleSetWindowMode mode = do
         Just (Window win) → do
             env ← ask
             liftIO $ do
-                -- Cache windowed geometry before switching away from it
-                currentConfig ← readIORef (rcVideoConfigRef (toRenderCapability env))
-                when (vcWindowMode currentConfig ≡ Windowed) $ do
-                    (wx, wy) ← GLFW.getWindowPos win
-                    (ww, wh) ← GLFW.getWindowSize win
-                    writeIORef (rcWindowStateRef (toRenderCapability env)) $ WindowState
-                        { wsWindowedPos  = (wx, wy)
-                        , wsWindowedSize = (ww, wh)
-                        }
+                let rc = toRenderCapability env
+                    publish = publishWindowGeometry rc (luaQueue env) win
+                -- Sampled while the window is still in the mode being left
+                livePos ← GLFW.getWindowPos win
+                liveSize ← GLFW.getWindowSize win
 
-                case mode of
+                applied ← case mode of
                     Fullscreen → do
                         mMonitor ← GLFW.getPrimaryMonitor
                         case mMonitor of
-                            Nothing → pure ()
+                            Nothing → pure False
                             Just monitor → do
                                 mMode ← GLFW.getVideoMode monitor
                                 case mMode of
-                                    Nothing → pure ()
+                                    Nothing → pure False
                                     Just vm → do
                                       GLFW.setFullscreen win monitor vm
-                                      (winW, winH) ← GLFW.getWindowSize win
-                                      (fbW, fbH) ← GLFW.getFramebufferSize win
-                                      let rc = toRenderCapability env
-                                      writeIORef (rcWindowSizeRef rc) (winW, winH)
-                                      writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
-                                      Q.writeQueue (luaQueue env)
-                                                   (LuaWindowResize winW winH)
-                                      Q.writeQueue (luaQueue env)
-                                                   (LuaFramebufferResize fbW fbH)
+                                      publish
+                                      pure True
 
                     BorderlessWindowed → do
                         mMonitor ← GLFW.getPrimaryMonitor
                         case mMonitor of
-                            Nothing → pure ()
+                            Nothing → pure False
                             Just monitor → do
                                 mMode ← GLFW.getVideoMode monitor
                                 case mMode of
-                                    Nothing → pure ()
+                                    Nothing → pure False
                                     Just vm → do
                                         let monW = GLFW.videoModeWidth vm
                                             monH = GLFW.videoModeHeight vm
                                         GLFW.setWindowed win monW monH 0 0
                                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
-                                        (winW, winH) ← GLFW.getWindowSize win
-                                        (fbW, fbH) ← GLFW.getFramebufferSize win
-                                        let rc = toRenderCapability env
-                                        writeIORef (rcWindowSizeRef rc) (winW, winH)
-                                        writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
-                                        Q.writeQueue (luaQueue env)
-                                                     (LuaWindowResize winW winH)
-                                        Q.writeQueue (luaQueue env)
-                                                     (LuaFramebufferResize fbW fbH)
-
-
+                                        publish
+                                        pure True
 
                     Windowed → do
-                        let rc = toRenderCapability env
                         ws ← readIORef (rcWindowStateRef rc)
                         let (wx, wy) = wsWindowedPos ws
                             (ww, wh) = wsWindowedSize ws
                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
                         GLFW.setWindowed win ww wh wx wy
-                        (winW, winH) ← GLFW.getWindowSize win
-                        (fbW, fbH) ← GLFW.getFramebufferSize win
-                        writeIORef (rcWindowSizeRef rc) (winW, winH)
-                        writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
-                        Q.writeQueue (luaQueue env)
-                                     (LuaWindowResize winW winH)
-                        Q.writeQueue (luaQueue env)
-                                     (LuaFramebufferResize fbW fbH)
+                        publish
+                        pure True
+
+                when applied $
+                    modifyIORef' (rcWindowStateRef rc)
+                                 (applyWindowModeTransition mode livePos liveSize)
 
 
 handleSetVSync ∷ Bool → EngineM ε σ ()
