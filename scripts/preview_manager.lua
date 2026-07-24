@@ -335,6 +335,11 @@ function previewManager.dump()
         loadedPaths = loadedPaths,
     }
     if mode == "list" then
+        -- The FULL discovered entry list, not just entryCount + the
+        -- currently visible rows (#886 round-4 review) — a probe
+        -- comparing only a count and the first/visible labels can't
+        -- catch an omission or substitution further down the list.
+        out.entries = entries
         out.entryCount = entries and #entries or 0
         out.selected = {
             label = assetBrowser.getSelectedLabel(browserId),

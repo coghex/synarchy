@@ -486,10 +486,13 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
   `debug.lua` are, despite being `engine.loadScript`-loaded, not
   `require`d) reports `mode` (`"list"`/`"item"`/`"placeholder"`), `state`
   (`"loading"`/`"ready"`/`"empty"`), the current `selected` entry, and in
-  list mode `entryCount`, `scrollOffset`, and per-visible-row interactive
-  bounds/handles (`rows`, `scripts/ui/list.lua`'s existing F3 dump
-  contract) — enough to drive real `input.click`/`input.scroll` against a
-  located row without ever hardcoding a screen coordinate.
+  list mode the FULL ordered `entries` list (not just its `entryCount`
+  — a probe needs the complete list to catch an omission/substitution
+  anywhere past the visible/selected rows), `scrollOffset`, and
+  per-visible-row interactive bounds/handles (`rows`,
+  `scripts/ui/list.lua`'s existing F3 dump contract) — enough to drive
+  real `input.click`/`input.scroll` against a located row without ever
+  hardcoding a screen coordinate.
 
 Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
 check above the "always opens a real window" line) and

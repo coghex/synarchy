@@ -193,6 +193,17 @@ def check_simple_list_mode(port: int) -> bool:
                          entry_count == len(expected),
                          f"entryCount={entry_count} expected={len(expected)}")
 
+        # The FULL ordered entry list, not just the count (#886 round-4
+        # review) — a count-only check can't catch an omission or
+        # substitution anywhere past the visible/selected rows.
+        dumped_entries = [e.get("label") for e in (d.get("entries") or [])]
+        ok_entries = check("full discovered entry list matches the "
+                          "filesystem-derived expectation exactly, in order",
+                          dumped_entries == expected,
+                          f"dumped={dumped_entries[:5]}...({len(dumped_entries)}) "
+                          f"expected={expected[:5]}...({len(expected)})"
+                          if dumped_entries != expected else "")
+
         selected = d.get("selected") or {}
         ok_first = check("first entry auto-selected",
                          selected.get("label") == (expected[0] if expected else None),
@@ -306,8 +317,8 @@ def check_simple_list_mode(port: int) -> bool:
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
-        return all([ok_filter, ok_mode, ok_count, ok_first, ok_ready, ok_click,
-                    ok_scroll, ok_resize_bounds, ok_resize_selection,
+        return all([ok_filter, ok_mode, ok_count, ok_entries, ok_first, ok_ready,
+                    ok_click, ok_scroll, ok_resize_bounds, ok_resize_selection,
                     ok_resize_scroll, ok_grow_fit, ok_shrink_rows, ok_shrink_fit,
                     ok_trimmed, ok_no_gameplay])
     finally:
