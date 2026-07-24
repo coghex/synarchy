@@ -28,7 +28,7 @@ Pipeline:
 
 Usage:
   python3 tools/playtest/critic.py <trace_dir>            # writes into the trace dir
-  python3 tools/playtest/critic.py <trace_dir> --out DIR --model claude-opus-4-8
+  python3 tools/playtest/critic.py <trace_dir> --out DIR --model claude-opus-5
   python3 tools/playtest/critic.py --selftest             # offline, no API key
   python3 tools/playtest/critic.py --eval                 # canned trace + REAL model
                                                           # (needs ANTHROPIC_API_KEY)
@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from trace import load_meta, load_turns  # noqa: E402
 
-DEFAULT_MODEL = "claude-opus-4-8"   # strong + multimodal; runs once per session
+DEFAULT_MODEL = "claude-opus-5"   # strong + multimodal; runs once per session
 DEFAULT_EFFORT = "high"
 DEFAULT_MAX_TOKENS = 16000
 DEFAULT_MAX_FRAMES = 8
