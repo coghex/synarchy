@@ -329,6 +329,7 @@ library
                      Engine.Core.Init
                      Engine.Core.Monad
                      Engine.Core.State
+                     Engine.Core.Capability.Core
                      Engine.Save.Barrier
                      Engine.Load.Status
                      Engine.Core.Types
@@ -1064,6 +1065,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Core.ConfigState
+                   Test.Headless.Core.LogMonad
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge

@@ -22,6 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from engine_env_capability_audit import (  # type: ignore
     audit, parse_inventory, ENGINE_ENV_FILE, ENGINE_ENV_PATTERN,
+    classify_state_import, parse_temporary_boundary, audit_ratchet,
+    scan_production_unrestricted_importers,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -433,6 +435,224 @@ def test_parse_inventory_only_scans_section_5():
            "even if it reuses a real capability heading")
 
 
+# ----- SS6 full-access ratchet (issue #889) -----------------------------
+
+
+def test_bare_import_detected():
+    src = "module Foo where\nimport Engine.Core.State\nfoo ∷ Int\nfoo = 1\n"
+    expect(classify_state_import(src) == "bare",
+           "a plain `import Engine.Core.State` with no import list at all "
+           "must classify as bare (grants full access to every export)")
+
+
+def test_bare_import_qualified_and_aliased_detected():
+    cases = (
+        "import qualified Engine.Core.State\n",
+        "import Engine.Core.State as ST\n",
+        "import qualified Engine.Core.State as ST\n",
+    )
+    for src in cases:
+        full = "module Foo where\n" + src + "foo ∷ Int\nfoo = 1\n"
+        expect(classify_state_import(full) == "bare",
+               f"a qualified and/or aliased bare import must still "
+               f"classify as bare: {src!r}")
+
+
+def test_bare_import_multiline_detected():
+    src = "module Foo where\nimport\n  Engine.Core.State\nfoo ∷ Int\nfoo = 1\n"
+    expect(classify_state_import(src) == "bare",
+           "a bare import whose module name wraps onto a continuation "
+           "line must still classify as bare")
+
+
+def test_bare_import_as_last_import_not_swallowed_by_later_code():
+    # A bare import that happens to be the FILE'S LAST import has no
+    # following `^import` line to bound it against -- naively scanning
+    # "from this import to the next import-or-EOF" would swallow the
+    # entire rest of the module (every subsequent function body's
+    # parentheses included) and misreport it as non-bare. The real
+    # Engine.Core.Monad.hs is exactly this shape.
+    src = (
+        "module Foo where\n"
+        "import Data.IORef (readIORef)\n"
+        "import Engine.Core.State\n"
+        "\n"
+        "-- | some docs with (parens) and (more parens)\n"
+        "data Something = Something { field ∷ Int → (Int, Int) }\n"
+    )
+    expect(classify_state_import(src) == "bare",
+           "a bare import that is the file's last import must not be "
+           "misread as narrow merely because later top-level code "
+           "contains parentheses")
+
+
+def test_explicit_engineenv_ordinary_qualified_and_multiline_detected():
+    cases = (
+        "import Engine.Core.State (EngineEnv(..))\n",
+        "import qualified Engine.Core.State as ST (EngineEnv(..))\n",
+        "import Engine.Core.State (SomeOtherType, EngineEnv (..))\n",
+        "import Engine.Core.State\n  ( EngineEnv(..)\n  , SomeOtherType\n  )\n",
+    )
+    for src in cases:
+        full = "module Foo where\n" + src + "foo ∷ Int\nfoo = 1\n"
+        expect(classify_state_import(full) == "explicit",
+               f"an explicit EngineEnv(..) import (ordinary, qualified, "
+               f"aliased, or multiline) must classify as explicit: {src!r}")
+
+
+def test_narrow_import_not_classified_unrestricted():
+    cases = (
+        "import Engine.Core.State (EngineEnv)\n",
+        "import Engine.Core.State (loggerRef)\n",
+        "import Engine.Core.State (EngineEnv, loggerRef)\n",
+    )
+    for src in cases:
+        full = "module Foo where\n" + src + "foo ∷ Int\nfoo = 1\n"
+        expect(classify_state_import(full) == "narrow",
+               f"a strictly narrower import (bare EngineEnv type or "
+               f"individual field accessors, no (..)) must not classify "
+               f"as unrestricted: {src!r}")
+
+
+def test_no_state_import_returns_none():
+    src = "module Foo where\nimport Data.Text (Text)\nfoo ∷ Int\nfoo = 1\n"
+    expect(classify_state_import(src) is None,
+           "a file that never imports Engine.Core.State must classify as "
+           "None, not bare/explicit/narrow")
+
+
+FAKE_INVENTORY_6_2 = """\
+### 6.2 Temporary compatibility boundary (production)
+
+| Target capability | Modules | Roadmap entry |
+|---|---|---|
+| `core-init` | `Foo.Bar`, `Foo.Baz` | §7.1 |
+| `save-load-coordination` | *(none — every module whose dominant field \
+usage is save/load coordination is already a permanent orchestration \
+exception; `Some.Explanatory.Module` was previously assigned here for its \
+`someField` read, but its dominant usage is elsewhere)* | §7.8 |
+
+### 6.3 Test-only exceptions
+
+not part of SS6.2 at all
+"""
+
+
+def test_section_6_2_parser_extracts_real_assignments():
+    parsed = parse_temporary_boundary(FAKE_INVENTORY_6_2)
+    expect(parsed.get("core-init") == {"Foo.Bar", "Foo.Baz"},
+           "a normal SS6.2 row must parse its backtick-quoted module names")
+
+
+def test_section_6_2_parser_ignores_explanatory_backtick_references():
+    parsed = parse_temporary_boundary(FAKE_INVENTORY_6_2)
+    expect(parsed.get("save-load-coordination") == set(),
+           "a Modules cell that is pure explanatory prose (wrapped "
+           "entirely in *(...)*) must parse to zero assigned modules, "
+           "even though it cites backtick-quoted names for context -- "
+           "the real save-load-coordination row is exactly this shape")
+
+
+def test_new_full_access_module_rejected():
+    permanent = frozenset({"Perm.Mod"})
+    ceiling = {"core-init": frozenset({"Temp.Mod"})}
+    doc = {"core-init": {"Temp.Mod"}}
+    unrestricted = {"Perm.Mod", "Temp.Mod", "New.Unclassified.Mod"}
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("New.Unclassified.Mod" in v for v in violations),
+           "a module with unrestricted access that is neither permanent "
+           "nor in the checked-in temporary ceiling must be rejected")
+
+
+def test_shrinking_migration_accepted():
+    # A migration narrows Temp.B away (it's no longer unrestricted at
+    # all) and the checked-in ceiling + SS6.2 doc are updated together
+    # to drop it -- this must be a clean, zero-violation migration.
+    permanent = frozenset({"Perm.Mod"})
+    ceiling = {"core-init": frozenset({"Temp.A"})}
+    doc = {"core-init": {"Temp.A"}}
+    unrestricted = {"Perm.Mod", "Temp.A"}
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(violations == [],
+           "a migration that shrinks the live temporary set, with the "
+           "checked-in ceiling and SS6.2 doc updated in tandem, must be "
+           "accepted with zero violations")
+
+
+def test_documented_but_ungoverned_addition_still_rejected():
+    # Someone adds real unrestricted access to a new module AND
+    # documents it in SS6.2, but never grows the checked-in
+    # TEMPORARY_CEILING itself -- the strict ceiling must still reject
+    # it; documentation alone never admits a new full-access module.
+    permanent = frozenset({"Perm.Mod"})
+    ceiling = {"core-init": frozenset({"Temp.A"})}
+    doc = {"core-init": {"Temp.A", "Sneaky.New.Mod"}}
+    unrestricted = {"Perm.Mod", "Temp.A", "Sneaky.New.Mod"}
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("Sneaky.New.Mod" in v for v in violations),
+           "a new full-access module must still be rejected even when "
+           "SS6.2 is ALSO edited to document it -- only growing the "
+           "checked-in ceiling itself admits a new temporary module")
+
+
+def test_stale_ceiling_entry_rejected():
+    # A migration narrows a module (it no longer has live unrestricted
+    # access) but never shrinks the checked-in ceiling or its SS6.2
+    # row to match -- the ratchet must reject this drift in EITHER
+    # direction, not just growth: SS6.2's accounting must stay an
+    # exact mirror of the live temporary set, not merely an upper bound.
+    permanent = frozenset({"Perm.Mod"})
+    ceiling = {"core-init": frozenset({"Temp.A", "Temp.Stale"})}
+    doc = {"core-init": {"Temp.A", "Temp.Stale"}}
+    unrestricted = {"Perm.Mod", "Temp.A"}  # Temp.Stale no longer unrestricted
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("Temp.Stale" in v for v in violations),
+           "a checked-in ceiling/SS6.2 entry that no longer has live "
+           "unrestricted access must be flagged as stale, not silently "
+           "tolerated as a mere upper bound")
+
+
+def test_stale_permanent_importer_rejected():
+    # A permanent (SS6.1) module is narrowed by a later change (no
+    # longer live-unrestricted) but PERMANENT_IMPORTERS is never
+    # updated to drop it -- this must fail just like a stale temporary
+    # ceiling entry does; the permanent allowlist is not exempt from
+    # the live-scan agreement requirement.
+    permanent = frozenset({"Perm.Stale"})
+    ceiling = {"core-init": frozenset({"Temp.Live"})}
+    doc = {"core-init": {"Temp.Live"}}
+    unrestricted = {"Temp.Live"}  # Perm.Stale no longer unrestricted
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("Perm.Stale" in v for v in violations),
+           "a checked-in PERMANENT_IMPORTERS entry that no longer has live "
+           "unrestricted access must be flagged as stale, matching the "
+           "temporary-ceiling side's same requirement")
+
+
+def test_ceiling_and_doc_mismatch_detected():
+    permanent: frozenset[str] = frozenset()
+    ceiling = {"core-init": frozenset({"Temp.A", "Temp.B"})}
+    doc = {"core-init": {"Temp.A"}}  # Temp.B undocumented
+    unrestricted = {"Temp.A", "Temp.B"}
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("Temp.B" in v and "core-init" in v for v in violations),
+           "a checked-in ceiling entry missing from SS6.2's documented "
+           "accounting must be flagged as a doc/ceiling mismatch")
+
+
+def test_real_repo_ratchet_consistency():
+    real_inventory = (REPO_ROOT / "docs" /
+                       "engineenv_capability_inventory.md").read_text(encoding="utf-8")
+    unrestricted = scan_production_unrestricted_importers(REPO_ROOT)
+    doc_temporary = parse_temporary_boundary(real_inventory)
+    violations = audit_ratchet(unrestricted, doc_temporary)
+    expect(violations == [],
+           f"the real repo's live-scanned production importer set, the "
+           f"checked-in PERMANENT_IMPORTERS/TEMPORARY_CEILING constants, "
+           f"and SS6.2 as documented should all agree after issue #889's "
+           f"core-init migration, got: {violations}")
+
+
 def test_audit_against_the_real_repo():
     real_source = (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8")
     real_inventory = (REPO_ROOT / "docs" /
@@ -475,6 +695,22 @@ def main() -> int:
         test_valid_multi_reader_multi_writer_field_passes,
         test_parse_inventory_only_scans_section_5,
         test_audit_against_the_real_repo,
+        test_bare_import_detected,
+        test_bare_import_qualified_and_aliased_detected,
+        test_bare_import_multiline_detected,
+        test_bare_import_as_last_import_not_swallowed_by_later_code,
+        test_explicit_engineenv_ordinary_qualified_and_multiline_detected,
+        test_narrow_import_not_classified_unrestricted,
+        test_no_state_import_returns_none,
+        test_section_6_2_parser_extracts_real_assignments,
+        test_section_6_2_parser_ignores_explanatory_backtick_references,
+        test_new_full_access_module_rejected,
+        test_shrinking_migration_accepted,
+        test_documented_but_ungoverned_addition_still_rejected,
+        test_stale_ceiling_entry_rejected,
+        test_stale_permanent_importer_rejected,
+        test_ceiling_and_doc_mismatch_detected,
+        test_real_repo_ratchet_consistency,
     ]
 
     for t in tests:

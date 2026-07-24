@@ -397,39 +397,50 @@ again afterward.
 
 ## 6. Full-`EngineEnv` compatibility boundary
 
-Today, 222 files under `src/`/`app/` import `Engine.Core.State` in
-some form. Of those, 208 have genuine unrestricted field-level access:
-`Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 207 files that import it either as an explicit
-`EngineEnv(..)` (in any combination with other names on the same
-import line) or as a **bare** `import Engine.Core.State` with no
-explicit list at all — Haskell grants a bare import full access to
-everything the target module exports, `EngineEnv(..)` included, so
-this is exactly as unrestricted as the explicit form. An earlier
-iteration of this document counted only the explicit-`EngineEnv(..)`
-form (165 files) and missed the 42 bare-import files entirely; the 208
-figure below is the corrected, complete count, verified with:
+**Live since issue #889 (E1, landed):** 223 files under `src/`/`app/`
+import `Engine.Core.State` in some form. Of those, 207 have genuine
+unrestricted field-level access: `Engine.Core.State.hs` itself (which
+defines `EngineEnv` and therefore imports nothing) plus 206 files that
+import it either as an explicit `EngineEnv(..)` (in any combination
+with other names on the same import line) or as a **bare**
+`import Engine.Core.State` with no explicit list at all — Haskell
+grants a bare import full access to everything the target module
+exports, `EngineEnv(..)` included, so this is exactly as unrestricted
+as the explicit form. Both forms are recognized regardless of
+`qualified`/`as`-aliasing or the import spanning multiple lines;
+`tools/engine_env_capability_audit.py`'s SS6 ratchet enforces
+this exact same two-shape definition against `src/`/`app/` on every
+run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 222
+grep -rl "import Engine.Core.State" src app | wc -l                    # 223
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 207 have full access, 15 do not:
-#   13 × `Engine.Scripting.Lua.API.Register.*` (import `(EngineEnv)`,
+# script logic below; 206 have full access, 17 do not:
+#   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
+#        itself plus its 12 `Register.*` submodules; import `(EngineEnv)`,
 #        the bare TYPE with no constructor/field access — opaque)
 #   1  × `Engine.Core.Resource` (imports only the `loggerRef` accessor)
 #   1  × `Engine.Scene.Graph` (imports `EngineState(..)`, not `EngineEnv`)
+#   1  × `Engine.Core.Log.Monad` (narrowed by #889 — imports only the
+#        bare `EngineEnv` type, deriving everything through
+#        `Engine.Core.Capability.Core.toCoreCapability` instead of a
+#        direct field accessor)
+#   1  × `Engine.Core.Capability.Core` (new by #889 — the `core-init`
+#        capability-record projection module itself; imports the bare
+#        `EngineEnv` type plus its four `core-init` field accessors,
+#        never `EngineEnv(..)`)
 ```
 
-The remaining 15 files that import `Engine.Core.State` (222 − 207) are
+The remaining 17 files that import `Engine.Core.State` (223 − 206) are
 exactly the ones enumerated above — none of them are consumers this
-document needs to classify: an opaque `EngineEnv` type import, a
-single named field accessor, or an unrelated `EngineState` import none
-grant the unrestricted access this section is about. Adding back
-`Engine.Core.State.hs` itself (the definer, which imports nothing and
-so is outside the 222/207/15 accounting entirely) gives the 208 total
-full-access modules this section classifies.
+document needs to classify: an opaque `EngineEnv` type import, one or
+more individually named field accessors, or an unrelated `EngineState`
+import none grant the unrestricted access this section is about.
+Adding back `Engine.Core.State.hs` itself (the definer, which imports
+nothing and so is outside the 223/206/17 accounting entirely) gives
+the 207 total full-access modules this section classifies.
 
 This section names the intended *end state*: what should still
 legitimately construct, carry, or inspect the **complete** `EngineEnv`
@@ -437,7 +448,7 @@ once the epic's capability split has landed, versus what merely has
 full access today because nothing narrower exists yet. It is
 deliberately narrow — narrow enough to become the literal allowlist
 for #537's final unrestricted-access audit (per requirement 6) — which
-means most of today's 208 full-access files are **not** listed as
+means most of today's 207 full-access files are **not** listed as
 permanent below; they belong in the temporary section (§6.2), each
 assigned individually (no wildcards, no catch-all) to one of §7's
 bounded follow-up issues.
@@ -463,12 +474,18 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 25 permanent modules (24 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 208 − 25 = 183 full-access
+which imports nothing). The remaining 207 − 25 = 182 full-access
 modules are temporary, enumerated exhaustively in §6.2.
+
+Since issue #889, this permanent allowlist and §6.2's temporary
+accounting are also enforced live: `tools/engine_env_capability_audit.py`'s
+checked-in `PERMANENT_IMPORTERS`/`TEMPORARY_CEILING` constants mirror
+this document's §6.1/§6.2 exactly, and the audit fails if the
+live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 183 remaining full-access modules is individually
+Every one of the 182 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -523,7 +540,7 @@ directory-name guessing:
 
 | Target capability | Modules (every current temporary full-`EngineEnv` consumer, individually assigned) | Roadmap entry |
 |---|---|---|
-| `core-init` | `Engine.Core.Log.Monad`, `Engine.Graphics.Vulkan.Command.Record`, `Engine.Scripting.Lua.API.Log` | §7.1 |
+| `core-init` | `Engine.Graphics.Vulkan.Command.Record`, `Engine.Scripting.Lua.API.Log` | §7.1 |
 | `render-gpu-asset` | `Building.HitTest`, `Building.Render`, `Engine.Asset.Manager`, `Engine.Graphics.Font.Draw`, `Engine.Graphics.Font.Load`, `Engine.Graphics.Font.Upload`, `Engine.Graphics.Vulkan.Command.Sprite`, `Engine.Graphics.Vulkan.Command.Text`, `Engine.Graphics.Vulkan.Framebuffer`, `Engine.Graphics.Vulkan.Init`, `Engine.Graphics.Vulkan.MSAA`, `Engine.Graphics.Vulkan.Offscreen`, `Engine.Graphics.Vulkan.Pipeline`, `Engine.Graphics.Vulkan.Pipeline.Bindless`, `Engine.Graphics.Vulkan.Recreate`, `Engine.Graphics.Vulkan.Swapchain`, `Engine.Graphics.Vulkan.Sync`, `Engine.Graphics.Vulkan.Texture.Bindless`, `Engine.Graphics.Vulkan.Texture.DefaultFaceMap`, `Engine.Graphics.Window.GLFW`, `Engine.Scene.Batch.Text`, `Engine.Scene.Render`, `Engine.Scripting.Lua.API.Camera`, `Engine.Scripting.Lua.API.Config`, `Engine.Scripting.Lua.API.Graphics`, `Engine.Scripting.Lua.API.Input`, `Engine.Scripting.Lua.API.Items.Render`, `Engine.Scripting.Lua.API.Screenshot`, `Engine.Scripting.Lua.API.Text`, `Engine.Scripting.Lua.API.UI.Placement`, `Engine.Scripting.Lua.API.WorldQuery.Pick`, `Engine.Scripting.Lua.API.YamlTextures`, `Engine.Scripting.Lua.Message.Texture`, `Engine.Scripting.Lua.Message.Video`, `Engine.Scripting.Lua.Message.WorldTexture`, `Structure.Render`, `UI.Render`, `Unit.HitTest`, `World.Render`, `World.Render.BloodQuads`, `World.Render.CursorQuads`, `World.Render.GroundItemQuads`, `World.Render.Quads`, `World.Render.SpoilQuads`, `World.Render.Zoom.Quads` | §7.2 |
 | `input-lua-transport` | `Engine.Input.Callback`, `Engine.Input.Thread`, `Engine.Input.Thread.Char`, `Engine.Input.Thread.Dispatch`, `Engine.Input.Thread.Keyboard`, `Engine.Input.Thread.Mouse.Activation`, `Engine.Input.Thread.Scroll`, `Engine.Scripting.Lua.API.InputInject`, `Engine.Scripting.Lua.API.Keybinds`, `World.Log`, `World.Thread.Helpers` | §7.3 |
 | `world-sim-render-handoff` | `Blood.Impact`, `Engine.Scripting.Lua.API.Blood`, `Engine.Scripting.Lua.API.Chop`, `Engine.Scripting.Lua.API.Construct`, `Engine.Scripting.Lua.API.Core`, `Engine.Scripting.Lua.API.Flora`, `Engine.Scripting.Lua.API.Forage.Crop`, `Engine.Scripting.Lua.API.Forage.Lookup`, `Engine.Scripting.Lua.API.Forage.Query`, `Engine.Scripting.Lua.API.Plant`, `Engine.Scripting.Lua.API.Structure`, `Engine.Scripting.Lua.API.Till`, `Engine.Scripting.Lua.API.World.Clock`, `Engine.Scripting.Lua.API.World.Cursor`, `Engine.Scripting.Lua.API.World.Designation`, `Engine.Scripting.Lua.API.World.Edit`, `Engine.Scripting.Lua.API.World.GenConfig`, `Engine.Scripting.Lua.API.World.Lifecycle`, `Engine.Scripting.Lua.API.World.Query`, `Engine.Scripting.Lua.API.World.Tools`, `Engine.Scripting.Lua.API.WorldQuery.Chunk`, `Engine.Scripting.Lua.API.WorldQuery.Climate`, `Engine.Scripting.Lua.API.WorldQuery.Fluid`, `Engine.Scripting.Lua.API.WorldQuery.Lookup`, `Engine.Scripting.Lua.API.WorldQuery.River`, `Engine.Scripting.Lua.API.WorldQuery.Terrain`, `Sim.Thread`, `Unit.LineOfSight`, `Unit.Render`, `Unit.Thread.Movement.PathAdvance`, `World.Render.Zoom.Background`, `World.Thread`, `World.Thread.ChunkLoading`, `World.Thread.Command`, `World.Thread.Command.Basic`, `World.Thread.Command.Cursor.Chop`, `World.Thread.Command.Cursor.Construct`, `World.Thread.Command.Cursor.Mine`, `World.Thread.Command.Cursor.Plant`, `World.Thread.Command.Cursor.Select`, `World.Thread.Command.Cursor.Till`, `World.Thread.Command.Edit.Fluid`, `World.Thread.Command.Edit.Structure`, `World.Thread.Command.Edit.Sync`, `World.Thread.Command.Edit.Terrain`, `World.Thread.Command.Edit.Vegetation`, `World.Thread.Command.Init`, `World.Thread.Command.Location`, `World.Thread.Command.Texture`, `World.Thread.Command.Time`, `World.Thread.Command.UI`, `World.Thread.Cursor`, `World.Thread.Time` | §7.4 |
@@ -532,8 +549,8 @@ directory-name guessing:
 | `ui-hud-events` | `Engine.Input.Thread.Mouse`, `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.Focus`, `Engine.Scripting.Lua.API.PlayerEvent`, `Engine.Scripting.Lua.API.UI.Element`, `Engine.Scripting.Lua.API.UI.Focus`, `Engine.Scripting.Lua.API.UI.Hierarchy`, `Engine.Scripting.Lua.API.UI.Page`, `Engine.Scripting.Lua.API.UI.Property`, `Engine.Scripting.Lua.API.UI.TextInput`, `Engine.Scripting.Lua.API.UI.Tooltip`, `Engine.Scripting.Lua.Message.Scene`, `UI.Tooltip.State` | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (3 + 45 + 11 + 53 + 49 + 9 + 13 + 0 = 183) match
-208 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 45 + 11 + 53 + 49 + 9 + 13 + 0 = 182) match
+207 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -560,19 +577,39 @@ scope, per the issue text).
 
 ### 7.1 `core-init`
 
+- **Landed by #889.** `Engine.Core.Capability.Core` introduces
+  `CoreCapability` (`ccEngineConfig`, `ccLoggerRef`, `ccLifecycleRef`,
+  `ccInputThreadActiveRef`) and its total `toCoreCapability ∷ EngineEnv
+  → CoreCapability` projection, establishing the capability-record
+  convention E2+ follow. `Engine.Core.Log.Monad` — §6.2's one
+  `core-init` module whose migration this issue actually required — no
+  longer imports `EngineEnv(..)`/a bare `Engine.Core.State`: its
+  capability-scoped primitives (`getLoggerFor`, `logInfoFor`, ...) take
+  `CoreCapability` explicitly, and its original `MonadReader EngineEnv`
+  names (`logInfoM`, ...) are now thin wrappers over them, so none of
+  the ~440 existing production call sites needed to change.
+  `Engine.Loop.Shutdown`'s core-only tail (logger flush + lifecycle
+  write) is similarly narrowed into a `finalizeCoreShutdown ∷
+  CoreCapability → ...` helper, while `shutdownEngine` itself stays a
+  permanent, whole-`EngineEnv` orchestration function (§6.1) — the
+  rest of it still needs graphics/window/thread capabilities.
+  `Engine.Core.Init`'s own helpers already took narrower explicit
+  values before this issue and needed no change. §6.2's `core-init` row
+  still names `Engine.Graphics.Vulkan.Command.Record` and
+  `Engine.Scripting.Lua.API.Log` — this issue did not migrate them;
+  they remain live temporary `core-init` consumers for a later child.
 - **Dependencies:** None — every other capability group depends on
   this one being available first (the logger and lifecycle flag are
   read from every thread), so this is necessarily the first migration,
   not something that can be deferred.
-- **Independent migration:** Yes, and it should go first.
-- **Follow-up scope:** Introduce a `CoreCapability` record
-  (`engineConfig`, `loggerRef`, `lifecycleRef`, `inputThreadActiveRef`)
-  and narrow `Engine.Core.Init`/`Engine.Loop.Shutdown`'s own internal
-  helpers to accept it where they don't also need other capabilities.
-  Given how universally `loggerRef`/`lifecycleRef` are read, most call
-  sites will still need to reach them through a broader carrier for a
-  while — this migration is more about establishing the record and
-  proving the pattern than about shrinking many imports immediately.
+- **Independent migration:** Yes, and it went first.
+- **Follow-up scope (remaining):** Narrow
+  `Engine.Graphics.Vulkan.Command.Record`/`Engine.Scripting.Lua.API.Log`
+  to `CoreCapability` where feasible. Given how universally
+  `loggerRef`/`lifecycleRef` are read, most call sites will still need
+  to reach them through a broader carrier for a while yet — this
+  migration was about establishing the record and proving the pattern
+  on one real consumer, not about shrinking every import immediately.
 
 ### 7.2 `render-gpu-asset`
 

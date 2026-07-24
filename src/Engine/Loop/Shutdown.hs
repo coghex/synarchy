@@ -10,6 +10,7 @@ import Engine.Core.Log (shutdownLogger, LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Core.Monad
 import Engine.Core.State
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Thread (ThreadState, shutdownThread)
 import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Graphics.Window.Types (Window(..))
@@ -108,15 +109,22 @@ shutdownEngine mWindow mUnitThreadState mWorldThreadState
     logDebugM CatSystem "Shutting down Lua thread..."
     liftIO $ shutdownThread luaThreadState
 
-    -- shut down logger
+    -- shut down logger, then mark the engine stopped -- both are
+    -- pure core-init capability (issue #889): nothing here needs
+    -- graphics/window/thread state, unlike everything above it.
     logDebugM CatSystem "Shutting down logger..."
-    logger ← liftIO $ readIORef $ loggerRef env
-    liftIO $ shutdownLogger logger
-    
-    -- Mark engine as stopped
-    liftIO $ writeIORef (lifecycleRef env) EngineStopped
-    
+    finalizeCoreShutdown (toCoreCapability env)
+
     logDebugM CatSystem "Engine shutdown complete"
+
+-- | Flush the logger and mark the engine lifecycle stopped -- the
+--   'core-init'-only tail of 'shutdownEngine', narrowed to
+--   'CoreCapability' rather than the full 'EngineEnv' (issue #889).
+finalizeCoreShutdown ∷ MonadIO m ⇒ CoreCapability → m ()
+finalizeCoreShutdown cap = liftIO $ do
+  logger ← readIORef (ccLoggerRef cap)
+  shutdownLogger logger
+  writeIORef (ccLifecycleRef cap) EngineStopped
 
 -- | Final continuation for 'runEngineM': pass the result through
 --   unchanged. Error handling (thread shutdown, logger flush, failure
