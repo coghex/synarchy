@@ -253,7 +253,7 @@ it is recorded on the turn (`stuck: true`) before the session ends.
 
 ```bash
 python3 tools/playtest/critic.py tools/playtest/sessions/<dir>
-python3 tools/playtest/critic.py <dir> --model claude-opus-4-8 --effort high
+python3 tools/playtest/critic.py <dir> --model claude-opus-5 --effort high
 python3 tools/playtest/critic.py --selftest   # offline, no API key
 python3 tools/playtest/critic.py --eval       # REAL model vs the canned
                                               # planted-issue trace (needs a key)
@@ -265,7 +265,7 @@ the canonical cross-source joins (action-outcome `rejected`/`noop`/
 click-hit-no-widget ⇒ phantom-affordance; player-claims-nothing-
 happened while the oracle shows feedback ⇒ feedback-was-shown; stuck
 loops; crash) and enumerates **friction candidates** with stable ids.
-Adjudication (default `claude-opus-4-8`, high effort — cost is
+Adjudication (default `claude-opus-5`, high effort — cost is
 per-session, not per-turn) is **batched** so that every candidate's
 own screenshot is actually shown in the call that judges it:
 `--max-frames` is a per-call budget, and a tight budget means more
