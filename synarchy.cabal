@@ -331,6 +331,8 @@ library
                      Engine.Core.State
                      Engine.Core.Capability.Core
                      Engine.Core.Capability.ContentRegistries
+                     Engine.Core.Capability.Render
+                     Engine.Core.Capability.RenderView
                      Engine.Save.Barrier
                      Engine.Load.Status
                      Engine.Preview.Discovery
@@ -1082,6 +1084,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Capability.Render
                    Test.Headless.Lua.DebugQueue
                    Test.Headless.Lua.RenderQueue
                    Test.Headless.Lua.PreviewGeneration
