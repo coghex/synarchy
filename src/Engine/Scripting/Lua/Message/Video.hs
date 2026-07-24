@@ -20,7 +20,8 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..)
-  , WindowState(..), applyWindowModeTransition, luaQueue )
+  , WindowState(..), applyWindowModeTransition, windowModeAlreadyApplied
+  , luaQueue )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import qualified Engine.Core.Queue as Q
@@ -80,7 +81,9 @@ publishWindowGeometry rc lq win = do
 --   'applyWindowModeTransition' is folded in only after the switch
 --   actually succeeded, from geometry sampled before it, so a branch that
 --   bails out (no monitor, no video mode) leaves both the cache and the
---   applied mode untouched.
+--   applied mode untouched. A request for the mode already applied is
+--   inert ('windowModeAlreadyApplied') — see that function for why a
+--   redundant @windowed@ request must not re-run the restore.
 handleSetWindowMode ∷ WindowMode → EngineM ε σ ()
 handleSetWindowMode mode = do
     state ← gets graphicsState
@@ -94,49 +97,56 @@ handleSetWindowMode mode = do
                 -- Sampled while the window is still in the mode being left
                 livePos ← GLFW.getWindowPos win
                 liveSize ← GLFW.getWindowSize win
+                ws0 ← readIORef (rcWindowStateRef rc)
 
-                applied ← case mode of
-                    Fullscreen → do
-                        mMonitor ← GLFW.getPrimaryMonitor
-                        case mMonitor of
-                            Nothing → pure False
-                            Just monitor → do
-                                mMode ← GLFW.getVideoMode monitor
-                                case mMode of
-                                    Nothing → pure False
-                                    Just vm → do
-                                      GLFW.setFullscreen win monitor vm
-                                      publish
-                                      pure True
+                if windowModeAlreadyApplied ws0 mode
+                  -- Nothing to switch. Republishing the unchanged live
+                  -- geometry keeps this exactly as inert as it was before
+                  -- #907, when the guard's own cache write made the
+                  -- Windowed branch's restore a no-op.
+                  then publish
+                  else do
+                    applied ← case mode of
+                        Fullscreen → do
+                            mMonitor ← GLFW.getPrimaryMonitor
+                            case mMonitor of
+                                Nothing → pure False
+                                Just monitor → do
+                                    mMode ← GLFW.getVideoMode monitor
+                                    case mMode of
+                                        Nothing → pure False
+                                        Just vm → do
+                                          GLFW.setFullscreen win monitor vm
+                                          publish
+                                          pure True
 
-                    BorderlessWindowed → do
-                        mMonitor ← GLFW.getPrimaryMonitor
-                        case mMonitor of
-                            Nothing → pure False
-                            Just monitor → do
-                                mMode ← GLFW.getVideoMode monitor
-                                case mMode of
-                                    Nothing → pure False
-                                    Just vm → do
-                                        let monW = GLFW.videoModeWidth vm
-                                            monH = GLFW.videoModeHeight vm
-                                        GLFW.setWindowed win monW monH 0 0
-                                        GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
-                                        publish
-                                        pure True
+                        BorderlessWindowed → do
+                            mMonitor ← GLFW.getPrimaryMonitor
+                            case mMonitor of
+                                Nothing → pure False
+                                Just monitor → do
+                                    mMode ← GLFW.getVideoMode monitor
+                                    case mMode of
+                                        Nothing → pure False
+                                        Just vm → do
+                                            let monW = GLFW.videoModeWidth vm
+                                                monH = GLFW.videoModeHeight vm
+                                            GLFW.setWindowed win monW monH 0 0
+                                            GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
+                                            publish
+                                            pure True
 
-                    Windowed → do
-                        ws ← readIORef (rcWindowStateRef rc)
-                        let (wx, wy) = wsWindowedPos ws
-                            (ww, wh) = wsWindowedSize ws
-                        GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
-                        GLFW.setWindowed win ww wh wx wy
-                        publish
-                        pure True
+                        Windowed → do
+                            let (wx, wy) = wsWindowedPos ws0
+                                (ww, wh) = wsWindowedSize ws0
+                            GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
+                            GLFW.setWindowed win ww wh wx wy
+                            publish
+                            pure True
 
-                when applied $
-                    modifyIORef' (rcWindowStateRef rc)
-                                 (applyWindowModeTransition mode livePos liveSize)
+                    when applied $
+                        modifyIORef' (rcWindowStateRef rc)
+                                     (applyWindowModeTransition mode livePos liveSize)
 
 
 handleSetVSync ∷ Bool → EngineM ε σ ()

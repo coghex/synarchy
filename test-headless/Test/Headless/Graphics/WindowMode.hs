@@ -23,7 +23,8 @@ import UPrelude
 import Test.Hspec
 import Engine.Core.State
   ( WindowState(..), defaultWindowState, bootAppliedWindowMode
-  , leavingWindowedMode, applyWindowModeTransition )
+  , leavingWindowedMode, windowModeAlreadyApplied
+  , applyWindowModeTransition )
 import Engine.Graphics.Config (WindowMode(..))
 
 -- | A windowed session: the user's window, as the render thread would
@@ -76,6 +77,44 @@ spec = do
             leavingWindowedMode Windowed Windowed `shouldBe` False
             leavingWindowedMode BorderlessWindowed BorderlessWindowed
                 `shouldBe` False
+
+    -- Review round 1 on PR #908: keying the cache off wsAppliedMode made
+    -- a REDUNDANT request meaningful where the old target-config guard
+    -- had made it inert. `scripts/settings/data.lua`'s Defaults path
+    -- calls engine.setWindowMode unconditionally, so a windowed session
+    -- pressing Defaults would have run the Windowed branch's restore
+    -- against a cache no switch away from windowed had ever filled —
+    -- teleporting the live window onto defaultWindowState's 800x600 at
+    -- (100,100). The handler short-circuits on this predicate instead.
+    describe "windowModeAlreadyApplied" $ do
+        it "reports a redundant request for each mode" $ do
+            let applied m = defaultWindowState { wsAppliedMode = m }
+            windowModeAlreadyApplied (applied Windowed) Windowed
+                `shouldBe` True
+            windowModeAlreadyApplied (applied BorderlessWindowed)
+                                     BorderlessWindowed `shouldBe` True
+            windowModeAlreadyApplied (applied Fullscreen) Fullscreen
+                `shouldBe` True
+
+        it "does not short-circuit a real switch" $ do
+            windowModeAlreadyApplied windowedSession BorderlessWindowed
+                `shouldBe` False
+            windowModeAlreadyApplied windowedSession Fullscreen
+                `shouldBe` False
+
+        -- The exact regression: a boot-fresh windowed session whose cache
+        -- still holds the defaults must not act on a redundant request.
+        it "short-circuits a redundant windowed request on a fresh boot" $ do
+            let boot = defaultWindowState
+                  { wsAppliedMode = bootAppliedWindowMode Windowed }
+            windowModeAlreadyApplied boot Windowed `shouldBe` True
+
+        -- A borderless-CONFIGURED boot comes up windowed, so asking for
+        -- borderless there is a real switch, not a redundant request.
+        it "does not short-circuit a borderless boot's first request" $ do
+            let boot = defaultWindowState
+                  { wsAppliedMode = bootAppliedWindowMode BorderlessWindowed }
+            windowModeAlreadyApplied boot BorderlessWindowed `shouldBe` False
 
     describe "applyWindowModeTransition" $ do
         it "records the windowed geometry on the way out to borderless" $ do

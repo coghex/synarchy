@@ -524,6 +524,19 @@ bootAppliedWindowMode _          = Windowed
 leavingWindowedMode ∷ WindowMode → WindowMode → Bool
 leavingWindowedMode applied target = applied ≡ Windowed ∧ target ≢ Windowed
 
+-- | Is there nothing to switch — has the render thread already applied
+--   this mode?
+--
+--   A redundant request must NOT re-run the switch. That matters most
+--   for 'Windowed', whose branch RESTORES from the geometry cache, and
+--   the cache holds nothing meaningful until a real switch away from
+--   windowed has filled it: re-applying it to a live windowed window
+--   would teleport it onto the default 800x600 at (100,100). Redundant
+--   requests are reachable — @scripts/settings/data.lua@'s Defaults path
+--   calls @engine.setWindowMode@ unconditionally.
+windowModeAlreadyApplied ∷ WindowState → WindowMode → Bool
+windowModeAlreadyApplied ws target = wsAppliedMode ws ≡ target
+
 -- | Fold one SUCCESSFULLY applied window-mode switch into the
 --   render-thread-owned 'WindowState': cache the supplied live geometry
 --   when (and only when) 'leavingWindowedMode' says so, then record the
