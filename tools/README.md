@@ -483,12 +483,20 @@ read live values; that `engine.setResolution` round-trips through
 `Message.Video`'s GLFW write path into both size refs; that toggling
 VSync and MSAA rebuilds the swapchain with the instance still
 responsive and reporting a sane framebuffer afterwards; and that
-brightness / pixel-snap / texture-filter each apply cleanly. Every
-setting it touches is captured from the LIVE config first and restored
-at the end (never to a hardcoded default — a user's persisted
-`config/video.local.yaml` holds the real values). Whether the picture
-still looks right after a swapchain rebuild is the human eyeball this
-check exists to prompt.
+brightness / pixel-snap / texture-filter each apply cleanly.
+
+Every setting it touches is captured from the LIVE config first and
+restored at the end — never to a hardcoded default, since a user's
+persisted `config/video.local.yaml` holds the real values. The
+resolution needs two captures, not one: `engine.setResolution` writes
+`vcWidth`/`vcHeight` *and* enqueues the GLFW resize, whereas dragging a
+window edge moves only the window, so the config dimensions and the
+physical window size can legitimately disagree on entry. The script
+restores the window with `setResolution` and the config with
+`engine.setVideoConfig` (a config-only write), and asserts both — it
+cannot pass while having replaced a saved resolution with a transient
+window size. Whether the picture still looks right after a swapchain
+rebuild is the human eyeball this check exists to prompt.
 
 ## Directory layout
 ```

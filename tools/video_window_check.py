@@ -39,7 +39,18 @@ It asserts, against the live instance:
      erroring and leave the instance responsive (`Message.Video`'s
      remaining handlers, plus `Vulkan.Texture.Bindless`'s live sampler
      swap),
-  6. every setting it touched is restored to the value it found.
+  6. every setting it touched is restored to the value it found — the
+     CONFIG resolution and the PHYSICAL window size independently.
+
+That last point is not incidental. `engine.setResolution` writes
+`vcWidth`/`vcHeight` AND enqueues the GLFW resize, while dragging a
+window edge moves only the window — so the two can legitimately
+disagree on entry. This script captures both, drives its resize test
+from the window size, restores the window with `setResolution`, and
+then restores the config with `engine.setVideoConfig` (a config-only
+write that enqueues nothing). Both are asserted at the end, so it
+cannot report a clean restore while having replaced the user's saved
+resolution with a transient window size.
 
 Rendering is verified structurally (the instance keeps answering and
 keeps reporting a sane framebuffer). Whether the picture still LOOKS
@@ -86,8 +97,8 @@ def main() -> int:
     cfg = lua("local w,h,mode,scale,vs,fl,msaa,bright,snap,filt = "
               "engine.getVideoConfig(); "
               "return {width=w, height=h, mode=mode, scale=scale, "
-              "vsync=vs, msaa=msaa, brightness=bright, pixelSnap=snap, "
-              "textureFilter=filt}")
+              "vsync=vs, frameLimit=fl, msaa=msaa, brightness=bright, "
+              "pixelSnap=snap, textureFilter=filt}")
     if not isinstance(cfg, dict) or "width" not in cfg:
         print(f"  [FAIL] engine.getVideoConfig() gave {cfg!r}")
         print("  (is a GRAPHICAL instance running on this port? this check "
@@ -109,17 +120,33 @@ def main() -> int:
         print("video_window_check: cannot continue without a live window size")
         return 1
 
+    # TWO independent originals, which can legitimately disagree:
+    #   * the CONFIG dimensions (`vcWidth`/`vcHeight`), and
+    #   * the PHYSICAL window size right now.
+    # Dragging a window edge moves the second without touching the
+    # first, and `engine.setResolution` writes BOTH (`API.Config`'s
+    # `setResolutionFn` updates the config, then enqueues the GLFW
+    # resize). So restoring the window with `setResolution` alone would
+    # silently overwrite the user's saved resolution with whatever
+    # transient size their window happened to have. Both are captured
+    # here and both are restored — and asserted — at the end.
     orig_w, orig_h = int(size["w"]), int(size["h"])
+    cfg_w, cfg_h = int(cfg["width"]), int(cfg["height"])
     orig_mode = cfg.get("mode")
     # Restore targets come from the LIVE config, never a hardcoded
     # default: `handleSetBrightness` clamps to 50-300, and a user's
     # persisted config/video.local.yaml can hold any value in range —
     # restoring to a guess would silently change the user's settings.
+    orig_scale = float(cfg.get("scale") or 1.0)
     orig_vsync = bool(cfg.get("vsync"))
+    orig_flimit = int(cfg.get("frameLimit") or 0)
     orig_msaa = int(cfg.get("msaa") or 1)
     orig_bright = int(cfg.get("brightness") or 100)
     orig_snap = bool(cfg.get("pixelSnap"))
     orig_filter = cfg.get("textureFilter") or "nearest"
+    if (cfg_w, cfg_h) != (orig_w, orig_h):
+        print(f"    (note: config is {cfg_w}x{cfg_h} but the window is "
+              f"currently {orig_w}x{orig_h} — both are restored separately)")
 
     # --- 2. setResolution round-trips through Message.Video -------------
     # A modest, safely-restorable delta — big enough that a no-op write
@@ -140,10 +167,12 @@ def main() -> int:
           isinstance(after, dict) and after.get("fw", 0) > 0
           and after.get("fh", 0) > 0, str(after))
 
+    # Restore the PHYSICAL window first; the config dimensions this also
+    # clobbers are put back by the config-only write at the end.
     lua(f"engine.setResolution({orig_w}, {orig_h}); return true")
     settle()
     restored = lua("local w,h = engine.getWindowSize(); return {w=w, h=h}")
-    check("resolution restored",
+    check("window size restored",
           isinstance(restored, dict)
           and (int(restored.get("w", -1)), int(restored.get("h", -1)))
               == (orig_w, orig_h),
@@ -192,26 +221,60 @@ def main() -> int:
     alive_and_rendering("after all video settings restored")
 
     # --- 6. leave the instance as we found it ---------------------------
-    if orig_mode:
-        lua(f'engine.setWindowMode("{orig_mode}"); return true')
-        settle()
+    # Note this script never CHANGES the window mode — re-applying it
+    # here would be a no-op at best and, in the Windowed branch, would
+    # re-drive `handleSetWindowMode`'s cached-geometry restore for no
+    # reason. The mode is asserted below instead, as a did-we-disturb-it
+    # check, and `setVideoConfig` pins `vcWindowMode` along with the
+    # rest.
+    #
+    # `engine.setVideoConfig` is the CONFIG-ONLY write (`API.Config`'s
+    # `setVideoConfigFn` updates `videoConfigRef` and enqueues nothing),
+    # so this restores every one of the ten fields — `vcWidth`/`vcHeight`
+    # included, which `setResolution` clobbered above — without moving
+    # the window off the physical size restored in step 2.
+    lua(f'engine.setVideoConfig({cfg_w}, {cfg_h}, "{orig_mode}", '
+        f'{orig_scale}, {str(orig_vsync).lower()}, {orig_flimit}, '
+        f'{orig_msaa}, {orig_bright}, {str(orig_snap).lower()}, '
+        f'"{orig_filter}"); return true')
+    settle(0.6)
+
     final = lua("local w,h,mode,scale,vs,fl,msaa,bright,snap,filt = "
                 "engine.getVideoConfig(); "
-                "return {mode=mode, vsync=vs, msaa=msaa, brightness=bright, "
-                "pixelSnap=snap, textureFilter=filt}")
-    check("window mode restored",
+                "local ww,wh = engine.getWindowSize(); "
+                "return {width=w, height=h, mode=mode, vsync=vs, "
+                "frameLimit=fl, msaa=msaa, brightness=bright, "
+                "pixelSnap=snap, textureFilter=filt, winW=ww, winH=wh}")
+    check("window mode undisturbed",
           isinstance(final, dict) and final.get("mode") == orig_mode,
           f"{final.get('mode') if isinstance(final, dict) else final} "
           f"(was {orig_mode})")
-    check("every touched video setting restored",
+    # The resolution assertion the earlier version of this script was
+    # missing: `setResolution` writes the CONFIG too, so a check that
+    # only looked at vsync/msaa/brightness/snap/filter would report a
+    # clean restore while the user's saved resolution had been replaced
+    # by whatever transient size their window happened to have.
+    check("config resolution restored",
+          isinstance(final, dict)
+          and (int(final.get("width") or -1), int(final.get("height") or -1))
+              == (cfg_w, cfg_h),
+          f"{final.get('width')}x{final.get('height')} (was {cfg_w}x{cfg_h})")
+    check("physical window size restored",
+          isinstance(final, dict)
+          and (int(final.get("winW") or -1), int(final.get("winH") or -1))
+              == (orig_w, orig_h),
+          f"{final.get('winW')}x{final.get('winH')} (was {orig_w}x{orig_h})")
+    check("every other touched video setting restored",
           isinstance(final, dict)
           and bool(final.get("vsync")) == orig_vsync
+          and int(final.get("frameLimit") or 0) == orig_flimit
           and int(final.get("msaa") or 1) == orig_msaa
           and int(final.get("brightness") or 0) == orig_bright
           and bool(final.get("pixelSnap")) == orig_snap
           and final.get("textureFilter") == orig_filter,
-          f"{final} (was vsync={orig_vsync} msaa={orig_msaa} "
-          f"brightness={orig_bright} snap={orig_snap} filter={orig_filter})")
+          f"{final} (was vsync={orig_vsync} frameLimit={orig_flimit} "
+          f"msaa={orig_msaa} brightness={orig_bright} snap={orig_snap} "
+          f"filter={orig_filter})")
 
     print("\nswapchain was rebuilt several times above — eyeball the window "
           "now: it should be rendering normally, at its original size and "
