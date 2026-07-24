@@ -13,7 +13,8 @@ import Data.List (sort)
 import qualified Data.Text as T
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , doesDirectoryExist )
+    , doesDirectoryExist, createFileLink, createDirectoryLink
+    , removeDirectoryLink )
 import System.FilePath ((</>))
 import Engine.Core.Types (PreviewEntry(..))
 import Engine.Preview.Discovery
@@ -42,6 +43,37 @@ withFixture action = do
     writeFile (root </> "notes.txt") ""              -- must be excluded
     writeFile (root </> "sub" </> "readme.md") ""    -- must be excluded
     (`finally` removeDirectoryRecursive root) (action root)
+
+-- A fixture proving the symlink rule (#886 round-5 review): rejected
+-- unconditionally, not just when it escapes the root, and checked at
+-- every ancestor level, not just the leaf.
+--   outside/escape.png  -- a real file OUTSIDE the fixture root entirely
+--   real.png            -- a real file INSIDE the root
+--   escape_link.png     -- a symlink to outside/escape.png (an escape)
+--   inner_link.png      -- a symlink to real.png (does NOT escape --
+--                          still rejected; the rule is unconditional)
+--   shortcut/           -- a symlinked DIRECTORY pointing at 'outside'
+--   shortcut/escape.png -- reached only by walking through 'shortcut'
+withSymlinkFixture ∷ (FilePath → IO ()) → IO ()
+withSymlinkFixture action = do
+    tmp ← getTemporaryDirectory
+    let root = tmp </> "synarchy-preview-discovery-symlink-spec"
+        outside = tmp </> "synarchy-preview-discovery-symlink-spec-outside"
+    createDirectoryIfMissing True root
+    createDirectoryIfMissing True outside
+    writeFile (outside </> "escape.png") ""
+    writeFile (root </> "real.png") ""
+    createFileLink (outside </> "escape.png") (root </> "escape_link.png")
+    createFileLink (root </> "real.png") (root </> "inner_link.png")
+    createDirectoryLink outside (root </> "shortcut")
+    -- Unlink the directory symlink FIRST — removeDirectoryRecursive must
+    -- never be given a chance to follow it into 'outside' (the exact
+    -- cycle/escape hazard this whole fixture exists to prove is fixed).
+    let cleanup = do
+            removeDirectoryLink (root </> "shortcut")
+            removeDirectoryRecursive root
+            removeDirectoryRecursive outside
+    (`finally` cleanup) (action root)
 
 spec ∷ Spec
 spec = do
@@ -87,6 +119,12 @@ spec = do
                 map peLabel entries `shouldBe`
                     ["a.png", "sub/b.png", "sub/c.PNG"]
 
+        it "skips every symlink (file or directory) unconditionally, \
+           \never recursing into a symlinked directory" $
+            withSymlinkFixture $ \root → do
+                entries ← discoverEntries root
+                map peLabel entries `shouldBe` ["real.png"]
+
     describe "resolveFocusedEntry" $ do
         it "resolves a real nested item to the same path discoverEntries reports" $ do
             result ← resolveFocusedEntry realCategoryRoot realItem
@@ -127,6 +165,23 @@ spec = do
             withFixture $ \root → do
                 result ← resolveFocusedEntry root "notes.txt"
                 result `shouldBe` Left FocusUnsupportedExtension
+
+        it "rejects a symlinked leaf file that stays inside the root \
+           \(the rule is unconditional, not just escape detection)" $
+            withSymlinkFixture $ \root → do
+                result ← resolveFocusedEntry root "inner_link.png"
+                result `shouldBe` Left FocusSymlink
+
+        it "rejects a symlinked leaf file that escapes the root" $
+            withSymlinkFixture $ \root → do
+                result ← resolveFocusedEntry root "escape_link.png"
+                result `shouldBe` Left FocusSymlink
+
+        it "rejects an item reached only through a symlinked ancestor \
+           \directory, even though the leaf name itself isn't a symlink" $
+            withSymlinkFixture $ \root → do
+                result ← resolveFocusedEntry root "shortcut/escape.png"
+                result `shouldBe` Left FocusSymlink
 
         it "reports FocusNotFound when the category root itself doesn't exist" $ do
             result ← resolveFocusedEntry "assets/textures/does-not-exist-886" "x.png"
