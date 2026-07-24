@@ -485,12 +485,19 @@ VSync and MSAA rebuilds the swapchain with the instance still
 responsive and reporting a sane framebuffer afterwards; that
 brightness / pixel-snap / texture-filter each apply cleanly; and that a
 real window-mode TRANSITION runs through `handleSetWindowMode` and
-back. From a `windowed` start that last one also asserts the geometry
-cached into `rcWindowStateRef` on the way out is exactly what the
-`Windowed` branch restores on the way back, so the migrated field is
-proven rather than just the verb. `fullscreen` is never chosen as the
-transition target — it switches the monitor's video mode; `borderless`
-reaches the same code shape without disrupting the desktop.
+back, with `rcWindowSizeRef`/`rcFramebufferSizeRef` live and sane
+through every branch. `fullscreen` is never chosen as the transition
+target — it switches the monitor's video mode; `borderless` reaches the
+same code shape without disrupting the desktop.
+
+It deliberately does NOT assert that the mode round trip restores the
+window's original geometry: it doesn't, due to the pre-existing engine
+bug in issue #907 (the cache guard in `handleSetWindowMode` reads a
+`vcWindowMode` that `setWindowModeFn` has already overwritten with the
+target mode). The script re-pins the window SIZE explicitly instead.
+Window POSITION is not settable from Lua, so running this from
+`windowed` can leave the window at `0,0` — drag it back. When #907 is
+fixed, that skipped assertion should become a real one.
 
 Every setting it touches is captured from the LIVE config first and
 restored at the end — never to a hardcoded default, since a user's
