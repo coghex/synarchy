@@ -21,9 +21,12 @@ Checks:
      dump's per-row interactive bounds — never hardcoded coordinates,
      the offscreen_probe.py convention) changes the selection; scrolling
      over the list (input.moveMouse + input.scroll, located the same
-     way) changes the reported scroll offset; a framebuffer resize
+     way) changes the reported scroll offset; a framebuffer GROW
      (engine.setResolution) reflows the panel bounds while preserving
-     the current selection and scroll offset.
+     the current selection and scroll offset, and at every size the
+     visible row count actually fits the reported panel height (no
+     overflow); a subsequent SHRINK well below the list's natural row
+     budget reduces the visible row count and still fits.
   3. Focused item mode (--preview icons/<item>): texture filter forced
      to nearest; no list (dump().rows is absent/empty) while the
      requested texture resolves; a resize reflows the panel bounds.
@@ -253,6 +256,47 @@ def check_simple_list_mode(port: int) -> bool:
                                  after_resize.get("scrollOffset") == prev_scroll,
                                  after_resize.get("scrollOffset"))
 
+        # The visible row count must actually fit the reported panel
+        # height at every size (#886 round-3 review: the browser
+        # previously hardcoded a fixed 16-row list regardless of
+        # params.height). itemHeight mirrors
+        # scripts/ui/asset_browser.lua's own scaling exactly.
+        ui_scale_raw = send(port, "return engine.getUIScale()")
+        try:
+            item_height = 32.0 * float(ui_scale_raw)
+        except (TypeError, ValueError):
+            item_height = 32.0
+
+        def assert_rows_fit(label: str, state: dict) -> bool:
+            b = state.get("panelBounds") or {}
+            rows = state.get("rows") or []
+            h = b.get("height", 0)
+            return check(f"visible rows fit within the panel height, no overflow ({label})",
+                        len(rows) * item_height <= h + 1,
+                        f"rows={len(rows)} itemHeight={item_height} panelHeight={h}")
+
+        ok_grow_fit = assert_rows_fit("after grow", after_resize)
+
+        # Shrink (#886 round-3 review): well below the list's natural
+        # row budget (icons has 67 entries, comfortably more than fit at
+        # any of these sizes) — reproduces the exact regression the
+        # review reported (an 800x600->800x400 shrink leaving a
+        # 512px-tall list inside a 320px-tall panel).
+        rows_before_shrink = len(after_resize.get("rows") or [])
+        prev_h = (after_resize.get("panelBounds") or {}).get("height")
+        shrink_w = int(prev_bounds.get("width", 400))
+        shrink_h = max(200, int((prev_h or 400) * 0.5))
+        send(port, f"return engine.setResolution({shrink_w}, {shrink_h})", timeout=10.0)
+        after_shrink = poll_until(
+            10.0, lambda: (dump(port).get("panelBounds") or {}).get("height") != prev_h
+                and dump(port))
+        after_shrink = after_shrink or dump(port)
+        ok_shrink_rows = check("visible row count decreases on shrink",
+                              len(after_shrink.get("rows") or []) < rows_before_shrink,
+                              f"before={rows_before_shrink} "
+                              f"after={len(after_shrink.get('rows') or [])}")
+        ok_shrink_fit = assert_rows_fit("after shrink", after_shrink)
+
         # Trimmed loading (Requirement 5) — engine-authoritative (#886
         # round-2 review): every texture engine.getLoadedTexturePaths()
         # reports resolves under the browsed category's root or is a
@@ -264,7 +308,8 @@ def check_simple_list_mode(port: int) -> bool:
 
         return all([ok_filter, ok_mode, ok_count, ok_first, ok_ready, ok_click,
                     ok_scroll, ok_resize_bounds, ok_resize_selection,
-                    ok_resize_scroll, ok_trimmed, ok_no_gameplay])
+                    ok_resize_scroll, ok_grow_fit, ok_shrink_rows, ok_shrink_fit,
+                    ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 
