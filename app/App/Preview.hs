@@ -16,7 +16,7 @@ import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
-import Engine.Core.Types (EngineConfig(..), BootProfile(..))
+import Engine.Core.Types (EngineConfig(..), BootProfile(..), PreviewBrowse)
 import Engine.Core.Thread (shutdownThread)
 import Engine.Core.Log (LogCategory(..), shutdownLogger)
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
@@ -33,9 +33,12 @@ import App.Exception (guardNativeExceptions)
 -- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
 --   unit, sim, or combat thread. The input thread is kept so the OS
 --   window-close button and the debug console (started inside the Lua
---   thread, same as headless) both work normally.
-runPreview ∷ (Text, Maybe Text) → Maybe Int → IO ()
-runPreview target mPort = do
+--   thread, same as headless) both work normally. 'mBrowse' is the
+--   simple-category browsing state @app/Main.hs@ already resolved
+--   (discovery/containment done, #886) — 'Nothing' for a grouped
+--   category, which keeps Phase 1's (#632) placeholder-label boot.
+runPreview ∷ (Text, Maybe Text) → Maybe PreviewBrowse → Maybe Int → IO ()
+runPreview target mBrowse mPort = do
   EngineInitResult env ← initializeEngine
 
   let baseConfig = engineConfig env
@@ -44,6 +47,7 @@ runPreview target mPort = do
             { ecDebugPort = fromMaybe (ecDebugPort baseConfig) mPort
             , ecBootProfile = BootPreview
             , ecPreviewTarget = Just target
+            , ecPreviewBrowse = mBrowse
             } }
 
   inputThreadState ← startInputThread env'

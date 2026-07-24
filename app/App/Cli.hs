@@ -103,23 +103,33 @@ parseSize args = do
 --   Just Nothing = --preview given with no value following it — an
 --   error, NOT "not present": the caller must not silently fall through
 --   to normal headless/graphical dispatch here.
---   Just (Just (category, mItem)) = --preview <value> parsed. A trailing
---   slash with nothing after it (@--preview units/@) is treated the same
---   as a bare category (mItem = Nothing), not an empty item name.
+--   Just (Just (category, mItem)) = --preview <value> parsed. Only the
+--   FIRST slash splits category from item — everything after it
+--   (internal slashes included) is the item path verbatim, so a nested
+--   simple-category target (@--preview items/tools/hammer.png@) keeps
+--   its full "tools/hammer.png" item rather than being truncated to
+--   just "tools" (#886). A trailing slash with nothing after it
+--   (@--preview units/@) is treated the same as a bare category
+--   (mItem = Nothing), not an empty item name.
 parsePreview ∷ [String] → Maybe (Maybe (String, Maybe String))
 parsePreview [] = Nothing
 parsePreview ["--preview"] = Just Nothing
 parsePreview ("--preview":s:_) = Just $ Just $
-    case splitOn '/' s of
-        (cat:item:_) | not (null item) → (cat, Just item)
-        (cat:_)                        → (cat, Nothing)
-        []                             → (s, Nothing)
+    case break (≡ '/') s of
+        (cat, '/':rest) → (cat, if null rest then Nothing else Just rest)
+        (cat, _)        → (cat, Nothing)
 parsePreview (_:rest) = parsePreview rest
 
--- | Which of the epic's hardcoded --preview categories 'cat' names, if
+-- | Which of the epic's canonical --preview categories 'cat' names, if
 --   any. Simple categories preview a single flat asset folder; grouped
 --   categories require a specific --preview <category>/<item> (the
---   folder holds many named entries, e.g. one per unit).
+--   folder holds many named entries, e.g. one per unit). This is the
+--   epic-level reconciliation (#886): @equipment@/@hud@ (no longer
+--   top-level asset directories since #428's reorganization — HUD
+--   assets live under @ui/hud@) are ordinary unknown categories now,
+--   with no compatibility aliases, and @structures@ (a real top-level
+--   directory) is grouped. @facemap@, @utility@, and @vegetation@ stay
+--   unexposed.
 data PreviewCategoryKind
     = SimplePreviewCategory
     | GroupedPreviewCategory
@@ -132,8 +142,8 @@ classifyPreviewCategory cat
     | cat `elem` groupedCategories = GroupedPreviewCategory
     | otherwise                    = UnknownPreviewCategory
   where
-    simpleCategories  = ["icons", "equipment", "hud", "items", "ui", "world"]
-    groupedCategories = ["units", "flora", "buildings"]
+    simpleCategories  = ["icons", "items", "ui", "world"]
+    groupedCategories = ["units", "flora", "buildings", "structures"]
 
 -- | Whether @--language-report@ (#710) is present at all. It never
 --   boots the engine/world (unlike --dump/--headless/--offscreen), so

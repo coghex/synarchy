@@ -28,6 +28,7 @@ defaultEngineConfig = EngineConfig
   , ecDebugPort  = 8008
   , ecBootProfile = BootNormal
   , ecPreviewTarget = Nothing
+  , ecPreviewBrowse = Nothing
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig
