@@ -70,6 +70,23 @@ gatingSpec = describe "Blood.Trail.consumeTrailMarks — distance/cadence gating
                             (ttMinCadence tp) ts0
         length marks `shouldBe` 1
 
+    it "never pops while stationary (stepDist=0), even with both gates already banked \
+       \— #883 defers stationary/collapsed pooling (round-4 review regression)" $ do
+        -- Distance and cadence can both already be satisfied from EARLIER
+        -- movement while the unit has since stopped — cadence keeps
+        -- advancing with real time regardless of motion. A call with
+        -- stepDist=0 must never pop (that would be stationary pooling,
+        -- explicitly #883's scope, not this issue's), and must leave the
+        -- banked state untouched for whenever movement actually resumes.
+        let tp  = defaultTrailThresholds
+            ts0 = TrailState { tsPendingVolume = 0.5
+                             , tsDistSinceMark = ttMinDistance tp
+                             , tsLastMarkAt = 0 }
+            (ts', marks) = consumeTrailMarks tp 0 (ttMinCadence tp) (ttMinCadence tp) ts0
+        marks `shouldBe` []
+        tsPendingVolume ts' `shouldBe` 0.5
+        tsDistSinceMark ts' `shouldBe` ttMinDistance tp
+
     it "never pops a mark with no real blood behind it, even when both gates clear" $ do
         -- A stale distance/cadence bank from a bleed that has since
         -- stopped (clotted/bandaged to zero) must not manufacture a

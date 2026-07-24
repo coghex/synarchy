@@ -151,8 +151,19 @@ consumeTrailMarks tp stepDist dt now ts0 =
         -- (harmlessly — the caller clears the whole accumulator once
         -- there's neither pending volume nor any live external bleed
         -- left to wait for, see "Unit.Thread.Movement").
-        n | tsPendingVolume ts0 > 0 = max 0 (min nDist nTime)
-          | otherwise               = 0
+        --
+        -- Likewise requiring stepDist > 0 (round-4 review): distance
+        -- and cadence can BOTH already be banked from earlier movement
+        -- while the unit has since stopped — cadence alone keeps
+        -- advancing with real time regardless of motion. Popping in a
+        -- call where nothing moved would place a mark at a stationary
+        -- unit's resting position, which is stationary/collapsed
+        -- POOLING — issue #882 requirement explicitly defers that to
+        -- #883. A pop only ever happens in a call where the unit is
+        -- ACTUALLY moving; the banked state is preserved untouched
+        -- (nothing here resets it) for whenever movement resumes.
+        n | tsPendingVolume ts0 > 0 ∧ stepDist > 0 = max 0 (min nDist nTime)
+          | otherwise                              = 0
     in if n ≤ 0
        then (ts0 { tsDistSinceMark = d1 }, [])
        else
