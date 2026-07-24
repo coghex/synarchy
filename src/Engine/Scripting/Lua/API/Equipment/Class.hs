@@ -6,6 +6,16 @@
 --   read-only queries. The slot/accessory equip verbs and the
 --   render-field pushers that consume these classes live in the
 --   sibling Slot/Accessory/Render sub-modules.
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the class catalogue is reached only through
+--   'ContentRegistriesCapability' and the logger only through
+--   'CoreCapability'. 'loadEquipmentYamlFn' still takes an 'EngineEnv',
+--   but purely as the opaque token the not-yet-narrowed
+--   @render-gpu-asset@ texture helpers ('resolveTexturePath',
+--   'loadAndRegister') demand — this module dereferences no 'EngineEnv'
+--   field itself, and that parameter goes away when @render-gpu-asset@
+--   migrates (SS7.2).
 module Engine.Scripting.Lua.API.Equipment.Class
     ( loadEquipmentYamlFn
     , equipmentGetClassFn
@@ -19,8 +29,12 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
@@ -39,10 +53,12 @@ missingEquipmentSilhouette =
 -- | equipment.loadYaml(path) — parses a YAML file describing one or
 --   more equipment classes, loads each class's silhouette texture, and
 --   registers the classes into the EquipmentClassManager. Returns the
---   number of classes loaded.
-loadEquipmentYamlFn ∷ EngineEnv → LuaBackendState
+--   number of classes loaded. Callable repeatedly; each call
+--   inserts/replaces by class name.
+loadEquipmentYamlFn ∷ CoreCapability → ContentRegistriesCapability
+                    → EngineEnv → LuaBackendState
                     → Lua.LuaE Lua.Exception Lua.NumResults
-loadEquipmentYamlFn env backendState = do
+loadEquipmentYamlFn core regs env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
         Nothing → do
@@ -51,7 +67,7 @@ loadEquipmentYamlFn env backendState = do
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
-                logger ← readIORef (loggerRef env)
+                logger ← getLoggerFor core
                 classes ← loadEquipmentYaml logger filePath
                 let (lteq, _) = lbsMsgQueues backendState
 
@@ -84,7 +100,7 @@ loadEquipmentYamlFn env backendState = do
                             , ecSlots         = slots
                             }
 
-                    atomicModifyIORef' (equipmentClassManagerRef env) $ \m →
+                    atomicModifyIORef' (crEquipmentClassManagerRef regs) $ \m →
                         (EquipmentClassManager
                             { ecmDefs = HM.insert (eycName c) ecDef
                                                   (ecmDefs m) }, ())
@@ -104,8 +120,9 @@ loadEquipmentYamlFn env backendState = do
 --   render-side view of an EquipmentClass:
 --   { name, silhouette = <textureHandle int>, silhouetteW, silhouetteH,
 --     slots = { { id, name, kind, x, y, w, h }, … } }
-equipmentGetClassFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-equipmentGetClassFn env = do
+equipmentGetClassFn ∷ ContentRegistriesCapability
+                    → Lua.LuaE Lua.Exception Lua.NumResults
+equipmentGetClassFn regs = do
     nameArg ← Lua.tostring 1
     case nameArg of
         Nothing → do
@@ -114,7 +131,7 @@ equipmentGetClassFn env = do
         Just nameBS → do
             let name = TE.decodeUtf8Lenient nameBS
             mClass ← Lua.liftIO $ do
-                mgr ← readIORef (equipmentClassManagerRef env)
+                mgr ← readIORef (crEquipmentClassManagerRef regs)
                 pure (lookupEquipmentClass name mgr)
             case mClass of
                 Nothing → do
@@ -154,10 +171,11 @@ equipmentGetClassFn env = do
 
 -- | equipment.getClassNames() → array of strings (sorted by HashMap
 --   iteration order, i.e. arbitrary). Returns every registered class.
-equipmentGetClassNamesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-equipmentGetClassNamesFn env = do
+equipmentGetClassNamesFn ∷ ContentRegistriesCapability
+                         → Lua.LuaE Lua.Exception Lua.NumResults
+equipmentGetClassNamesFn regs = do
     names ← Lua.liftIO $ do
-        mgr ← readIORef (equipmentClassManagerRef env)
+        mgr ← readIORef (crEquipmentClassManagerRef regs)
         pure (HM.keys (ecmDefs mgr))
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] names) $ \(i, n) → do

@@ -556,13 +556,9 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
         "World.Thread.Command.Edit.Dig", "World.Thread.Discovery", "World.Thread.ItemTemp",
         "World.Thread.Power",
     }),
-    "content-registries": frozenset({
-        "Engine.Scripting.Lua.API.Craft.Recipe", "Engine.Scripting.Lua.API.Equipment.Class",
-        "Engine.Scripting.Lua.API.Infection", "Engine.Scripting.Lua.API.Items.Defs",
-        "Engine.Scripting.Lua.API.Locations", "Engine.Scripting.Lua.API.LootTables",
-        "Engine.Scripting.Lua.API.Repair", "Engine.Scripting.Lua.API.Substance",
-        "Engine.Scripting.Lua.API.WorldQuery.Location",
-    }),
+    # Emptied by issue #890 (E2): all nine modules now reach their
+    # registries through Engine.Core.Capability.ContentRegistries.
+    "content-registries": frozenset(),
     "ui-hud-events": frozenset({
         "Engine.Input.Thread.Mouse", "Engine.PlayerEvent.Emit", "Engine.Scripting.Lua.API.Focus",
         "Engine.Scripting.Lua.API.PlayerEvent", "Engine.Scripting.Lua.API.UI.Element",

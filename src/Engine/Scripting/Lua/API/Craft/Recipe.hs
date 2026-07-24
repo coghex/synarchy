@@ -6,6 +6,11 @@
 --   Engine.Scripting.Lua.API.Repair (repair.get) and the execute/bill
 --   sub-modules never need it, so it lives here alone with its
 --   catalogue reads.
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the recipe catalogue is reached only through
+--   'ContentRegistriesCapability' and the logger only through
+--   'CoreCapability', so this module never touches an 'EngineEnv'.
 module Engine.Scripting.Lua.API.Craft.Recipe
     ( loadRecipeYamlFn
     , craftGetFn
@@ -20,22 +25,27 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.Core (CoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlRecipes
 import Craft.Types
 
 -- | engine.loadRecipeYaml(path) — parse a YAML file of recipe defs,
---   register each into the RecipeManager, return the count.
-loadRecipeYamlFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-loadRecipeYamlFn env = do
+--   register each into the RecipeManager, return the count. Callable
+--   repeatedly; each call inserts/replaces by recipe id.
+loadRecipeYamlFn ∷ CoreCapability → ContentRegistriesCapability
+                 → Lua.LuaE Lua.Exception Lua.NumResults
+loadRecipeYamlFn core regs = do
     pathArg ← Lua.tostring 1
     case pathArg of
         Nothing → Lua.pushnumber 0 >> return 1
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
-                logger ← readIORef (loggerRef env)
+                logger ← getLoggerFor core
                 defs ← loadRecipeYaml logger filePath
                 total ← foldM (\acc d → do
                     let recipe = RecipeDef
@@ -52,7 +62,7 @@ loadRecipeYamlFn env = do
                             , rdOutputTemp = ryOutputTemp d
                             , rdPowerDraw  = ryPowerDraw d
                             }
-                    atomicModifyIORef' (recipeManagerRef env) $ \m →
+                    atomicModifyIORef' (crRecipeManagerRef regs) $ \m →
                         (RecipeManager
                             { rmDefs = HM.insert (ryId d) recipe
                                                  (rmDefs m) }, ())
@@ -122,24 +132,26 @@ pushRecipe d = do
 --   { id, name, station, work, knowledge?, skill?,
 --     inputs = [{item,count}…], fuel = {item,count}?,
 --     outputs = [{item,count}…] }.
-craftGetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-craftGetFn env = do
+craftGetFn ∷ ContentRegistriesCapability
+           → Lua.LuaE Lua.Exception Lua.NumResults
+craftGetFn regs = do
     idArg ← Lua.tostring 1
     case idArg of
         Nothing → Lua.pushnil >> return 1
         Just idBS → do
             let key = TE.decodeUtf8Lenient idBS
             mDef ← Lua.liftIO $ do
-                m ← readIORef (recipeManagerRef env)
+                m ← readIORef (crRecipeManagerRef regs)
                 pure (lookupRecipe key m)
             case mDef of
                 Nothing → Lua.pushnil >> return 1
                 Just d  → pushRecipe d >> return 1
 
 -- | craft.getNames() → array of all loaded recipe ids.
-craftGetNamesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-craftGetNamesFn env = do
-    m ← Lua.liftIO $ readIORef (recipeManagerRef env)
+craftGetNamesFn ∷ ContentRegistriesCapability
+                → Lua.LuaE Lua.Exception Lua.NumResults
+craftGetNamesFn regs = do
+    m ← Lua.liftIO $ readIORef (crRecipeManagerRef regs)
     Lua.newtable
     forM_ (zip [1..] (HM.keys (rmDefs m))) $ \(i, k) → do
         Lua.pushstring (TE.encodeUtf8 k)

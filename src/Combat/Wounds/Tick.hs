@@ -16,6 +16,8 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import System.Environment (lookupEnv)
 import Combat.Types (CombatEvent(..))
 import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
@@ -69,7 +71,10 @@ data WoundTickOutcome
 tickAllWounds ∷ EngineEnv → Float → IO ()
 tickAllWounds env dt = do
     gt ← readIORef (gameTimeRef env)
-    infMgr ← readIORef (infectionManagerRef env)
+    -- Infection defs come through the `content-registries` capability
+    -- (#890); everything else here is still broad EngineEnv state.
+    infMgr ← readIORef
+        (crInfectionManagerRef (toContentRegistriesCapability env))
     testMode ← isJust ⊚ lookupEnv infectionTestModeVar
     -- Active world's climate, for per-unit infection selection + onset speed.
     -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.

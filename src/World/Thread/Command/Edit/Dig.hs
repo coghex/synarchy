@@ -15,6 +15,8 @@ import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
@@ -211,7 +213,10 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
 spawnYieldItems ∷ EngineEnv → LoggerState → WorldState → Text
                 → (Int, Int) → Int → IO ()
 spawnYieldItems env logger ws defName (gx, gy) n = do
-    itemMgr ← readIORef (itemManagerRef env)
+    -- Dig-yield item defs come through the `content-registries`
+    -- capability (#890).
+    itemMgr ← readIORef
+        (crItemManagerRef (toContentRegistriesCapability env))
     case lookupItemDef defName itemMgr of
         Nothing →
             logWarn logger CatWorld $

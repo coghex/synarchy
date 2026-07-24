@@ -1,4 +1,10 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+-- | Lua surface for the worked-material substance catalogue.
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the substance catalogue is reached only through
+--   'ContentRegistriesCapability' and the logger only through
+--   'CoreCapability', so this module never touches an 'EngineEnv'.
 module Engine.Scripting.Lua.API.Substance
     ( loadSubstanceYamlFn
     , substanceGetFn
@@ -12,16 +18,21 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.Core (CoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlSubstance
 import Substance.Types
 
 -- | engine.loadSubstanceYaml(path) — parses a YAML file of substance
 --   defs, registers each into the SubstanceManager, returns the count.
---   Mirrors engine.loadItemYaml / engine.loadEquipmentYaml.
-loadSubstanceYamlFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-loadSubstanceYamlFn env = do
+--   Mirrors engine.loadItemYaml / engine.loadEquipmentYaml. Callable
+--   repeatedly; each call inserts/replaces by substance name.
+loadSubstanceYamlFn ∷ CoreCapability → ContentRegistriesCapability
+                    → Lua.LuaE Lua.Exception Lua.NumResults
+loadSubstanceYamlFn core regs = do
     pathArg ← Lua.tostring 1
     case pathArg of
         Nothing → do
@@ -30,7 +41,7 @@ loadSubstanceYamlFn env = do
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
-                logger ← readIORef (loggerRef env)
+                logger ← getLoggerFor core
                 defs ← loadSubstanceYaml logger filePath
                 total ← foldM (\acc d → do
                     let sbsDef = SubstanceDef
@@ -45,7 +56,7 @@ loadSubstanceYamlFn env = do
                             , sbsSlashResistance   = sySlashResistance d
                             , sbsBluntResistance   = syBluntResistance d
                             }
-                    atomicModifyIORef' (substanceManagerRef env) $ \m →
+                    atomicModifyIORef' (crSubstanceManagerRef regs) $ \m →
                         (SubstanceManager
                             { sbmDefs = HM.insert (syName d) sbsDef
                                                   (sbmDefs m) }, ())
@@ -61,8 +72,9 @@ loadSubstanceYamlFn env = do
 -- | substance.get(name) → table or nil. Returns the substance's full
 --   property set so Lua-side combat math (when it lands) can read
 --   density, tensile, fracture toughness, etc. directly.
-substanceGetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-substanceGetFn env = do
+substanceGetFn ∷ ContentRegistriesCapability
+               → Lua.LuaE Lua.Exception Lua.NumResults
+substanceGetFn regs = do
     nameArg ← Lua.tostring 1
     case nameArg of
         Nothing → do
@@ -71,7 +83,7 @@ substanceGetFn env = do
         Just nameBS → do
             let name = TE.decodeUtf8Lenient nameBS
             mDef ← Lua.liftIO $ do
-                mgr ← readIORef (substanceManagerRef env)
+                mgr ← readIORef (crSubstanceManagerRef regs)
                 pure (lookupSubstance name mgr)
             case mDef of
                 Nothing → do
@@ -108,10 +120,11 @@ substanceGetFn env = do
                     Lua.setfield (-2) "bluntResistance"
                     return 1
 
-substanceGetNamesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-substanceGetNamesFn env = do
+substanceGetNamesFn ∷ ContentRegistriesCapability
+                    → Lua.LuaE Lua.Exception Lua.NumResults
+substanceGetNamesFn regs = do
     names ← Lua.liftIO $ do
-        mgr ← readIORef (substanceManagerRef env)
+        mgr ← readIORef (crSubstanceManagerRef regs)
         pure (HM.keys (sbmDefs mgr))
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] names) $ \(i, n) → do

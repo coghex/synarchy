@@ -89,6 +89,10 @@ PROBES = [
     ("construction_blueprint_footprint", "construction_blueprint_footprint_probe.py",
      "offscreen: committed CtBuilding blueprint renders its full def footprint "
      "while staying one designation job (#807)"),
+    ("content_registry", "content_registry_probe.py",
+     "content-registries capability (#890): all seven registries written via "
+     "their public load*Yaml verb and read back via their public query, plus "
+     "post-boot reload (insert/replace) and the placed-location def join"),
     ("consumable_effects", "consumable_effects_probe.py",
      "drink effects scaled by item quality/temperature: hydration/caffeine/mood/warmth (#347)"),
     ("cooking", "cooking_probe.py",

@@ -357,19 +357,27 @@ dependencies, cross-references, or compatibility-boundary remarks.
 ### `content-registries`
 
 Every field in this group shares one shape: allocated empty at
-`Engine.Core.Init.initializeEngineWith`, then populated exactly once by
-the Lua thread's boot-time content-load calls (`scripts/init.lua`'s
-`X.loadYaml` sequence, run before gameplay begins) — never written
-again afterward.
+`Engine.Core.Init.initializeEngineWith`, then populated by the Lua
+thread's boot-time content-load calls (`scripts/init.lua`'s
+`X.loadYaml` sequence, run before gameplay begins) and in practice not
+written again afterward. That once-at-boot pattern is the normal
+startup shape, **not** an enforced invariant: the `engine.load*Yaml` /
+`item.loadYaml` / `equipment.loadYaml` verbs stay publicly callable at
+any time (`Engine.Scripting.Lua.API.Register.Engine`) and keep their
+insert/replace-by-id behaviour, so nothing here may assume a one-shot
+or frozen registry. Since #890 every reader AND writer in this group
+reaches these fields through
+`Engine.Core.Capability.ContentRegistries.ContentRegistriesCapability`
+rather than an `EngineEnv` field (§7.6).
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
-| `itemManagerRef` | boot-process | `UnitThread` (spawn materializes `starting_inventory`), `LuaThread` (queries), `CombatThread` (`Combat.Resolution:118`'s `resolveAttack`, weapon/item def lookup), `WorldThread` (`World.Thread.Command.Edit.Dig:214`'s `spawnYieldItems`, dig-yield item def lookup) | `LuaThread` (`item.loadYaml`) | `IORef ItemManager` | `emptyItemManager` (`src/Engine/Core/Init.hs:237`), populated from `data/items/*.yaml` | None | — |
-| `equipmentClassManagerRef` | boot-process | `LuaThread` (queries; also backs the UI unit-info v2 equipment section's slot layout), `UnitThread` (`Unit.Thread.Command.Spawn:106`, starting-equipment materialization) | `LuaThread` (`equipment.loadYaml`) | `IORef EquipmentClassManager` | `emptyEquipmentClassManager` (`src/Engine/Core/Init.hs:238`) | None | — |
-| `substanceManagerRef` | boot-process | `LuaThread` (queries), `CombatThread` (`Combat.Resolution:119`'s `resolveAttack`, weapon-material lookup), `UnitThread` (`Unit.Thread.Movement:132`, physical-property lookup) | `LuaThread` (`substance.loadYaml`) | `IORef SubstanceManager` | `emptySubstanceManager` (`src/Engine/Core/Init.hs:239`) | None | — |
-| `infectionManagerRef` | boot-process | `CombatThread`/`UnitThread` (wound tick selects an infection), `LuaThread` (`API.Infection:79`'s `infection.get`, direct query) | `LuaThread` (`infection.loadYaml`) | `IORef InfectionManager` | `emptyInfectionManager` (`src/Engine/Core/Init.hs:240`) | None | — |
-| `recipeManagerRef` | boot-process | `LuaThread` (`craft.*`/`repair.*` API — the craft-bill AI itself is Lua code, so it reads this on `LuaThread`, not a Haskell unit thread), `WorldThread` (`World.Thread.Power:50`'s `tickPowerNetworks`, per-tick craft-bill power-draw lookup) | `LuaThread` (`engine.loadRecipeYaml`) | `IORef RecipeManager` | `emptyRecipeManager` (`src/Engine/Core/Init.hs:241`) | None | — |
-| `locationDefsRef` | boot-process | `LuaThread` (`locations.*`, `API.Power`, `API.WorldQuery.Location`, `API.Buildings.Spawn`), `WorldThread` (`World.Render.Zoom.Quads:79`, `World.Thread.Discovery:49`) | `LuaThread` (content load) | `IORef LocationRegistry` | `emptyLocationRegistry` (`src/Engine/Core/Init.hs:242`) | None | — |
+| `itemManagerRef` | boot-process | `UnitThread` (spawn materializes `starting_inventory`), `LuaThread` (queries), `CombatThread` (`Combat.Resolution:125`'s `resolveAttack`, weapon/item def lookup), `WorldThread` (`World.Thread.Command.Edit.Dig:219`'s `spawnYieldItems`, dig-yield item def lookup) | `LuaThread` (`item.loadYaml`) | `IORef ItemManager` | `emptyItemManager` (`src/Engine/Core/Init.hs:237`), populated from `data/items/*.yaml` | None | — |
+| `equipmentClassManagerRef` | boot-process | `LuaThread` (queries; also backs the UI unit-info v2 equipment section's slot layout), `UnitThread` (`Unit.Thread.Command.Spawn:111`, starting-equipment materialization) | `LuaThread` (`equipment.loadYaml`) | `IORef EquipmentClassManager` | `emptyEquipmentClassManager` (`src/Engine/Core/Init.hs:238`) | None | — |
+| `substanceManagerRef` | boot-process | `LuaThread` (queries), `CombatThread` (`Combat.Resolution:126`'s `resolveAttack`, weapon-material lookup), `UnitThread` (`Unit.Thread.Movement:140`, physical-property lookup) | `LuaThread` (`substance.loadYaml`) | `IORef SubstanceManager` | `emptySubstanceManager` (`src/Engine/Core/Init.hs:239`) | None | — |
+| `infectionManagerRef` | boot-process | `CombatThread`/`UnitThread` (wound tick selects an infection), `LuaThread` (`API.Infection:90`'s `infection.get`, direct query) | `LuaThread` (`infection.loadYaml`) | `IORef InfectionManager` | `emptyInfectionManager` (`src/Engine/Core/Init.hs:240`) | None | — |
+| `recipeManagerRef` | boot-process | `LuaThread` (`craft.*`/`repair.*` API — the craft-bill AI itself is Lua code, so it reads this on `LuaThread`, not a Haskell unit thread), `WorldThread` (`World.Thread.Power:55`'s `tickPowerNetworks`, per-tick craft-bill power-draw lookup) | `LuaThread` (`engine.loadRecipeYaml`) | `IORef RecipeManager` | `emptyRecipeManager` (`src/Engine/Core/Init.hs:241`) | None | — |
+| `locationDefsRef` | boot-process | `LuaThread` (`locations.*`, `API.Power`, `API.WorldQuery.Location`, `API.Buildings.Spawn`), `WorldThread` (`World.Render.Zoom.Quads:85`, `World.Thread.Discovery:54`) | `LuaThread` (content load) | `IORef LocationRegistry` | `emptyLocationRegistry` (`src/Engine/Core/Init.hs:242`) | None | — |
 | `lootTableRegistryRef` | boot-process | `LuaThread` (`loot.roll`) | `LuaThread` (content load) | `IORef LootTableRegistry` | `emptyLootTableRegistry` (`src/Engine/Core/Init.hs:243`) | None | — |
 
 ### `ui-hud-events`
@@ -397,10 +405,11 @@ again afterward.
 
 ## 6. Full-`EngineEnv` compatibility boundary
 
-**Live since issue #889 (E1, landed):** 223 files under `src/`/`app/`
-import `Engine.Core.State` in some form. Of those, 207 have genuine
-unrestricted field-level access: `Engine.Core.State.hs` itself (which
-defines `EngineEnv` and therefore imports nothing) plus 206 files that
+**Live since issue #889 (E1, landed); recounted by #890 (E2).** 221
+files under `src/`/`app/` import `Engine.Core.State` in some form. Of
+those, 199 have genuine unrestricted field-level access:
+`Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
+imports nothing) plus 198 files that
 import it either as an explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
@@ -413,14 +422,17 @@ this exact same two-shape definition against `src/`/`app/` on every
 run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 223
+grep -rl "import Engine.Core.State" src app | wc -l                    # 221
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 206 have full access, 17 do not:
+# script logic below; 198 have full access, 23 do not:
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
-#        itself plus its 12 `Register.*` submodules; import `(EngineEnv)`,
-#        the bare TYPE with no constructor/field access — opaque)
+#        itself plus its 12 `Register.*` submodules; all import the bare
+#        `EngineEnv` TYPE with no constructor access, and two of them
+#        — `Register.Craft`/`Register.Item` — additionally name a single
+#        field accessor each (`unitManagerRef` / `statRNGRef`) to hand a
+#        #890-narrowed callee the one field outside its capability)
 #   1  × `Engine.Core.Resource` (imports only the `loggerRef` accessor)
 #   1  × `Engine.Scene.Graph` (imports `EngineState(..)`, not `EngineEnv`)
 #   1  × `Engine.Core.Log.Monad` (narrowed by #889 — imports only the
@@ -431,16 +443,27 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 223
 #        capability-record projection module itself; imports the bare
 #        `EngineEnv` type plus its four `core-init` field accessors,
 #        never `EngineEnv(..)`)
+#   1  × `Engine.Core.Capability.ContentRegistries` (new by #890 — the
+#        `content-registries` projection module; bare `EngineEnv` type
+#        plus its seven field accessors, never `EngineEnv(..)`)
+#   5  × the #890-narrowed content-registry API modules that still need
+#        an opaque `EngineEnv` to pass to a not-yet-narrowed helper:
+#        `API.Items.Defs`, `API.Equipment.Class`, `API.Locations`
+#        (render-gpu-asset texture helpers), `API.Repair` (the station
+#        gate), `API.WorldQuery.Location` (page lookup). The other four
+#        of #890's nine (`API.Craft.Recipe`, `API.Infection`,
+#        `API.Substance`, `API.LootTables`) import `Engine.Core.State`
+#        not at all and so are outside this accounting entirely.
 ```
 
-The remaining 17 files that import `Engine.Core.State` (223 − 206) are
+The remaining 23 files that import `Engine.Core.State` (221 − 198) are
 exactly the ones enumerated above — none of them are consumers this
 document needs to classify: an opaque `EngineEnv` type import, one or
 more individually named field accessors, or an unrelated `EngineState`
 import none grant the unrestricted access this section is about.
 Adding back `Engine.Core.State.hs` itself (the definer, which imports
-nothing and so is outside the 223/206/17 accounting entirely) gives
-the 207 total full-access modules this section classifies.
+nothing and so is outside the 221/198/23 accounting entirely) gives
+the 199 total full-access modules this section classifies.
 
 This section names the intended *end state*: what should still
 legitimately construct, carry, or inspect the **complete** `EngineEnv`
@@ -448,7 +471,7 @@ once the epic's capability split has landed, versus what merely has
 full access today because nothing narrower exists yet. It is
 deliberately narrow — narrow enough to become the literal allowlist
 for #537's final unrestricted-access audit (per requirement 6) — which
-means most of today's 207 full-access files are **not** listed as
+means most of today's 199 full-access files are **not** listed as
 permanent below; they belong in the temporary section (§6.2), each
 assigned individually (no wildcards, no catch-all) to one of §7's
 bounded follow-up issues.
@@ -474,7 +497,7 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 25 permanent modules (24 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 207 − 25 = 182 full-access
+which imports nothing). The remaining 199 − 25 = 174 full-access
 modules are temporary, enumerated exhaustively in §6.2.
 
 Since issue #889, this permanent allowlist and §6.2's temporary
@@ -485,7 +508,7 @@ live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 182 remaining full-access modules is individually
+Every one of the 174 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -545,12 +568,12 @@ directory-name guessing:
 | `input-lua-transport` | `Engine.Input.Callback`, `Engine.Input.Thread`, `Engine.Input.Thread.Char`, `Engine.Input.Thread.Dispatch`, `Engine.Input.Thread.Keyboard`, `Engine.Input.Thread.Mouse.Activation`, `Engine.Input.Thread.Scroll`, `Engine.Scripting.Lua.API.InputInject`, `Engine.Scripting.Lua.API.Keybinds`, `World.Log`, `World.Thread.Helpers` | §7.3 |
 | `world-sim-render-handoff` | `Blood.Impact`, `Blood.Trail`, `Engine.Scripting.Lua.API.Blood`, `Engine.Scripting.Lua.API.Chop`, `Engine.Scripting.Lua.API.Construct`, `Engine.Scripting.Lua.API.Core`, `Engine.Scripting.Lua.API.Flora`, `Engine.Scripting.Lua.API.Forage.Crop`, `Engine.Scripting.Lua.API.Forage.Lookup`, `Engine.Scripting.Lua.API.Forage.Query`, `Engine.Scripting.Lua.API.Plant`, `Engine.Scripting.Lua.API.Structure`, `Engine.Scripting.Lua.API.Till`, `Engine.Scripting.Lua.API.World.Clock`, `Engine.Scripting.Lua.API.World.Cursor`, `Engine.Scripting.Lua.API.World.Designation`, `Engine.Scripting.Lua.API.World.Edit`, `Engine.Scripting.Lua.API.World.GenConfig`, `Engine.Scripting.Lua.API.World.Lifecycle`, `Engine.Scripting.Lua.API.World.Query`, `Engine.Scripting.Lua.API.World.Tools`, `Engine.Scripting.Lua.API.WorldQuery.Chunk`, `Engine.Scripting.Lua.API.WorldQuery.Climate`, `Engine.Scripting.Lua.API.WorldQuery.Fluid`, `Engine.Scripting.Lua.API.WorldQuery.Lookup`, `Engine.Scripting.Lua.API.WorldQuery.River`, `Engine.Scripting.Lua.API.WorldQuery.Terrain`, `Sim.Thread`, `Unit.LineOfSight`, `Unit.Render`, `Unit.Thread.Movement.PathAdvance`, `World.Render.Zoom.Background`, `World.Thread`, `World.Thread.ChunkLoading`, `World.Thread.Command`, `World.Thread.Command.Basic`, `World.Thread.Command.Cursor.Chop`, `World.Thread.Command.Cursor.Construct`, `World.Thread.Command.Cursor.Mine`, `World.Thread.Command.Cursor.Plant`, `World.Thread.Command.Cursor.Select`, `World.Thread.Command.Cursor.Till`, `World.Thread.Command.Edit.Fluid`, `World.Thread.Command.Edit.Structure`, `World.Thread.Command.Edit.Sync`, `World.Thread.Command.Edit.Terrain`, `World.Thread.Command.Edit.Vegetation`, `World.Thread.Command.Init`, `World.Thread.Command.Location`, `World.Thread.Command.Texture`, `World.Thread.Command.Time`, `World.Thread.Command.UI`, `World.Thread.Cursor`, `World.Thread.Time` | §7.4 |
 | `units-buildings-combat` | `Building.Thread.Command`, `Combat.Resolution`, `Combat.Resolution.Events`, `Combat.Resolution.Wear`, `Combat.Thread`, `Combat.Wounds.Tick`, `Engine.Input.State`, `Engine.Scripting.Lua.API.ActionOutcome`, `Engine.Scripting.Lua.API.Buildings.Materials`, `Engine.Scripting.Lua.API.Buildings.Progress`, `Engine.Scripting.Lua.API.Buildings.Query`, `Engine.Scripting.Lua.API.Buildings.Selection`, `Engine.Scripting.Lua.API.Buildings.Spawn`, `Engine.Scripting.Lua.API.Buildings.Yaml`, `Engine.Scripting.Lua.API.Combat`, `Engine.Scripting.Lua.API.Craft.Bill`, `Engine.Scripting.Lua.API.Craft.Execute`, `Engine.Scripting.Lua.API.Equipment.Accessory`, `Engine.Scripting.Lua.API.Equipment.Render`, `Engine.Scripting.Lua.API.Equipment.Slot`, `Engine.Scripting.Lua.API.Forage.Harvest`, `Engine.Scripting.Lua.API.Items.Ground`, `Engine.Scripting.Lua.API.Power`, `Engine.Scripting.Lua.API.Units.Cargo`, `Engine.Scripting.Lua.API.Units.Combat`, `Engine.Scripting.Lua.API.Units.Equipment`, `Engine.Scripting.Lua.API.Units.Inventory`, `Engine.Scripting.Lua.API.Units.List`, `Engine.Scripting.Lua.API.Units.Medical`, `Engine.Scripting.Lua.API.Units.Query`, `Engine.Scripting.Lua.API.Units.Selection`, `Engine.Scripting.Lua.API.Units.Spawn`, `Engine.Scripting.Lua.API.Units.Stats`, `Engine.Scripting.Lua.API.Units.Survival`, `Engine.Scripting.Lua.API.Units.Yaml`, `Unit.Selection`, `Unit.Thread`, `Unit.Thread.Command`, `Unit.Thread.Command.Lifecycle`, `Unit.Thread.Command.Motion`, `Unit.Thread.Command.Pose`, `Unit.Thread.Command.Spawn`, `Unit.Thread.Movement`, `Unit.Thread.Movement.Climb`, `World.Thread.Command.Cursor.Common`, `World.Thread.Command.Edit.Dig`, `World.Thread.Discovery`, `World.Thread.ItemTemp`, `World.Thread.Power` | §7.5 |
-| `content-registries` | `Engine.Scripting.Lua.API.Craft.Recipe`, `Engine.Scripting.Lua.API.Equipment.Class`, `Engine.Scripting.Lua.API.Infection`, `Engine.Scripting.Lua.API.Items.Defs`, `Engine.Scripting.Lua.API.Locations`, `Engine.Scripting.Lua.API.LootTables`, `Engine.Scripting.Lua.API.Repair`, `Engine.Scripting.Lua.API.Substance`, `Engine.Scripting.Lua.API.WorldQuery.Location` | §7.6 |
+| `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
 | `ui-hud-events` | `Engine.Input.Thread.Mouse`, `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.Focus`, `Engine.Scripting.Lua.API.PlayerEvent`, `Engine.Scripting.Lua.API.UI.Element`, `Engine.Scripting.Lua.API.UI.Focus`, `Engine.Scripting.Lua.API.UI.Hierarchy`, `Engine.Scripting.Lua.API.UI.Page`, `Engine.Scripting.Lua.API.UI.Property`, `Engine.Scripting.Lua.API.UI.TextInput`, `Engine.Scripting.Lua.API.UI.Tooltip`, `Engine.Scripting.Lua.Message.Scene`, `UI.Tooltip.State` | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 45 + 11 + 53 + 49 + 9 + 13 + 0 = 182) match
-207 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 45 + 11 + 54 + 49 + 0 + 13 + 0 = 174) match
+199 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -676,19 +699,51 @@ scope, per the issue text).
   documented shutdown-ordering dependency between them), buildings
   separately (consumed on `UnitThread` but conceptually its own domain).
 
-### 7.6 `content-registries`
+### 7.6 `content-registries` — **LANDED (#890, E2)**
 
-- **Dependencies:** `core-init` only (content is loaded once, read-only
-  thereafter — the least coupled group in this inventory).
-- **Independent migration:** Yes, cleanly. This is a strong candidate
-  for an *early* migration precisely because none of its 7 fields are
-  ever written after boot-time content load, so there is no
-  write-ordering subtlety to resolve.
-- **Follow-up scope:** One issue introducing a `ContentRegistries`
-  record for all 7 fields and narrowing every `Engine.Scripting.Lua.API.*`
-  content-query module (and the couple of engine-side consumers —
-  `Unit.Thread.Command.Spawn`, `Combat.Wounds.Tick`,
-  `World`'s location/loot spawn resolution) to it.
+- **Dependencies:** `core-init` only (content is loaded at boot and in
+  practice only read thereafter — the least coupled group in this
+  inventory).
+- **Independent migration:** Yes, cleanly — and done. It was the right
+  *early* migration precisely because none of its 7 fields is written
+  after boot-time content load in normal operation, so there was no
+  write-ordering subtlety to resolve. (The loaders themselves stay
+  callable at any time and keep insert/replace semantics — see §5's
+  `content-registries` preamble; the record carries the write path
+  rather than freezing it.)
+- **What landed:** `Engine.Core.Capability.ContentRegistries` exports
+  `ContentRegistriesCapability` over exactly the 7 fields plus the
+  total one-way projection `toContentRegistriesCapability`, following
+  §7.1/#889's convention (same live `IORef`s, never a copy; no import
+  of a consumer).
+  - **Fully narrowed (the nine §6.2 entries, all removed above):**
+    `Engine.Scripting.Lua.API.Craft.Recipe`, `.Equipment.Class`,
+    `.Infection`, `.Items.Defs`, `.Locations`, `.LootTables`,
+    `.Repair`, `.Substance`, `.WorldQuery.Location`. Four of them
+    (`Craft.Recipe`, `Infection`, `Substance`, `LootTables`) no longer
+    import `Engine.Core.State` at all; the other five still take an
+    opaque `EngineEnv` **solely** to hand to a not-yet-narrowed helper
+    (`resolveTexturePath`/`loadAndRegister` — §7.2;
+    `Craft.Execute.validateStation` — §7.5; `activeWorldState`/
+    `worldStateByPage` — §7.4) and dereference no field themselves.
+    The two fields outside this capability that survived the narrowing
+    are passed as the bare `IORef`s they are (`statRNGRef` into
+    `loot.roll`, `unitManagerRef` into `repair.repairAt`), wired at the
+    `Register.*` call sites.
+  - **Mixed-capability modules that adopted the record for their
+    content lookups only** (each KEEPS its own §6.2 entry until its own
+    capability child migrates it): `Combat.Resolution` (weapon item def
+    + substance), `Combat.Wounds.Tick` (infection selection),
+    `Unit.Thread.Command.Spawn` (starting inventory + equipment class),
+    `Unit.Thread.Movement` (fall-injury substance lookup),
+    `World.Thread.Command.Edit.Dig` (dig-yield item defs),
+    `World.Thread.Power` (per-bill recipe power draw),
+    `World.Render.Zoom.Quads` and `World.Thread.Discovery` (location
+    defs). That is the complete set of engine-side content readers §5
+    names.
+- **Follow-up scope:** None — this row is closed. The remaining
+  `EngineEnv` parameters listed above disappear as §7.2/§7.4/§7.5
+  land; nothing further is owed to `content-registries` itself.
 
 ### 7.7 `ui-hud-events`
 

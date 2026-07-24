@@ -24,6 +24,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Power.Types (PowerNodes(..))
 import Power.Network (tickPowerNodes, wireTilesOn, positionsOf, consumersOn,
                       activeCraftConsumersOn, combineConsumers)
@@ -47,7 +49,10 @@ tickPowerNetworks env pageId ws dtGame = do
         td      ← readIORef (wsTilesRef ws)
         bm      ← readIORef (buildingManagerRef env)
         now     ← readIORef (gameTimeRef env)
-        rm      ← readIORef (recipeManagerRef env)
+        -- Per-bill electrical load lives on the recipe, read through
+        -- the `content-registries` capability (#890).
+        rm      ← readIORef
+            (crRecipeManagerRef (toContentRegistriesCapability env))
         bills   ← readIORef (wsCraftBillsRef ws)
         mParams ← readIORef (wsGenParamsRef ws)
         let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)

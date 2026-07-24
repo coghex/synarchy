@@ -18,6 +18,16 @@
 --   rebalance of what's built here. An axis already at 100 refuses
 --   before any cost is consumed, so an AI (#302) can't waste a
 --   whetstone honing an already-keen edge.
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the recipe + item catalogues are reached only through
+--   'ContentRegistriesCapability', and the one @units-buildings-combat@
+--   field this module writes (the unit manager) is passed in as the bare
+--   'IORef' it is. 'repairAtFn' still takes an 'EngineEnv', but purely
+--   as the opaque token the not-yet-narrowed station gate
+--   ('validateStation') demands — this module dereferences no
+--   'EngineEnv' field itself, and that parameter goes away when
+--   @units-buildings-combat@ migrates (SS7.5).
 module Engine.Scripting.Lua.API.Repair
     ( repairGetFn
     , repairGetNamesFn
@@ -28,8 +38,10 @@ import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import Craft.Types (RecipeManager(..), RecipeDef(..), lookupRecipe,
                     RepairAxis(..), repairAxisName)
 import Craft.Execute (consumeIngredients)
@@ -41,24 +53,26 @@ import Engine.Scripting.Lua.API.Units (applyRepairToUnit, findHeldItemById)
 
 -- | repair.get(id) → table | nil. Same shape as craft.get, restricted
 --   to recipes tagged with a repair axis.
-repairGetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-repairGetFn env = do
+repairGetFn ∷ ContentRegistriesCapability
+            → Lua.LuaE Lua.Exception Lua.NumResults
+repairGetFn regs = do
     idArg ← Lua.tostring 1
     case idArg of
         Nothing → Lua.pushnil >> return 1
         Just idBS → do
             let key = TE.decodeUtf8Lenient idBS
             mDef ← Lua.liftIO $ do
-                m ← readIORef (recipeManagerRef env)
+                m ← readIORef (crRecipeManagerRef regs)
                 pure (lookupRecipe key m)
             case mDef of
                 Just d | rdRepairAxis d ≢ Nothing → pushRecipe d >> return 1
                 _ → Lua.pushnil >> return 1
 
 -- | repair.getNames() → array of repair-tagged recipe ids only.
-repairGetNamesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-repairGetNamesFn env = do
-    m ← Lua.liftIO $ readIORef (recipeManagerRef env)
+repairGetNamesFn ∷ ContentRegistriesCapability
+                 → Lua.LuaE Lua.Exception Lua.NumResults
+repairGetNamesFn regs = do
+    m ← Lua.liftIO $ readIORef (crRecipeManagerRef regs)
     let names = [ rdId d | d ← HM.elems (rmDefs m), rdRepairAxis d ≢ Nothing ]
     Lua.newtable
     forM_ (zip [1..] names) $ \(i, n) → do
@@ -78,8 +92,9 @@ repairGetNamesFn env = do
 --   same { defName, condition, sharpness, conditionApplied,
 --   sharpnessApplied } shape as unit.repairItem. On refusal, returns
 --   nil plus a reason and touches nothing.
-repairAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-repairAtFn env = do
+repairAtFn ∷ ContentRegistriesCapability → IORef UnitManager → EngineEnv
+           → Lua.LuaE Lua.Exception Lua.NumResults
+repairAtFn regs umRef env = do
     idArg    ← Lua.tointeger 1
     ridArg   ← Lua.tostring 2
     instArg  ← Lua.tointeger 3
@@ -90,7 +105,8 @@ repairAtFn env = do
                 rid = TE.decodeUtf8Lenient ridBS
                 iid = fromIntegral iidI ∷ Word64
                 bid = BuildingId (fromIntegral b)
-            result ← Lua.liftIO $ runRepairAt env uid rid iid bid
+            result ← Lua.liftIO $
+                runRepairAt regs umRef env uid rid iid bid
             case result of
                 Left err → do
                     Lua.pushnil
@@ -115,10 +131,11 @@ repairAtFn env = do
                 ("repair.repairAt: expected (uid, recipeId, instanceId, buildingId)" ∷ Text))
             return 2
 
-runRepairAt ∷ EngineEnv → UnitId → Text → Word64 → BuildingId
+runRepairAt ∷ ContentRegistriesCapability → IORef UnitManager → EngineEnv
+            → UnitId → Text → Word64 → BuildingId
             → IO (Either Text (Text, Float, Float, Float, Float))
-runRepairAt env uid rid iid bid = do
-    rm ← readIORef (recipeManagerRef env)
+runRepairAt regs umRef env uid rid iid bid = do
+    rm ← readIORef (crRecipeManagerRef regs)
     case lookupRecipe rid rm of
         Nothing → return (Left ("unknown recipe " <> rid))
         Just recipe → case rdRepairAxis recipe of
@@ -132,8 +149,8 @@ runRepairAt env uid rid iid bid = do
                 case gate of
                     Left err → return (Left err)
                     Right () → do
-                        itemMgr ← readIORef (itemManagerRef env)
-                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                        itemMgr ← readIORef (crItemManagerRef regs)
+                        atomicModifyIORef' umRef $ \um →
                             applyRepairAt axis recipe iid itemMgr uid um
 
 -- | The pure atomic step: find the targeted instance, refuse if

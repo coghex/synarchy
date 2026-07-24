@@ -12,6 +12,8 @@ import UPrelude
 import Data.IORef (readIORef, IORef)
 import qualified Data.Vector as V
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
@@ -76,7 +78,11 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
         Just params → do
             baked ← ensureBakedAtlas bakedRef rawCache textures facing
                         mAtlas texturePicker lookupSlot defFmSlot
-            registry ← readIORef (locationDefsRef env)
+            -- Location defs come through the `content-registries`
+            -- capability (#890); the texture-name registry beside it is
+            -- still `render-gpu-asset` state (SS7.2).
+            registry ← readIORef
+                (crLocationDefsRef (toContentRegistriesCapability env))
             nameReg  ← readIORef (textureNameRegistryRef env)
             let vb = computeZoomViewBounds camera fbW fbH
                 ws = wgpWorldSize params

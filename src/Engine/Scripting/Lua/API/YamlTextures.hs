@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.YamlTextures
     , loadVegetationYamlFn
     , loadFloraYamlFn
     , loadAndRegister
+    , isTextureNameRegistered
     , resolveTexturePath
     , getTextureHandleFn
     ) where
@@ -178,6 +179,15 @@ loadAndRegister env backendState lteq name path = do
     -- Queue for actual GPU loading on the engine thread
     Q.writeQueue lteq (LuaLoadTextureRequest handle path)
     return handle
+
+-- | Has @name@ already been registered in the shared texture-name
+--   registry? Lets a caller outside this module's capability
+--   ('Engine.Scripting.Lua.API.Items.Defs', narrowed by #890) make a
+--   register-once decision without dereferencing a @render-gpu-asset@
+--   'EngineEnv' field of its own.
+isTextureNameRegistered ∷ EngineEnv → Text → IO Bool
+isTextureNameRegistered env name =
+    isJust . lookupTextureName name <$> readIORef (textureNameRegistryRef env)
 
 -- | Parse a flora YAML: load textures, build species and world-gen entries,
 --   insert into the FloraCatalog. Returns number of textures queued.

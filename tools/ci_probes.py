@@ -48,6 +48,11 @@ ALL_KEYS = {p[0] for p in PROBES}
 CI_ELIGIBLE = {
     "cargo_capacity",
     "consumable_effects",
+    # #890 (E2): the only gate covering all seven content registries —
+    # deterministic (no AI, no timing), one boot, and the sole automated
+    # coverage of the infection / location-def / loot-table writer+reader
+    # pairs.
+    "content_registry",
     "craft",
     "medic_coord",
     "persistence_contract",
@@ -258,20 +263,24 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
       "scripts/injury_log*.lua"],
      {"medic_coord"}),
     (["src/Infection/*", "data/infections/*"],
-     set()),
+     # The infection SCENARIO probe stays manual-only (#593); the #890
+     # content-registry smoke does gate the infection catalogue's
+     # load+query path, which previously had no CI coverage at all.
+     {"content_registry"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
      # data/recipes/* also covers repair.yaml (repair-tagged recipes) and
      # brew_coffee (consumable_effects' brew step) — both promoted probes
      # (#722) load the full data/recipes/*.yaml glob at bootstrap.
-     {"craft", "consumable_effects", "repair"}),
+     {"craft", "consumable_effects", "repair", "content_registry"}),
     (["src/Power/*", "scripts/wire.lua", "scripts/power*.lua",
       "data/structure_packs/*"],
      set()),
     (["src/Item/*", "data/items/*", "src/Equipment/*", "data/equipment/*"],
      # consumable_effects exercises coffee_pot/coffee_grounds/water; repair
      # exercises axe_steel/whetstone/lignite_chunk (#722).
-     {"cargo_capacity", "repair_item", "consumable_effects", "repair"}),
+     {"cargo_capacity", "repair_item", "consumable_effects", "repair",
+      "content_registry"}),
     (["src/Building/*", "data/buildings/*"],
      # consumable_effects builds a kitchen; repair builds a furnace +
      # workbench (#722).
@@ -359,18 +368,21 @@ def _self_test() -> int:
         (["README.md"], [], "docs only"),
         (["docs/foo.md", "assets/x.png"], [], "docs+assets"),
         (["data/recipes/smelting.yaml"],
-         sorted({"craft", "consumable_effects", "repair"}),
-         "recipes -> craft + consumable_effects + repair"),
+         sorted({"craft", "consumable_effects", "repair", "content_registry"}),
+         "recipes -> craft + consumable_effects + repair + content_registry"),
         (["data/buildings/furnace.yaml"],
          sorted({"craft", "consumable_effects", "repair"}),
          "buildings -> craft + consumable_effects + repair"),
         (["data/items/coffee_pot.yaml"],
-         sorted({"cargo_capacity", "repair_item", "consumable_effects", "repair"}),
-         "items -> cargo_capacity + repair_item + consumable_effects + repair"),
+         sorted({"cargo_capacity", "repair_item", "consumable_effects", "repair",
+                 "content_registry"}),
+         "items -> cargo_capacity + repair_item + consumable_effects + repair "
+         "+ content_registry"),
         (["src/Power/Network.hs"], [], "power probes are manual-only"),
         (["data/infections/staph.yaml"],
-         [],
-         "infection probes are manual-only (#593)"),
+         ["content_registry"],
+         "infections -> the #890 registry smoke (the scenario probe stays "
+         "manual-only, #593)"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
         (["scripts/unit_ai_combat.lua"], sorted(CI_ELIGIBLE),
          "unit_ai_*.lua submodule (#538) -> full"),
