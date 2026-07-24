@@ -94,17 +94,12 @@ function assetBrowser.new(params)
     return id
 end
 
--- Select an entry by its path, falling back to the first entry when
--- 'path' is nil or not found (Requirement 3's "first entry selected by
--- default"). Fires onSelect synchronously, same as a real click —
--- callers MUST read getPanelBounds(id) before calling this: a resize
--- rebuild (#886 round-1 review) recreates the browser at NEW bounds,
--- and onSelect's texture-fit math needs those new bounds already in
--- hand, not whatever a caller's own state held from before this browser
--- existed.
-function assetBrowser.selectEntry(id, path)
-    local b = browsers[id]
-    if not b or #b.items == 0 then return end
+-- Resolve 'path' to its 1-based index in browser 'id's item list,
+-- falling back to the first entry when 'path' is nil or not found
+-- (Requirement 3's "first entry selected by default"). Shared by
+-- selectEntry/selectEntrySilently below so they can never disagree on
+-- which index the SAME path resolves to.
+local function resolveIndex(b, path)
     local index = 1
     if path then
         for i, item in ipairs(b.items) do
@@ -114,7 +109,38 @@ function assetBrowser.selectEntry(id, path)
             end
         end
     end
-    list.selectItem(b.listId, index)
+    return index
+end
+
+-- Select an entry by its path (see resolveIndex above for the fallback
+-- rule). Fires onSelect synchronously, same as a real click — callers
+-- MUST read getPanelBounds(id) before calling this: a resize rebuild
+-- (#886 round-1 review) recreates the browser at NEW bounds, and
+-- onSelect's texture-fit math needs those new bounds already in hand,
+-- not whatever a caller's own state held from before this browser
+-- existed. Use this ONLY for a genuinely fresh selection (the initial
+-- auto-select, or a real click) — never to RESTORE a prior selection
+-- across a rebuild; selectEntrySilently below is for that.
+function assetBrowser.selectEntry(id, path)
+    local b = browsers[id]
+    if not b or #b.items == 0 then return end
+    list.selectItem(b.listId, resolveIndex(b, path))
+end
+
+-- Like selectEntry, but never fires onSelect (list.setSelectedIndex,
+-- mirroring the #748 responsive-lifecycle convention every other
+-- geometry-rebuild restore in this codebase already follows: "restores
+-- must not re-fire onChange/onSelect"). For restoring a PRIOR selection
+-- across a resize rebuild (#886 round-6 review) — re-firing onSelect
+-- there would issue a duplicate engine.loadTexture request if the
+-- original load was still pending, and treats a mere geometry change as
+-- if the user had clicked something new. The caller is responsible for
+-- re-fitting an already-resolved texture to the new panel bounds itself
+-- (nothing here does that, unlike selectEntry's onSelect side effect).
+function assetBrowser.selectEntrySilently(id, path)
+    local b = browsers[id]
+    if not b or #b.items == 0 then return end
+    list.setSelectedIndex(b.listId, resolveIndex(b, path))
 end
 
 function assetBrowser.destroy(id)

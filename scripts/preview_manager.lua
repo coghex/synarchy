@@ -130,10 +130,15 @@ local function onEntrySelected(path, _label, _index)
     requestTexture(path)
 end
 
--- restoreSelectedPath/restoreScroll: nil for the initial build (selects
--- entry 1 by default, per assetBrowser.selectEntry); real values passed
--- by onFramebufferResize's rebuild so a resize never resets what the
--- user already picked (#886 round-1 review).
+-- restoreSelectedPath/restoreScroll: nil for the initial build (a
+-- genuinely fresh selection — entry 1 by default, firing onSelect);
+-- real values passed by onFramebufferResize's rebuild, RESTORED
+-- silently (#886 round-6 review) — re-selecting through onSelect there
+-- would treat a mere geometry change as if the user had clicked
+-- something new, and would issue a DUPLICATE engine.loadTexture request
+-- if the original load was still pending (the repo's established
+-- resize-restore contract: never re-fire onSelect/onChange, e.g.
+-- list.setSelectedIndex elsewhere in this codebase).
 local function buildListUI(browseEntries, fbW, fbH, restoreSelectedPath, restoreScroll)
     mode = "list"
     entries = browseEntries or {}
@@ -153,15 +158,30 @@ local function buildListUI(browseEntries, fbW, fbH, restoreSelectedPath, restore
         entries = listItems,
         onSelect = onEntrySelected,
     })
-    -- panelBounds MUST be current before selectEntry fires onSelect
-    -- synchronously below — see assetBrowser.selectEntry's own doc.
+    -- panelBounds MUST be current before selection below — a real
+    -- selectEntry's onSelect fires synchronously and needs it; a silent
+    -- restore's own explicit re-fit (below) needs it too.
     panelBounds = assetBrowser.getPanelBounds(browserId)
 
     if #listItems == 0 then
         readyState = "empty"
         return
     end
-    assetBrowser.selectEntry(browserId, restoreSelectedPath)
+
+    if restoreSelectedPath then
+        assetBrowser.selectEntrySilently(browserId, restoreSelectedPath)
+        -- If the restored selection's texture already resolved, refit
+        -- the cached sprite to the NEW panel bounds directly (onSelect
+        -- never fired, so nothing else will). If it's still pending,
+        -- the eventual onAssetLoaded completion already reads the
+        -- panelBounds just set above — nothing else to do here.
+        local cached = textureCache[restoreSelectedPath]
+        if cached then
+            previewManager.applyTexture(cached, restoreSelectedPath)
+        end
+    else
+        assetBrowser.selectEntry(browserId, nil)
+    end
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
