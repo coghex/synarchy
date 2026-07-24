@@ -111,6 +111,19 @@ def decals() -> list:
     return send_json(PORT, "return blood.listDecals()") or []
 
 
+def trail_decals(exclude_ids: set) -> list:
+    """Decals minus a given set of ids — used to exclude the one-shot
+    Blood.Impact decal `unit.injure` places for slash/arterial wounds
+    (Blood.Impact always creates one for those kinds) so bounds/spread
+    checks below assert on ACTUAL trail marks only, never a false
+    positive from the impact mark alone."""
+    return [d for d in decals() if d["id"] not in exclude_ids]
+
+
+def impact_decal_ids() -> set:
+    return {d["id"] for d in decals()}
+
+
 def trail_state(uid: int):
     return send_json(PORT, f"return blood.getTrailState({uid})")
 
@@ -156,9 +169,20 @@ def main() -> int:
         reset_blood()
         uid = spawn_fresh(10, 10)
         injure(uid, "slash", 0.6)   # untreated (bandage defaults to 1.0)
+        impact_ids = impact_decal_ids()   # slash always creates one impact decal
         move_to(uid, 10 + route, 10)
-        time.sleep(route + 4)
-        ds = decals()
+        # Poll for at least 2 marks rather than assume a fixed sleep
+        # margin always yields more than one — real-time engine
+        # scheduling can lag well behind wall-clock under system load,
+        # and the unit stops generating NEW marks once it arrives, so
+        # a generous ceiling matters more than a short one here.
+        if poll_until(90.0, lambda: len(trail_decals(impact_ids)) >= 2, interval=1.0) is None:
+            print(f"FAIL (setup): fewer than 2 trail marks appeared within 90s "
+                  f"along a {route}-tile bled, moved route "
+                  f"({len(trail_decals(impact_ids))} so far) — engine too slow "
+                  f"under current load, or a real regression")
+            return 2
+        ds = trail_decals(impact_ids)
         if not ds:
             print("FAIL: no trail decals appeared along a bled, moved route")
             return 1
@@ -180,10 +204,15 @@ def main() -> int:
         reset_blood()
         uid = spawn_fresh(10, 10)
         injure(uid, "slash", 0.6)
+        impact_ids = impact_decal_ids()
         send(PORT, "world.setTimeScale(5.0); return 'ok'")
         move_to(uid, 10 + route, 10)
-        time.sleep(route + 4)
-        ds = decals()
+        if poll_until(90.0, lambda: len(trail_decals(impact_ids)) >= 1, interval=1.0) is None:
+            send(PORT, "world.setTimeScale(1.0); return 'ok'")
+            print(f"FAIL (setup): no trail marks appeared within 90s at "
+                  f"world.setTimeScale(5.0)")
+            return 2
+        ds = trail_decals(impact_ids)
         send(PORT, "world.setTimeScale(1.0); return 'ok'")
         if not (lower_bound <= len(ds) <= upper_bound):
             print(f"FAIL: mark count {len(ds)} outside bounds "
@@ -197,10 +226,11 @@ def main() -> int:
         reset_blood()
         uid = spawn_fresh(10, 10)
         before = blood_of(uid)
-        injure(uid, "internal", 0.6)
+        injure(uid, "internal", 0.6)   # internal never creates an impact decal either
+        impact_ids = impact_decal_ids()
         move_to(uid, 10 + route, 10)
         time.sleep(route + 4)
-        ds = decals()
+        ds = trail_decals(impact_ids)
         after = blood_of(uid)
         if ds:
             print(f"FAIL: internal-only wound produced {len(ds)} trail marks")
@@ -213,12 +243,16 @@ def main() -> int:
         destroy(uid)
 
         # --- 4(e). death mid-route stops the trail cleanly ---
+        # A MODERATE slash (not arterial/high-severity — those exsanguinate
+        # in a few seconds via the wound tick's own natural DiedNow path,
+        # leaving no time to reach a trail mark before this test's
+        # EXPLICIT unit.kill() — the path actually under test here).
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "arterial", 0.9)
+        injure(uid, "slash", 0.6)   # slash always creates one impact decal
+        impact_ids = impact_decal_ids()
         move_to(uid, 10 + route, 10)
-        time.sleep(1.5)
-        if not decals():
+        if poll_until(8.0, lambda: len(trail_decals(impact_ids)) > 0, interval=0.5) is None:
             print("FAIL (setup): no marks appeared before death — can't test the stop")
             return 2
         send(PORT, f"unit.kill({uid}); return 'ok'", expect_result=False)
@@ -230,9 +264,9 @@ def main() -> int:
             print(f"FAIL: trail state still active after death: "
                   f"{trail_state(uid)!r}")
             return 1
-        before_n = len(decals())
+        before_n = len(trail_decals(impact_ids))
         time.sleep(2.0)
-        after_n = len(decals())
+        after_n = len(trail_decals(impact_ids))
         if after_n != before_n:
             print(f"FAIL: a dead unit kept adding trail marks "
                   f"({before_n} -> {after_n})")
@@ -252,7 +286,8 @@ def main() -> int:
         # needing to know the arena's extent.
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "slash", 0.15)
+        injure(uid, "slash", 0.15)   # slash always creates one impact decal
+        impact_ids = impact_decal_ids()
         waypoints = [(10.0, 10.0), (16.0, 10.0)]
         start = time.time()
         current_leg = [-1]
@@ -270,7 +305,7 @@ def main() -> int:
         while time.time() - start < 6:
             time.sleep(1)
             patrol()
-        early_n = len(decals())
+        early_n = len(trail_decals(impact_ids))
         if early_n == 0:
             print("FAIL: no marks appeared while the wound was fresh/bleeding")
             return 1
@@ -283,30 +318,35 @@ def main() -> int:
             print("FAIL (setup): wound never self-clotted to ~zero bleed "
                   "within 90s — can't test the cutoff")
             return 2
-        mid_n = len(decals())
+        mid_n = len(trail_decals(impact_ids))
 
-        # The accumulator may still hold a tiny sub-threshold residual
-        # right at the clot instant (real, already-lost blood not yet
-        # placed as a mark — banked distance/cadence not yet re-crossed):
-        # keep patrolling and poll for getTrailState to flush/clear
-        # rather than asserting "no more marks" before that residual has
-        # had a chance to land.
+        # Movement.hs checks external bleed BEFORE consuming any pending
+        # volume (round-2 review): the instant bleedRate reads zero the
+        # accumulator clears outright, discarding any tiny residual — so
+        # getTrailState should clear at essentially the same moment, not
+        # after one more flushed mark. Poll (briefly) rather than assume
+        # a single immediate check lands in the same tick.
         def trail_cleared() -> bool:
             patrol()
             return trail_state(uid) is None
 
-        if poll_until(30.0, trail_cleared, interval=1.0) is None:
+        if poll_until(10.0, trail_cleared, interval=0.5) is None:
             print(f"FAIL: getTrailState still active long after full clot: "
                   f"{trail_state(uid)!r}")
             return 1
-        cleared_n = len(decals())
+        cleared_n = len(trail_decals(impact_ids))
+        if cleared_n != mid_n:
+            print(f"FAIL: a mark was emitted AFTER bleedRate already read "
+                  f"zero, between clot detection and getTrailState "
+                  f"clearing ({mid_n} -> {cleared_n})")
+            return 1
 
         # NOW nothing should be left to emit — continued patrolling must
         # add zero further marks.
         for _ in range(8):
             time.sleep(1)
             patrol()
-        late_n = len(decals())
+        late_n = len(trail_decals(impact_ids))
         if not (late_n == cleared_n):
             print(f"FAIL: marks kept appearing after getTrailState cleared "
                   f"({cleared_n} -> {late_n})")

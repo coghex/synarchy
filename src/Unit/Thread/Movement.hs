@@ -244,43 +244,50 @@ tickAllMovement dt env utsRef = do
                             -- to consume.
                             Nothing → (accMap, accMarks)
                             Just ts →
-                                let stepDist = sqrt ((nx - ox) * (nx - ox)
-                                                    + (ny - oy) * (ny - oy))
-                                    (ts', popped) =
-                                        consumeTrailMarks defaultTrailThresholds
-                                            stepDist now ts
-                                    extRate = externalBleedRateFor def liveInst
-                                    finalTs
-                                        -- Death is terminal (#882
-                                        -- requirement 5): stop tracking
-                                        -- immediately, no further marks
-                                        -- even from banked distance/volume.
-                                        -- Likewise the instant external
-                                        -- bleed reads zero, the WHOLE
-                                        -- accumulator clears — never kept
-                                        -- alive just because a leftover
-                                        -- pendingVolume sits in ts' — so a
-                                        -- later tick can't flush a mark
-                                        -- from blood a since-stopped wound
-                                        -- already finished losing.
-                                        | uiPose liveInst ≡ "dead" ∨ extRate ≤ 0 = Nothing
-                                        | otherwise                              = Just ts'
-                                    repKind = maybe T.empty woundKind
-                                        (dominantExternalBleedWound def liveInst)
-                                    mkMark i m =
-                                        ( uiPage liveInst
-                                        , ox + tmoFraction m * (nx - ox)
-                                        , oy + tmoFraction m * (ny - oy)
-                                        , nz
-                                        , repKind
-                                        , tmoVolume m
-                                        , round (now * 1000.0)
-                                            + fromIntegral (unUnitId uid) + i
-                                        , Just uid
-                                        )
-                                    marks = zipWith mkMark [0 ∷ Int ..] popped
-                                in ( HM.insert uid (liveInst { uiTrailState = finalTs }) accMap
-                                   , accMarks ++ marks )
+                                let extRate = externalBleedRateFor def liveInst
+                                in if uiPose liveInst ≡ "dead" ∨ extRate ≤ 0
+                                   -- Check death / zero-external-bleed
+                                   -- BEFORE consuming anything (#882,
+                                   -- round-2 review): a synchronous
+                                   -- treatment (unit.treatBleeding
+                                   -- zeroing woundBandage) or a wound
+                                   -- healing out can drop external bleed
+                                   -- to zero between wound ticks, while
+                                   -- ts still holds volume banked from
+                                   -- BEFORE that moment — if this tick's
+                                   -- distance/cadence also happen to
+                                   -- clear, calling consumeTrailMarks
+                                   -- first would stamp that now-stale
+                                   -- volume. Clearing outright here,
+                                   -- with NO marks popped, is the only
+                                   -- way "external rate reached zero ⇒
+                                   -- no further marks" holds exactly.
+                                   then ( HM.insert uid
+                                            (liveInst { uiTrailState = Nothing }) accMap
+                                        , accMarks )
+                                   else
+                                     let stepDist = sqrt ((nx - ox) * (nx - ox)
+                                                         + (ny - oy) * (ny - oy))
+                                         (ts', popped) =
+                                             consumeTrailMarks defaultTrailThresholds
+                                                 stepDist dt now ts
+                                         repKind = maybe T.empty woundKind
+                                             (dominantExternalBleedWound def liveInst)
+                                         mkMark i m =
+                                             ( uiPage liveInst
+                                             , ox + tmoFraction m * (nx - ox)
+                                             , oy + tmoFraction m * (ny - oy)
+                                             , nz
+                                             , repKind
+                                             , tmoVolume m
+                                             , round (now * 1000.0)
+                                                 + fromIntegral (unUnitId uid) + i
+                                             , Just uid
+                                             )
+                                         marks = zipWith mkMark [0 ∷ Int ..] popped
+                                     in ( HM.insert uid
+                                            (liveInst { uiTrailState = Just ts' }) accMap
+                                        , accMarks ++ marks )
                 (finalMap, allMarks) = foldl' processOne (umInstances um', []) trailSteps
             in (um' { umInstances = finalMap }, allMarks)
     forM_ trailMarks $ \(page, gx, gy, gz, kind, vol, seed, mSrc) →

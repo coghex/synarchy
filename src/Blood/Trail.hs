@@ -98,8 +98,10 @@ data TrailMarkOut = TrailMarkOut
     } deriving (Show, Eq)
 
 -- | Advance a unit's trail accumulator by one movement tick's step
---   distance, popping zero or more marks. @now@ is the absolute
---   unpaused game-time seconds (never the world calendar).
+--   distance, popping zero or more marks. @dt@ is THIS call's own real
+--   elapsed seconds (paired with @stepDist@, its own distance); @now@
+--   is the absolute unpaused game-time seconds (never the world
+--   calendar) — @now - dt@ is when this call's window started.
 --
 --   Distance and cadence are BOTH hard floors (issue #882 requirement
 --   4) — a mark needs at least 'ttMinDistance' path-tiles AND at least
@@ -117,20 +119,27 @@ data TrailMarkOut = TrailMarkOut
 --   catch-up dt, or a large single step in the hspec partition-
 --   invariance tests) pops that many marks, each getting an EQUAL share
 --   of the pending volume (so total emitted volume is exactly
---   conserved) and evenly spread across the step's distance via
---   @tmoFraction@ — never all stamped at one endpoint, and never
---   dropping banked distance/cadence progress (the remainder always
---   carries forward in the returned 'TrailState').
+--   conserved). Each mark's @tmoFraction@ within THIS call's
+--   [start,end] step is whichever of the two gates is the SLOWER
+--   (later-reached) one for that mark — @max@ of the distance-implied
+--   and the time-implied fraction, assuming uniform motion across the
+--   call — so a mark whose count is capped by cadence lands where
+--   cadence actually cleared, not wherever distance alone would have
+--   put it. This is what keeps positions (not just counts/volumes)
+--   timestep-partition-invariant: using distance alone would place a
+--   cadence-limited mark differently depending on how the same journey
+--   was chunked into calls (a confirmed round-2 review regression).
 consumeTrailMarks
-    ∷ TrailThresholds → Float → Double → TrailState
+    ∷ TrailThresholds → Float → Double → Double → TrailState
     → (TrailState, [TrailMarkOut])
-consumeTrailMarks tp stepDist now ts0 =
-    let d0      = tsDistSinceMark ts0
-        d1      = d0 + max 0 stepDist
-        elapsed = max 0 (now - tsLastMarkAt ts0)
+consumeTrailMarks tp stepDist dt now ts0 =
+    let d0           = tsDistSinceMark ts0
+        d1           = d0 + max 0 stepDist
+        elapsedEnd   = max 0 (now - tsLastMarkAt ts0)
+        elapsedStart = max 0 (elapsedEnd - max 0 dt)
         nDist | ttMinDistance tp > 0 = floor (d1 / ttMinDistance tp)
               | otherwise            = 0 ∷ Int
-        nTime | ttMinCadence tp > 0  = floor (elapsed / ttMinCadence tp)
+        nTime | ttMinCadence tp > 0  = floor (elapsedEnd / ttMinCadence tp)
               | otherwise            = 0 ∷ Int
         -- Distance/cadence alone would happily "pop" a zero-volume mark
         -- once banked progress from an EARLIER bleed clears both gates
@@ -148,10 +157,16 @@ consumeTrailMarks tp stepDist now ts0 =
        then (ts0 { tsDistSinceMark = d1 }, [])
        else
          let share = tsPendingVolume ts0 / fromIntegral n
-             frac k
+             distFrac k
                  | stepDist > 0 =
-                     max 0 (min 1 ((fromIntegral k * ttMinDistance tp - d0) / stepDist))
+                     clamp01 ((fromIntegral k * ttMinDistance tp - d0) / stepDist)
                  | otherwise = 0
+             timeFrac k
+                 | dt > 0 =
+                     clamp01 (realToFrac
+                        ((fromIntegral k * ttMinCadence tp - elapsedStart) / dt))
+                 | otherwise = 0
+             frac k = max (distFrac k) (timeFrac k)
              marks = [ TrailMarkOut (frac k) share | k ← [1 .. n] ]
              ts' = ts0
                  { tsPendingVolume = 0
