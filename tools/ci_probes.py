@@ -51,6 +51,7 @@ CI_ELIGIBLE = {
     "craft",
     "medic_coord",
     "persistence_contract",
+    "preview_cli",
     "repair",
     "repair_item",
 }

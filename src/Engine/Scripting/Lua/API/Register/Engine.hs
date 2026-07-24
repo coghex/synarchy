@@ -10,6 +10,7 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
                                       listFilesFn, setPausedFn, isPausedFn,
                                       getBootProfileFn, getPreviewTargetFn,
+                                      getPreviewBrowseFn,
                                       realTimeFn, gameTimeFn)
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -23,7 +24,9 @@ import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , setTooltipDwellMsFn
                                        , getTooltipHintDelayMsFn
                                        , setTooltipHintDelayMsFn)
-import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
+import Engine.Scripting.Lua.API.Graphics (loadTextureFn, getTextureSizeFn,
+                                           getLoadedTexturePathsFn,
+                                           spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, getUIScaleFn)
 import Engine.Scripting.Lua.API.YamlTextures (loadMaterialYamlFn, loadVegetationYamlFn
@@ -87,6 +90,7 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "getFPS"            (getFPSFn env)
   registerLuaFunction "getBootProfile"    (getBootProfileFn env)
   registerLuaFunction "getPreviewTarget"  (getPreviewTargetFn env)
+  registerLuaFunction "getPreviewBrowse"  (getPreviewBrowseFn env)
   registerLuaFunction "setPaused"         (setPausedFn env)
   registerLuaFunction "isPaused"          (isPausedFn env)
   registerLuaFunction "getSaveStatus"     (saveStatusFn env)
@@ -120,6 +124,8 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "setTooltipHintDelayMs" (setTooltipHintDelayMsFn env)
 
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)
+  registerLuaFunction "getTextureSize" (getTextureSizeFn env)
+  registerLuaFunction "getLoadedTexturePaths" (getLoadedTexturePathsFn env)
   registerLuaFunction "getTextureHandle" (getTextureHandleFn env)
   registerLuaFunction "spawnSprite"   (spawnSpriteFn env backendState)
   registerLuaFunction "setPos"        (setPosFn env backendState)

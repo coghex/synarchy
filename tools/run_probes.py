@@ -173,7 +173,11 @@ PROBES = [
     ("power_workshop", "power_workshop_probe.py",
      "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
     ("preview", "preview_probe.py",
-     "--preview boot skeleton: CLI dispatch (grouped-no-item/unrecognized exit before boot) + boot profile/target over the debug console (#632)"),
+     "--preview real-boot browser: grouped+item placeholder boot (#632), simple-category "
+     "list/focused-item discovery+selection+scroll+trimmed-loading via previewManager.dump() (#886)"),
+    ("preview_cli", "preview_cli_probe.py",
+     "--preview CLI contract, no boot: canonical category classification (unexposed names, "
+     "grouped-no-item guidance), pre-boot item-path rejection (nonexistent/containment/directory) (#886)"),
     ("remote_warning_page_guard", "remote_warning_page_guard_probe.py",
      "remote-warning establishHere() revalidation guard against an active-world switch (#844)"),
     ("repair_item", "repair_item_probe.py",
