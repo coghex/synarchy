@@ -1,7 +1,10 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 -- | Blood decal model (#604): the world-scoped data + pure transitions
---   behind procedural injury blood, ahead of any rendering or combat
---   hook (see docs/blood_decals.md, the #603 epic's design record).
+--   behind procedural injury blood (see docs/blood_decals.md, the #603
+--   epic's design record). Rendering ("World.Render.BloodQuads"),
+--   one-shot impact marks ("Blood.Impact", #607), and the ongoing
+--   combat-driven trail emitter ("Blood.Trail", #882) all sit on top
+--   of this model.
 --
 --   Two registries, kept in one 'BloodStore' rather than two separate
 --   'Craft.Bills'/'Power.Types'-style refs, because eviction from the
