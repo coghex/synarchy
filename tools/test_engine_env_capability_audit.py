@@ -612,6 +612,23 @@ def test_stale_ceiling_entry_rejected():
            "tolerated as a mere upper bound")
 
 
+def test_stale_permanent_importer_rejected():
+    # A permanent (SS6.1) module is narrowed by a later change (no
+    # longer live-unrestricted) but PERMANENT_IMPORTERS is never
+    # updated to drop it -- this must fail just like a stale temporary
+    # ceiling entry does; the permanent allowlist is not exempt from
+    # the live-scan agreement requirement.
+    permanent = frozenset({"Perm.Stale"})
+    ceiling = {"core-init": frozenset({"Temp.Live"})}
+    doc = {"core-init": {"Temp.Live"}}
+    unrestricted = {"Temp.Live"}  # Perm.Stale no longer unrestricted
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("Perm.Stale" in v for v in violations),
+           "a checked-in PERMANENT_IMPORTERS entry that no longer has live "
+           "unrestricted access must be flagged as stale, matching the "
+           "temporary-ceiling side's same requirement")
+
+
 def test_ceiling_and_doc_mismatch_detected():
     permanent: frozenset[str] = frozenset()
     ceiling = {"core-init": frozenset({"Temp.A", "Temp.B"})}
@@ -691,6 +708,7 @@ def main() -> int:
         test_shrinking_migration_accepted,
         test_documented_but_ungoverned_addition_still_rejected,
         test_stale_ceiling_entry_rejected,
+        test_stale_permanent_importer_rejected,
         test_ceiling_and_doc_mismatch_detected,
         test_real_repo_ratchet_consistency,
     ]

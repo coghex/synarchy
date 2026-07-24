@@ -44,14 +44,15 @@ newly gaining unrestricted access fails this ratchet even if SS6.2 is
 ALSO edited to document it -- growing the checked-in ceiling itself
 (in this file) is the only way to admit a new temporary full-access
 module, and doing so without a matching SS6.2 update fails the
-doc/ceiling consistency check below. The ceiling is checked in BOTH
-directions: a module also fails the ratchet if it is listed in the
-checked-in ceiling (and/or SS6.2) but no longer has live unrestricted
+doc/ceiling consistency check below. Both the temporary ceiling AND the
+permanent allowlist are checked in BOTH directions: a module also fails
+the ratchet if it is listed in the checked-in ceiling (and/or SS6.2) or
+in PERMANENT_IMPORTERS (SS6.1) but no longer has live unrestricted
 access -- a stale entry left behind by a migration that narrowed the
-module without also shrinking the ceiling and SS6.2's row -- since
-SS6.2 must stay an exact, exhaustive mirror of the live temporary set,
-not merely an upper bound on it. `test/` sources remain outside this
-ratchet entirely (SS6.3's test-only exception).
+module without also updating its allowlist/ceiling entry -- since both
+SS6.1 and SS6.2 must stay an exact, exhaustive mirror of the live
+full-access set, never merely an upper bound on it. `test/` sources
+remain outside this ratchet entirely (SS6.3's test-only exception).
 
 Usage:
   python3 tools/engine_env_capability_audit.py
@@ -768,6 +769,24 @@ def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
             f"its SS6.2 row (docs/engineenv_capability_inventory.md), not "
             f"left as a stale entry: SS6.2's accounting must exactly mirror "
             f"the live temporary set, not merely bound it from above")
+
+    # SS6.1's permanent allowlist must agree with the live scan just as
+    # strictly as SS6.2's temporary ceiling does -- a permanent module
+    # that has since been narrowed (and so no longer needs its SS6.1
+    # exception) must be caught too, not only growth into a NEW
+    # full-access module. `Engine.Core.State` itself (the definer) is
+    # deliberately excluded from `permanent` above (PERMANENT_IMPORTERS
+    # holds only the 24 actual importers, never the definer), so no
+    # special-case exclusion is needed here.
+    for module in sorted(set(permanent) - unrestricted):
+        violations.append(
+            f"`{module}` is listed in the checked-in PERMANENT_IMPORTERS "
+            f"allowlist (SS6.1) but no longer has unrestricted "
+            f"`Engine.Core.State` access in the live source -- remove it "
+            f"from PERMANENT_IMPORTERS and its SS6.1 entry "
+            f"(docs/engineenv_capability_inventory.md) once it has "
+            f"genuinely been narrowed, rather than leaving a stale "
+            f"allowlist entry the live scan no longer agrees with")
 
     for cap in sorted(set(ceiling) | set(doc_temporary)):
         ceiling_set = set(ceiling.get(cap, frozenset()))
