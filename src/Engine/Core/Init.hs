@@ -179,6 +179,11 @@ initializeEngineWith logBackend = do
   videoConfig ← loadVideoConfig logger videoConfigPath
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
+  windowPosRef ← newIORef (0, 0)
+  -- wsAppliedMode is seeded by Engine.Graphics.Window.GLFW.createWindow
+  -- from what GLFW actually did, not from vcWindowMode -- a fullscreen
+  -- request can degrade to a plain window, and borderless is never
+  -- applied at creation at all (#907).
   windowStateRef ← newIORef defaultWindowState
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   brightnessRef ← newIORef (vcBrightness videoConfig)
@@ -260,6 +265,7 @@ initializeEngineWith logBackend = do
         , engineStateRef     = engineStateRef
         , videoConfigRef     = videoConfigRef
         , windowSizeRef      = windowSizeRef
+        , windowPosRef       = windowPosRef
         , windowStateRef     = windowStateRef
         , framebufferSizeRef = framebufferSizeRef
         , fpsRef             = fpsRef

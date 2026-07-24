@@ -1,0 +1,250 @@
+{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
+-- | Window-mode transition / windowed-geometry cache tests (issue #907).
+--
+--   The regression: 'Engine.Scripting.Lua.Message.Video.handleSetWindowMode'
+--   decided whether to cache the live windowed geometry by reading
+--   @vcWindowMode@ — a field
+--   'Engine.Scripting.Lua.API.Config.setWindowModeFn' has ALREADY
+--   overwritten with the TARGET mode on the Lua thread by the time the
+--   handler drains the queue on the render thread a frame later. So
+--   leaving @windowed@ saw @borderless@ and skipped the cache, and
+--   returning to @windowed@ saw @windowed@, cached the borderless
+--   monitor geometry, and "restored" that.
+--
+--   The fix keys every decision off 'wsAppliedMode' — the mode the render
+--   thread last actually applied — so these tests deliberately pin the
+--   reported ordering: each case is written as if @vcWindowMode@ already
+--   holds the target, which is exactly why the config never appears
+--   below. Nothing here needs a window, a GPU, or a live fullscreen
+--   switch: 'applyWindowModeTransition' is the whole decision.
+module Test.Headless.Graphics.WindowMode (spec) where
+
+import UPrelude
+import Test.Hspec
+import Engine.Core.State
+  ( WindowState(..), defaultWindowState, appliedModeAtCreation
+  , leavingWindowedMode, windowModeAlreadyApplied
+  , applyWindowModeTransition )
+import Engine.Graphics.Config (WindowMode(..))
+
+-- | A windowed session: the user's window, as the render thread would
+--   find it on screen before the first switch away.
+windowedSession ∷ WindowState
+windowedSession = WindowState
+  { wsWindowedPos  = (317, 208)
+  , wsWindowedSize = (1024, 768)
+  , wsAppliedMode  = Windowed
+  }
+
+userPos, userSize ∷ (Int, Int)
+userPos  = (317, 208)
+userSize = (1024, 768)
+
+-- | What a borderless window looks like live: the whole monitor at the
+--   origin. Caching THIS is the bug's signature.
+monitorPos, monitorSize ∷ (Int, Int)
+monitorPos  = (0, 0)
+monitorSize = (2560, 1440)
+
+-- | The WindowState the render thread holds right after
+--   'Engine.Graphics.Window.GLFW.createWindow', given whether its
+--   fullscreen request actually took effect.
+createdWith ∷ Bool → WindowState
+createdWith fullscreenApplied = defaultWindowState
+  { wsAppliedMode = appliedModeAtCreation fullscreenApplied }
+
+-- | One queued request: the target mode plus the geometry the render
+--   thread samples before applying it. Folding a list of these is exactly
+--   what 'handleSetWindowMode' does as 'processLuaMessages' drains the
+--   queue, one message per call, in order.
+type Request = (WindowMode, (Int, Int), (Int, Int))
+
+drain ∷ WindowState → [Request] → WindowState
+drain = foldl' (\ws (target, pos, size) →
+                  applyWindowModeTransition target pos size ws)
+
+spec ∷ Spec
+spec = do
+    describe "leavingWindowedMode" $ do
+        it "caches when leaving windowed for borderless" $
+            leavingWindowedMode Windowed BorderlessWindowed `shouldBe` True
+
+        it "caches when leaving windowed for fullscreen" $
+            leavingWindowedMode Windowed Fullscreen `shouldBe` True
+
+        it "never caches when entering windowed" $ do
+            leavingWindowedMode BorderlessWindowed Windowed `shouldBe` False
+            leavingWindowedMode Fullscreen Windowed `shouldBe` False
+
+        it "never caches when moving between the non-windowed modes" $ do
+            leavingWindowedMode BorderlessWindowed Fullscreen `shouldBe` False
+            leavingWindowedMode Fullscreen BorderlessWindowed `shouldBe` False
+
+        it "never caches when re-applying the mode already applied" $ do
+            leavingWindowedMode Windowed Windowed `shouldBe` False
+            leavingWindowedMode BorderlessWindowed BorderlessWindowed
+                `shouldBe` False
+
+    -- Review round 1 on PR #908: keying the cache off wsAppliedMode made
+    -- a REDUNDANT request meaningful where the old target-config guard
+    -- had made it inert. `scripts/settings/data.lua`'s Defaults path
+    -- calls engine.setWindowMode unconditionally, so a windowed session
+    -- pressing Defaults would have run the Windowed branch's restore
+    -- against a cache no switch away from windowed had ever filled —
+    -- teleporting the live window onto defaultWindowState's 800x600 at
+    -- (100,100). The handler short-circuits on this predicate instead.
+    describe "windowModeAlreadyApplied" $ do
+        it "reports a redundant request for each mode" $ do
+            let applied m = defaultWindowState { wsAppliedMode = m }
+            windowModeAlreadyApplied (applied Windowed) Windowed
+                `shouldBe` True
+            windowModeAlreadyApplied (applied BorderlessWindowed)
+                                     BorderlessWindowed `shouldBe` True
+            windowModeAlreadyApplied (applied Fullscreen) Fullscreen
+                `shouldBe` True
+
+        it "does not short-circuit a real switch" $ do
+            windowModeAlreadyApplied windowedSession BorderlessWindowed
+                `shouldBe` False
+            windowModeAlreadyApplied windowedSession Fullscreen
+                `shouldBe` False
+
+        -- The exact regression: a boot-fresh windowed session whose cache
+        -- still holds the defaults must not act on a redundant request.
+        it "short-circuits a redundant windowed request on a fresh boot" $ do
+            windowModeAlreadyApplied (createdWith False) Windowed
+                `shouldBe` True
+
+        -- A borderless-CONFIGURED boot comes up windowed, so asking for
+        -- borderless there is a real switch, not a redundant request.
+        it "does not short-circuit a borderless boot's first request" $ do
+            windowModeAlreadyApplied (createdWith False) BorderlessWindowed
+                `shouldBe` False
+
+    describe "applyWindowModeTransition" $ do
+        it "records the windowed geometry on the way out to borderless" $ do
+            let ws = applyWindowModeTransition BorderlessWindowed
+                                               userPos userSize windowedSession
+            wsWindowedPos ws `shouldBe` userPos
+            wsWindowedSize ws `shouldBe` userSize
+            wsAppliedMode ws `shouldBe` BorderlessWindowed
+
+        -- The half a live GUI check cannot exercise without switching the
+        -- monitor's video mode out from under the user.
+        it "records the windowed geometry on the way out to fullscreen" $ do
+            let ws = applyWindowModeTransition Fullscreen
+                                               userPos userSize windowedSession
+            wsWindowedPos ws `shouldBe` userPos
+            wsWindowedSize ws `shouldBe` userSize
+            wsAppliedMode ws `shouldBe` Fullscreen
+
+        it "leaves the cache alone when entering windowed" $ do
+            let borderless = applyWindowModeTransition BorderlessWindowed
+                                userPos userSize windowedSession
+                back = applyWindowModeTransition Windowed
+                                monitorPos monitorSize borderless
+            wsWindowedPos back `shouldBe` userPos
+            wsWindowedSize back `shouldBe` userSize
+            wsAppliedMode back `shouldBe` Windowed
+
+        it "leaves the cache alone moving between non-windowed modes" $ do
+            let ws = drain windowedSession
+                       [ (BorderlessWindowed, userPos, userSize)
+                       , (Fullscreen, monitorPos, monitorSize) ]
+            wsWindowedPos ws `shouldBe` userPos
+            wsWindowedSize ws `shouldBe` userSize
+            wsAppliedMode ws `shouldBe` Fullscreen
+
+    describe "window-mode round trips (#907)" $ do
+        -- The exact reproduction from the issue.
+        it "windowed -> borderless -> windowed restores pos AND size" $ do
+            let ws = drain windowedSession
+                       [ (BorderlessWindowed, userPos, userSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+
+        it "windowed -> fullscreen -> windowed restores pos AND size" $ do
+            let ws = drain windowedSession
+                       [ (Fullscreen, userPos, userSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+
+        -- Ordered back-to-back requests: whatever interleaving the Lua
+        -- thread's config writes happened to take, the queue is drained
+        -- in order and the geometry survives every hop.
+        it "survives a long back-to-back chain through both other modes" $ do
+            let ws = drain windowedSession
+                       [ (BorderlessWindowed, userPos, userSize)
+                       , (Fullscreen, monitorPos, monitorSize)
+                       , (BorderlessWindowed, monitorPos, monitorSize)
+                       , (Fullscreen, monitorPos, monitorSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+            wsAppliedMode ws `shouldBe` Windowed
+
+        -- Two switches away without an intervening return: the FIRST one
+        -- owns the cache, and a redundant repeat cannot clobber it.
+        it "a repeated switch away does not re-cache the new geometry" $ do
+            let ws = drain windowedSession
+                       [ (BorderlessWindowed, userPos, userSize)
+                       , (BorderlessWindowed, monitorPos, monitorSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+
+        it "re-caches a window the user moved between round trips" $ do
+            let movedPos  = (42, 96)
+                movedSize = (1440, 900)
+                ws = drain windowedSession
+                       [ (BorderlessWindowed, userPos, userSize)
+                       , (Windowed, monitorPos, monitorSize)
+                       -- ... user drags/resizes the restored window ...
+                       , (BorderlessWindowed, movedPos, movedSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (movedPos, movedSize)
+
+    describe "appliedModeAtCreation" $ do
+        -- Round 2 on PR #908: the seed must come from what GLFW actually
+        -- did, not from the configured mode. createWindow degrades a
+        -- fullscreen request to the plain window it just created when no
+        -- primary monitor or video mode is available, and it never asks
+        -- for borderless at all.
+        it "reports fullscreen only when setFullscreen actually ran" $
+            appliedModeAtCreation True `shouldBe` Fullscreen
+
+        it "reports windowed when no fullscreen was applied" $
+            appliedModeAtCreation False `shouldBe` Windowed
+
+        it "seeds the pre-window default in the applied windowed state" $
+            wsAppliedMode defaultWindowState `shouldBe` Windowed
+
+        -- A borderless-configured boot comes up as a plain decorated
+        -- window, so its first switch away must cache the real geometry.
+        it "lets a borderless-configured boot cache on its first switch" $ do
+            let ws = drain (createdWith False)
+                       [ (BorderlessWindowed, userPos, userSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+
+        -- A fullscreen request that FAILED leaves a live plain window.
+        -- Recording Fullscreen there would make the next windowed request
+        -- a real switch that restores the never-filled default cache,
+        -- teleporting that window to 800x600 at (100,100).
+        it "leaves a failed fullscreen boot's windowed request inert" $ do
+            let boot = createdWith False
+            wsAppliedMode boot `shouldBe` Windowed
+            windowModeAlreadyApplied boot Windowed `shouldBe` True
+
+        -- A fullscreen boot that SUCCEEDED does switch, and has no
+        -- windowed geometry to restore but the seeded fallback — which is
+        -- the honest answer, since no windowed window was ever on screen.
+        it "treats a real fullscreen boot's windowed request as a switch" $ do
+            let boot = createdWith True
+            wsAppliedMode boot `shouldBe` Fullscreen
+            windowModeAlreadyApplied boot Windowed `shouldBe` False
+            leavingWindowedMode (wsAppliedMode boot) Windowed `shouldBe` False

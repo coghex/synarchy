@@ -685,7 +685,7 @@ RENDER_CAPABILITY_MODULE = "Engine.Core.Capability.Render"
 RENDER_VIEW_MODULE = "Engine.Core.Capability.RenderView"
 
 # Production modules that legitimately run on `MainRender` and may hold
-# the full 20-field record. Every one of these is a SS6.2
+# the full 21-field record. Every one of these is a SS6.2
 # `render-gpu-asset` module #891 migrated whose execution domain SS5
 # records as `MainRender` (the Vulkan device/pipeline/swapchain/texture
 # family, font rasterization and upload, the GLFW window, UI/text

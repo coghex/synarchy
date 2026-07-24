@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.Input
   , getMousePositionFn
   , isMouseButtonDownFn
   , getWindowSizeFn
+  , getWindowPosFn
   , getFramebufferSizeFn
   , getWorldCoordFn
   ) where
@@ -84,6 +85,23 @@ getWindowSizeFn env _backendState = do
   (w, h) ← Lua.liftIO $ readIORef (rvWindowSizeRef (toRenderViewCapability env))
   Lua.pushnumber (Lua.Number (fromIntegral w))
   Lua.pushnumber (Lua.Number (fromIntegral h))
+  return 2
+
+-- | @debug.getWindowPos()@ — the window's screen position as of the last
+--   geometry publish the render thread made (see 'windowPosRef').
+--
+--   Registered under @debug@, not @engine@, on purpose: it is the
+--   diagnostic seam #907's windowed-geometry restore is verified through
+--   ('tools/video_window_check.py'), not a general-purpose window API.
+--   'GLFW.getWindowPos' may only be called on the main thread, so the Lua
+--   thread reads the published ref rather than GLFW itself — which also
+--   means a caller that needs a CURRENT position must first make the
+--   render thread republish (any @engine.setResolution@ does).
+getWindowPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getWindowPosFn env = do
+  (x, y) ← Lua.liftIO $ readIORef (rvWindowPosRef (toRenderViewCapability env))
+  Lua.pushnumber (Lua.Number (fromIntegral x))
+  Lua.pushnumber (Lua.Number (fromIntegral y))
   return 2
 
 getFramebufferSizeFn ∷ EngineEnv → LuaBackendState

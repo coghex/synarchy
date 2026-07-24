@@ -42,10 +42,12 @@ It asserts, against the live instance:
   6. a real window-mode TRANSITION runs through
      `handleSetWindowMode` — away from the current mode and back —
      with the instance responsive and `rcWindowSizeRef`/
-     `rcFramebufferSizeRef` live and sane through every branch, and the
-     mode round-tripping. `fullscreen` is never chosen as the target (it
-     switches the monitor video mode); `borderless` covers the same code
-     shape without disrupting the desktop,
+     `rcFramebufferSizeRef` live and sane through every branch, the
+     mode round-tripping, and (from a `windowed` start) the window
+     landing back on its exact pre-transition SIZE and POSITION.
+     `fullscreen` is never chosen as the target (it switches the
+     monitor video mode); `borderless` covers the same code shape
+     without disrupting the desktop,
   7. every setting it touched is restored to the value it found — the
      CONFIG resolution and the PHYSICAL window size independently.
 
@@ -59,15 +61,29 @@ write that enqueues nothing). Both are asserted at the end, so it
 cannot report a clean restore while having replaced the user's saved
 resolution with a transient window size.
 
-One thing this script deliberately does NOT assert: that the window-mode
-round trip returns the window to its pre-transition geometry. It does
-not, because of a pre-existing engine bug (#907) in the interaction
-between `API.Config.setWindowModeFn` and `Message.Video`'s
-`handleSetWindowMode` — see the comment at the round trip for the
-mechanism. This check therefore re-pins the window SIZE explicitly at
-the end instead of trusting that restore path. The window POSITION is
-not restorable from Lua, so running this from `windowed` can leave the
-window moved to 0,0; drag it back if so.
+The geometry round trip in point 6 is the #907 regression gate. That bug
+made `handleSetWindowMode` decide whether to cache the windowed geometry
+by reading `vcWindowMode` — which `API.Config.setWindowModeFn` has
+already overwritten with the TARGET mode on the Lua thread — so leaving
+`windowed` skipped the cache and returning to `windowed` restored the
+borderless monitor geometry instead. The decision now keys off
+`wsAppliedMode`, the mode the render thread last actually applied.
+
+Position is read through `debug.getWindowPos()`, the narrow diagnostic
+seam added with that fix: `GLFW.getWindowPos` is main-thread-only, so
+the Lua thread reads a ref the render thread publishes rather than GLFW
+itself. That ref is published on change, not continuously, so this
+script forces a publish (a no-op `engine.setResolution`) immediately
+before sampling — otherwise a window the human dragged since boot would
+be measured where it used to be.
+
+The geometry assertions run only from a `windowed` start, which is the
+state the cache contract is about. From a `borderless` or `fullscreen`
+start the values are printed but not asserted: `defaultWindowConfig`
+only applies `fullscreen` at window creation, so a
+borderless-configured boot comes up as a plain decorated window whose
+reported mode and real mode disagree, and the round trip legitimately
+moves it.
 
 Rendering is verified structurally (the instance keeps answering and
 keeps reporting a sane framebuffer). Whether the picture still LOOKS
@@ -252,7 +268,18 @@ def main() -> int:
     known_modes = ("windowed", "borderless", "fullscreen")
     mode_state = ("local w,h,mode = engine.getVideoConfig(); "
                   "local ww,wh = engine.getWindowSize(); "
-                  "return {mode=mode, winW=ww, winH=wh}")
+                  "local px,py = debug.getWindowPos(); "
+                  "return {mode=mode, winW=ww, winH=wh, posX=px, posY=py}")
+
+    def geometry(state) -> tuple | None:
+        """(x, y, w, h) out of a mode_state reply, or None if malformed."""
+        if not isinstance(state, dict):
+            return None
+        try:
+            return (int(state["posX"]), int(state["posY"]),
+                    int(state["winW"]), int(state["winH"]))
+        except (KeyError, TypeError, ValueError):
+            return None
 
     if orig_mode not in known_modes:
         # Never send an unrecognized string back as a "restore" — that
@@ -264,6 +291,18 @@ def main() -> int:
               "still runs)")
     else:
         other_mode = "borderless" if orig_mode == "windowed" else "windowed"
+
+        # `debug.getWindowPos` reports the position as of the render
+        # thread's last geometry publish — `GLFW.getWindowPos` is
+        # main-thread-only, so the Lua thread cannot sample the window
+        # itself. A no-op resize makes the render thread republish, so
+        # the baseline below is where the window IS, not where it was
+        # when some earlier engine-driven change last moved it.
+        lua(f"engine.setResolution({orig_w}, {orig_h}); return true")
+        settle()
+        before = geometry(lua(mode_state))
+        check("pre-transition window geometry is readable", before is not None,
+              str(before))
 
         lua(f'engine.setWindowMode("{other_mode}"); return true')
         alive_and_rendering(f"window mode -> {other_mode}")
@@ -286,40 +325,36 @@ def main() -> int:
               and int(mode_back.get("winW") or 0) > 0
               and int(mode_back.get("winH") or 0) > 0, str(mode_back))
 
-        # Deliberately NOT asserted: that the round trip lands back on
-        # the pre-transition window geometry. It does not, and that is a
-        # PRE-EXISTING engine bug (issue #907), not something this
-        # capability migration introduced or should fix — #891 is a pure
-        # refactor and lists window-behaviour changes as out of scope.
-        #
-        # `API.Config.setWindowModeFn` enqueues `LuaSetWindowMode` and
-        # then writes `vcWindowMode = target` on the Lua thread, so by
-        # the time `handleSetWindowMode` runs on MainRender a frame
-        # later and reads `videoConfigRef` to decide whether to cache
-        # the windowed geometry, the config already reports the TARGET
-        # mode. Leaving `windowed` therefore skips the cache, and
-        # returning to `windowed` caches the borderless monitor geometry
-        # and restores that instead. (It is also racy: if MainRender
-        # happens to drain between the enqueue and the config write, the
-        # guard sees the old mode and caches correctly.)
-        #
-        # So this script asserts what the migrated code genuinely
-        # guarantees — the handler runs, `rcWindowSizeRef`/
-        # `rcFramebufferSizeRef` stay live and sane through every
-        # branch, and the mode round-trips — and step 7 below puts the
-        # window SIZE back explicitly rather than trusting a restore
-        # path that does not work.
-        if (int(mode_back.get("winW") or -1),
-                int(mode_back.get("winH") or -1)) != (orig_w, orig_h):
-            print(f"    (known, pre-existing #907: the mode round trip left "
-                  f"the window at {mode_back.get('winW')}x"
-                  f"{mode_back.get('winH')} instead of {orig_w}x{orig_h}; "
-                  f"size is re-pinned below, but POSITION is not "
-                  f"restorable from Lua — drag the window back if it moved)")
+        # The #907 regression gate: the round trip must land the window
+        # back on the geometry it had before it, POSITION included.
+        # `handleSetWindowMode` caches the live windowed pos/size on the
+        # way out (keyed off `wsAppliedMode`, the mode the render thread
+        # last applied) and restores both on the way back in.
+        after = geometry(mode_back)
+        if orig_mode != "windowed":
+            # Only a `windowed` start exercises the windowed-geometry
+            # cache contract. From `borderless`, `defaultWindowConfig`
+            # never applied borderless at window creation, so the
+            # reported mode and the window's real state disagree and the
+            # round trip legitimately relocates it.
+            print(f"    (started in {orig_mode!r}, not 'windowed' — geometry "
+                  f"round trip reported but not asserted: {before} -> {after})")
+        else:
+            check("window-mode round trip restored the pre-transition size "
+                  "(#907)",
+                  before is not None and after is not None
+                  and after[2:] == before[2:],
+                  f"{before} -> {after}")
+            check("window-mode round trip restored the pre-transition "
+                  "position (#907)",
+                  before is not None and after is not None
+                  and after[:2] == before[:2],
+                  f"{before} -> {after}")
 
     # --- 7. leave the instance as we found it ---------------------------
-    # Re-pin the physical window size: the mode round trip above moved it,
-    # and in the non-`windowed` starting cases there is no cached geometry
+    # Re-pin the physical window size. From a `windowed` start the round
+    # trip already restored it (asserted above) and this is a no-op; from
+    # the other starting modes there is no windowed-geometry cache
     # guaranteeing it came back to exactly where it began.
     lua(f"engine.setResolution({orig_w}, {orig_h}); return true")
     settle()

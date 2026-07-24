@@ -74,6 +74,17 @@ data EngineEnv = EngineEnv
     --   invariant below), so a plain 'IORef' (no STM) is correct.
   , videoConfigRef      ∷ IORef VideoConfig
   , windowSizeRef       ∷ IORef (Int, Int)
+  , windowPosRef        ∷ IORef (Int, Int)
+    -- ^ The window's screen position as of the last geometry publish the
+    --   main render thread made (window creation, a Lua-driven resolution
+    --   change, a window-mode switch). It exists so the windowed-geometry
+    --   restore (#907) is OBSERVABLE from outside the render thread:
+    --   'GLFW.getWindowPos' may only be called on the main thread, so a
+    --   Lua-side check cannot read the position itself. Deliberately NOT
+    --   a live cursor of where the window is — no GLFW window-position
+    --   callback is installed, so a user dragging the window leaves this
+    --   stale until the next publish. Diagnostic reads (@debug.getWindowPos@)
+    --   drive a publish first; see 'tools/video_window_check.py'.
   , windowStateRef      ∷ IORef WindowState
   , framebufferSizeRef  ∷ IORef (Int, Int)
   , fpsRef              ∷ IORef Double
@@ -469,17 +480,99 @@ data GraphicsState = GraphicsState
     -- ^ Current zoom-atlas upload; replaced per world init/load.
   }
 
--- | Cached windowed-mode geometry so we can restore position\/size after fullscreen
+-- | Cached windowed-mode geometry so we can restore position\/size after
+--   fullscreen, plus the window mode the main render thread has actually
+--   APPLIED to the GLFW window.
 data WindowState = WindowState
   { wsWindowedPos  ∷ (Int, Int)   -- ^ Last known windowed position
   , wsWindowedSize ∷ (Int, Int)   -- ^ Last known windowed size (screen coords)
-  } deriving (Show)
+  , wsAppliedMode  ∷ WindowMode
+    -- ^ The mode the main render thread last applied to the window.
+    --   Every cache decision keys off THIS, never @vcWindowMode@ (#907):
+    --   'Engine.Scripting.Lua.API.Config.setWindowModeFn' publishes the
+    --   TARGET mode into the video config on the Lua thread the moment it
+    --   enqueues @LuaSetWindowMode@, so by the time the handler runs on
+    --   the render thread a frame later the config already reports the
+    --   mode being entered rather than the one being left.
+  } deriving (Show, Eq)
 
+-- | The pre-window seed. @wsAppliedMode@ starts 'Windowed' because no
+--   GLFW window exists yet — 'Engine.Graphics.Window.GLFW.createWindow'
+--   overwrites it with 'appliedModeAtCreation' once one does, and the
+--   window-less boot profiles (@--headless@, @--dump@, @--offscreen@)
+--   never reach 'Engine.Scripting.Lua.Message.Video.handleSetWindowMode'
+--   at all.
 defaultWindowState ∷ WindowState
 defaultWindowState = WindowState
   { wsWindowedPos  = (100, 100)
   , wsWindowedSize = (800, 600)
+  , wsAppliedMode  = Windowed
   }
+
+-- | The window mode a freshly created GLFW window actually came up in,
+--   given whether 'Engine.Graphics.Window.Types.wcFullscreen' was both
+--   requested AND successfully applied.
+--
+--   Deliberately keyed on the OUTCOME, not the configured mode.
+--   'Engine.Core.Defaults.defaultWindowConfig' only ever asks GLFW for
+--   fullscreen, so a 'BorderlessWindowed' config comes up as a plain
+--   decorated window; and 'Engine.Graphics.Window.GLFW.createWindow'
+--   degrades a fullscreen request gracefully to that same plain window
+--   when no primary monitor or video mode is available. Seeding
+--   'wsAppliedMode' from the config would call both of those cases
+--   fullscreen, and a later 'Windowed' request would then skip caching
+--   and teleport a live decorated window onto 'defaultWindowState'\'s
+--   fallback geometry.
+appliedModeAtCreation ∷ Bool → WindowMode
+appliedModeAtCreation True  = Fullscreen
+appliedModeAtCreation False = Windowed
+
+-- | Does switching to @target@ mean LEAVING an applied windowed state?
+--   Only then may the live GLFW geometry be captured into the cache:
+--
+--   * entering 'Windowed' must not cache — that would overwrite the
+--     user's geometry with the borderless\/fullscreen geometry the very
+--     restore is trying to replace (the #907 symptom), and
+--   * moving between the two non-windowed modes must not cache — there
+--     is no windowed geometry on screen to record.
+leavingWindowedMode ∷ WindowMode → WindowMode → Bool
+leavingWindowedMode applied target = applied ≡ Windowed ∧ target ≢ Windowed
+
+-- | Is there nothing to switch — has the render thread already applied
+--   this mode?
+--
+--   A redundant request must NOT re-run the switch. That matters most
+--   for 'Windowed', whose branch RESTORES from the geometry cache, and
+--   the cache holds nothing meaningful until a real switch away from
+--   windowed has filled it: re-applying it to a live windowed window
+--   would teleport it onto the default 800x600 at (100,100). Redundant
+--   requests are reachable — @scripts/settings/data.lua@'s Defaults path
+--   calls @engine.setWindowMode@ unconditionally.
+windowModeAlreadyApplied ∷ WindowState → WindowMode → Bool
+windowModeAlreadyApplied ws target = wsAppliedMode ws ≡ target
+
+-- | Fold one SUCCESSFULLY applied window-mode switch into the
+--   render-thread-owned 'WindowState': cache the supplied live geometry
+--   when (and only when) 'leavingWindowedMode' says so, then record the
+--   newly applied mode.
+--
+--   The live position\/size must be sampled BEFORE the GLFW switch, while
+--   the window is still in the mode being left. Applying the fold after
+--   the switch is what keeps the restore path correct: entering 'Windowed'
+--   reads the cache during the switch and never writes it here.
+--
+--   Purely a function of the applied mode and the target, so a sequence of
+--   back-to-back requests folds deterministically in queue order, with no
+--   dependence on when the Lua thread published @vcWindowMode@.
+applyWindowModeTransition ∷ WindowMode → (Int, Int) → (Int, Int)
+                          → WindowState → WindowState
+applyWindowModeTransition target livePos liveSize ws
+  | leavingWindowedMode (wsAppliedMode ws) target
+  = ws { wsWindowedPos  = livePos
+       , wsWindowedSize = liveSize
+       , wsAppliedMode  = target }
+  | otherwise
+  = ws { wsAppliedMode = target }
 
 -- | The single canonical "active world" resolution rule. Every read of
 --   "the current world" must go through this (or 'activeWorldState' /

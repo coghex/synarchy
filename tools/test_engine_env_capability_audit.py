@@ -802,9 +802,9 @@ def test_audit_against_the_real_repo():
            f"the real EngineEnv + the real inventory doc should have zero "
            f"violations, got: {violations}")
     live_fields = extract_record_fields(real_source, ENGINE_ENV_PATTERN)
-    expect(len(live_fields) == 81,
-           f"expected 81 live EngineEnv fields (issue #876's own count), "
-           f"got {len(live_fields)}")
+    expect(len(live_fields) == 82,
+           f"expected 82 live EngineEnv fields (issue #876's own count of 81, "
+           f"plus #907's `windowPosRef`), got {len(live_fields)}")
 
 
 def main() -> int:
