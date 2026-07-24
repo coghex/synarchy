@@ -119,88 +119,96 @@ data TrailMarkOut = TrailMarkOut
 --   catch-up dt, or a large single step in the hspec partition-
 --   invariance tests) pops that many marks, each getting an EQUAL share
 --   of the pending volume (so total emitted volume is exactly
---   conserved). Each mark's @tmoFraction@ within THIS call's
---   [start,end] step is whichever of the two gates is the SLOWER
---   (later-reached) one for that mark — @max@ of the distance-implied
---   and the time-implied fraction, assuming uniform motion across the
---   call — so a mark whose count is capped by cadence lands where
---   cadence actually cleared, not wherever distance alone would have
---   put it. This is what keeps positions (not just counts/volumes)
---   timestep-partition-invariant: using distance alone would place a
---   cadence-limited mark differently depending on how the same journey
---   was chunked into calls (a confirmed round-2 review regression).
+--   conserved). Marks are placed SEQUENTIALLY (round-5 review): the
+--   first mark's @tmoFraction@ within THIS call's [start,end] step is
+--   whichever gate is the SLOWER (later-reached) one measured from
+--   whatever was already banked before this call — @max@ of the
+--   distance-implied and time-implied fraction, assuming uniform motion
+--   across the call — but every mark AFTER the first is placed a fixed
+--   @max(ttMinDistance/stepDist, ttMinCadence/dt)@ fraction further
+--   along, i.e. gated against the PRECEDING mark's own actual position,
+--   not against this call's original starting baseline. Computing every
+--   mark's fraction independently against that shared baseline (the
+--   round-2 fix) keeps counts/volumes/positions invariant across
+--   different chunkings, but does NOT guarantee two marks are actually
+--   >= ttMinDistance apart from EACH OTHER — the gate governing mark k
+--   can differ from the gate governing mark k+1, letting the pair
+--   land closer together than the spacing floor (a confirmed round-5
+--   review regression). Sequential placement fixes that while still
+--   preserving partition invariance, since the per-mark advance depends
+--   only on this call's own (stepDist, dt), not on which call it is.
 consumeTrailMarks
     ∷ TrailThresholds → Float → Double → Double → TrailState
     → (TrailState, [TrailMarkOut])
-consumeTrailMarks tp stepDist dt now ts0 =
-    let d0           = tsDistSinceMark ts0
-        d1           = d0 + max 0 stepDist
-        elapsedEnd   = max 0 (now - tsLastMarkAt ts0)
-        elapsedStart = max 0 (elapsedEnd - max 0 dt)
-        nDist | ttMinDistance tp > 0 = floor (d1 / ttMinDistance tp)
-              | otherwise            = 0 ∷ Int
-        nTime | ttMinCadence tp > 0  = floor (elapsedEnd / ttMinCadence tp)
-              | otherwise            = 0 ∷ Int
-        -- Distance/cadence alone would happily "pop" a zero-volume mark
-        -- once banked progress from an EARLIER bleed clears both gates
-        -- on a tick where nothing has drained since (a wound that just
-        -- clotted, or a unit that was briefly not bleeding at all) —
-        -- issue #882 requirement 2/3 forbid a mark with no real blood
-        -- behind it, so no pop happens at all while pendingVolume is
-        -- empty; the banked distance/cadence simply keeps waiting
-        -- (harmlessly — the caller clears the whole accumulator once
-        -- there's neither pending volume nor any live external bleed
-        -- left to wait for, see "Unit.Thread.Movement").
-        --
-        -- Likewise requiring stepDist > 0 (round-4 review): distance
-        -- and cadence can BOTH already be banked from earlier movement
-        -- while the unit has since stopped — cadence alone keeps
-        -- advancing with real time regardless of motion. Popping in a
-        -- call where nothing moved would place a mark at a stationary
-        -- unit's resting position, which is stationary/collapsed
-        -- POOLING — issue #882 requirement explicitly defers that to
-        -- #883. A pop only ever happens in a call where the unit is
-        -- ACTUALLY moving; the banked state is preserved untouched
-        -- (nothing here resets it) for whenever movement resumes.
-        n | tsPendingVolume ts0 > 0 ∧ stepDist > 0 = max 0 (min nDist nTime)
-          | otherwise                              = 0
-    in if n ≤ 0
-       then (ts0 { tsDistSinceMark = d1 }, [])
-       else
-         let share = tsPendingVolume ts0 / fromIntegral n
-             distFrac k
-                 | stepDist > 0 =
-                     clamp01 ((fromIntegral k * ttMinDistance tp - d0) / stepDist)
-                 | otherwise = 0
-             timeFrac k
-                 | dt > 0 =
-                     clamp01 (realToFrac
-                        ((fromIntegral k * ttMinCadence tp - elapsedStart) / dt))
-                 | otherwise = 0
-             frac k = max (distFrac k) (timeFrac k)
-             marks = [ TrailMarkOut (frac k) share | k ← [1 .. n] ]
-             -- Residual distance/time must be measured from where the
-             -- LAST mark actually landed (round-3 review) — not from
-             -- "n whole minDistance multiples", which is only correct
-             -- when distance is the dimension that governed every
-             -- popped mark. When cadence governs instead (frac driven
-             -- by timeFrac, e.g. 3 tiles in 1s: minDistance=1 would
-             -- allow 3 marks but minCadence caps it to 2, landing the
-             -- 2nd at the full 3-tile mark, not the 2-tile one), that
-             -- formula fictionally banks leftover distance the unit
-             -- never actually travelled PAST the real mark position —
-             -- letting the very next tiny step pop another mark well
-             -- under 'ttMinDistance' away. @frac n@ (monotonic in k) is
-             -- the last mark's true fraction through THIS call's own
-             -- [start,end] window; only the portion of the step AFTER
-             -- that fraction is unconsumed distance/time.
-             lastFrac = frac n
-             ts' = ts0
-                 { tsPendingVolume = 0
-                 , tsDistSinceMark = (1 - lastFrac) * stepDist
-                 , tsLastMarkAt    = now - realToFrac (1 - lastFrac) * dt
-                 }
-         in (ts', marks)
+consumeTrailMarks tp stepDist dt now ts0
+    -- Distance/cadence alone would happily "pop" a zero-volume mark
+    -- once banked progress from an EARLIER bleed clears both gates on
+    -- a tick where nothing has drained since (a wound that just
+    -- clotted, or a unit that was briefly not bleeding at all) — issue
+    -- #882 requirement 2/3 forbid a mark with no real blood behind it.
+    --
+    -- Likewise requiring stepDist > 0 (round-4 review): distance and
+    -- cadence can BOTH already be banked from earlier movement while
+    -- the unit has since stopped — cadence alone keeps advancing with
+    -- real time regardless of motion. Popping in a call where nothing
+    -- moved would place a mark at a stationary unit's resting
+    -- position, which is stationary/collapsed POOLING — issue #882
+    -- explicitly defers that to #883.
+    --
+    -- Either way, no pop happens; the banked distance/cadence/volume
+    -- state is preserved untouched (harmlessly — the caller clears the
+    -- whole accumulator once there's neither pending volume nor any
+    -- live external bleed left to wait for, see "Unit.Thread.Movement").
+    | tsPendingVolume ts0 ≤ 0 ∨ stepDist ≤ 0 =
+        (ts0 { tsDistSinceMark = tsDistSinceMark ts0 + max 0 stepDist }, [])
+    | otherwise =
+        let d0           = tsDistSinceMark ts0
+            elapsedEnd   = max 0 (now - tsLastMarkAt ts0)
+            elapsedStart = max 0 (elapsedEnd - max 0 dt)
+            -- Fixed per-mark advance (fraction of THIS call's own
+            -- step) once a mark has already landed within this call —
+            -- whichever gate needs the larger share of the step to
+            -- clear a FULL fresh 'ttMinDistance'/'ttMinCadence' from
+            -- that mark's own position.
+            distStep = ttMinDistance tp / stepDist
+            timeStep = if dt > 0 then realToFrac (ttMinCadence tp / dt) else 1 / 0
+            fracStep = max distStep timeStep
+            -- The FIRST mark still measures against whatever distance/
+            -- time was already banked (d0/elapsedStart) from BEFORE
+            -- this call — unchanged from the round-2 fix. Clamped at 0:
+            -- both gates may already be satisfied from earlier banking,
+            -- in which case the first mark lands at this call's very
+            -- start.
+            firstDistFrac = (ttMinDistance tp - d0) / stepDist
+            firstTimeFrac = if dt > 0
+                            then realToFrac ((ttMinCadence tp - elapsedStart) / dt)
+                            else 1 / 0
+            firstFrac = max 0 (max firstDistFrac firstTimeFrac)
+            -- Indexed by multiplication (firstFrac + i*fracStep), not
+            -- repeated addition (iterate (+ fracStep)) — the latter
+            -- ACCUMULATES Float rounding error term over term (e.g. a
+            -- chain of ten 0.1 additions drifts further from 1.0 than
+            -- a single 10*0.1), which previously undercounted a mark at
+            -- the boundary of a whole-multiple catch-up.
+            fracs = takeWhile (≤ 1)
+                        [ firstFrac + fromIntegral i * fracStep | i ← [0 ∷ Int ..] ]
+            n = length fracs
+        in if n ≤ 0
+           then (ts0 { tsDistSinceMark = d0 + stepDist }, [])
+           else
+             let share = tsPendingVolume ts0 / fromIntegral n
+                 marks = [ TrailMarkOut (clamp01 f) share | f ← fracs ]
+                 -- Residual distance/time is measured from where the
+                 -- LAST mark actually landed (round-3 review), not from
+                 -- "n whole minDistance multiples" — only the portion
+                 -- of the step AFTER that fraction is unconsumed.
+                 lastFrac = last fracs
+                 ts' = ts0
+                     { tsPendingVolume = 0
+                     , tsDistSinceMark = (1 - lastFrac) * stepDist
+                     , tsLastMarkAt    = now - realToFrac (1 - lastFrac) * dt
+                     }
+             in (ts', marks)
 
 -- ----- Volume -> texture-request mapping -----
 

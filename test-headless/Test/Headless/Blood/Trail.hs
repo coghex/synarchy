@@ -23,6 +23,9 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
 import World.Save.Types (toUnitSnapshot, fromUnitSnapshot)
+import Infection.Types (emptyInfectionManager)
+import Combat.Wounds (tickOneUnit)
+import qualified System.Random as Random
 import Blood.Trail
 import Blood.Types (BloodStyle(..), BloodStore(..), allDecals)
 import Combat.Wounds.Bleed (isExternallyBleedingKind)
@@ -86,6 +89,23 @@ gatingSpec = describe "Blood.Trail.consumeTrailMarks — distance/cadence gating
         marks `shouldBe` []
         tsPendingVolume ts' `shouldBe` 0.5
         tsDistSinceMark ts' `shouldBe` ttMinDistance tp
+
+    it "consecutive marks in the SAME call are genuinely >= ttMinDistance apart \
+       \(round-5 review regression)" $ do
+        -- The exact reviewer-supplied counter-example: with defaults
+        -- (ttMinDistance=1.0, ttMinCadence=0.5), distSinceMark=0.9 and a
+        -- 10-tile/6s call used to place marks at ~0.667 and ~1.5 (only
+        -- 0.833 tiles apart) because each mark's fraction was computed
+        -- independently against the call's ORIGINAL baseline rather
+        -- than against the PRECEDING mark's own position — reachable on
+        -- any catch-up tick after a speed change.
+        let tp  = defaultTrailThresholds
+            ts0 = TrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0.9, tsLastMarkAt = 0 }
+            (_, marks) = consumeTrailMarks tp 10 6 6.1 ts0
+            positions = map ((* 10) . tmoFraction) marks
+            gaps = zipWith (-) (drop 1 positions) positions
+        length marks `shouldSatisfy` (≥ 2)
+        gaps `shouldSatisfy` all (\g → g ≥ ttMinDistance tp - 1e-4)
 
     it "never pops a mark with no real blood behind it, even when both gates clear" $ do
         -- A stale distance/cadence bank from a bleed that has since
@@ -356,3 +376,22 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
         case HM.lookup uid (umInstances um1) of
             Nothing    → expectationFailure "unit vanished across the save/load round-trip"
             Just inst' → uiTrailState inst' `shouldBe` Nothing
+
+    it "a dead unit's wound tick never recreates the trail accumulator, even with an \
+       \externally-bleeding wound still in uiWounds (round-5 review regression)" $ do
+        -- handleUnitKillCommand clears uiTrailState AND stamps
+        -- uiPose="dead" synchronously, so Combat.Wounds.Tick's own
+        -- "uiPose inst == dead" early-exit guard is what makes death
+        -- terminal for the accumulator on every SUBSEQUENT wound tick
+        -- (the corpse's wounds are never cleared, so without this
+        -- guard a still-bleeding kind would keep re-deriving a
+        -- positive externalPortion and recreate Just from Nothing).
+        let w = Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.6
+                      , woundAt = 0, woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0
+                      , woundDressing = "", woundInfection = 0.0, woundClean = False
+                      , woundInfectionType = "", woundNecrosis = 0.0 }
+            inst = (minimalInst pageA Nothing)
+                { uiPose = "dead", uiWounds = [w], uiBlood = 3.0 }
+            (inst', _, _) = tickOneUnit 100 minimalDef 0.1 emptyInfectionManager Nothing
+                                (Random.mkStdGen 1) inst False
+        uiTrailState inst' `shouldBe` Nothing

@@ -77,6 +77,15 @@ def bootstrap_defs(port: int) -> None:
     send(port,
          "pcall(function() require('scripts.unit_ai').update = function() end end); "
          "return 'ai-off'")
+    # unit_resources' stamina drain would otherwise exhaust-collapse a
+    # unit sustaining a full-speed 15-tile route long before it arrives
+    # — movement_probe.py's own documented gotcha for its "move mode"
+    # ("the auto-loaded resource tick would otherwise exhaust-collapse a
+    # unit..."). This probe tests bleeding-trail emission, not stamina;
+    # neutralise it the same way.
+    send(port,
+         "pcall(function() require('scripts.unit_resources').update = function() end end); "
+         "return 'resources-off'")
 
 
 def reset_blood() -> None:
@@ -160,6 +169,25 @@ def move_to(uid: int, tx: float, ty: float, speed: float = 1.0) -> None:
          expect_result=False)
 
 
+def grid_x(uid: int):
+    info = send_json(PORT, f"return unit.getInfo({uid})")
+    return info.get("gridX") if isinstance(info, dict) else None
+
+
+def wait_arrival(uid: int, target_x: float, timeout: float = 90.0,
+                  epsilon: float = 0.5) -> bool:
+    """Poll until the unit's gridX is within epsilon of target_x (arrived
+    and stopped) — the full-route acceptance criterion (mark count/
+    distribution bounded for the WHOLE route) only means something once
+    the unit has actually finished travelling it; stopping early at the
+    first couple of marks would leave most of the documented upper bound
+    unexercised."""
+    def arrived() -> bool:
+        x = grid_x(uid)
+        return x is not None and abs(x - target_x) < epsilon
+    return poll_until(timeout, arrived, interval=1.0) is not None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9041)
@@ -181,21 +209,28 @@ def main() -> int:
         # a moderate-or-higher slash on this unit's torso empirically
         # exsanguinates in well under 15s (its bpBleedFactor is steep) —
         # this case needs the unit ALIVE for the whole route, not testing
-        # death (that's case 4/e, on its own explicit unit.kill()).
+        # death (that's case 4/e, on its own explicit unit.kill()). Since
+        # this case now waits for actual arrival (round-5 review) against
+        # a generous worst-case-scheduling ceiling (up to 90 REAL
+        # seconds — blood drain runs on wall-clock time via the combat
+        # thread regardless of how slowly movement itself progresses),
+        # severity must stay safe across that whole window, not just a
+        # nominal ~15 sim-second traversal.
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "slash", 0.2)   # untreated (bandage defaults to 1.0)
+        injure(uid, "slash", 0.1)   # untreated (bandage defaults to 1.0)
         impact_ids = impact_decal_ids()   # slash always creates one impact decal
         move_to(uid, 10 + route, 10)
-        # Poll for at least 2 marks rather than assume a fixed sleep
-        # margin always yields more than one — real-time engine
-        # scheduling can lag well behind wall-clock under system load,
-        # and the unit stops generating NEW marks once it arrives, so
-        # a generous ceiling matters more than a short one here.
-        if poll_until(90.0, lambda: len(trail_decals(impact_ids)) >= 2, interval=1.0) is None:
-            print(f"FAIL (setup): fewer than 2 trail marks appeared within 90s "
-                  f"along a {route}-tile bled, moved route "
-                  f"({len(trail_decals(impact_ids))} so far) — engine too slow "
+        # Wait for the unit to actually FINISH the route (not just "at
+        # least 2 marks") — the documented bounds are a route-LENGTH
+        # acceptance criterion, so evaluating them the moment a couple
+        # of marks appear would leave most of the upper bound and the
+        # tail of the route unexercised (round-5 review). A generous
+        # ceiling matters more than a short one — real-time engine
+        # scheduling can lag well behind wall-clock under system load.
+        if not wait_arrival(uid, 10 + route, timeout=90.0):
+            print(f"FAIL (setup): unit never completed the {route}-tile route "
+                  f"within 90s (stuck at gridX={grid_x(uid)}) — engine too slow "
                   f"under current load, or a real regression")
             return 2
         ds = trail_decals(impact_ids)
@@ -219,17 +254,21 @@ def main() -> int:
         # --- 2(b). same bounds hold at a different world.setTimeScale ---
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "slash", 0.2)
+        injure(uid, "slash", 0.1)
         impact_ids = impact_decal_ids()
         send(PORT, "world.setTimeScale(5.0); return 'ok'")
         move_to(uid, 10 + route, 10)
-        if poll_until(90.0, lambda: len(trail_decals(impact_ids)) >= 1, interval=1.0) is None:
-            send(PORT, "world.setTimeScale(1.0); return 'ok'")
-            print(f"FAIL (setup): no trail marks appeared within 90s at "
-                  f"world.setTimeScale(5.0)")
-            return 2
+        # Same "wait for the whole route" reasoning as case 1(a) above —
+        # otherwise this only ever proves a partial-route mark count is
+        # in bounds, which world.setTimeScale couldn't desync anyway.
+        arrived = wait_arrival(uid, 10 + route, timeout=90.0)
         ds = trail_decals(impact_ids)
         send(PORT, "world.setTimeScale(1.0); return 'ok'")
+        if not arrived:
+            print(f"FAIL (setup): unit never completed the {route}-tile route "
+                  f"within 90s at world.setTimeScale(5.0) (stuck at "
+                  f"gridX={grid_x(uid)})")
+            return 2
         if not (lower_bound <= len(ds) <= upper_bound):
             print(f"FAIL: mark count {len(ds)} outside bounds "
                   f"[{lower_bound},{upper_bound}] at world.setTimeScale(5.0)")

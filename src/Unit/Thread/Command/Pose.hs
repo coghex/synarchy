@@ -88,18 +88,25 @@ handleUnitKillCommand env utsRef uid = do
     -- non-Standing guards and the Lua-side dead-pose short-circuit.
     --
     -- Also clear the bleeding-trail accumulator (#882 requirement 5)
-    -- HERE, synchronously with the kill — a queued UnitKill (e.g. the
-    -- unit.kill debug surface, or an AI-driven death) bypasses
-    -- Combat.Wounds.Tick's own DiedNow clearing entirely, and waiting
-    -- for the NEXT tick's publishToRender to mirror uiPose="dead" onto
-    -- the render-facing UnitInstance would leave Unit.Thread.Movement's
-    -- own dead-pose check reading a stale (pre-kill) pose for one more
-    -- tick, during which a banked mark could still pop/emit.
+    -- and stamp uiPose="dead" HERE, synchronously with the kill — a
+    -- queued UnitKill (e.g. the unit.kill debug surface, or an
+    -- AI-driven death) bypasses Combat.Wounds.Tick's own DiedNow
+    -- clearing entirely, and waiting for the NEXT tick's
+    -- publishToRender to mirror uiPose="dead" from sim state would
+    -- leave BOTH Unit.Thread.Movement's dead-pose check AND
+    -- Combat.Wounds.Tick's own "uiPose inst == dead" early-exit guard
+    -- reading a stale (pre-kill) pose for up to one more wound tick —
+    -- long enough for a still-externally-bleeding corpse to recreate
+    -- uiTrailState from Nothing before the mirror ever lands (round-5
+    -- review). Stamping uiPose here directly closes that race; the
+    -- next publishToRender idempotently re-derives the SAME "dead"
+    -- string from usPose, so this never fights it.
     atomicModifyIORef' (unitManagerRef env) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing   → (um, ())
             Just inst → (um { umInstances = HM.insert uid
-                                (inst { uiTrailState = Nothing }) (umInstances um) }, ())
+                                (inst { uiTrailState = Nothing
+                                      , uiPose = "dead" }) (umInstances um) }, ())
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
