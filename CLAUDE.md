@@ -456,8 +456,14 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
   its category-relative path with `/` separators and the file extension
   INCLUDED (e.g. `skill/climbing.png`) — sorted lexicographically. The
   first entry auto-selects; its texture renders in the main panel,
-  nearest-neighbour scaled, fit to the panel with aspect ratio preserved.
-  Click a row to select it; wheel-scroll the list.
+  nearest-neighbour scaled (`previewManager.init` forces
+  `engine.setTextureFilter("nearest")` live-session-only — never assumed
+  from the default video config, which a user's persisted
+  `config/video.local.yaml` can override to `"linear"`), fit to the panel
+  with aspect ratio preserved. Click a row to select it; wheel-scroll the
+  list. A resize (the preview window is resizable) reflows the panel/list
+  bounds while preserving the current selection and scroll offset
+  (`previewManager.onFramebufferResize`).
   A label displayed here is ALWAYS a valid item target for the form below
   — discovery and item resolution apply the identical extension rule, so
   they can never disagree.
@@ -488,7 +494,10 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
 Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
 check above the "always opens a real window" line) and
 `tools/preview_probe.py` (manual-only, `needs-gpu` — the real-boot
-browser checks: discovery/selection/scroll/trimmed-loading via the dump,
+browser checks: discovery/selection/scroll/resize via the dump, forced
+nearest filtering, trimmed loading cross-checked against
+`blood.gpuStats().texSize` — the engine's own authoritative loaded-
+texture count, not just previewManager's self-reported bookkeeping —
 plus the grouped-category placeholder boot). Focused hspec coverage for
 the pure discovery/labeling/ordering/containment logic:
 `cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`.

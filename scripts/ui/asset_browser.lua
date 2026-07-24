@@ -23,10 +23,13 @@ end
 --   font, fontSize, itemHeight, maxVisible, uiscale, zIndex
 --   listWidthFraction (default 0.35), gap (default 20)
 --   entries = { { label = "...", path = "..." }, ... }
---   onSelect = function(path, label, index) end -- fired once at
---     creation for the first entry (Requirement 3's "first entry
---     selected by default") and again on every later click/keyboard
---     selection.
+--   onSelect = function(path, label, index) end -- fired by
+--     assetBrowser.selectEntry (below) and by every later click/
+--     keyboard selection. NOT fired by 'new' itself — a caller doing
+--     texture-fit math off getPanelBounds must be able to read it
+--     BEFORE the initial selection fires (selectEntry's own doc
+--     explains why), which 'new' auto-selecting internally could not
+--     guarantee.
 function assetBrowser.new(params)
     local id = nextId
     nextId = nextId + 1
@@ -62,6 +65,7 @@ function assetBrowser.new(params)
     browsers[id] = {
         id     = id,
         listId = listId,
+        items  = items,
         panelBounds = {
             x = params.x + listWidth + gap,
             y = params.y,
@@ -70,12 +74,30 @@ function assetBrowser.new(params)
         },
     }
 
-    -- Requirement 3: the first entry is selected by default.
-    if #items > 0 then
-        list.selectItem(listId, 1)
-    end
-
     return id
+end
+
+-- Select an entry by its path, falling back to the first entry when
+-- 'path' is nil or not found (Requirement 3's "first entry selected by
+-- default"). Fires onSelect synchronously, same as a real click —
+-- callers MUST read getPanelBounds(id) before calling this: a resize
+-- rebuild (#886 round-1 review) recreates the browser at NEW bounds,
+-- and onSelect's texture-fit math needs those new bounds already in
+-- hand, not whatever a caller's own state held from before this browser
+-- existed.
+function assetBrowser.selectEntry(id, path)
+    local b = browsers[id]
+    if not b or #b.items == 0 then return end
+    local index = 1
+    if path then
+        for i, item in ipairs(b.items) do
+            if item.value == path then
+                index = i
+                break
+            end
+        end
+    end
+    list.selectItem(b.listId, index)
 end
 
 function assetBrowser.destroy(id)
@@ -106,6 +128,13 @@ function assetBrowser.getScrollOffset(id)
     local b = browsers[id]
     if not b then return 0 end
     return list.getScrollOffset(b.listId)
+end
+
+-- Restore a scroll position (e.g. across a resize rebuild, #886).
+function assetBrowser.setScrollOffset(id, offset)
+    local b = browsers[id]
+    if not b then return end
+    list.setScrollOffset(b.listId, offset)
 end
 
 -- Introspection (#886 Requirement 6): per-visible-row interactive

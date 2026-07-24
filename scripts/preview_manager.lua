@@ -94,9 +94,10 @@ local function requestTexture(path)
 end
 
 -- Fit 'handle' (already-uploaded texture at 'path') into panelBounds
--- with nearest-neighbour scaling (the engine's default texture filter,
--- Engine.Graphics.Config.defaultVideoConfig) and aspect ratio preserved
--- (Requirement 3).
+-- with nearest-neighbour scaling (forced in previewManager.init below —
+-- NOT assumed from the default video config, which is only nearest
+-- until a user's own persisted config/video.local.yaml picks "linear")
+-- and aspect ratio preserved (Requirement 3).
 function previewManager.applyTexture(handle, path)
     textureCache[path] = handle
     if not panelBounds then return end
@@ -129,7 +130,11 @@ local function onEntrySelected(path, _label, _index)
     requestTexture(path)
 end
 
-local function buildListUI(browseEntries)
+-- restoreSelectedPath/restoreScroll: nil for the initial build (selects
+-- entry 1 by default, per assetBrowser.selectEntry); real values passed
+-- by onFramebufferResize's rebuild so a resize never resets what the
+-- user already picked (#886 round-1 review).
+local function buildListUI(browseEntries, fbW, fbH, restoreSelectedPath, restoreScroll)
     mode = "list"
     entries = browseEntries or {}
 
@@ -138,7 +143,6 @@ local function buildListUI(browseEntries)
         listItems[i] = { label = e.label, path = e.path }
     end
 
-    local fbW, fbH = engine.getFramebufferSize()
     assetBrowser.init()
     browserId = assetBrowser.new({
         page = page,
@@ -149,28 +153,53 @@ local function buildListUI(browseEntries)
         entries = listItems,
         onSelect = onEntrySelected,
     })
+    -- panelBounds MUST be current before selectEntry fires onSelect
+    -- synchronously below — see assetBrowser.selectEntry's own doc.
     panelBounds = assetBrowser.getPanelBounds(browserId)
 
     if #listItems == 0 then
         readyState = "empty"
+        return
     end
-    -- else: assetBrowser.new already selected entry 1, which fired
-    -- onEntrySelected -> requestTexture synchronously above.
+    assetBrowser.selectEntry(browserId, restoreSelectedPath)
+    if restoreScroll and restoreScroll > 0 then
+        assetBrowser.setScrollOffset(browserId, restoreScroll)
+    end
 end
 
-local function buildFocusedUI(entry)
-    mode = "item"
-    focusedEntry = entry
-    local fbW, fbH = engine.getFramebufferSize()
+-- Recompute the focused-item panel geometry and, if the texture already
+-- resolved, immediately re-fit the existing sprite to it — the initial
+-- build (requestTexture hasn't fired yet) and a resize rebuild (the
+-- texture is already cached) both route through here.
+local function refitFocusedPanel(fbW, fbH)
     panelBounds = {
         x = 40, y = 40,
         width = math.max(1, fbW - 80),
         height = math.max(1, fbH - 80),
     }
+    if focusedEntry then
+        local cached = textureCache[focusedEntry.path]
+        if cached then
+            previewManager.applyTexture(cached, focusedEntry.path)
+        end
+    end
+end
+
+local function buildFocusedUI(entry, fbW, fbH)
+    mode = "item"
+    focusedEntry = entry
+    refitFocusedPanel(fbW, fbH)
     requestTexture(entry.path)
 end
 
 function previewManager.init(scriptId)
+    -- Requirement 3: nearest-neighbour is REQUIRED for the browser, not
+    -- just the default — a user's persisted config/video.local.yaml can
+    -- set "linear" (defaultVideoConfig is only nearest until then), and
+    -- the bindless sampler is shared engine-wide, so pin it explicitly
+    -- for this preview session. Live-only (no engine.saveVideoConfig
+    -- call) — never touches the user's saved setting.
+    engine.setTextureFilter("nearest")
     labelFont = engine.loadFont("assets/fonts/arcade.ttf", FONT_SIZE)
 end
 
@@ -181,10 +210,11 @@ function previewManager.onAssetLoaded(assetType, handle, path)
         page = UI.newPage("preview_manager", "menu")
 
         local browse = engine.getPreviewBrowse()
+        local fbW, fbH = engine.getFramebufferSize()
         if browse and browse.mode == "list" then
-            buildListUI(browse.entries)
+            buildListUI(browse.entries, fbW, fbH, nil, nil)
         elseif browse and browse.mode == "item" then
-            buildFocusedUI(browse.entry)
+            buildFocusedUI(browse.entry, fbW, fbH)
         else
             -- Phase 1 (#632) placeholder: grouped category, or no
             -- browse state at all.
@@ -266,6 +296,29 @@ end
 function previewManager.onUIScroll(elemHandle, dx, dy, _shiftHeld)
     if not browserId then return end
     assetBrowser.onScroll(elemHandle, dx, dy)
+end
+
+-- Preview windows are resizable (App.Preview reuses the normal window
+-- config), so a bare-category list or a focused item must reflow on
+-- resize instead of leaving stale bounds/sprite dimensions behind
+-- (#886 round-1 review) — the SAME broadcast every other loaded script
+-- receives (Engine.Scripting.Lua.Thread.Dispatch's
+-- LuaFramebufferResize -> "onFramebufferResize").
+function previewManager.onFramebufferResize(width, height)
+    if not page then return end
+    if mode == "list" then
+        local prevPath = browserId and assetBrowser.getSelectedPath(browserId)
+        local prevScroll = browserId and assetBrowser.getScrollOffset(browserId) or 0
+        if browserId then
+            assetBrowser.destroy(browserId)
+            browserId = nil
+        end
+        buildListUI(entries, width, height, prevPath, prevScroll)
+    elseif mode == "item" then
+        refitFocusedPanel(width, height)
+    end
+    -- "placeholder" mode (Phase 1, #632): the label's fixed (40,40)
+    -- position never overflows, so nothing to reflow.
 end
 
 -----------------------------------------------------------

@@ -620,6 +620,21 @@ function list.getScrollOffset(id)
     return ls.scrollOffset
 end
 
+-- Set the scroll offset directly (e.g. restoring it across a geometry
+-- rebuild, #886). Routed through the scrollbar widget when one exists so
+-- its tab position and the list content never desync — the identical
+-- path a real scrollbar drag/click already uses.
+function list.setScrollOffset(id, offset)
+    local ls = lists[id]
+    if not ls then return end
+    if ls.scrollbarId then
+        scrollbar.setScrollOffset(ls.scrollbarId, offset)
+    else
+        ls.scrollOffset = math.max(0, math.floor(offset))
+        list.refreshSlots(id)
+    end
+end
+
 function list.getSelectedValue(id)
     local ls = lists[id]
     if not ls then return nil end

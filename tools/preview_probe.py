@@ -12,20 +12,27 @@ Checks:
      (engine.getBootProfile/getPreviewTarget), grouped+item form
      ("units/acolyte") — the Phase 1 (#632) placeholder-label boot path,
      unaffected by #886.
-  2. Simple-category list mode (--preview icons): the discovered entry
-     list (require("scripts.preview_manager").dump()) matches a
-     filesystem-derived expectation computed independently in this
-     probe; the first entry is auto-selected and its texture resolves
-     to "ready"; clicking a DIFFERENT row (located from the dump's
-     per-row interactive bounds — never hardcoded coordinates, the
-     offscreen_probe.py convention) changes the selection; scrolling
+  2. Simple-category list mode (--preview icons): the texture filter is
+     forced to nearest regardless of the persisted video config; the
+     discovered entry list (require("scripts.preview_manager").dump())
+     matches a filesystem-derived expectation computed independently in
+     this probe; the first entry is auto-selected and its texture
+     resolves to "ready"; clicking a DIFFERENT row (located from the
+     dump's per-row interactive bounds — never hardcoded coordinates,
+     the offscreen_probe.py convention) changes the selection; scrolling
      over the list (input.moveMouse + input.scroll, located the same
-     way) changes the reported scroll offset.
-  3. Focused item mode (--preview icons/<item>): no list (dump().rows
-     is absent/empty) while the requested texture resolves.
-  4. Trimmed loading (Requirement 5): every texture path
-     previewManager.dump() reports as requested resolves under the
-     browsed category's own root.
+     way) changes the reported scroll offset; a framebuffer resize
+     (engine.setResolution) reflows the panel bounds while preserving
+     the current selection and scroll offset.
+  3. Focused item mode (--preview icons/<item>): texture filter forced
+     to nearest; no list (dump().rows is absent/empty) while the
+     requested texture resolves; a resize reflows the panel bounds.
+  4. Trimmed loading (Requirement 5): the engine's OWN authoritative
+     texture-upload count (blood.gpuStats().texSize) matches EXACTLY
+     the browsed category's own requested textures plus the documented
+     chrome allowlist (list mode only) — not just previewManager's
+     self-reported bookkeeping — and every self-reported path resolves
+     under the browsed category's own root.
 
 Usage:
   python3 tools/preview_probe.py [--port 9150]
@@ -38,7 +45,7 @@ import argparse
 import os
 import sys
 import time
-from probelib import boot, quit_engine, send, send_json
+from probelib import boot, quit_engine, send, send_json, poll_until
 
 LOG = "/tmp/preview_probe_engine.log"
 
@@ -110,6 +117,15 @@ def check_simple_list_mode(port: int) -> bool:
         expected = expected_entries("icons")
         d = poll_state(port, "ready")
 
+        # Requirement 3: nearest-neighbour is forced for the preview
+        # session (previewManager.init), NOT merely assumed from the
+        # default video config, which a user's persisted
+        # config/video.local.yaml can override to "linear" (#886
+        # round-1 review).
+        texture_filter = send(port, "return select(10, engine.getVideoConfig())")
+        ok_filter = check("texture filter forced to nearest",
+                          texture_filter == "nearest", texture_filter)
+
         ok_mode = check("mode == list", d.get("mode") == "list", d.get("mode"))
         rows = d.get("rows") or []
         entry_count = d.get("entryCount")
@@ -153,17 +169,71 @@ def check_simple_list_mode(port: int) -> bool:
             ok_scroll = check("scroll offset changes on wheel input",
                              after != before, f"before={before} after={after}")
 
-        # Trimmed loading (Requirement 5): every requested path stays
-        # under the browsed category's own root.
-        loaded = d.get("loadedPaths") or []
-        root_prefix = os.path.join("assets", "textures", "icons") + "/"
-        ok_trimmed = check("every requested texture path stays under the "
-                          "browsed category's root",
-                          all(p.startswith(root_prefix) for p in loaded),
-                          loaded)
+        # Resize (#886 round-1 review): the preview window is resizable
+        # (App.Preview reuses the normal window config) — a framebuffer
+        # resize must reflow the panel/sprite bounds AND preserve the
+        # current selection + scroll offset rather than silently
+        # resetting them (previewManager.onFramebufferResize).
+        before_resize = dump(port)
+        prev_bounds = before_resize.get("panelBounds") or {}
+        prev_selected = before_resize.get("selected") or {}
+        prev_scroll = before_resize.get("scrollOffset")
+        new_w = int(prev_bounds.get("width", 400)) + 300
+        new_h = int(prev_bounds.get("height", 300)) + 200
+        send(port, f"return engine.setResolution({new_w}, {new_h})", timeout=10.0)
+        after_resize = poll_until(
+            10.0, lambda: (dump(port).get("panelBounds") or {}) != prev_bounds
+                and dump(port))
+        after_resize = after_resize or dump(port)
+        ok_resize_bounds = check("panel bounds reflow on resize",
+                                 after_resize.get("panelBounds") != prev_bounds,
+                                 after_resize.get("panelBounds"))
+        ok_resize_selection = check("selection preserved across resize",
+                                    (after_resize.get("selected") or {}).get("label")
+                                    == prev_selected.get("label"),
+                                    after_resize.get("selected"))
+        ok_resize_scroll = check("scroll offset preserved across resize",
+                                 after_resize.get("scrollOffset") == prev_scroll,
+                                 after_resize.get("scrollOffset"))
 
-        return all([ok_mode, ok_count, ok_first, ok_ready, ok_click,
-                    ok_scroll, ok_trimmed])
+        # Trimmed loading (Requirement 5): cross-check against the
+        # engine's OWN authoritative texture-upload count
+        # (blood.gpuStats already exposes texSize, the live
+        # textureSizeRef entry count — an engine-side ground truth, not
+        # self-reported by previewManager) so an unrelated/hidden
+        # texture load anywhere in the engine shows up as a count
+        # mismatch here, not just a gap in previewManager's own
+        # bookkeeping (#886 round-1 review).
+        dfinal = dump(port)
+        loaded = dfinal.get("loadedPaths") or []
+        root_prefix = os.path.join("assets", "textures", "icons") + os.sep
+        ok_paths = check("every requested texture path stays under the "
+                        "browsed category's root",
+                        all(p.startswith(root_prefix) for p in loaded),
+                        loaded)
+
+        gpu = send_json(port, "return blood.gpuStats()")
+        tex_size = gpu.get("texSize") if isinstance(gpu, dict) else None
+        # List mode always loads scripts.ui.list's 6 chrome textures
+        # (highlight.png + 5 scrollbar assets) the moment ANY list is
+        # built — list.init()/scrollbar.init() are unconditional,
+        # regardless of whether this particular list needs to scroll —
+        # so the engine-wide total must be EXACTLY chrome +
+        # previewManager's own tracked requests, no slack for anything
+        # else (a gameplay catalog, a stray world/HUD texture, ...) to
+        # have snuck in.
+        CHROME_TEXTURE_COUNT = 6
+        expected_tex_size = CHROME_TEXTURE_COUNT + len(loaded)
+        ok_trimmed = check("engine-wide loaded-texture count is EXACTLY "
+                          "chrome + the browsed category's own requests "
+                          "(no unrelated/hidden texture load)",
+                          tex_size == expected_tex_size,
+                          f"texSize={tex_size} expected={expected_tex_size} "
+                          f"(chrome={CHROME_TEXTURE_COUNT} loaded={len(loaded)})")
+
+        return all([ok_filter, ok_mode, ok_count, ok_first, ok_ready, ok_click,
+                    ok_scroll, ok_resize_bounds, ok_resize_selection,
+                    ok_resize_scroll, ok_paths, ok_trimmed])
     finally:
         quit_engine(port, proc)
 
@@ -175,6 +245,10 @@ def check_focused_item_mode(port: int) -> bool:
                 label="preview engine (icons item)")
     try:
         d = poll_state(port, "ready")
+        texture_filter = send(port, "return select(10, engine.getVideoConfig())")
+        ok_filter = check("texture filter forced to nearest",
+                          texture_filter == "nearest", texture_filter)
+
         ok_mode = check("mode == item", d.get("mode") == "item", d.get("mode"))
         ok_no_list = check("no list (rows absent)", not d.get("rows"), d.get("rows"))
         selected = d.get("selected") or {}
@@ -182,7 +256,37 @@ def check_focused_item_mode(port: int) -> bool:
                             selected.get("label") == "skill/climbing.png",
                             selected)
         ok_ready = check("resolved to ready", d.get("state") == "ready", d.get("state"))
-        return ok_mode and ok_no_list and ok_selected and ok_ready
+
+        # Trimmed loading: focused mode never calls assetBrowser.init(),
+        # so no list chrome loads at all — the engine-wide texture count
+        # must be EXACTLY the one requested texture (see the list-mode
+        # check above for why this is the engine's own ground truth,
+        # not previewManager's self-reported loadedPaths).
+        loaded = d.get("loadedPaths") or []
+        gpu = send_json(port, "return blood.gpuStats()")
+        tex_size = gpu.get("texSize") if isinstance(gpu, dict) else None
+        ok_trimmed = check("engine-wide loaded-texture count == exactly "
+                          "the one requested texture (no list chrome, "
+                          "no unrelated/hidden texture load)",
+                          tex_size == len(loaded),
+                          f"texSize={tex_size} loaded={loaded}")
+
+        # Resize (#886 round-1 review): focused mode has no list to
+        # preserve, but the panel/sprite still must reflow, not overflow
+        # or go stale (previewManager.onFramebufferResize).
+        prev_bounds = d.get("panelBounds") or {}
+        new_w = int(prev_bounds.get("width", 400)) + 300
+        new_h = int(prev_bounds.get("height", 300)) + 200
+        send(port, f"return engine.setResolution({new_w}, {new_h})", timeout=10.0)
+        after_resize = poll_until(
+            10.0, lambda: (dump(port).get("panelBounds") or {}) != prev_bounds
+                and dump(port)) or dump(port)
+        ok_resize = check("panel bounds reflow on resize",
+                          after_resize.get("panelBounds") != prev_bounds,
+                          after_resize.get("panelBounds"))
+
+        return (ok_filter and ok_mode and ok_no_list and ok_selected
+                and ok_ready and ok_trimmed and ok_resize)
     finally:
         quit_engine(port, proc)
 
