@@ -82,6 +82,8 @@ import Data.List (maximumBy)
 import qualified System.Random as Random
 import Combat.Types (AttackMode(..), attackModeText)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Types (ItemDef(..), ItemWeapon(..), ItemInstance(..)
                   , ItemManager(..), lookupItemDef)
@@ -115,8 +117,13 @@ resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → Float → F
 resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
     um ← readIORef (unitManagerRef env)
-    im ← readIORef (itemManagerRef env)
-    sm ← readIORef (substanceManagerRef env)
+    -- Weapon/armor item defs + their worked-material properties are
+    -- reached through the `content-registries` capability (#890), not
+    -- the broader EngineEnv this module still carries for unit/combat
+    -- state (SS7.5 narrows the rest).
+    let regs = toContentRegistriesCapability env
+    im ← readIORef (crItemManagerRef regs)
+    sm ← readIORef (crSubstanceManagerRef regs)
     gt ← readIORef (gameTimeRef env)
     let atkId = UnitId atkRaw
         tgtId = UnitId tgtRaw

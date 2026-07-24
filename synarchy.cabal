@@ -330,6 +330,7 @@ library
                      Engine.Core.Monad
                      Engine.Core.State
                      Engine.Core.Capability.Core
+                     Engine.Core.Capability.ContentRegistries
                      Engine.Save.Barrier
                      Engine.Load.Status
                      Engine.Preview.Discovery

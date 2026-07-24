@@ -8,6 +8,8 @@ import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState)
 import Unit.Types
 import Unit.Sim.Types
@@ -95,15 +97,18 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId = do
             -- Starting inventory: look each entry up in the ItemManager
             -- and build an ItemInstance. Unknown names are dropped
             -- with a warning (load-order issue: items loaded after
-            -- units that reference them).
-            itemMgr ← readIORef (itemManagerRef env)
+            -- units that reference them). Both catalogues are reached
+            -- through the `content-registries` capability (#890); the
+            -- unit state they materialize into is still broad EngineEnv.
+            let regs = toContentRegistriesCapability env
+            itemMgr ← readIORef (crItemManagerRef regs)
             logger  ← readIORef (loggerRef env)
             taggedInventory ← buildStartingInventory env logger itemMgr
                                   (udStartingInventory def)
             -- Pre-equipped items declared by the unit def's
             -- starting_equipment. Resolved against the EquipmentClass
             -- so each item's kind can be validated against the slot.
-            ecMgr ← readIORef (equipmentClassManagerRef env)
+            ecMgr ← readIORef (crEquipmentClassManagerRef regs)
             let mClass = udEquipmentClass def >>= (`lookupEquipmentClass` ecMgr)
             initialEquipment ← buildStartingEquipment env logger itemMgr mClass
                                   (udStartingEquipment def)

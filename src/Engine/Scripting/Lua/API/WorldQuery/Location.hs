@@ -1,6 +1,15 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 -- | Placed-location queries: world.listPlacedLocations,
 --   world.hasSpawnedLocationContents, world.hasStampedLocation.
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the location-def registry is reached only through
+--   'ContentRegistriesCapability'. 'worldListPlacedLocationsFn' still
+--   takes an 'EngineEnv', but purely as the opaque token the
+--   not-yet-narrowed @world-sim-render-handoff@ page-lookup services
+--   ('activeWorldState', 'worldStateByPage') demand — this module
+--   dereferences no 'EngineEnv' field itself, and that parameter goes
+--   away when @world-sim-render-handoff@ migrates (SS7.4).
 module Engine.Scripting.Lua.API.WorldQuery.Location
     ( worldListPlacedLocationsFn
     , worldHasSpawnedLocationContentsFn
@@ -12,7 +21,9 @@ import qualified HsLua as Lua
 import qualified Data.HashSet as HS
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldState)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import World.Types
 import Location.Overlay.Types (overlayToList)
 import Location.Types (LocationDef(..), LocationRegistry, lookupLocation)
@@ -44,8 +55,9 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 --   `locations` module wraps this as locations.listPlaced(); join `id`
 --   against locations.getDef for label/type/builder. Returns an empty
 --   table when no such world exists or none were placed.
-worldListPlacedLocationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldListPlacedLocationsFn env = do
+worldListPlacedLocationsFn ∷ ContentRegistriesCapability → EngineEnv
+                           → Lua.LuaE Lua.Exception Lua.NumResults
+worldListPlacedLocationsFn regs env = do
     mPage ← Lua.tostring 1
     (mParams, defs) ← Lua.liftIO $ do
         mWs ← case mPage of
@@ -54,7 +66,7 @@ worldListPlacedLocationsFn env = do
         mp ← case mWs of
             Just ws → readIORef (wsGenParamsRef ws)
             Nothing → pure Nothing
-        reg ← readIORef (locationDefsRef env)
+        reg ← readIORef (crLocationDefsRef regs)
         pure (mp, reg)
     Lua.newtable
     case mParams of

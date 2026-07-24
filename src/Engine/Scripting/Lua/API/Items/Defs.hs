@@ -4,6 +4,16 @@
 --   Split from Engine.Scripting.Lua.API.Items (#577) — ground-item
 --   world state lives in Items.Ground, selection/render-introspection
 --   in Items.Render.
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the item catalogue is reached only through
+--   'ContentRegistriesCapability' and the logger only through
+--   'CoreCapability'. 'loadItemYamlFn' still takes an 'EngineEnv', but
+--   purely as the opaque token the not-yet-narrowed @render-gpu-asset@
+--   texture helpers ('resolveTexturePath', 'loadAndRegister',
+--   'isTextureNameRegistered') demand — this module dereferences no
+--   'EngineEnv' field itself, and that parameter goes away when
+--   @render-gpu-asset@ migrates (SS7.2).
 module Engine.Scripting.Lua.API.Items.Defs
     ( loadItemYamlFn
     , itemListDefsFn
@@ -17,11 +27,16 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
-import Engine.Asset.YamlTextures (lookupTextureName)
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister,
+                                              isTextureNameRegistered,
+                                              resolveTexturePath)
 import Engine.Asset.YamlItems
 import Item.Types
 
@@ -47,10 +62,11 @@ resolveSpritePath env = resolveTexturePath env "Item sprite" missingEquipmentTex
 
 -- | item.loadYaml(path) — parses a YAML file of item defs, loads each
 --   item's sprite, and registers the defs into the ItemManager.
---   Returns the number of defs loaded.
-loadItemYamlFn ∷ EngineEnv → LuaBackendState
-               → Lua.LuaE Lua.Exception Lua.NumResults
-loadItemYamlFn env backendState = do
+--   Returns the number of defs loaded. Callable repeatedly; each call
+--   inserts/replaces by def name.
+loadItemYamlFn ∷ CoreCapability → ContentRegistriesCapability → EngineEnv
+               → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
+loadItemYamlFn core regs env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
         Nothing → do
@@ -59,15 +75,16 @@ loadItemYamlFn env backendState = do
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
-                logger ← readIORef (loggerRef env)
+                logger ← getLoggerFor core
                 defs ← loadItemYaml logger filePath
                 let (lteq, _) = lbsMsgQueues backendState
 
                 -- Register the broken-weapon overlay once (same flow as
                 -- item sprites). The ground-item renderer fetches it by
                 -- name from the texture-name registry.
-                reg0 ← readIORef (textureNameRegistryRef env)
-                when (isNothing (lookupTextureName brokenEquipmentTexName reg0)) $
+                alreadyRegistered ← isTextureNameRegistered env
+                                        brokenEquipmentTexName
+                unless alreadyRegistered $
                     void $ loadAndRegister env backendState lteq
                                brokenEquipmentTexName brokenEquipmentTexture
 
@@ -157,7 +174,7 @@ loadItemYamlFn env backendState = do
                             , idInsulation  = iydInsulation def
                             }
 
-                    atomicModifyIORef' (itemManagerRef env) $ \im →
+                    atomicModifyIORef' (crItemManagerRef regs) $ \im →
                         (ItemManager
                             { imDefs = HM.insert (iydName def) itemDef
                                                 (imDefs im) }, ())
@@ -175,9 +192,10 @@ loadItemYamlFn env backendState = do
 
 -- | item.listDefs() → array of {name, displayName, category, weight}
 --   Sorted by name for a stable debug-overlay listing.
-itemListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-itemListDefsFn env = do
-    im ← Lua.liftIO $ readIORef (itemManagerRef env)
+itemListDefsFn ∷ ContentRegistriesCapability
+               → Lua.LuaE Lua.Exception Lua.NumResults
+itemListDefsFn regs = do
+    im ← Lua.liftIO $ readIORef (crItemManagerRef regs)
     let defs = L.sortOn idName (HM.elems (imDefs im))
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] defs) $ \(i, d) → do

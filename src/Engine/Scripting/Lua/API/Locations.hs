@@ -1,4 +1,15 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+-- | Lua surface for the location-def catalogue (#88/#90).
+--
+--   Narrowed to the @content-registries@ capability (#890, epic #537):
+--   the location registry is reached only through
+--   'ContentRegistriesCapability' and the logger only through
+--   'CoreCapability'. 'loadLocationYamlFn' still takes an 'EngineEnv',
+--   but purely as the opaque token the not-yet-narrowed
+--   @render-gpu-asset@ texture helpers ('resolveTexturePath',
+--   'loadAndRegister') demand — this module dereferences no 'EngineEnv'
+--   field itself, and that parameter goes away when @render-gpu-asset@
+--   migrates (SS7.2).
 module Engine.Scripting.Lua.API.Locations
     ( loadLocationYamlFn
     , locationListDefsFn
@@ -10,8 +21,12 @@ import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlLocations
@@ -31,9 +46,11 @@ missingLocationIconTexture = "assets/textures/utility/notexture.png"
 --   Mirrors engine.loadBuildingYaml / engine.loadSubstanceYaml.
 --   Locations load LAST at boot (after items / units / buildings) so a
 --   future cross-registry validation pass (#90) can resolve content ids.
-loadLocationYamlFn ∷ EngineEnv → LuaBackendState
+--   Callable repeatedly; each call inserts/replaces by def id.
+loadLocationYamlFn ∷ CoreCapability → ContentRegistriesCapability
+                   → EngineEnv → LuaBackendState
                    → Lua.LuaE Lua.Exception Lua.NumResults
-loadLocationYamlFn env backendState = do
+loadLocationYamlFn core regs env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
         Nothing → do
@@ -42,7 +59,7 @@ loadLocationYamlFn env backendState = do
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
-                logger ← readIORef (loggerRef env)
+                logger ← getLoggerFor core
                 defs ← loadLocationYaml logger filePath
                 let (lteq, _) = lbsMsgQueues backendState
                 total ← foldM (\acc d → do
@@ -78,7 +95,7 @@ loadLocationYamlFn env backendState = do
                             , ldDiscoveryMargin = lydDiscoveryMargin d
                             , ldMapIcons   = lydMapIcons d
                             }
-                    atomicModifyIORef' (locationDefsRef env) $ \reg →
+                    atomicModifyIORef' (crLocationDefsRef regs) $ \reg →
                         (registerLocation def reg, ())
                     return (acc + 1)
                     ) (0 ∷ Int) defs
@@ -116,9 +133,10 @@ loadLocationYamlFn env backendState = do
 --   `bounds` / `discovery_margin` are always present — every def loads
 --   with a required, validated spatial contract (#777).
 --   The Lua `locations` module wraps this as locations.listDefs().
-locationListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-locationListDefsFn env = do
-    defs ← Lua.liftIO $ allLocations <$> readIORef (locationDefsRef env)
+locationListDefsFn ∷ ContentRegistriesCapability
+                   → Lua.LuaE Lua.Exception Lua.NumResults
+locationListDefsFn regs = do
+    defs ← Lua.liftIO $ allLocations <$> readIORef (crLocationDefsRef regs)
     Lua.newtable
     forM_ (zip [1..] defs) $ \(i, d) → do
         Lua.newtable

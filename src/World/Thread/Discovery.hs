@@ -19,6 +19,8 @@ import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.PlayerEvent.Emit (emitEventFullOnPage)
 import Location.Discovery (DiscoveryHit(..), findDiscoveries)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
@@ -46,7 +48,10 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     case mParams of
         Nothing → pure ()
         Just p → do
-            registry ← readIORef (locationDefsRef env)
+            -- Location defs (their discovery margins) come through the
+            -- `content-registries` capability (#890).
+            registry ← readIORef
+                (crLocationDefsRef (toContentRegistriesCapability env))
             um ← readIORef (unitManagerRef env)
             mActive ← activeWorldPage env
             let isActivePage = case mActive of

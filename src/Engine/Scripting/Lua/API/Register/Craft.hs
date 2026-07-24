@@ -6,13 +6,19 @@ import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Craft
 import Engine.Scripting.Lua.API.Power
 import Engine.Scripting.Lua.API.Repair
-import Engine.Core.State (EngineEnv)
+import Engine.Core.State (EngineEnv, unitManagerRef)
+import Engine.Core.Capability.ContentRegistries
+  (toContentRegistriesCapability)
 import qualified HsLua as Lua
 
 -- | Populate and install the @craft@, @power@, and @repair@ global
 --   tables.
 registerCraftAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
 registerCraftAPI env = do
+  -- craft.get/getNames and the whole repair surface read the recipe
+  -- (and item) catalogue through the `content-registries` capability
+  -- (#890) rather than the full EngineEnv.
+  let regs = toContentRegistriesCapability env
   -- Craft global — the crafting recipe catalogue (#325), loaded from
   -- data/recipes/*.yaml via engine.loadRecipeYaml. get/getNames are
   -- read-only queries; execute runs one craft against a unit's
@@ -26,8 +32,8 @@ registerCraftAPI env = do
   -- are the craft AI's job lifecycle. setBillPaused / reorderBill are
   -- the #330 station panel's pause + manual-reorder controls.
   Lua.newtable
-  registerLuaFunction "get"      (craftGetFn env)
-  registerLuaFunction "getNames" (craftGetNamesFn env)
+  registerLuaFunction "get"      (craftGetFn regs)
+  registerLuaFunction "getNames" (craftGetNamesFn regs)
   registerLuaFunction "execute"  (craftExecuteFn env)
   registerLuaFunction "executeAt" (craftExecuteAtFn env)
   registerLuaFunction "addBill"           (craftAddBillFn env)
@@ -70,7 +76,7 @@ registerCraftAPI env = do
   -- restricted to repair-tagged recipes; repairAt runs one repair
   -- against a targeted item instance.
   Lua.newtable
-  registerLuaFunction "get"      (repairGetFn env)
-  registerLuaFunction "getNames" (repairGetNamesFn env)
-  registerLuaFunction "repairAt" (repairAtFn env)
+  registerLuaFunction "get"      (repairGetFn regs)
+  registerLuaFunction "getNames" (repairGetNamesFn regs)
+  registerLuaFunction "repairAt" (repairAtFn regs (unitManagerRef env) env)
   Lua.setglobal (Lua.Name "repair")

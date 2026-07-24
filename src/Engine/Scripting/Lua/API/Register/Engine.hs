@@ -64,6 +64,9 @@ import Engine.Scripting.Lua.API.Locations (loadLocationYamlFn, locationListDefsF
 import Engine.Scripting.Lua.API.LootTables (loadLootTableYamlFn)
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (toCoreCapability)
+import Engine.Core.Capability.ContentRegistries
+  (toContentRegistriesCapability)
 import qualified HsLua as Lua
 
 -- | engine.debugThrow() — deliberately throws a non-Lua Haskell
@@ -76,6 +79,11 @@ debugThrowFn = error "debugThrow: deliberate test exception"
 registerEngineAPI ∷ Lua.State → EngineEnv → LuaBackendState
                   → Lua.LuaE Lua.Exception ()
 registerEngineAPI lst env backendState = do
+  -- The content-registry loaders are narrowed to the `content-registries`
+  -- capability (#890) — projected once here, alongside `core-init` for
+  -- their logging. See docs/engineenv_capability_inventory.md SS7.6.
+  let core = toCoreCapability env
+      regs = toContentRegistriesCapability env
   Lua.newtable
 
   registerLuaFunction "quit"              (quitFn env)
@@ -140,14 +148,16 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "loadFloraYaml" (loadFloraYamlFn env backendState)
   registerLuaFunction "loadUnitYaml" (loadUnitYamlFn env backendState)
   registerLuaFunction "loadBuildingYaml" (loadBuildingYamlFn env backendState)
-  registerLuaFunction "loadItemYaml" (loadItemYamlFn env backendState)
-  registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
-  registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
-  registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
-  registerLuaFunction "loadRecipeYaml" (loadRecipeYamlFn env)
-  registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env backendState)
-  registerLuaFunction "listLocationDefs" (locationListDefsFn env)
-  registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn env)
+  registerLuaFunction "loadItemYaml" (loadItemYamlFn core regs env backendState)
+  registerLuaFunction "loadEquipmentYaml"
+                          (loadEquipmentYamlFn core regs env backendState)
+  registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn core regs)
+  registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn core regs)
+  registerLuaFunction "loadRecipeYaml" (loadRecipeYamlFn core regs)
+  registerLuaFunction "loadLocationYaml"
+                          (loadLocationYamlFn core regs env backendState)
+  registerLuaFunction "listLocationDefs" (locationListDefsFn regs)
+  registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn core regs)
 
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)

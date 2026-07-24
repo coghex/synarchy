@@ -9,11 +9,16 @@ import Engine.Scripting.Lua.API.Forage
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.Plant (worldGetPlantSuitabilityFn)
 import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.ContentRegistries
+  (toContentRegistriesCapability)
 import qualified HsLua as Lua
 
 -- | Populate and install the @world@ and @flora@ global tables.
 registerWorldAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
 registerWorldAPI env = do
+  -- world.listPlacedLocations joins placements against the location-def
+  -- registry through the `content-registries` capability (#890).
+  let regs = toContentRegistriesCapability env
   Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn env)
@@ -105,7 +110,8 @@ registerWorldAPI env = do
   registerLuaFunction "getClimateAt" (worldGetClimateAtFn env)
   registerLuaFunction "getAmbientAt" (worldGetAmbientAtFn env)
   registerLuaFunction "getSunAngleAt" (worldGetSunAngleAtFn env)
-  registerLuaFunction "listPlacedLocations" (worldListPlacedLocationsFn env)
+  registerLuaFunction "listPlacedLocations"
+    (worldListPlacedLocationsFn regs env)
   registerLuaFunction "hasSpawnedLocationContents"
     (worldHasSpawnedLocationContentsFn env)
   registerLuaFunction "markLocationContentsSpawned"
