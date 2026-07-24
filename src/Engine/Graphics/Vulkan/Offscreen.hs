@@ -16,7 +16,6 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugSM)
 import Engine.Graphics.Types (RenderTarget(..), SwapchainInfo(..))
@@ -25,6 +24,7 @@ import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10 hiding (size)
 import Vulkan.Core10.MemoryManagement (size)
 import Vulkan.Zero
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | The one format offscreen targets use: the same B8G8R8A8_UNORM the
 --   windowed swapchain picker prefers, so offscreen screenshots decode

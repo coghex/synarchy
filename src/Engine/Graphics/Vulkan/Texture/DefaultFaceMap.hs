@@ -9,7 +9,8 @@ import UPrelude
 import qualified Data.Vector.Storable as Vec
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Vulkan.Image
 import Engine.Graphics.Vulkan.Buffer
@@ -88,7 +89,8 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
   -- The 1×1 face map is sampler-agnostic (single pixel), so it shares
   -- the cached NEAREST sampler rather than minting its own.
   env ← ask
-  sampler ← liftIO $ acquireSampler dev (samplerCacheRef env) SamplerTextureNearest
+  let rc = toRenderCapability env
+  sampler ← liftIO $ acquireSampler dev (rcSamplerCacheRef rc) SamplerTextureNearest
 
   -- High handle value to avoid collisions with normal texture handles
   let faceMapTexHandle = TextureHandle 999999

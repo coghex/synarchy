@@ -28,7 +28,9 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, texPaletteHandlesRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -74,8 +76,8 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
                     , Just th ← [HM.lookup (spdTexId spd) handles]
                     , Just fh ← [HM.lookup (spdFaceId spd) handles] ]
             if null pieces then return V.empty else do
-                texSizes ← readIORef (textureSizeRef env)
-                mBts ← readIORef (textureSystemRef env)
+                texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+                mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
                 case mBts of
                     Nothing → return V.empty
                     Just _bts → do

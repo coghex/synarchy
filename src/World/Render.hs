@@ -9,7 +9,9 @@ import qualified Data.Map as Map
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Core.State (EngineEnv, worldManagerRef, resolveActiveWorld)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
@@ -36,8 +38,8 @@ surfaceHeadroom = 25
 
 updateWorldTiles ∷ EngineEnv → IO LayeredQuads
 updateWorldTiles env = do
-    camera ← readIORef (cameraRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    camera ← readIORef (rvCameraRef (toRenderViewCapability env))
+    (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
 
     let zoom = camZoom camera
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
@@ -191,7 +193,7 @@ updateWorldTiles env = do
                     ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
     when shouldTrack $ do
         when (not (camZTracking camera)) $
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 (cam { camZTracking = True }, ())
         -- Track the ACTIVE world's terrain under the camera. Previously this
         -- looped every visible world and let the LAST one win, disagreeing
@@ -209,7 +211,7 @@ updateWorldTiles env = do
                     Just lc → do
                         let surfElev = (lcSurfaceMap lc) VU.! columnIndex lx ly
                             targetZ = surfElev + surfaceHeadroom
-                        atomicModifyIORef' (cameraRef env) $ \cam →
+                        atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                             (cam { camZSlice = targetZ }, ())
                     Nothing → return ()
             Nothing → return ()

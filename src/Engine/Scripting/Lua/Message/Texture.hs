@@ -30,7 +30,10 @@ import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logWarnM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
+  , luaQueue, worldManagerRef )
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource (locally)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Font.Load (loadSDFFont)
@@ -81,14 +84,15 @@ invalidateAllWorldRenderCaches env = do
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM ε σ ()
 duplicateCachedTextureHandle env handle assetId atlas = do
-    poolRef ← asks assetPoolRef
+    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
-    mBindless ← liftIO $ readIORef (textureSystemRef env)
+    mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
     case mBindless of
         Just bindless →
             case Map.lookup (taTextureHandle atlas) (btsHandleMap bindless) of
                 Just existingBindlessHandle → do
-                    liftIO $ writeIORef (textureSystemRef env) (Just bindless
+                    let rc = toRenderCapability env
+                    liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
                         { btsHandleMap =
                             Map.insert handle existingBindlessHandle
                                 (btsHandleMap bindless)
@@ -114,7 +118,7 @@ duplicateCachedTextureHandle env handle assetId atlas = do
             )
         let (w, h) = amDimensions (taMetadata atlas)
             (TextureHandle rawHandle) = handle
-        atomicModifyIORef' (textureSizeRef env) $ \m →
+        atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
             (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
         Q.writeQueue (luaQueue env)
             (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
@@ -157,7 +161,7 @@ handleLoadTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM ε σ ()
 handleLoadTextureBatch [] = pure ()
 handleLoadTextureBatch requests = do
     env ← ask
-    poolRef ← asks assetPoolRef
+    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
 
     let (cachedReqs, freshReqs, aliasReqs, _) =
@@ -191,7 +195,7 @@ handleLoadTextureBatch requests = do
 
     when (not (null freshReqs)) $ do
         gs ← gets graphicsState
-        mBindless ← liftIO $ readIORef (textureSystemRef env)
+        mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
         case (vulkanDevice gs, vulkanPDevice gs, vulkanCmdPool gs, deviceQueues gs, mBindless) of
             (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
                 preps ← mapM (prepareTextureUpload pool dev pdev) (reverse freshReqs)
@@ -264,7 +268,7 @@ handleLoadTextureBatch requests = do
                                     }
                                 , ()
                                 )
-                            atomicModifyIORef' (textureSizeRef env) $ \m →
+                            atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
                                 ( HM.insert (tupHandle prep)
                                     (fromIntegral (tupWidth prep), fromIntegral (tupHeight prep)) m
                                 , ()
@@ -276,7 +280,7 @@ handleLoadTextureBatch requests = do
                     ([], bindless0)
                     preps
 
-                liftIO $ writeIORef (textureSystemRef env) (Just bindlessN)
+                liftIO $ writeIORef (rcTextureSystemRef (toRenderCapability env)) (Just bindlessN)
 
                 let loadedMap = Map.fromList
                         [ (handle, (assetId, atlas))

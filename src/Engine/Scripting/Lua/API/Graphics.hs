@@ -19,7 +19,9 @@ import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Config (VideoConfig(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified Data.HashMap.Strict as HM
@@ -32,7 +34,7 @@ import Control.Monad.IO.Class (liftIO)
 
 getUIScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getUIScaleFn env = do
-    vconfig ← Lua.liftIO $ readIORef (videoConfigRef env)
+    vconfig ← Lua.liftIO $ readIORef (rvVideoConfigRef (toRenderViewCapability env))
     Lua.pushnumber (Lua.Number (realToFrac (vcUIScale vconfig)))
     return 1
 
@@ -70,7 +72,7 @@ getTextureSizeFn env = do
   case handleArg of
     Just h → do
       mSize ← Lua.liftIO $ HM.lookup (TextureHandle (fromIntegral h))
-          ⊚ readIORef (textureSizeRef env)
+          ⊚ readIORef (rvTextureSizeRef (toRenderViewCapability env))
       case mSize of
         Just (w, h') → do
           Lua.newtable
@@ -94,7 +96,8 @@ getTextureSizeFn env = do
 --   be a documented chrome asset).
 getLoadedTexturePathsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getLoadedTexturePathsFn env = do
-  paths ← Lua.liftIO $ Map.keys . apAssetPaths ⊚ readIORef (assetPoolRef env)
+  let rv = toRenderViewCapability env
+  paths ← Lua.liftIO $ Map.keys . apAssetPaths ⊚ readIORef (rvAssetPoolRef rv)
   Lua.newtable
   forM_ (zip [1 ∷ Int ..] paths) $ \(i, p) → do
     Lua.pushstring (TE.encodeUtf8 p)

@@ -37,7 +37,10 @@ import Data.Maybe (mapMaybe)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Vulkan.Core10 (Device, PhysicalDevice, CommandPool, Queue, deviceWaitIdle)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
+  , bloodDisposeQueue, gameTimeRef, worldManagerRef )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle, toInt)
 import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Graphics.Types (DevQueues(..))
@@ -73,7 +76,7 @@ uploadBloodTextures ∷ EngineM ε σ ()
 uploadBloodTextures = do
     env ← ask
     gs ← gets graphicsState
-    mBindless ← liftIO $ readIORef (textureSystemRef env)
+    mBindless ← liftIO $ readIORef (rvTextureSystemRef (toRenderViewCapability env))
     case ( vulkanDevice gs, vulkanPDevice gs, vulkanCmdPool gs
          , deviceQueues gs, mBindless ) of
         (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
@@ -81,7 +84,8 @@ uploadBloodTextures = do
             finalBindless ← foldM
                 (syncWorldBloodTextures dev pdev cmdPool (graphicsQueue queues))
                 bindless0 (wmWorlds mgr)
-            liftIO $ writeIORef (textureSystemRef env) (Just finalBindless)
+            let rv = toRenderViewCapability env
+            liftIO $ writeIORef (rvTextureSystemRef rv) (Just finalBindless)
         _ → pure ()
 
 -- | One world's diff-and-sync step: unregister anything evicted from its
@@ -124,7 +128,8 @@ disposeBloodRecord ∷ Device → BindlessTextureSystem → (TextureHandle, IO (
 disposeBloodRecord dev bl (h, cleanup) = do
     bl' ← unregisterTexture dev h bl
     env ← ask
-    liftIO $ atomicModifyIORef' (textureSizeRef env) (\m → (HM.delete h m, ()))
+    let rv = toRenderViewCapability env
+    liftIO $ atomicModifyIORef' (rvTextureSizeRef rv) (\m → (HM.delete h m, ()))
     liftIO cleanup
     pure bl'
 
@@ -158,12 +163,13 @@ disposeQueuedBloodTextures = do
     records ← liftIO $ drainBloodDisposalRecords (bloodDisposeQueue env)
     when (not (null records)) $ do
         gs ← gets graphicsState
-        mBindless ← liftIO $ readIORef (textureSystemRef env)
+        mBindless ← liftIO $ readIORef (rvTextureSystemRef (toRenderViewCapability env))
         case (vulkanDevice gs, mBindless) of
             (Just dev, Just bindless0) → do
                 liftIO (deviceWaitIdle dev)
                 bindless1 ← foldM (disposeBloodRecord dev) bindless0 records
-                liftIO $ writeIORef (textureSystemRef env) (Just bindless1)
+                let rv = toRenderViewCapability env
+                liftIO $ writeIORef (rvTextureSystemRef rv) (Just bindless1)
             -- No device (should be unreachable: records only exist once a
             -- device uploaded them, and the engine holds one device for
             -- the whole session). Run the image/view cleanups best-effort
@@ -176,7 +182,7 @@ uploadOne ∷ Device → PhysicalDevice → CommandPool → Queue
 uploadOne dev pdev cmdPool queue (bl, known) d = do
     let img = generateBloodTexture d
     env ← ask
-    poolRef ← asks assetPoolRef
+    poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     ap ← liftIO $ readIORef poolRef
     texHandle ← liftIO $ generateTextureHandle ap
     ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
@@ -185,7 +191,7 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
                                 (btsTextureSampler bl) bl
     case mBindlessHandle of
         Just _  → do
-            liftIO $ atomicModifyIORef' (textureSizeRef env) $ \m →
+            liftIO $ atomicModifyIORef' (rvTextureSizeRef (toRenderViewCapability env)) $ \m →
                 (HM.insert texHandle (btiWidth img, btiHeight img) m, ())
             pure (bl', HM.insert (btdId d) (texHandle, cleanupImg) known)
         Nothing → do
@@ -233,11 +239,12 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
       then return V.empty
       else do
         now      ← readIORef (gameTimeRef env)
-        camera   ← readIORef (cameraRef env)
+        let rv = toRenderViewCapability env
+        camera   ← readIORef (rvCameraRef rv)
         handles  ← readIORef (wsBloodTextureHandlesRef worldState)
-        texSizes ← readIORef (textureSizeRef env)
+        texSizes ← readIORef (rvTextureSizeRef rv)
         paramsM  ← readIORef (wsGenParamsRef worldState)
-        (fbW, fbH) ← readIORef (framebufferSizeRef env)
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef rv)
 
         let recs = bloodRenderRecords now pageId store
             lookupSlot texHandle = toInt texHandle

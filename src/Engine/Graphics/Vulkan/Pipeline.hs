@@ -6,10 +6,10 @@ module Engine.Graphics.Vulkan.Pipeline
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Graphics.Vulkan.Types.Cleanup
 import Vulkan.Core10
 import Vulkan.Zero
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Creates a render pass for the render target.
 -- When sampleCount > 1, uses a multisampled color attachment with resolve.

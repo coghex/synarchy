@@ -11,7 +11,9 @@ module World.Render.Zoom.Quads
 import UPrelude
 import Data.IORef (readIORef, IORef)
 import qualified Data.Vector as V
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, worldManagerRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -66,7 +68,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
     rawCache ← readIORef (wsZoomCacheRef worldState)
 
     mapMode ← readIORef (wsMapModeRef worldState)
-    (winW, winH) ← readIORef (windowSizeRef env)
+    (winW, winH) ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
     mAtlas ← readIORef (wsZoomAtlasRef worldState)
     -- Stable handle id resolved in the shader (#286); -1 = default face
     -- map (the flat zoom map has no directional face map).
@@ -83,7 +85,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             -- still `render-gpu-asset` state (SS7.2).
             registry ← readIORef
                 (crLocationDefsRef (toContentRegistriesCapability env))
-            nameReg  ← readIORef (textureNameRegistryRef env)
+            nameReg  ← readIORef (rvTextureNameRegistryRef (toRenderViewCapability env))
             let vb = computeZoomViewBounds camera fbW fbH
                 ws = wgpWorldSize params
                 (camX, camY) = camPosition camera

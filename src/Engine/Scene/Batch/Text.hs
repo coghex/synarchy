@@ -21,7 +21,8 @@ import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutText, layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Core.Monad
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Log (LogCategory(..))
 
@@ -33,7 +34,7 @@ collectTextBatches graph screenW screenH = do
   logDebugSM CatScene "Text batch collection started"
       [("totalTextNodes", T.pack $ show $ length textNodes)]
   
-  cacheRef ← asks fontCacheRef
+  cacheRef ← asks (rcFontCacheRef . toRenderCapability)
   cache ← liftIO $ readIORef cacheRef
   let grouped = groupByFontAndLayer textNodes
   batches ← forM grouped $ \((fontHandle, layerId), nodes) → do

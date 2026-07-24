@@ -14,7 +14,10 @@ import Engine.Asset.Handle (FontHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Util (calculateTextWidthScaled)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue
+  , textBuffersRef )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -35,7 +38,7 @@ loadFontFn env backendState = do
             (lteq, _) = lbsMsgQueues backendState
         
         -- Check if font is already cached
-        fontCache ← readIORef (fontCacheRef env)
+        fontCache ← readIORef (rvFontCacheRef (toRenderViewCapability env))
         let cacheKey = (pathStr, -1)  -- -1 for SDF fonts
         
         case Map.lookup cacheKey (fcPathCache fontCache) of
@@ -134,7 +137,7 @@ getTextWidthFn env = do
           width ← Lua.liftIO $ do
               let fontHandle = FontHandle (fromIntegral fh)
                   textStr = T.unpack $ TE.decodeUtf8Lenient textBS
-              fontCache ← readIORef (fontCacheRef env)
+              fontCache ← readIORef (rvFontCacheRef (toRenderViewCapability env))
               case Map.lookup fontHandle (fcFonts fontCache) of
                   Nothing → return 0.0
                   Just atlas → return $ calculateTextWidthScaled atlas (realToFrac size) textStr

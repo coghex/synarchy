@@ -23,7 +23,9 @@ import qualified Data.List as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, itemManagerRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.YamlTextures (lookupTextureName)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
@@ -150,16 +152,17 @@ renderGroundItemQuads env worldState tileAlpha = do
     if HM.null (gisItems gis)
       then return V.empty
       else do
-        camera   ← readIORef (cameraRef env)
+        let rv = toRenderViewCapability env
+        camera   ← readIORef (rvCameraRef rv)
         tileData ← readIORef (wsTilesRef worldState)
         im       ← readIORef (itemManagerRef env)
-        texSizes ← readIORef (textureSizeRef env)
+        texSizes ← readIORef (rvTextureSizeRef rv)
         paramsM  ← readIORef (wsGenParamsRef worldState)
         cs       ← readIORef (wsCursorRef worldState)
-        (fbW, fbH) ← readIORef (framebufferSizeRef env)
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef rv)
         -- The broken-weapon overlay, registered by name during item
         -- loading (Lua/API/Items). Absent until items load.
-        nameReg ← readIORef (textureNameRegistryRef env)
+        nameReg ← readIORef (rvTextureNameRegistryRef rv)
         let mBrokenTex = lookupTextureName "broken_equipment" nameReg
 
         -- Bake the STABLE texture-handle id; the bindless shader resolves
@@ -268,16 +271,16 @@ hitTestGroundItemAt ∷ EngineEnv → WorldState → Double → Double
                     → IO (Maybe Int)
 hitTestGroundItemAt env worldState pixX pixY = do
     gis ← readIORef (wsGroundItemsRef worldState)
-    (winW, winH) ← readIORef (windowSizeRef env)
+    (winW, winH) ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
     -- Zero-size window (minimize): the pixel→world divisions below would
     -- yield a non-finite click coord. Report "no item".
     if HM.null (gisItems gis) ∨ windowDegenerate winW winH
       then return Nothing
       else do
-        camera   ← readIORef (cameraRef env)
+        camera   ← readIORef (rvCameraRef (toRenderViewCapability env))
         tileData ← readIORef (wsTilesRef worldState)
         im       ← readIORef (itemManagerRef env)
-        texSizes ← readIORef (textureSizeRef env)
+        texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
 
         let facing = camFacing camera
             zoom   = camZoom camera

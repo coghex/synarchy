@@ -9,7 +9,9 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, buildingManagerRef, loggerRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (logWarn, LogCategory(..))
 import Engine.Asset.Handle (toInt)
 import Engine.Scene.Types (SortableQuad(..))
@@ -39,15 +41,16 @@ maxMinePreviewSide = 64
 
 renderWorldCursorQuads ∷ EngineEnv → WorldState → Float → IO (V.Vector SortableQuad)
 renderWorldCursorQuads env worldState tileAlpha = do
-    camera   ← readIORef (cameraRef env)
+    let rv = toRenderViewCapability env
+    camera   ← readIORef (rvCameraRef rv)
     tileData ← readIORef (wsTilesRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     paramsM  ← readIORef (wsGenParamsRef worldState)
     cs       ← readIORef (wsCursorRef worldState)
     toolMode ← readIORef (wsToolModeRef worldState)
 
-    (winW, winH) ← readIORef (windowSizeRef env)
-    (fbW, fbH)   ← readIORef (framebufferSizeRef env)
+    (winW, winH) ← readIORef (rvWindowSizeRef rv)
+    (fbW, fbH)   ← readIORef (rvFramebufferSizeRef rv)
 
     -- Stable handle ids; resolved to live slots in the shader (#286).
     let lookupSlot texHandle = fromIntegral (toInt texHandle)

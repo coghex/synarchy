@@ -6,11 +6,11 @@ module Engine.Graphics.Vulkan.Framebuffer
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Creates framebuffers for each swapchain image view.
 -- When msaaImageView is provided (Just), creates MSAA framebuffers with two attachments.

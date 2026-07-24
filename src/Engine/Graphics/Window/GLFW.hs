@@ -45,7 +45,9 @@ import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (loggerRef, luaQueue)
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (LogCategory(..), logWarn)
@@ -106,8 +108,8 @@ createWindow config = do
   liftIO $ do
     windowSize ← GLFW.getWindowSize win
     framebufferSize ← GLFW.getFramebufferSize win
-    writeIORef (windowSizeRef env) windowSize
-    writeIORef (framebufferSizeRef env) framebufferSize
+    writeIORef (rcWindowSizeRef (toRenderCapability env)) windowSize
+    writeIORef (rcFramebufferSizeRef (toRenderCapability env)) framebufferSize
     Q.writeQueue (luaQueue env) (LuaWindowResize (fst windowSize) (snd windowSize))
     Q.writeQueue (luaQueue env) (LuaFramebufferResize (fst framebufferSize) (snd framebufferSize))
     

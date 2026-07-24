@@ -28,7 +28,9 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, engineConfig)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Graphics.Screenshot (grabToPngBytes)
 import Engine.Graphics.Types (ScreenshotGrab(..), ScreenshotRequest(..))
@@ -71,7 +73,7 @@ captureScreenshotFn env = do
 requestCapture ∷ EngineEnv → FilePath → IO (Either Text (Int, Int))
 requestCapture env path = do
     reply ← Q.newQueue
-    Q.writeQueue (screenshotRequestQueue env) (ScreenshotRequest reply)
+    Q.writeQueue (rvScreenshotRequestQueue (toRenderViewCapability env)) (ScreenshotRequest reply)
     mReply ← Q.readQueueTimeout captureTimeoutMicros reply
     case mReply of
         Nothing → pure $ Left $

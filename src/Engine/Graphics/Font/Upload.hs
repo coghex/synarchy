@@ -17,7 +17,9 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log.Monad (logDebugM, logAndThrowM)
@@ -124,7 +126,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
 
     -- Every font atlas shares one cached linear/clamp/mip-linear
     -- sampler instead of minting its own.
-    cacheRef ← asks samplerCacheRef
+    cacheRef ← asks (rcSamplerCacheRef . toRenderCapability)
     sampler ← liftIO $ acquireSampler device cacheRef SamplerFont
     state ← get
     fontPool ← case fontDescriptorPool (graphicsState state) of
@@ -157,7 +159,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
 
     updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
 
-    poolRef ← asks assetPoolRef
+    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
     handle ← liftIO $ generateTextureHandle pool
     destroyBuffer device stagingBuffer Nothing

@@ -8,7 +8,9 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.IORef (writeIORef, readIORef)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logAndThrowM)
 import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
@@ -66,7 +68,7 @@ recreateSwapchain window = do
             }}
 
             env ← ask
-            liftIO $ writeIORef (uiCameraRef env) $ 
+            liftIO $ writeIORef (rcUiCameraRef (toRenderCapability env)) $ 
                 UICamera (fromIntegral width) (fromIntegral height)
             
             logInfoM CatSwapchain $ "Swapchain recreated: " <> (T.pack (show width)) 
@@ -87,7 +89,7 @@ recreateAllResources pDevice device queues surface window = do
         bindlessLayout = btsDescriptorLayout texSystem
     
     env ← ask
-    videoConfig ← liftIO $ readIORef (videoConfigRef env)
+    videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
     let vsyncEnabled = vcVSync videoConfig
         msaaInt      = vcMSAA videoConfig
         Window glfwWin = window
@@ -201,7 +203,7 @@ getDescriptorManagerOrFail state = case descriptorState state of
 getTextureSystemOrFail ∷ EngineM ε σ BindlessTextureSystem
 getTextureSystemOrFail = do
     env ← ask
-    mts ← liftIO $ readIORef (textureSystemRef env)
+    mts ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
     case mts of
         Just ts → pure ts
         Nothing → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)

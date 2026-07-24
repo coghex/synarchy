@@ -15,7 +15,10 @@ module Building.HitTest
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Core.State (EngineEnv, buildingManagerRef, worldManagerRef
+  , resolveActiveWorld )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
@@ -35,9 +38,10 @@ baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 hitTestBuildingAt ∷ EngineEnv → Double → Double → IO (Maybe BuildingId)
 hitTestBuildingAt env pixX pixY = do
     bm       ← readIORef (buildingManagerRef env)
-    camera   ← readIORef (cameraRef env)
-    (winW, winH) ← readIORef (windowSizeRef env)
-    texSizes ← readIORef (textureSizeRef env)
+    let rv = toRenderViewCapability env
+    camera   ← readIORef (rvCameraRef rv)
+    (winW, winH) ← readIORef (rvWindowSizeRef rv)
+    texSizes ← readIORef (rvTextureSizeRef rv)
     mgr      ← readIORef (worldManagerRef env)
 
     -- Only the active world's buildings are clickable (#76) — matches the

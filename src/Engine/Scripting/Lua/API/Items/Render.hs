@@ -16,7 +16,9 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldState)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import World.Cursor.Types (CursorState(..))
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (Camera2D(..))
@@ -104,7 +106,7 @@ itemDebugQuadsFn env = do
             (quads, gis, cam) ← Lua.liftIO $ do
                 q ← renderGroundItemQuads env ws 1.0
                 g ← readIORef (wsGroundItemsRef ws)
-                c ← readIORef (cameraRef env)
+                c ← readIORef (rvCameraRef (toRenderViewCapability env))
                 pure (q, g, c)
             let (camX, camY) = camPosition cam
             Lua.newtable

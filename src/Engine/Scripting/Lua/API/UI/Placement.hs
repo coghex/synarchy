@@ -14,7 +14,9 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import UI.PopupPlacement
 
 -- | Parse the direction string argument; an unrecognized string
@@ -46,7 +48,7 @@ uiPlacePopupFn env = do
 
     case (axArg, ayArg, awArg, ahArg, cwArg, chArg) of
         (Just ax, Just ay, Just aw, Just ah, Just cw, Just ch) → do
-            (fbW, fbH) ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+            (fbW, fbH) ← Lua.liftIO $ readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
             let direction = maybe PopupAnchored (parseDirection ∘ TE.decodeUtf8Lenient) dirArg
                 req = PlacementRequest
                     { prAnchorX      = realToFrac ax

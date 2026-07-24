@@ -23,7 +23,10 @@ module Engine.Scripting.Lua.API.Camera
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import qualified Data.Vector.Unboxed as VU
-import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Core.State (EngineEnv, materialRegistryRef, worldManagerRef
+  , resolveActiveWorld )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import Engine.Loop.Camera (applyGotoLimits, gotoTileZoomSafe, scrollZoomImpulse)
 import World.Grid
@@ -41,7 +44,7 @@ cameraMoveFn env = do
     dyArg ← Lua.tonumber 2
     case (dxArg, dyArg) of
         (Just (Lua.Number dx), Just (Lua.Number dy)) → Lua.liftIO $ do
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 let (cx, cy) = camPosition cam
                 in (cam { camPosition = ( cx + realToFrac dx
                                         , cy + realToFrac dy ) }, ())
@@ -52,7 +55,7 @@ cameraMoveFn env = do
 cameraGetPositionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetPositionFn env = do
     (x, y) ← Lua.liftIO $ do
-        cam ← readIORef (cameraRef env)
+        cam ← readIORef (rvCameraRef (toRenderViewCapability env))
         return (camPosition cam)
     Lua.pushnumber (Lua.Number (realToFrac x))
     Lua.pushnumber (Lua.Number (realToFrac y))
@@ -65,7 +68,7 @@ cameraSetPositionFn env = do
     yArg ← Lua.tonumber 2
     case (xArg, yArg) of
         (Just (Lua.Number x), Just (Lua.Number y)) → Lua.liftIO $
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 (cam { camPosition = (realToFrac x, realToFrac y) }, ())
         _ → pure ()
     return 0
@@ -74,7 +77,7 @@ cameraSetPositionFn env = do
 cameraGetZoomFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetZoomFn env = do
     z ← Lua.liftIO $ do
-        cam ← readIORef (cameraRef env)
+        cam ← readIORef (rvCameraRef (toRenderViewCapability env))
         return (camZoom cam)
     Lua.pushnumber (Lua.Number (realToFrac z))
     return 1
@@ -85,7 +88,7 @@ cameraSetZoomFn env = do
     zArg ← Lua.tonumber 1
     case zArg of
         Just (Lua.Number z) → Lua.liftIO $
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 (cam { camZoom = max 0.1 (realToFrac z) }, ())
         _ → pure ()
     return 0
@@ -105,7 +108,7 @@ cameraGetZoomFadeEndFn = do
 -- | camera.getZoomVelocity() -> number
 cameraGetZoomVelocityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetZoomVelocityFn env = do
-    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    cam ← Lua.liftIO $ readIORef (rvCameraRef (toRenderViewCapability env))
     Lua.pushnumber (Lua.Number (realToFrac (camZoomVelocity cam)))
     return 1
 
@@ -115,7 +118,7 @@ cameraSetZoomVelocityFn env = do
     vArg ← Lua.tonumber 1
     case vArg of
         Just (Lua.Number v) → Lua.liftIO $
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 (cam { camZoomVelocity = realToFrac v }, ())
         _ → pure ()
     return 0
@@ -130,7 +133,7 @@ cameraApplyScrollZoomFn env = do
     dyArg ← Lua.tonumber 1
     case dyArg of
         Just (Lua.Number dy) → Lua.liftIO $
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 let impulse = scrollZoomImpulse (camZoom cam) (realToFrac dy)
                 in (cam { camZoomVelocity = camZoomVelocity cam + impulse }, ())
         _ → pure ()
@@ -139,7 +142,7 @@ cameraApplyScrollZoomFn env = do
 -- | camera.getZSlice() -> int
 cameraGetZSliceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetZSliceFn env = do
-    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    cam ← Lua.liftIO $ readIORef (rvCameraRef (toRenderViewCapability env))
     Lua.pushinteger (fromIntegral $ camZSlice cam)
     return 1
 
@@ -149,7 +152,7 @@ cameraSetZSliceFn env = do
     zArg ← Lua.tointeger 1
     case zArg of
         Just z → Lua.liftIO $ 
-            atomicModifyIORef' (cameraRef env) $ \cam →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 (cam { camZSlice = fromIntegral z }, ())
         Nothing → pure ()
     return 0
@@ -167,7 +170,7 @@ cameraGotoTileFn env = do
         (Just gxRaw, Just gyRaw) → Lua.liftIO $ do
             let gx = fromIntegral gxRaw ∷ Int
                 gy = fromIntegral gyRaw ∷ Int
-            cam ← readIORef (cameraRef env)
+            cam ← readIORef (rvCameraRef (toRenderViewCapability env))
             let facing = camFacing cam
                 (wx0, wy0) = gridToWorld facing gx gy
 
@@ -214,7 +217,7 @@ cameraGotoTileFn env = do
                                 -- zoomed out, where the loader is gated off.
                                 zoomSafe = gotoTileZoomSafe worldSize
                                 newZoom = if zoomSafe then 0.5 else zoomFadeEnd + 0.5
-                            atomicModifyIORef' (cameraRef env) $ \cam →
+                            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                                 (cam { camPosition     = (wx, wy)
                                      , camZoom         = newZoom
                                      , camVelocity     = (0, 0)
@@ -231,7 +234,7 @@ cameraGotoTileFn env = do
                         -- set the unclamped position as before. Without an
                         -- active world there are no chunks to overflow anyway.
                         Nothing →
-                            atomicModifyIORef' (cameraRef env) $ \cam →
+                            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                                 (cam { camPosition     = (wx0, wy0)
                                      , camZoom         = 0.5
                                      , camVelocity     = (0, 0)
@@ -239,7 +242,7 @@ cameraGotoTileFn env = do
                                      , camDragging     = False
                                      }, ())
                 Nothing →
-                    atomicModifyIORef' (cameraRef env) $ \cam →
+                    atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                         (cam { camPosition     = (wx0, wy0)
                              , camZoom         = 0.5
                              , camVelocity     = (0, 0)
@@ -266,7 +269,7 @@ cameraRotateCCWFn env = do
 --   rotate, and re-center the camera on that same tile.
 rotateCamera ∷ EngineEnv → (CameraFacing → CameraFacing) → IO ()
 rotateCamera env rotateFn = do
-    cam ← readIORef (cameraRef env)
+    cam ← readIORef (rvCameraRef (toRenderViewCapability env))
     let oldFacing = camFacing cam
         (cx, cy)  = camPosition cam
         zSlice    = camZSlice cam
@@ -284,7 +287,7 @@ rotateCamera env rotateFn = do
                 (nx, ny) = gridToWorld newFacing gx gy
             -- Apply same height offset so camera stays at same visual height
                 newCy = ny + zOffset
-            atomicModifyIORef' (cameraRef env) $ \cam' →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam' →
                 (cam' { camFacing   = newFacing
                       , camPosition = (nx, newCy)
                       , camVelocity = (0, 0)
@@ -293,7 +296,7 @@ rotateCamera env rotateFn = do
             -- Fallback: no terrain found, just do grid-based rotation
             let (gx, gy) = worldToGrid oldFacing cx cy
                 (nx, ny) = gridToWorld newFacing gx gy
-            atomicModifyIORef' (cameraRef env) $ \cam' →
+            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam' →
                 (cam' { camFacing   = newFacing
                       , camPosition = (nx, ny)
                       , camVelocity = (0, 0)
@@ -337,7 +340,7 @@ findVisualCenterTile env facing cx cy zSlice = do
 -- | camera.getFacing() → int (0=South, 1=West, 2=North, 3=East)
 cameraGetFacingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetFacingFn env = do
-    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    cam ← Lua.liftIO $ readIORef (rvCameraRef (toRenderViewCapability env))
     Lua.pushinteger $ case camFacing cam of
         FaceSouth → 0
         FaceWest  → 1
@@ -347,7 +350,7 @@ cameraGetFacingFn env = do
 
 invalidateWorldCaches ∷ EngineEnv → IO ()
 invalidateWorldCaches env = do
-    _camera ← readIORef (cameraRef env)
+    _camera ← readIORef (rvCameraRef (toRenderViewCapability env))
     manager ← readIORef (worldManagerRef env)
     forM_ (wmWorlds manager) $ \(_, ws) → do
         bumpQuadCacheGen ws
@@ -359,7 +362,7 @@ invalidateWorldCaches env = do
 -- | camera.getZTracking() -> bool
 cameraGetZTrackingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetZTrackingFn env = do
-    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    cam ← Lua.liftIO $ readIORef (rvCameraRef (toRenderViewCapability env))
     Lua.pushboolean (camZTracking cam)
     return 1
 
@@ -367,6 +370,6 @@ cameraGetZTrackingFn env = do
 cameraSetZTrackingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraSetZTrackingFn env = do
     bArg ← Lua.toboolean 1
-    Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+    Lua.liftIO $ atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
         (cam { camZTracking = bArg }, ())
     return 0

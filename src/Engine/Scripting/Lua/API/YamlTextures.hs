@@ -17,7 +17,10 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', newIORef, IORef)
 import System.Directory (doesFileExist)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, floraCatalogRef, loggerRef
+  , materialRegistryRef )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
@@ -83,11 +86,12 @@ loadMaterialYamlFn env backendState = do
                     -- Also register by numeric ID for world.setTexture
                     -- compatibility: "mat_tile_56" etc.
                     let idStr = T.pack (show (mdId def))
-                    registerTextureName (textureNameRegistryRef env)
+                    let rv = toRenderViewCapability env
+                    registerTextureName (rvTextureNameRegistryRef rv)
                         ("mat_tile_" <> idStr) tileH
-                    registerTextureName (textureNameRegistryRef env)
+                    registerTextureName (rvTextureNameRegistryRef rv)
                         ("mat_zoom_" <> idStr) zoomH
-                    registerTextureName (textureNameRegistryRef env)
+                    registerTextureName (rvTextureNameRegistryRef rv)
                         ("mat_bg_"   <> idStr) bgH
 
                     return (acc + 3)
@@ -175,7 +179,7 @@ loadAndRegister env backendState lteq name path = do
     handle ← generateTextureHandle pool
     updateTextureState handle (AssetLoading path [] 0.0) pool
     -- Register name → handle
-    registerTextureName (textureNameRegistryRef env) name handle
+    registerTextureName (rvTextureNameRegistryRef (toRenderViewCapability env)) name handle
     -- Queue for actual GPU loading on the engine thread
     Q.writeQueue lteq (LuaLoadTextureRequest handle path)
     return handle
@@ -187,7 +191,8 @@ loadAndRegister env backendState lteq name path = do
 --   'EngineEnv' field of its own.
 isTextureNameRegistered ∷ EngineEnv → Text → IO Bool
 isTextureNameRegistered env name =
-    isJust . lookupTextureName name <$> readIORef (textureNameRegistryRef env)
+    isJust . lookupTextureName name
+        <$> readIORef (rvTextureNameRegistryRef (toRenderViewCapability env))
 
 -- | Parse a flora YAML: load textures, build species and world-gen entries,
 --   insert into the FloraCatalog. Returns number of textures queued.
@@ -416,7 +421,7 @@ getTextureHandleFn env = do
         Just nameBS → do
             let name = TE.decodeUtf8Lenient nameBS
             result ← Lua.liftIO $ do
-                registry ← readIORef (textureNameRegistryRef env)
+                registry ← readIORef (rvTextureNameRegistryRef (toRenderViewCapability env))
                 return $ lookupTextureName name registry
             case result of
                 Just (TextureHandle n) →
