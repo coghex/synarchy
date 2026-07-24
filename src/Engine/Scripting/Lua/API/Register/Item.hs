@@ -32,6 +32,7 @@ registerItemAPI env = do
   registerLuaFunction "getRenderQuads" (bloodGetRenderQuadsFn env)
   registerLuaFunction "gpuStats"       (bloodGpuStatsFn env)
   registerLuaFunction "clear"          (bloodClearFn env)
+  registerLuaFunction "getTrailState"  (bloodGetTrailStateFn env)
   Lua.setglobal (Lua.Name "blood")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml

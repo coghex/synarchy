@@ -20,7 +20,7 @@ import Engine.Core.Log (logDebug, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , UnitManager(..), BodyPart(..), Wound(..)
-                  , Scar(..), bloodMassRatio)
+                  , Scar(..), bloodMassRatio, TrailState(..))
 import Unit.Command.Types (UnitCommand(..))
 import qualified System.Random as Random
 import World.State.Types (WorldState(..))
@@ -46,7 +46,8 @@ import Combat.Wounds.Infection
     , immuneRampRate, immuneSeed, immuneDecayRate, immuneClearRate
     , infectionLoadThreshold, immGainRate, immunityDecayRate, immunityFloor
     )
-import Combat.Wounds.Bleed (kindBleedFactor)
+import Combat.Wounds.Bleed
+    (kindBleedFactor, isExternallyBleedingKind, externalBleedRateFor)
 import Combat.Wounds.Sever (propagateSevering)
 
 -- ----- Entry point -----
@@ -202,8 +203,8 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                        min 1 (r0 + immuneRampRate * con
                                    * (immuneSeed + r0) * dt)
                  | otherwise = max 0 (r0 - immuneDecayRate * dt)
-            (newWounds, totalDrain, worstPart, _worstRate, newScars, genFinal, immDelta) =
-                L.foldl' (\(ws, drain, wp, wr, scars, gen, immD) w →
+            (newWounds, totalDrain, extDrainTotal, worstPart, _worstRate, newScars, genFinal, immDelta) =
+                L.foldl' (\(ws, drain, extDrain, wp, wr, scars, gen, immD) w →
                     let sev0       = woundSeverity w   -- INFLICTED (static)
                         p          = HM.lookup (woundPart w) parts
                         partBleed  = maybe 1.0 bpBleedFactor p
@@ -336,10 +337,18 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                                                , scarSeverity = sev0
                                                , scarAt       = gt } : scars
                                      else scars
+                        -- Conserved external-loss accounting (#882): only
+                        -- the externally-visible share of this wound's
+                        -- drain feeds the bleeding-trail accumulator —
+                        -- internal/fracture/concussion bleed internally
+                        -- and never contributes a trail mark.
+                        extContrib = if isExternallyBleedingKind (woundKind w)
+                                     then bleedRate * dt else 0
                     in ( if healedOut then ws else w' : ws
                        , drain + bleedRate * dt
+                       , extDrain + extContrib
                        , wp', wr', scars', gen', immD' ))
-                ([], 0.0, "torso", 0.0, [], gen0, HM.empty)
+                ([], 0.0, 0.0, "torso", 0.0, [], gen0, HM.empty)
                 (uiWounds inst)
             -- Merge accrued immunity into the unit's map, then decay all
             -- immunities very slowly; drop negligible entries.
@@ -348,6 +357,43 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                        $ HM.map (\v → max 0 (min 1 (v - immunityDecayRate * dt)))
                                 mergedImm
             newBlood   = uiBlood inst - totalDrain
+            -- Conserved external-loss accounting (#882): the trail
+            -- accumulator gets the EXTERNAL share of blood actually
+            -- removed this tick, not the raw external drain — a fatal/
+            -- clamped tick (uiBlood hits 0 mid-formula) must not credit
+            -- the trail with more volume than really left the body.
+            -- Proportion actual drain by external-raw / total-raw; zero
+            -- when total raw drain is zero (no division by zero, and
+            -- correctly zero when nothing bled at all this tick).
+            actualDrain = uiBlood inst - max 0 newBlood
+            externalPortion
+                | totalDrain > 0 = actualDrain * (extDrainTotal / totalDrain)
+                | otherwise      = 0
+            -- Whether the unit's wounds AFTER this tick's heal/clot
+            -- advance (newWoundsR — already drops any wound that just
+            -- healed out) still bleed externally at all. Reusing
+            -- 'externalBleedRateFor' on a throwaway instance carrying
+            -- the post-tick wound list keeps this in lockstep with the
+            -- SAME formula 'Blood.Trail's consumer re-checks each
+            -- movement tick, rather than a second hand-rolled copy.
+            stillBleedingExternally =
+                externalBleedRateFor def (inst { uiWounds = newWoundsR }) > 0
+            newTrailState
+                -- #882 requirement: the instant external bleed reaches
+                -- zero (clotted, bandaged shut, or the wound healed out
+                -- of newWoundsR entirely), the accumulator is CLEARED —
+                -- not merely stopped from growing — so no leftover
+                -- pending volume can flush as a stale mark on later
+                -- movement once the unit is done bleeding.
+                | not stillBleedingExternally = Nothing
+                | externalPortion ≤ 0 = uiTrailState inst
+                | otherwise = Just $ case uiTrailState inst of
+                    Just ts → ts { tsPendingVolume = tsPendingVolume ts + externalPortion }
+                    Nothing → TrailState
+                        { tsPendingVolume = externalPortion
+                        , tsDistSinceMark = 0
+                        , tsLastMarkAt    = gt
+                        }
             bodyMass   = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
             maxBlood   = bodyMass * bloodMassRatio
             unconsCut  = maxBlood * unconsciousFraction
@@ -379,5 +425,11 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                 , uiImmuneResponse = newR
                 , uiImmunities = newImm
                 , uiBlood  = max 0 newBlood
+                -- Death is terminal for the trail too (#882 requirement
+                -- 5): no leaked emitter state once exsanguination/
+                -- gangrene fires this tick.
+                , uiTrailState = case outcome of
+                    DiedNow _ _ → Nothing
+                    _           → newTrailState
                 }
         in (propagateSevering def inst', outcome, genFinal)

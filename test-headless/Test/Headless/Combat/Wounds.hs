@@ -70,7 +70,7 @@ inst ws = UnitInstance
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 100
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing }
+    , uiClimbDest = Nothing, uiTrailState = Nothing }
 
 -- A wound built with explicit infection-relevant fields.
 mkWound ∷ Text → Float → Float → Float → Bool → Wound

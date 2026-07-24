@@ -80,12 +80,33 @@ handleUnitCrawlCommand utsRef uid = do
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitKillCommand ∷ IORef UnitThreadState → UnitId → IO ()
-handleUnitKillCommand utsRef uid = do
+handleUnitKillCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
+handleUnitKillCommand env utsRef uid = do
     -- Terminal: snap to Dead pose and clear all in-flight state.
     -- No animation chain — just an instant transition. Dead units
     -- are filtered out by AI / movement / drink / pickup via the
     -- non-Standing guards and the Lua-side dead-pose short-circuit.
+    --
+    -- Also clear the bleeding-trail accumulator (#882 requirement 5)
+    -- and stamp uiPose="dead" HERE, synchronously with the kill — a
+    -- queued UnitKill (e.g. the unit.kill debug surface, or an
+    -- AI-driven death) bypasses Combat.Wounds.Tick's own DiedNow
+    -- clearing entirely, and waiting for the NEXT tick's
+    -- publishToRender to mirror uiPose="dead" from sim state would
+    -- leave BOTH Unit.Thread.Movement's dead-pose check AND
+    -- Combat.Wounds.Tick's own "uiPose inst == dead" early-exit guard
+    -- reading a stale (pre-kill) pose for up to one more wound tick —
+    -- long enough for a still-externally-bleeding corpse to recreate
+    -- uiTrailState from Nothing before the mirror ever lands (round-5
+    -- review). Stamping uiPose here directly closes that race; the
+    -- next publishToRender idempotently re-derives the SAME "dead"
+    -- string from usPose, so this never fights it.
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        case HM.lookup uid (umInstances um) of
+            Nothing   → (um, ())
+            Just inst → (um { umInstances = HM.insert uid
+                                (inst { uiTrailState = Nothing
+                                      , uiPose = "dead" }) (umInstances um) }, ())
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of

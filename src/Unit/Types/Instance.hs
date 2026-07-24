@@ -14,6 +14,7 @@ import Unit.Direction (Direction(..))
 import World.Page.Types (WorldPageId(..))
 import Unit.Types.Def (StatModifier(..))
 import Unit.Types.Wound (Wound(..), Scar(..))
+import Unit.Types.Trail (TrailState(..))
 
 -- | A spawned unit instance in the world.
 --   Engine is agnostic to player vs NPC — Lua drives behavior.
@@ -174,4 +175,13 @@ data UnitInstance = UnitInstance
       --   the FAR face behind that column (so it doesn't draw over the
       --   cliff), emerging as the pullup carries it onto the top tile.
       --   Runtime state only, NOT in SaveData.
+    , uiTrailState  ∷ !(Maybe TrailState)
+      -- ^ Bleeding-trail emitter state (issue #882, the moving half of
+      --   ongoing bleeding — see "Blood.Trail"). Nothing = no active
+      --   trail: the unit has never bled externally, or its trail was
+      --   cleared (death, `unit.destroy`, or effective external bleed
+      --   reaching zero). Written by `Combat.Wounds.Tick` (accumulates
+      --   external loss) and consumed by `Unit.Thread.Movement` (pops
+      --   marks as the unit moves). Runtime state only, NOT in SaveData
+      --   — resets to Nothing on load like `uiClimbDest`.
     } deriving (Show, Eq)

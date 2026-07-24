@@ -54,7 +54,7 @@ inst ws = UnitInstance
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 5
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing }
+    , uiClimbDest = Nothing, uiTrailState = Nothing }
 
 wound ∷ Text → Text → Float → Wound
 wound part kind sev = Wound { woundPart = part, woundKind = kind

@@ -48,9 +48,15 @@ module Combat.Wounds
     , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
     , bleedRateFor        -- current L/sec blood loss (for the info panel)
     , kindBleedFactor     -- per-kind bleed multiplier (treat-action ranking)
+    , isExternallyBleedingKind  -- external- vs internal-only wound kinds (#882)
+    , externalBleedRateFor      -- current external-only L/sec (#882)
+    , dominantExternalBleedWound -- representative externally-bleeding wound (#882)
     , destroyThreshold    -- the "structurally destroyed" severity (#607 impact blood)
     ) where
 
 import Combat.Wounds.Tick (tickAllWounds, tickOneUnit)
 import Combat.Wounds.Sever (propagateSevering, destroyThreshold)
-import Combat.Wounds.Bleed (bleedRateFor, kindBleedFactor)
+import Combat.Wounds.Bleed
+    ( bleedRateFor, kindBleedFactor, isExternallyBleedingKind
+    , externalBleedRateFor, dominantExternalBleedWound
+    )

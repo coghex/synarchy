@@ -68,8 +68,8 @@ handleUnitCommand _env utsRef (UnitCollapse uid)
   = handleUnitCollapseCommand utsRef uid
 handleUnitCommand _env utsRef (UnitCrawl uid)
   = handleUnitCrawlCommand utsRef uid
-handleUnitCommand _env utsRef (UnitKill uid)
-  = handleUnitKillCommand utsRef uid
+handleUnitCommand env utsRef (UnitKill uid)
+  = handleUnitKillCommand env utsRef uid
 handleUnitCommand _env utsRef (UnitRevive uid)
   = handleUnitReviveCommand utsRef uid
 handleUnitCommand env utsRef (UnitDrink uid)

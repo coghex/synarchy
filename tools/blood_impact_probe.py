@@ -53,6 +53,15 @@ def bootstrap_defs(port: int) -> None:
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
+    # This probe reuses ONE unit across every case (never destroyed) and
+    # each case's wounds keep bleeding externally between checks — #882's
+    # bleeding-trail emitter would otherwise let unit_ai's wander tick add
+    # movement-triggered trail decals that contaminate expect_blood's exact
+    # decal-count assertions. Neutralise wander (movement_probe.py's
+    # technique) so this probe's own explicit calls are the only activity.
+    send(port,
+         "pcall(function() require('scripts.unit_ai').update = function() end end); "
+         "return 'ai-off'")
 
 
 def reset_blood() -> None:

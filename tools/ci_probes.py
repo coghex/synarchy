@@ -160,6 +160,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                 "(world.show) boundary from the same decodeUtf8Lenient sweep"),
     "blood_decal": (TARGETED, "narrow #604/#606 blood decal texture reuse/eviction/render regression"),
     "blood_impact": (TARGETED, "narrow #607 wound-to-impact-blood mapping regression"),
+    "bleeding_trail": (TARGETED, "narrow #882 ongoing bleeding-trail emission regression"),
     "circadian": (TARGETED, "narrow #611 circadian urge + sleep_pressure drain regression"),
     "circadian_species": (TARGETED, "narrow #613 species-specific circadian phase regression"),
     "thought": (TARGETED, "thought event/log backend plumbing, narrower than the full "

@@ -1,7 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
 -- | Impact blood (#607): the one-shot mark a FRESH wound creates on
---   landing — not the ongoing bleeding-trail system (that's a later
---   issue). Two halves:
+--   landing — not the ongoing bleeding-trail system ("Blood.Trail",
+--   #882), which handles a moving unit's continued external bleeding.
+--   Two halves:
 --
 --   * The pure decision — 'impactBloodForWound' — maps a wound's kind
 --     + severity onto a blood request (or 'Nothing'), reusing

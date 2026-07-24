@@ -30,6 +30,8 @@ module Unit.Types
     , UnitInstance(..)
     , UnitManager(..)
     , UnitId(..)
+    , TrailState(..)
+    , emptyTrailState
     , emptyUnitManager
     , nextUnitId
     , unitsOnPages
@@ -41,3 +43,4 @@ import Unit.Types.Combat
 import Unit.Types.Def
 import Unit.Types.Instance
 import Unit.Types.Manager
+import Unit.Types.Trail
