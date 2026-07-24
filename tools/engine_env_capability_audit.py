@@ -476,29 +476,11 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     "core-init": frozenset({
         "Engine.Graphics.Vulkan.Command.Record", "Engine.Scripting.Lua.API.Log",
     }),
-    "render-gpu-asset": frozenset({
-        "Building.HitTest", "Building.Render", "Engine.Asset.Manager",
-        "Engine.Graphics.Font.Draw", "Engine.Graphics.Font.Load",
-        "Engine.Graphics.Font.Upload", "Engine.Graphics.Vulkan.Command.Sprite",
-        "Engine.Graphics.Vulkan.Command.Text", "Engine.Graphics.Vulkan.Framebuffer",
-        "Engine.Graphics.Vulkan.Init", "Engine.Graphics.Vulkan.MSAA",
-        "Engine.Graphics.Vulkan.Offscreen", "Engine.Graphics.Vulkan.Pipeline",
-        "Engine.Graphics.Vulkan.Pipeline.Bindless", "Engine.Graphics.Vulkan.Recreate",
-        "Engine.Graphics.Vulkan.Swapchain", "Engine.Graphics.Vulkan.Sync",
-        "Engine.Graphics.Vulkan.Texture.Bindless",
-        "Engine.Graphics.Vulkan.Texture.DefaultFaceMap", "Engine.Graphics.Window.GLFW",
-        "Engine.Scene.Batch.Text", "Engine.Scene.Render",
-        "Engine.Scripting.Lua.API.Camera", "Engine.Scripting.Lua.API.Config",
-        "Engine.Scripting.Lua.API.Graphics", "Engine.Scripting.Lua.API.Input",
-        "Engine.Scripting.Lua.API.Items.Render", "Engine.Scripting.Lua.API.Screenshot",
-        "Engine.Scripting.Lua.API.Text", "Engine.Scripting.Lua.API.UI.Placement",
-        "Engine.Scripting.Lua.API.WorldQuery.Pick", "Engine.Scripting.Lua.API.YamlTextures",
-        "Engine.Scripting.Lua.Message.Texture", "Engine.Scripting.Lua.Message.Video",
-        "Engine.Scripting.Lua.Message.WorldTexture", "Structure.Render", "UI.Render",
-        "Unit.HitTest", "World.Render", "World.Render.BloodQuads",
-        "World.Render.CursorQuads", "World.Render.GroundItemQuads",
-        "World.Render.Quads", "World.Render.SpoilQuads", "World.Render.Zoom.Quads",
-    }),
+    # Emptied by issue #891 (E3): all 45 modules now reach their render
+    # fields through Engine.Core.Capability.Render (MainRender) or
+    # Engine.Core.Capability.RenderView (worker threads) -- see the SS3
+    # boundary enforcement below.
+    "render-gpu-asset": frozenset(),
     "input-lua-transport": frozenset({
         "Engine.Input.Callback", "Engine.Input.Thread", "Engine.Input.Thread.Char",
         "Engine.Input.Thread.Dispatch", "Engine.Input.Thread.Keyboard",
@@ -671,12 +653,164 @@ def classify_production_sources(sources: dict[str, str]) -> set[str]:
 def scan_production_unrestricted_importers(repo_root: Path) -> set[str]:
     """IO wrapper: walk every `src/**/*.hs` and `app/**/*.hs` file
     under `repo_root` and classify it."""
+    return classify_production_sources(scan_production_sources(repo_root))
+
+
+# ===========================================================================
+# SS3 main-render ownership boundary (issue #891, capability split E3)
+# ===========================================================================
+#
+# docs/engineenv_capability_inventory.md SS3 makes `EngineState`
+# main-render-thread-private, and SS5 lists `MainRender` as
+# `engineStateRef`'s ONLY reader and writer. E1's capability convention
+# exports each record as `Capability(..)` -- constructor AND accessors
+# -- so a worker-visible record carrying `engineStateRef` would hand
+# worker-thread code a way to inspect that pointer no matter what its
+# Haddock claimed. #891 therefore splits `render-gpu-asset` into two
+# interfaces, and these three checks are what make the split a boundary
+# rather than a convention:
+#
+#   1. Only a module classified `MainRender` may import the full
+#      `Engine.Core.Capability.Render`.
+#   2. Only the pointer's genuine owners may name `engineStateRef` (or
+#      its `rcEngineStateRef` accessor) at all.
+#   3. The worker-visible view must not so much as MENTION the field --
+#      no field, no accessor, no re-export, hence no path to dereference
+#      it.
+#
+# Like the SS6 ratchet, sets 1 and 2 are checked in BOTH directions: a
+# stale entry (a module listed here that no longer does the thing) fails
+# too, so neither set can silently decay into a mere upper bound.
+RENDER_CAPABILITY_MODULE = "Engine.Core.Capability.Render"
+RENDER_VIEW_MODULE = "Engine.Core.Capability.RenderView"
+
+# Production modules that legitimately run on `MainRender` and may hold
+# the full 20-field record. Every one of these is a SS6.2
+# `render-gpu-asset` module #891 migrated whose execution domain SS5
+# records as `MainRender` (the Vulkan device/pipeline/swapchain/texture
+# family, font rasterization and upload, the GLFW window, UI/text
+# rendering, and the `processLuaMessages`-dispatched Message handlers).
+#
+# A module reached from a worker thread does NOT belong here even if it
+# also has a `MainRender` caller: a dual-domain module must satisfy the
+# boundary with the worker-safe view alone (e.g. `World.Render.BloodQuads`,
+# whose `renderBloodDecalQuads` runs on `WorldThread` while
+# `uploadBloodTextures` runs on `MainRender` -- neither path needs
+# `engineStateRef`, so the view serves both).
+RENDER_MAIN_ONLY_MODULES = frozenset({
+    "Engine.Graphics.Font.Load", "Engine.Graphics.Font.Upload",
+    "Engine.Graphics.Vulkan.Command.Sprite", "Engine.Graphics.Vulkan.Command.Text",
+    "Engine.Graphics.Vulkan.Init", "Engine.Graphics.Vulkan.Recreate",
+    "Engine.Graphics.Vulkan.Texture.Bindless",
+    "Engine.Graphics.Vulkan.Texture.DefaultFaceMap",
+    "Engine.Graphics.Window.GLFW", "Engine.Scene.Batch.Text",
+    "Engine.Scripting.Lua.Message.Texture", "Engine.Scripting.Lua.Message.Video",
+    "Engine.Scripting.Lua.Message.WorldTexture", "UI.Render",
+})
+
+# The only production modules that may name the main-render-private
+# pointer: `Engine.Core.State` declares it, `Engine.Core.Init` seeds it,
+# `Engine.Core.Monad` carries it through the CPS Reader environment (the
+# "carrying mechanism, not an ownership signal" SS3 describes), and
+# `Engine.Core.Capability.Render` projects it into the MainRender-only
+# record.
+ENGINE_STATE_REF_OWNERS = frozenset({
+    "Engine.Core.State", "Engine.Core.Init", "Engine.Core.Monad",
+    RENDER_CAPABILITY_MODULE,
+})
+
+_ENGINE_STATE_REF_RE = re.compile(r"(?<![A-Za-z0-9_'])(?:rcE|e)ngineStateRef(?![A-Za-z0-9_'])")
+
+
+def imports_module(source_text: str, module: str) -> bool:
+    """True iff `source_text` imports `module` (comments stripped, so a
+    Haddock reference to a module name never counts as an import)."""
+    for chunk in _import_chunks(_strip_haskell_comments(source_text)):
+        head = _IMPORT_HEAD_RE.match(chunk)
+        if head and head.group(1) == module:
+            return True
+    return False
+
+
+def audit_render_boundary(
+    sources: dict[str, str], *,
+    main_only: frozenset[str] = RENDER_MAIN_ONLY_MODULES,
+    state_ref_owners: frozenset[str] = ENGINE_STATE_REF_OWNERS,
+) -> list[str]:
+    """Pure core of the SS3 boundary check. `sources` is
+    `{relative_path: source_text}` for every production Haskell file
+    (the same input `classify_production_sources` takes)."""
+    violations: list[str] = []
+    live_render_importers: set[str] = set()
+    live_state_ref_users: set[str] = set()
+    view_source: str | None = None
+
+    for relpath, text in sorted(sources.items()):
+        module = module_identifier(relpath)
+        code = _strip_haskell_comments(text)
+        if module == RENDER_VIEW_MODULE:
+            view_source = code
+        if imports_module(text, RENDER_CAPABILITY_MODULE):
+            live_render_importers.add(module)
+        if _ENGINE_STATE_REF_RE.search(code):
+            live_state_ref_users.add(module)
+
+    for module in sorted(live_render_importers - main_only - {RENDER_CAPABILITY_MODULE}):
+        violations.append(
+            f"`{module}` imports `{RENDER_CAPABILITY_MODULE}` but is not a "
+            f"`MainRender` module (RENDER_MAIN_ONLY_MODULES in "
+            f"tools/engine_env_capability_audit.py) -- the full render "
+            f"capability carries `engineStateRef`, which "
+            f"docs/engineenv_capability_inventory.md SS3 makes main-render "
+            f"private. Use `{RENDER_VIEW_MODULE}`'s worker-safe view "
+            f"instead; a dual-domain module must satisfy the boundary with "
+            f"the view alone")
+
+    for module in sorted(main_only - live_render_importers):
+        violations.append(
+            f"`{module}` is listed in RENDER_MAIN_ONLY_MODULES but no longer "
+            f"imports `{RENDER_CAPABILITY_MODULE}` -- remove the stale entry "
+            f"so the checked-in MainRender set stays an exact mirror of the "
+            f"live one, not merely an upper bound")
+
+    for module in sorted(live_state_ref_users - state_ref_owners):
+        violations.append(
+            f"`{module}` names `engineStateRef`/`rcEngineStateRef` but is not "
+            f"one of its owners (ENGINE_STATE_REF_OWNERS in "
+            f"tools/engine_env_capability_audit.py) -- "
+            f"docs/engineenv_capability_inventory.md SS3 confines the "
+            f"main-render-private `EngineState` pointer to `MainRender`")
+
+    for module in sorted(state_ref_owners - live_state_ref_users):
+        violations.append(
+            f"`{module}` is listed in ENGINE_STATE_REF_OWNERS but no longer "
+            f"names `engineStateRef` -- remove the stale entry")
+
+    if view_source is None:
+        violations.append(
+            f"`{RENDER_VIEW_MODULE}` is missing from the production sources "
+            f"-- the worker-safe render view is what keeps non-`MainRender` "
+            f"consumers off `engineStateRef`; SS3's boundary has no "
+            f"enforcement without it")
+    elif _ENGINE_STATE_REF_RE.search(view_source):
+        violations.append(
+            f"`{RENDER_VIEW_MODULE}` mentions `engineStateRef` -- the "
+            f"worker-visible render view must provide NO path to the "
+            f"main-render-private pointer (no field, no accessor, no "
+            f"re-export); see docs/engineenv_capability_inventory.md SS3")
+
+    return violations
+
+
+def scan_production_sources(repo_root: Path) -> dict[str, str]:
+    """IO wrapper: `{relative_path: source_text}` for every production
+    Haskell file under `repo_root`."""
     sources: dict[str, str] = {}
     for base in PRODUCTION_DIRS:
         for path in sorted((repo_root / base).rglob("*.hs")):
             relpath = str(path.relative_to(repo_root))
             sources[relpath] = path.read_text(encoding="utf-8", errors="replace")
-    return classify_production_sources(sources)
+    return sources
 
 
 SECTION_6_2_HEADING = "### 6.2 Temporary compatibility boundary (production)"
@@ -820,7 +954,8 @@ def main() -> int:
               f"capability/thread-role/lifecycle vocabulary).")
         return 1
 
-    unrestricted = scan_production_unrestricted_importers(REPO_ROOT)
+    production_sources = scan_production_sources(REPO_ROOT)
+    unrestricted = classify_production_sources(production_sources)
     doc_temporary = parse_temporary_boundary(inventory_text)
     ratchet_violations = audit_ratchet(unrestricted, doc_temporary)
     if ratchet_violations:
@@ -829,11 +964,21 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
+    boundary_violations = audit_render_boundary(production_sources)
+    if boundary_violations:
+        print(f"{len(boundary_violations)} SS3 main-render boundary "
+              f"violation(s):")
+        for v in boundary_violations:
+            print(f"  - {v}")
+        return 1
+
     total_fields = len(extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN))
     print(f"engine-env capability-inventory audit: {total_fields} EngineEnv "
           f"field(s) all classified, {len(unrestricted) + 1} full-access "
           f"modules (incl. the {PERMANENT_DEFINER} definer) within the SS6 "
-          f"ratchet")
+          f"ratchet, {len(RENDER_MAIN_ONLY_MODULES)} MainRender module(s) "
+          f"holding the full render capability and no non-owner naming "
+          f"`engineStateRef` (SS3)")
     return 0
 
 

@@ -121,6 +121,7 @@ import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
+import qualified Test.Headless.Capability.Render as CapabilityRender
 
 main ∷ IO ()
 main = hspec $ do
@@ -157,6 +158,10 @@ main = hspec $ do
         -- processInputs, driven directly against the live EngineEnv.
         describe "Input.LayerA" InputLayerA.spec
         describe "River.InlandSources" RiverInlandSources.spec
+        -- Capability-projection aliasing (#891): pure handle-equality
+        -- checks against the already-booted env — no worldgen, no
+        -- mutation, so it rides the shared engine above.
+        describe "Capability.Render projections" CapabilityRender.spec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead
