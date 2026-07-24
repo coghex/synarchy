@@ -27,12 +27,15 @@ Checks:
   3. Focused item mode (--preview icons/<item>): texture filter forced
      to nearest; no list (dump().rows is absent/empty) while the
      requested texture resolves; a resize reflows the panel bounds.
-  4. Trimmed loading (Requirement 5): the engine's OWN authoritative
-     texture-upload count (blood.gpuStats().texSize) matches EXACTLY
-     the browsed category's own requested textures plus the documented
-     chrome allowlist (list mode only) — not just previewManager's
-     self-reported bookkeeping — and every self-reported path resolves
-     under the browsed category's own root.
+  4. Trimmed loading (Requirement 5): engine.getLoadedTexturePaths() —
+     the engine's OWN authoritative record of every texture ever loaded
+     this session (Engine.Asset's apAssetPaths, populated by
+     engine.loadTexture's Haskell handler itself, not any Lua caller's
+     self-reported bookkeeping) — contains ONLY paths under the browsed
+     category's root plus the documented chrome allowlist (list mode
+     only), with no extras and nothing missing; the normal ~25-script
+     gameplay set never loaded (the `ui` global, wired only outside the
+     preview boot profile, stays nil).
 
 Usage:
   python3 tools/preview_probe.py [--port 9150]
@@ -48,6 +51,31 @@ import time
 from probelib import boot, quit_engine, send, send_json, poll_until
 
 LOG = "/tmp/preview_probe_engine.log"
+
+# Every texture scripts.ui.list's list.init() (highlight.png) and its
+# scrollbar.init() (arrow buttons + track + the 9-slice scrolltab set,
+# scripts/ui/scrollbar.lua + scripts/ui/box_textures.lua) load THE
+# MOMENT any list-mode browser is built, regardless of whether that
+# particular list ever needs to scroll — the ONE allowed exception to
+# "textures within the requested category" (Requirement 5). List mode
+# only; focused/item mode never calls assetBrowser.init() at all.
+CHROME_TEXTURE_PATHS = frozenset({
+    "assets/textures/ui/highlight.png",
+    "assets/textures/ui/scrollup.png",
+    "assets/textures/ui/scrolldown.png",
+    "assets/textures/ui/scrollbar.png",
+    "assets/textures/ui/scrollbartop.png",
+    "assets/textures/ui/scrollbarbottom.png",
+    "assets/textures/ui/scrolltab/scrolltab.png",
+    "assets/textures/ui/scrolltab/scrolltabn.png",
+    "assets/textures/ui/scrolltab/scrolltabs.png",
+    "assets/textures/ui/scrolltab/scrolltabe.png",
+    "assets/textures/ui/scrolltab/scrolltabw.png",
+    "assets/textures/ui/scrolltab/scrolltabne.png",
+    "assets/textures/ui/scrolltab/scrolltabnw.png",
+    "assets/textures/ui/scrolltab/scrolltabse.png",
+    "assets/textures/ui/scrolltab/scrolltabsw.png",
+})
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -70,6 +98,35 @@ def poll_state(port: int, want: str, seconds: float = 10.0, interval: float = 0.
         time.sleep(interval)
         d = dump(port)
     return d
+
+
+def check_trimmed_loading(port: int, category_root_prefix: str, allow_chrome: bool) -> bool:
+    """Requirement 5, verified against the engine's OWN authoritative
+    texture-load record (engine.getLoadedTexturePaths — Engine.Asset's
+    apAssetPaths, populated by engine.loadTexture's Haskell handler
+    itself) rather than any Lua caller's self-reported bookkeeping: every
+    loaded texture this whole session is EITHER under the browsed
+    category's root OR (list mode only) one of the documented chrome
+    assets — no extras, nothing unaccounted for (#886 round-2 review)."""
+    loaded = send_json(port, "return engine.getLoadedTexturePaths()")
+    loaded = loaded if isinstance(loaded, list) else []
+    allowed_chrome = CHROME_TEXTURE_PATHS if allow_chrome else frozenset()
+    unaccounted = [p for p in loaded
+                   if not p.startswith(category_root_prefix) and p not in allowed_chrome]
+    return check("every engine-loaded texture is under the browsed "
+                "category's root or a documented chrome asset",
+                not unaccounted,
+                f"loaded={loaded} unaccounted={unaccounted}")
+
+
+def check_no_gameplay_scripts_loaded(port: int) -> bool:
+    """The normal ~25-script gameplay/menu set (init_loader.lua's
+    non-preview branch) never loads in preview mode — the `ui` global it
+    wires (require("scripts.ui.registry")) is the cheapest sentinel:
+    nil here means that whole branch never ran."""
+    result = send(port, "return ui == nil")
+    return check("normal gameplay script set never loaded (ui global is nil)",
+                 result == "true", result)
 
 
 def expected_entries(category: str) -> list[str]:
@@ -196,44 +253,18 @@ def check_simple_list_mode(port: int) -> bool:
                                  after_resize.get("scrollOffset") == prev_scroll,
                                  after_resize.get("scrollOffset"))
 
-        # Trimmed loading (Requirement 5): cross-check against the
-        # engine's OWN authoritative texture-upload count
-        # (blood.gpuStats already exposes texSize, the live
-        # textureSizeRef entry count — an engine-side ground truth, not
-        # self-reported by previewManager) so an unrelated/hidden
-        # texture load anywhere in the engine shows up as a count
-        # mismatch here, not just a gap in previewManager's own
-        # bookkeeping (#886 round-1 review).
-        dfinal = dump(port)
-        loaded = dfinal.get("loadedPaths") or []
+        # Trimmed loading (Requirement 5) — engine-authoritative (#886
+        # round-2 review): every texture engine.getLoadedTexturePaths()
+        # reports resolves under the browsed category's root or is a
+        # documented chrome asset, and the normal gameplay script set
+        # never loaded.
         root_prefix = os.path.join("assets", "textures", "icons") + os.sep
-        ok_paths = check("every requested texture path stays under the "
-                        "browsed category's root",
-                        all(p.startswith(root_prefix) for p in loaded),
-                        loaded)
-
-        gpu = send_json(port, "return blood.gpuStats()")
-        tex_size = gpu.get("texSize") if isinstance(gpu, dict) else None
-        # List mode always loads scripts.ui.list's 6 chrome textures
-        # (highlight.png + 5 scrollbar assets) the moment ANY list is
-        # built — list.init()/scrollbar.init() are unconditional,
-        # regardless of whether this particular list needs to scroll —
-        # so the engine-wide total must be EXACTLY chrome +
-        # previewManager's own tracked requests, no slack for anything
-        # else (a gameplay catalog, a stray world/HUD texture, ...) to
-        # have snuck in.
-        CHROME_TEXTURE_COUNT = 6
-        expected_tex_size = CHROME_TEXTURE_COUNT + len(loaded)
-        ok_trimmed = check("engine-wide loaded-texture count is EXACTLY "
-                          "chrome + the browsed category's own requests "
-                          "(no unrelated/hidden texture load)",
-                          tex_size == expected_tex_size,
-                          f"texSize={tex_size} expected={expected_tex_size} "
-                          f"(chrome={CHROME_TEXTURE_COUNT} loaded={len(loaded)})")
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
+        ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         return all([ok_filter, ok_mode, ok_count, ok_first, ok_ready, ok_click,
                     ok_scroll, ok_resize_bounds, ok_resize_selection,
-                    ok_resize_scroll, ok_paths, ok_trimmed])
+                    ok_resize_scroll, ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 
@@ -257,19 +288,14 @@ def check_focused_item_mode(port: int) -> bool:
                             selected)
         ok_ready = check("resolved to ready", d.get("state") == "ready", d.get("state"))
 
-        # Trimmed loading: focused mode never calls assetBrowser.init(),
-        # so no list chrome loads at all — the engine-wide texture count
-        # must be EXACTLY the one requested texture (see the list-mode
-        # check above for why this is the engine's own ground truth,
-        # not previewManager's self-reported loadedPaths).
-        loaded = d.get("loadedPaths") or []
-        gpu = send_json(port, "return blood.gpuStats()")
-        tex_size = gpu.get("texSize") if isinstance(gpu, dict) else None
-        ok_trimmed = check("engine-wide loaded-texture count == exactly "
-                          "the one requested texture (no list chrome, "
-                          "no unrelated/hidden texture load)",
-                          tex_size == len(loaded),
-                          f"texSize={tex_size} loaded={loaded}")
+        # Trimmed loading (Requirement 5) — engine-authoritative (#886
+        # round-2 review): focused mode never calls assetBrowser.init(),
+        # so no list chrome is allowed at all — every engine-loaded
+        # texture must be under the browsed category's root, and the
+        # normal gameplay script set never loaded.
+        root_prefix = os.path.join("assets", "textures", "icons") + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=False)
+        ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         # Resize (#886 round-1 review): focused mode has no list to
         # preserve, but the panel/sprite still must reflow, not overflow
@@ -286,7 +312,7 @@ def check_focused_item_mode(port: int) -> bool:
                           after_resize.get("panelBounds"))
 
         return (ok_filter and ok_mode and ok_no_list and ok_selected
-                and ok_ready and ok_trimmed and ok_resize)
+                and ok_ready and ok_trimmed and ok_no_gameplay and ok_resize)
     finally:
         quit_engine(port, proc)
 

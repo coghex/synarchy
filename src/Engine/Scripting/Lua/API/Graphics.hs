@@ -1,6 +1,7 @@
 module Engine.Scripting.Lua.API.Graphics
   ( loadTextureFn
   , getTextureSizeFn
+  , getLoadedTexturePathsFn
   , spawnSpriteFn
   , setPosFn
   , setColorFn
@@ -15,12 +16,14 @@ import Math (colorToVec4)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
+import Engine.Asset.Types (AssetPool(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -77,6 +80,25 @@ getTextureSizeFn env = do
           Lua.setfield (-2) "height"
         Nothing → Lua.pushnil
     Nothing → Lua.pushnil
+  return 1
+
+-- | engine.getLoadedTexturePaths() → array of every currently-loaded
+--   texture's file path. 'apAssetPaths' is the authoritative record
+--   'engine.loadTexture'\'s own Haskell handler
+--   ('Engine.Scripting.Lua.Message.Texture.handleLoadTextureBatch')
+--   inserts into the moment an upload completes, regardless of WHICH
+--   Lua caller requested it — so this is a ground-truth enumeration a
+--   probe can check against an allowlist, not a caller's own self-
+--   reported bookkeeping (#886's preview-mode trimmed-loading proof:
+--   every entry here must resolve under the browsed category's root or
+--   be a documented chrome asset).
+getLoadedTexturePathsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getLoadedTexturePathsFn env = do
+  paths ← Lua.liftIO $ Map.keys . apAssetPaths ⊚ readIORef (assetPoolRef env)
+  Lua.newtable
+  forM_ (zip [1 ∷ Int ..] paths) $ \(i, p) → do
+    Lua.pushstring (TE.encodeUtf8 p)
+    Lua.rawseti (-2) (fromIntegral i)
   return 1
 
 spawnSpriteFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults

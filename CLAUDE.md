@@ -495,10 +495,12 @@ Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
 check above the "always opens a real window" line) and
 `tools/preview_probe.py` (manual-only, `needs-gpu` — the real-boot
 browser checks: discovery/selection/scroll/resize via the dump, forced
-nearest filtering, trimmed loading cross-checked against
-`blood.gpuStats().texSize` — the engine's own authoritative loaded-
-texture count, not just previewManager's self-reported bookkeeping —
-plus the grouped-category placeholder boot). Focused hspec coverage for
+nearest filtering, and trimmed loading verified against
+`engine.getLoadedTexturePaths()` — `Engine.Asset`'s `apAssetPaths`,
+populated by `engine.loadTexture`'s own Haskell handler regardless of
+Lua caller, so this is the engine's own authoritative loaded-texture
+record, not previewManager's self-reported bookkeeping — plus the
+grouped-category placeholder boot). Focused hspec coverage for
 the pure discovery/labeling/ordering/containment logic:
 `cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`.
 

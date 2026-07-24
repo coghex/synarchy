@@ -25,6 +25,7 @@ import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , getTooltipHintDelayMsFn
                                        , setTooltipHintDelayMsFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, getTextureSizeFn,
+                                           getLoadedTexturePathsFn,
                                            spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, getUIScaleFn)
@@ -124,6 +125,7 @@ registerEngineAPI lst env backendState = do
 
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)
   registerLuaFunction "getTextureSize" (getTextureSizeFn env)
+  registerLuaFunction "getLoadedTexturePaths" (getLoadedTexturePathsFn env)
   registerLuaFunction "getTextureHandle" (getTextureHandleFn env)
   registerLuaFunction "spawnSprite"   (spawnSpriteFn env backendState)
   registerLuaFunction "setPos"        (setPosFn env backendState)
