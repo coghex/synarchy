@@ -31,10 +31,15 @@ Phases:
      queryable, name count unchanged, new value visible), and a
      re-load of a shipped file must leave its defs queryable too.
   4. World join — with a real generated world, world.listPlacedLocations
-     joins each placement against the location-def registry; every
-     placement whose id has a registered def must carry the def's
-     `bounds` + `discovery_margin` (the read that goes through the
-     capability record in `API.WorldQuery.Location`).
+     joins each placement against the location-def registry. The phase
+     POLLS for at least one placement whose id resolves against a
+     registered def (an empty list would satisfy a "all known entries
+     are well-formed" check vacuously, and `world.show` is fire-and-
+     forget onto the world thread), then requires every such placement
+     to carry the def's `bounds` + `discovery_margin` — the read that
+     goes through the capability record in `API.WorldQuery.Location` —
+     and requires the argument-less active-world form to agree with the
+     page-targeted one.
 
 Usage: python3 tools/content_registry_probe.py [--port 9341]
 """
@@ -43,7 +48,7 @@ import glob
 import json
 import sys
 
-from probelib import boot, init_world, quit_engine, send
+from probelib import boot, init_world, poll_until, quit_engine, send
 
 PROBE_SUBSTANCE_YAML = "/tmp/content_registry_probe_substances.yaml"
 
@@ -252,13 +257,38 @@ def main():
 
         # --- Phase 4: placed-location join against the def registry ----
         print("\n-- phase 4: world.listPlacedLocations def join --")
-        init_world(port, name="content_registry_probe", seed=42, size=64, plates=3)
-        placed = jget(port, "return world.listPlacedLocations()", timeout=30.0)
-        ok = isinstance(placed, list)
-        passed = check(passed, ok, "world.listPlacedLocations returns a list",
-                       f"got={placed!r}")
-        if ok:
-            known = [p for p in placed if p.get("id") in def_ids]
+        page = "content_registry_probe"
+        init_world(port, name=page, seed=42, size=64, plates=3)
+        # `init_world`'s world.show is fire-and-forget onto the world
+        # thread, so the page is NOT necessarily active the instant it
+        # returns — an argument-less world.listPlacedLocations() issued
+        # right here can still read a nonexistent active world and come
+        # back empty. An empty list would satisfy a naive
+        # "is it a list?" + "are all known entries well-formed?" pair
+        # VACUOUSLY, so poll for the real thing instead: at least one
+        # placement whose id resolves against the def registry. That is
+        # the join this phase exists to gate, and a w64/seed-42 world
+        # placing >= 1 ruin_small is the same expectation
+        # tools/location_overlay_probe.py's check 1 already relies on.
+        def placements():
+            entries = jget(port, f"return world.listPlacedLocations('{page}')",
+                           timeout=30.0)
+            if not isinstance(entries, list):
+                return None
+            known = [p for p in entries if p.get("id") in def_ids]
+            return (entries, known) if known else None
+
+        found = poll_until(90, placements, interval=0.5)
+        detail = ""
+        if found is None:
+            last = jget(port, f"return world.listPlacedLocations('{page}')",
+                        timeout=30.0)
+            detail = f"def_ids={sorted(def_ids)} last={last!r}"
+        passed = check(passed, found is not None,
+                       "world.listPlacedLocations reports >= 1 placement "
+                       "resolving against a registered def", detail)
+        if found is not None:
+            placed, known = found
             bad = [p for p in known
                    if not isinstance(p.get("bounds"), dict)
                    or "discovery_margin" not in p]
@@ -266,10 +296,23 @@ def main():
                            "every placement with a registered def carries "
                            "its bounds + discovery_margin",
                            f"placed={len(placed)} known={len(known)} bad={bad}")
-            # Not an assertion (placement is worldgen-dependent), but the
-            # count belongs in the log so a vacuous join is visible.
             print(f"        (placements: {len(placed)}, "
                   f"with a registered def: {len(known)})")
+            # The argument-less form (active world) must agree with the
+            # page-targeted one — same registry read, same join, and the
+            # form the Lua `locations` module actually calls.
+            active = poll_until(
+                30,
+                lambda: (lambda e: e if isinstance(e, list) and e else None)(
+                    jget(port, "return world.listPlacedLocations()",
+                         timeout=30.0)),
+                interval=0.5)
+            passed = check(passed, active is not None
+                           and len(active) == len(placed),
+                           "the active-world form agrees with the "
+                           "page-targeted form",
+                           f"active={len(active) if isinstance(active, list) else active} "
+                           f"page={len(placed)}")
 
         print("\n" + ("ALL CONTENT-REGISTRY CHECKS PASSED"
                       if passed else "SOME FAILED"))
