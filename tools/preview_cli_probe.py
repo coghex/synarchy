@@ -130,6 +130,10 @@ def check_directory_as_item() -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    # Every registered probe accepts --port (#723) so tools/run_probes.py
+    # can force a non-default port on any of them uniformly, even one
+    # like this that boots no engine at all and has no use for it.
+    ap.add_argument("--port", type=int, default=None)
     ap.parse_args()
 
     results = [check_missing_target()]
