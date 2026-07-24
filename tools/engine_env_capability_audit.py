@@ -44,8 +44,14 @@ newly gaining unrestricted access fails this ratchet even if SS6.2 is
 ALSO edited to document it -- growing the checked-in ceiling itself
 (in this file) is the only way to admit a new temporary full-access
 module, and doing so without a matching SS6.2 update fails the
-doc/ceiling consistency check below. `test/` sources remain outside
-this ratchet entirely (SS6.3's test-only exception).
+doc/ceiling consistency check below. The ceiling is checked in BOTH
+directions: a module also fails the ratchet if it is listed in the
+checked-in ceiling (and/or SS6.2) but no longer has live unrestricted
+access -- a stale entry left behind by a migration that narrowed the
+module without also shrinking the ceiling and SS6.2's row -- since
+SS6.2 must stay an exact, exhaustive mirror of the live temporary set,
+not merely an upper bound on it. `test/` sources remain outside this
+ratchet entirely (SS6.3's test-only exception).
 
 Usage:
   python3 tools/engine_env_capability_audit.py
@@ -753,6 +759,15 @@ def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
             f"tools/engine_env_capability_audit.py) -- a newly full-access "
             f"module must be narrowed, not merely documented; see "
             f"docs/engineenv_capability_inventory.md SS6")
+
+    for module in sorted(ceiling_all - unrestricted):
+        violations.append(
+            f"`{module}` is listed in the checked-in TEMPORARY_CEILING but "
+            f"no longer has unrestricted `Engine.Core.State` access in the "
+            f"live source -- it must be REMOVED from TEMPORARY_CEILING and "
+            f"its SS6.2 row (docs/engineenv_capability_inventory.md), not "
+            f"left as a stale entry: SS6.2's accounting must exactly mirror "
+            f"the live temporary set, not merely bound it from above")
 
     for cap in sorted(set(ceiling) | set(doc_temporary)):
         ceiling_set = set(ceiling.get(cap, frozenset()))

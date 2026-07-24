@@ -104,6 +104,7 @@ import qualified Test.Headless.World.Render.WaterSlope as RenderWaterSlope
 import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Core.ConfigState as ConfigState
+import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
@@ -252,6 +253,7 @@ main = hspec $ do
     describe "World.Render.Zoom.zoomQuadWorldUVs" ZoomBakeUV.spec
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Core.ConfigState" ConfigState.spec
+    LogMonad.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec
     describe "Scene.BatchMerge" BatchMerge.spec

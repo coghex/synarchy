@@ -153,6 +153,17 @@ extractCallSite cs =
       , "logWarnM", "logWarnSM"
       , "logErrorM", "logErrorSM"
       , "getLogger"  -- Also skip the logger fetcher
+      -- Engine.Core.Log.Monad's capability-scoped primitives (#889):
+      -- each *M wrapper now calls through one of these before reaching
+      -- the functions above, so they need the same skip treatment --
+      -- otherwise the walk stops one frame too early, at the *For
+      -- call site INSIDE Log.Monad, instead of falling through to the
+      -- real external caller recorded on the *M frame.
+      , "getLoggerFor"
+      , "logDebugFor", "logDebugSFor"
+      , "logInfoFor", "logInfoSFor"
+      , "logWarnFor", "logWarnSFor"
+      , "logErrorFor", "logErrorSFor"
       ]
 
 logMessage ∷ (HasCallStack, MonadIO m)

@@ -595,6 +595,23 @@ def test_documented_but_ungoverned_addition_still_rejected():
            "checked-in ceiling itself admits a new temporary module")
 
 
+def test_stale_ceiling_entry_rejected():
+    # A migration narrows a module (it no longer has live unrestricted
+    # access) but never shrinks the checked-in ceiling or its SS6.2
+    # row to match -- the ratchet must reject this drift in EITHER
+    # direction, not just growth: SS6.2's accounting must stay an
+    # exact mirror of the live temporary set, not merely an upper bound.
+    permanent = frozenset({"Perm.Mod"})
+    ceiling = {"core-init": frozenset({"Temp.A", "Temp.Stale"})}
+    doc = {"core-init": {"Temp.A", "Temp.Stale"}}
+    unrestricted = {"Perm.Mod", "Temp.A"}  # Temp.Stale no longer unrestricted
+    violations = audit_ratchet(unrestricted, doc, permanent=permanent, ceiling=ceiling)
+    expect(any("Temp.Stale" in v for v in violations),
+           "a checked-in ceiling/SS6.2 entry that no longer has live "
+           "unrestricted access must be flagged as stale, not silently "
+           "tolerated as a mere upper bound")
+
+
 def test_ceiling_and_doc_mismatch_detected():
     permanent: frozenset[str] = frozenset()
     ceiling = {"core-init": frozenset({"Temp.A", "Temp.B"})}
@@ -673,6 +690,7 @@ def main() -> int:
         test_new_full_access_module_rejected,
         test_shrinking_migration_accepted,
         test_documented_but_ungoverned_addition_still_rejected,
+        test_stale_ceiling_entry_rejected,
         test_ceiling_and_doc_mismatch_detected,
         test_real_repo_ratchet_consistency,
     ]
