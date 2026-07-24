@@ -5,12 +5,14 @@ module World.Render.Quads
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
-import Engine.Core.State (EngineEnv, floraCatalogRef)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -43,7 +45,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)
     camera ← readIORef (rvCameraRef (toRenderViewCapability env))
-    floraCat ← readIORef (floraCatalogRef env)
+    floraCat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
     worldDate ← readIORef (wsDateRef worldState)
     texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
     harvests ← readIORef (wsFloraHarvestsRef worldState)

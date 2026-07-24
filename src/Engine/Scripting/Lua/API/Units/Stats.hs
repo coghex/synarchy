@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.Units.Stats
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -50,7 +52,7 @@ unitGetSkillFn env = do
                     Just inst → case HM.lookup name (uiSkills inst) of
                         Nothing → pure Nothing
                         Just base → do
-                            now ← readIORef (gameTimeRef env)
+                            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                             let mods = HM.lookupDefault [] name
                                           (uiModifiers inst)
                             pure (Just (effectiveStat now base mods))
@@ -237,7 +239,7 @@ unitGetAllSkillsFn env = do
             let uid = UnitId (fromIntegral n)
             mEntries ← Lua.liftIO $ do
                 um  ← readIORef (unitManagerRef env)
-                now ← readIORef (gameTimeRef env)
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     def  ← HM.lookup (uiDefName inst) (umDefs um)
@@ -373,8 +375,8 @@ unitGetAllStatsFn env = do
 --   add or replace a modifier on a stat. Same @source@ on
 --   the same @name@ overwrites the previous entry; different sources
 --   stack. @durationSec@ is optional (nil = permanent); when given it
---   is added to the current gameTimeRef value to produce smExpiry,
---   so modifier expiries survive save/load (gameTimeRef is restored
+--   is added to the current game-clock value to produce smExpiry,
+--   so modifier expiries survive save/load (@gameTimeRef@ is restored
 --   on load; POSIX wall-clock isn't). @percent@ is an optional
 --   fractional multiplier contribution (0.5 = +50%, applied as
 --   (base + Σdelta) × (1 + Σpercent)); nil/absent = 0 (additive only).
@@ -401,7 +403,7 @@ unitAddModifierFn env = do
             ok ← Lua.liftIO $ do
                 expiry ← case durMaybe of
                     Just (Lua.Number dur) → do
-                        now ← readIORef (gameTimeRef env)
+                        now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                         pure (Just (now + realToFrac dur))
                     _ → pure Nothing
                 let mod' = StatModifier
@@ -610,7 +612,7 @@ getEffectiveStat env uid name = do
     case mBase of
         Nothing   → pure Nothing
         Just base → do
-            now ← readIORef (gameTimeRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             um ← readIORef (unitManagerRef env)
             case HM.lookup uid (umInstances um) of
                 Nothing   → pure (Just base)   -- destroyed mid-call
@@ -627,7 +629,7 @@ effectiveAllStats env uid = do
     case mBases of
         Nothing    → pure Nothing
         Just bases → do
-            now ← readIORef (gameTimeRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             um ← readIORef (unitManagerRef env)
             case HM.lookup uid (umInstances um) of
                 Nothing   → pure (Just bases)  -- destroyed mid-call

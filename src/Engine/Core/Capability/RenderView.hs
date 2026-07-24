@@ -26,13 +26,18 @@
 --   remaining @MainRender@-only fields are omitted because no
 --   non-@MainRender@ consumer reads them (SS5's Readers\/Writers
 --   cells): @windowStateRef@, @brightnessRef@, @samplerCacheRef@,
---   @defaultFaceMapSlotRef@ and @uiCameraRef@. @fpsRef@ and
---   @nextObjectIdRef@ have @LuaThread@ readers, but neither belongs to
---   a module this issue migrates (@API.Core@ is SS7.4\/#894's;
---   @nextObjectIdRef@'s only consumer is the permanently-full-access
---   @Engine.Scripting.Lua.Thread@), and E1's "no unused capability
---   records ahead of need" applies field-by-field here too — a later
---   migration that needs one adds it then.
+--   @defaultFaceMapSlotRef@ and @uiCameraRef@. @nextObjectIdRef@ has a
+--   @LuaThread@ reader, but its only consumer is the
+--   permanently-full-access @Engine.Scripting.Lua.Thread@, and E1's "no
+--   unused capability records ahead of need" applies field-by-field
+--   here too — a later migration that needs one adds it then.
+--
+--   @fpsRef@ was omitted on the same "no consumer yet" grounds when
+--   #891 landed and is now present: #893 (E5a) narrowed
+--   @Engine.Scripting.Lua.API.Core@, whose @engine.getFPS@ is the
+--   @LuaThread@ reader SS5's @fpsRef@ row names — exactly the "a later
+--   migration adds them when it has a real consumer" case SS7.2
+--   anticipated.
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs rather than
@@ -59,15 +64,15 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import Engine.Core.State
   ( EngineEnv
   , videoConfigRef, windowSizeRef, windowPosRef, framebufferSizeRef, pixelSnapRef
-  , textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
+  , fpsRef, textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
   , textureSystemRef, textureSizeRef, cameraRef, screenshotRequestQueue
   )
 
 -- | The worker-safe slice of @render-gpu-asset@: window\/framebuffer
---   geometry, the world camera, the asset\/texture-name\/texture-size
---   registries, the bindless texture system, the font cache, the video
---   settings a Lua settings call writes, and the screenshot request
---   queue a Lua verb enqueues onto.
+--   geometry, the measured frame rate, the world camera, the
+--   asset\/texture-name\/texture-size registries, the bindless texture
+--   system, the font cache, the video settings a Lua settings call
+--   writes, and the screenshot request queue a Lua verb enqueues onto.
 --
 --   Every field here is a container SS5 records a @WorldThread@,
 --   @LuaThread@ or @InputThread@ reader or writer for. Writes stay
@@ -80,6 +85,7 @@ data RenderViewCapability = RenderViewCapability
   , rvWindowPosRef           ∷ IORef (Int, Int)
   , rvFramebufferSizeRef     ∷ IORef (Int, Int)
   , rvPixelSnapRef           ∷ IORef Bool
+  , rvFpsRef                 ∷ IORef Double
   , rvTextureFilterRef       ∷ IORef TextureFilter
   , rvAssetPoolRef           ∷ IORef AssetPool
   , rvTextureNameRegistryRef ∷ IORef TextureNameRegistry
@@ -101,6 +107,7 @@ toRenderViewCapability env = RenderViewCapability
   , rvWindowPosRef           = windowPosRef env
   , rvFramebufferSizeRef     = framebufferSizeRef env
   , rvPixelSnapRef           = pixelSnapRef env
+  , rvFpsRef                 = fpsRef env
   , rvTextureFilterRef       = textureFilterRef env
   , rvAssetPoolRef           = assetPoolRef env
   , rvTextureNameRegistryRef = textureNameRegistryRef env

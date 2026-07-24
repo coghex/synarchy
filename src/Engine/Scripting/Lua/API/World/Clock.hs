@@ -18,14 +18,16 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import World.Types
 
 -- | world.setTexture(pageId, textureType, textureHandle)
-worldSetTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetTextureFn env = do
+worldSetTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureTypeArg ← Lua.tostring 2
     textureHandleArg ← Lua.tointeger 3
@@ -35,14 +37,14 @@ worldSetTextureFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texType = parseTextureType (TE.decodeUtf8Lenient typeBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) (WorldSetTexture pageId texType texHandle)
+            Q.writeQueue (wsWorldQueue wsc) (WorldSetTexture pageId texType texHandle)
         _ → pure ()
 
     return 0
 
 -- | world.setCamera(pageId, x, y)
-worldSetCameraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetCameraFn env = do
+worldSetCameraFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetCameraFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -50,7 +52,7 @@ worldSetCameraFn env = do
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just (Lua.Number x), Just (Lua.Number y)) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env)
+            Q.writeQueue (wsWorldQueue wsc)
                 (WorldSetCamera pageId (realToFrac x) (realToFrac y))
         _ → pure ()
 
@@ -58,21 +60,21 @@ worldSetCameraFn env = do
 
 -- | world.setSunAngle(angle)
 -- Direct override of sun angle (0..1), bypasses time system
-worldSetSunAngleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetSunAngleFn env = do
+worldSetSunAngleFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetSunAngleFn wsc = do
     angleArg ← Lua.tonumber 1
 
     case angleArg of
         Just (Lua.Number angle) → Lua.liftIO $ do
-            atomicModifyIORef' (sunAngleRef env) $ \_ → (realToFrac angle, ())
+            atomicModifyIORef' (wsSunAngleRef wsc) $ \_ → (realToFrac angle, ())
         _ → pure ()
 
     return 0
 
 -- | world.setTime(pageId, hour, minute)
 -- Set the world clock. The world thread will compute sun angle from this.
-worldSetTimeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetTimeFn env = do
+worldSetTimeFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetTimeFn wsc = do
     pageIdArg ← Lua.tostring 1
     hourArg   ← Lua.tointeger 2
     minuteArg ← Lua.tointeger 3
@@ -80,7 +82,7 @@ worldSetTimeFn env = do
     case (pageIdArg, hourArg, minuteArg) of
         (Just pageIdBS, Just h, Just m) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env)
+            Q.writeQueue (wsWorldQueue wsc)
                 (WorldSetTime pageId (fromIntegral h) (fromIntegral m))
         _ → pure ()
 
@@ -88,8 +90,8 @@ worldSetTimeFn env = do
 
 -- | world.setDate(pageId, year, month, day)
 -- Set the world date. Currently unused for sun angle (placeholder for seasons).
-worldSetDateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetDateFn env = do
+worldSetDateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetDateFn wsc = do
     pageIdArg ← Lua.tostring 1
     yearArg   ← Lua.tointeger 2
     monthArg  ← Lua.tointeger 3
@@ -98,7 +100,7 @@ worldSetDateFn env = do
     case (pageIdArg, yearArg, monthArg, dayArg) of
         (Just pageIdBS, Just y, Just mo, Just d) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env)
+            Q.writeQueue (wsWorldQueue wsc)
                 (WorldSetDate pageId (fromIntegral y) (fromIntegral mo) (fromIntegral d))
         _ → pure ()
 
@@ -111,13 +113,13 @@ worldSetDateFn env = do
 -- epoch (the #332 flora growth clock). nil when the pageId isn't
 -- registered. The date advances on its own now (midnight rollover in
 -- tickWorldTime) — this is how tests observe it.
-worldGetDateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetDateFn env = do
+worldGetDateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetDateFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     (date, calendar) ← Lua.liftIO $ do
@@ -149,14 +151,14 @@ worldGetDateFn env = do
 -- session with a randomized seed is still diagnosable and a replay's
 -- world divergence is detectable. nil while no world (or no gen
 -- params yet) exists.
-worldGetSeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetSeedFn env = do
+worldGetSeedFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSeedFn wsc = do
     pageIdArg ← Lua.tostring 1
     mWs ← Lua.liftIO $ case pageIdArg of
         Just pageIdBS → do
-            mgr ← readIORef (worldManagerRef env)
+            mgr ← readIORef (wsWorldManagerRef wsc)
             pure (lookup (WorldPageId (TE.decodeUtf8Lenient pageIdBS)) (wmWorlds mgr))
-        Nothing → activeWorldState env
+        Nothing → activeWorldStateFrom (wsWorldManagerRef wsc)
     mParams ← Lua.liftIO $ case mWs of
         Just ws → readIORef (wsGenParamsRef ws)
         Nothing → pure Nothing
@@ -168,15 +170,15 @@ worldGetSeedFn env = do
 -- | world.setTimeScale(pageId, scale)
 -- Set how fast time passes: game-minutes per real-second.
 -- 1.0 = real-time, 60.0 = 1 game-hour per real-second, 0.0 = paused
-worldSetTimeScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetTimeScaleFn env = do
+worldSetTimeScaleFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetTimeScaleFn wsc = do
     pageIdArg ← Lua.tostring 1
     scaleArg  ← Lua.tonumber 2
 
     case (pageIdArg, scaleArg) of
         (Just pageIdBS, Just (Lua.Number s)) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env)
+            Q.writeQueue (wsWorldQueue wsc)
                 (WorldSetTimeScale pageId (realToFrac s))
         _ → pure ()
 
@@ -186,13 +188,13 @@ worldSetTimeScaleFn env = do
 -- Reads the named world's current time scale directly from
 -- 'wsTimeScaleRef'. Returns 1.0 if the pageId isn't registered
 -- (matches the engine's default scale).
-worldGetTimeScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetTimeScaleFn env = do
+worldGetTimeScaleFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetTimeScaleFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     s ← Lua.liftIO $ readIORef (wsTimeScaleRef ws)
@@ -209,9 +211,9 @@ worldGetTimeScaleFn env = do
 -- transition). Returns nil when no worlds are registered (main menu).
 -- Lua callers use this to target "the current world" without
 -- hardcoding "main_world" or "test_arena".
-worldGetActiveWorldIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetActiveWorldIdFn env = do
-    mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+worldGetActiveWorldIdFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetActiveWorldIdFn wsc = do
+    mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
     let active = case wmVisible mgr of
             (pageId:_) → Just pageId
             []         → case wmWorlds mgr of
@@ -223,8 +225,8 @@ worldGetActiveWorldIdFn env = do
     return 1
 
 -- | world.setMapMode(pageId, mode)
-worldSetMapModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetMapModeFn env = do
+worldSetMapModeFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetMapModeFn wsc = do
     pageIdArg ← Lua.tostring 1
     modeArg   ← Lua.tostring 2
 
@@ -232,7 +234,7 @@ worldSetMapModeFn env = do
         (Just pageIdBS, Just modeBS) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 mode = textToMapMode (TE.decodeUtf8Lenient modeBS)
-            Q.writeQueue (worldQueue env)
+            Q.writeQueue (wsWorldQueue wsc)
                 (WorldSetMapMode pageId mode)
         _ → pure ()
 

@@ -75,6 +75,8 @@ module Combat.Resolution
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
@@ -124,7 +126,7 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     let regs = toContentRegistriesCapability env
     im ← readIORef (crItemManagerRef regs)
     sm ← readIORef (crSubstanceManagerRef regs)
-    gt ← readIORef (gameTimeRef env)
+    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     let atkId = UnitId atkRaw
         tgtId = UnitId tgtRaw
     case (HM.lookup atkId (umInstances um),
@@ -365,7 +367,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
             case pickImpactWound [ (woundKind w, woundSeverity w) | w ← wounds ] of
                 Nothing → pure ()
                 Just (kind, sev, _) →
-                    spawnImpactBlood env (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
+                    spawnImpactBlood (toWorldSimCapability env) (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
                         (uiGridZ tgt) kind sev impactAngle impactSeed
                         (Just (UnitId tgtRaw)) gt
 

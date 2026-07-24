@@ -13,6 +13,8 @@ module Engine.Scripting.Lua.API.Units.List
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -301,7 +303,7 @@ unitGetFrameTextureFn env = do
             mTex ← Lua.liftIO $ do
                 um  ← readIORef (unitManagerRef env)
                 cam ← readIORef (cameraRef env)
-                now ← readIORef (gameTimeRef env)
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → Nothing
                     Just inst →

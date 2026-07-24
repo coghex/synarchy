@@ -9,18 +9,20 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldStateFrom)
 import World.Types
 
-worldSetToolModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetToolModeFn env = do
+worldSetToolModeFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetToolModeFn wsc = do
     pageIdArg ← Lua.tostring 1
     toolModeArg ← Lua.tostring 2
     case (pageIdArg, toolModeArg) of
         (Just pageIdBS, Just toolModeBS) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 toolMode = TE.decodeUtf8Lenient toolModeBS
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetToolMode pageId $ textToToolMode toolMode
         _ → pure ()
     return 0
@@ -30,9 +32,9 @@ worldSetToolModeFn env = do
 --   Returns the current tool mode for the first visible world, or nil
 --   if no world is active. Reads `wsToolModeRef` directly so callers
 --   see the world thread's view of the tool state.
-worldGetToolModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetToolModeFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+worldGetToolModeFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetToolModeFn wsc = do
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef wsc)
     case mWs of
         Just ws → do
             tm ← Lua.liftIO $ readIORef (wsToolModeRef ws)

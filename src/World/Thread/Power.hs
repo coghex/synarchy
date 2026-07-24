@@ -21,6 +21,8 @@ module World.Thread.Power
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
@@ -48,7 +50,7 @@ tickPowerNetworks env pageId ws dtGame = do
         wt      ← readIORef (wsTimeRef ws)
         td      ← readIORef (wsTilesRef ws)
         bm      ← readIORef (buildingManagerRef env)
-        now     ← readIORef (gameTimeRef env)
+        now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         -- Per-bill electrical load lives on the recipe, read through
         -- the `content-registries` capability (#890).
         rm      ← readIORef

@@ -10,6 +10,8 @@ module Engine.Scripting.Lua.API.Buildings.Query
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -142,7 +144,7 @@ buildingFindStationFn env = do
                     _                → Nothing
             mBest ← Lua.liftIO $ do
                 bm      ← readIORef (buildingManagerRef env)
-                now     ← readIORef (gameTimeRef env)
+                now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 mActive ← activeWorldPage env
                 pure $ case mActive of
                     Nothing → Nothing

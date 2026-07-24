@@ -6,13 +6,15 @@ module Building.Render
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, buildingGhostRef, buildingManagerRef
-  , gameTimeRef, worldManagerRef )
+   )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -93,7 +95,7 @@ renderBuildingQuads env facing zSlice effDepth tileAlpha = do
     bm ← readIORef (buildingManagerRef env)
     -- Render only the visible worlds' buildings — buildings are
     -- world-scoped so a hidden world's must not draw here (#76).
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let visiblePages = HS.fromList (wmVisible mgr)
         instances = buildingsOnPages visiblePages (bmInstances bm)
         defs      = bmDefs bm
@@ -104,7 +106,7 @@ renderBuildingQuads env facing zSlice effDepth tileAlpha = do
             -- Game-clock matches biSpawnedAt's clock, so the
             -- Appearing→Built transition derived from elapsed time
             -- doesn't run while paused.
-            now ← readIORef (gameTimeRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
             mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
             case mBts of

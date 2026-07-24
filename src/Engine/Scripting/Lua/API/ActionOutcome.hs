@@ -22,6 +22,8 @@ module Engine.Scripting.Lua.API.ActionOutcome
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Sequence as Seq
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
@@ -82,7 +84,7 @@ debugRecordOutcomeFn env = do
     handler   ← getStr "handler"
     case (mKind, mOutcome) of
         (Just kind, Just outcome) → do
-            gt ← Lua.liftIO $ readIORef (gameTimeRef env)
+            gt ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
             Lua.liftIO $ atomicModifyIORef' (actionOutcomeRef env) $ \buf →
                 ( buf Seq.|> ActionOutcome
                     { aoTs        = gt

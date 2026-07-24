@@ -20,7 +20,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
@@ -32,7 +34,7 @@ import World.Thread.Command.Cursor.Common
 handleWorldSetChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetChopAnchorCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -42,7 +44,7 @@ handleWorldSetChopAnchorCommand env _logger pageId gx gy = do
 handleWorldClearChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → IO ()
 handleWorldClearChopAnchorCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -56,12 +58,12 @@ handleWorldClearChopAnchorCommand env _logger pageId = do
 handleWorldDesignateChopCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → Text → IO ()
 handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing → recordMissingWorldOutcome env "chop.designate" pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
-            cat ← readIORef (floraCatalogRef env)
+            cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             harvests ← readIORef (wsFloraHarvestsRef worldState)
             let xLo = min gx1 gx2
                 yLo = min gy1 gy2
@@ -112,7 +114,7 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
 handleWorldCancelChopCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldCancelChopCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsChopDesignationsRef worldState) $ \m →
@@ -122,7 +124,7 @@ handleWorldCancelChopCommand env _logger pageId gx gy = do
 handleWorldSetChopDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → TextureHandle → IO ()
 handleWorldSetChopDesignateTextureCommand env _logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →

@@ -4,6 +4,8 @@ module Building.Thread.Command
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
@@ -32,7 +34,7 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz pageId) = do
     -- Drop the spawn if its world is gone — a spawn queued before
     -- world.destroyAll would otherwise re-insert an orphan building into
     -- the cleared manager after teardown (#58).
-    wmgr ← readIORef (worldManagerRef env)
+    wmgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (bmDefs bm) of
         _ | worldGone → pure ()
@@ -42,7 +44,7 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz pageId) = do
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
             -- Game-clock so the appear-anim countdown freezes on pause.
-            now ← readIORef (gameTimeRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             let inst = BuildingInstance
                     { biDefName   = defName
                     , biPage      = pageId

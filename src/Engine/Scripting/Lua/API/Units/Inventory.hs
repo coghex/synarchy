@@ -18,6 +18,8 @@ module Engine.Scripting.Lua.API.Units.Inventory
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -104,7 +106,7 @@ unitAddItemFn env = do
 --   no live world or no gen params yet.
 unitAmbientTemp ∷ EngineEnv → UnitInstance → IO (Maybe Float)
 unitAmbientTemp env inst = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup (uiPage inst) (wmWorlds wm) of
         Nothing → pure Nothing
         Just ws → do

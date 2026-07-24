@@ -25,7 +25,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldPageFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
@@ -33,35 +35,35 @@ import World.Command.Types (WorldCommand(..))
 import World.Till.Types
 
 -- | till.setAnchor(pageId, gx, gy) — first-click anchor.
-tillSetAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillSetAnchorFn env = do
+tillSetAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillSetAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetTillAnchor pageId (round gx) (round gy)
         _ → pure ()
     return 0
 
 -- | till.clearAnchor(pageId) — cancel the pending rectangle.
-tillClearAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillClearAnchorFn env = do
+tillClearAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillClearAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldClearTillAnchor pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldClearTillAnchor pageId
         _ → pure ()
     return 0
 
 -- | till.designate(pageId, x1, y1, x2, y2) — commit the rectangle. Only
 --   tillable tiles at the anchor's surface z (no fluid, no flora, not
 --   already tilled) are designated.
-tillDesignateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillDesignateFn env = do
+tillDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
     x1Arg ← Lua.tonumber 2
     y1Arg ← Lua.tonumber 3
@@ -70,7 +72,7 @@ tillDesignateFn env = do
     case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg) of
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldDesignateTill pageId
                     (round x1) (round y1) (round x2) (round y2)
         _ → pure ()
@@ -79,24 +81,24 @@ tillDesignateFn env = do
 -- | till.cancelDesignation(gx, gy) — remove the designation at a tile
 --   on the active world. Both the player-cancel path and the till AI's
 --   completion call this (best-effort, returns nothing).
-tillCancelDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillCancelDesignationFn env = do
+tillCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1
     gyArg ← Lua.tonumber 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mPage ← Lua.liftIO $ activeWorldPage env
+            mPage ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef wsc)
             case mPage of
                 Just (pageId, _) → Lua.liftIO $
-                    Q.writeQueue (worldQueue env) $
+                    Q.writeQueue (wsWorldQueue wsc) $
                         WorldCancelTill pageId (round gx) (round gy)
                 Nothing → pure ()
         _ → pure ()
     return 0
 
 -- | till.getDesignationAt(pageId, gx, gy) → {x, y, z} | nil.
-tillGetDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillGetDesignationAtFn env = do
+tillGetDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillGetDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -105,7 +107,7 @@ tillGetDesignationAtFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -124,13 +126,13 @@ tillGetDesignationAtFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | till.getDesignationCount(pageId) → n.
-tillGetDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillGetDesignationCountFn env = do
+tillGetDesignationCountFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillGetDesignationCountFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsTillDesignationsRef ws)
@@ -142,8 +144,8 @@ tillGetDesignationCountFn env = do
 -- | till.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tile by Euclidean distance — the till AI's
 --   "distance to nearest till job" term. Mirrors chop.nearestDesignation.
-tillNearestDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillNearestDesignationFn env = do
+tillNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -152,7 +154,7 @@ tillNearestDesignationFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsTillDesignationsRef ws)
@@ -177,15 +179,15 @@ tillNearestDesignationFn env = do
 
 -- | till.setDesignateTexture(pageId, texHandle) — marker texture for
 --   committed till designations.
-tillSetDesignateTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-tillSetDesignateTextureFn env = do
+tillSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillSetDesignateTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     handleArg ← Lua.tointeger 2
     case (pageIdArg, handleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetTillDesignateTexture pageId texHandle
         _ → pure ()
     return 0

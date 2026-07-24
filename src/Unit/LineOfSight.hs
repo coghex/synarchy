@@ -28,7 +28,9 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv, unitManagerRef)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Unit.Direction (Direction(..))
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..),
@@ -48,7 +50,7 @@ unitVisibleTiles env uid = do
     case HM.lookup uid (umInstances um) of
         Nothing → return []
         Just inst → do
-            wm ← readIORef (worldManagerRef env)
+            wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
             if uiPage inst `notElem` wmVisible wm then return []
             else case lookup (uiPage inst) (wmWorlds wm) of
                 Nothing → return []
@@ -112,7 +114,7 @@ unitAwareness ∷ EngineEnv → UnitInstance → UnitInstance → IO Float
 unitAwareness env defender attacker
     | uiPage defender ≠ uiPage attacker = pure 0.0
     | otherwise = do
-        wm ← readIORef (worldManagerRef env)
+        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         if uiPage defender `notElem` wmVisible wm then pure 0.0
         else case lookup (uiPage defender) (wmWorlds wm) of
             Nothing → pure 0.0
@@ -149,7 +151,7 @@ unitAwareness env defender attacker
 --   day just degrades to the world-default circumference in that window.
 activeWorldSizeChunks ∷ EngineEnv → WorldPageId → IO Int
 activeWorldSizeChunks env pageId = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     if pageId `notElem` wmVisible wm then pure 128
     else case lookup pageId (wmWorlds wm) of
         Nothing → pure 128
@@ -192,7 +194,7 @@ losBlockedBetween ∷ EngineEnv → UnitInstance → UnitInstance → IO Bool
 losBlockedBetween env defender attacker
     | uiPage defender ≠ uiPage attacker = pure True
     | otherwise = do
-        wm ← readIORef (worldManagerRef env)
+        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case wmWorlds wm of
             [] → pure False
             worlds

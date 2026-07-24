@@ -8,6 +8,8 @@ module Unit.Thread.Command.Lifecycle
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
@@ -134,7 +136,7 @@ handleUnitReGroundCommand env utsRef gx gy = do
 --   as a deferred follow-up.
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     go (wmVisible wm) (wmWorlds wm)
   where
     (chunkCoord, (lx, ly)) = globalToChunk gx gy

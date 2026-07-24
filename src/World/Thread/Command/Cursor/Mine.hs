@@ -15,7 +15,9 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
@@ -27,7 +29,7 @@ import World.Thread.Command.Cursor.Common
 handleWorldSetMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetMineAnchorCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -36,7 +38,7 @@ handleWorldSetMineAnchorCommand env _logger pageId gx gy = do
 
 handleWorldClearMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldClearMineAnchorCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -54,7 +56,7 @@ handleWorldClearMineAnchorCommand env _logger pageId = do
 handleWorldDesignateMineCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → IO ()
 handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing → recordMissingWorldOutcome env "world.designateMine" pageId gx1 gy1
         Just worldState → do
@@ -106,7 +108,7 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
 handleWorldSetMineDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → TextureHandle → IO ()
 handleWorldSetMineDesignateTextureCommand env _logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →

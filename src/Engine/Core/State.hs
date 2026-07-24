@@ -592,15 +592,35 @@ resolveActiveWorld mgr = case wmVisible mgr of
         (pw:_) → Just pw
         []     → Nothing
 
+-- | 'resolveActiveWorld' over a live world-manager ref, returning the
+--   active world's page id together with its state.
+--
+--   Takes the 'IORef' rather than an 'EngineEnv' so a capability-narrowed
+--   consumer (issue #893's @Engine.Core.Capability.WorldSim@) can apply
+--   the one canonical resolution rule to @wsWorldManagerRef@ without
+--   reaching for the whole environment — the "explicitly narrower
+--   handle" shape @docs/engineenv_capability_inventory.md@ §7.6
+--   established. 'activeWorldPage' below is the identical operation
+--   spelled over an 'EngineEnv', for consumers that still hold one.
+activeWorldPageFrom ∷ IORef WorldManager
+                    → IO (Maybe (WorldPageId, WorldState))
+activeWorldPageFrom ref = resolveActiveWorld <$> readIORef ref
+
+-- | The active world's 'WorldState' (its page id discarded), over a
+--   live world-manager ref. The common case for current-world reads
+--   that don't need the page id.
+activeWorldStateFrom ∷ IORef WorldManager → IO (Maybe WorldState)
+activeWorldStateFrom ref = fmap snd <$> activeWorldPageFrom ref
+
 -- | 'resolveActiveWorld' over the live 'worldManagerRef', returning the
 --   active world's page id together with its state.
 activeWorldPage ∷ EngineEnv → IO (Maybe (WorldPageId, WorldState))
-activeWorldPage env = resolveActiveWorld <$> readIORef (worldManagerRef env)
+activeWorldPage env = activeWorldPageFrom (worldManagerRef env)
 
 -- | The active world's 'WorldState' (its page id discarded). The common
 --   case for current-world reads that don't need the page id.
 activeWorldState ∷ EngineEnv → IO (Maybe WorldState)
-activeWorldState env = fmap snd <$> activeWorldPage env
+activeWorldState env = activeWorldStateFrom (worldManagerRef env)
 
 -- | Allocate the next process-unique 'iiInstanceId'. Call ONCE per
 --   genuine item creation (a roll / spawn); never when merely moving or

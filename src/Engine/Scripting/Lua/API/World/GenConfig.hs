@@ -9,14 +9,15 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Generate.Config
 
 -- | world.getGenDefaults() → table
 --   Returns the world generation config as a Lua table.
-worldGetGenDefaultsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetGenDefaultsFn env = do
-    cfg ← Lua.liftIO $ readIORef (worldGenConfigRef env)
+worldGetGenDefaultsFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetGenDefaultsFn wsc = do
+    cfg ← Lua.liftIO $ readIORef (wsWorldGenConfigRef wsc)
     Lua.newtable
     -- Top-level params
     case wgcSeed cfg of
@@ -116,8 +117,8 @@ worldGetGenDefaultsFn env = do
 -- | world.setGenConfig(table)
 --   Updates the world generation config from a Lua table.
 --   Only updates fields that are present in the table.
-worldSetGenConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetGenConfigFn env = do
+worldSetGenConfigFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetGenConfigFn wsc = do
     -- The config table starts on top of the Lua stack. hslua's 'Lua.nth N'
     -- is top-relative, so 'Lua.nth 1' means "current top", not "argument 1".
     -- The nested helpers below rely on that: once getfield pushes a subtable,
@@ -165,7 +166,7 @@ worldSetGenConfigFn env = do
                     Lua.pop 1
                     pure def
 
-    oldCfg ← Lua.liftIO $ readIORef (worldGenConfigRef env)
+    oldCfg ← Lua.liftIO $ readIORef (wsWorldGenConfigRef wsc)
     let oldCal = wgcCalendar oldCfg
         oldSun = wgcSun oldCfg
         oldMoon = wgcMoon oldCfg
@@ -232,5 +233,5 @@ worldSetGenConfigFn env = do
             , wgcResources  = ResourcesYaml oreAb ironAb copAb
             , wgcTimeline   = TimelineYaml tlEon tlEra tlPMin tlPMax tlEMin tlEMax tlAMin tlAMax
             }
-    Lua.liftIO $ writeIORef (worldGenConfigRef env) newCfg
+    Lua.liftIO $ writeIORef (wsWorldGenConfigRef wsc) newCfg
     return 0

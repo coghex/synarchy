@@ -4,6 +4,8 @@ module Unit.Thread
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
@@ -74,9 +76,9 @@ unitLoop env stateRef lastTimeRef utsRef = do
 
                 locked ← captureLocked (saveBarrierRef env)
                 unless locked $ processAllUnitCommands env utsRef
-                paused ← readIORef (enginePausedRef env)
+                paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
                 unless paused $ do
-                    modifyIORef' (gameTimeRef env) (+ dt)
+                    modifyIORef' (wsGameTimeRef (toWorldSimCapability env)) (+ dt)
                     tickAllMovement dt env utsRef
                 -- Round 3 review (issue #763): a load publish
                 -- (World.Load.Publish.publishStagedSession) swaps
@@ -123,7 +125,7 @@ publishToRender env utsRef = do
     if HM.null simStates
         then return ()
         else do
-            now ← readIORef (gameTimeRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             atomicModifyIORef' (unitManagerRef env) $ \um →
                 let defs = umDefs um
                     updated = HM.mapWithKey (\uid inst →

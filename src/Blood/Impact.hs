@@ -36,7 +36,8 @@ import UPrelude
 import Data.List (maximumBy)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Combat.Wounds (destroyThreshold)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Page.Types (WorldPageId)
 import World.State.Types (WorldManager(..), WorldState(..))
 import Unit.Types (UnitId)
@@ -189,7 +190,7 @@ pickImpactWound candidates =
 --   the CALLER's job (pick one headline wound per event) — this
 --   function always places exactly one decal per call.
 spawnImpactBlood
-    ∷ EngineEnv
+    ∷ WorldSimCapability
     → WorldPageId
     → Float           -- ^ gx
     → Float           -- ^ gy
@@ -201,11 +202,11 @@ spawnImpactBlood
     → Maybe UnitId    -- ^ source unit
     → Double          -- ^ game time
     → IO ()
-spawnImpactBlood env page gx gy z kind severity rotation seed mSrc now =
+spawnImpactBlood wsc page gx gy z kind severity rotation seed mSrc now =
     case impactBloodForWound kind severity of
         Nothing → pure ()
         Just ib → do
-            wm ← readIORef (worldManagerRef env)
+            wm ← readIORef (wsWorldManagerRef wsc)
             case lookup page (wmWorlds wm) of
                 Nothing → pure ()
                 Just ws → do

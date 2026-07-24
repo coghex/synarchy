@@ -14,10 +14,12 @@ module Unit.HitTest
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, unitManagerRef, worldManagerRef
+import Engine.Core.State (EngineEnv, unitManagerRef
   , resolveActiveWorld )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
@@ -47,7 +49,7 @@ hitTestUnitAt env pixX pixY = do
     camera   ← readIORef (rvCameraRef rv)
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     texSizes ← readIORef (rvTextureSizeRef rv)
-    mgr      ← readIORef (worldManagerRef env)
+    mgr      ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     -- Only the active world's units are clickable (#78).
     let instances = case resolveActiveWorld mgr of
@@ -144,7 +146,7 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
     camera   ← readIORef (rvCameraRef rv)
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     texSizes ← readIORef (rvTextureSizeRef rv)
-    mgr      ← readIORef (worldManagerRef env)
+    mgr      ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     let x1 = realToFrac (min x1d x2d) ∷ Float
         x2 = realToFrac (max x1d x2d) ∷ Float

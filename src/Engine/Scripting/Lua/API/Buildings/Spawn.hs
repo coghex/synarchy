@@ -9,6 +9,8 @@ module Engine.Scripting.Lua.API.Buildings.Spawn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -54,7 +56,7 @@ buildingSpawnFn env = do
                 mTarget ← case pageArg of
                     Just pidBS → do
                         let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
-                        wm ← readIORef (worldManagerRef env)
+                        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                         pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                     Nothing → activeWorldPage env
                 case (HM.lookup defName (bmDefs bm), mTarget) of
@@ -247,7 +249,7 @@ buildingClearGhostFn env = do
 
 snapshotVisibleWorldTiles ∷ EngineEnv → IO (Maybe WorldTileData)
 snapshotVisibleWorldTiles env = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case wmVisible wm of
         []          → pure Nothing
         (pageId:_)  → case lookup pageId (wmWorlds wm) of

@@ -8,6 +8,7 @@
 module Test.Headless.Blood.Trail (spec) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Test.Hspec
 import Data.List (sort, nub)
 import qualified Data.HashMap.Strict as HM
@@ -303,7 +304,7 @@ pageTargetingSpec =
         -- "active" page a page-blind implementation would wrongly use.
         writeIORef (worldManagerRef env) (WorldManager [(pageA, wsA), (pageB, wsB)] [pageA])
         now ← readIORef (gameTimeRef env)
-        spawnTrailMark env pageB 5 5 0 "slash" 0.1 0 0 Nothing now
+        spawnTrailMark (toWorldSimCapability env) pageB 5 5 0 "slash" 0.1 0 0 Nothing now
         storeA ← readIORef (wsBloodStoreRef wsA)
         storeB ← readIORef (wsBloodStoreRef wsB)
         allDecals (bstDecals storeA) `shouldBe` []

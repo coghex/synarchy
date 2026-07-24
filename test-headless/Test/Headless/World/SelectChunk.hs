@@ -23,6 +23,7 @@
 module Test.Headless.World.SelectChunk (spec, sharedSpec) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Test.Hspec
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -138,14 +139,14 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
                 modifyIORef' (wsCursorRef ws) $ \cs →
                     cs { worldSelectedTile = Just (1, 1, 1) }
 
-                handleWorldSelectChunkByCoordCommand env logger pidA gx gy
+                handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pidA gx gy
                 afterSelect ← readIORef (wsCursorRef ws)
                 zoomSelectedPos afterSelect `shouldBe` Just (gx, gy)
                 worldSelectedTile afterSelect `shouldBe` Nothing
 
                 -- A later per-tick hover push (hud.update) must move the
                 -- hover position but leave the committed selection alone.
-                handleWorldSetZoomCursorHoverCommand env logger pidA 10 10
+                handleWorldSetZoomCursorHoverCommand (toWorldSimCapability env) logger pidA 10 10
                 afterHover ← readIORef (wsCursorRef ws)
                 zoomCursorPos afterHover `shouldBe` Just (10, 10)
                 zoomSelectedPos afterHover `shouldBe` Just (gx, gy)
@@ -162,7 +163,7 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
                                  (wgpWorldSize testParams) 500 350 of
             Nothing → expectationFailure "test pixel unexpectedly off-map"
             Just (gx, gy) → do
-                handleWorldSelectChunkByCoordCommand env logger pidA gx gy
+                handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pidA gx gy
 
                 -- Move the camera far enough that the SAME pixel would now
                 -- resolve to a different chunk (proves the move is
@@ -261,7 +262,7 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
                     , worldSelectNow = True
                     }
 
-                handleWorldSelectChunkByCoordCommand env logger pidA gx gy
+                handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pidA gx gy
                 afterSelect ← readIORef (wsCursorRef ws)
                 zoomSelectedPos afterSelect `shouldBe` Just (gx, gy)
                 zoomSelectNow afterSelect `shouldBe` False
@@ -298,11 +299,11 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
                                  (wgpWorldSize testParams) 500 350 of
             Nothing → expectationFailure "test pixel unexpectedly off-map"
             Just (gx, gy) → do
-                handleWorldSelectChunkByCoordCommand env logger pidA gx gy
+                handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pidA gx gy
                 committed ← readIORef (wsCursorRef ws)
                 zoomSelectedPos committed `shouldBe` Just (gx, gy)
 
-                handleWorldHideCommand env logger pidA
+                handleWorldHideCommand (toWorldSimCapability env) logger pidA
                 afterHide ← readIORef (wsCursorRef ws)
                 zoomSelectedPos afterHide `shouldBe` Nothing
                 zoomSelectNow afterHide `shouldBe` False
@@ -328,7 +329,7 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
                                  (wgpWorldSize testParams) 500 350 of
             Nothing → expectationFailure "test pixel unexpectedly off-map"
             Just (gx, gy) → do
-                handleWorldSelectChunkByCoordCommand env logger pidA gx gy
+                handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pidA gx gy
 
                 afterA ← readIORef (wsCursorRef wsA)
                 zoomSelectedPos afterA `shouldBe` Just (gx, gy)
@@ -340,7 +341,7 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
                 worldSelectedTile afterB `shouldBe` Just (7, 7, 7)
 
                 -- A select for a nonexistent page is a no-op, not a crash.
-                handleWorldSelectChunkByCoordCommand env logger
+                handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger
                     (WorldPageId "select_chunk_test_missing") gx gy
                 afterMissing ← readIORef (wsCursorRef wsA)
                 zoomSelectedPos afterMissing `shouldBe` Just (gx, gy)
@@ -425,7 +426,7 @@ sharedSpec = describe "zoom cursor selection (#813) — tile-render commit" $
                             }
 
                         -- A fresh, synchronous chunk selection lands.
-                        handleWorldSelectChunkByCoordCommand env logger pid tgx tgy
+                        handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pid tgx tgy
                         afterSelect ← readIORef (wsCursorRef ws)
                         zoomSelectedPos afterSelect `shouldBe` Just (tgx, tgy)
                         worldSelectNow afterSelect `shouldBe` False

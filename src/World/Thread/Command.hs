@@ -8,7 +8,9 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.MVar (putMVar)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (LoggerState)
 import World.Types
 import World.Thread.Command.Basic (handleWorldTickCommand
@@ -92,45 +94,45 @@ handleWorldCommand env logger (WorldInitArena pageId)
 handleWorldCommand env logger (WorldInitArenaDone pageId)
   = handleWorldInitArenaDoneCommand env logger pageId
 handleWorldCommand env logger (WorldSetTexture pageId texType texHandle)
-  = handleWorldSetTextureCommand env logger pageId texType texHandle
+  = handleWorldSetTextureCommand (toWorldSimCapability env) logger pageId texType texHandle
 handleWorldCommand env logger (WorldShow pageId)
-  = handleWorldShowCommand env logger pageId
+  = handleWorldShowCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldHide pageId)
-  = handleWorldHideCommand env logger pageId
+  = handleWorldHideCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldSetMapMode pageId mapMode)
-  = handleWorldSetMapModeCommand env logger pageId mapMode
+  = handleWorldSetMapModeCommand (toWorldSimCapability env) logger pageId mapMode
 handleWorldCommand env logger (WorldSetToolMode pageId toolMode)
-  = handleWorldSetToolModeCommand env logger pageId toolMode
+  = handleWorldSetToolModeCommand (toWorldSimCapability env) logger pageId toolMode
 handleWorldCommand env logger (WorldTick dt)
   = handleWorldTickCommand env logger dt
 handleWorldCommand env logger (WorldSetCamera pageId x y)
   = handleWorldSetCameraCommand env logger pageId x y
 handleWorldCommand env logger (WorldSetTime pageId hour minute)
-  = handleWorldSetTimeCommand env logger pageId hour minute
+  = handleWorldSetTimeCommand (toWorldSimCapability env) logger pageId hour minute
 handleWorldCommand env logger (WorldSetDate pageId year month day)
-  = handleWorldSetDateCommand env logger pageId year month day
+  = handleWorldSetDateCommand (toWorldSimCapability env) logger pageId year month day
 handleWorldCommand env logger (WorldSetTimeScale pageId scale)
-  = handleWorldSetTimeScaleCommand env logger pageId scale
+  = handleWorldSetTimeScaleCommand (toWorldSimCapability env) logger pageId scale
 handleWorldCommand env logger (WorldSetZoomCursorHover pageId x y)
-  = handleWorldSetZoomCursorHoverCommand env logger pageId x y
+  = handleWorldSetZoomCursorHoverCommand (toWorldSimCapability env) logger pageId x y
 handleWorldCommand env logger (WorldSetZoomCursorSelect pageId)
-  = handleWorldSetZoomCursorSelectCommand env logger pageId
+  = handleWorldSetZoomCursorSelectCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldSetZoomCursorDeselect pageId)
-  = handleWorldSetZoomCursorDeselectCommand env logger pageId
+  = handleWorldSetZoomCursorDeselectCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldSetZoomCursorSelectTexture pageId texHandle)
-  = handleWorldSetZoomCursorSelectTextureCommand env logger pageId texHandle
+  = handleWorldSetZoomCursorSelectTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSetZoomCursorHoverTexture pageId texHandle)
-  = handleWorldSetZoomCursorHoverTextureCommand env logger pageId texHandle
+  = handleWorldSetZoomCursorHoverTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorHover pageId x y)
-  = handleWorldSetWorldCursorHoverCommand env logger pageId x y
+  = handleWorldSetWorldCursorHoverCommand (toWorldSimCapability env) logger pageId x y
 handleWorldCommand env logger (WorldSetWorldCursorSelect pageId)
-  = handleWorldSetWorldCursorSelectCommand env logger pageId
+  = handleWorldSetWorldCursorSelectCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldSetWorldCursorDeselect pageId)
-  = handleWorldSetWorldCursorDeselectCommand env logger pageId
+  = handleWorldSetWorldCursorDeselectCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldSelectTileByCoord pageId gx gy mz)
-  = handleWorldSelectTileByCoordCommand env logger pageId gx gy mz
+  = handleWorldSelectTileByCoordCommand (toWorldSimCapability env) logger pageId gx gy mz
 handleWorldCommand env logger (WorldSelectChunkByCoord pageId gx gy)
-  = handleWorldSelectChunkByCoordCommand env logger pageId gx gy
+  = handleWorldSelectChunkByCoordCommand (toWorldSimCapability env) logger pageId gx gy
 handleWorldCommand env logger (WorldSetMineAnchor pageId gx gy)
   = handleWorldSetMineAnchorCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldClearMineAnchor pageId)
@@ -182,21 +184,21 @@ handleWorldCommand env logger (WorldCancelPlant pageId gx gy)
 handleWorldCommand env logger (WorldSetPlantDesignateTexture pageId texHandle)
   = handleWorldSetPlantDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetVeg pageId gx gy z vegId)
-  = handleWorldSetVegCommand env logger pageId gx gy z vegId
+  = handleWorldSetVegCommand (toWorldSimCapability env) logger pageId gx gy z vegId
 handleWorldCommand env logger (WorldPlantRowCropAt pageId gx gy cropName)
-  = handleWorldPlantRowCropAtCommand env logger pageId gx gy cropName
+  = handleWorldPlantRowCropAtCommand (toWorldSimCapability env) logger pageId gx gy cropName
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
   = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)
   = handleWorldAddTileCommand env logger pageId gx gy mat
 handleWorldCommand env logger (WorldSetWorldCursorSelectTexture pageId texHandle)
-  = handleWorldSetWorldCursorSelectTextureCommand env logger pageId texHandle
+  = handleWorldSetWorldCursorSelectTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorHoverTexture pageId texHandle)
-  = handleWorldSetWorldCursorHoverTextureCommand env logger pageId texHandle
+  = handleWorldSetWorldCursorHoverTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorSelectBgTexture pageId texHandle)
-  = handleWorldSetWorldCursorSelectBgTextureCommand env logger pageId texHandle
+  = handleWorldSetWorldCursorSelectBgTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorHoverBgTexture pageId texHandle)
-  = handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId texHandle
+  = handleWorldSetWorldCursorHoverBgTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSave pageId saveName ts luaComponents luaRefs)
   = handleWorldSaveCommand env logger pageId saveName ts luaComponents luaRefs
 handleWorldCommand env logger (WorldLoadTransaction requestId saveData matReg)
@@ -206,17 +208,17 @@ handleWorldCommand env logger (WorldLoadPublish requestId)
 handleWorldCommand env logger (WorldDeleteTile pageId gx gy)
   = handleWorldDeleteTileCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetFluidTile pageId gx gy fluidType)
-  = handleWorldSetFluidTileCommand env logger pageId gx gy fluidType
+  = handleWorldSetFluidTileCommand (toWorldSimCapability env) logger pageId gx gy fluidType
 handleWorldCommand env logger (WorldSetSlope pageId gx gy z bits)
   = handleWorldSetSlopeCommand env logger pageId gx gy z bits
 handleWorldCommand env logger (WorldSetCell pageId gx gy z mat)
   = handleWorldSetCellCommand env logger pageId gx gy z mat
 handleWorldCommand env logger (WorldSetStructure pageId gx gy slotTag texId faceId z)
-  = handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z
+  = handleWorldSetStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag texId faceId z
 handleWorldCommand env logger (WorldClearStructure pageId gx gy slotTag)
-  = handleWorldClearStructureCommand env logger pageId gx gy slotTag
+  = handleWorldClearStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag
 handleWorldCommand env logger (WorldClearAllStructures pageId)
-  = handleWorldClearAllStructuresCommand env logger pageId
+  = handleWorldClearAllStructuresCommand (toWorldSimCapability env) logger pageId
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env logger WorldDestroyAll
@@ -224,9 +226,9 @@ handleWorldCommand env logger WorldDestroyAll
 handleWorldCommand env _ (WorldApplyFluids batch)
   = handleApplyFluidsCommand env batch
 handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId gx gy)
-  = handleWorldMarkLocationContentsSpawnedCommand env pageId gx gy
+  = handleWorldMarkLocationContentsSpawnedCommand (toWorldSimCapability env) pageId gx gy
 handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
-  = handleWorldMarkLocationStampedCommand env pageId gx gy
+  = handleWorldMarkLocationStampedCommand (toWorldSimCapability env) pageId gx gy
 
 -- | Sim → World: apply the sim's fluid writebacks to the ORIGINATING
 --   world's tile data, resolved by the batch's page id — not every
@@ -237,7 +239,7 @@ handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
 handleApplyFluidsCommand ∷ EngineEnv → FluidWritebackBatch → IO ()
 handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
     when (not (null writebacks)) $ do
-        mgr ← readIORef (worldManagerRef env)
+        mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case lookup pageId (wmWorlds mgr) of
             Nothing → pure ()  -- world gone (destroyed/unloaded) — drop the batch
             Just ws → do

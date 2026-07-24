@@ -20,6 +20,7 @@ module World.Load.Publish
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
@@ -174,7 +175,7 @@ publishStagedSession env logger requestId staged = do
     -- fresh world.show would.
     let wantVisible = dedupPageIds (ssActivePage staged : ssVisiblePages staged)
     forM_ (reverse wantVisible) $ \pid →
-        handleWorldShowCommand env logger pid
+        handleWorldShowCommand (toWorldSimCapability env) logger pid
 
     -- Fire every deferred sim-seed / location-stamp collected during
     -- staging now that each page is genuinely live (requirement 6: this

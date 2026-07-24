@@ -21,7 +21,9 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv, actionOutcomeRef)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -47,12 +49,12 @@ import World.Thread.Command.Cursor.Common (recordMissingWorldOutcome)
 handleWorldDesignatePlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Text → IO ()
 handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing → recordMissingWorldOutcome env "plant.designate" pageId gx gy
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
-            cat ← readIORef (floraCatalogRef env)
+            cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             plots ← readIORef (wsCropPlotsRef worldState)
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx = columnIndex lx ly
@@ -76,7 +78,7 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     if isTilledSoil vg ∧ not hasExistingFlora
                        ∧ not hasExistingPlot
                     then Just z else Nothing
-            gt ← readIORef (gameTimeRef env)
+            gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             case (tileZ, resolvedCrop) of
                 (Just z, Just fid) → do
                     atomicModifyIORef' (wsPlantDesignationsRef worldState) $
@@ -113,7 +115,7 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
 handleWorldCancelPlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldCancelPlantCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsPlantDesignationsRef worldState) $ \m →
@@ -123,7 +125,7 @@ handleWorldCancelPlantCommand env _logger pageId gx gy = do
 handleWorldSetPlantDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → TextureHandle → IO ()
 handleWorldSetPlantDesignateTextureCommand env _logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →

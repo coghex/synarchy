@@ -9,7 +9,8 @@ module World.Render.Zoom.Background
 import UPrelude
 import Data.IORef (readIORef, IORef)
 import qualified Data.Vector as V
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
@@ -22,22 +23,22 @@ import World.Render.Zoom.Bake (ensureBaked)
 import World.Render.Zoom.ViewBounds (computeZoomViewBounds, isChunkInView, bestZoomWrapOffset)
 import World.Render.Zoom.Textures (getBgTexture)
 
-generateBackgroundQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
-generateBackgroundQuads env camera fbW fbH = do
-    worldManager ← readIORef (worldManagerRef env)
+generateBackgroundQuads ∷ WorldSimCapability → Camera2D → Int → Int → IO (V.Vector SortableQuad)
+generateBackgroundQuads wsc camera fbW fbH = do
+    worldManager ← readIORef (wsWorldManagerRef wsc)
 
     let zSlice = camZSlice camera
 
     quads ← forM (wmVisible worldManager) $ \pageId →
         case lookup pageId (wmWorlds worldManager) of
             Just worldState →
-                renderFromBakedBg env worldState camera
+                renderFromBakedBg wsc worldState camera
                     fbW fbH 1.0 getBgTexture
                     (wsBakedBgRef worldState) backgroundMapLayer zSlice
             Nothing → return V.empty
     return $ V.concat quads
 
-renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D → Int → Int → Float
+renderFromBakedBg ∷ WorldSimCapability → WorldState → Camera2D → Int → Int → Float
                   → (WorldTextures → Word8 → Int → TextureHandle)
                   → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
                   → LayerId → Int

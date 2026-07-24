@@ -103,7 +103,7 @@ spec = do
       (windowSizeRef env == windowPosRef env) `shouldBe` False
       (framebufferSizeRef env == windowPosRef env) `shouldBe` False
 
-  describe "toRenderViewCapability (the 13 worker-visible fields)" $ do
+  describe "toRenderViewCapability (the 14 worker-visible fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderViewCapability env)) (field env)
@@ -113,6 +113,9 @@ spec = do
     aliases "rvWindowPosRef"           rvWindowPosRef           windowPosRef
     aliases "rvFramebufferSizeRef"     rvFramebufferSizeRef     framebufferSizeRef
     aliases "rvPixelSnapRef"           rvPixelSnapRef           pixelSnapRef
+    -- Added to the view by #893 (E5a): engine.getFPS is the
+    -- LuaThread reader SS5 names, and API.Core is now narrowed.
+    aliases "rvFpsRef"                 rvFpsRef                 fpsRef
     aliases "rvTextureFilterRef"       rvTextureFilterRef       textureFilterRef
     aliases "rvAssetPoolRef"           rvAssetPoolRef           assetPoolRef
     aliases "rvTextureNameRegistryRef" rvTextureNameRegistryRef textureNameRegistryRef

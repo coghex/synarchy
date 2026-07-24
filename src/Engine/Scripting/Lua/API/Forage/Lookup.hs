@@ -10,17 +10,18 @@ module Engine.Scripting.Lua.API.Forage.Lookup
 
 import UPrelude
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 
 -- | Every flora instance on tile (gx, gy) of the active world's loaded
 --   chunks, joined with its species. Empty when the chunk isn't loaded.
-floraAt ∷ EngineEnv → WorldState → Int → Int
+floraAt ∷ WorldSimCapability → WorldState → Int → Int
         → IO [(FloraInstance, FloraSpecies)]
-floraAt env ws gx gy = do
+floraAt wsc ws gx gy = do
     tileData ← readIORef (wsTilesRef ws)
-    cat ← readIORef (floraCatalogRef env)
+    cat ← readIORef (wsFloraCatalogRef wsc)
     let (coord, (lx, ly)) = globalToChunk gx gy
     pure $ case lookupChunk coord tileData of
         Nothing → []

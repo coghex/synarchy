@@ -27,7 +27,9 @@ import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldPage, activeWorldState)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types hiding (activeWorldPage)
 import World.Plant.Types
@@ -41,8 +43,8 @@ import World.Generate.Coordinates (globalToChunk)
 --   species (row_crop or groundcover_crop worldGen category); query
 --   getDesignationAt afterward to confirm it landed (a queued world
 --   command, same as world.setVegAt / till.designate).
-plantDesignateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-plantDesignateFn env = do
+plantDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -50,7 +52,7 @@ plantDesignateFn env = do
     case (pageIdArg, gxArg, gyArg, cropArg) of
         (Just pageIdBS, Just gx, Just gy, Just cropBS) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldDesignatePlant pageId (round gx) (round gy)
                     (TE.decodeUtf8Lenient cropBS)
         _ → pure ()
@@ -59,16 +61,16 @@ plantDesignateFn env = do
 -- | plant.cancelDesignation(gx, gy) — remove the designation at a tile
 --   on the active world. Both the player-cancel path and the farm AI's
 --   completion call this (best-effort, returns nothing).
-plantCancelDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-plantCancelDesignationFn env = do
+plantCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1
     gyArg ← Lua.tonumber 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mPage ← Lua.liftIO $ activeWorldPage env
+            mPage ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef wsc)
             case mPage of
                 Just (pageId, _) → Lua.liftIO $
-                    Q.writeQueue (worldQueue env) $
+                    Q.writeQueue (wsWorldQueue wsc) $
                         WorldCancelPlant pageId (round gx) (round gy)
                 Nothing → pure ()
         _ → pure ()
@@ -80,8 +82,8 @@ plantCancelDesignationFn env = do
 --   planting primitive to call (world.plantRowCropAt vs
 --   world.plantCropAt) without a second round-trip through
 --   world.getPlantSuitability.
-plantGetDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-plantGetDesignationAtFn env = do
+plantGetDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantGetDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -90,14 +92,14 @@ plantGetDesignationAtFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsPlantDesignationsRef ws)
                     case HM.lookup (gx, gy) m of
                         Just pd → do
-                            cat ← Lua.liftIO $ readIORef (floraCatalogRef env)
+                            cat ← Lua.liftIO $ readIORef (wsFloraCatalogRef wsc)
                             let cropName =
                                     maybe "" fsName (lookupSpecies (ptCrop pd) cat)
                                 category = maybe "" fwCategory
@@ -119,13 +121,13 @@ plantGetDesignationAtFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | plant.getDesignationCount(pageId) → n.
-plantGetDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-plantGetDesignationCountFn env = do
+plantGetDesignationCountFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantGetDesignationCountFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsPlantDesignationsRef ws)
@@ -137,8 +139,8 @@ plantGetDesignationCountFn env = do
 -- | plant.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tile by Euclidean distance — the farm AI's
 --   "distance to nearest plant job" term. Mirrors till.nearestDesignation.
-plantNearestDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-plantNearestDesignationFn env = do
+plantNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -147,7 +149,7 @@ plantNearestDesignationFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsPlantDesignationsRef ws)
@@ -172,15 +174,15 @@ plantNearestDesignationFn env = do
 
 -- | plant.setDesignateTexture(pageId, texHandle) — marker texture for
 --   committed plant designations.
-plantSetDesignateTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-plantSetDesignateTextureFn env = do
+plantSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantSetDesignateTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     handleArg ← Lua.tointeger 2
     case (pageIdArg, handleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetPlantDesignateTexture pageId texHandle
         _ → pure ()
     return 0
@@ -203,8 +205,8 @@ plantSetDesignateTextureFn env = do
 --   "altitude", "slope", "soil" (in that order). min/ideal/max are
 --   filler (0/0/max or 0/1/1) for the "slope" and "soil" entries,
 --   which aren't range-shaped — see World.Flora.Placement.FitnessFactor.
-worldGetPlantSuitabilityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetPlantSuitabilityFn env = do
+worldGetPlantSuitabilityFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetPlantSuitabilityFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
@@ -214,7 +216,7 @@ worldGetPlantSuitabilityFn env = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mResult ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef wsc)
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
@@ -222,7 +224,7 @@ worldGetPlantSuitabilityFn env = do
                         mParams ← readIORef (wsGenParamsRef ws)
                         case (lookupChunk coord tileData, mParams) of
                             (Just lc, Just params) → do
-                                cat ← readIORef (floraCatalogRef env)
+                                cat ← readIORef (wsFloraCatalogRef wsc)
                                 let col = lcTiles lc V.! idx
                                     z   = lcSurfaceMap lc VU.! idx
                                     i   = z - ctStartZ col

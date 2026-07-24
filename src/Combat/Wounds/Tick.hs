@@ -8,6 +8,8 @@ module Combat.Wounds.Tick
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
@@ -70,7 +72,7 @@ data WoundTickOutcome
 --   onto the unit command queue.
 tickAllWounds ∷ EngineEnv → Float → IO ()
 tickAllWounds env dt = do
-    gt ← readIORef (gameTimeRef env)
+    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- Infection defs come through the `content-registries` capability
     -- (#890); everything else here is still broad EngineEnv state.
     infMgr ← readIORef

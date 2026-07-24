@@ -30,6 +30,8 @@ module World.Render.BloodQuads
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Control.Monad (foldM)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
@@ -38,7 +40,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Vulkan.Core10 (Device, PhysicalDevice, CommandPool, Queue, deviceWaitIdle)
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
-  , bloodDisposeQueue, gameTimeRef, worldManagerRef )
+  , bloodDisposeQueue )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle, toInt)
@@ -80,7 +82,7 @@ uploadBloodTextures = do
     case ( vulkanDevice gs, vulkanPDevice gs, vulkanCmdPool gs
          , deviceQueues gs, mBindless ) of
         (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
-            mgr ← liftIO $ readIORef (worldManagerRef env)
+            mgr ← liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             finalBindless ← foldM
                 (syncWorldBloodTextures dev pdev cmdPool (graphicsQueue queues))
                 bindless0 (wmWorlds mgr)
@@ -238,7 +240,7 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
     if HM.null (bdlDecals (bstDecals store))
       then return V.empty
       else do
-        now      ← readIORef (gameTimeRef env)
+        now      ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         let rv = toRenderViewCapability env
         camera   ← readIORef (rvCameraRef rv)
         handles  ← readIORef (wsBloodTextureHandlesRef worldState)

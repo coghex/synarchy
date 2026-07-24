@@ -29,7 +29,11 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map as Map
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified HsLua as Lua
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.State (EngineEnv, unitManagerRef, activeWorldPageFrom)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import World.Page.Types (WorldPageId(..))
 import World.Types (WorldManager(..), WorldState(..))
@@ -45,10 +49,10 @@ import Blood.Impact (defaultStyleForWound)
 --   Engine.Scripting.Lua.API.Items.resolveItemPage.
 resolveBloodPage ∷ EngineEnv → Maybe Text → IO (Maybe (WorldPageId, WorldState))
 resolveBloodPage env (Just pid) = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let target = WorldPageId pid
     pure $ (\ws → (target, ws)) <$> lookup target (wmWorlds wm)
-resolveBloodPage env Nothing = activeWorldPage env
+resolveBloodPage env Nothing = activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
 
 -- | blood.spawn(gx, gy, woundKind, severity [, props]) → decalId,
 --   textureId, isNewTexture on success, or nil, reason on failure.
@@ -142,7 +146,7 @@ bloodSpawnFn env = do
                         case mTarget of
                             Nothing → pure Nothing
                             Just (pid, ws) → do
-                                now ← readIORef (gameTimeRef env)
+                                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                                 let mkSpec tid = BloodDecalSpec
                                         { bspTexture    = tid
                                         , bspPage       = pid
@@ -184,11 +188,11 @@ bloodGetDecalFn env = do
     mDecal ← case idArg of
         Nothing → return Nothing
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) → do
-                    now   ← readIORef (gameTimeRef env)
+                    now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                     store ← readIORef (wsBloodStoreRef ws)
                     pure $ (\d → (d, now)) ⊚
                         lookupDecal (BloodDecalId (fromIntegral n)) (bstDecals store)
@@ -201,11 +205,11 @@ bloodGetDecalFn env = do
 bloodListDecalsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodListDecalsFn env = do
     (now, decalList) ← Lua.liftIO $ do
-        mPage ← activeWorldPage env
+        mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mPage of
             Nothing      → pure (0, [])
             Just (_, ws) → do
-                now   ← readIORef (gameTimeRef env)
+                now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 store ← readIORef (wsBloodStoreRef ws)
                 pure (now, allDecals (bstDecals store))
     Lua.newtable
@@ -223,7 +227,7 @@ bloodGetTextureFn env = do
     mTex ← case idArg of
         Nothing → return Nothing
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) → do
@@ -242,7 +246,7 @@ bloodGetTextureFn env = do
 bloodListTexturesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodListTexturesFn env = do
     texList ← Lua.liftIO $ do
-        mPage ← activeWorldPage env
+        mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mPage of
             Nothing      → return []
             Just (_, ws) → allTextures . bstPool ⊚ readIORef (wsBloodStoreRef ws)
@@ -257,7 +261,7 @@ bloodListTexturesFn env = do
 bloodGetTextureCapFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodGetTextureCapFn env = do
     cap ← Lua.liftIO $ do
-        mPage ← activeWorldPage env
+        mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mPage of
             Nothing      → return 0
             Just (_, ws) → btpCap . bstPool ⊚ readIORef (wsBloodStoreRef ws)
@@ -276,9 +280,9 @@ bloodGetTextureCapFn env = do
 bloodGpuStatsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodGpuStatsFn env = do
     (bindless, texSize, bloodHandles) ← Lua.liftIO $ do
-        mSys     ← readIORef (textureSystemRef env)
-        texSizes ← readIORef (textureSizeRef env)
-        mPage    ← activeWorldPage env
+        mSys     ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
+        texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+        mPage    ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         bh ← case mPage of
             Nothing      → pure (0 ∷ Int)
             Just (_, ws) → HM.size ⊚ readIORef (wsBloodTextureHandlesRef ws)
@@ -309,7 +313,7 @@ bloodGetRenderQuadsFn env = do
         case mTarget of
             Nothing         → pure []
             Just (pid, ws)  → do
-                now   ← readIORef (gameTimeRef env)
+                now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 store ← readIORef (wsBloodStoreRef ws)
                 pure (bloodRenderRecords now pid store)
     Lua.newtable
@@ -324,7 +328,7 @@ bloodGetRenderQuadsFn env = do
 bloodClearFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodClearFn env = do
     ok ← Lua.liftIO $ do
-        mPage ← activeWorldPage env
+        mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mPage of
             Nothing      → return False
             Just (_, ws) → do

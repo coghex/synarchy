@@ -17,6 +17,8 @@ module Engine.Scripting.Lua.API.Units.Selection
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -162,7 +164,7 @@ unitSetAnimFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ do
-                now ← readIORef (gameTimeRef env)
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 atomicModifyIORef' (unitManagerRef env) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)

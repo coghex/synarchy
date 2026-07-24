@@ -22,6 +22,8 @@ module Engine.Scripting.Lua.API.Craft.Bill
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -235,7 +237,7 @@ craftClaimBillFn env = do
             case mPage of
                 Nothing      → return False
                 Just (_, ws) → do
-                    now ← readIORef (gameTimeRef env)
+                    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                     um  ← readIORef (unitManagerRef env)
                     let alive c = HM.member c (umInstances um)
                     atomicModifyIORef' (wsCraftBillsRef ws) $

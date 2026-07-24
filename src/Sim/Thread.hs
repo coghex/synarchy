@@ -16,7 +16,11 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, catch, finally)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
+import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
@@ -54,7 +58,7 @@ maxFastSettleIterations = 500
 
 startSimThread ∷ EngineEnv → IO ThreadState
 startSimThread env = do
-    logger ← readIORef (loggerRef env)
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     stateRef ← newIORef ThreadRunning
     doneVar ← newEmptyMVar
     threadId ← catch
@@ -80,7 +84,7 @@ anyLiveWorld ss = any (\sws → swsActive sws ∧ not (HM.null (swsChunks sws)))
 simLoop ∷ EngineEnv → IORef ThreadControl → IORef SimState → IO ()
 simLoop env stateRef simStateRef = do
     control ← readIORef stateRef
-    logger ← readIORef (loggerRef env)
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     case control of
         ThreadStopped → do
             logDebug logger CatWorld "Sim thread stopping..."
@@ -113,7 +117,7 @@ simLoop env stateRef simStateRef = do
                 -- authoritative flag every other paused-gate in the
                 -- engine already reads) fixes both: the general
                 -- gameplay-pause gap and this issue's post-publish one.
-                enginePaused ← readIORef (enginePausedRef env)
+                enginePaused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
                 -- Round 7 review: acknowledging BEFORE this tick's own
                 -- work (the tick/emitWorldDirtyFluids branch below,
                 -- which queues WorldApplyFluids writebacks to the world
@@ -147,7 +151,7 @@ simLoop env stateRef simStateRef = do
               )
               (\(e ∷ SomeException) → do
                 logError logger CatWorld $ "Sim thread crashed: " <> T.pack (show e)
-                writeIORef (lifecycleRef env) CleaningUp
+                writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
                 pure False
               )
             when ok $ simLoop env stateRef simStateRef
@@ -163,7 +167,7 @@ clearDirty sws = sws { swsDirtyChunks = HS.empty }
 
 processSimCommands ∷ EngineEnv → LoggerState → IORef SimState → IO ()
 processSimCommands env logger simStateRef = do
-    mCmd ← Q.tryReadQueue (simQueue env)
+    mCmd ← Q.tryReadQueue (wsSimQueue (toWorldSimCapability env))
     case mCmd of
         Just cmd → do
             handleSimCommand env logger simStateRef cmd
@@ -389,7 +393,7 @@ emitWorldDirtyFluids env pid sws mAck = do
                                             (scsSideDeco scs))
             ) (HS.toList dirty)
     when (not (null writebacks) ∨ isJust mAck) $
-        Q.writeQueue (worldQueue env)
+        Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
             (WorldApplyFluids (FluidWritebackBatch pid writebacks mAck))
 
 deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)

@@ -9,6 +9,8 @@ module World.Thread.Command.Cursor.Common
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
@@ -34,7 +36,7 @@ maxDesignateSide = 128
 recordDesignationOutcome
     ∷ EngineEnv → Text → Text → Int → Int → Int → Int → IO ()
 recordDesignationOutcome env kind rejectedReason gx1 gy1 requested applied = do
-    gt ← readIORef (gameTimeRef env)
+    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     let dropped = requested - applied
         (outcome, reason)
             | requested ≡ 0 =
@@ -69,7 +71,7 @@ recordDesignationOutcome env kind rejectedReason gx1 gy1 requested applied = do
 --   record at all.
 recordMissingWorldOutcome ∷ EngineEnv → Text → WorldPageId → Int → Int → IO ()
 recordMissingWorldOutcome env kind pageId gx1 gy1 = do
-    gt ← readIORef (gameTimeRef env)
+    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     pushActionOutcome (actionOutcomeRef env) ActionOutcome
         { aoTs        = gt
         , aoKind      = kind

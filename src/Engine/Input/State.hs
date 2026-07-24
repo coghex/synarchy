@@ -2,6 +2,8 @@
 module Engine.Input.State where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Graphics.UI.GLFW as GLFW
@@ -109,7 +111,7 @@ releaseHeldButtons env inpSt = do
     forM_ (heldButtonReleases inpSt) $ \(btn, mx, my, route) →
         Q.writeQueue (luaQueue env) (LuaMouseUpEvent btn mx my route)
     forM_ (Map.toList (inpPendingUIClick inpSt)) $ \(_btn, (kind, callback, px, py)) → do
-        gt ← readIORef (gameTimeRef env)
+        gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         pushActionOutcome (actionOutcomeRef env) ActionOutcome
             { aoTs = gt, aoKind = kind, aoOutcome = "noop"
             , aoWhereX = Just px, aoWhereY = Just py, aoTarget = Nothing

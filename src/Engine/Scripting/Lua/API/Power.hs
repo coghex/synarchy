@@ -27,6 +27,8 @@ module Engine.Scripting.Lua.API.Power
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Data.List (find)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -94,7 +96,7 @@ powerPlaceNodeFn env = do
                     mTarget ← case pageArg of
                         Just pidBS → do
                             let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
-                            wm ← readIORef (worldManagerRef env)
+                            wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                             pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                         Nothing → activeWorldPage env
                     case mTarget of
@@ -314,7 +316,7 @@ activeNetworkSnapshots env = do
             wt    ← readIORef (wsTimeRef ws)
             td    ← readIORef (wsTilesRef ws)
             bm    ← readIORef (buildingManagerRef env)
-            now   ← readIORef (gameTimeRef env)
+            now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             worldSize ← pageWorldSize ws
             let sunAngle   = worldTimeToSunAngle wt
                 wireTiles  = wireTilesOn td
@@ -345,14 +347,14 @@ isBuildingPowered env bid = do
             Just def
                 | bdPowerDrain def ≤ 0 → pure True
                 | otherwise → do
-                    wm ← readIORef (worldManagerRef env)
+                    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                     case lookup (biPage inst) (wmWorlds wm) of
                         Nothing → pure False
                         Just ws → do
                             nodes ← readIORef (wsPowerNodesRef ws)
                             wt    ← readIORef (wsTimeRef ws)
                             td    ← readIORef (wsTilesRef ws)
-                            now   ← readIORef (gameTimeRef env)
+                            now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                             consumers ← liveConsumersOn env Nothing (biPage inst) now bm ws
                             worldSize ← pageWorldSize ws
                             let sunAngle   = worldTimeToSunAngle wt
@@ -396,14 +398,14 @@ isRecipePoweredAt env mBillId bid drawW
         case HM.lookup bid (bmInstances bm) of
             Nothing → pure False
             Just inst → do
-                wm ← readIORef (worldManagerRef env)
+                wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                 case lookup (biPage inst) (wmWorlds wm) of
                     Nothing → pure False
                     Just ws → do
                         nodes ← readIORef (wsPowerNodesRef ws)
                         wt    ← readIORef (wsTimeRef ws)
                         td    ← readIORef (wsTilesRef ws)
-                        now   ← readIORef (gameTimeRef env)
+                        now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                         othersOnly ← liveConsumersOn env mBillId (biPage inst) now bm ws
                         worldSize ← pageWorldSize ws
                         let sunAngle  = worldTimeToSunAngle wt

@@ -13,9 +13,11 @@ module Building.HitTest
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, buildingManagerRef, worldManagerRef
+import Engine.Core.State (EngineEnv, buildingManagerRef
   , resolveActiveWorld )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
@@ -42,7 +44,7 @@ hitTestBuildingAt env pixX pixY = do
     camera   ← readIORef (rvCameraRef rv)
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     texSizes ← readIORef (rvTextureSizeRef rv)
-    mgr      ← readIORef (worldManagerRef env)
+    mgr      ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     -- Only the active world's buildings are clickable (#76) — matches the
     -- render scoping; a hidden world's building must not win the hit-test.

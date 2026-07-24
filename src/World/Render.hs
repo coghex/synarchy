@@ -5,11 +5,13 @@ module World.Render
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map as Map
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, worldManagerRef, resolveActiveWorld)
+import Engine.Core.State (EngineEnv, resolveActiveWorld)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer)
@@ -52,7 +54,7 @@ updateWorldTiles env = do
         -- cliff sprites vanished when viewed from the top).
         effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
 
-    worldManager ← readIORef (worldManagerRef env)
+    worldManager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     tileQuads ← if tileAlpha ≤ 0.001
         then return Map.empty
@@ -199,7 +201,7 @@ updateWorldTiles env = do
         -- looped every visible world and let the LAST one win, disagreeing
         -- with camera.gotoTile (also last-wins) and findVisualCenterTile
         -- (first-visible). All three now resolve the one active world (#81).
-        worldManager' ← readIORef (worldManagerRef env)
+        worldManager' ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case resolveActiveWorld worldManager' of
             Just (_, worldState) → do
                 tileData ← readIORef (wsTilesRef worldState)

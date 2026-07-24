@@ -15,6 +15,8 @@ module Engine.Scripting.Lua.API.Items.Ground
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -39,7 +41,7 @@ import World.Weather.Ambient (ambientTempAt)
 --   'Engine.Scripting.Lua.API.Structure.resolveStructurePage'.
 resolveItemPage ∷ EngineEnv → Maybe Text → IO (Maybe WorldState)
 resolveItemPage env (Just pid) = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     pure $ lookup (WorldPageId pid) (wmWorlds mgr)
 resolveItemPage env Nothing = activeWorldState env
 

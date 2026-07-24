@@ -13,7 +13,11 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.State (EngineEnv, unitManagerRef)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -115,7 +119,7 @@ renderUnitQuads env facing zSlice effDepth tileAlpha = do
     um ← readIORef (unitManagerRef env)
     -- Render only units of the VISIBLE worlds — units are world-scoped, so
     -- a hidden world's units must not draw over the active one (#78).
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let visiblePages = HS.fromList (wmVisible mgr)
         instances = unitsOnPages visiblePages (umInstances um)
         defs      = umDefs um
@@ -126,9 +130,9 @@ renderUnitQuads env facing zSlice effDepth tileAlpha = do
             -- Read the game-clock (advances only when not paused) so
             -- the rendered frame index matches the uiAnimStart values
             -- published in game-time.
-            now ← readIORef (gameTimeRef env)
-            texSizes ← readIORef (textureSizeRef env)
-            mBts ← readIORef (textureSystemRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+            texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+            mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
             case mBts of
                 Nothing → return V.empty
                 Just _bts → do

@@ -13,7 +13,9 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldStateFrom)
 import World.Types
 import World.Vegetation (isTilledSoil)
 import World.Flora.CropPlot (newCropPlot)
@@ -47,8 +49,8 @@ groundcoverCropCategory = "groundcover_crop"
 --   as #300's unit.repairItem preceding the repair AI/UI. A planted
 --   plot renders as the tile's veg-fill (World.Render.Quads), NOT a
 --   floating sprite.
-worldPlantCropAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldPlantCropAtFn env = do
+worldPlantCropAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldPlantCropAtFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     mName ← Lua.tostring 3
@@ -58,7 +60,7 @@ worldPlantCropAtFn env = do
                 gy = fromIntegral gy'
                 name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef wsc)
                 case mWs of
                     Nothing → pure False
                     Just ws → do
@@ -91,7 +93,7 @@ worldPlantCropAtFn env = do
                                    ∨ hasExistingFlora ∨ hasExistingPlot
                                 then pure False
                                 else do
-                                    cat ← readIORef (floraCatalogRef env)
+                                    cat ← readIORef (wsFloraCatalogRef wsc)
                                     case findSpeciesByName name cat of
                                         Nothing → pure False
                                         Just (fid, _) →

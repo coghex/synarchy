@@ -14,7 +14,11 @@ import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.State (EngineEnv)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
@@ -47,13 +51,13 @@ worldGetDigInfoAtFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     desigs ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
                     tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
-                    registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+                    registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
                     piles ← Lua.liftIO $ readIORef (wsSpoilRef ws)
                     let mInfo = do
                             md ← HM.lookup (gx, gy) desigs
@@ -99,7 +103,7 @@ worldGetDigInfoAtFn env = do
 --   debug overlay's Terrain placement list.
 worldListMaterialsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldListMaterialsFn env = do
-    registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+    registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let mats = [ (i, mpName props)
                | i ← [1 ∷ Int .. 255]
                , let props = getMaterialProps registry
@@ -129,13 +133,13 @@ worldDebugTileQuadsFn env = do
     case (pageIdArg, matArg) of
         (Just pageIdBS, Just (Lua.Number matN)) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     (quads, texH) ← Lua.liftIO $ do
-                        camera ← readIORef (cameraRef env)
-                        (fbW, fbH) ← readIORef (framebufferSizeRef env)
+                        camera ← readIORef (rvCameraRef (toRenderViewCapability env))
+                        (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
                         textures ← readIORef (wsTexturesRef ws)
                         let snap = WorldCameraSnapshot
                                 { wcsPosition = camPosition camera
@@ -182,7 +186,7 @@ worldGetGemInfoAtFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -212,7 +216,7 @@ worldGetSpoilInfoFn env = do
         Nothing → Lua.pushnil >> return 1
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do

@@ -17,6 +17,8 @@ module Combat.Thread
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Control.Concurrent (forkIO, threadDelay)
@@ -84,7 +86,7 @@ combatLoop env stateRef tick = do
                 -- we sleep the tick and do nothing, so combat events
                 -- queued mid-pause stay queued and wounds don't bleed
                 -- out while the player has the game stopped.
-                paused ← readIORef (enginePausedRef env)
+                paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
                 next ← if paused
                     then do
                         -- A save boundary drains accepted combat commands

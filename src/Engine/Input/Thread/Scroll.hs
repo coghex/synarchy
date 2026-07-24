@@ -13,6 +13,8 @@ module Engine.Input.Thread.Scroll
   ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
@@ -66,7 +68,7 @@ dispatchScrollEvent env inpSt x y = do
         -- recordRouteOutcome.
         recordScrollOutcome ∷ Text → Text → Maybe Word32 → IO ()
         recordScrollOutcome outcome domain target = do
-            gt ← readIORef (gameTimeRef env)
+            gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             let (whereX, whereY) = toFb (rawX, rawY)
             pushActionOutcome (actionOutcomeRef env) ActionOutcome
                 { aoTs = gt, aoKind = "input.scroll", aoOutcome = outcome

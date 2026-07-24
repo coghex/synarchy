@@ -7,20 +7,21 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import World.Types
 import World.Thread.Helpers (unWorldPageId)
 
-handleWorldSetTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → WorldTextureType → TextureHandle → IO ()
-handleWorldSetTextureCommand env logger pageId texType texHandle = do
+handleWorldSetTextureCommand wsc logger pageId texType texHandle = do
     logDebug logger CatWorld $ 
         "Setting texture for world: " <> unWorldPageId pageId 
         <> ", type: " <> T.pack (show texType)
         <> ", handle: " <> T.pack (show texHandle)
     
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             let updateTextures wt = case texType of

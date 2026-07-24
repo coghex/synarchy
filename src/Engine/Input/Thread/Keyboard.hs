@@ -12,6 +12,8 @@ module Engine.Input.Thread.Keyboard
   ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -43,7 +45,7 @@ import UI.FocusNavigation (nextFocus, prevFocus)
 --   route via InputCharEvent instead, not here).
 recordKeyOutcome ∷ EngineEnv → Text → Maybe Text → Maybe Word32 → IO ()
 recordKeyOutcome env domain matched target = do
-    gt ← readIORef (gameTimeRef env)
+    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     let (outcome, handler, reason) = case matched of
             Just action → ("accepted", Just action, Nothing)
             Nothing     → ("noop", Just domain,

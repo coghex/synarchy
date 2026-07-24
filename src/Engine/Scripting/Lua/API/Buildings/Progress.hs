@@ -10,6 +10,8 @@ module Engine.Scripting.Lua.API.Buildings.Progress
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -194,7 +196,7 @@ buildingGetActivityFn env = do
                             -- Game-clock matches biSpawnedAt, so the
                             -- Appearing→Built transition freezes on
                             -- pause and doesn't drift against POSIX.
-                            now ← readIORef (gameTimeRef env)
+                            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                             pure $ Just $ case currentActivity now inst def of
                                 Appearing → "appearing" ∷ Text
                                 Built     → "built"

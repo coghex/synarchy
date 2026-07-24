@@ -488,31 +488,17 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.InputInject", "Engine.Scripting.Lua.API.Keybinds",
         "World.Log", "World.Thread.Helpers",
     }),
+    # Shrunk from 54 to 4 by issue #893 (E5a): every module whose
+    # `EngineEnv` use was covered by the nine world/sim fields now
+    # reaches them through Engine.Core.Capability.WorldSim. The four
+    # below still need one or more of the SEVEN coupled render-handoff
+    # fields (worldPreviewRef, worldPreviewGenerationRef,
+    # zoomAtlasDataRef, worldQuadsRef, bloodDisposeQueue, texPaletteRef,
+    # texPaletteHandlesRef), which #894 (E5b) migrates once the render
+    # capability boundary is composed with this one -- see SS7.4.
     "world-sim-render-handoff": frozenset({
-        "Blood.Impact", "Blood.Trail", "Engine.Scripting.Lua.API.Blood", "Engine.Scripting.Lua.API.Chop",
-        "Engine.Scripting.Lua.API.Construct", "Engine.Scripting.Lua.API.Core",
-        "Engine.Scripting.Lua.API.Flora", "Engine.Scripting.Lua.API.Forage.Crop",
-        "Engine.Scripting.Lua.API.Forage.Lookup", "Engine.Scripting.Lua.API.Forage.Query",
-        "Engine.Scripting.Lua.API.Plant", "Engine.Scripting.Lua.API.Structure",
-        "Engine.Scripting.Lua.API.Till", "Engine.Scripting.Lua.API.World.Clock",
-        "Engine.Scripting.Lua.API.World.Cursor", "Engine.Scripting.Lua.API.World.Designation",
-        "Engine.Scripting.Lua.API.World.Edit", "Engine.Scripting.Lua.API.World.GenConfig",
-        "Engine.Scripting.Lua.API.World.Lifecycle", "Engine.Scripting.Lua.API.World.Query",
-        "Engine.Scripting.Lua.API.World.Tools", "Engine.Scripting.Lua.API.WorldQuery.Chunk",
-        "Engine.Scripting.Lua.API.WorldQuery.Climate", "Engine.Scripting.Lua.API.WorldQuery.Fluid",
-        "Engine.Scripting.Lua.API.WorldQuery.Lookup", "Engine.Scripting.Lua.API.WorldQuery.River",
-        "Engine.Scripting.Lua.API.WorldQuery.Terrain", "Sim.Thread", "Unit.LineOfSight",
-        "Unit.Render", "Unit.Thread.Movement.PathAdvance", "World.Render.Zoom.Background",
-        "World.Thread", "World.Thread.ChunkLoading", "World.Thread.Command",
-        "World.Thread.Command.Basic", "World.Thread.Command.Cursor.Chop",
-        "World.Thread.Command.Cursor.Construct", "World.Thread.Command.Cursor.Mine",
-        "World.Thread.Command.Cursor.Plant", "World.Thread.Command.Cursor.Select",
-        "World.Thread.Command.Cursor.Till", "World.Thread.Command.Edit.Fluid",
-        "World.Thread.Command.Edit.Structure", "World.Thread.Command.Edit.Sync",
-        "World.Thread.Command.Edit.Terrain", "World.Thread.Command.Edit.Vegetation",
-        "World.Thread.Command.Init", "World.Thread.Command.Location",
-        "World.Thread.Command.Texture", "World.Thread.Command.Time",
-        "World.Thread.Command.UI", "World.Thread.Cursor", "World.Thread.Time",
+        "Engine.Scripting.Lua.API.Structure", "World.Thread",
+        "World.Thread.Command.Basic", "World.Thread.Command.Init",
     }),
     "units-buildings-combat": frozenset({
         "Building.Thread.Command", "Combat.Resolution", "Combat.Resolution.Events",

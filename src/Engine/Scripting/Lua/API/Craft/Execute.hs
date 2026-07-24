@@ -12,6 +12,8 @@ module Engine.Scripting.Lua.API.Craft.Execute
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -101,7 +103,7 @@ validateStation env mBillId uid rid bid = do
     rm      ← readIORef (recipeManagerRef env)
     bm      ← readIORef (buildingManagerRef env)
     um      ← readIORef (unitManagerRef env)
-    now     ← readIORef (gameTimeRef env)
+    now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- #590: power is job-dependent — a recipe with no power_draw (the
     -- default) needs none checked at all, regardless of the station's
     -- own wiring. An unknown recipe id resolves to 0 draw here (trivially

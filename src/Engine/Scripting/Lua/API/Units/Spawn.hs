@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.Units.Spawn
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -104,7 +106,7 @@ unitSpawnFn env = do
                 mActive ← case pageArg6 of
                     Just pbs → do
                         let pid = WorldPageId (TE.decodeUtf8Lenient pbs)
-                        wm ← readIORef (worldManagerRef env)
+                        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                         pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                     Nothing  → activeWorldPage env
                 case (HM.lookup name (umDefs um), mActive) of
