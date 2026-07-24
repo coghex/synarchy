@@ -496,6 +496,12 @@ data WindowState = WindowState
     --   mode being entered rather than the one being left.
   } deriving (Show, Eq)
 
+-- | The pre-window seed. @wsAppliedMode@ starts 'Windowed' because no
+--   GLFW window exists yet — 'Engine.Graphics.Window.GLFW.createWindow'
+--   overwrites it with 'appliedModeAtCreation' once one does, and the
+--   window-less boot profiles (@--headless@, @--dump@, @--offscreen@)
+--   never reach 'Engine.Scripting.Lua.Message.Video.handleSetWindowMode'
+--   at all.
 defaultWindowState ∷ WindowState
 defaultWindowState = WindowState
   { wsWindowedPos  = (100, 100)
@@ -503,15 +509,23 @@ defaultWindowState = WindowState
   , wsAppliedMode  = Windowed
   }
 
--- | The window mode actually applied to a freshly created GLFW window.
---   'Engine.Core.Defaults.defaultWindowConfig' only asks for fullscreen
---   (@wcFullscreen@); every other configured mode — 'BorderlessWindowed'
---   included — leaves the new window plain, decorated and windowed. That
---   is where 'wsAppliedMode' must start, so a first switch away from a
---   borderless-configured boot still caches the real windowed geometry.
-bootAppliedWindowMode ∷ WindowMode → WindowMode
-bootAppliedWindowMode Fullscreen = Fullscreen
-bootAppliedWindowMode _          = Windowed
+-- | The window mode a freshly created GLFW window actually came up in,
+--   given whether 'Engine.Graphics.Window.Types.wcFullscreen' was both
+--   requested AND successfully applied.
+--
+--   Deliberately keyed on the OUTCOME, not the configured mode.
+--   'Engine.Core.Defaults.defaultWindowConfig' only ever asks GLFW for
+--   fullscreen, so a 'BorderlessWindowed' config comes up as a plain
+--   decorated window; and 'Engine.Graphics.Window.GLFW.createWindow'
+--   degrades a fullscreen request gracefully to that same plain window
+--   when no primary monitor or video mode is available. Seeding
+--   'wsAppliedMode' from the config would call both of those cases
+--   fullscreen, and a later 'Windowed' request would then skip caching
+--   and teleport a live decorated window onto 'defaultWindowState'\'s
+--   fallback geometry.
+appliedModeAtCreation ∷ Bool → WindowMode
+appliedModeAtCreation True  = Fullscreen
+appliedModeAtCreation False = Windowed
 
 -- | Does switching to @target@ mean LEAVING an applied windowed state?
 --   Only then may the live GLFW geometry be captured into the cache:

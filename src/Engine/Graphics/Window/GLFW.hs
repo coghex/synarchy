@@ -42,10 +42,11 @@ module Engine.Graphics.Window.GLFW
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, modifyIORef')
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
-import Engine.Core.State (loggerRef, luaQueue)
+import Engine.Core.State (WindowState(..), appliedModeAtCreation
+  , loggerRef, luaQueue )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource
@@ -94,15 +95,26 @@ createWindow config = do
         logInfoM CatGraphics $ "Window created with actual size: " <> T.pack (show actualSize)
         pure $ Window win
   let Window win = window
-  when (wcFullscreen config) $ do
-    primaryMonitor ← liftIO $ GLFW.getPrimaryMonitor
-    case primaryMonitor of
-      Nothing → logInfoM CatGraphics "Failed to get primary monitor for fullscreen"
-      Just monitor → do
-        videoMode ← liftIO $ GLFW.getVideoMode monitor
-        case videoMode of
-          Nothing → logInfoM CatGraphics "Failed to get video mode for fullscreen"
-          Just vm → liftIO $ GLFW.setFullscreen win monitor vm
+  -- A fullscreen request degrades gracefully to the plain window GLFW
+  -- just created, so the outcome — not the config — is what gets
+  -- recorded as the applied mode below (#907).
+  fullscreenApplied ← if wcFullscreen config
+    then do
+      primaryMonitor ← liftIO $ GLFW.getPrimaryMonitor
+      case primaryMonitor of
+        Nothing → do
+          logInfoM CatGraphics "Failed to get primary monitor for fullscreen"
+          pure False
+        Just monitor → do
+          videoMode ← liftIO $ GLFW.getVideoMode monitor
+          case videoMode of
+            Nothing → do
+              logInfoM CatGraphics "Failed to get video mode for fullscreen"
+              pure False
+            Just vm → do
+              liftIO $ GLFW.setFullscreen win monitor vm
+              pure True
+    else pure False
 
   env ← ask
   liftIO $ do
@@ -112,6 +124,13 @@ createWindow config = do
     writeIORef (rcWindowSizeRef (toRenderCapability env)) windowSize
     writeIORef (rcFramebufferSizeRef (toRenderCapability env)) framebufferSize
     writeIORef (rcWindowPosRef (toRenderCapability env)) windowPos
+    -- Seed the window-mode tracker from what GLFW actually did. Nothing
+    -- else establishes it: 'Engine.Core.Init' cannot know whether this
+    -- fullscreen request succeeded, and 'defaultWindowConfig' never asks
+    -- for borderless at creation, so any non-fullscreen outcome is a
+    -- plain decorated window.
+    modifyIORef' (rcWindowStateRef (toRenderCapability env)) $ \ws →
+      ws { wsAppliedMode = appliedModeAtCreation fullscreenApplied }
     Q.writeQueue (luaQueue env) (LuaWindowResize (fst windowSize) (snd windowSize))
     Q.writeQueue (luaQueue env) (LuaFramebufferResize (fst framebufferSize) (snd framebufferSize))
     

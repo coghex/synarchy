@@ -22,7 +22,7 @@ module Test.Headless.Graphics.WindowMode (spec) where
 import UPrelude
 import Test.Hspec
 import Engine.Core.State
-  ( WindowState(..), defaultWindowState, bootAppliedWindowMode
+  ( WindowState(..), defaultWindowState, appliedModeAtCreation
   , leavingWindowedMode, windowModeAlreadyApplied
   , applyWindowModeTransition )
 import Engine.Graphics.Config (WindowMode(..))
@@ -45,6 +45,13 @@ userSize = (1024, 768)
 monitorPos, monitorSize ∷ (Int, Int)
 monitorPos  = (0, 0)
 monitorSize = (2560, 1440)
+
+-- | The WindowState the render thread holds right after
+--   'Engine.Graphics.Window.GLFW.createWindow', given whether its
+--   fullscreen request actually took effect.
+createdWith ∷ Bool → WindowState
+createdWith fullscreenApplied = defaultWindowState
+  { wsAppliedMode = appliedModeAtCreation fullscreenApplied }
 
 -- | One queued request: the target mode plus the geometry the render
 --   thread samples before applying it. Folding a list of these is exactly
@@ -105,16 +112,14 @@ spec = do
         -- The exact regression: a boot-fresh windowed session whose cache
         -- still holds the defaults must not act on a redundant request.
         it "short-circuits a redundant windowed request on a fresh boot" $ do
-            let boot = defaultWindowState
-                  { wsAppliedMode = bootAppliedWindowMode Windowed }
-            windowModeAlreadyApplied boot Windowed `shouldBe` True
+            windowModeAlreadyApplied (createdWith False) Windowed
+                `shouldBe` True
 
         -- A borderless-CONFIGURED boot comes up windowed, so asking for
         -- borderless there is a real switch, not a redundant request.
         it "does not short-circuit a borderless boot's first request" $ do
-            let boot = defaultWindowState
-                  { wsAppliedMode = bootAppliedWindowMode BorderlessWindowed }
-            windowModeAlreadyApplied boot BorderlessWindowed `shouldBe` False
+            windowModeAlreadyApplied (createdWith False) BorderlessWindowed
+                `shouldBe` False
 
     describe "applyWindowModeTransition" $ do
         it "records the windowed geometry on the way out to borderless" $ do
@@ -202,29 +207,44 @@ spec = do
             (wsWindowedPos ws, wsWindowedSize ws)
                 `shouldBe` (movedPos, movedSize)
 
-    describe "bootAppliedWindowMode" $ do
-        -- defaultWindowConfig only asks GLFW for fullscreen; a
-        -- borderless-configured boot still comes up as a plain decorated
-        -- window, so its first switch away must cache the real geometry.
-        it "reports windowed for a borderless-configured boot" $
-            bootAppliedWindowMode BorderlessWindowed `shouldBe` Windowed
+    describe "appliedModeAtCreation" $ do
+        -- Round 2 on PR #908: the seed must come from what GLFW actually
+        -- did, not from the configured mode. createWindow degrades a
+        -- fullscreen request to the plain window it just created when no
+        -- primary monitor or video mode is available, and it never asks
+        -- for borderless at all.
+        it "reports fullscreen only when setFullscreen actually ran" $
+            appliedModeAtCreation True `shouldBe` Fullscreen
 
-        it "reports windowed for a windowed-configured boot" $
-            bootAppliedWindowMode Windowed `shouldBe` Windowed
+        it "reports windowed when no fullscreen was applied" $
+            appliedModeAtCreation False `shouldBe` Windowed
 
-        it "reports fullscreen for a fullscreen-configured boot" $
-            bootAppliedWindowMode Fullscreen `shouldBe` Fullscreen
-
-        it "starts the default cache in the applied windowed state" $
+        it "seeds the pre-window default in the applied windowed state" $
             wsAppliedMode defaultWindowState `shouldBe` Windowed
 
-        -- A borderless-configured boot's first toggle to borderless is a
-        -- real departure from windowed, not a no-op.
+        -- A borderless-configured boot comes up as a plain decorated
+        -- window, so its first switch away must cache the real geometry.
         it "lets a borderless-configured boot cache on its first switch" $ do
-            let boot = defaultWindowState
-                  { wsAppliedMode = bootAppliedWindowMode BorderlessWindowed }
-                ws = drain boot
+            let ws = drain (createdWith False)
                        [ (BorderlessWindowed, userPos, userSize)
                        , (Windowed, monitorPos, monitorSize) ]
             (wsWindowedPos ws, wsWindowedSize ws)
                 `shouldBe` (userPos, userSize)
+
+        -- A fullscreen request that FAILED leaves a live plain window.
+        -- Recording Fullscreen there would make the next windowed request
+        -- a real switch that restores the never-filled default cache,
+        -- teleporting that window to 800x600 at (100,100).
+        it "leaves a failed fullscreen boot's windowed request inert" $ do
+            let boot = createdWith False
+            wsAppliedMode boot `shouldBe` Windowed
+            windowModeAlreadyApplied boot Windowed `shouldBe` True
+
+        -- A fullscreen boot that SUCCEEDED does switch, and has no
+        -- windowed geometry to restore but the seeded fallback — which is
+        -- the honest answer, since no windowed window was ever on screen.
+        it "treats a real fullscreen boot's windowed request as a switch" $ do
+            let boot = createdWith True
+            wsAppliedMode boot `shouldBe` Fullscreen
+            windowModeAlreadyApplied boot Windowed `shouldBe` False
+            leavingWindowedMode (wsAppliedMode boot) Windowed `shouldBe` False
