@@ -10,7 +10,6 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM, logInfoSM)
 import Engine.Graphics.Types
@@ -19,6 +18,7 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_surface as Surf
 import Vulkan.Extensions.VK_KHR_swapchain as Swap
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Query swapchain support details from physical device
 querySwapchainSupport ∷ PhysicalDevice → SurfaceKHR → EngineM ε σ SwapchainSupportDetails

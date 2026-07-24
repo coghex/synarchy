@@ -17,7 +17,10 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Core.State (EngineEnv, unitManagerRef, worldManagerRef
+  , resolveActiveWorld )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (windowDegenerate)
@@ -40,9 +43,10 @@ baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 hitTestUnitAt ∷ EngineEnv → Double → Double → IO (Maybe UnitId)
 hitTestUnitAt env pixX pixY = do
     um       ← readIORef (unitManagerRef env)
-    camera   ← readIORef (cameraRef env)
-    (winW, winH) ← readIORef (windowSizeRef env)
-    texSizes ← readIORef (textureSizeRef env)
+    let rv = toRenderViewCapability env
+    camera   ← readIORef (rvCameraRef rv)
+    (winW, winH) ← readIORef (rvWindowSizeRef rv)
+    texSizes ← readIORef (rvTextureSizeRef rv)
     mgr      ← readIORef (worldManagerRef env)
 
     -- Only the active world's units are clickable (#78).
@@ -136,9 +140,10 @@ hitTestUnitsInRect
     ∷ EngineEnv → Double → Double → Double → Double → IO [UnitId]
 hitTestUnitsInRect env x1d y1d x2d y2d = do
     um       ← readIORef (unitManagerRef env)
-    camera   ← readIORef (cameraRef env)
-    (winW, winH) ← readIORef (windowSizeRef env)
-    texSizes ← readIORef (textureSizeRef env)
+    let rv = toRenderViewCapability env
+    camera   ← readIORef (rvCameraRef rv)
+    (winW, winH) ← readIORef (rvWindowSizeRef rv)
+    texSizes ← readIORef (rvTextureSizeRef rv)
     mgr      ← readIORef (worldManagerRef env)
 
     let x1 = realToFrac (min x1d x2d) ∷ Float

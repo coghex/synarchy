@@ -11,7 +11,10 @@ import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, buildingGhostRef, buildingManagerRef
+  , gameTimeRef, worldManagerRef )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -102,8 +105,8 @@ renderBuildingQuads env facing zSlice effDepth tileAlpha = do
             -- Appearing→Built transition derived from elapsed time
             -- doesn't run while paused.
             now ← readIORef (gameTimeRef env)
-            texSizes ← readIORef (textureSizeRef env)
-            mBts ← readIORef (textureSystemRef env)
+            texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+            mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
             case mBts of
                 Nothing → return V.empty
                 Just _bts → do
@@ -256,8 +259,8 @@ renderGhostQuad env facing zSlice = do
             case HM.lookup (bgDefName ghost) (bmDefs bm) of
                 Nothing → return V.empty
                 Just def → do
-                    texSizes ← readIORef (textureSizeRef env)
-                    mBts ← readIORef (textureSystemRef env)
+                    texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+                    mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
                     case mBts of
                         Nothing → return V.empty
                         Just _bts →

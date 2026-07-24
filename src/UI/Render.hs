@@ -18,7 +18,9 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logWarnM)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (uiManagerRef)
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts, GlyphInstance(..))
 import Engine.Graphics.Font.Draw (layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
@@ -103,7 +105,7 @@ renderUIPages = do
     env ← ask
     mgr ← liftIO $ readIORef (uiManagerRef env)
     
-    maybeBindless ← liftIO $ readIORef (textureSystemRef env)
+    maybeBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
 
     case maybeBindless of
         Nothing → do
@@ -111,7 +113,7 @@ renderUIPages = do
             pure (V.empty, Map.empty)
         Just bindless → do
             logDebugM CatUI $ "UI rendering with bindless texture system containing " <> T.pack (show $ Map.size (btsHandleMap bindless)) <> " textures"
-            fontCache ← liftIO $ readIORef (fontCacheRef env)
+            fontCache ← liftIO $ readIORef (rcFontCacheRef (toRenderCapability env))
 
             let visiblePages = getVisiblePages mgr
 

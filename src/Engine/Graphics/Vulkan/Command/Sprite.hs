@@ -11,7 +11,9 @@ import Data.IORef (IORef, readIORef, modifyIORef')
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (GraphicsState(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Scene.Types (RenderBatch(..), SceneDynamicBuffer(..))
@@ -47,7 +49,7 @@ renderSpritesWith selectPipeline cmdBuf state viewport scissor uniformSet
 
     bindless ← do
         env ← ask
-        mts ← liftIO $ readIORef (textureSystemRef env)
+        mts ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
         case mts of
             Just b → pure b
             _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)

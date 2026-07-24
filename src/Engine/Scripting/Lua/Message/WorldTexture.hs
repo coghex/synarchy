@@ -19,7 +19,10 @@ import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), TransientTexture(..)
+  , GraphicsState(..), luaQueue, worldPreviewRef, zoomAtlasDataRef )
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource (locally)
 import qualified Engine.Core.Queue as Q
 import Foreign.Marshal.Utils (copyBytes)
@@ -51,11 +54,11 @@ disposeTransientTexture ∷ Device → TransientTexture → EngineM ε σ ()
 disposeTransientTexture dev old = do
     env ← ask
     liftIO $ deviceWaitIdle dev
-    mSys ← liftIO $ readIORef (textureSystemRef env)
+    mSys ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
     case mSys of
         Just sys → do
             sys' ← unregisterTexture dev (ttHandle old) sys
-            liftIO $ writeIORef (textureSystemRef env) (Just sys')
+            liftIO $ writeIORef (rcTextureSystemRef (toRenderCapability env)) (Just sys')
         Nothing → pure ()
     liftIO $ ttCleanup old
 
@@ -70,14 +73,14 @@ handleWorldPreview = do
                 <> T.pack (show w) <> "×" <> T.pack (show h)
 
             gs ← gets graphicsState
-            mBindless ← liftIO $ readIORef (textureSystemRef env)
+            mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
             case ( vulkanDevice gs
                  , vulkanPDevice gs
                  , vulkanCmdPool gs
                  , deviceQueues gs
                  , mBindless ) of
                 (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
-                    poolRef ← asks assetPoolRef
+                    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
                     pool ← liftIO $ readIORef poolRef
                     texHandle ← liftIO $ generateTextureHandle pool
 
@@ -121,13 +124,14 @@ handleWorldPreview = do
                     -- nearest sampler). A live filter toggle repaints all
                     -- slots to the global sampler until the next regen —
                     -- same as the pre-cache behaviour.
-                    let cacheRef = samplerCacheRef env
+                    let cacheRef = rcSamplerCacheRef (toRenderCapability env)
                     sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureNearest
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureNearest
 
                     (_, newBindless) ← registerPinnedTexture dev texHandle
                         imageView sampler bindless
-                    liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+                    let rc = toRenderCapability env
+                    liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
                     -- Dispose the previous preview generation (slot
                     -- recycled, GPU objects destroyed) and record this
@@ -191,14 +195,14 @@ handleZoomAtlasUpload = do
                 <> T.pack (show w) <> "×" <> T.pack (show h)
 
             gs ← gets graphicsState
-            mBindless ← liftIO $ readIORef (textureSystemRef env)
+            mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
             case ( vulkanDevice gs
                  , vulkanPDevice gs
                  , vulkanCmdPool gs
                  , deviceQueues gs
                  , mBindless ) of
                 (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
-                    poolRef ← asks assetPoolRef
+                    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
                     pool ← liftIO $ readIORef poolRef
                     texHandle ← liftIO $ generateTextureHandle pool
 
@@ -243,13 +247,14 @@ handleZoomAtlasUpload = do
                     -- (shares the cached linear sampler). A live filter
                     -- toggle repaints all slots to the global sampler
                     -- until the next regen — same as pre-cache behaviour.
-                    let cacheRef = samplerCacheRef env
+                    let cacheRef = rcSamplerCacheRef (toRenderCapability env)
                     sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureLinear
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
 
                     (_, newBindless) ← registerPinnedTexture dev texHandle
                         imageView sampler bindless
-                    liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+                    let rc = toRenderCapability env
+                    liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
                     -- Dispose the previous atlas generation (slot
                     -- recycled, GPU objects destroyed) and record this

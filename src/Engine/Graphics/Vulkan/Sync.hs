@@ -6,8 +6,8 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Vulkan as Vk
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Graphics.Vulkan.Types.Cleanup
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Create one render-finished semaphore per swapchain IMAGE and store
 --   the vector in 'renderFinishedSems'. The semaphore that

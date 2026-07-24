@@ -24,7 +24,8 @@ import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Sampler.Cache
@@ -88,9 +89,9 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   -- global filter. Every atlas slot (and the undefined fallback) points
   -- at this one sampler; a filter toggle swaps it via 'setTextureFilter'.
   env ← ask
-  filterMode ← liftIO $ readIORef (textureFilterRef env)
+  filterMode ← liftIO $ readIORef (rcTextureFilterRef (toRenderCapability env))
   let texKind = textureSamplerKind (textureFilterToVulkan filterMode)
-  sharedSampler ← liftIO $ acquireSampler dev (samplerCacheRef env) texKind
+  sharedSampler ← liftIO $ acquireSampler dev (rcSamplerCacheRef (toRenderCapability env)) texKind
 
   -- MoltenVK requires all argument buffer slots to be initialized
   initializeAllSlots dev descriptorSet config
@@ -399,7 +400,7 @@ setTextureFilter ∷ Device
                  → EngineM ε σ BindlessTextureSystem
 setTextureFilter dev flt system = do
     env ← ask
-    let ref     = samplerCacheRef env
+    let ref     = rcSamplerCacheRef (toRenderCapability env)
         descSet = btsDescriptorSet system
         config  = btsConfig system
         oldKind = btsTextureKind system
@@ -435,6 +436,6 @@ getTextureSlotIndex texHandle system =
 destroyBindlessTextureSystem ∷ Device → BindlessTextureSystem → EngineM ε σ ()
 destroyBindlessTextureSystem dev system = do
   env ← ask
-  liftIO $ releaseSampler dev (samplerCacheRef env) (btsTextureKind system)
+  liftIO $ releaseSampler dev (rcSamplerCacheRef (toRenderCapability env)) (btsTextureKind system)
   destroyDescriptorPool dev (btsDescriptorPool system) Nothing
   destroyDescriptorSetLayout dev (btsDescriptorLayout system) Nothing

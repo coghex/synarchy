@@ -10,7 +10,7 @@ import Data.IORef
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Scene.Types
 import Engine.Scene.Manager

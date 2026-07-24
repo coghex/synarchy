@@ -24,7 +24,9 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef)
 import Data.Maybe (mapMaybe)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Asset.Handle (toInt)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
@@ -67,11 +69,11 @@ renderSpoilQuads env worldState tileAlpha = do
     if HM.null piles
       then return V.empty
       else do
-        camera   ← readIORef (cameraRef env)
+        camera   ← readIORef (rvCameraRef (toRenderViewCapability env))
         tileData ← readIORef (wsTilesRef worldState)
         textures ← readIORef (wsTexturesRef worldState)
         paramsM  ← readIORef (wsGenParamsRef worldState)
-        (fbW, fbH) ← readIORef (framebufferSizeRef env)
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
 
         -- Bake STABLE handle ids (tile + its face map); the bindless
         -- shader resolves them to live slots at draw time, and applies

@@ -11,7 +11,9 @@ import Engine.Graphics.Font.SDF (generateSDFFontAtlas, sdfBaseSize)
 import Engine.Graphics.Font.Upload (uploadFontAtlasToGPU)
 import Engine.Core.Log.Monad (logDebugSM, logWarnM, logAndThrowM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..), loggerRef)
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log (LogCategory(..))
 
@@ -23,7 +25,7 @@ loadFont requestedHandle fontPath fontSize = do
         ,("size", T.pack $ show fontSize)
         ,("char_range", "' ' to '~'")]
 
-    cacheRef ← asks fontCacheRef
+    cacheRef ← asks (rcFontCacheRef . toRenderCapability)
     cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
     case Map.lookup (fontPath, fontSize) (fcPathCache cache) of
@@ -71,7 +73,7 @@ loadSDFFont requestedHandle fontPath = do
         ,("base_size", T.pack $ show sdfBaseSize)
         ,("char_range", "' ' to '~'")]
 
-    cacheRef ← asks fontCacheRef
+    cacheRef ← asks (rcFontCacheRef . toRenderCapability)
     cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
 

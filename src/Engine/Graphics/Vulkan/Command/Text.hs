@@ -14,7 +14,8 @@ import Data.IORef (readIORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugSM, logWarnM)
 import Engine.Core.Monad
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Graphics.Font.Data (FontCache(..), FontAtlas(..), GlyphInstance, fcFonts)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Scene.Types (TextRenderBatch(..), TextInstanceBuffer(..))
@@ -111,7 +112,7 @@ renderTextBatches ∷ CommandBuffer
                   → EngineM ε σ ()
 renderTextBatches cmdBuf quadBuffer layout uniformSet tib batchesWithOffsets = do
     env ← ask
-    cache ← liftIO $ readIORef (fontCacheRef env)
+    cache ← liftIO $ readIORef (rcFontCacheRef (toRenderCapability env))
 
     -- All-empty batches mean tib may be the zero placeholder — binding
     -- it would be invalid, and there is nothing to draw anyway.

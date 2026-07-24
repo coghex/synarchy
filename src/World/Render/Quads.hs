@@ -10,7 +10,9 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, floraCatalogRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
@@ -40,10 +42,10 @@ renderWorldQuads env worldState zoomAlpha snap = do
     tileData ← readIORef (wsTilesRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)
-    camera ← readIORef (cameraRef env)
+    camera ← readIORef (rvCameraRef (toRenderViewCapability env))
     floraCat ← readIORef (floraCatalogRef env)
     worldDate ← readIORef (wsDateRef worldState)
-    texSizes ← readIORef (textureSizeRef env)
+    texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
     harvests ← readIORef (wsFloraHarvestsRef worldState)
     cropPlots ← readIORef (wsCropPlotsRef worldState)
 

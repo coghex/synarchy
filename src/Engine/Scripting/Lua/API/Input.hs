@@ -14,7 +14,9 @@ import Engine.Input.Types (InputState(..), inpMousePos, inpMouseBtns)
 import Engine.Input.Bindings (checkKeyDown, isActionDown)
 import Engine.Graphics.Camera (Camera2D(..), camZoom, camPosition)
 import Engine.Graphics.Viewport (viewportDegenerate)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, keyBindingsRef)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
@@ -79,7 +81,7 @@ isMouseButtonDownFn backendState = do
 getWindowSizeFn ∷ EngineEnv → LuaBackendState
   → Lua.LuaE Lua.Exception Lua.NumResults
 getWindowSizeFn env _backendState = do
-  (w, h) ← Lua.liftIO $ readIORef (windowSizeRef env)
+  (w, h) ← Lua.liftIO $ readIORef (rvWindowSizeRef (toRenderViewCapability env))
   Lua.pushnumber (Lua.Number (fromIntegral w))
   Lua.pushnumber (Lua.Number (fromIntegral h))
   return 2
@@ -87,7 +89,7 @@ getWindowSizeFn env _backendState = do
 getFramebufferSizeFn ∷ EngineEnv → LuaBackendState
   → Lua.LuaE Lua.Exception Lua.NumResults
 getFramebufferSizeFn env _backendState = do
-  (w, h) ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+  (w, h) ← Lua.liftIO $ readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
   Lua.pushnumber (Lua.Number (fromIntegral w))
   Lua.pushnumber (Lua.Number (fromIntegral h))
   return 2
@@ -99,9 +101,10 @@ getWorldCoordFn env _backendState = do
   case (sx, sy) of
     (Just (Lua.Number screenX), Just (Lua.Number screenY)) → do
       mCoord ← Lua.liftIO $ do
-        camera ← readIORef (cameraRef env)
-        (winW, winH) ← readIORef (windowSizeRef env)
-        (fbW, fbH) ← readIORef (framebufferSizeRef env)
+        let rv = toRenderViewCapability env
+        camera ← readIORef (rvCameraRef rv)
+        (winW, winH) ← readIORef (rvWindowSizeRef rv)
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef rv)
         -- Minimized window: a zero-size window/framebuffer makes the
         -- divisions below hand NaN (zero height) or a centerline-collapsed
         -- coord (zero width) to Lua camera math. Report "no coordinate".

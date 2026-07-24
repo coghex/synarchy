@@ -15,7 +15,10 @@ import Linear (identity)
 import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource)
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..)
+  , sunAngleRef )
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Graphics.Base
@@ -91,7 +94,7 @@ initializeVulkan window = do
                     } }
 
   env ← ask
-  videoConfig ← liftIO $ readIORef (videoConfigRef env)
+  videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
   let vsyncEnabled = vcVSync videoConfig
 
   logDebugSM CatVulkan "Creating swapchain"
@@ -153,7 +156,7 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
                       swapchainInfo = Just swapInfo } }
 
   env ← ask
-  videoConfig ← liftIO $ readIORef (videoConfigRef env)
+  videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
   props ← liftIO $ getPhysicalDeviceProperties physicalDevice
 
   let msaaInt = vcMSAA videoConfig
@@ -210,8 +213,8 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
       physicalDevice device cmdPool (graphicsQueue queues) texSystem
   -- textureSystem + defaultFaceMapSlot live solely in EngineEnv now
   -- (single source of truth, readable by worker threads).
-  liftIO $ writeIORef (textureSystemRef env) (Just texSystemWithFaceMap)
-  liftIO $ writeIORef (defaultFaceMapSlotRef env) (dfmSlot defaultFaceMap)
+  liftIO $ writeIORef (rcTextureSystemRef (toRenderCapability env)) (Just texSystemWithFaceMap)
+  liftIO $ writeIORef (rcDefaultFaceMapSlotRef (toRenderCapability env)) (dfmSlot defaultFaceMap)
   
   let defaultSceneId = "default"
   sceneMgr ← gets sceneManager
@@ -299,10 +302,10 @@ createUniformBuffersForFrames ∷ Device → PhysicalDevice
   → (Int, Int) → V.Vector DescriptorSet → EngineM ε σ ()
 createUniformBuffersForFrames device physicalDevice (width, height) descSets = do
   env ← ask
-  let cRef   = cameraRef env
-      uiCRef = uiCameraRef env
-      bRef   = brightnessRef env
-      psRef  = pixelSnapRef env
+  let cRef   = rcCameraRef (toRenderCapability env)
+      uiCRef = rcUiCameraRef (toRenderCapability env)
+      bRef   = rcBrightnessRef (toRenderCapability env)
+      psRef  = rcPixelSnapRef (toRenderCapability env)
   _state ← gets graphicsState
   camera ← liftIO $ readIORef cRef
   brightnessInt ← liftIO $ readIORef bRef

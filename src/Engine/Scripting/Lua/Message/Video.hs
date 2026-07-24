@@ -19,7 +19,10 @@ import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..)
+  , WindowState(..), luaQueue )
+import Engine.Core.Capability.Render
+  (RenderCapability(..), toRenderCapability)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Config (WindowMode(..)
                                , VideoConfig(..)
@@ -45,8 +48,8 @@ handleSetResolution w h = do
             liftIO $ do
                 (winW, winH) ← GLFW.getWindowSize win
                 (fbW, fbH) ← GLFW.getFramebufferSize win
-                writeIORef (windowSizeRef env) (winW, winH)
-                writeIORef (framebufferSizeRef env) (fbW, fbH)
+                writeIORef (rcWindowSizeRef (toRenderCapability env)) (winW, winH)
+                writeIORef (rcFramebufferSizeRef (toRenderCapability env)) (fbW, fbH)
 
                 Q.writeQueue (luaQueue env) (LuaWindowResize winW winH)
                 Q.writeQueue (luaQueue env) (LuaFramebufferResize fbW fbH)
@@ -63,11 +66,11 @@ handleSetWindowMode mode = do
             env ← ask
             liftIO $ do
                 -- Cache windowed geometry before switching away from it
-                currentConfig ← readIORef (videoConfigRef env)
+                currentConfig ← readIORef (rcVideoConfigRef (toRenderCapability env))
                 when (vcWindowMode currentConfig ≡ Windowed) $ do
                     (wx, wy) ← GLFW.getWindowPos win
                     (ww, wh) ← GLFW.getWindowSize win
-                    writeIORef (windowStateRef env) $ WindowState
+                    writeIORef (rcWindowStateRef (toRenderCapability env)) $ WindowState
                         { wsWindowedPos  = (wx, wy)
                         , wsWindowedSize = (ww, wh)
                         }
@@ -85,8 +88,9 @@ handleSetWindowMode mode = do
                                       GLFW.setFullscreen win monitor vm
                                       (winW, winH) ← GLFW.getWindowSize win
                                       (fbW, fbH) ← GLFW.getFramebufferSize win
-                                      writeIORef (windowSizeRef env) (winW, winH)
-                                      writeIORef (framebufferSizeRef env) (fbW, fbH)
+                                      let rc = toRenderCapability env
+                                      writeIORef (rcWindowSizeRef rc) (winW, winH)
+                                      writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
                                       Q.writeQueue (luaQueue env)
                                                    (LuaWindowResize winW winH)
                                       Q.writeQueue (luaQueue env)
@@ -107,8 +111,9 @@ handleSetWindowMode mode = do
                                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
                                         (winW, winH) ← GLFW.getWindowSize win
                                         (fbW, fbH) ← GLFW.getFramebufferSize win
-                                        writeIORef (windowSizeRef env) (winW, winH)
-                                        writeIORef (framebufferSizeRef env) (fbW, fbH)
+                                        let rc = toRenderCapability env
+                                        writeIORef (rcWindowSizeRef rc) (winW, winH)
+                                        writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
                                         Q.writeQueue (luaQueue env)
                                                      (LuaWindowResize winW winH)
                                         Q.writeQueue (luaQueue env)
@@ -117,15 +122,16 @@ handleSetWindowMode mode = do
 
 
                     Windowed → do
-                        ws ← readIORef (windowStateRef env)
+                        let rc = toRenderCapability env
+                        ws ← readIORef (rcWindowStateRef rc)
                         let (wx, wy) = wsWindowedPos ws
                             (ww, wh) = wsWindowedSize ws
                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
                         GLFW.setWindowed win ww wh wx wy
                         (winW, winH) ← GLFW.getWindowSize win
                         (fbW, fbH) ← GLFW.getFramebufferSize win
-                        writeIORef (windowSizeRef env) (winW, winH)
-                        writeIORef (framebufferSizeRef env) (fbW, fbH)
+                        writeIORef (rcWindowSizeRef rc) (winW, winH)
+                        writeIORef (rcFramebufferSizeRef rc) (fbW, fbH)
                         Q.writeQueue (luaQueue env)
                                      (LuaWindowResize winW winH)
                         Q.writeQueue (luaQueue env)
@@ -135,7 +141,7 @@ handleSetWindowMode mode = do
 handleSetVSync ∷ Bool → EngineM ε σ ()
 handleSetVSync vsync = do
     env ← ask
-    liftIO $ atomicModifyIORef' (videoConfigRef env) $ \c →
+    liftIO $ atomicModifyIORef' (rcVideoConfigRef (toRenderCapability env)) $ \c →
         (c { vcVSync = vsync }, ())
 
     state ← gets graphicsState
@@ -149,7 +155,7 @@ handleSetVSync vsync = do
 handleSetMSAA ∷ Int → EngineM ε σ ()
 handleSetMSAA msaa = do
     env ← ask
-    liftIO $ atomicModifyIORef' (videoConfigRef env) $ \c →
+    liftIO $ atomicModifyIORef' (rcVideoConfigRef (toRenderCapability env)) $ \c →
         (c { vcMSAA = msaa }, ())
 
     state ← gets graphicsState
@@ -164,13 +170,13 @@ handleSetBrightness ∷ Int → EngineM ε σ ()
 handleSetBrightness pct = do
     env ← ask
     let brightness = max 50 (min 300 pct)
-    liftIO $ writeIORef (brightnessRef env) brightness
+    liftIO $ writeIORef (rcBrightnessRef (toRenderCapability env)) brightness
     logDebugM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
 
 handleSetPixelSnap ∷ Bool → EngineM ε σ ()
 handleSetPixelSnap enabled = do
     env ← ask
-    liftIO $ writeIORef (pixelSnapRef env) enabled
+    liftIO $ writeIORef (rcPixelSnapRef (toRenderCapability env)) enabled
     logDebugM CatGraphics $ "Pixel snap " <> if enabled then "enabled" else "disabled"
 
 -- | Live-swap every bound texture sampler to a new filter mode
@@ -180,12 +186,12 @@ handleSetTextureFilter ∷ TextureFilter → EngineM ε σ ()
 handleSetTextureFilter tf = do
     logInfoM CatTexture $ "Texture filter changed to: " <> textureFilterToText tf
     env ← ask
-    liftIO $ writeIORef (textureFilterRef env) tf
+    liftIO $ writeIORef (rcTextureFilterRef (toRenderCapability env)) tf
     gs ← gets graphicsState
-    mBindless ← liftIO $ readIORef (textureSystemRef env)
+    mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
     case (vulkanDevice gs, mBindless) of
         (Just dev, Just bindless) → do
             newBindless ← setTextureFilter dev (textureFilterToVulkan tf) bindless
-            liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+            liftIO $ writeIORef (rcTextureSystemRef (toRenderCapability env)) (Just newBindless)
             logInfoM CatTexture "All texture samplers updated live"
         _ → pure ()

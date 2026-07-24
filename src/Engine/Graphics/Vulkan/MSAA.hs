@@ -6,11 +6,11 @@ module Engine.Graphics.Vulkan.MSAA
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10 hiding (size)
 import Vulkan.Core10.MemoryManagement (size)
 import Vulkan.Zero
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Create a multisampled color image for MSAA rendering.
 -- Returns the image, its memory, and an image view.

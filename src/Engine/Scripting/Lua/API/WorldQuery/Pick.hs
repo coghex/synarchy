@@ -13,7 +13,9 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv, worldManagerRef, activeWorldState)
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import World.Types
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Render.HitTest (pickWorldTile)
@@ -105,11 +107,12 @@ worldPickTileFn env = do
             -- against the wrong world would silently desync ghost/placement.
             case mVisibleWorldState manager of
                 Just ws → do
-                    camera   ← Lua.liftIO $ readIORef (cameraRef env)
+                    let rv = toRenderViewCapability env
+                    camera   ← Lua.liftIO $ readIORef (rvCameraRef rv)
                     tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
                     paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
-                    (winW, winH) ← Lua.liftIO $ readIORef (windowSizeRef env)
-                    (fbW, fbH)   ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+                    (winW, winH) ← Lua.liftIO $ readIORef (rvWindowSizeRef rv)
+                    (fbW, fbH)   ← Lua.liftIO $ readIORef (rvFramebufferSizeRef rv)
                     let facing   = camFacing camera
                         zoom     = camZoom camera
                         zSlice   = camZSlice camera
@@ -170,10 +173,11 @@ worldPickChunkFn env = do
             mWs ← Lua.liftIO $ worldStateByPage env (TE.decodeUtf8Lenient pageIdBS)
             case mWs of
                 Just ws → do
-                    camera   ← Lua.liftIO $ readIORef (cameraRef env)
+                    let rv = toRenderViewCapability env
+                    camera   ← Lua.liftIO $ readIORef (rvCameraRef rv)
                     paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
-                    (winW, winH) ← Lua.liftIO $ readIORef (windowSizeRef env)
-                    (fbW, fbH)   ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+                    (winW, winH) ← Lua.liftIO $ readIORef (rvWindowSizeRef rv)
+                    (fbW, fbH)   ← Lua.liftIO $ readIORef (rvFramebufferSizeRef rv)
                     let facing    = camFacing camera
                         worldSize = case paramsM of
                                       Nothing     → 128
@@ -216,11 +220,12 @@ worldPickPosFn env = do
             manager ← Lua.liftIO $ readIORef (worldManagerRef env)
             case mVisibleWorldState manager of
                 Just ws → do
-                    camera   ← Lua.liftIO $ readIORef (cameraRef env)
+                    let rv = toRenderViewCapability env
+                    camera   ← Lua.liftIO $ readIORef (rvCameraRef rv)
                     tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
                     paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
-                    (winW, winH) ← Lua.liftIO $ readIORef (windowSizeRef env)
-                    (fbW, fbH)   ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+                    (winW, winH) ← Lua.liftIO $ readIORef (rvWindowSizeRef rv)
+                    (fbW, fbH)   ← Lua.liftIO $ readIORef (rvFramebufferSizeRef rv)
                     let facing   = camFacing camera
                         zoom     = camZoom camera
                         zSlice   = camZSlice camera

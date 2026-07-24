@@ -34,7 +34,9 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , AssetError(..))
 import Engine.Core.Log.Monad (logDebugM, logWarnM, logInfoM, logAndThrowM
@@ -136,7 +138,7 @@ lookupShaderAsset handle pool = do
 -- | Convenience wrapper that auto-generates a 'TextureHandle' before loading
 loadTextureAtlas ∷ Text → FilePath → Text → EngineM ε σ AssetId
 loadTextureAtlas name path arrayName = do
-  poolRef ← asks assetPoolRef
+  poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
   texHandle ← liftIO $ generateTextureHandle pool
   loadTextureAtlasWithHandle texHandle name path arrayName
@@ -156,7 +158,7 @@ loadTextureAtlasWithHandle texHandle name path _arrayName = do
     ,("name", name)]
   
   -- Read from the global IORef (the ONLY source of truth)
-  poolRef ← asks assetPoolRef
+  poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
   
   let pathKey = T.pack path
@@ -177,14 +179,15 @@ loadTextureAtlasWithHandle texHandle name path _arrayName = do
       -- the same slot as the cached atlas. textureSystemRef is the
       -- single source of truth (no graphicsState mirror).
       env ← ask
-      mBindless ← liftIO $ readIORef (textureSystemRef env)
+      mBindless ← liftIO $ readIORef (rvTextureSystemRef (toRenderViewCapability env))
       case mBindless of
         Just bindless →
           case Map.lookup (taTextureHandle existingAtlas) (btsHandleMap bindless) of
             Just existingBindlessHandle → do
               let newBindless = bindless
                     { btsHandleMap = Map.insert texHandle existingBindlessHandle (btsHandleMap bindless) }
-              liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+              let rv = toRenderViewCapability env
+              liftIO $ writeIORef (rvTextureSystemRef rv) (Just newBindless)
               -- Atlas-share path: the new handle reuses an existing slot
               -- without going through registerTexture, so sync the shader
               -- handle→slot table here too (#286).
@@ -241,13 +244,13 @@ loadTextureAtlasWithHandle texHandle name path _arrayName = do
       -- textureSystemRef is the single source of truth. The atlas does
       -- not own a sampler — it shares the bindless system's single
       -- texture sampler (governed by the global filter).
-      mBindless ← liftIO $ readIORef (textureSystemRef env)
+      mBindless ← liftIO $ readIORef (rvTextureSystemRef (toRenderViewCapability env))
       bindlessSlot ← case mBindless of
         Just bindless → do
           logDebugM CatAsset "Registering texture with bindless system"
           (mbHandle, newBindless) ←
             registerTexture device texHandle imageView (btsTextureSampler bindless) bindless
-          liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+          liftIO $ writeIORef (rvTextureSystemRef (toRenderViewCapability env)) (Just newBindless)
           case mbHandle of
             Just bHandle → do
               let slot = tsIndex $ bthSlot bHandle
@@ -305,7 +308,7 @@ loadTextureAtlasWithHandle texHandle name path _arrayName = do
 --   action and remove it from the pool
 unloadAsset ∷ AssetId → EngineM' ε ()
 unloadAsset aid = do
-  poolRef ← asks assetPoolRef
+  poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
   
   case Map.lookup aid (apTextureAtlases pool) of
@@ -323,10 +326,10 @@ unloadAsset aid = do
           gs  ← gets graphicsState
           forM_ (vulkanDevice gs) $ \dev → do
             liftIO $ Vk.deviceWaitIdle dev
-            mSys ← liftIO $ readIORef (textureSystemRef env)
+            mSys ← liftIO $ readIORef (rvTextureSystemRef (toRenderViewCapability env))
             forM_ mSys $ \sys → do
               sys' ← unregisterTexture dev (taTextureHandle atlas) sys
-              liftIO $ writeIORef (textureSystemRef env) (Just sys')
+              liftIO $ writeIORef (rvTextureSystemRef (toRenderViewCapability env)) (Just sys')
           liftIO $ maybe (pure ()) id (taCleanup atlas)
           liftIO $ atomicModifyIORef' poolRef $ \p → (p
             { apTextureAtlases = Map.delete aid (apTextureAtlases p)
@@ -362,7 +365,7 @@ unloadAsset aid = do
 
 getTextureAtlas ∷ AssetId → EngineM ε σ TextureAtlas
 getTextureAtlas aid = do
-  poolRef ← asks assetPoolRef
+  poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
   case Map.lookup aid (apTextureAtlases pool) of
     Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
@@ -371,7 +374,7 @@ getTextureAtlas aid = do
 
 getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
 getShaderProgram aid = do
-  poolRef ← asks assetPoolRef
+  poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
   case Map.lookup aid (apShaders pool) of
     Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
@@ -384,7 +387,7 @@ cleanupAssetManager ∷ EngineM' ε ()
 cleanupAssetManager = do
     logInfoM CatAsset "Asset cleanup phase started"
     state ← gets graphicsState
-    poolRef ← asks assetPoolRef
+    poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     _pool ← liftIO $ readIORef poolRef
 
     when (cleanupStatus state ≡ InProgress) $
@@ -411,7 +414,7 @@ cleanupAssetManager = do
 
 cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ε ()
 cleanupResources device _state = do
-    poolRef ← asks assetPoolRef
+    poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     pool ← liftIO $ readIORef poolRef
     -- The device is already fully idle here ('cleanupAssetManager' waits
     -- on both queues + the device before calling us), and 'taCleanup'

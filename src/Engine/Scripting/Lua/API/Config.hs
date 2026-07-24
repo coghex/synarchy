@@ -25,7 +25,10 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue
+  , uiManagerRef )
+import Engine.Core.Capability.RenderView
+  (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Config
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
@@ -33,7 +36,7 @@ import UI.Types (UIPageManager(..), TooltipState(..), TooltipStyle(..))
 
 getVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getVideoConfigFn env = do
-    config ← Lua.liftIO $ readIORef (videoConfigRef env)
+    config ← Lua.liftIO $ readIORef (rvVideoConfigRef (toRenderViewCapability env))
     let scale = realToFrac (vcUIScale config) ∷ Double
     Lua.pushinteger (fromIntegral $ vcWidth config)
     Lua.pushinteger (fromIntegral $ vcHeight config)
@@ -67,7 +70,7 @@ setVideoConfigFn env = do
                         Just mode → mode
                         Nothing   → Windowed
             Lua.liftIO $
-                atomicModifyIORef' (videoConfigRef env) $ \oldConfig →
+                atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \oldConfig →
                     (oldConfig
                       { vcWidth = fromIntegral w
                       , vcHeight = fromIntegral h
@@ -91,7 +94,7 @@ setVideoConfigFn env = do
 saveVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveVideoConfigFn env = do
     Lua.liftIO $ do
-        config ← readIORef (videoConfigRef env)
+        config ← readIORef (rvVideoConfigRef (toRenderViewCapability env))
         logger ← readIORef (loggerRef env)
         saveVideoConfig logger "config/video.local.yaml" config
     return 0
@@ -101,10 +104,10 @@ loadDefaultConfigFn env = do
     Lua.liftIO $ do
         logger ← readIORef (loggerRef env)
         defaultConfig ← loadVideoConfig logger "config/video_default.yaml"
-        writeIORef (videoConfigRef env) defaultConfig
+        writeIORef (rvVideoConfigRef (toRenderViewCapability env)) defaultConfig
         logInfo logger CatInit "Loaded default video config"
     
-    config ← Lua.liftIO $ readIORef (videoConfigRef env)
+    config ← Lua.liftIO $ readIORef (rvVideoConfigRef (toRenderViewCapability env))
     let scale = realToFrac (vcUIScale config) ∷ Double
     Lua.pushinteger (fromIntegral $ vcWidth config)
     Lua.pushinteger (fromIntegral $ vcHeight config)
@@ -125,7 +128,7 @@ setUIScaleFn env = do
     case scaleArg of
         Just scale → do
             Lua.liftIO $
-                atomicModifyIORef' (videoConfigRef env) $ \c →
+                atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                     (c { vcUIScale = realToFrac scale }, ())
             Lua.pushboolean True
         Nothing → Lua.pushboolean False
@@ -137,7 +140,7 @@ setFrameLimitFn env = do
     case frameLimitArg of
         Just fl → do
             Lua.liftIO $
-                atomicModifyIORef' (videoConfigRef env) $ \c →
+                atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                     (c { vcFrameLimit = if fl > 0 then Just (fromIntegral fl)
                                                   else Nothing }, ())
             Lua.pushboolean True
@@ -152,7 +155,7 @@ setResolutionFn env = do
     case (widthArg, heightArg) of
         (Just w, Just h) → do
             Lua.liftIO $ do
-                atomicModifyIORef' (videoConfigRef env) $ \c →
+                atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                     (c { vcWidth = fromIntegral w
                        , vcHeight = fromIntegral h
                        }, ())
@@ -173,7 +176,7 @@ setWindowModeFn env = do
                 Just wm → Lua.liftIO $ do
                     let lteq = luaToEngineQueue env
                     Q.writeQueue lteq (LuaSetWindowMode wm)
-                    atomicModifyIORef' (videoConfigRef env) $ \c →
+                    atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                         (c { vcWindowMode = wm }, ())
                 Nothing → pure ()
         Nothing → pure ()
@@ -186,7 +189,7 @@ setVSyncFn env = do
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
             Q.writeQueue lteq (LuaSetVSync vsyncArg)
-            atomicModifyIORef' (videoConfigRef env) $ \c →
+            atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                 (c { vcVSync = vsyncArg }, ())
     return 0
 
@@ -199,7 +202,7 @@ setMSAAFn env = do
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
             Q.writeQueue lteq (LuaSetMSAA msaa)
-            atomicModifyIORef' (videoConfigRef env) $ \c →
+            atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                 (c { vcMSAA = msaa }, ())
     return 0
 
@@ -212,7 +215,7 @@ setBrightnessFn env = do
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
             Q.writeQueue lteq (LuaSetBrightness brightness)
-            atomicModifyIORef' (videoConfigRef env) $ \c →
+            atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                 (c { vcBrightness = brightness }, ())
     return 0
 
@@ -220,8 +223,8 @@ setPixelSnapFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setPixelSnapFn env = do
     enabled ← Lua.toboolean 1
     Lua.liftIO $ do
-        writeIORef (pixelSnapRef env) enabled
-        atomicModifyIORef' (videoConfigRef env) $ \c →
+        writeIORef (rvPixelSnapRef (toRenderViewCapability env)) enabled
+        atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
             (c { vcPixelSnap = enabled }, ())
     return 0
 
@@ -233,8 +236,8 @@ setTextureFilterFn env = do
             let filterText = TE.decodeUtf8Lenient filterBS
             case textureFilterFromText filterText of
                 Just tf → Lua.liftIO $ do
-                    writeIORef (textureFilterRef env) tf
-                    atomicModifyIORef' (videoConfigRef env) $ \c →
+                    writeIORef (rvTextureFilterRef (toRenderViewCapability env)) tf
+                    atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
                         (c { vcTextureFilter = tf }, ())
                     let lteq = luaToEngineQueue env
                     Q.writeQueue lteq (LuaSetTextureFilter tf)
@@ -245,7 +248,7 @@ setTextureFilterFn env = do
 -- | engine.getTooltipDwellMs() -> integer
 getTooltipDwellMsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getTooltipDwellMsFn env = do
-    config ← Lua.liftIO $ readIORef (videoConfigRef env)
+    config ← Lua.liftIO $ readIORef (rvVideoConfigRef (toRenderViewCapability env))
     Lua.pushinteger (fromIntegral $ vcTooltipDwellMs config)
     return 1
 
@@ -259,7 +262,7 @@ setTooltipDwellMsFn env = do
             Just n  → max 0 (min 1000 (fromIntegral n))
             Nothing → 400
     Lua.liftIO $ do
-        atomicModifyIORef' (videoConfigRef env) $ \c →
+        atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
             (c { vcTooltipDwellMs = dwell }, ())
         atomicModifyIORef' (uiManagerRef env) $ \mgr →
             let tts = upmTooltip mgr
@@ -270,7 +273,7 @@ setTooltipDwellMsFn env = do
 -- | engine.getTooltipHintDelayMs() -> integer
 getTooltipHintDelayMsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getTooltipHintDelayMsFn env = do
-    config ← Lua.liftIO $ readIORef (videoConfigRef env)
+    config ← Lua.liftIO $ readIORef (rvVideoConfigRef (toRenderViewCapability env))
     Lua.pushinteger (fromIntegral $ vcTooltipHintDelayMs config)
     return 1
 
@@ -284,7 +287,7 @@ setTooltipHintDelayMsFn env = do
             Just n  → max 0 (min 1000 (fromIntegral n))
             Nothing → 400
     Lua.liftIO $ do
-        atomicModifyIORef' (videoConfigRef env) $ \c →
+        atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
             (c { vcTooltipHintDelayMs = delay }, ())
         atomicModifyIORef' (uiManagerRef env) $ \mgr →
             let tts = upmTooltip mgr

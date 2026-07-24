@@ -8,7 +8,6 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Graphics.Vulkan.Vertex
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFragmentShaderCode
@@ -17,6 +16,7 @@ import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFrag
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Create a pipeline for bindless rendering (world camera)
 createBindlessPipeline ∷ Device

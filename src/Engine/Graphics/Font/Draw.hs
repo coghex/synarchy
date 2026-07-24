@@ -13,7 +13,6 @@ import UPrelude
 import Engine.Graphics.Font.Data
 import Engine.Asset.Types
 import Engine.Core.Monad
-import Engine.Core.State
 import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer, copyBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
@@ -30,6 +29,7 @@ import Foreign.Marshal.Utils (copyBytes)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- * Text Rendering API
 
