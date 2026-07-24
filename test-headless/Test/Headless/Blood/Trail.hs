@@ -10,9 +10,21 @@ module Test.Headless.Blood.Trail (spec) where
 import UPrelude
 import Test.Hspec
 import Data.List (sort, nub)
-import Unit.Types.Trail (TrailState(..), emptyTrailState)
+import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
+import Data.IORef (newIORef, readIORef, writeIORef)
+import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.State (EngineEnv(..))
+import Unit.Direction (Direction(..))
+import Unit.Sim.Types (emptyUnitThreadState)
+import Unit.Thread.Command.Lifecycle (handleUnitDestroyCommand)
+import Unit.Types
+import World.Page.Types (WorldPageId(..))
+import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.Save.Types (toUnitSnapshot, fromUnitSnapshot)
 import Blood.Trail
-import Blood.Types (BloodStyle(..))
+import Blood.Types (BloodStyle(..), BloodStore(..), allDecals)
 import Combat.Wounds.Bleed (isExternallyBleedingKind)
 
 spec ∷ Spec
@@ -22,6 +34,8 @@ spec = do
   conservationSpec
   partitionInvarianceSpec
   textureMappingSpec
+  pageTargetingSpec
+  lifecycleSpec
 
 kindSpec ∷ Spec
 kindSpec = describe "Combat.Wounds.Bleed.isExternallyBleedingKind" $ do
@@ -126,6 +140,31 @@ partitionInvarianceSpec =
         -- cleared, 1.5,3.0, and disagreed across different chunkings).
         checkPartitionInvariance 3.0 2.0 2.0 4
 
+    it "a DISTANCE-limited path (cadence alone would allow more marks than \
+       \distance does) still matches" $
+        -- distGates=2 (2 tiles) but cadenceGates=4 (2 seconds): cadence
+        -- alone would allow 4 marks, distance caps it to 2 — the mirror
+        -- image of the cadence-limited case above.
+        checkPartitionInvariance 2.0 4.0 2.0 4
+
+    it "a follow-up tiny step never pops a mark under ttMinDistance away \
+       \from the last one (round-3 review regression)" $ do
+        -- The exact scenario the round-3 review flagged: after a
+        -- cadence-limited mark lands SHORT of a whole distance multiple
+        -- (3 tiles/1s -> marks at 1.5 and 3.0, i.e. the unit has only
+        -- travelled up to the 3.0 mark itself, nothing "extra" banked),
+        -- a tiny follow-up step must NOT immediately pop another mark —
+        -- the old "d1 - n*minDistance" bookkeeping fictionally banked a
+        -- whole leftover tile the unit never actually walked past the
+        -- last mark, letting a 0.01-tile nudge pop one right on top of it.
+        let tp = defaultTrailThresholds
+            ts0 = emptyTrailState { tsPendingVolume = 2.0 }
+            (afterBig, bigMarks) = consumeTrailMarks tp 3.0 1.0 1.0 ts0
+            (_, followUpMarks) =
+                consumeTrailMarks tp 0.01 0.5 (1.0 + 0.5) afterBig
+        length bigMarks `shouldBe` 2
+        followUpMarks `shouldBe` []
+
 -- | Shared partition-invariance check (issue #882 spec addition, tightened
 --   by round-2 review): the same continuous path (@distGates@/
 --   @cadenceGates@ multiples of the thresholds) and external-loss budget
@@ -201,3 +240,102 @@ textureMappingSpec =
     monotonic f =
         let vals = map f volumes
         in vals `shouldBe` sort vals
+
+-- ----- Round-3 review: deterministic lifecycle/page/load coverage -----
+-- (the probe only exercises death against a real engine; these three
+-- exercise the OTHER acceptance items directly and pin them down
+-- exactly, rather than relying on a live-engine timing window.)
+
+initEnv ∷ IO EngineEnv
+initEnv = do
+    EngineInitResult env ← initializeEngineHeadless
+    pure env
+
+pageA, pageB ∷ WorldPageId
+pageA = WorldPageId "trail_test_a"
+pageB = WorldPageId "trail_test_b"
+
+pageTargetingSpec ∷ Spec
+pageTargetingSpec =
+  describe "Blood.Trail.spawnTrailMark places decals on the unit's OWN page (#882)" $
+    it "targets the given page's own BloodStore, never whichever page happens to be head/active" $ do
+        env ← initEnv
+        wsA ← emptyWorldState
+        wsB ← emptyWorldState
+        -- pageA is wmWorlds' head / wmVisible's only entry — the kind of
+        -- "active" page a page-blind implementation would wrongly use.
+        writeIORef (worldManagerRef env) (WorldManager [(pageA, wsA), (pageB, wsB)] [pageA])
+        now ← readIORef (gameTimeRef env)
+        spawnTrailMark env pageB 5 5 0 "slash" 0.1 0 0 Nothing now
+        storeA ← readIORef (wsBloodStoreRef wsA)
+        storeB ← readIORef (wsBloodStoreRef wsB)
+        allDecals (bstDecals storeA) `shouldBe` []
+        length (allDecals (bstDecals storeB)) `shouldBe` 1
+
+-- Minimal UnitDef/UnitInstance fixtures — mirrors Test.Headless.Combat.
+-- Wounds' pattern; only the fields these two specs touch matter.
+minimalDef ∷ UnitDef
+minimalDef = UnitDef
+    { udName = "t", udNamePool = Nothing, udDisplayName = Nothing
+    , udTexture = TextureHandle 0, udPortrait = Nothing, udDirSprites = Map.empty
+    , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
+    , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
+    , udStatTemplates = HM.empty, udBodyTemplates = HM.empty
+    , udSkillTemplates = HM.empty, udKnowledgeTemplates = HM.empty
+    , udStartingInventory = []
+    , udEquipmentClass = Nothing, udStartingEquipment = HM.empty
+    , udStartingAccessories = []
+    , udBodyParts =
+        [ BodyPart
+            { bpId = "torso", bpName = "torso", bpParent = Nothing
+            , bpVital = False, bpAreaWeight = 1.0, bpTacticalValue = 0.5
+            , bpBleedFactor = 1.0, bpHeightLow = 0, bpHeightHigh = 1
+            , bpLayers = [], bpTargetable = True, bpDepth = 0.0
+            , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
+    , udNaturalResistance = defaultNaturalResistance
+    , udNaturalWeapon = Nothing, udModifiers = [] }
+
+minimalInst ∷ WorldPageId → Maybe TrailState → UnitInstance
+minimalInst page ts = UnitInstance
+    { uiDefName = "t", uiName = "", uiPage = page
+    , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
+    , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0, uiRealZ = 0
+    , uiFacing = DirS, uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
+    , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
+    , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
+    , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
+    , uiAccessories = [], uiFactionId = "player", uiWounds = []
+    , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
+    , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
+    , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
+    , uiClimbDest = Nothing
+    , uiTrailState = ts
+    }
+
+lifecycleSpec ∷ Spec
+lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)" $ do
+
+    it "handleUnitDestroyCommand removes the unit — the trail-state query surface sees nothing" $ do
+        env ← initEnv
+        let uid = UnitId 1
+            liveTs = TrailState { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0 }
+        writeIORef (unitManagerRef env)
+            (emptyUnitManager { umDefs = HM.singleton "t" minimalDef
+                              , umInstances = HM.singleton uid (minimalInst pageA (Just liveTs)) })
+        utsRef ← newIORef emptyUnitThreadState
+        handleUnitDestroyCommand env utsRef uid
+        um' ← readIORef (unitManagerRef env)
+        HM.lookup uid (umInstances um') `shouldBe` Nothing
+
+    it "a save/load round-trip resets the trail accumulator, even if the original session had one" $ do
+        let uid = UnitId 1
+            liveTs = TrailState { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0 }
+            defs = HM.singleton "t" minimalDef
+            um0 = emptyUnitManager
+                { umDefs = defs, umInstances = HM.singleton uid (minimalInst pageA (Just liveTs)) }
+            snap = toUnitSnapshot pageA um0
+            (um1, orphans) = fromUnitSnapshot pageA defs snap
+        orphans `shouldBe` []
+        case HM.lookup uid (umInstances um1) of
+            Nothing    → expectationFailure "unit vanished across the save/load round-trip"
+            Just inst' → uiTrailState inst' `shouldBe` Nothing

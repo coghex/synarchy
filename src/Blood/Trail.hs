@@ -168,10 +168,26 @@ consumeTrailMarks tp stepDist dt now ts0 =
                  | otherwise = 0
              frac k = max (distFrac k) (timeFrac k)
              marks = [ TrailMarkOut (frac k) share | k ← [1 .. n] ]
+             -- Residual distance/time must be measured from where the
+             -- LAST mark actually landed (round-3 review) — not from
+             -- "n whole minDistance multiples", which is only correct
+             -- when distance is the dimension that governed every
+             -- popped mark. When cadence governs instead (frac driven
+             -- by timeFrac, e.g. 3 tiles in 1s: minDistance=1 would
+             -- allow 3 marks but minCadence caps it to 2, landing the
+             -- 2nd at the full 3-tile mark, not the 2-tile one), that
+             -- formula fictionally banks leftover distance the unit
+             -- never actually travelled PAST the real mark position —
+             -- letting the very next tiny step pop another mark well
+             -- under 'ttMinDistance' away. @frac n@ (monotonic in k) is
+             -- the last mark's true fraction through THIS call's own
+             -- [start,end] window; only the portion of the step AFTER
+             -- that fraction is unconsumed distance/time.
+             lastFrac = frac n
              ts' = ts0
                  { tsPendingVolume = 0
-                 , tsDistSinceMark = d1 - fromIntegral n * ttMinDistance tp
-                 , tsLastMarkAt    = now
+                 , tsDistSinceMark = (1 - lastFrac) * stepDist
+                 , tsLastMarkAt    = now - realToFrac (1 - lastFrac) * dt
                  }
          in (ts', marks)
 

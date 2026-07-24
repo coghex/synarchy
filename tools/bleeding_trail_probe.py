@@ -91,8 +91,19 @@ def spawn_fresh(x: float = 10, y: float = 10) -> int:
     state/decals can't leak into the next (isolation, per issue #882's
     acceptance note). `clear_water=False`: unit_ai's update tick (which
     would normally assign/clear that goal) is neutralised in bootstrap,
-    so no per-unit AI state is ever created to clear."""
-    return spawn_acolyte(PORT, x, y, clear_water=False)
+    so no per-unit AI state is ever created to clear.
+
+    Pins constitution/body_mass so bleed rate and blood capacity are
+    deterministic: acolyte spawns roll RANDOM stats, and an unpinned low
+    constitution + low body_mass roll can bleed a unit out from a
+    moderate wound (sev 0.6) in as little as ~3 real seconds — well
+    before the route completes — making mark counts flaky across runs
+    for reasons unrelated to the trail emitter itself.
+    """
+    uid = spawn_acolyte(PORT, x, y, clear_water=False)
+    send(PORT, f"unit.setStat({uid}, 'constitution', 2.0); return 'ok'")
+    send(PORT, f"unit.setStat({uid}, 'body_mass', 70.0); return 'ok'")
+    return uid
 
 
 def destroy(uid: int) -> None:
@@ -166,9 +177,14 @@ def main() -> int:
         upper_bound = int(route / MIN_DISTANCE) + 2
 
         # --- 1/2(a). a bled, moving unit leaves marks spread along the route ---
+        # A LOW severity: even with constitution/body_mass pinned above,
+        # a moderate-or-higher slash on this unit's torso empirically
+        # exsanguinates in well under 15s (its bpBleedFactor is steep) —
+        # this case needs the unit ALIVE for the whole route, not testing
+        # death (that's case 4/e, on its own explicit unit.kill()).
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "slash", 0.6)   # untreated (bandage defaults to 1.0)
+        injure(uid, "slash", 0.2)   # untreated (bandage defaults to 1.0)
         impact_ids = impact_decal_ids()   # slash always creates one impact decal
         move_to(uid, 10 + route, 10)
         # Poll for at least 2 marks rather than assume a fixed sleep
@@ -203,7 +219,7 @@ def main() -> int:
         # --- 2(b). same bounds hold at a different world.setTimeScale ---
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "slash", 0.6)
+        injure(uid, "slash", 0.2)
         impact_ids = impact_decal_ids()
         send(PORT, "world.setTimeScale(5.0); return 'ok'")
         move_to(uid, 10 + route, 10)
@@ -249,7 +265,7 @@ def main() -> int:
         # EXPLICIT unit.kill() — the path actually under test here).
         reset_blood()
         uid = spawn_fresh(10, 10)
-        injure(uid, "slash", 0.6)   # slash always creates one impact decal
+        injure(uid, "slash", 0.2)   # slash always creates one impact decal
         impact_ids = impact_decal_ids()
         move_to(uid, 10 + route, 10)
         if poll_until(8.0, lambda: len(trail_decals(impact_ids)) > 0, interval=0.5) is None:
