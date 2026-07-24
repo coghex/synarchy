@@ -461,6 +461,35 @@ the off-world no-selection right-click deadclick route (a miss here —
 the corner happened to show world geometry — is informational, not a
 failure, since this script doesn't control camera framing).
 
+### `video_window_check.py`
+
+The #891 gate for the video/window settings path — the modules the
+`render-gpu-asset` capability migration narrowed that no automated tier
+reaches: `Engine.Graphics.Window.GLFW`, `Engine.Graphics.Vulkan.Swapchain`,
+`Engine.Graphics.Vulkan.Recreate` and `Engine.Scripting.Lua.Message.Video`.
+`--headless` has no GLFW and no swapchain; `--offscreen` has a GPU but
+still no window and no swapchain (see `offscreen_probe.py`'s own
+header), so neither tier executes these paths. Like the other checks
+here it **attaches to an already-running graphical instance** and is
+human-run only — never part of CI or `run_probes.py`.
+
+```bash
+python3 tools/video_window_check.py             # attach to port 8008
+python3 tools/video_window_check.py --port 9008
+```
+
+Asserts `engine.getVideoConfig()`/`getWindowSize()`/`getFramebufferSize()`
+read live values; that `engine.setResolution` round-trips through
+`Message.Video`'s GLFW write path into both size refs; that toggling
+VSync and MSAA rebuilds the swapchain with the instance still
+responsive and reporting a sane framebuffer afterwards; and that
+brightness / pixel-snap / texture-filter each apply cleanly. Every
+setting it touches is captured from the LIVE config first and restored
+at the end (never to a hardcoded default — a user's persisted
+`config/video.local.yaml` holds the real values). Whether the picture
+still looks right after a swapchain rebuild is the human eyeball this
+check exists to prompt.
+
 ## Directory layout
 ```
 tools/
@@ -476,6 +505,7 @@ tools/
 ├── language_report.py      (generated-language native-name report/check, #710)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
+├── video_window_check.py   (GUI-attached video/window settings check, #891 — see above)
 ├── playtest/               (naive-player UX playtest harness — see above)
 ├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── action_outcome_layer_a_check.py (GUI-attached F4 Layer A check — see above)
