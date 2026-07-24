@@ -37,12 +37,20 @@ It asserts, against the live instance:
   4. the same for an MSAA change,
   5. brightness / pixel-snap / texture-filter each apply without
      erroring and leave the instance responsive (`Message.Video`'s
-     remaining handlers, plus `Vulkan.Texture.Bindless`'s live sampler
-     swap),
-  6. every setting it touched is restored to the value it found — the
+     remaining scalar handlers, plus `Vulkan.Texture.Bindless`'s live
+     sampler swap),
+  6. a real window-mode TRANSITION runs through
+     `handleSetWindowMode` — away from the current mode and back —
+     leaving the instance responsive with a sane framebuffer. Starting
+     from `windowed` it also asserts the geometry cached into
+     `rcWindowStateRef` on the way out is what the `Windowed` branch
+     restores on the way back, so the migrated field is proven, not just
+     the verb. `fullscreen` is never chosen as the target (it switches
+     the monitor video mode); `borderless` covers the same shape,
+  7. every setting it touched is restored to the value it found — the
      CONFIG resolution and the PHYSICAL window size independently.
 
-That last point is not incidental. `engine.setResolution` writes
+Point 7 is not incidental. `engine.setResolution` writes
 `vcWidth`/`vcHeight` AND enqueues the GLFW resize, while dragging a
 window edge moves only the window — so the two can legitimately
 disagree on entry. This script captures both, drives its resize test
@@ -220,24 +228,93 @@ def main() -> int:
 
     alive_and_rendering("after all video settings restored")
 
-    # --- 6. leave the instance as we found it ---------------------------
-    # Note this script never CHANGES the window mode — re-applying it
-    # here would be a no-op at best and, in the Windowed branch, would
-    # re-drive `handleSetWindowMode`'s cached-geometry restore for no
-    # reason. The mode is asserted below instead, as a did-we-disturb-it
-    # check, and `setVideoConfig` pins `vcWindowMode` along with the
-    # rest.
+    # --- 6. a real window-mode transition through handleSetWindowMode ----
+    # The remaining migrated `Message.Video` handler, and the only one
+    # that touches `rcWindowStateRef`. Re-applying the CURRENT mode would
+    # not exercise it meaningfully, so this drives an actual transition
+    # away and back.
     #
+    # `fullscreen` is never chosen as the target: it switches the
+    # monitor's video mode, which is the most disruptive thing this
+    # script could do to a human's desktop. `borderless` reaches the same
+    # monitor-sized code shape without that. If the instance STARTS in
+    # fullscreen or borderless, the round trip goes via `windowed` and
+    # the original mode's own branch runs on the way back.
+    known_modes = ("windowed", "borderless", "fullscreen")
+    mode_state = ("local w,h,mode = engine.getVideoConfig(); "
+                  "local ww,wh = engine.getWindowSize(); "
+                  "return {mode=mode, winW=ww, winH=wh}")
+
+    if orig_mode not in known_modes:
+        # Never send an unrecognized string back as a "restore" — that
+        # would be guessing at the user's window mode.
+        check("window mode is one this script can round-trip safely", False,
+              f"getVideoConfig reported mode={orig_mode!r}, expected one of "
+              f"{known_modes}")
+        print("    (skipping the window-mode transition; every other check "
+              "still runs)")
+    else:
+        other_mode = "borderless" if orig_mode == "windowed" else "windowed"
+
+        lua(f'engine.setWindowMode("{other_mode}"); return true')
+        alive_and_rendering(f"window mode -> {other_mode}")
+        mode_now = lua(mode_state)
+        check(f"window mode reports {other_mode}",
+              isinstance(mode_now, dict) and mode_now.get("mode") == other_mode,
+              str(mode_now))
+        check(f"{other_mode}: window size ref stayed positive",
+              isinstance(mode_now, dict) and int(mode_now.get("winW") or 0) > 0
+              and int(mode_now.get("winH") or 0) > 0, str(mode_now))
+
+        lua(f'engine.setWindowMode("{orig_mode}"); return true')
+        alive_and_rendering(f"window mode -> {orig_mode} restored")
+        mode_back = lua(mode_state)
+        check(f"window mode returns to {orig_mode}",
+              isinstance(mode_back, dict)
+              and mode_back.get("mode") == orig_mode, str(mode_back))
+        if orig_mode == "windowed":
+            # The strong assertion, and the reason starting from
+            # `windowed` is worth singling out: leaving `windowed` is
+            # what caches pos/size into `rcWindowStateRef`, and the
+            # `Windowed` branch restores from exactly that cache.
+            # Landing back on the pre-transition size proves that
+            # cache/restore round trip through the migrated field, not
+            # merely that the verb did not crash.
+            check("Windowed branch restored the cached geometry "
+                  "(rcWindowStateRef round trip)",
+                  isinstance(mode_back, dict)
+                  and (int(mode_back.get("winW") or -1),
+                       int(mode_back.get("winH") or -1)) == (orig_w, orig_h),
+                  f"{mode_back.get('winW')}x{mode_back.get('winH')} "
+                  f"(was {orig_w}x{orig_h})")
+
+    # --- 7. leave the instance as we found it ---------------------------
+    # Re-pin the physical window size: the mode round trip above moved it,
+    # and in the non-`windowed` starting cases there is no cached geometry
+    # guaranteeing it came back to exactly where it began.
+    lua(f"engine.setResolution({orig_w}, {orig_h}); return true")
+    settle()
+
     # `engine.setVideoConfig` is the CONFIG-ONLY write (`API.Config`'s
     # `setVideoConfigFn` updates `videoConfigRef` and enqueues nothing),
     # so this restores every one of the ten fields — `vcWidth`/`vcHeight`
-    # included, which `setResolution` clobbered above — without moving
-    # the window off the physical size restored in step 2.
-    lua(f'engine.setVideoConfig({cfg_w}, {cfg_h}, "{orig_mode}", '
-        f'{orig_scale}, {str(orig_vsync).lower()}, {orig_flimit}, '
-        f'{orig_msaa}, {orig_bright}, {str(orig_snap).lower()}, '
-        f'"{orig_filter}"); return true')
-    settle(0.6)
+    # included, which `setResolution` clobbered just above — without
+    # moving the window off the size it was restored to.
+    #
+    # Skipped entirely on an unrecognized mode: `setVideoConfigFn` maps
+    # an unparseable window-mode string to `Windowed`, so passing one
+    # through here would SET the user's mode rather than restore it. That
+    # case is already a recorded failure above; leaving vcWidth/vcHeight
+    # alone is the lesser harm.
+    if orig_mode in known_modes:
+        lua(f'engine.setVideoConfig({cfg_w}, {cfg_h}, "{orig_mode}", '
+            f'{orig_scale}, {str(orig_vsync).lower()}, {orig_flimit}, '
+            f'{orig_msaa}, {orig_bright}, {str(orig_snap).lower()}, '
+            f'"{orig_filter}"); return true')
+        settle(0.6)
+    else:
+        print("    (skipping the config-only restore: refusing to write an "
+              f"unrecognized window mode {orig_mode!r})")
 
     final = lua("local w,h,mode,scale,vs,fl,msaa,bright,snap,filt = "
                 "engine.getVideoConfig(); "
@@ -245,7 +322,7 @@ def main() -> int:
                 "return {width=w, height=h, mode=mode, vsync=vs, "
                 "frameLimit=fl, msaa=msaa, brightness=bright, "
                 "pixelSnap=snap, textureFilter=filt, winW=ww, winH=wh}")
-    check("window mode undisturbed",
+    check("window mode restored",
           isinstance(final, dict) and final.get("mode") == orig_mode,
           f"{final.get('mode') if isinstance(final, dict) else final} "
           f"(was {orig_mode})")
