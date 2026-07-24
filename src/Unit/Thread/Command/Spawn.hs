@@ -168,6 +168,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId = do
                     , uiFrozen      = False
                     , uiForceLoop   = False
                     , uiClimbDest   = Nothing
+                    , uiTrailState  = Nothing
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())

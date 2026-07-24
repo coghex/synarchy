@@ -507,7 +507,7 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
         "World.Log", "World.Thread.Helpers",
     }),
     "world-sim-render-handoff": frozenset({
-        "Blood.Impact", "Engine.Scripting.Lua.API.Blood", "Engine.Scripting.Lua.API.Chop",
+        "Blood.Impact", "Blood.Trail", "Engine.Scripting.Lua.API.Blood", "Engine.Scripting.Lua.API.Chop",
         "Engine.Scripting.Lua.API.Construct", "Engine.Scripting.Lua.API.Core",
         "Engine.Scripting.Lua.API.Flora", "Engine.Scripting.Lua.API.Forage.Crop",
         "Engine.Scripting.Lua.API.Forage.Lookup", "Engine.Scripting.Lua.API.Forage.Query",

@@ -90,6 +90,7 @@ testUnit page gx gy gz facing = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
+    , uiTrailState = Nothing
     }
 
 pageA, pageB, pageGone ∷ WorldPageId

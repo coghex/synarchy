@@ -46,7 +46,7 @@ mkInst stats skills = UnitInstance
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 100
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing }
+    , uiClimbDest = Nothing, uiTrailState = Nothing }
 
 -- A minimal single-part target body for computeSeverity — mirrors
 -- Test.Headless.Combat.Wounds's `def` fixture. bpLayers = [] is

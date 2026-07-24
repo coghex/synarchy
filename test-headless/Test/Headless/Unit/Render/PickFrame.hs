@@ -95,6 +95,7 @@ mkInst animName start = UnitInstance
     , uiFrozen          = False
     , uiForceLoop       = False
     , uiClimbDest       = Nothing
+    , uiTrailState      = Nothing
     }
 
 -- | An animation with frame handles 100,101,102,103 on DirS, fps 4, loop.

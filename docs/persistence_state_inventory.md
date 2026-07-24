@@ -364,6 +364,7 @@ already covered):
 | `uiFrozen` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `False` post-load | none yet |
 | `uiForceLoop` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `False` post-load | none yet |
 | `uiClimbDest` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `Nothing` post-load | `tools/movement_probe.py` (behavior, not persistence) |
+| `uiTrailState` | `src/World/Save/Types.hs:910` | per-unit | Reset to default | — | always `Nothing` post-load (bleeding-trail emitter accumulator, #882) | `tools/bleeding_trail_probe.py` (behavior, not persistence) |
 
 Other gameplay managers (item defs, ground items, and every per-page
 designation/job manager) are already classified in §3/§4 by their

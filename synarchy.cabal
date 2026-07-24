@@ -397,6 +397,7 @@ library
                      Unit.Types.Def
                      Unit.Types.Instance
                      Unit.Types.Manager
+                     Unit.Types.Trail
                      Unit.Anim
                      Unit.Stats
                      Unit.Render
@@ -487,6 +488,7 @@ library
                      Blood.Texture
                      Blood.Render
                      Blood.Impact
+                     Blood.Trail
                      Engine.Scripting.Lua.API.Blood
                      Location.Types
                      Location.Bounds
@@ -1037,6 +1039,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact
                    Test.Headless.Blood.Teardown
+                   Test.Headless.Blood.Trail
                    Test.Headless.UI.CreateWorldControls
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership

@@ -197,6 +197,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | Probe | Gates | Boot | Purpose |
 |-------|-------|------|---------|
 | `action_outcome_probe.py` | #646 | worldgen | F4 action-outcome oracle through the real Lua contract: `debug.recordOutcome` requires kind+outcome, a full record round-trips through `debug.drainActionOutcomes` with every field intact, the ring drains destructively (second drain empty), a mixed tillable/non-tillable sweep reports `partial` with `requested == applied + dropped`, and an unloaded-anchor sweep reports `rejected`. |
+| `bleeding_trail_probe.py` | #882 | arena | Ongoing bleeding trails (`Blood.Trail`): a moving, externally-bled unit leaves distance/cadence-gated marks along its route within documented bounds, invariant to `world.setTimeScale`; clot progression and an internal-only wound stop/suppress marks; death mid-route stops the trail cleanly (`blood.getTrailState`). |
 | `blood_decal_probe.py` | #604, #606 | arena | Blood decal model + procedural texture generation: descriptor reuse/eviction, `blood.getRenderQuads()` render records, wetness-tint aging. |
 | `blood_impact_probe.py` | #607 | arena | Wound-kind/severity -> impact-blood mapping (`Blood.Impact`) driven through the debug `unit.injure` path. |
 | `cargo_capacity_probe.py` | #189 | arena | `depositToCargo` weighs the actual `ItemInstance` (fill + nested contents), not the item def's base weight. |

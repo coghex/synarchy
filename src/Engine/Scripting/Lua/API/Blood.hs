@@ -19,6 +19,7 @@ module Engine.Scripting.Lua.API.Blood
     , bloodGetRenderQuadsFn
     , bloodGpuStatsFn
     , bloodClearFn
+    , bloodGetTrailStateFn
     ) where
 
 import UPrelude
@@ -32,7 +33,7 @@ import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import World.Page.Types (WorldPageId(..))
 import World.Types (WorldManager(..), WorldState(..))
-import Unit.Types (UnitId(..))
+import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..), TrailState(..))
 import Blood.Types
 import Blood.Texture (generateBloodTexture, bloodTextureHash, btiWidth, btiHeight)
 import Blood.Render (BloodRenderRecord(..), bloodRenderRecords)
@@ -332,6 +333,35 @@ bloodClearFn env = do
                 return True
     Lua.pushboolean ok
     return 1
+
+-- | blood.getTrailState(uid) → { pendingVolume, distSinceMark,
+--     lastMarkAt } | nil. Headless introspection (issue #882 requirement
+--   7) for the bleeding-trail emitter's per-unit accumulator
+--   ('Unit.Types.Trail.TrailState', written by
+--   'Combat.Wounds.Tick' and consumed by 'Unit.Thread.Movement' /
+--   "Blood.Trail"). nil for a missing unit OR a unit with no active
+--   trail (never bled externally, or cleared on death/despawn/zero
+--   external bleed — see 'Unit.Types.Instance.uiTrailState').
+--   @lastMarkAt@ is the absolute game-time seconds of the last placed
+--   mark (or of the accumulator's creation, before any mark has fired).
+bloodGetTrailStateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+bloodGetTrailStateFn env = do
+    idArg ← Lua.tointeger 1
+    mTs ← case idArg of
+        Nothing → return Nothing
+        Just n  → Lua.liftIO $ do
+            um ← readIORef (unitManagerRef env)
+            pure $ HM.lookup (UnitId (fromIntegral n)) (umInstances um)
+                     ⌦ uiTrailState
+    case mTs of
+        Just ts → do
+            Lua.newtable
+            let putN k v = Lua.pushnumber (Lua.Number (realToFrac v)) >> Lua.setfield (-2) k
+            putN "pendingVolume" (tsPendingVolume ts)
+            putN "distSinceMark" (tsDistSinceMark ts)
+            putN "lastMarkAt"    (tsLastMarkAt ts)
+            return 1
+        Nothing → Lua.pushnil >> return 1
 
 -- | Push one texture descriptor: { id, order, style, woundKind,
 --   severity, footprint, anisotropy, edge, seed, width, height,

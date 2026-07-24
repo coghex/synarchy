@@ -905,6 +905,9 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiFrozen      = False
     , uiForceLoop   = False
     , uiClimbDest   = Nothing   -- runtime-only; not persisted
+    -- Runtime-only bleeding-trail emitter state (#882) — always a clean
+    -- slate on load, same as the combat-memory fields above.
+    , uiTrailState  = Nothing
     }
 
 -- Missing-definition validation (#760 requirement 9) -----------------

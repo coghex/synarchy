@@ -73,6 +73,7 @@ testUnit page faction gx gy = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
+    , uiTrailState = Nothing
     }
 
 -- | A fresh page carrying loc1's overlay, registered as the sole

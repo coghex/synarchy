@@ -40,9 +40,14 @@ import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
-                  , Wound(..))
+                  , Wound(..), TrailState(..))
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle, pickImpactWound)
+import Blood.Trail
+    ( defaultTrailThresholds, consumeTrailMarks, TrailMarkOut(..)
+    , spawnTrailMark
+    )
+import Combat.Wounds (externalBleedRateFor, dominantExternalBleedWound)
 import Unit.Thread.Movement.Types
     (UnitMoveStats(..), defaultMoveStats, baselineUnitHeight)
 import Unit.Thread.Movement.Leap
@@ -199,6 +204,80 @@ tickAllMovement dt env utsRef = do
                             angle = impactFallbackAngle seed
                         in spawnImpactBlood env (uiPage inst) gx gy gz
                              kind sev angle seed (Just uid) now
+
+    -- Bleeding trails (#882): the MOVING half of ongoing external
+    -- bleeding. Only units carrying an active trail accumulator
+    -- (uiTrailState — populated by Combat.Wounds.Tick's conserved
+    -- external-loss accounting; Nothing for a unit that has never bled
+    -- externally) do any work here. `um`'s uiGridX/Y still mirrors this
+    -- unit's position as of the END of the PREVIOUS tick — Unit.Thread's
+    -- publishToRender (which writes it) hasn't run yet for THIS tick —
+    -- so pairing it with this tick's fresh simStates''' position gives
+    -- exactly this tick's step distance, the same "old vs new" pairing
+    -- the fall-injury/impact-blood code above uses.
+    -- `ts` itself is NOT read here — only used as a stale existence
+    -- filter (does this unit have SOME trail state worth checking).
+    -- The atomic block below re-reads uiTrailState from the FRESH
+    -- instance it receives, so a concurrent wound-tick write (the
+    -- combat thread merges into the very same unitManagerRef
+    -- independently) is never lost to this stale snapshot — worst
+    -- case a brand-new bleed that started after this snapshot is
+    -- simply picked up next tick instead of this one.
+    let trailSteps =
+            [ (uid, ox, oy, nx, ny, nz, def)
+            | (uid, ss) ← HM.toList simStates'''
+            , Just inst ← [HM.lookup uid (umInstances um)]
+            , Just _    ← [uiTrailState inst]
+            , Just def  ← [HM.lookup (uiDefName inst) (umDefs um)]
+            , let ox = uiGridX inst; oy = uiGridY inst
+                  nx = usRealX ss;   ny = usRealY ss
+                  nz = usGridZ ss
+            ]
+    trailMarks ← if null trailSteps then pure [] else
+        atomicModifyIORef' (unitManagerRef env) $ \um' →
+            let processOne (accMap, accMarks) (uid, ox, oy, nx, ny, nz, def) =
+                    case HM.lookup uid accMap of
+                        Nothing → (accMap, accMarks)
+                        Just liveInst → case uiTrailState liveInst of
+                            -- Cleared concurrently (e.g. the wound tick
+                            -- just marked this unit DiedNow) — nothing
+                            -- to consume.
+                            Nothing → (accMap, accMarks)
+                            Just ts →
+                                let stepDist = sqrt ((nx - ox) * (nx - ox)
+                                                    + (ny - oy) * (ny - oy))
+                                    (ts', popped) =
+                                        consumeTrailMarks defaultTrailThresholds
+                                            stepDist now ts
+                                    extRate = externalBleedRateFor def liveInst
+                                    finalTs
+                                        -- Death is terminal (#882
+                                        -- requirement 5): stop tracking
+                                        -- immediately, no further marks
+                                        -- even from banked distance/volume.
+                                        | uiPose liveInst ≡ "dead"              = Nothing
+                                        | tsPendingVolume ts' > 0 ∨ extRate > 0 = Just ts'
+                                        | otherwise                             = Nothing
+                                    repKind = maybe T.empty woundKind
+                                        (dominantExternalBleedWound def liveInst)
+                                    mkMark i m =
+                                        ( uiPage liveInst
+                                        , ox + tmoFraction m * (nx - ox)
+                                        , oy + tmoFraction m * (ny - oy)
+                                        , nz
+                                        , repKind
+                                        , tmoVolume m
+                                        , round (now * 1000.0)
+                                            + fromIntegral (unUnitId uid) + i
+                                        , Just uid
+                                        )
+                                    marks = zipWith mkMark [0 ∷ Int ..] popped
+                                in ( HM.insert uid (liveInst { uiTrailState = finalTs }) accMap
+                                   , accMarks ++ marks )
+                (finalMap, allMarks) = foldl' processOne (umInstances um', []) trailSteps
+            in (um' { umInstances = finalMap }, allMarks)
+    forM_ trailMarks $ \(page, gx, gy, gz, kind, vol, seed, mSrc) →
+        spawnTrailMark env page gx gy gz kind vol (impactFallbackAngle seed) seed mSrc now
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)
