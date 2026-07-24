@@ -21,6 +21,14 @@ the live code and the agent memory notes instead.
   independently. The "pure pipeline refactor" it scoped was deemed
   largely unnecessary.
 
+- **`claude_md_2026-07-23_pretrim.md`** — verbatim snapshot of CLAUDE.md
+  before its 2026-07-23 trim (3,927 → ~690 lines). The trim removed
+  accumulated per-PR review-round narratives (mainly the #742-#750 UI
+  responsive epic and the #756-#768 persistence overhaul) while keeping
+  every durable contract in the live CLAUDE.md. Consult this snapshot,
+  git history, or the referenced issues/PRs for the full rationale
+  behind a contract the live file now states tersely.
+
 - **`worldgen_timeline_profile_2026-07.md`** — GHC cost-centre profile of the
   worldgen setup/timeline phase (2026-07-03, issue #448). Not superseded —
   the dominant cost centre (`applyTimelineChunk`'s per-chunk replay loop)
