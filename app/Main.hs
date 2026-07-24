@@ -8,7 +8,9 @@ import System.IO (hPutStrLn, stderr)
 import qualified Data.Text as T
 import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
-import Engine.Core.Types (BootProfile(..))
+import Engine.Core.Types (BootProfile(..), PreviewBrowse(..))
+import Engine.Preview.Discovery (discoverEntries, resolveFocusedEntry
+                                , focusErrorMessage, textureCategoryRoot)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
@@ -88,15 +90,42 @@ main = do
         Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
           UnknownPreviewCategory → do
               hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
-                  ⧺ " (expected one of: icons, equipment, hud, items, ui, "
-                  ⧺ "world, units, flora, buildings)"
+                  ⧺ " (expected one of: icons, items, ui, world, units, "
+                  ⧺ "flora, buildings, structures)"
               exitWith (ExitFailure 1)
           GroupedPreviewCategory | isNothing mItem → do
               putStrLn $ "select a specific " ⧺ cat
                   ⧺ ", e.g. --preview units/acolyte"
               exitSuccess
-          _ → runPreview (T.pack cat, T.pack ⊚ mItem)
-                          (Just (fromMaybe 8008 port))
+          -- Grouped category/item: classification is canonical as of
+          -- this issue, but the actual browsing implementation is
+          -- #887 (units) / #888 (the rest) — keep Phase 1's (#632)
+          -- placeholder-label boot, no 'PreviewBrowse'.
+          GroupedPreviewCategory → runPreview (T.pack cat, T.pack ⊚ mItem)
+                                    Nothing (Just (fromMaybe 8008 port))
+          SimplePreviewCategory → case mItem of
+            -- Bare simple category: recursively discover every texture
+            -- under its root (#886 Requirement 3) — always succeeds
+            -- (an empty/missing root just yields no entries, not a
+            -- pre-boot error; every canonical simple category is a
+            -- real, populated directory in this repo).
+            Nothing → do
+                entries ← discoverEntries (textureCategoryRoot cat)
+                runPreview (T.pack cat, Nothing) (Just (PreviewList entries))
+                           (Just (fromMaybe 8008 port))
+            -- Focused item: resolve + validate BEFORE ever creating a
+            -- window (#886 Requirement 4) — absolute paths, ".."
+            -- traversal, symlink escapes, directories, unsupported
+            -- extensions, and plain nonexistence all reject here.
+            Just item → resolveFocusedEntry (textureCategoryRoot cat) item ⌦ \case
+                Left err → do
+                    hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ item
+                        ⧺ ": " ⧺ T.unpack (focusErrorMessage err)
+                    exitWith (ExitFailure 1)
+                Right entry →
+                    runPreview (T.pack cat, Just (T.pack item))
+                               (Just (PreviewItem entry))
+                               (Just (fromMaybe 8008 port))
         Nothing
           -- Offscreen (#650) wins over --headless if both are given:
           -- it is the strictly more capable mode (GPU on, window off).

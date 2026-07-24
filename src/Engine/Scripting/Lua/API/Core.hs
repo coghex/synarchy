@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.Core
   , isPausedFn
   , getBootProfileFn
   , getPreviewTargetFn
+  , getPreviewBrowseFn
   , realTimeFn
   , gameTimeFn
   ) where
@@ -20,7 +21,8 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Types (EngineConfig(..), bootProfileTag)
+import Engine.Core.Types
+    (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
 import qualified HsLua as Lua
@@ -121,6 +123,42 @@ getPreviewTargetFn env = do
           Lua.setfield (-2) "item"
         Nothing → pure ()
   return 1
+
+-- | engine.getPreviewBrowse() → nil | {mode="list", entries={{label=,path=},...}}
+--   | {mode="item", entry={label=,path=}}
+--   The simple-category browsing state @app/Main.hs@ resolved before
+--   boot (#886): 'PreviewList' for a bare @--preview \<simple
+--   category\>@, 'PreviewItem' for a validated
+--   @--preview \<simple category\>/\<item\>@. 'nil' for a grouped
+--   category (or outside 'BootPreview') — @scripts/preview_manager.lua@
+--   falls back to the Phase 1 (#632) placeholder-label boot in that case.
+getPreviewBrowseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getPreviewBrowseFn env = do
+  case ecPreviewBrowse (engineConfig env) of
+    Nothing → Lua.pushnil
+    Just (PreviewList entries) → do
+      Lua.newtable
+      Lua.pushstring "list"
+      Lua.setfield (-2) "mode"
+      Lua.newtable
+      forM_ (zip [1 ∷ Int ..] entries) $ \(i, entry) → do
+        pushPreviewEntry entry
+        Lua.rawseti (-2) (fromIntegral i)
+      Lua.setfield (-2) "entries"
+    Just (PreviewItem entry) → do
+      Lua.newtable
+      Lua.pushstring "item"
+      Lua.setfield (-2) "mode"
+      pushPreviewEntry entry
+      Lua.setfield (-2) "entry"
+  return 1
+  where
+    pushPreviewEntry entry = do
+      Lua.newtable
+      Lua.pushstring (TE.encodeUtf8 (peLabel entry))
+      Lua.setfield (-2) "label"
+      Lua.pushstring (TE.encodeUtf8 (pePath entry))
+      Lua.setfield (-2) "path"
 
 -- | engine.realTime() → number
 --   POSIX wall-clock seconds (sub-second precision). Doesn't freeze

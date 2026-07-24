@@ -383,7 +383,7 @@ testing, scripted worldgen, and agent workflows.
 
 ### Tips for agents (read first)
 
-- **NEVER launch `cabal run synarchy` / `cabal run exe:synarchy` without `--dump`, `--headless`, or `--offscreen`** — otherwise it opens a graphical window that steals the user's focus (`--offscreen` uses the GPU but creates no window, so it is safe)
+- **NEVER launch `cabal run synarchy` / `cabal run exe:synarchy` without `--dump`, `--headless`, or `--offscreen`** — otherwise it opens a graphical window that steals the user's focus (`--offscreen` uses the GPU but creates no window, so it is safe). **`--preview` (below) is NOT in this safe list** — it always opens a real window (no offscreen variant exists), so never launch it yourself even transiently; a bad target rejects before boot, but a valid one steals focus like the graphical path
 - **Prefer `--dump` for testing** — self-contained, no TCP, JSON to stdout, implies headless
 - If you must use `--headless`, use `--port 9008` (or another non-8008 port) — 8008 may be the user's graphical instance
 - **NEVER use `pkill -f synarchy`** — it kills the user's GUI. Shut down your own instance with `echo 'engine.quit()' | nc -w 2 localhost 9008`, or track your PID (`HPID=$!`) and `kill $HPID`. If a port is busy with a stale instance: `lsof -ti:9008 | xargs kill`
@@ -421,6 +421,77 @@ Frames pace on a fixed ~60 fps sleep; window-requiring video settings
 no-op with a warning. Gate: `tools/offscreen_probe.py` (manual-only,
 `needs-gpu`) — locate click targets via the `ui.dumpWidgets` oracle,
 never hardcoded coordinates.
+
+### Preview mode: asset browser (#632 Phase 1, #886 Phase 2, epic #427)
+
+`--preview <category>[/<item>]` is a fourth, structurally distinct boot
+mode (`App.Preview`, `BootPreview`): a real GLFW window + Vulkan, but no
+world/unit/sim/combat thread, booting straight to
+`scripts/preview_manager.lua` instead of the normal ~25-script menu/HUD
+set — for eyeballing a texture without booting a game session. **It
+always opens a real window** (see the warning above) — there is no
+offscreen/headless variant, so treat it exactly like the graphical path.
+
+Canonical category contract (`App.Cli.classifyPreviewCategory`) — the
+unknown-category error message lists exactly this set, no compatibility
+aliases:
+
+- **Simple** (a flat, recursively-browsable asset folder — bare
+  `--preview icons` lists every texture under `assets/textures/icons/`):
+  `icons`, `items`, `ui`, `world`.
+- **Grouped** (one named entry per item — a bare grouped category prints
+  "select a specific ..." and exits without booting; you must give
+  `--preview <category>/<item>`): `units`, `flora`, `buildings`,
+  `structures`.
+- `equipment`, `hud`, `facemap`, `utility`, `vegetation` are NOT exposed
+  (no top-level `assets/textures/` directory of that name, or — for
+  `hud`, which lives under `ui/hud` — folded into `ui`'s recursive
+  simple-category listing instead).
+
+Simple-category behavior (`Engine.Preview.Discovery`, pre-boot; the
+in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
+
+- **Bare category** (`--preview icons`): a scrollable left-hand list of
+  every texture found recursively under the category root, labeled by
+  its category-relative path with `/` separators and the file extension
+  INCLUDED (e.g. `skill/climbing.png`) — sorted lexicographically. The
+  first entry auto-selects; its texture renders in the main panel,
+  nearest-neighbour scaled, fit to the panel with aspect ratio preserved.
+  Click a row to select it; wheel-scroll the list.
+  A label displayed here is ALWAYS a valid item target for the form below
+  — discovery and item resolution apply the identical extension rule, so
+  they can never disagree.
+- **Focused item** (`--preview icons/skill/climbing.png`): shows only
+  that one texture, no list. A nonexistent item, a directory, an absolute
+  path, or a path containing `..` (including a symlink escape) all reject
+  **before ever creating a window** — same pre-boot exit code convention
+  as the unknown-category/missing-target errors below.
+- A grouped category's item form (`--preview units/acolyte`) still only
+  gets the Phase 1 placeholder-label boot (its own real browsing is
+  #887/#888) — this canonical contract only makes grouped *classification*
+  final, not its browsing implementation.
+- Trimmed loading: preview mode loads only its font, the list widget's
+  own chrome textures (`assets/textures/ui/{highlight,scroll*}.png`,
+  loaded once, list-mode only), and textures within the requested
+  category — never `data/*.yaml` gameplay catalogs, unrelated world/HUD
+  texture sets, or the normal script set.
+- Debug-console introspection: `require("scripts.preview_manager").dump()`
+  (self-registered into `package.loaded` the same way `unit_ai.lua`/
+  `debug.lua` are, despite being `engine.loadScript`-loaded, not
+  `require`d) reports `mode` (`"list"`/`"item"`/`"placeholder"`), `state`
+  (`"loading"`/`"ready"`/`"empty"`), the current `selected` entry, and in
+  list mode `entryCount`, `scrollOffset`, and per-visible-row interactive
+  bounds/handles (`rows`, `scripts/ui/list.lua`'s existing F3 dump
+  contract) — enough to drive real `input.click`/`input.scroll` against a
+  located row without ever hardcoding a screen coordinate.
+
+Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
+check above the "always opens a real window" line) and
+`tools/preview_probe.py` (manual-only, `needs-gpu` — the real-boot
+browser checks: discovery/selection/scroll/trimmed-loading via the dump,
+plus the grouped-category placeholder boot). Focused hspec coverage for
+the pure discovery/labeling/ordering/containment logic:
+`cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`.
 
 ### Dump mode (no TCP, JSON to stdout)
 

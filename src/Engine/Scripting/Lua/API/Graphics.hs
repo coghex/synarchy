@@ -1,5 +1,6 @@
 module Engine.Scripting.Lua.API.Graphics
   ( loadTextureFn
+  , getTextureSizeFn
   , spawnSpriteFn
   , setPosFn
   , setColorFn
@@ -19,6 +20,7 @@ import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
+import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -47,6 +49,33 @@ loadTextureFn backendState = do
         return handle
       let (TextureHandle n) = handle
       Lua.pushnumber (Lua.Number (fromIntegral n))
+    Nothing → Lua.pushnil
+  return 1
+
+-- | engine.getTextureSize(handle) → {width=, height=} | nil
+--   The natural pixel dimensions of a texture 'engine.loadTexture'
+--   already finished uploading (populated into 'textureSizeRef' the
+--   moment its GPU upload completes — see
+--   'Engine.Scripting.Lua.Message.Texture'). 'nil' for an unknown
+--   handle or one whose upload hasn't landed yet; a caller should only
+--   query this from its own @onAssetLoaded("texture", handle, path)@
+--   callback (#886's preview browser fits the selected texture into its
+--   panel with aspect ratio preserved this way).
+getTextureSizeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getTextureSizeFn env = do
+  handleArg ← Lua.tointeger 1
+  case handleArg of
+    Just h → do
+      mSize ← Lua.liftIO $ HM.lookup (TextureHandle (fromIntegral h))
+          ⊚ readIORef (textureSizeRef env)
+      case mSize of
+        Just (w, h') → do
+          Lua.newtable
+          Lua.pushinteger (fromIntegral w)
+          Lua.setfield (-2) "width"
+          Lua.pushinteger (fromIntegral h')
+          Lua.setfield (-2) "height"
+        Nothing → Lua.pushnil
     Nothing → Lua.pushnil
   return 1
 

@@ -332,6 +332,7 @@ library
                      Engine.Core.Capability.Core
                      Engine.Save.Barrier
                      Engine.Load.Status
+                     Engine.Preview.Discovery
                      Engine.Core.Types
                      Engine.Core.Log
                      Engine.Core.Log.Types
@@ -992,6 +993,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier
                    Test.Headless.Asset.TextureFallback
+                   Test.Headless.Preview.Discovery
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope

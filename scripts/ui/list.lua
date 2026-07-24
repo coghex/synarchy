@@ -614,6 +614,12 @@ function list.getSelectedIndex(id)
     return ls.selectedIndex
 end
 
+function list.getScrollOffset(id)
+    local ls = lists[id]
+    if not ls then return 0 end
+    return ls.scrollOffset
+end
+
 function list.getSelectedValue(id)
     local ls = lists[id]
     if not ls then return nil end
