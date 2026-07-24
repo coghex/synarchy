@@ -80,12 +80,26 @@ handleUnitCrawlCommand utsRef uid = do
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitKillCommand ∷ IORef UnitThreadState → UnitId → IO ()
-handleUnitKillCommand utsRef uid = do
+handleUnitKillCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
+handleUnitKillCommand env utsRef uid = do
     -- Terminal: snap to Dead pose and clear all in-flight state.
     -- No animation chain — just an instant transition. Dead units
     -- are filtered out by AI / movement / drink / pickup via the
     -- non-Standing guards and the Lua-side dead-pose short-circuit.
+    --
+    -- Also clear the bleeding-trail accumulator (#882 requirement 5)
+    -- HERE, synchronously with the kill — a queued UnitKill (e.g. the
+    -- unit.kill debug surface, or an AI-driven death) bypasses
+    -- Combat.Wounds.Tick's own DiedNow clearing entirely, and waiting
+    -- for the NEXT tick's publishToRender to mirror uiPose="dead" onto
+    -- the render-facing UnitInstance would leave Unit.Thread.Movement's
+    -- own dead-pose check reading a stale (pre-kill) pose for one more
+    -- tick, during which a banked mark could still pop/emit.
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        case HM.lookup uid (umInstances um) of
+            Nothing   → (um, ())
+            Just inst → (um { umInstances = HM.insert uid
+                                (inst { uiTrailState = Nothing }) (umInstances um) }, ())
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of

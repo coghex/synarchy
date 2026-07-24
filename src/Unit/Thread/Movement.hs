@@ -40,7 +40,7 @@ import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
-                  , Wound(..), TrailState(..))
+                  , Wound(..))
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle, pickImpactWound)
 import Blood.Trail
@@ -255,9 +255,16 @@ tickAllMovement dt env utsRef = do
                                         -- requirement 5): stop tracking
                                         -- immediately, no further marks
                                         -- even from banked distance/volume.
-                                        | uiPose liveInst ≡ "dead"              = Nothing
-                                        | tsPendingVolume ts' > 0 ∨ extRate > 0 = Just ts'
-                                        | otherwise                             = Nothing
+                                        -- Likewise the instant external
+                                        -- bleed reads zero, the WHOLE
+                                        -- accumulator clears — never kept
+                                        -- alive just because a leftover
+                                        -- pendingVolume sits in ts' — so a
+                                        -- later tick can't flush a mark
+                                        -- from blood a since-stopped wound
+                                        -- already finished losing.
+                                        | uiPose liveInst ≡ "dead" ∨ extRate ≤ 0 = Nothing
+                                        | otherwise                              = Just ts'
                                     repKind = maybe T.empty woundKind
                                         (dominantExternalBleedWound def liveInst)
                                     mkMark i m =

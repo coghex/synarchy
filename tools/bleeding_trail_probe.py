@@ -222,9 +222,13 @@ def main() -> int:
             print("FAIL (setup): no marks appeared before death — can't test the stop")
             return 2
         send(PORT, f"unit.kill({uid}); return 'ok'", expect_result=False)
-        ts = trail_state(uid)
-        if ts is not None:
-            print(f"FAIL: trail state still active right after death: {ts!r}")
+        # unit.kill only QUEUES the command; poll briefly for the unit
+        # thread to actually apply it (handleUnitKillCommand clears
+        # uiTrailState synchronously with the kill) rather than assuming
+        # a single immediate check lands after that has happened.
+        if poll_until(5.0, lambda: trail_state(uid) is None, interval=0.2) is None:
+            print(f"FAIL: trail state still active after death: "
+                  f"{trail_state(uid)!r}")
             return 1
         before_n = len(decals())
         time.sleep(2.0)

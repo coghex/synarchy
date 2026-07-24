@@ -46,7 +46,8 @@ import Combat.Wounds.Infection
     , immuneRampRate, immuneSeed, immuneDecayRate, immuneClearRate
     , infectionLoadThreshold, immGainRate, immunityDecayRate, immunityFloor
     )
-import Combat.Wounds.Bleed (kindBleedFactor, isExternallyBleedingKind)
+import Combat.Wounds.Bleed
+    (kindBleedFactor, isExternallyBleedingKind, externalBleedRateFor)
 import Combat.Wounds.Sever (propagateSevering)
 
 -- ----- Entry point -----
@@ -368,7 +369,23 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
             externalPortion
                 | totalDrain > 0 = actualDrain * (extDrainTotal / totalDrain)
                 | otherwise      = 0
+            -- Whether the unit's wounds AFTER this tick's heal/clot
+            -- advance (newWoundsR — already drops any wound that just
+            -- healed out) still bleed externally at all. Reusing
+            -- 'externalBleedRateFor' on a throwaway instance carrying
+            -- the post-tick wound list keeps this in lockstep with the
+            -- SAME formula 'Blood.Trail's consumer re-checks each
+            -- movement tick, rather than a second hand-rolled copy.
+            stillBleedingExternally =
+                externalBleedRateFor def (inst { uiWounds = newWoundsR }) > 0
             newTrailState
+                -- #882 requirement: the instant external bleed reaches
+                -- zero (clotted, bandaged shut, or the wound healed out
+                -- of newWoundsR entirely), the accumulator is CLEARED —
+                -- not merely stopped from growing — so no leftover
+                -- pending volume can flush as a stale mark on later
+                -- movement once the unit is done bleeding.
+                | not stillBleedingExternally = Nothing
                 | externalPortion ≤ 0 = uiTrailState inst
                 | otherwise = Just $ case uiTrailState inst of
                     Just ts → ts { tsPendingVolume = tsPendingVolume ts + externalPortion }
