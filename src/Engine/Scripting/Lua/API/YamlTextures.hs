@@ -10,6 +10,8 @@ module Engine.Scripting.Lua.API.YamlTextures
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -17,8 +19,8 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', newIORef, IORef)
 import System.Directory (doesFileExist)
-import Engine.Core.State (EngineEnv, floraCatalogRef, loggerRef
-  , materialRegistryRef )
+import Engine.Core.State (EngineEnv, loggerRef
+   )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
@@ -101,7 +103,7 @@ loadMaterialYamlFn env backendState = do
                 -- in the world's MaterialRegistry. Without this the
                 -- info-tool readout falls back to "unknown" for every
                 -- tile, since the registry stays at defaults.
-                atomicModifyIORef' (materialRegistryRef env) $ \reg →
+                atomicModifyIORef' (wsMaterialRegistryRef (toWorldSimCapability env)) $ \reg →
                     let reg' = foldl' (\r def →
                             registerMaterial (mdId def)
                                 (MaterialProps (mdName def)
@@ -211,7 +213,7 @@ loadFloraYamlFn env backendState = do
                 defs ← loadFloraYaml logger filePath
 
                 let (lteq, _) = lbsMsgQueues backendState
-                    catRef = floraCatalogRef env
+                    catRef = wsFloraCatalogRef (toWorldSimCapability env)
 
                 total ← foldM (\acc def → do
                     texCount ← registerFloraSpecies env backendState lteq catRef def
@@ -362,7 +364,7 @@ registerFloraSpecies env backendState lteq catRef def = do
     -- mpDigSpoil/mpDigChunk's lazy-at-use-time resolution (this feeds
     -- FloraWorldGen, queried every world-gen fitness check, so
     -- resolving once here avoids a registry lookup per tile).
-    registry ← readIORef (materialRegistryRef env)
+    registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     logger ← readIORef (loggerRef env)
     let wg = fydWorldGen def
         soilIds =

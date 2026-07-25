@@ -8,6 +8,8 @@ module World.Thread.Command.Edit.Dig
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -63,7 +65,7 @@ import World.Thread.Helpers (unWorldPageId)
 handleWorldDigTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Float → Float → Float → Float → Float → IO ()
 handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -74,7 +76,7 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
                 Nothing → pure ()
                 Just md → do
                     td0 ← readIORef (wsTilesRef ws)
-                    registry ← readIORef (materialRegistryRef env)
+                    registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
                     piles ← readIORef (wsSpoilRef ws)
                     let oldCorners = mdCorners md
                         sumC (a, b, c, d) = a + b + c + d
@@ -274,7 +276,7 @@ promoteFullSpoilTiles ∷ EngineEnv → LoggerState → WorldPageId
     → WorldState → (Int, Int) → IO ()
 promoteFullSpoilTiles env logger _pageId ws startV = do
     piles ← readIORef (wsSpoilRef ws)
-    _registry ← readIORef (materialRegistryRef env)
+    _registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let ready = promotableTiles piles (candidateVertices startV)
     forM_ ready $ \tile@(tx, ty) → do
         ps ← readIORef (wsSpoilRef ws)

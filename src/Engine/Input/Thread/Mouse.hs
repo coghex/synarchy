@@ -12,6 +12,8 @@ module Engine.Input.Thread.Mouse
   ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
@@ -93,7 +95,7 @@ dispatchMouseEvent env inpSt btn pos state = do
     pendingActivationRef ← newIORef (Nothing ∷ Maybe PendingActivation)
     let recordRouteOutcome ∷ Text → Maybe Text → IO ()
         recordRouteOutcome outcome handler = do
-            gt ← readIORef (gameTimeRef env)
+            gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             let (whereX, whereY) = toFb (x, y)
             pushActionOutcome (actionOutcomeRef env) ActionOutcome
                 { aoTs = gt, aoKind = "input.click", aoOutcome = outcome
@@ -438,7 +440,7 @@ dispatchMouseEvent env inpSt btn pos state = do
         case Map.lookup btn (inpPendingUIClick inpSt) of
                 Nothing → return ()
                 Just (clickKind, callback, px, py) → do
-                    gt ← readIORef (gameTimeRef env)
+                    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                     -- The threshold compare stays in window pixels
                     -- (dx/dy/movedPx) — uiDragThresholdPx is defined
                     -- to match scripts/unit_drag_select.lua's window-

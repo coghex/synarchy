@@ -11,7 +11,8 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup (getWorldTileData)
@@ -23,8 +24,8 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (getWorldTileData)
 --   the fluid surface Z. So test `getFluidAt(x,y) ~= nil` (or capture
 --   the first return) to distinguish "no fluid" from a fluid sitting at
 --   surface 0 — never rely on the surface alone.
-worldGetFluidAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetFluidAtFn env = do
+worldGetFluidAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetFluidAtFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
@@ -33,7 +34,7 @@ worldGetFluidAtFn env = do
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ getWorldTileData wsc
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
@@ -58,8 +59,8 @@ worldGetFluidAtFn env = do
 
 -- | world.getSurfaceAt(gx, gy) → surfaceZ, terrainSurfaceZ, fluidType, fluidSurface
 --   Combined query: returns all surface info at a global coordinate.
-worldGetSurfaceAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetSurfaceAtFn env = do
+worldGetSurfaceAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSurfaceAtFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
@@ -68,7 +69,7 @@ worldGetSurfaceAtFn env = do
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ getWorldTileData wsc
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
@@ -98,8 +99,8 @@ worldGetSurfaceAtFn env = do
 -- | world.getAreaFluid(gx, gy, radius) → table of {x,y,type,surface,terrainZ}
 --   Scans a square area and returns all fluid cells found.
 --   Useful for debugging river coverage around a point.
-worldGetAreaFluidFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetAreaFluidFn env = do
+worldGetAreaFluidFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetAreaFluidFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     mR  ← Lua.tointeger 3
@@ -108,7 +109,7 @@ worldGetAreaFluidFn env = do
             let gx = fromIntegral gx' ∷ Int
                 gy = fromIntegral gy' ∷ Int
                 radius = min 64 (fromIntegral r' ∷ Int)  -- cap at 64
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ getWorldTileData wsc
             case mTd of
                 Nothing → do
                     Lua.pushnil

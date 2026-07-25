@@ -10,10 +10,12 @@ module Engine.Scripting.Lua.API.WorldQuery.Pick
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, worldManagerRef, activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import World.Types
@@ -32,7 +34,7 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup
 --   isometric tilt, camera facing, elevation, and u-wrap boundary.
 worldGetHoverTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetHoverTileFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Just ws → do
             cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
@@ -56,7 +58,7 @@ worldGetHoverTileFn env = do
 --   to the tile center.
 worldGetHoverPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetHoverPosFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Just ws → do
             cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
@@ -99,7 +101,7 @@ worldPickTileFn env = do
         (Just px', Just py') → do
             let px = round px'
                 py = round py'
-            manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+            manager ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             -- Resolve the VISIBLE world (head of wmVisible), not the raw
             -- wmWorlds head: rendering and building validation/spawn both
             -- operate on wmVisible, and a hidden page (e.g. test_arena) can
@@ -170,7 +172,7 @@ worldPickChunkFn env = do
         (Just pageIdBS, Just px', Just py') → do
             let px = round px'
                 py = round py'
-            mWs ← Lua.liftIO $ worldStateByPage env (TE.decodeUtf8Lenient pageIdBS)
+            mWs ← Lua.liftIO $ worldStateByPage (toWorldSimCapability env) (TE.decodeUtf8Lenient pageIdBS)
             case mWs of
                 Just ws → do
                     let rv = toRenderViewCapability env
@@ -217,7 +219,7 @@ worldPickPosFn env = do
         (Just px', Just py') → do
             let px = round px'
                 py = round py'
-            manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+            manager ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case mVisibleWorldState manager of
                 Just ws → do
                     let rv = toRenderViewCapability env

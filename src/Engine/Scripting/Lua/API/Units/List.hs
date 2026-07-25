@@ -13,12 +13,14 @@ module Engine.Scripting.Lua.API.Units.List
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import Unit.Types
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame)
@@ -36,7 +38,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 activeUnits ∷ EngineEnv → IO (HM.HashMap UnitId UnitInstance)
 activeUnits env = do
     um ← readIORef (unitManagerRef env)
-    mActive ← activeWorldPage env
+    mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     pure $ case mActive of
         Just (pid, _) → unitsOnPage pid (umInstances um)
         Nothing       → HM.empty
@@ -301,7 +303,7 @@ unitGetFrameTextureFn env = do
             mTex ← Lua.liftIO $ do
                 um  ← readIORef (unitManagerRef env)
                 cam ← readIORef (cameraRef env)
-                now ← readIORef (gameTimeRef env)
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → Nothing
                     Just inst →

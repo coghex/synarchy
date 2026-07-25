@@ -45,7 +45,8 @@ module Blood.Trail
 
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Page.Types (WorldPageId)
 import World.State.Types (WorldManager(..), WorldState(..))
 import Unit.Types (UnitId)
@@ -59,8 +60,8 @@ import Blood.Types
 --   per tile of path stay independent of frame rate, unit-thread tick
 --   rate, movement speed, or @world.setTimeScale@ (the cadence clock
 --   here is 'Unit.Types.Trail.tsLastMarkAt' — the unpaused
---   @gameTimeRef@, never the world calendar). Neither gate is a volume
---   threshold — see 'consumeTrailMarks'.
+--   @wsGameTimeRef@, never the world calendar). Neither gate is a
+--   volume threshold — see 'consumeTrailMarks'.
 data TrailThresholds = TrailThresholds
     { ttMinDistance ∷ !Float   -- ^ world tiles
     , ttMinCadence  ∷ !Double  -- ^ real seconds
@@ -276,7 +277,7 @@ trailBloodForVolume v = TrailBlood
 --   isn't currently loaded (same policy as impact blood — issue #607
 --   requirement 8's precedent).
 spawnTrailMark
-    ∷ EngineEnv
+    ∷ WorldSimCapability
     → WorldPageId
     → Float           -- ^ gx
     → Float           -- ^ gy
@@ -288,8 +289,8 @@ spawnTrailMark
     → Maybe UnitId    -- ^ source unit
     → Double          -- ^ game time
     → IO ()
-spawnTrailMark env page gx gy z kind volume rotation seed mSrc now = do
-    wm ← readIORef (worldManagerRef env)
+spawnTrailMark wsc page gx gy z kind volume rotation seed mSrc now = do
+    wm ← readIORef (wsWorldManagerRef wsc)
     case lookup page (wmWorlds wm) of
         Nothing → pure ()
         Just ws → do

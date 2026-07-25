@@ -17,11 +17,13 @@ module Engine.Scripting.Lua.API.WorldQuery.Location
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified HsLua as Lua
 import qualified Data.HashSet as HS
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
 import World.Types
@@ -61,8 +63,8 @@ worldListPlacedLocationsFn regs env = do
     mPage ← Lua.tostring 1
     (mParams, defs) ← Lua.liftIO $ do
         mWs ← case mPage of
-            Just pidBS → worldStateByPage env (TE.decodeUtf8Lenient pidBS)
-            Nothing    → activeWorldState env
+            Just pidBS → worldStateByPage (toWorldSimCapability env) (TE.decodeUtf8Lenient pidBS)
+            Nothing    → activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
         mp ← case mWs of
             Just ws → readIORef (wsGenParamsRef ws)
             Nothing → pure Nothing
@@ -130,8 +132,8 @@ worldHasSpawnedLocationContentsFn env = do
         (Just gx, Just gy) → do
             spawned ← Lua.liftIO $ do
                 mWs ← case pageA of
-                    Just pidBS → worldStateByPage env (TE.decodeUtf8Lenient pidBS)
-                    Nothing    → activeWorldState env
+                    Just pidBS → worldStateByPage (toWorldSimCapability env) (TE.decodeUtf8Lenient pidBS)
+                    Nothing    → activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure False
                     Just ws → do
@@ -165,8 +167,8 @@ worldHasStampedLocationFn env = do
         (Just gx, Just gy) → do
             stamped ← Lua.liftIO $ do
                 mWs ← case pageA of
-                    Just pidBS → worldStateByPage env (TE.decodeUtf8Lenient pidBS)
-                    Nothing    → activeWorldState env
+                    Just pidBS → worldStateByPage (toWorldSimCapability env) (TE.decodeUtf8Lenient pidBS)
+                    Nothing    → activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure False
                     Just ws → do

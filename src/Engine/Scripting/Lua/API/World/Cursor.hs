@@ -22,13 +22,14 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
 
 -- | world.setZoomCursorHover(pageId, x, y)
-worldSetZoomCursorHoverFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetZoomCursorHoverFn env = do
+worldSetZoomCursorHoverFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetZoomCursorHoverFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -36,37 +37,37 @@ worldSetZoomCursorHoverFn env = do
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetZoomCursorHover pageId (round x) (round y)
         _ → pure ()
     return 0
 
 -- | world.setZoomCursorSelect(pageId, x, y)
-worldSetZoomCursorSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetZoomCursorSelectFn env = do
+worldSetZoomCursorSelectFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetZoomCursorSelectFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldSetZoomCursorSelect pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldSetZoomCursorSelect pageId
         _ → pure ()
     return 0
 
 -- | world.clearZoomCursorDeselect(pageId)
-worldClearZoomCursorSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldClearZoomCursorSelectFn env = do
+worldClearZoomCursorSelectFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldClearZoomCursorSelectFn wsc = do
     pageIdArg ← Lua.tostring 1
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetZoomCursorDeselect pageId
         _ → pure ()
     return 0
 
-worldSetZoomCursorSelectTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetZoomCursorSelectTextureFn env = do
+worldSetZoomCursorSelectTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetZoomCursorSelectTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
 
@@ -74,13 +75,13 @@ worldSetZoomCursorSelectTextureFn env = do
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetZoomCursorSelectTexture pageId texHandle
         _ → pure ()
     return 0
 
-worldSetZoomCursorHoverTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetZoomCursorHoverTextureFn env = do
+worldSetZoomCursorHoverTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetZoomCursorHoverTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
 
@@ -88,41 +89,41 @@ worldSetZoomCursorHoverTextureFn env = do
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetZoomCursorHoverTexture pageId texHandle
         _ → pure ()
     return 0
 
-worldSetWorldCursorHoverFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetWorldCursorHoverFn env = do
+worldSetWorldCursorHoverFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorHoverFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetWorldCursorHover pageId (round x) (round y)
         _ → pure ()
     return 0
 
-worldSetWorldCursorSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetWorldCursorSelectFn env = do
+worldSetWorldCursorSelectFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorSelectFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldSetWorldCursorSelect pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldSetWorldCursorSelect pageId
         _ → pure ()
     return 0
 
-worldClearWorldCursorSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldClearWorldCursorSelectFn env = do
+worldClearWorldCursorSelectFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldClearWorldCursorSelectFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldSetWorldCursorDeselect pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldSetWorldCursorDeselect pageId
         _ → pure ()
     return 0
 
@@ -138,8 +139,8 @@ worldClearWorldCursorSelectFn env = do
 --   setWorldCursorSelect (which races with per-tick mouse hover
 --   updates), this is direct: a one-shot selection that doesn't touch
 --   the cursor position.
-worldSelectTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSelectTileFn env = do
+worldSelectTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSelectTileFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
@@ -148,7 +149,7 @@ worldSelectTileFn env = do
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 mz     = round ⊚ zArg
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSelectTileByCoord pageId (round gx) (round gy) mz
         _ → pure ()
     return 0
@@ -161,13 +162,13 @@ worldSelectTileFn env = do
 --   reset-policy check (#767, requirement 6: tile selection is
 --   transient/Excluded state, never persisted, so it must read back
 --   empty after any load).
-worldGetSelectedTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetSelectedTileFn env = do
+worldGetSelectedTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSelectedTileFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
@@ -191,15 +192,15 @@ worldGetSelectedTileFn env = do
             Lua.pushnil
             return 1
 
-worldSetWorldCursorSelectTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetWorldCursorSelectTextureFn env = do
+worldSetWorldCursorSelectTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorSelectTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetWorldCursorSelectTexture pageId texHandle
         _ → pure ()
     return 0
@@ -213,54 +214,54 @@ worldSetWorldCursorSelectTextureFn env = do
 --   arming @setZoomCursorSelect@'s deferred render-time resolve — so a
 --   later hover update, camera pan/zoom, or render timing can't retarget
 --   an already-accepted click (issue #813).
-worldSelectChunkFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSelectChunkFn env = do
+worldSelectChunkFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSelectChunkFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSelectChunkByCoord pageId (round gx) (round gy)
         _ → pure ()
     return 0
 
-worldSetWorldCursorHoverTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetWorldCursorHoverTextureFn env = do
+worldSetWorldCursorHoverTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorHoverTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetWorldCursorHoverTexture pageId texHandle
         _ → pure ()
     return 0
 
-worldSetWorldCursorHoverBgTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetWorldCursorHoverBgTextureFn env = do
+worldSetWorldCursorHoverBgTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorHoverBgTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetWorldCursorHoverBgTexture pageId texHandle
         _ → pure ()
     return 0
 
-worldSetWorldCursorSelectBgTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetWorldCursorSelectBgTextureFn env = do
+worldSetWorldCursorSelectBgTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorSelectBgTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetWorldCursorSelectBgTexture pageId texHandle
         _ → pure ()
     return 0

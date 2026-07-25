@@ -9,11 +9,13 @@ module Engine.Scripting.Lua.API.Buildings.Spawn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
 import Building.Types
@@ -54,9 +56,9 @@ buildingSpawnFn env = do
                 mTarget ← case pageArg of
                     Just pidBS → do
                         let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
-                        wm ← readIORef (worldManagerRef env)
+                        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                         pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
-                    Nothing → activeWorldPage env
+                    Nothing → activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case (HM.lookup defName (bmDefs bm), mTarget) of
                     (Just def, Just (pid, ws)) → do
                         wtd ← readIORef (wsTilesRef ws)
@@ -121,7 +123,7 @@ buildingCanPlaceAtFn env = do
                 gy      = fromIntegral y
             result ← Lua.liftIO $ do
                 bm ← readIORef (buildingManagerRef env)
-                mActive ← activeWorldPage env
+                mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 -- Occupancy is checked only against the ACTIVE world's
                 -- buildings — a building in another world must not block
                 -- placement here (#76).
@@ -179,7 +181,7 @@ buildingRemoteCheckFn env = do
                 gx      = fromIntegral x
                 gy      = fromIntegral y
             bm ← readIORef (buildingManagerRef env)
-            mActive ← activeWorldPage env
+            mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case (HM.lookup defName (bmDefs bm), mActive) of
                 (Just def, Just (_pid, ws)) → do
                     locs ← readIORef (locationDefsRef env)
@@ -247,7 +249,7 @@ buildingClearGhostFn env = do
 
 snapshotVisibleWorldTiles ∷ EngineEnv → IO (Maybe WorldTileData)
 snapshotVisibleWorldTiles env = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case wmVisible wm of
         []          → pure Nothing
         (pageId:_)  → case lookup pageId (wmWorlds wm) of

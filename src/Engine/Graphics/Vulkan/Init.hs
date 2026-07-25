@@ -8,6 +8,8 @@ module Engine.Graphics.Vulkan.Init
   ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
@@ -16,7 +18,7 @@ import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource)
 import Engine.Core.State (EngineState(..), GraphicsState(..)
-  , sunAngleRef )
+   )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Core.Log (LogCategory(..))
@@ -310,7 +312,7 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
   camera ← liftIO $ readIORef cRef
   brightnessInt ← liftIO $ readIORef bRef
   pixelSnap ← liftIO $ readIORef psRef
-  sunAngle ← liftIO $ readIORef (sunAngleRef env)
+  sunAngle ← liftIO $ readIORef (wsSunAngleRef (toWorldSimCapability env))
   worldCirc ← liftIO $ activeWorldCircumferenceTiles env
 
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)

@@ -9,7 +9,8 @@ module World.Thread.Command.Edit.Fluid
 import UPrelude
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
@@ -21,10 +22,10 @@ import World.Thread.Helpers (unWorldPageId)
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same
 --   `applyEdit` helper.
-handleWorldSetFluidTileCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetFluidTileCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → FluidType → IO ()
-handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -47,7 +48,7 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
                     -- Re-seed the sim with the placed fluid so it flows /
                     -- settles instead of being overwritten by stale sim
                     -- output (#60).
-                    syncEditToSim env pageId lc'
+                    syncEditToSim wsc pageId lc'
                     bumpQuadCacheGen ws
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing

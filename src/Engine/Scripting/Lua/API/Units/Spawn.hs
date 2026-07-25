@@ -20,12 +20,14 @@ module Engine.Scripting.Lua.API.Units.Spawn
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
@@ -104,9 +106,9 @@ unitSpawnFn env = do
                 mActive ← case pageArg6 of
                     Just pbs → do
                         let pid = WorldPageId (TE.decodeUtf8Lenient pbs)
-                        wm ← readIORef (worldManagerRef env)
+                        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                         pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
-                    Nothing  → activeWorldPage env
+                    Nothing  → activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case (HM.lookup name (umDefs um), mActive) of
                     (Nothing, _) → return (-1)
                     (_, Nothing) → do

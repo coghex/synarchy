@@ -9,9 +9,11 @@ module World.Render.Zoom.Quads
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef, IORef)
 import qualified Data.Vector as V
-import Engine.Core.State (EngineEnv, worldManagerRef)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.ContentRegistries
@@ -40,7 +42,7 @@ import World.Render.Zoom.Icons (locationIconTargetPixels, iconWorldSize
 
 generateZoomMapQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
 generateZoomMapQuads env camera fbW fbH = do
-    worldManager ← readIORef (worldManagerRef env)
+    worldManager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     let zoom = camZoom camera
         zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))

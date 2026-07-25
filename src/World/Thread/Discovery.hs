@@ -14,11 +14,13 @@ module World.Thread.Discovery
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.PlayerEvent.Emit (emitEventFullOnPage)
@@ -53,7 +55,7 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
             registry ← readIORef
                 (crLocationDefsRef (toContentRegistriesCapability env))
             um ← readIORef (unitManagerRef env)
-            mActive ← activeWorldPage env
+            mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             let isActivePage = case mActive of
                     Just (activePageId, _) → activePageId ≡ pageId
                     Nothing → False

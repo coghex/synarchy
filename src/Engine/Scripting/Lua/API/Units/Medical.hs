@@ -7,6 +7,8 @@ module Engine.Scripting.Lua.API.Units.Medical
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -345,7 +347,7 @@ unitFrostbiteFn env = do
     deltaArg ← Lua.tonumber 3
     case (idArg, partArg, deltaArg) of
         (Just n, Just partBS, Just (Lua.Number d)) → do
-            now ← Lua.liftIO $ readIORef (gameTimeRef env)
+            now ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
             let uid   = UnitId (fromIntegral n)
                 part  = TE.decodeUtf8Lenient partBS
                 delta = max 0 (realToFrac d)

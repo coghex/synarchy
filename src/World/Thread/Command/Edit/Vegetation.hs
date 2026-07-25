@@ -14,7 +14,8 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
@@ -28,10 +29,10 @@ import World.Thread.Helpers (unWorldPageId)
 --   the till AI's (#333) completion primitive: flips a tilled tile's
 --   ground cover to 'World.Vegetation.vegTilledSoil' so it survives
 --   chunk eviction + save/load like every other edit.
-handleWorldSetVegCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetVegCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Int → Word8 → IO ()
-handleWorldSetVegCommand env logger pageId gx gy z vegId = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetVegCommand wsc logger pageId gx gy z vegId = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -75,10 +76,10 @@ handleWorldSetVegCommand env logger pageId gx gy z vegId = do
 --   the chunk is loaded, the tile is tilled soil, and cropName names a
 --   registered row_crop species — mirrors handleWorldDesignatePlantCommand's
 --   validation.
-handleWorldPlantRowCropAtCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldPlantRowCropAtCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Text → IO ()
-handleWorldPlantRowCropAtCommand env logger pageId gx gy cropName = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldPlantRowCropAtCommand wsc logger pageId gx gy cropName = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -87,7 +88,7 @@ handleWorldPlantRowCropAtCommand env logger pageId gx gy cropName = do
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx  = columnIndex lx ly
             td ← readIORef (wsTilesRef ws)
-            cat ← readIORef (floraCatalogRef env)
+            cat ← readIORef (wsFloraCatalogRef wsc)
             let resolved = do
                     (fid, _sp) ← findSpeciesByName cropName cat
                     wg ← HM.lookup (unFloraId fid) (fcWorldGen cat)

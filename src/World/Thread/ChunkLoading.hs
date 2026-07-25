@@ -15,7 +15,11 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Parallel.Strategies (parMap, rdeepseq)
 import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.State (EngineEnv, luaQueue)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (Camera2D(..))
@@ -45,12 +49,12 @@ maxChunksPerTick = 8
 
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env _logger = do
-    camera ← readIORef (cameraRef env)
-    catalog ← readIORef (floraCatalogRef env)
-    registry ← readIORef (materialRegistryRef env)
+    camera ← readIORef (rvCameraRef (toRenderViewCapability env))
+    catalog ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
+    registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let zoom = camZoom camera
     when (zoom < (zoomFadeEnd + 0.5)) $ do
-        manager ← readIORef (worldManagerRef env)
+        manager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         let (camX, camY) = camPosition camera
             facing = camFacing camera
             camChunk = cameraChunkCoord facing camX camY
@@ -144,7 +148,7 @@ updateChunkLoading env _logger = do
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
                                 forM_ newChunks' $ \lc →
-                                    Q.writeQueue (simQueue env) $
+                                    Q.writeQueue (wsSimQueue (toWorldSimCapability env)) $
                                         SimChunkLoaded pageId (lcCoord lc)
                                             (lcFluidMap lc)
                                             (lcTerrainSurfaceMap lc)
@@ -153,7 +157,7 @@ updateChunkLoading env _logger = do
                                 dispatchLocationStamps env params pageId newChunks'
                                 -- Notify sim thread of evicted chunks
                                 forM_ evicted $ \cc →
-                                    Q.writeQueue (simQueue env)
+                                    Q.writeQueue (wsSimQueue (toWorldSimCapability env))
                                         (SimChunkUnloaded pageId cc)
                                 bumpQuadCacheGen worldState
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
@@ -201,9 +205,9 @@ partitionChunks coords tileData =
 --   Runs every world tick until all initial chunks are loaded.
 drainInitQueues ∷ EngineEnv → LoggerState → IO ()
 drainInitQueues env logger = do
-    manager ← readIORef (worldManagerRef env)
-    catalog ← readIORef (floraCatalogRef env)
-    registry ← readIORef (materialRegistryRef env)
+    manager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    catalog ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
+    registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     forM_ (wmWorlds manager) $ \(pageId, worldState) → do
         remaining ← readIORef (wsInitQueueRef worldState)
         case remaining of
@@ -290,7 +294,7 @@ drainInitQueues env logger = do
                         -- first — otherwise the final batch can race the
                         -- settle and never be simulated. (post-replay)
                         forM_ newChunks' $ \lc →
-                            Q.writeQueue (simQueue env) $
+                            Q.writeQueue (wsSimQueue (toWorldSimCapability env)) $
                                 SimChunkLoaded pageId (lcCoord lc)
                                     (lcFluidMap lc)
                                     (lcTerrainSurfaceMap lc)

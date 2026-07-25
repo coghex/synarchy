@@ -13,10 +13,12 @@ module Engine.Scripting.Lua.API.Items.Render
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import World.Cursor.Types (CursorState(..))
@@ -37,7 +39,7 @@ itemHitTestAtFn env = do
     yArg ← Lua.tonumber 2
     case (xArg, yArg) of
         (Just (Lua.Number x), Just (Lua.Number y)) → do
-            mWs ← Lua.liftIO $ activeWorldState env
+            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -57,7 +59,7 @@ itemSelectFn env = do
     idArg ← Lua.tointeger 1
     case idArg of
         Just n → do
-            mWs ← Lua.liftIO $ activeWorldState env
+            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Just ws → Lua.liftIO $
                     atomicModifyIORef' (wsCursorRef ws) $ \cs →
@@ -69,7 +71,7 @@ itemSelectFn env = do
 
 itemDeselectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemDeselectFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Just ws → Lua.liftIO $
             atomicModifyIORef' (wsCursorRef ws) $ \cs →
@@ -79,7 +81,7 @@ itemDeselectFn env = do
 
 itemGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemGetSelectedFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Nothing → Lua.pushnil >> return 1
         Just ws → do
@@ -99,7 +101,7 @@ itemGetSelectedFn env = do
 --   return 0 without a texture system).
 itemDebugQuadsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemDebugQuadsFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Nothing → Lua.pushnil >> return 1
         Just ws → do

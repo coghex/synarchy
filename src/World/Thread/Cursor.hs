@@ -10,7 +10,9 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv, hudActivePageRef, resolveActiveWorld)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Fluids (isOceanChunk)
@@ -30,7 +32,7 @@ import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
 
 pollCursorInfo ∷ EngineEnv → IO ()
 pollCursorInfo env = do
-    manager ← readIORef (worldManagerRef env)
+    manager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     -- Only the ACTIVE world drives the HUD. The HUD messages emitted below
     -- ('sendHudInfo' / weather / resources) carry no page identifier, so
     -- processing every visible page (the old 'forM_ (wmVisible …)') let a
@@ -143,7 +145,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
 
     -- Try to find this chunk's zoom cache entry for material/elevation
     zoomCache ← readIORef (wsZoomCacheRef worldState)
-    materials ← readIORef (materialRegistryRef env)
+    materials ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let mEntry = V.find (\e → zceChunkX e ≡ cx ∧ zceChunkY e ≡ cy) zoomCache
 
     -- Resources tab: per-ore SURVIVING inventory counted from the
@@ -164,7 +166,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
     -- generation and edits self-invalidate. Arena worlds (flat
     -- chunks, no timeline) skip the transient path.
     tileData ← readIORef (wsTilesRef worldState)
-    catalog ← readIORef (floraCatalogRef env)
+    catalog ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
     edits ← readIORef (wsEditsRef worldState)
     let prettyMatName = T.unwords . map T.toTitle . T.splitOn "_"
         renderOreLines counts = T.intercalate "\n"
@@ -295,7 +297,7 @@ sendTileInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
              → Int → Int → Int → IO ()
 sendTileInfo env worldState _mParams gx gy z = do
     tileData ← readIORef (wsTilesRef worldState)
-    materials ← readIORef (materialRegistryRef env)
+    materials ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
 
     let (coord, (lx, ly)) = globalToChunk gx gy
         mChunk = lookupChunk coord tileData

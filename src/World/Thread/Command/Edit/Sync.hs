@@ -11,7 +11,8 @@ module World.Thread.Command.Edit.Sync
 
 import UPrelude
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Sim.Command.Types (SimCommand(..))
 import World.Types
 
@@ -22,8 +23,8 @@ import World.Types
 --   without the activation (the old SimChunkLoaded path) the edited chunk
 --   kept the new snapshot but sat frozen because the volume sim only
 --   advances active chunks (#60).
-syncEditToSim ∷ EngineEnv → WorldPageId → LoadedChunk → IO ()
-syncEditToSim env pageId lc =
-    Q.writeQueue (simQueue env) $
+syncEditToSim ∷ WorldSimCapability → WorldPageId → LoadedChunk → IO ()
+syncEditToSim wsc pageId lc =
+    Q.writeQueue (wsSimQueue wsc) $
         SimChunkEdited pageId (lcCoord lc)
             (lcFluidMap lc) (lcTerrainSurfaceMap lc)

@@ -6,6 +6,8 @@ module Unit.Thread.Command.Motion
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
@@ -69,7 +71,7 @@ handleUnitMoveToCommand env utsRef uid tx ty speed = do
 handleUnitJumpCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                       → Int → Int → IO ()
 handleUnitJumpCommand env utsRef uid tgx tgy = do
-    now ← readIORef (gameTimeRef env)
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     um  ← readIORef (unitManagerRef env)
     -- Reach = learned jumping skill blended with agility/strength stats
     -- (the skill/stat split). Unknown unit → 0 reach (can't leap).

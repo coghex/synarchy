@@ -9,12 +9,14 @@ module Engine.Scripting.Lua.API.Forage.Harvest
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Random (randomR)
-import Engine.Core.State (EngineEnv(..), activeWorldState,
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom,
                           freshItemInstanceId)
 import World.Types
 import World.Flora.Growth (floraGrowth, harvestOpen)
@@ -53,7 +55,7 @@ worldHarvestFloraFn env = do
                 gy = fromIntegral gy'
                 tagFilter = TE.decodeUtf8Lenient <$> mTag
             mSpawned ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
@@ -68,7 +70,7 @@ worldHarvestFloraFn env = do
                         mPlot ← if isJust tagFilter then pure Nothing
                                 else HM.lookup (gx, gy) ⊚
                                          readIORef (wsCropPlotsRef ws)
-                        cat ← readIORef (floraCatalogRef env)
+                        cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
                         (doy, absDay) ← growthClock ws
                         let mPlotHarvest = do
                                 cp ← mPlot
@@ -99,7 +101,7 @@ worldHarvestFloraFn env = do
                                 pure (Just spawned)
                             Nothing | isJust mPlot → pure Nothing
                             Nothing → do
-                              insts ← floraAt env ws gx gy
+                              insts ← floraAt (toWorldSimCapability env) ws gx gy
                               harvests ← readIORef (wsFloraHarvestsRef ws)
                               let live = HM.lookupDefault 0 (gx, gy) harvests
                                   -- #332: only the BARE (forage) call

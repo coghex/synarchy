@@ -32,6 +32,7 @@
 module Test.Headless.World.SelectTileZ (spec) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Test.Hspec
 import Data.IORef (readIORef, newIORef)
 import qualified Data.HashMap.Strict as HM
@@ -70,13 +71,13 @@ spec = do
                         belowZ   = surfZ - 2   -- a distinct tile below the top
 
                     -- Nothing → the handler's own surface-z fallback.
-                    handleWorldSelectTileByCoordCommand env logger pid gx gy Nothing
+                    handleWorldSelectTileByCoordCommand (toWorldSimCapability env) logger pid gx gy Nothing
                     sel0 ← worldSelectedTile <$> readIORef (wsCursorRef ws)
                     sel0 `shouldBe` Just (gx, gy, surfZ)
 
                     -- Just z → the clicked tile, even below the surface. The
                     -- old code snapped this to surfZ — that is the #367 bug.
-                    handleWorldSelectTileByCoordCommand env logger pid gx gy (Just belowZ)
+                    handleWorldSelectTileByCoordCommand (toWorldSimCapability env) logger pid gx gy (Just belowZ)
                     sel1 ← worldSelectedTile <$> readIORef (wsCursorRef ws)
                     sel1 `shouldBe` Just (gx, gy, belowZ)
 

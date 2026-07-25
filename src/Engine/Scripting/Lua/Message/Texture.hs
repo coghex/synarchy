@@ -12,6 +12,8 @@ module Engine.Scripting.Lua.Message.Texture
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
@@ -31,7 +33,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logWarnM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
-  , luaQueue, worldManagerRef )
+  , luaQueue )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource (locally)
@@ -75,7 +77,7 @@ data TextureUploadPrep = TextureUploadPrep
 --   directly (they have a single writer and no cross-thread rebuild race).
 invalidateAllWorldRenderCaches ∷ EngineEnv → IO ()
 invalidateAllWorldRenderCaches env = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     forM_ (wmWorlds mgr) $ \(_, ws) → do
         bumpQuadCacheGen ws
         writeIORef (wsZoomQuadCacheRef ws) Nothing

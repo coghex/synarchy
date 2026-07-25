@@ -20,7 +20,13 @@ import UPrelude
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
 import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
@@ -40,12 +46,12 @@ import System.FilePath (takeExtension)
 
 quitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 quitFn env = do
-  liftIO $ writeIORef (lifecycleRef env) CleaningUp
+  liftIO $ writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
   return 0
 
 getFPSFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getFPSFn env = do
-  fps ← liftIO $ readIORef (fpsRef env)
+  fps ← liftIO $ readIORef (rvFpsRef (toRenderViewCapability env))
   Lua.pushnumber (Lua.Number fps)
   return 1
 
@@ -80,14 +86,14 @@ setPausedFn env = do
       loading ← loadInProgress (loadStatusRef env)
       if loading ∧ not b
         then do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef (toCoreCapability env))
             logWarn logger CatLua
                 "setPaused(false) rejected: a load transaction is in \
                 \flight -- unpausing now could resume simulation before \
                 \it either publishes or fails"
             pure False
         else do
-            writeIORef (enginePausedRef env) b
+            writeIORef (wsEnginePausedRef (toWorldSimCapability env)) b
             pure True
   Lua.pushboolean applied
   return 1
@@ -95,7 +101,7 @@ setPausedFn env = do
 -- | engine.isPaused() → bool
 isPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 isPausedFn env = do
-  p ← Lua.liftIO $ readIORef (enginePausedRef env)
+  p ← Lua.liftIO $ readIORef (wsEnginePausedRef (toWorldSimCapability env))
   Lua.pushboolean p
   return 1
 
@@ -103,7 +109,7 @@ isPausedFn env = do
 getBootProfileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getBootProfileFn env = do
   Lua.pushstring . TE.encodeUtf8 . bootProfileTag . ecBootProfile $
-      engineConfig env
+      ccEngineConfig (toCoreCapability env)
   return 1
 
 -- | engine.getPreviewTarget() → {category=..., item=...} | nil
@@ -111,7 +117,7 @@ getBootProfileFn env = do
 --   boot ('BootPreview'). @item@ is omitted for a bare category.
 getPreviewTargetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getPreviewTargetFn env = do
-  case ecPreviewTarget (engineConfig env) of
+  case ecPreviewTarget (ccEngineConfig (toCoreCapability env)) of
     Nothing → Lua.pushnil
     Just (cat, mItem) → do
       Lua.newtable
@@ -134,7 +140,7 @@ getPreviewTargetFn env = do
 --   falls back to the Phase 1 (#632) placeholder-label boot in that case.
 getPreviewBrowseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getPreviewBrowseFn env = do
-  case ecPreviewBrowse (engineConfig env) of
+  case ecPreviewBrowse (ccEngineConfig (toCoreCapability env)) of
     Nothing → Lua.pushnil
     Just (PreviewList entries) → do
       Lua.newtable
@@ -181,7 +187,7 @@ realTimeFn = do
 --   should NOT include real-world save→load gap time.
 gameTimeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 gameTimeFn env = do
-  t ← Lua.liftIO $ readIORef (gameTimeRef env)
+  t ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
   Lua.pushnumber (Lua.Number t)
   return 1
 
@@ -196,11 +202,11 @@ setTickIntervalFn env backendState = do
                Map.adjust (\s → s { scriptTickRate = seconds
                                   , scriptNextTick = currentSecs + seconds
                                   }) (fromIntegral sid)
-           logger ← readIORef (loggerRef env)
+           logger ← readIORef (ccLoggerRef (toCoreCapability env))
            logInfo logger CatLua $ T.pack $
                "Tick interval for script " ⧺ show sid ⧺ " set to " ⧺ show seconds ⧺ " seconds."
        _ → Lua.liftIO $ do
-           logger ← readIORef (loggerRef env)
+           logger ← readIORef (ccLoggerRef (toCoreCapability env))
            logInfo logger CatLua
                "setTickInterval requires 2 arguments: scriptId, seconds"
    return 0
@@ -212,7 +218,7 @@ loadScriptFn env backendState lst = do
     tickRate ← Lua.tonumber 2
     case (path, tickRate) of
         (Just pathBS, Just rate) → do
-            logger ← Lua.liftIO $ readIORef (loggerRef env)
+            logger ← Lua.liftIO $ readIORef (ccLoggerRef (toCoreCapability env))
             scriptId ← Lua.liftIO $ do
                 let pathStr = TE.decodeUtf8Lenient pathBS
 
@@ -281,7 +287,7 @@ killScriptFn env backendState lst = do
     sidNum ← Lua.tointeger 1
     case sidNum of
         Just sid → Lua.liftIO $ do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef (toCoreCapability env))
             logDebug logger CatLua $ "Destroying Lua script with ID " 
                            <> T.pack (show sid)
             scriptsMap ← readTVarIO (lbsScripts backendState)

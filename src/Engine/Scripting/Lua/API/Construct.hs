@@ -27,7 +27,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
@@ -38,27 +40,27 @@ import World.Construct.Types
 import World.Thread.Command.Cursor.Construct (popConstructDesignation)
 
 -- | construction.setAnchor(pageId, gx, gy) — first-click anchor.
-constructSetAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetAnchorFn env = do
+constructSetAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetConstructAnchor pageId (round gx) (round gy)
         _ → pure ()
     return 0
 
 -- | construction.clearAnchor(pageId) — cancel the pending rectangle.
-constructClearAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructClearAnchorFn env = do
+constructClearAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructClearAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldClearConstructAnchor pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldClearConstructAnchor pageId
         _ → pure ()
     return 0
 
@@ -68,8 +70,8 @@ constructClearAnchorFn env = do
 --       "post"), c=wall edge ("ne"/"nw"/"se"/"sw"; nil for non-walls)
 --     * category "building":  a=building def name (rest ignored)
 --   Unknown categories are ignored. A building only marks the anchor.
-constructDesignateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructDesignateFn env = do
+constructDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
     x1Arg ← Lua.tonumber 2
     y1Arg ← Lua.tonumber 3
@@ -85,7 +87,7 @@ constructDesignateFn env = do
                 Nothing → pure ()
                 Just tgt → Lua.liftIO $ do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    Q.writeQueue (worldQueue env) $
+                    Q.writeQueue (wsWorldQueue wsc) $
                         WorldDesignateConstruct pageId
                             (round x1) (round y1) (round x2) (round y2) tgt
         _ → pure ()
@@ -101,16 +103,16 @@ constructDesignateFn env = do
 
 -- | construction.cancelDesignation(gx, gy) — remove the designation at a
 --   tile on the active world. Returns nothing (best-effort).
-constructCancelDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructCancelDesignationFn env = do
+constructCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1
     gyArg ← Lua.tonumber 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mPage ← Lua.liftIO $ activeWorldPage env
+            mPage ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef wsc)
             case mPage of
                 Just (pageId, _) → Lua.liftIO $
-                    Q.writeQueue (worldQueue env) $
+                    Q.writeQueue (wsWorldQueue wsc) $
                         WorldCancelConstruct pageId (round gx) (round gy)
                 Nothing → pure ()
         _ → pure ()
@@ -126,13 +128,13 @@ constructCancelDesignationFn env = do
 --   status when looking for fresh work (so a second worker still can't
 --   re-claim an owned tile) and uses the claimed entries to release
 --   stale claims (dead/vanished claimant) back to "pending" on timeout.
-constructGetPendingJobsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructGetPendingJobsFn env = do
+constructGetPendingJobsFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructGetPendingJobsFn wsc = do
     cx1Arg ← Lua.tonumber 1
     cy1Arg ← Lua.tonumber 2
     cx2Arg ← Lua.tonumber 3
     cy2Arg ← Lua.tonumber 4
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef wsc)
     case (mWs, cx1Arg, cy1Arg, cx2Arg, cy2Arg) of
         (Just ws, Just cx1, Just cy1, Just cx2, Just cy2) → do
             m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
@@ -155,8 +157,8 @@ constructGetPendingJobsFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | construction.getDesignationAt(pageId, gx, gy) → job table | nil.
-constructGetDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructGetDesignationAtFn env = do
+constructGetDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructGetDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -165,7 +167,7 @@ constructGetDesignationAtFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -184,8 +186,8 @@ constructGetDesignationAtFn env = do
 --   the SAME entry — whether that's a rapid double right-click on one
 --   designation, or a genuinely new designation quickly replacing it
 --   at the same tile. See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
-constructCancelDesignationForRefundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructCancelDesignationForRefundFn env = do
+constructCancelDesignationForRefundFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructCancelDesignationForRefundFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -194,7 +196,7 @@ constructCancelDesignationForRefundFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -205,13 +207,13 @@ constructCancelDesignationForRefundFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | construction.getDesignationCount(pageId) → n.
-constructGetDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructGetDesignationCountFn env = do
+constructGetDesignationCountFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructGetDesignationCountFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
@@ -223,8 +225,8 @@ constructGetDesignationCountFn env = do
 -- | construction.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tile by Euclidean distance — the build AI's
 --   "distance to nearest build job" term. Mirrors nearestMineDesignation.
-constructNearestDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructNearestDesignationFn env = do
+constructNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -233,7 +235,7 @@ constructNearestDesignationFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
@@ -259,8 +261,8 @@ constructNearestDesignationFn env = do
 -- | construction.setJobStatus(pageId, gx, gy, status) — build AI marks a
 --   job "claimed" / "complete" (complete removes the designation). Unknown
 --   status strings are ignored.
-constructSetJobStatusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetJobStatusFn env = do
+constructSetJobStatusFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetJobStatusFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -270,7 +272,7 @@ constructSetJobStatusFn env = do
             case textToConstructStatus (TE.decodeUtf8Lenient statusBS) of
                 Just st → Lua.liftIO $ do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    Q.writeQueue (worldQueue env) $
+                    Q.writeQueue (wsWorldQueue wsc) $
                         WorldSetConstructStatus pageId (round gx) (round gy) st
                 Nothing → pure ()
         _ → pure ()
@@ -281,8 +283,8 @@ constructSetJobStatusFn env = do
 --   total (1.0 = done); the engine clamps the sum to [0, 1]. The AI
 --   watches getDesignationAt().progress and finishes the job itself
 --   (place piece, then setJobStatus "complete").
-constructAddJobProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructAddJobProgressFn env = do
+constructAddJobProgressFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructAddJobProgressFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -290,7 +292,7 @@ constructAddJobProgressFn env = do
     case (pageIdArg, gxArg, gyArg, deltaArg) of
         (Just pageIdBS, Just gx, Just gy, Just delta) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldAddConstructProgress pageId (round gx) (round gy)
                     (realToFrac delta)
         _ → pure ()
@@ -314,8 +316,8 @@ constructAddJobProgressFn env = do
 --   time on the single scripting thread, so making this write happen
 --   the instant Lua calls it — instead of some later, unspecified world-
 --   thread tick — is what actually closes the window; queuing can't.
-constructSetMaterialsPaidFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetMaterialsPaidFn env = do
+constructSetMaterialsPaidFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetMaterialsPaidFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -323,7 +325,7 @@ constructSetMaterialsPaidFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← readIORef (worldManagerRef env)
+            mgr ← readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws →
                     atomicModifyIORef' (wsConstructDesignationsRef ws) $ \m →
@@ -336,8 +338,8 @@ constructSetMaterialsPaidFn env = do
 -- | construction.setDesignateTexture(pageId, category, texHandle) — ghost
 --   texture for committed designations, keyed by category ("structure" |
 --   "building").
-constructSetDesignateTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetDesignateTextureFn env = do
+constructSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetDesignateTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     catArg ← Lua.tostring 2
     handleArg ← Lua.tointeger 3
@@ -345,7 +347,7 @@ constructSetDesignateTextureFn env = do
         (Just pageIdBS, Just catBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetConstructDesignateTexture pageId
                     (TE.decodeUtf8Lenient catBS) texHandle
         _ → pure ()
@@ -358,14 +360,14 @@ constructSetDesignateTextureFn env = do
 --   tool's commit (scripts/build_tool.lua) snaps the SAME way before
 --   calling designate, so the committed tiles always match what
 --   previewed.
-constructSetLineModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetLineModeFn env = do
+constructSetLineModeFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetLineModeFn wsc = do
     pageIdArg ← Lua.tostring 1
     enabledArg ← Lua.toboolean 2
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetConstructLineMode pageId enabledArg
         Nothing → pure ()
     return 0

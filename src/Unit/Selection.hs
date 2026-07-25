@@ -17,10 +17,12 @@ module Unit.Selection
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import Unit.Types (UnitManager(..), UnitInstance(..), UnitId(..))
 
@@ -36,7 +38,7 @@ onActivePage mPage um uid = case (mPage, HM.lookup uid (umInstances um)) of
 --   No-op if the unit doesn't exist or belongs to another world.
 selectUnit ∷ EngineEnv → UnitId → IO Bool
 selectUnit env uid = do
-    mActive ← activeWorldPage env
+    mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     let mPage = fst <$> mActive
     atomicModifyIORef' (unitManagerRef env) $ \um →
         if onActivePage mPage um uid
@@ -59,7 +61,7 @@ clearSelection env =
 --   don't currently have a live unit instance in the active world.
 setSelection ∷ EngineEnv → HS.HashSet UnitId → IO ()
 setSelection env new = do
-    mActive ← activeWorldPage env
+    mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     let mPage = fst <$> mActive
     atomicModifyIORef' (unitManagerRef env) $ \um →
         let live = HS.filter (onActivePage mPage um) new
@@ -68,7 +70,7 @@ setSelection env new = do
 isSelected ∷ EngineEnv → UnitId → IO Bool
 isSelected env uid = do
     um ← readIORef (unitManagerRef env)
-    mActive ← activeWorldPage env
+    mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     pure (HS.member uid (umSelected um) ∧ onActivePage (fst <$> mActive) um uid)
 
 -- | Returns the current selection, filtered to live units of the active
@@ -76,6 +78,6 @@ isSelected env uid = do
 getSelected ∷ EngineEnv → IO (HS.HashSet UnitId)
 getSelected env = do
     um ← readIORef (unitManagerRef env)
-    mActive ← activeWorldPage env
+    mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     let mPage = fst <$> mActive
     pure (HS.filter (onActivePage mPage um) (umSelected um))

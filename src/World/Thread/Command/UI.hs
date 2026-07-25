@@ -9,15 +9,16 @@ module World.Thread.Command.UI
 import UPrelude
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import World.Types
 import World.Thread.Helpers (unWorldPageId)
 
-handleWorldShowCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldShowCommand env logger pageId = do
+handleWorldShowCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
+handleWorldShowCommand wsc logger pageId = do
     logDebug logger CatWorld $ "Showing world: " <> unWorldPageId pageId
 
     -- Only worlds that actually exist may enter wmVisible. Inserting a
@@ -26,7 +27,7 @@ handleWorldShowCommand env logger pageId = do
     -- atomicModifyIORef' returns whether the world was found so the
     -- existence check and the visible-list mutation share one consistent
     -- snapshot of the manager.
-    found ← atomicModifyIORef' (worldManagerRef env) $ \mgr →
+    found ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
         case lookup pageId (wmWorlds mgr) of
             Nothing → (mgr, False)
             Just _
@@ -38,7 +39,7 @@ handleWorldShowCommand env logger pageId = do
     then logWarn logger CatWorld $
         "Ignoring world.show for nonexistent world: " <> unWorldPageId pageId
     else do
-        mgr ← readIORef (worldManagerRef env)
+        mgr ← readIORef (wsWorldManagerRef wsc)
         logDebug logger CatWorld $
             "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
 
@@ -53,16 +54,16 @@ handleWorldShowCommand env logger pageId = do
         -- tile ref — it emits WorldApplyFluids back to the world thread (the
         -- sole writer of wsTilesRef) — so this is just a per-world "is
         -- active" signal.
-        Q.writeQueue (simQueue env) (SimActivateWorld pageId)
+        Q.writeQueue (wsSimQueue wsc) (SimActivateWorld pageId)
 
-handleWorldHideCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldHideCommand env logger pageId = do
+handleWorldHideCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
+handleWorldHideCommand wsc logger pageId = do
     logDebug logger CatWorld $ "Hiding world: " <> unWorldPageId pageId
 
     -- Only deactivate sim for a world that was actually visible. Hiding an
     -- invalid / already-hidden page is a no-op for sim state, and hiding one
     -- world never tears down the others' sim (per-world deactivate, #55).
-    wasVisible ← atomicModifyIORef' (worldManagerRef env) $ \mgr →
+    wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
         ( mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }
         , pageId `elem` wmVisible mgr )
 
@@ -92,7 +93,7 @@ handleWorldHideCommand env logger pageId = do
     -- WorldSetZoomCursorDeselect / WorldSetWorldCursorDeselect handlers do
     -- (both reset position AND *Now), and is unambiguously correct here: a
     -- hidden world has no pending selection to commit.
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -104,15 +105,15 @@ handleWorldHideCommand env logger pageId = do
         Nothing → pure ()
 
     when wasVisible $
-        Q.writeQueue (simQueue env) (SimDeactivateWorld pageId)
+        Q.writeQueue (wsSimQueue wsc) (SimDeactivateWorld pageId)
 
-handleWorldSetMapModeCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetMapModeCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → ZoomMapMode → IO ()
-handleWorldSetMapModeCommand env logger pageId mode = do
+handleWorldSetMapModeCommand wsc logger pageId mode = do
     logDebug logger CatWorld $
         "Setting map mode for world: " <> unWorldPageId pageId
         <> " to " <> T.pack (show mode)
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             writeIORef (wsMapModeRef worldState) mode
@@ -123,9 +124,9 @@ handleWorldSetMapModeCommand env logger pageId mode = do
             logDebug logger CatWorld $
                 "World not found for map mode update: " <> unWorldPageId pageId
 
-handleWorldSetToolModeCommand ∷ EngineEnv → LoggerState → WorldPageId → ToolMode → IO ()
-handleWorldSetToolModeCommand env logger pagedId mode = do
-        mgr ← readIORef (worldManagerRef env)
+handleWorldSetToolModeCommand ∷ WorldSimCapability → LoggerState → WorldPageId → ToolMode → IO ()
+handleWorldSetToolModeCommand wsc logger pagedId mode = do
+        mgr ← readIORef (wsWorldManagerRef wsc)
         case lookup pagedId (wmWorlds mgr) of
             Just worldState → do
                 writeIORef (wsToolModeRef worldState) mode

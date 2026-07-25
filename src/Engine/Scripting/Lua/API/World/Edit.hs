@@ -17,7 +17,9 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldPageFrom)
 import World.Types hiding (activeWorldPage)
 import World.Material (MaterialId(..), materialIdByName)
 
@@ -25,8 +27,8 @@ import World.Material (MaterialId(..), materialIdByName)
 --   content-spawn flag (#90). An explicit pageId targets that live
 --   page (even hidden); omitted defaults to the active world. No-op
 --   (queues nothing) when neither resolves to a live page.
-worldMarkLocationContentsSpawnedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldMarkLocationContentsSpawnedFn env = do
+worldMarkLocationContentsSpawnedFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldMarkLocationContentsSpawnedFn wsc = do
     gxArg   ← Lua.tointeger 1
     gyArg   ← Lua.tointeger 2
     pageArg ← Lua.tostring 3
@@ -35,9 +37,9 @@ worldMarkLocationContentsSpawnedFn env = do
             Lua.liftIO $ do
                 mPid ← case pageArg of
                     Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8Lenient pidBS)))
-                    Nothing    → (fmap fst) <$> activeWorldPage env
+                    Nothing    → (fmap fst) <$> activeWorldPageFrom (wsWorldManagerRef wsc)
                 case mPid of
-                    Just pid → Q.writeQueue (worldQueue env) $
+                    Just pid → Q.writeQueue (wsWorldQueue wsc) $
                         WorldMarkLocationContentsSpawned pid
                             (fromIntegral gx) (fromIntegral gy)
                     Nothing  → pure ()
@@ -48,8 +50,8 @@ worldMarkLocationContentsSpawnedFn env = do
 --   flag (#424). An explicit pageId targets that live page (even hidden);
 --   omitted defaults to the active world. No-op (queues nothing) when
 --   neither resolves to a live page.
-worldMarkLocationStampedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldMarkLocationStampedFn env = do
+worldMarkLocationStampedFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldMarkLocationStampedFn wsc = do
     gxArg   ← Lua.tointeger 1
     gyArg   ← Lua.tointeger 2
     pageArg ← Lua.tostring 3
@@ -58,9 +60,9 @@ worldMarkLocationStampedFn env = do
             Lua.liftIO $ do
                 mPid ← case pageArg of
                     Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8Lenient pidBS)))
-                    Nothing    → (fmap fst) <$> activeWorldPage env
+                    Nothing    → (fmap fst) <$> activeWorldPageFrom (wsWorldManagerRef wsc)
                 case mPid of
-                    Just pid → Q.writeQueue (worldQueue env) $
+                    Just pid → Q.writeQueue (wsWorldQueue wsc) $
                         WorldMarkLocationStamped pid
                             (fromIntegral gx) (fromIntegral gy)
                     Nothing  → pure ()
@@ -73,8 +75,8 @@ worldMarkLocationStampedFn env = do
 --   edit log via WeAddTile, so it persists like any player edit.
 --   Debug terrain placement. Returns false when the material can't
 --   be resolved.
-worldAddTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldAddTileFn env = do
+worldAddTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldAddTileFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -83,7 +85,7 @@ worldAddTileFn env = do
     matNum  ← Lua.tonumber 4
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → do
-            registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef wsc)
             let mMat = case (matNum, matName) of
                     (Just (Lua.Number n), _) | n ≥ 1 ∧ n ≤ 255 →
                         Just (MaterialId (round n))
@@ -95,7 +97,7 @@ worldAddTileFn env = do
                 Nothing → Lua.pushboolean False >> return 1
                 Just mat → do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    Lua.liftIO $ Q.writeQueue (worldQueue env) $
+                    Lua.liftIO $ Q.writeQueue (wsWorldQueue wsc) $
                         WorldAddTile pageId (round gx) (round gy) mat
                     Lua.pushboolean True
                     return 1
@@ -109,8 +111,8 @@ worldAddTileFn env = do
 --   current digger's mining skill; optional, defaults 0) scales the
 --   per-tick chunk-yield fill — pass it every tick so a mid-dig
 --   handoff uses the new digger's rate.
-worldDigTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldDigTileFn env = do
+worldDigTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldDigTileFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -129,7 +131,7 @@ worldDigTileFn env = do
                     percep = case percepArg of
                         Just (Lua.Number s) → realToFrac s
                         _                   → 1.0
-                Q.writeQueue (worldQueue env) $
+                Q.writeQueue (wsWorldQueue wsc) $
                     WorldDigTile pageId (round gx) (round gy)
                                  (realToFrac ux) (realToFrac uy)
                                  (realToFrac amt) skill percep
@@ -140,8 +142,8 @@ worldDigTileFn env = do
 -- Enqueues a dig-1-Z-down edit at the given tile. The actual mutation
 -- happens on the next world-thread tick, so this returns true once
 -- enqueued (not once applied).
-worldDeleteTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldDeleteTileFn env = do
+worldDeleteTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldDeleteTileFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tointeger 2
     gyArg     ← Lua.tointeger 3
@@ -149,7 +151,7 @@ worldDeleteTileFn env = do
         (Just pageIdBS, Just gx, Just gy) → do
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                Q.writeQueue (worldQueue env)
+                Q.writeQueue (wsWorldQueue wsc)
                     (WorldDeleteTile pageId (fromIntegral gx) (fromIntegral gy))
             Lua.pushboolean True
             return 1
@@ -163,8 +165,8 @@ worldDeleteTileFn env = do
 -- (Ocean); unknown values fall back to "water". Debug-tool affordance:
 -- lets the arena have water sources without waiting for procedural
 -- generation.
-worldSetFluidTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetFluidTileFn env = do
+worldSetFluidTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetFluidTileFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tointeger 2
     gyArg     ← Lua.tointeger 3
@@ -180,7 +182,7 @@ worldSetFluidTileFn env = do
                     Nothing → Lake
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                Q.writeQueue (worldQueue env) $
+                Q.writeQueue (wsWorldQueue wsc) $
                     WorldSetFluidTile pageId
                         (fromIntegral gx) (fromIntegral gy) fluidType
             Lua.pushboolean True
@@ -197,8 +199,8 @@ worldSetFluidTileFn env = do
 --   WeSetCell so it persists like any player edit. Grows the column up
 --   to reach z; a z below the column floor is dropped (warns). Returns
 --   false when the material can't be resolved.
-worldSetCellFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetCellFn env = do
+worldSetCellFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetCellFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tointeger 2
     gyArg     ← Lua.tointeger 3
@@ -208,7 +210,7 @@ worldSetCellFn env = do
     matNum  ← Lua.tonumber 5
     case (pageIdArg, gxArg, gyArg, zArg) of
         (Just pageIdBS, Just gx, Just gy, Just z) → do
-            registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef wsc)
             let mMat = case (matNum, matName) of
                     (Just (Lua.Number n), _) | n ≥ 0 ∧ n ≤ 255 →
                         Just (MaterialId (round n))
@@ -220,7 +222,7 @@ worldSetCellFn env = do
                 Nothing → Lua.pushboolean False >> return 1
                 Just mat → do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    Lua.liftIO $ Q.writeQueue (worldQueue env) $
+                    Lua.liftIO $ Q.writeQueue (wsWorldQueue wsc) $
                         WorldSetCell pageId
                             (fromIntegral gx) (fromIntegral gy)
                             (fromIntegral z) mat
@@ -234,8 +236,8 @@ worldSetCellFn env = do
 --   1-z ramp down (so a unit can walk up it instead of climbing). addTile
 --   only ever makes flat tops (slope 0 = cliff), so this is the only way
 --   to author a walkable ramp — exists for the movement test harness.
-worldSetSlopeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetSlopeFn env = do
+worldSetSlopeFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetSlopeFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tointeger 2
     gyArg     ← Lua.tointeger 3
@@ -245,7 +247,7 @@ worldSetSlopeFn env = do
         (Just pageIdBS, Just gx, Just gy, Just z, Just bits) → do
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                Q.writeQueue (worldQueue env) $
+                Q.writeQueue (wsWorldQueue wsc) $
                     WorldSetSlope pageId
                         (fromIntegral gx) (fromIntegral gy)
                         (fromIntegral z)
@@ -264,8 +266,8 @@ worldSetSlopeFn env = do
 --   Refused world-thread-side unless the tile is tilled soil and
 --   cropName names a registered row_crop species; poll
 --   world.getFloraGrowthAt afterward to confirm it landed.
-worldPlantRowCropAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldPlantRowCropAtFn env = do
+worldPlantRowCropAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldPlantRowCropAtFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tointeger 2
     gyArg     ← Lua.tointeger 3
@@ -274,7 +276,7 @@ worldPlantRowCropAtFn env = do
         (Just pageIdBS, Just gx, Just gy, Just cropBS) → do
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                Q.writeQueue (worldQueue env) $
+                Q.writeQueue (wsWorldQueue wsc) $
                     WorldPlantRowCropAt pageId
                         (fromIntegral gx) (fromIntegral gy)
                         (TE.decodeUtf8Lenient cropBS)
@@ -291,8 +293,8 @@ worldPlantRowCropAtFn env = do
 --   'World.Vegetation.vegTilledSoil' so it survives chunk eviction +
 --   save/load like every other edit. No generator path emits arbitrary
 --   ids here (computeChunkVegetation owns natural placement).
-worldSetVegFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetVegFn env = do
+worldSetVegFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetVegFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tointeger 2
     gyArg     ← Lua.tointeger 3
@@ -302,7 +304,7 @@ worldSetVegFn env = do
         (Just pageIdBS, Just gx, Just gy, Just z, Just vegId) → do
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                Q.writeQueue (worldQueue env) $
+                Q.writeQueue (wsWorldQueue wsc) $
                     WorldSetVeg pageId
                         (fromIntegral gx) (fromIntegral gy)
                         (fromIntegral z)

@@ -22,7 +22,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
+import Engine.Core.State (activeWorldPageFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
@@ -30,27 +32,27 @@ import World.Command.Types (WorldCommand(..))
 import World.Chop.Types
 
 -- | chop.setAnchor(pageId, gx, gy) — first-click anchor.
-chopSetAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopSetAnchorFn env = do
+chopSetAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopSetAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetChopAnchor pageId (round gx) (round gy)
         _ → pure ()
     return 0
 
 -- | chop.clearAnchor(pageId) — cancel the pending rectangle.
-chopClearAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopClearAnchorFn env = do
+chopClearAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopClearAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldClearChopAnchor pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldClearChopAnchor pageId
         _ → pure ()
     return 0
 
@@ -58,8 +60,8 @@ chopClearAnchorFn env = do
 --   rectangle. Only tiles holding a currently-harvestable flora species
 --   carrying @tag@ (default "wood") are designated — sweeping a forest
 --   marks the trees, not the ground between them.
-chopDesignateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopDesignateFn env = do
+chopDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
     x1Arg ← Lua.tonumber 2
     y1Arg ← Lua.tonumber 3
@@ -70,7 +72,7 @@ chopDesignateFn env = do
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 tag = maybe "wood" TE.decodeUtf8Lenient tagArg
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldDesignateChop pageId
                     (round x1) (round y1) (round x2) (round y2) tag
         _ → pure ()
@@ -79,24 +81,24 @@ chopDesignateFn env = do
 -- | chop.cancelDesignation(gx, gy) — remove the designation at a tile
 --   on the active world. Both the player-cancel path and the chop AI's
 --   completion call this (best-effort, returns nothing).
-chopCancelDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopCancelDesignationFn env = do
+chopCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1
     gyArg ← Lua.tonumber 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mPage ← Lua.liftIO $ activeWorldPage env
+            mPage ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef wsc)
             case mPage of
                 Just (pageId, _) → Lua.liftIO $
-                    Q.writeQueue (worldQueue env) $
+                    Q.writeQueue (wsWorldQueue wsc) $
                         WorldCancelChop pageId (round gx) (round gy)
                 Nothing → pure ()
         _ → pure ()
     return 0
 
 -- | chop.getDesignationAt(pageId, gx, gy) → {x, y, z} | nil.
-chopGetDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopGetDesignationAtFn env = do
+chopGetDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopGetDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
@@ -105,7 +107,7 @@ chopGetDesignationAtFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -124,13 +126,13 @@ chopGetDesignationAtFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | chop.getDesignationCount(pageId) → n.
-chopGetDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopGetDesignationCountFn env = do
+chopGetDesignationCountFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopGetDesignationCountFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsChopDesignationsRef ws)
@@ -142,8 +144,8 @@ chopGetDesignationCountFn env = do
 -- | chop.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tree by Euclidean distance — the chop AI's
 --   "distance to nearest chop job" term. Mirrors nearestMineDesignation.
-chopNearestDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopNearestDesignationFn env = do
+chopNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -152,7 +154,7 @@ chopNearestDesignationFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsChopDesignationsRef ws)
@@ -177,15 +179,15 @@ chopNearestDesignationFn env = do
 
 -- | chop.setDesignateTexture(pageId, texHandle) — marker texture for
 --   committed chop designations.
-chopSetDesignateTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-chopSetDesignateTextureFn env = do
+chopSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopSetDesignateTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     handleArg ← Lua.tointeger 2
     case (pageIdArg, handleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetChopDesignateTexture pageId texHandle
         _ → pure ()
     return 0

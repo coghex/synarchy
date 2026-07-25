@@ -10,7 +10,8 @@ module Unit.Thread.Movement.PathAdvance
 
 import UPrelude
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Tile.Types (WorldTileData(..))
 import Unit.Sim.Types
@@ -40,9 +41,9 @@ arrivalEpsilon = 0.1
 --   per-unit-page fix is materially larger in scope than #797's LOS
 --   change (a per-caller WorldTileData lookup, not a single shared
 --   snapshot). Tracked as a deferred follow-up, not fixed in #797.
-snapshotVisibleWorldTiles ∷ EngineEnv → IO (Maybe WorldTileData)
-snapshotVisibleWorldTiles env = do
-    wm ← readIORef (worldManagerRef env)
+snapshotVisibleWorldTiles ∷ WorldSimCapability → IO (Maybe WorldTileData)
+snapshotVisibleWorldTiles wsc = do
+    wm ← readIORef (wsWorldManagerRef wsc)
     case wmVisible wm of
         []          → pure Nothing
         (pageId:_)  → case lookup pageId (wmWorlds wm) of

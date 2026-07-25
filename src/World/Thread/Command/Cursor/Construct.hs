@@ -22,7 +22,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
@@ -41,7 +43,7 @@ import Structure.Types (StructureSlot, slotFromText)
 handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetConstructAnchorCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -51,7 +53,7 @@ handleWorldSetConstructAnchorCommand env _logger pageId gx gy = do
 handleWorldClearConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → IO ()
 handleWorldClearConstructAnchorCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -99,7 +101,7 @@ structureOccupiedAt tileData gx gy slot =
 handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → ConstructTarget → IO ()
 handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing → recordMissingWorldOutcome env "construction.designate"
             pageId gx1 gy1
@@ -151,7 +153,7 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
 handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldCancelConstructCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → void $ popConstructDesignation worldState (gx, gy)
         Nothing → pure ()
@@ -181,7 +183,7 @@ popConstructDesignation worldState (gx, gy) = do
 handleWorldSetConstructStatusCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → ConstructStatus → IO ()
 handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
@@ -202,7 +204,7 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
 handleWorldAddConstructProgressCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Float → IO ()
 handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             mUpd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
@@ -247,7 +249,7 @@ resetConstructSlope worldState (gx, gy) cd =
 handleWorldSetConstructDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → Text → TextureHandle → IO ()
 handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -261,7 +263,7 @@ handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
 handleWorldSetConstructLineModeCommand ∷ EngineEnv → LoggerState
     → WorldPageId → Bool → IO ()
 handleWorldSetConstructLineModeCommand env _logger pageId enabled = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →

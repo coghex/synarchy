@@ -21,9 +21,11 @@ module Engine.Scripting.Lua.API.Camera
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import qualified Data.Vector.Unboxed as VU
-import Engine.Core.State (EngineEnv, materialRegistryRef, worldManagerRef
+import Engine.Core.State (EngineEnv
   , resolveActiveWorld )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
@@ -176,8 +178,8 @@ cameraGotoTileFn env = do
 
             -- Compute surface elevation from world gen params.
             -- This is a pure computation — no loaded chunks needed.
-            manager ← readIORef (worldManagerRef env)
-            registry ← readIORef (materialRegistryRef env)
+            manager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+            registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
             -- Track the ACTIVE world only (was: loop every visible world,
             -- last-wins — disagreed with the render-thread z-track and the
             -- rotation hit-test, #81).
@@ -311,7 +313,7 @@ rotateCamera env rotateFn = do
 findVisualCenterTile ∷ EngineEnv → CameraFacing → Float → Float → Int
                      → IO (Maybe (Int, Int, Int))
 findVisualCenterTile env facing cx cy zSlice = do
-    wm ← readIORef (worldManagerRef env)
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case resolveActiveWorld wm of
         Nothing → return Nothing
         Just (_, ws) → do
@@ -351,7 +353,7 @@ cameraGetFacingFn env = do
 invalidateWorldCaches ∷ EngineEnv → IO ()
 invalidateWorldCaches env = do
     _camera ← readIORef (rvCameraRef (toRenderViewCapability env))
-    manager ← readIORef (worldManagerRef env)
+    manager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     forM_ (wmWorlds manager) $ \(_, ws) → do
         bumpQuadCacheGen ws
         writeIORef (wsZoomQuadCacheRef ws) Nothing

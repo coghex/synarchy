@@ -14,7 +14,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types
 import World.Vegetation (isTilledSoil)
 import World.Generate.Coordinates (globalToChunk)
@@ -27,8 +28,8 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup
 --   active world's — so the location stamper can author geometry against a
 --   specific (possibly hidden, non-active) page and still read its real
 --   terrain height (#89 multiworld).
-worldGetTerrainAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetTerrainAtFn env = do
+worldGetTerrainAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetTerrainAtFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     mPage ← Lua.tostring 3
@@ -40,11 +41,11 @@ worldGetTerrainAtFn env = do
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ case mPage of
                 Just pidBS → do
-                    mWs ← worldStateByPage env (TE.decodeUtf8Lenient pidBS)
+                    mWs ← worldStateByPage wsc (TE.decodeUtf8Lenient pidBS)
                     case mWs of
                         Just ws → Just <$> readIORef (wsTilesRef ws)
                         Nothing → pure Nothing
-                Nothing → getWorldTileData env
+                Nothing → getWorldTileData wsc
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
@@ -64,8 +65,8 @@ worldGetTerrainAtFn env = do
 --   the active world — the value the dig display and the construction
 --   corner-progress display (#96) write, so headless tests can assert
 --   a tile is visibly mid-work. Read-only sibling of world.setSlope.
-worldGetSlopeAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetSlopeAtFn env = do
+worldGetSlopeAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSlopeAtFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
@@ -74,7 +75,7 @@ worldGetSlopeAtFn env = do
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ getWorldTileData wsc
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
@@ -96,8 +97,8 @@ worldGetSlopeAtFn env = do
 --   The SURFACE tile's vegetation id on the active world — the value
 --   the till AI (#333) writes via world.setVegAt. Read-only sibling of
 --   world.setVegAt, mirroring world.getSlopeAt.
-worldGetVegAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetVegAtFn env = do
+worldGetVegAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetVegAtFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
@@ -106,7 +107,7 @@ worldGetVegAtFn env = do
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ getWorldTileData wsc
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
@@ -131,8 +132,8 @@ worldGetVegAtFn env = do
 --   should call this rather than compare world.getVegAt's raw id to
 --   77 — if a soil-type-variant tilled texture ever adds ids
 --   alongside vegTilledSoil, only isTilledSoil needs to grow to match.
-worldIsPlantableFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldIsPlantableFn env = do
+worldIsPlantableFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldIsPlantableFn wsc = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
@@ -141,7 +142,7 @@ worldIsPlantableFn env = do
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ getWorldTileData wsc
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil

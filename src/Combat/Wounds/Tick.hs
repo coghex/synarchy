@@ -8,6 +8,8 @@ module Combat.Wounds.Tick
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
@@ -15,7 +17,7 @@ import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Environment (lookupEnv)
 import Combat.Types (CombatEvent(..))
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -70,7 +72,7 @@ data WoundTickOutcome
 --   onto the unit command queue.
 tickAllWounds ∷ EngineEnv → Float → IO ()
 tickAllWounds env dt = do
-    gt ← readIORef (gameTimeRef env)
+    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- Infection defs come through the `content-registries` capability
     -- (#890); everything else here is still broad EngineEnv state.
     infMgr ← readIORef
@@ -79,7 +81,7 @@ tickAllWounds env dt = do
     -- Active world's climate, for per-unit infection selection + onset speed.
     -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.
     mClim ← do
-        mWs ← activeWorldState env
+        mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mWs of
             Just ws → do
                 mp ← readIORef (wsGenParamsRef ws)

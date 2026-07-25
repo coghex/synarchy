@@ -5,7 +5,9 @@ module World.Thread.Time
 
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv, loadStatusRef)
 import Engine.Load.Status (loadInProgress)
 import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
@@ -16,7 +18,7 @@ import World.Thread.Discovery (tickLocationDiscovery)
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
 tickWorldTime env dt = do
-    manager ← readIORef (worldManagerRef env)
+    manager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     -- enginePausedRef is the single source of truth for "is the world clock
     -- advancing". wsTimeScaleRef (the player's chosen speed) is updated
     -- through a separate, asynchronous path (a queued WorldSetTimeScale)
@@ -26,7 +28,7 @@ tickWorldTime env dt = do
     -- Gating advancement on the pause flag keeps a paused world's clock
     -- frozen regardless of how wsTimeScaleRef got set (#42). It also covers
     -- every other pause source (notification ccPause, etc.) for free.
-    paused ← readIORef (enginePausedRef env)
+    paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
 
     forM_ (wmVisible manager) $ \pageId →
         case lookup pageId (wmWorlds manager) of
@@ -105,6 +107,6 @@ tickWorldTime env dt = do
             Just worldState → do
                 wt ← readIORef (wsTimeRef worldState)
                 let sunAngle = worldTimeToSunAngle wt
-                atomicModifyIORef' (sunAngleRef env) $ \_ → (sunAngle, ())
+                atomicModifyIORef' (wsSunAngleRef (toWorldSimCapability env)) $ \_ → (sunAngle, ())
             Nothing → return ()
         [] → return ()

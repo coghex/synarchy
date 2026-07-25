@@ -17,7 +17,11 @@ import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
                            growthPhaseTag, activeStageTag,
@@ -56,11 +60,11 @@ worldGetFloraAtFn env = do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
             mResult ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
-                        insts ← floraAt env ws gx gy
+                        insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         (doy, absDay) ← growthClock ws
                         let open (i, sp) =
@@ -117,11 +121,11 @@ worldGetFloraGrowthAtFn env = do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
             entries ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure []
                     Just ws → do
-                        insts ← floraAt env ws gx gy
+                        insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         (doy, absDay) ← growthClock ws
                         let timer = HM.lookupDefault 0 (gx, gy) harvests
@@ -201,16 +205,16 @@ worldFindHarvestableFloraFn env = do
                 radius = min 64 (max 1 (maybe 24 fromIntegral mRad)) ∷ Int
                 tagFilter = TE.decodeUtf8Lenient <$> mTag
             mBest ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
                         tileData ← readIORef (wsTilesRef ws)
-                        cat ← readIORef (floraCatalogRef env)
+                        cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         cropPlots ← readIORef (wsCropPlotsRef ws)
                         (doy, absDay) ← growthClock ws
-                        itemMgr ← readIORef (itemManagerRef env)
+                        itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                         let (cLo, _) = globalToChunk (gx - radius) (gy - radius)
                             (cHi, _) = globalToChunk (gx + radius) (gy + radius)
                             ChunkCoord cx0 cy0 = cLo
@@ -314,7 +318,7 @@ itemGetFoodFn env = do
         Just nameBS → do
             let name = TE.decodeUtf8Lenient nameBS
             mFood ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure (lookupItemDef name itemMgr >>= idFood)
             case mFood of
                 Nothing → Lua.pushnil
@@ -345,7 +349,7 @@ worldGetCropPlotAtFn env = do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
             mResult ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
@@ -353,7 +357,7 @@ worldGetCropPlotAtFn env = do
                         case HM.lookup (gx, gy) plots of
                             Nothing → pure Nothing
                             Just cp → do
-                                cat ← readIORef (floraCatalogRef env)
+                                cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
                                 (doy, absDay) ← growthClock ws
                                 pure $ do
                                     sp ← lookupSpecies (cpSpecies cp) cat

@@ -23,17 +23,18 @@ module World.Thread.Command.Cursor.Select
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (globalToChunk)
 import World.Thread.Helpers (unWorldPageId)
 
-handleWorldSetZoomCursorHoverCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetZoomCursorHoverCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → IO ()
-handleWorldSetZoomCursorHoverCommand env logger pageId x y = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetZoomCursorHoverCommand wsc logger pageId x y = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -41,9 +42,9 @@ handleWorldSetZoomCursorHoverCommand env logger pageId x y = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for cursor hover update: " <> unWorldPageId pageId
-handleWorldSetZoomCursorSelectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetZoomCursorSelectCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetZoomCursorSelectCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
+handleWorldSetZoomCursorSelectCommand wsc _logger pageId = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             -- Only ARM the selection here. The chunk is resolved from the
@@ -61,18 +62,18 @@ handleWorldSetZoomCursorSelectCommand env _logger pageId = do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { zoomSelectNow = True }, ())
         Nothing → pure ()
-handleWorldSetZoomCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetZoomCursorDeselectCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetZoomCursorDeselectCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
+handleWorldSetZoomCursorDeselectCommand wsc _logger pageId = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { zoomSelectedPos = Nothing, zoomSelectNow = False }, ())
         Nothing → pure ()
-handleWorldSetZoomCursorSelectTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetZoomCursorSelectTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → TextureHandle → IO ()
-handleWorldSetZoomCursorSelectTextureCommand env logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetZoomCursorSelectTextureCommand wsc logger pageId tid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -81,10 +82,10 @@ handleWorldSetZoomCursorSelectTextureCommand env logger pageId tid = do
             logWarn logger CatWorld $
                 "World not found for zoom cursor texture update: "
                     <> unWorldPageId pageId
-handleWorldSetZoomCursorHoverTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetZoomCursorHoverTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → TextureHandle → IO ()
-handleWorldSetZoomCursorHoverTextureCommand env logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetZoomCursorHoverTextureCommand wsc logger pageId tid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -93,10 +94,10 @@ handleWorldSetZoomCursorHoverTextureCommand env logger pageId tid = do
             logWarn logger CatWorld $
                 "World not found for zoom cursor hover texture update: "
                     <> unWorldPageId pageId
-handleWorldSetWorldCursorHoverCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetWorldCursorHoverCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → IO ()
-handleWorldSetWorldCursorHoverCommand env logger pageId x y = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorHoverCommand wsc logger pageId x y = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -104,9 +105,9 @@ handleWorldSetWorldCursorHoverCommand env logger pageId x y = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for cursor hover update: " <> unWorldPageId pageId
-handleWorldSetWorldCursorSelectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetWorldCursorSelectCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorSelectCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
+handleWorldSetWorldCursorSelectCommand wsc _logger pageId = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             -- Only ARM the selection here. The tile is resolved from the
@@ -117,18 +118,18 @@ handleWorldSetWorldCursorSelectCommand env _logger pageId = do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { worldSelectNow = True }, ())
         Nothing → pure ()
-handleWorldSetWorldCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetWorldCursorDeselectCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorDeselectCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
+handleWorldSetWorldCursorDeselectCommand wsc _logger pageId = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { worldSelectedTile = Nothing, worldSelectNow = False }, ())
         Nothing → pure ()
-handleWorldSetWorldCursorSelectTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetWorldCursorSelectTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → TextureHandle → IO ()
-handleWorldSetWorldCursorSelectTextureCommand env logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorSelectTextureCommand wsc logger pageId tid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -137,10 +138,10 @@ handleWorldSetWorldCursorSelectTextureCommand env logger pageId tid = do
             logWarn logger CatWorld $
                 "World not found for cursor texture update: "
                     <> unWorldPageId pageId
-handleWorldSetWorldCursorHoverTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetWorldCursorHoverTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → TextureHandle → IO ()
-handleWorldSetWorldCursorHoverTextureCommand env logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorHoverTextureCommand wsc logger pageId tid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -149,10 +150,10 @@ handleWorldSetWorldCursorHoverTextureCommand env logger pageId tid = do
             logWarn logger CatWorld $
                 "World not found for cursor hover texture update: "
                     <> unWorldPageId pageId
-handleWorldSetWorldCursorSelectBgTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetWorldCursorSelectBgTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → TextureHandle → IO ()
-handleWorldSetWorldCursorSelectBgTextureCommand env logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorSelectBgTextureCommand wsc logger pageId tid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -161,10 +162,10 @@ handleWorldSetWorldCursorSelectBgTextureCommand env logger pageId tid = do
             logWarn logger CatWorld $
                 "World not found for cursor texture update: "
                     <> unWorldPageId pageId
-handleWorldSetWorldCursorHoverBgTextureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetWorldCursorHoverBgTextureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → TextureHandle → IO ()
-handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetWorldCursorHoverBgTextureCommand wsc logger pageId tid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -185,10 +186,10 @@ handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId tid = do
 --   without going through the hover-then-select cursor flow (which
 --   races with the per-tick mouse-hover updates from hud.update).
 --   No-op if the chunk isn't loaded.
-handleWorldSelectTileByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSelectTileByCoordCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Maybe Int → IO ()
-handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSelectTileByCoordCommand wsc _logger pageId gx gy mz = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing → pure ()
         Just worldState → do
@@ -235,10 +236,10 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do
 --   opposing-clear, mirrored the other way), so a lingering tile arm
 --   could wipe out this fresh chunk selection on the very next tile
 --   render even though nothing about it was ever re-armed.
-handleWorldSelectChunkByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSelectChunkByCoordCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → IO ()
-handleWorldSelectChunkByCoordCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSelectChunkByCoordCommand wsc _logger pageId gx gy = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing → pure ()
         Just worldState →

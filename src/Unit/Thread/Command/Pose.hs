@@ -12,6 +12,8 @@ module Unit.Thread.Command.Pose
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
@@ -181,7 +183,7 @@ handleUnitDrinkCommand env utsRef uid = do
                             in if fps > 0 ∧ maxN > 0
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
-    now ← readIORef (gameTimeRef env)
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
@@ -221,7 +223,7 @@ handleUnitEatCommand env utsRef uid = do
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
             _ → 0
-    now ← readIORef (gameTimeRef env)
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
@@ -258,7 +260,7 @@ handleUnitPickupCommand env utsRef uid = do
                             in if fps > 0 ∧ maxN > 0
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
-    now ← readIORef (gameTimeRef env)
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
@@ -319,7 +321,7 @@ handleUnitTransitionToCommand env utsRef uid target stride = do
                                    then fromIntegral visible / realToFrac fps ∷ Double
                                    else 0
             _ → 0
-    now ← readIORef (gameTimeRef env)
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of

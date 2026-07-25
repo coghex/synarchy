@@ -13,7 +13,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
@@ -29,10 +30,10 @@ import World.Thread.Helpers (unWorldPageId)
 --   variant is already baked into facePaletteId (the BUILDER chose it). No
 --   terrain is touched — but it shares the ordered log with terrain edits, so
 --   a dig recorded before this lands before it on replay.
-handleWorldSetStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldSetStructureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Word8 → Int → Int → Int → IO ()
-handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -61,10 +62,10 @@ handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z = 
 --   reload / after save/load. The live lcStructures overlay is additionally
 --   updated when the chunk happens to be loaded. (Replaying a clear with no
 --   matching set is a harmless no-op — a HM.delete on an absent key.)
-handleWorldClearStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldClearStructureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Word8 → IO ()
-handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldClearStructureCommand wsc logger pageId gx gy slotTag = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -90,10 +91,10 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
 --   read, so a cleared world stays cleared after a chunk evicts or a
 --   save/load round-trip. (No quad-cache bust: the structure pass renders
 --   from 'lcStructures' live every frame, never from the cached terrain quads.)
-handleWorldClearAllStructuresCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldClearAllStructuresCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → IO ()
-handleWorldClearAllStructuresCommand env logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+handleWorldClearAllStructuresCommand wsc logger pageId = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $

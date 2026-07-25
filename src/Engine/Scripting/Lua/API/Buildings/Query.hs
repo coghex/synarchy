@@ -10,6 +10,8 @@ module Engine.Scripting.Lua.API.Buildings.Query
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -17,7 +19,7 @@ import qualified HsLua as Lua
 import Data.List (minimumBy)
 import Data.Ord (comparing)
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
 import Engine.Asset.Handle (TextureHandle(..))
@@ -142,8 +144,8 @@ buildingFindStationFn env = do
                     _                → Nothing
             mBest ← Lua.liftIO $ do
                 bm      ← readIORef (buildingManagerRef env)
-                now     ← readIORef (gameTimeRef env)
-                mActive ← activeWorldPage env
+                now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+                mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 pure $ case mActive of
                     Nothing → Nothing
                     Just (pid, _) →
@@ -200,7 +202,7 @@ buildingGetActiveIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetActiveIdsFn env = do
     ids ← Lua.liftIO $ do
         bm ← readIORef (buildingManagerRef env)
-        mActive ← activeWorldPage env
+        mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         pure $ case mActive of
             Just (pid, _) → HM.keys (buildingsOnPage pid (bmInstances bm))
             Nothing       → []

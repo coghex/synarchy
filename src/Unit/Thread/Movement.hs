@@ -33,6 +33,8 @@ module Unit.Thread.Movement
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Combat.Types (pushInjuryEvent)
@@ -64,8 +66,8 @@ import Unit.Thread.Movement.PathAdvance (tickUnit, snapshotVisibleWorldTiles)
 --   once per tick so all units in this batch see the same world.
 tickAllMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
 tickAllMovement dt env utsRef = do
-    mWtd ← snapshotVisibleWorldTiles env
-    now  ← readIORef (gameTimeRef env)
+    mWtd ← snapshotVisibleWorldTiles (toWorldSimCapability env)
+    now  ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- Snapshot per-unit body_mass + toughness so the pure movement
     -- tick can compute fall impact without reading the unit manager.
     -- Defaults match human baseline (70 kg, toughness 1.0) — picked
@@ -80,7 +82,7 @@ tickAllMovement dt env utsRef = do
     -- Surface-material registry for the per-tile movement factor (#312):
     -- soft/loose ground slows the unit and biases A* toward firm routes.
     -- Read once per tick (single IORef deref), like the pathing config.
-    reg ← readIORef (materialRegistryRef env)
+    reg ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let statsFor uid = case HM.lookup uid (umInstances um) of
             Just inst →
                 -- Gait threshold (absolute tiles/s) from the unit's def:
@@ -205,7 +207,7 @@ tickAllMovement dt env utsRef = do
                     Just (kind, sev, _) →
                         let seed = round (now * 1000.0) + fromIntegral (unUnitId uid)
                             angle = impactFallbackAngle seed
-                        in spawnImpactBlood env (uiPage inst) gx gy gz
+                        in spawnImpactBlood (toWorldSimCapability env) (uiPage inst) gx gy gz
                              kind sev angle seed (Just uid) now
 
     -- Bleeding trails (#882): the MOVING half of ongoing external
@@ -294,7 +296,7 @@ tickAllMovement dt env utsRef = do
                 (finalMap, allMarks) = foldl' processOne (umInstances um', []) trailSteps
             in (um' { umInstances = finalMap }, allMarks)
     forM_ trailMarks $ \(page, gx, gy, gz, kind, vol, seed, mSrc) →
-        spawnTrailMark env page gx gy gz kind vol (impactFallbackAngle seed) seed mSrc now
+        spawnTrailMark (toWorldSimCapability env) page gx gy gz kind vol (impactFallbackAngle seed) seed mSrc now
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)

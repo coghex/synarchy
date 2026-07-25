@@ -29,6 +29,8 @@ module Engine.Scripting.Lua.API.Combat
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
@@ -83,7 +85,7 @@ combatEmitDeathFn env = do
     causeArg ← Lua.tostring 2
     case tArg of
         Just t → do
-            gt ← Lua.liftIO $ readIORef (gameTimeRef env)
+            gt ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
             let cause = maybe "their wounds" TE.decodeUtf8Lenient causeArg
                 ev = CombatEvent
                     { ceTs       = gt
@@ -176,7 +178,7 @@ injuryEmitFn env = do
     sevArg   ← Lua.tonumber 6
     case (vArg, kindArg) of
         (Just v, Just kindBS) → do
-            gt ← Lua.liftIO $ readIORef (gameTimeRef env)
+            gt ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
             let opt key = maybe [] (\bs → [(key, TE.decodeUtf8Lenient bs)])
                 payload = HM.fromList $ concat
                     [ opt "cause"     causeArg
@@ -216,7 +218,7 @@ thoughtEmitFn env = do
     catArg  ← Lua.tostring 3
     case (uArg, textArg) of
         (Just u, Just textBS) → do
-            gt ← Lua.liftIO $ readIORef (gameTimeRef env)
+            gt ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
             let category = maybe "random" TE.decodeUtf8Lenient catArg
                 ev = CombatEvent
                     { ceTs       = gt

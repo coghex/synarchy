@@ -14,7 +14,8 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (atomicModifyIORef', readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)
 import World.Flora.Types
@@ -34,12 +35,12 @@ import World.Material (MaterialId(..), materialIdByName)
 --   recipe/item checks already enforce -- unlike those, no per-tile
 --   world query works during prepareLoad (it runs before any world
 --   state is even restored), so this needed its own name-only lookup.
-floraExistsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraExistsFn env = do
+floraExistsFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraExistsFn wsc = do
     nameArg ← Lua.tostring 1
     case nameArg of
         Just nameBS → do
-            cat ← Lua.liftIO $ readIORef (floraCatalogRef env)
+            cat ← Lua.liftIO $ readIORef (wsFloraCatalogRef wsc)
             let name = TE.decodeUtf8Lenient nameBS
             Lua.pushboolean (maybe False (const True)
                 (findSpeciesByName name cat))
@@ -48,8 +49,8 @@ floraExistsFn env = do
 
 -- * Registration
 
-floraRegisterFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraRegisterFn env = do
+floraRegisterFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraRegisterFn wsc = do
     nameArg ← Lua.tostring 1
     texArg  ← Lua.tointeger 2
 
@@ -57,7 +58,7 @@ floraRegisterFn env = do
         (Just nameBS, Just texInt) → do
             let name = TE.decodeUtf8Lenient nameBS
                 baseTex = TextureHandle (fromIntegral texInt)
-                catRef = floraCatalogRef env
+                catRef = wsFloraCatalogRef wsc
 
             fid ← Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
                 let (newId, cat') = nextFloraId cat
@@ -73,8 +74,8 @@ floraRegisterFn env = do
 
 -- * Lifecycle
 
-floraSetLifecycleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraSetLifecycleFn env = do
+floraSetLifecycleFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraSetLifecycleFn wsc = do
     fidArg   ← Lua.tointeger 1
     typeArg  ← Lua.tostring 2
     arg3     ← Lua.tonumber 3
@@ -85,7 +86,7 @@ floraSetLifecycleFn env = do
         (Just fidInt, Just typeBS) → do
             let fid = FloraId (fromIntegral fidInt)
                 typeText = TE.decodeUtf8Lenient typeBS
-                catRef = floraCatalogRef env
+                catRef = wsFloraCatalogRef wsc
                 lifecycle = case typeText of
                     "perennial" →
                         let minL = luaNum arg3 1800.0
@@ -107,8 +108,8 @@ floraSetLifecycleFn env = do
 
 -- * Life phases
 
-floraAddPhaseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraAddPhaseFn env = do
+floraAddPhaseFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraAddPhaseFn wsc = do
     fidArg ← Lua.tointeger 1
     tagArg ← Lua.tostring 2
     texArg ← Lua.tointeger 3
@@ -119,7 +120,7 @@ floraAddPhaseFn env = do
             let fid = FloraId (fromIntegral fidInt)
                 tagText = TE.decodeUtf8Lenient tagBS
                 tex = TextureHandle (fromIntegral texInt)
-                catRef = floraCatalogRef env
+                catRef = wsFloraCatalogRef wsc
                 age = case ageArg of
                     Just (Lua.Number a) → realToFrac a
                     _                   → 0.0
@@ -144,8 +145,8 @@ floraAddPhaseFn env = do
 
 -- * Annual cycle stages
 
-floraAddCycleStageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraAddCycleStageFn env = do
+floraAddCycleStageFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraAddCycleStageFn wsc = do
     fidArg   ← Lua.tointeger 1
     tagArg   ← Lua.tostring 2
     dayArg   ← Lua.tointeger 3
@@ -157,7 +158,7 @@ floraAddCycleStageFn env = do
                 tagText = TE.decodeUtf8Lenient tagBS
                 tex = TextureHandle (fromIntegral texInt)
                 day = fromIntegral dayInt
-                catRef = floraCatalogRef env
+                catRef = wsFloraCatalogRef wsc
 
             case parseCycleTag tagText of
                 Just tag → Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
@@ -179,8 +180,8 @@ floraAddCycleStageFn env = do
 
 -- * Cycle overrides
 
-floraAddCycleOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraAddCycleOverrideFn env = do
+floraAddCycleOverrideFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraAddCycleOverrideFn wsc = do
     fidArg   ← Lua.tointeger 1
     phaseArg ← Lua.tostring 2
     cycleArg ← Lua.tostring 3
@@ -192,7 +193,7 @@ floraAddCycleOverrideFn env = do
                 phaseText = TE.decodeUtf8Lenient phaseBS
                 cycleText = TE.decodeUtf8Lenient cycleBS
                 tex = TextureHandle (fromIntegral texInt)
-                catRef = floraCatalogRef env
+                catRef = wsFloraCatalogRef wsc
 
             case (parsePhaseTag phaseText, parseCycleTag cycleText) of
                 (Just pTag, Just cTag) →
@@ -241,8 +242,8 @@ readSoilNames = do
 --   soils actually gets exercised end to end). The optional trailing
 --   `soils` arg (a Lua array of material names) is resolved the same
 --   way, for schema parity.
-floraRegisterForWorldGenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-floraRegisterForWorldGenFn env = do
+floraRegisterForWorldGenFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+floraRegisterForWorldGenFn wsc = do
     fidArg       ← Lua.tointeger 1
     catArg       ← Lua.tostring 2
     minTempArg   ← Lua.tonumber 3
@@ -264,10 +265,10 @@ floraRegisterForWorldGenFn env = do
 
     case (fidArg, catArg) of
         (Just fidInt, Just catBS) → do
-            registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef wsc)
             let fid = FloraId (fromIntegral fidInt)
                 category = TE.decodeUtf8Lenient catBS
-                catRef = floraCatalogRef env
+                catRef = wsFloraCatalogRef wsc
                 minTemp  = luaNum minTempArg (-40.0)
                 maxTemp  = luaNum maxTempArg 50.0
                 idealTemp = luaNum idealTempArg ((minTemp + maxTemp) / 2.0)

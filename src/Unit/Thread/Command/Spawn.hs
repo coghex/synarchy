@@ -4,6 +4,8 @@ module Unit.Thread.Command.Spawn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
@@ -31,7 +33,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId = do
     -- Drop the spawn if its world no longer exists. A spawn queued before
     -- world.destroyAll (Exit to Menu) would otherwise be drained after
     -- teardown and re-insert an orphan unit into the cleared manager (#58).
-    wmgr ← readIORef (worldManagerRef env)
+    wmgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (umDefs um) of
         _ | worldGone → do

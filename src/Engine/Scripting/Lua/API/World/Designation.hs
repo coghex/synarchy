@@ -15,7 +15,8 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
 import World.Mine.Types (MineDesignation(..))
@@ -24,34 +25,34 @@ import World.Mine.Types (MineDesignation(..))
 
 -- | world.setMineAnchor(pageId, gx, gy) — anchor the designation
 --   rectangle at the given tile (mine tool first click).
-worldSetMineAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetMineAnchorFn env = do
+worldSetMineAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetMineAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetMineAnchor pageId (round gx) (round gy)
         _ → pure ()
     return 0
 
 -- | world.clearMineAnchor(pageId) — cancel the pending rectangle.
-worldClearMineAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldClearMineAnchorFn env = do
+worldClearMineAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldClearMineAnchorFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $ WorldClearMineAnchor pageId
+            Q.writeQueue (wsWorldQueue wsc) $ WorldClearMineAnchor pageId
         _ → pure ()
     return 0
 
 -- | world.designateMine(pageId, x1, y1, x2, y2) — commit the
 --   rectangle (corners in either order; mine tool second click).
-worldDesignateMineFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldDesignateMineFn env = do
+worldDesignateMineFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldDesignateMineFn wsc = do
     pageIdArg ← Lua.tostring 1
     x1Arg ← Lua.tonumber 2
     y1Arg ← Lua.tonumber 3
@@ -60,7 +61,7 @@ worldDesignateMineFn env = do
     case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg) of
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldDesignateMine pageId (round x1) (round y1)
                                           (round x2) (round y2)
         _ → pure ()
@@ -68,15 +69,15 @@ worldDesignateMineFn env = do
 
 -- | world.setMineDesignateTexture(pageId, texHandle) — marker texture
 --   for committed designations.
-worldSetMineDesignateTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldSetMineDesignateTextureFn env = do
+worldSetMineDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetMineDesignateTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (worldQueue env) $
+            Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetMineDesignateTexture pageId texHandle
         _ → pure ()
     return 0
@@ -85,8 +86,8 @@ worldSetMineDesignateTextureFn env = do
 --   Nearest designated tile to (x, y) by Euclidean distance — the
 --   "distance to the nearest dig job" term in the dig utility. Linear
 --   scan of the designation map (synchronous read).
-worldNearestMineDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldNearestMineDesignationFn env = do
+worldNearestMineDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldNearestMineDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
@@ -95,7 +96,7 @@ worldNearestMineDesignationFn env = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
@@ -128,15 +129,15 @@ worldNearestMineDesignationFn env = do
 --     → z, cNW, cNE, cSE, cSW | nil
 --   Designation state at a tile, including corner dig progress (the
 --   AI's "how far along is this tile" query).
-worldGetMineDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetMineDesignationAtFn env = do
+worldGetMineDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetMineDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
@@ -156,13 +157,13 @@ worldGetMineDesignationAtFn env = do
 -- | world.getMineDesignationCount(pageId) → n — number of designated
 --   tiles. Reads the ref directly (synchronous; for HUD readouts and
 --   headless tests).
-worldGetMineDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetMineDesignationCountFn env = do
+worldGetMineDesignationCountFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetMineDesignationCountFn wsc = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)

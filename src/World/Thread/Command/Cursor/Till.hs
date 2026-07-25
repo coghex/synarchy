@@ -25,7 +25,9 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
@@ -38,7 +40,7 @@ import World.Thread.Command.Cursor.Common
 handleWorldSetTillAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetTillAnchorCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -48,7 +50,7 @@ handleWorldSetTillAnchorCommand env _logger pageId gx gy = do
 handleWorldClearTillAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → IO ()
 handleWorldClearTillAnchorCommand env _logger pageId = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -62,7 +64,7 @@ handleWorldClearTillAnchorCommand env _logger pageId = do
 handleWorldDesignateTillCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → IO ()
 handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing → recordMissingWorldOutcome env "till.designate" pageId gx1 gy1
         Just worldState → do
@@ -112,7 +114,7 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
 handleWorldCancelTillCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldCancelTillCommand env _logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsTillDesignationsRef worldState) $ \m →
@@ -122,7 +124,7 @@ handleWorldCancelTillCommand env _logger pageId gx gy = do
 handleWorldSetTillDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → TextureHandle → IO ()
 handleWorldSetTillDesignateTextureCommand env _logger pageId tid = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →

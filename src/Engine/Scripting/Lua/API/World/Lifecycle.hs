@@ -20,7 +20,11 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
+import Engine.Core.State (EngineEnv, luaQueue, activeWorldStateFrom)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
@@ -60,7 +64,7 @@ worldInitFn env = do
                 rawPlates = maybe (defaultPlatesFor size) fromIntegral platesArg
                 plates = normalizePlateCount rawPlates
             when (size /= rawSize ∨ plates /= rawPlates) $ do
-                logger ← readIORef (loggerRef env)
+                logger ← readIORef (ccLoggerRef (toCoreCapability env))
                 logWarn logger CatWorld $
                     "world.init normalized worldgen inputs: worldSize "
                     <> T.pack (show rawSize) <> " → "
@@ -70,7 +74,7 @@ worldInitFn env = do
                     <> " (worldSize minimum/multiple "
                     <> T.pack (show minimumWorldSize)
                     <> ", plateCount min 1)."
-            Q.writeQueue (worldQueue env)
+            Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                 (WorldInit pageId seed size plates identity)
         Nothing → pure ()
 
@@ -88,7 +92,7 @@ worldGetIdentityFn env = do
     pageIdArg ← Lua.tostring 1
     mIdentity ← Lua.liftIO $ case pageIdArg of
         Just pageIdBS → do
-            mgr ← readIORef (worldManagerRef env)
+            mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup (WorldPageId (TE.decodeUtf8Lenient pageIdBS)) (wmWorlds mgr) of
                 Just ws → readIORef (wsIdentityRef ws)
                 Nothing → pure Nothing
@@ -111,7 +115,7 @@ worldInitArenaFn env = do
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"    -- default when called with no args
-    Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArena pageId)
+    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldInitArena pageId)
     return 0
 
 -- | world.initArenaDone(pageId) — signal that all arena textures have been sent
@@ -121,7 +125,7 @@ worldInitArenaDoneFn env = do
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"
-    Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArenaDone pageId)
+    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldInitArenaDone pageId)
     return 0
 
 -- | world.openArena() — convenience function that broadcasts to Lua
@@ -138,7 +142,7 @@ worldShowFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) (WorldShow pageId)
+            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldShow pageId)
         Nothing → pure ()
 
     return 0
@@ -151,7 +155,7 @@ worldHideFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) (WorldHide pageId)
+            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldHide pageId)
         Nothing → pure ()
 
     return 0
@@ -166,7 +170,7 @@ worldHideFn env = do
 --   the 4th value (stage) is simply ignored by those callers.
 worldGetInitProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetInitProgressFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Just worldState → do
             phase ← Lua.liftIO $ readIORef (wsLoadPhaseRef worldState)
@@ -215,7 +219,7 @@ worldWaitForInitFn env = do
   where
     waitLoop 0 = return ()
     waitLoop n = do
-        mWs ← activeWorldState env
+        mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mWs of
             Just ws → do
                 phase ← readIORef (wsLoadPhaseRef ws)
@@ -237,7 +241,7 @@ worldDestroyFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) (WorldDestroy pageId)
+            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldDestroy pageId)
         Nothing → pure ()
 
     return 0
@@ -248,5 +252,5 @@ worldDestroyFn env = do
 --   unit/building managers. (#58)
 worldDestroyAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldDestroyAllFn env = do
-    Lua.liftIO $ Q.writeQueue (worldQueue env) WorldDestroyAll
+    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) WorldDestroyAll
     return 0

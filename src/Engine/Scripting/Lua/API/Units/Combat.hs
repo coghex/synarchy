@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.Units.Combat
     where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -431,7 +433,7 @@ unitInjureFn env = do
     bandArg ← Lua.tonumber 5
     case (idArg, partArg, kindArg, sevArg) of
         (Just n, Just partBS, Just kindBS, Just (Lua.Number sev)) → do
-            now ← Lua.liftIO $ readIORef (gameTimeRef env)
+            now ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
             let uid = UnitId (fromIntegral n)
                 bandage = case bandArg of
                     Just (Lua.Number b) → max 0 (min 1 (realToFrac b))
@@ -475,7 +477,7 @@ unitInjureFn env = do
                 Just (page, gx, gy, gz) → do
                     let seed  = round (now * 1000.0) + fromIntegral n
                         angle = impactFallbackAngle seed
-                    spawnImpactBlood env page gx gy gz
+                    spawnImpactBlood (toWorldSimCapability env) page gx gy gz
                         (TE.decodeUtf8Lenient kindBS) (woundSeverity w)
                         angle seed (Just uid) now
             Lua.pushboolean ok

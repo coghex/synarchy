@@ -16,7 +16,9 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv, unitQueue)
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
@@ -35,7 +37,7 @@ import World.Thread.Helpers (unWorldPageId)
 handleWorldDeleteTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldDeleteTileCommand env logger pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -73,7 +75,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         -- Keep the sim's chunk in step with the new terrain.
-                        syncEditToSim env pageId lc'
+                        syncEditToSim (toWorldSimCapability env) pageId lc'
                         -- Invalidate all three render caches so the next
                         -- tick rebuilds quads from the modified chunk.
                         bumpQuadCacheGen ws
@@ -96,7 +98,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
 handleWorldAddTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → MaterialId → IO ()
 handleWorldAddTileCommand env logger pageId gx gy mat = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -132,7 +134,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
-                        syncEditToSim env pageId lc'
+                        syncEditToSim (toWorldSimCapability env) pageId lc'
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -151,7 +153,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
 handleWorldSetSlopeCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Word8 → IO ()
 handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -203,7 +205,7 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
 handleWorldSetCellCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → MaterialId → IO ()
 handleWorldSetCellCommand env logger pageId gx gy z mat = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -233,7 +235,7 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
-                        syncEditToSim env pageId lc'
+                        syncEditToSim (toWorldSimCapability env) pageId lc'
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing

@@ -7,7 +7,8 @@ module World.Thread.Command.Location
 import UPrelude
 import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 
@@ -16,9 +17,9 @@ import World.Generate.Coordinates (globalToChunk)
 --   when the page or its gen params aren't live (mirrors the other
 --   cursor/designation command handlers).
 handleWorldMarkLocationContentsSpawnedCommand
-    ∷ EngineEnv → WorldPageId → Int → Int → IO ()
-handleWorldMarkLocationContentsSpawnedCommand env pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    ∷ WorldSimCapability → WorldPageId → Int → Int → IO ()
+handleWorldMarkLocationContentsSpawnedCommand wsc pageId gx gy = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing → pure ()
         Just worldState → do
@@ -40,9 +41,9 @@ handleWorldMarkLocationContentsSpawnedCommand env pageId gx gy = do
 --   or its gen params aren't live (mirrors the content-spawned handler
 --   above).
 handleWorldMarkLocationStampedCommand
-    ∷ EngineEnv → WorldPageId → Int → Int → IO ()
-handleWorldMarkLocationStampedCommand env pageId gx gy = do
-    mgr ← readIORef (worldManagerRef env)
+    ∷ WorldSimCapability → WorldPageId → Int → Int → IO ()
+handleWorldMarkLocationStampedCommand wsc pageId gx gy = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing → pure ()
         Just worldState → do

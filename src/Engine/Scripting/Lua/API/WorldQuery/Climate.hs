@@ -10,7 +10,8 @@ module Engine.Scripting.Lua.API.WorldQuery.Climate
 import UPrelude
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Weather.Ambient (ambientTempAt)
@@ -20,13 +21,13 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (getWorldGenParams)
 -- | world.getClimateAt(gx, gy) → { temp, summerTemp, winterTemp, precip,
 --   humidity, snow } | nil. Region climate sampled (bilinear) at a global
 --   tile. temp in °C; precip/humidity/snow 0..1. nil if no world is active.
-worldGetClimateAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetClimateAtFn env = do
+worldGetClimateAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetClimateAtFn wsc = do
     gxArg ← Lua.tointeger 1
     gyArg ← Lua.tointeger 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mParams ← Lua.liftIO (getWorldGenParams env)
+            mParams ← Lua.liftIO (getWorldGenParams wsc)
             case mParams of
                 Nothing → Lua.pushnil >> return 1
                 Just p → do
@@ -51,13 +52,13 @@ worldGetClimateAtFn env = do
 --   worldgen's ice system applies (see World.Weather.Ambient / issue #308), so
 --   a unit on an ice-capped peak reads below freezing instead of the valley's
 --   temperate mean. nil if no world is active. Used by scripts/thermo.lua.
-worldGetAmbientAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetAmbientAtFn env = do
+worldGetAmbientAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetAmbientAtFn wsc = do
     gxArg ← Lua.tointeger 1
     gyArg ← Lua.tointeger 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mParams ← Lua.liftIO (getWorldGenParams env)
+            mParams ← Lua.liftIO (getWorldGenParams wsc)
             case mParams of
                 Nothing → Lua.pushnil >> return 1
                 Just p → do
@@ -75,17 +76,17 @@ worldGetAmbientAtFn env = do
 --   different times of day. nil if no world is active. Lets Lua (e.g. a
 --   future sleep/circadian need, #479) be longitude-aware without
 --   duplicating the wrap math.
-worldGetSunAngleAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetSunAngleAtFn env = do
+worldGetSunAngleAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSunAngleAtFn wsc = do
     gxArg ← Lua.tointeger 1
     gyArg ← Lua.tointeger 2
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
-            mParams ← Lua.liftIO (getWorldGenParams env)
+            mParams ← Lua.liftIO (getWorldGenParams wsc)
             case mParams of
                 Nothing → Lua.pushnil >> return 1
                 Just p → do
-                    sunAngle ← Lua.liftIO (readIORef (sunAngleRef env))
+                    sunAngle ← Lua.liftIO (readIORef (wsSunAngleRef wsc))
                     let localAngle = localSunAngle (wgpWorldSize p)
                                         (fromIntegral gx) (fromIntegral gy)
                                         sunAngle

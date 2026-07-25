@@ -14,6 +14,8 @@ module Engine.Input.Thread.Char
   ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State
 import Engine.Input.Types
@@ -36,7 +38,7 @@ flushPendingCharBatch ∷ EngineEnv → InputState → IO InputState
 flushPendingCharBatch env inpSt = case inpCharBatch inpSt of
     Nothing → return inpSt
     Just batch → do
-        gt ← readIORef (gameTimeRef env)
+        gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         let req = cbRequested batch
             app = cbApplied batch
             drp = cbDropped batch

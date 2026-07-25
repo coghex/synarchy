@@ -7,7 +7,8 @@ module Engine.Scripting.Lua.API.WorldQuery.River
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Vector as V
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..))
 import World.Types
 import Engine.Scripting.Lua.API.WorldQuery.Lookup (getWorldGenParams)
 
@@ -19,9 +20,9 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (getWorldGenParams)
 --   Water surface elevation is no longer carried on the segment — it
 --   is derived per-tile from the water-table compute at chunk gen.
 --   Scripts that need surface heights should call world.getSurfaceAt.
-worldGetRiversFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-worldGetRiversFn env = do
-    mParams ← Lua.liftIO $ getWorldGenParams env
+worldGetRiversFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetRiversFn wsc = do
+    mParams ← Lua.liftIO $ getWorldGenParams wsc
     case mParams of
         Nothing → do
             Lua.pushnil

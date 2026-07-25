@@ -11,6 +11,8 @@ module Engine.PlayerEvent.Emit
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.Sequence (Seq, (|>))
 import qualified Data.Sequence as Seq
@@ -100,7 +102,7 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
                   <> "' from " <> source <> "; event dropped: "
                   <> eventText
         Just cfg → do
-            now ← readIORef (gameTimeRef env)
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             let ev = PlayerEvent
                     { peCategory = category
                     , peText     = eventText
@@ -120,7 +122,7 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
                 Q.writeQueue (luaQueue env)
                     (LuaShowPopup category eventText r g b a mCoords)
             when (ccPause cfg) $
-                writeIORef (enginePausedRef env) True
+                writeIORef (wsEnginePausedRef (toWorldSimCapability env)) True
 
 -- | Append an event to a bounded ring buffer. When @window > 0@, identical
 --   repeats within that many GAME-seconds coalesce Dwarf-Fortress style:
