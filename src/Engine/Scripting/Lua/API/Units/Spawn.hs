@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.Units.Spawn
     where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -27,7 +29,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom, loggerRef)
 import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
@@ -109,7 +111,7 @@ unitSpawnFn env = do
 
             result ← Lua.liftIO $ do
                 -- Check def exists
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 -- Resolve the world the unit will belong to. An explicit
                 -- pageId (slot 6) pins it to that live page; otherwise it
                 -- defaults to the active world (#78). A unit needs a world
@@ -168,13 +170,13 @@ unitSpawnFn env = do
                                     return fallbackFaction
 
                         -- Allocate ID
-                        uid ← atomicModifyIORef' (unitManagerRef env) $ \um' →
+                        uid ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
                             let (uid', um'') = nextUnitId um'
                             in (um'', uid')
 
                         -- Enqueue spawn command, stamped with the active
                         -- world so the unit is world-scoped (#78).
-                        Q.writeQueue (unitQueue env) $
+                        Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                             UnitSpawn uid name gx gy gz faction pageId
 
                         return (fromIntegral (unUnitId uid) ∷ Int)
@@ -191,7 +193,7 @@ unitDestroyFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitDestroy uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitDestroy uid
             Lua.pushboolean True
             return 1
 
@@ -218,7 +220,7 @@ unitSetPosFn env = do
                 mGz = case zArg of
                          Just z  → Just (fromIntegral z)
                          Nothing → Nothing
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                 UnitTeleport uid gx gy mGz
             Lua.pushboolean True
             return 1
@@ -246,7 +248,7 @@ unitMoveToFn env = do
                 speed = case speedArg of
                             Just (Lua.Number v) → realToFrac v
                             _                   → 2.0
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                 UnitMoveTo uid tx ty speed
             Lua.pushboolean True
             return 1
@@ -263,7 +265,7 @@ unitJumpFn env = do
     yArg  ← Lua.tointeger 3
     case (idArg, xArg, yArg) of
         (Just n, Just tx, Just ty) → do
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                 UnitJump (UnitId (fromIntegral n))
                          (fromIntegral tx) (fromIntegral ty)
             Lua.pushboolean True
@@ -281,7 +283,7 @@ unitStopFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitStop uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitStop uid
             Lua.pushboolean True
             return 1
 
@@ -298,7 +300,7 @@ unitCollapseFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitCollapse uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitCollapse uid
             Lua.pushboolean True
             return 1
 
@@ -315,7 +317,7 @@ unitCrawlFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitCrawl uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitCrawl uid
             Lua.pushboolean True
             return 1
 
@@ -332,7 +334,7 @@ unitReviveFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitRevive uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitRevive uid
             Lua.pushboolean True
             return 1
 
@@ -352,7 +354,7 @@ unitRecomputeBodyFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst →
@@ -376,7 +378,7 @@ unitKillFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitKill uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitKill uid
             Lua.pushboolean True
             return 1
 
@@ -396,7 +398,7 @@ unitTransitionToFn env = do
     case (idArg, mPoseBS >>= parsePose . TE.decodeUtf8Lenient) of
         (Just n, Just target) → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                 UnitTransitionTo uid target stride
             Lua.pushboolean True
             return 1
@@ -430,7 +432,7 @@ unitGetPoseFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPose ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiPose <$> HM.lookup uid (umInstances um))
             case mPose of
                 Just label → do
@@ -449,7 +451,7 @@ unitGetPosFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            um ← Lua.liftIO $ readIORef (unitManagerRef env)
+            um ← Lua.liftIO $ readIORef (ucUnitManagerRef (toUnitCombatCapability env))
             case HM.lookup uid (umInstances um) of
                 Nothing → do
                     Lua.pushnil
@@ -476,7 +478,7 @@ unitGetFactionFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mFac ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiFactionId <$> HM.lookup uid (umInstances um))
             case mFac of
                 Just f  → Lua.pushstring (TE.encodeUtf8 (factionTag f))
@@ -494,7 +496,7 @@ unitExistsFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             exists ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (HM.member uid (umInstances um))
             Lua.pushboolean exists
             return 1

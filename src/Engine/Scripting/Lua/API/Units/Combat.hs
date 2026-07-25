@@ -14,6 +14,10 @@ module Engine.Scripting.Lua.API.Units.Combat
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -22,7 +26,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.List as L
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Unit.Types
 import Combat.Wounds (bleedRateFor)
@@ -50,7 +54,7 @@ unitGetWoundSeverityOnFn env = do
             let uid     = UnitId (fromIntegral n)
                 partId  = TE.decodeUtf8Lenient pbs
             mTotal ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
@@ -76,9 +80,9 @@ unitGetWoundsFn env = do
         Nothing → Lua.pushnil >> return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
+            infMgr ← Lua.liftIO $ readIORef (crInfectionManagerRef (toContentRegistriesCapability env))
             mWounds ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     let parts = maybe [] udBodyParts
@@ -207,7 +211,7 @@ unitGetScarsFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mScars ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiScars <$> HM.lookup uid (umInstances um))
             case mScars of
                 Nothing → Lua.pushnil >> return 1
@@ -237,9 +241,9 @@ unitGetImmunitiesFn env = do
         Nothing → Lua.pushnil >> return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
+            infMgr ← Lua.liftIO $ readIORef (crInfectionManagerRef (toContentRegistriesCapability env))
             mImm ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiImmunities <$> HM.lookup uid (umInstances um))
             case mImm of
                 Nothing → Lua.pushnil >> return 1
@@ -273,8 +277,8 @@ unitGetInsulationFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             total ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
-                im ← readIORef (itemManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → 0
                     Just inst →
@@ -299,7 +303,7 @@ unitGetBloodFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
@@ -335,7 +339,7 @@ unitGetLastAttackerFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mAtt ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing   → return Nothing
                     Just inst → case uiLastAttackerUid inst of
@@ -370,7 +374,7 @@ unitGetPainFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPain ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
@@ -408,7 +412,7 @@ unitGetMentalEffectivenessFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mEff ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 return $ mentalEffectiveness ⊚ HM.lookup uid (umInstances um)
             case mEff of
                 Just e  → Lua.pushnumber (Lua.Number (realToFrac e))
@@ -451,7 +455,7 @@ unitInjureFn env = do
                     , woundClean    = False
                     , woundInfectionType = ""
                     , woundNecrosis = 0.0 }
-            mPos ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            mPos ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, Nothing)
                     Just inst →
@@ -462,7 +466,7 @@ unitInjureFn env = do
             let ok = mPos ≢ Nothing
             -- A successful (non-combat) wound feeds the injury log.
             Lua.liftIO $ when ok $
-                pushInjuryEvent (injuryEventsRef env) now (fromIntegral n)
+                pushInjuryEvent (ucInjuryEventsRef (toUnitCombatCapability env)) now (fromIntegral n)
                     "injure"
                     [ ("part",      TE.decodeUtf8Lenient partBS)
                     , ("woundKind", TE.decodeUtf8Lenient kindBS)

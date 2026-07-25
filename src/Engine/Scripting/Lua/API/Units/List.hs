@@ -13,6 +13,10 @@ module Engine.Scripting.Lua.API.Units.List
     where
 
 import UPrelude
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -20,7 +24,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Unit.Types
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame)
@@ -37,7 +41,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 --   current one (#78). Empty when no world is active.
 activeUnits ∷ EngineEnv → IO (HM.HashMap UnitId UnitInstance)
 activeUnits env = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     pure $ case mActive of
         Just (pid, _) → unitsOnPage pid (umInstances um)
@@ -90,7 +94,7 @@ unitListFn env = do
 unitListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitListDefsFn env = do
     names ← Lua.liftIO $ do
-        um ← readIORef (unitManagerRef env)
+        um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
         return $ HM.keys (umDefs um)
     Lua.newtable
     forM_ (zip [1..] names) $ \(i, name) → do
@@ -112,7 +116,7 @@ unitListAnimationsFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mNames ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     def  ← HM.lookup (uiDefName inst) (umDefs um)
@@ -140,8 +144,8 @@ unitGetInfoFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
-                um  ← readIORef (unitManagerRef env)
-                uts ← readIORef (utsRef env)
+                um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                uts ← readIORef (ucUtsRef (toUnitCombatCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     let mDef = HM.lookup (uiDefName inst) (umDefs um)
@@ -301,8 +305,8 @@ unitGetFrameTextureFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mTex ← Lua.liftIO $ do
-                um  ← readIORef (unitManagerRef env)
-                cam ← readIORef (cameraRef env)
+                um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                cam ← readIORef (rvCameraRef (toRenderViewCapability env))
                 now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → Nothing
@@ -332,7 +336,7 @@ unitGetPortraitTextureFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mTex ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → Nothing
                     Just inst →

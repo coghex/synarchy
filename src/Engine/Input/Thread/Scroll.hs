@@ -24,9 +24,11 @@ import Engine.Core.Log (logDebug, LogCategory(..))
 -- view; the SS7.3 cross-capability surface through the records that
 -- already exist for it — `core-init` for the logger (#889) and the
 -- worker-safe render view for window/framebuffer geometry (#891) —
--- and explicit narrow values for the two capabilities that have none
--- yet: `uiManagerRef` (`ui-hud-events`, #897) and `actionOutcomeRef`
--- (`units-buildings-combat`, #895).
+-- and explicit narrow values for two cross-capability reads:
+-- `uiManagerRef` (`ui-hud-events`, #897, which still has no record)
+-- and `actionOutcomeRef` (`units-buildings-combat`, whose record #895
+-- landed but which SS7.5's explicit-narrow rule deliberately keeps
+-- this input-thread reader off).
 import Engine.Core.State (EngineEnv, uiManagerRef, actionOutcomeRef)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.InputView

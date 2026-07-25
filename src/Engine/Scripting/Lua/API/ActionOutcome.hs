@@ -22,6 +22,8 @@ module Engine.Scripting.Lua.API.ActionOutcome
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Sequence as Seq
@@ -29,7 +31,7 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified HsLua as Lua
 import Engine.ActionOutcome (ActionOutcome(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 
 -- | debug.recordOutcome(table) → bool. False (no record pushed) if the
 --   required `kind`/`outcome` fields are missing.
@@ -85,7 +87,7 @@ debugRecordOutcomeFn env = do
     case (mKind, mOutcome) of
         (Just kind, Just outcome) → do
             gt ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
-            Lua.liftIO $ atomicModifyIORef' (actionOutcomeRef env) $ \buf →
+            Lua.liftIO $ atomicModifyIORef' (ucActionOutcomeRef (toUnitCombatCapability env)) $ \buf →
                 ( buf Seq.|> ActionOutcome
                     { aoTs        = gt
                     , aoKind      = kind
@@ -155,7 +157,7 @@ pushActionOutcomeLua ev = do
 --   preserved for the next call (same contract as combat.drainEvents).
 debugDrainActionOutcomesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 debugDrainActionOutcomesFn env = do
-    drained ← Lua.liftIO $ atomicModifyIORef' (actionOutcomeRef env) $
+    drained ← Lua.liftIO $ atomicModifyIORef' (ucActionOutcomeRef (toUnitCombatCapability env)) $
         \buf → (Seq.empty, buf)
     Lua.newtable
     forM_ (zip [1..] (foldr (:) [] drained)) $ \(i, ev) → do

@@ -8,6 +8,8 @@ module Combat.Wounds.Tick
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -17,7 +19,7 @@ import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Environment (lookupEnv)
 import Combat.Types (CombatEvent(..))
-import Engine.Core.State (EngineEnv(..), activeWorldStateFrom)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom, loggerRef)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -89,14 +91,14 @@ tickAllWounds env dt = do
             Nothing → pure Nothing
     -- One independent generator for this tick's infection-type rolls; split
     -- off statRNGRef (advances the master) so we don't race other consumers.
-    tickGen ← atomicModifyIORef' (statRNGRef env) Random.splitGen
+    tickGen ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) Random.splitGen
     -- Snapshot-and-clobber would lose any concurrent write to
     -- umInstances (publishToRender, Lua equip/modifier, the per-attack
     -- wound stamp in Combat.Resolution). Do the fold inside the
     -- atomicModifyIORef' lambda so wound updates merge with the
     -- current map instead of overwriting it. Same pattern as
     -- Unit.Thread.publishToRender.
-    outcomes ← atomicModifyIORef' (unitManagerRef env) $ \um →
+    outcomes ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         let defs = umDefs um
             (updatedMap, os, _) =
                 HM.foldlWithKey'
@@ -122,12 +124,12 @@ tickAllWounds env dt = do
     logger ← readIORef (loggerRef env)
     mapM_ (\(uid@(UnitId uidRaw), outcome) → case outcome of
         UnconsciousNow part → do
-            Q.writeQueue (unitQueue env) (UnitCollapse uid)
+            Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) (UnitCollapse uid)
             logDebug logger CatThread $
                 "collapsed: " <> T.pack (show uidRaw)
                     <> " (bleeding from " <> part <> ")"
         DiedNow part cause → do
-            Q.writeQueue (unitQueue env) (UnitKill uid)
+            Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) (UnitKill uid)
             let ev = CombatEvent
                     { ceTs       = gt
                     , ceKind     = "death"
@@ -138,7 +140,7 @@ tickAllWounds env dt = do
                         , ("part",  part)
                         ]
                     }
-            atomicModifyIORef' (combatEventsRef env) $ \buf →
+            atomicModifyIORef' (ucCombatEventsRef (toUnitCombatCapability env)) $ \buf →
                 (buf Seq.|> ev, ())
             logDebug logger CatThread $
                 "bled out: " <> T.pack (show uidRaw)

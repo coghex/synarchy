@@ -6,11 +6,13 @@ module Unit.Thread.Command.Motion
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.Body (injurySpeedMult)
@@ -33,7 +35,7 @@ handleUnitMoveToCommand env utsRef uid tx ty speed = do
     -- movement, ≲1% per-command hit rate) and not worth merging the
     -- two refs to close — kept here so the next reader doesn't
     -- mistake the separation for an oversight.
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     let (effSpeed, isRunning) = case HM.lookup uid (umInstances um) of
             Nothing   → (speed, False)
             Just inst →
@@ -72,7 +74,7 @@ handleUnitJumpCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                       → Int → Int → IO ()
 handleUnitJumpCommand env utsRef uid tgx tgy = do
     now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-    um  ← readIORef (unitManagerRef env)
+    um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Reach = learned jumping skill blended with agility/strength stats
     -- (the skill/stat split). Unknown unit → 0 reach (can't leap).
     let maxTiles = case HM.lookup uid (umInstances um) of

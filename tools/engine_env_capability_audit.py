@@ -502,29 +502,29 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Structure", "World.Thread",
         "World.Thread.Command.Basic", "World.Thread.Command.Init",
     }),
+    # Shrunk from 49 to 14 by issue #895 (E6a): every module whose
+    # `EngineEnv` use was covered by the ten unit/combat fields now
+    # reaches them through Engine.Core.Capability.UnitCombat (or, for
+    # World.Thread.Command.Edit.Dig, through the explicit narrow
+    # `statRNGRef`/`unitQueue` parameters its caller now supplies).
+    # The 14 below still need one or more of the THREE building fields
+    # (buildingManagerRef, buildingQueue, buildingGhostRef), which
+    # #896 (E6b) migrates -- see SS7.5. `Unit.Thread` is on the list
+    # for the same reason without naming a building field itself: it
+    # hands its whole environment to
+    # `Building.Thread.Command.processAllBuildingCommands`, which it
+    # drains on the unit thread. All 14 already route every access to
+    # one of E6a's ten fields through the capability record, so a
+    # building field is the ONLY thing keeping any of them
+    # unrestricted.
     "units-buildings-combat": frozenset({
-        "Building.Thread.Command", "Combat.Resolution", "Combat.Resolution.Events",
-        "Combat.Resolution.Wear", "Combat.Thread", "Combat.Wounds.Tick",
-        "Engine.Input.State", "Engine.Scripting.Lua.API.ActionOutcome",
+        "Building.Thread.Command",
         "Engine.Scripting.Lua.API.Buildings.Materials", "Engine.Scripting.Lua.API.Buildings.Progress",
         "Engine.Scripting.Lua.API.Buildings.Query", "Engine.Scripting.Lua.API.Buildings.Selection",
         "Engine.Scripting.Lua.API.Buildings.Spawn", "Engine.Scripting.Lua.API.Buildings.Yaml",
-        "Engine.Scripting.Lua.API.Combat", "Engine.Scripting.Lua.API.Craft.Bill",
-        "Engine.Scripting.Lua.API.Craft.Execute", "Engine.Scripting.Lua.API.Equipment.Accessory",
-        "Engine.Scripting.Lua.API.Equipment.Render", "Engine.Scripting.Lua.API.Equipment.Slot",
-        "Engine.Scripting.Lua.API.Forage.Harvest", "Engine.Scripting.Lua.API.Items.Ground",
+        "Engine.Scripting.Lua.API.Craft.Bill", "Engine.Scripting.Lua.API.Craft.Execute",
         "Engine.Scripting.Lua.API.Power", "Engine.Scripting.Lua.API.Units.Cargo",
-        "Engine.Scripting.Lua.API.Units.Combat", "Engine.Scripting.Lua.API.Units.Equipment",
-        "Engine.Scripting.Lua.API.Units.Inventory", "Engine.Scripting.Lua.API.Units.List",
-        "Engine.Scripting.Lua.API.Units.Medical", "Engine.Scripting.Lua.API.Units.Query",
-        "Engine.Scripting.Lua.API.Units.Selection", "Engine.Scripting.Lua.API.Units.Spawn",
-        "Engine.Scripting.Lua.API.Units.Stats", "Engine.Scripting.Lua.API.Units.Survival",
-        "Engine.Scripting.Lua.API.Units.Yaml", "Unit.Selection", "Unit.Thread",
-        "Unit.Thread.Command", "Unit.Thread.Command.Lifecycle", "Unit.Thread.Command.Motion",
-        "Unit.Thread.Command.Pose", "Unit.Thread.Command.Spawn", "Unit.Thread.Movement",
-        "Unit.Thread.Movement.Climb", "World.Thread.Command.Cursor.Common",
-        "World.Thread.Command.Edit.Dig", "World.Thread.Discovery", "World.Thread.ItemTemp",
-        "World.Thread.Power",
+        "Unit.Thread", "World.Thread.ItemTemp", "World.Thread.Power",
     }),
     # Emptied by issue #890 (E2): all nine modules now reach their
     # registries through Engine.Core.Capability.ContentRegistries.

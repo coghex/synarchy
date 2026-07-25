@@ -75,6 +75,8 @@ module Combat.Resolution
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -83,7 +85,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Data.List (maximumBy)
 import qualified System.Random as Random
 import Combat.Types (AttackMode(..), attackModeText)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
@@ -118,7 +120,7 @@ import Combat.Resolution.Events
 resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → Float → Float → IO ()
 resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Weapon/armor item defs + their worked-material properties are
     -- reached through the `content-registries` capability (#890), not
     -- the broader EngineEnv this module still carries for unit/combat
@@ -215,7 +217,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
     -- attackers naturally target vital low-resistance combos; low-
     -- int attackers flail at whatever's biggest with whatever motion
     -- the weapon supports.
-    rngOut ← atomicModifyIORef' (statRNGRef env) $ \rng0 →
+    rngOut ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \rng0 →
         let (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rng0
         in if roll > pHit
             then (rng1, Left False)            -- whiff (attacker missed)
@@ -329,7 +331,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
             -- scalar `severity` (total tissue destruction), unchanged by
             -- the distribution — so combat lethality is exactly preserved.
             let stanceHit = clamp 0.0 1.0 (severity * kindStanceFactor headKind)
-            atomicModifyIORef' (unitManagerRef env) $ \um' →
+            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
                 let upd inst = inst
                         { uiWounds          = wounds <> uiWounds inst
                         , uiLastAttackerUid = Just atkRaw

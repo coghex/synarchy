@@ -11,11 +11,15 @@ module Engine.Scripting.Lua.API.Equipment.Slot
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Equipment.Types
 import Item.Types (ItemInstance(..), lookupItemDef, itemMatches, idKind)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..))
@@ -55,9 +59,9 @@ equipmentEquipFn env = do
                 itemNm = TE.decodeUtf8Lenient itemBS
                 wantId = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
-                ecMgr   ← readIORef (equipmentClassManagerRef env)
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                ecMgr   ← readIORef (crEquipmentClassManagerRef (toContentRegistriesCapability env))
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
@@ -129,7 +133,7 @@ equipmentUnequipFn env = do
         (Just n, Just slotBS) → do
             let uid    = UnitId (fromIntegral n)
                 slotId = TE.decodeUtf8Lenient slotBS
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst → case HM.lookup slotId (uiEquipment inst) of

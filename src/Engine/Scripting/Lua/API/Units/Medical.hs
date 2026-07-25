@@ -7,6 +7,10 @@ module Engine.Scripting.Lua.API.Units.Medical
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
@@ -15,7 +19,7 @@ import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.List as L
 import qualified System.Random as Random
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Unit.Types
 import Combat.Wounds (kindBleedFactor)
@@ -61,7 +65,7 @@ bandageItemName = "bandage"
 --   are reusable (never consumed); only bandages are spent.
 treatBleedingIO ∷ EngineEnv → UnitId → UnitId → Maybe UnitId → IO TreatResult
 treatBleedingIO env medic patient mOwner = do
-    um0 ← readIORef (unitManagerRef env)
+    um0 ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     let owner = fromMaybe medic mOwner
     case ( HM.lookup medic   (umInstances um0)
          , HM.lookup patient (umInstances um0)
@@ -124,7 +128,7 @@ treatBleedingIO env medic patient mOwner = do
                         capClamp   = min 1 competence
                         seepBase   = 0.6 * (1 - capClamp) * (1 - capClamp)
                         maxAttempts = 8 ∷ Int
-                    localGen ← atomicModifyIORef' (statRNGRef env) Random.splitGen
+                    localGen ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) Random.splitGen
                     let go gen attemptsLeft used
                           | used >= bandageCount = (False, used, gen)
                           | attemptsLeft ≤ 0     = (False, used, gen)
@@ -143,7 +147,7 @@ treatBleedingIO env medic patient mOwner = do
                                  else 1.0
                         treatXp = if consumed ≤ 0 then 0
                                   else if success then 2.0 else 1.0
-                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         let um1 = consumeBandages owner consumed um
                             um2 = if success
                                     then setWoundDressing patient targetKey
@@ -175,7 +179,7 @@ treatBleedingIO env medic patient mOwner = do
                     -- poor seep (~0.4–0.58, a touch better with skill). Still
                     -- trains the medic a little.
                     let tqSeep = max 0.4 (min 0.58 (0.58 - 0.2 * min 1 baseComp))
-                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         let um1 = setWoundDressing patient targetKey
                                       tqSeep "tourniquet" um
                             um2 = grantKnowledgeXP medic "bleed_control" 1.0 um1
@@ -352,7 +356,7 @@ unitFrostbiteFn env = do
                 part  = TE.decodeUtf8Lenient partBS
                 delta = max 0 (realToFrac d)
                 isFb w = woundKind w ≡ "frostbite" ∧ woundPart w ≡ part
-            result ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            result ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, Nothing)
                     Just inst →
@@ -392,8 +396,8 @@ unitFrostbiteFn env = do
 --   trMethod = "antibiotics".
 treatInfectionIO ∷ EngineEnv → UnitId → UnitId → Maybe UnitId → IO TreatResult
 treatInfectionIO env medic patient mOwner = do
-    um0 ← readIORef (unitManagerRef env)
-    infMgr ← readIORef (infectionManagerRef env)
+    um0 ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    infMgr ← readIORef (crInfectionManagerRef (toContentRegistriesCapability env))
     let owner = fromMaybe medic mOwner
         -- A wound is antibiotic-curable if its infection is bacterial — i.e.
         -- the def lists "antibiotics" in curable_by. An untyped infection
@@ -431,7 +435,7 @@ treatInfectionIO env medic patient mOwner = do
                         reduction = max 0.15 (min 0.85 (0.2 + 0.6 * cap))
                                     * cureRateW worst
                         newInf    = max 0 (woundInfection worst - reduction)
-                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         let um1 = consumeKitFill owner antibioticsItemName
                                                  antibioticsDose um
                             um2 = setWoundInfection patient targetKey newInf um1

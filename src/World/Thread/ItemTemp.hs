@@ -22,6 +22,10 @@ module World.Thread.ItemTemp
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
@@ -42,7 +46,7 @@ tickItemTemperatures env pageId ws dtGame = do
     case mParams of
         Nothing → pure ()
         Just p → do
-            im ← readIORef (itemManagerRef env)
+            im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
             let ambientAt ∷ Int → Int → Float
                 ambientAt = ambientTempAt (wgpSeed p) (wgpPlates p)
                                 (wgpClimateState p) (wgpWorldSize p)
@@ -71,9 +75,9 @@ tickGroundItems ws im ambientAt dtGame = do
 tickUnitItems ∷ EngineEnv → WorldPageId → ItemManager
               → (Int → Int → Float) → Float → IO ()
 tickUnitItems env pageId im ambientAt dtGame = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     when (any unitTracked (umInstances um)) $
-        atomicModifyIORef' (unitManagerRef env) $ \um' →
+        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
             (um' { umInstances = HM.map coolUnit (umInstances um') }, ())
   where
     unitTracked inst =

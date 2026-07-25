@@ -8,13 +8,15 @@ module Unit.Thread.Command.Lifecycle
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Sim.Types
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
@@ -25,7 +27,7 @@ handleUnitDestroyCommand env utsRef uid = do
     -- Single atomic modify removes the unit from instances AND clears
     -- it from the selection set, so no observer ever sees a "selected
     -- but dead" state.
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         (um { umInstances = HM.delete uid (umInstances um)
             , umSelected  = HS.delete uid (umSelected um)
             }, ())
@@ -37,7 +39,7 @@ handleUnitClearAllCommand env utsRef = do
     -- Wipe all units + selection + sim state. Processed in queue order, so
     -- it runs AFTER any UnitSpawns queued before Exit to Menu — those
     -- insert first, then this clears, leaving no orphans (#58).
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         (um { umInstances = HM.empty, umSelected = HS.empty }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())
@@ -74,7 +76,7 @@ handleUnitTeleportCommand env utsRef uid gx gy mGz = do
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         let insts = umInstances um
         in case HM.lookup uid insts of
             Nothing → (um, ())
@@ -114,7 +116,7 @@ handleUnitReGroundCommand env utsRef gx gy = do
             -- Mirror into the render-facing instances so the visual z
             -- updates this frame, same as UnitTeleport does.
             forM_ snapped $ \uid →
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, ())
                         Just inst →
