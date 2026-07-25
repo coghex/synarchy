@@ -5,18 +5,21 @@ module Unit.Command.Types
 
 import UPrelude
 import Unit.Types (UnitId(..))
+import Unit.Faction (Faction(..))
 import Unit.Sim.Types (Pose(..))
 import World.Page.Types (WorldPageId(..))
 
 data UnitCommand
-    = UnitSpawn !UnitId !Text !Float !Float !Int !Text !WorldPageId
-        -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, factionId,
+    = UnitSpawn !UnitId !Text !Float !Float !Int !Faction !WorldPageId
+        -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, faction,
         --   owning world page (stamped from the active world at spawn so
         --   the unit is world-scoped, #78).
-        --   factionId is the spawn-time-only faction tag (no def-level
-        --   default); "player" for player-controlled units, "wildlife"
-        --   for everything else. Used by the combat layer for
-        --   hostile/friendly checks.
+        --   The faction is spawn-time-only (no def-level default) and is
+        --   already TYPED here: @unit.spawn@ parses the caller's tag at
+        --   ingress (#912), so an unrecognized tag is reported once at
+        --   the boundary rather than travelling as a string nobody
+        --   validates. Ownership/alliance/attack questions are answered
+        --   by "Unit.Faction", never by comparing two of these.
     | UnitDestroy !UnitId
     | UnitTeleport !UnitId !Float !Float !(Maybe Int)
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)

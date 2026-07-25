@@ -123,6 +123,8 @@ import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
+import qualified Test.Headless.Lua.Faction as LuaFaction
+import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
 import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
@@ -210,6 +212,7 @@ main = hspec $ do
     describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
+    LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
@@ -276,6 +279,7 @@ main = hspec $ do
     describe "Render.PanMargin" PanMargin.spec
     LocationBounds.spec
     LocationDiscovery.spec
+    UnitFaction.spec
     LocationInstance.spec
     LocationMapIcons.spec
     BuildingPlacement.spec

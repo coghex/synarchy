@@ -407,34 +407,50 @@ function unitAi.combatEffectiveness(uid)
         * (1 - painNorm * 0.5)
 end
 
--- | "Our" combat strength against `threatUid`. Counts every unit that is
---   EITHER already attacking the threat OR a same-side ally (faction ≠ the
---   threat's) within SWARM_RALLY_RADIUS of it — a POTENTIAL joiner. Used by
---   the retreat candidate so a solo acolyte still sees a bear as futile,
---   while a pack near the threat reads as a winnable swarm and commits
---   together instead of each member fleeing before the swarm forms.
---   (2-faction world for now — player vs wildlife — so "not the threat's
---   faction" = our side; wildlife rallying with wildlife is intended.)
-function unitAi.groupEffectivenessVs(threatUid)
+-- | `subjectUid`'s side's combat strength against `threatUid`. Counts
+--   every ALLY OF THE SUBJECT (faction relation, #912 — the subject
+--   itself included) that is either already attacking the threat or
+--   standing within SWARM_RALLY_RADIUS of it as a POTENTIAL joiner. Used
+--   by the retreat candidate so a solo acolyte still sees a bear as
+--   futile, while a pack near the threat reads as a winnable swarm and
+--   commits together instead of each member fleeing before the swarm
+--   forms.
+--
+--   The subject is REQUIRED, and the measure is "allied with the
+--   subject" rather than "not the threat's faction", because those two
+--   only coincide in a two-faction world. With a hostile ruin occupant
+--   present, "not the threat's faction" counts a nearby squirrel toward
+--   the swarm opposing a raider and the raider toward the swarm opposing
+--   a bear — inflated group strength, so a lone acolyte commits to a
+--   fight it should have fled. Non-allied co-belligerents are not our
+--   side just because they happen to be fighting the same thing.
+--
+--   The threat itself is excluded explicitly: with a staged same-faction
+--   fight (two debug units) the threat IS an ally of the subject, and
+--   counting it would let a unit read its own opponent as backup.
+function unitAi.groupEffectivenessVs(threatUid, subjectUid)
     if not unit.exists(threatUid) then return 0 end
+    if not subjectUid or not unit.exists(subjectUid) then return 0 end
     local you = unit.getInfo(threatUid)
-    local threatFaction = unit.getFaction(threatUid)
+    local subjectFaction = unit.getFaction(subjectUid)
     local total = 0
     for _, uid in ipairs(unit.getAllIds() or {}) do
-        local st = aiState[uid]
-        local committed = st and st.attackTargetUid == threatUid
-        local rallyable = false
-        if not committed and you
-           and unit.getFaction(uid) ~= threatFaction then
-            local me = unit.getInfo(uid)
-            if me then
-                local d = math.max(math.abs(me.gridX - you.gridX),
-                                   math.abs(me.gridY - you.gridY))
-                rallyable = d <= SWARM_RALLY_RADIUS
+        if uid ~= threatUid
+           and faction.areAllies(unit.getFaction(uid), subjectFaction) then
+            local st = aiState[uid]
+            local committed = st and st.attackTargetUid == threatUid
+            local rallyable = false
+            if not committed and you then
+                local me = unit.getInfo(uid)
+                if me then
+                    local d = math.max(math.abs(me.gridX - you.gridX),
+                                       math.abs(me.gridY - you.gridY))
+                    rallyable = d <= SWARM_RALLY_RADIUS
+                end
             end
-        end
-        if committed or rallyable then
-            total = total + unitAi.combatEffectiveness(uid)
+            if committed or rallyable then
+                total = total + unitAi.combatEffectiveness(uid)
+            end
         end
     end
     return total

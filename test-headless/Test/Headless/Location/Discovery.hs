@@ -27,6 +27,7 @@ import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), LocationInstances
     , LocationLifecycle(..), buildLocationInstances, instancesToList
     , markLocationContentsSpawned, setLocationLifecycle )
+import Unit.Faction (Faction(..), allFactions, factionTag)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 
@@ -78,8 +79,8 @@ hit1 ∷ DiscoveryHit Int
 hit1 = DiscoveryHit loc1Id loc1Coord (8, 8) "Small Ruin" 1
 
 -- | One player unit (id 1) at the given tile; no other units present.
-playerAt ∷ Int → Int → [(Int, Text, Int, Int)]
-playerAt gx gy = [ (1, "player", gx, gy) ]
+playerAt ∷ Int → Int → [(Int, Faction, Int, Int)]
+playerAt gx gy = [ (1, FactionPlayer, gx, gy) ]
 
 -- | The overlay/registry pair used by the cylindrical-seam tests: loc1
 --   re-anchored at chunk (1,0) in a 2-chunk-wide world (worldWidthTiles
@@ -119,11 +120,33 @@ spec = describe "Location discovery" $ do
             findDiscoveries 0 instances1 (playerAt 8 8)
                 `shouldBe` [hit1]
 
-    describe "findDiscoveries: player-control faction contract" $
-        forM_ ["hostile", "wildlife", "neutral", "debug_faction"] $ \fid →
-            it (T.unpack fid <> " standing inside never discovers it") $
+    describe "findDiscoveries: player-OWNERSHIP contract (#912)" $ do
+        -- Every non-player faction, including the RECOGNIZED debug one.
+        -- Using the real 'FactionDebug' is the point: debug is allied
+        -- with the player and takes player orders, so a model that
+        -- answered "friendly?" instead of "owned?" would newly discover
+        -- here. An unrecognized tag would have proved nothing.
+        forM_ [f | f ← allFactions, f ≢ FactionPlayer] $ \fid →
+            it (T.unpack (factionTag fid)
+                 <> " standing inside never discovers it") $
                 findDiscoveries 0 instances1 [(1, fid, 8, 8)]
                     `shouldBe` []
+
+        it "a debug unit inside does not discover it even while a player \
+           \unit stands outside the halo" $
+            -- The pairing that catches an ownership→alliance collapse
+            -- most directly: the only unit in range is debug.
+            findDiscoveries 0 instances1
+                [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 40, 40) ]
+                    `shouldBe` []
+
+        it "a player unit still discovers it with debug units alongside" $
+            -- …and the same scene with the player inside DOES fire, so
+            -- the case above is proving exclusion, not a dead fixture.
+            findDiscoveries 0 instances1
+                [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 8, 8) ]
+                    `shouldBe` [DiscoveryHit loc1Id loc1Coord (8, 8)
+                                             "Small Ruin" 2]
 
     describe "findDiscoveries: page scoping" $
         it "the same coordinates on a different page have independent \

@@ -103,7 +103,9 @@ local function futilityCheck(uid, s)
     if not unit.exists(threatUid) then return false, 0 end
     if unit.getPose(threatUid) == "dead" then return false, 0 end
     local threatEff = unitAi.combatEffectiveness(threatUid)
-    local groupEff  = unitAi.groupEffectivenessVs(threatUid)
+    -- Pass the subject: group strength is measured for THIS unit's side
+    -- (its allies), not merely "everyone who isn't the threat" (#912).
+    local groupEff  = unitAi.groupEffectivenessVs(threatUid, uid)
     if groupEff <= 0 then return false, 0 end
     local ratio = threatEff / groupEff
     -- A unit under orders (player/scripted commandAttack) holds far longer.

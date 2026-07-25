@@ -12,6 +12,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Unit.Direction (Direction(..))
+import Unit.Faction (Faction(..))
 import Unit.Render (pickFrame, screenDirOf, resolveTexture)
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
@@ -83,7 +84,7 @@ mkInst animName start = UnitInstance
     , uiInventory   = []
     , uiEquipment   = HM.empty
     , uiAccessories = []
-    , uiFactionId       = "test"
+    , uiFactionId       = FactionNeutral
     , uiWounds          = []
     , uiScars           = []
     , uiImmuneResponse  = 0

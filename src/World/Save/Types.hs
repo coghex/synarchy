@@ -86,6 +86,7 @@ import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
                   , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
+import Unit.Faction (factionFromTag, factionTag, parseFaction)
 import Unit.Sim.Types (UnitSimState(..))
 import Item.Types (ItemInstance(..))
 
@@ -776,8 +777,15 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       --   Order preserved.
     , uisFactionId   ∷ !Text
       -- ^ v16: spawn-time-only faction tag (no def-level default).
-      --   Used by the combat layer for hostile/friendly checks.
-      --   "player" / "wildlife" / future custom tags.
+      --   Deliberately stays 'Text' on the wire even though the runtime
+      --   field is a typed 'Unit.Faction.Faction' (#912): a
+      --   'Generic'-derived @Serialize@ enum is positional by
+      --   constructor tag, so serializing the type would make its
+      --   constructor ORDER load-bearing forever for no gain here.
+      --   Rendered by 'Unit.Faction.factionTag' and parsed by
+      --   'Unit.Faction.factionFromTag' at the two adapters below, so
+      --   this field's format — and the units component's schema
+      --   version — are unchanged.
     , uisWounds      ∷ ![Wound]
       -- ^ v16: per-unit wound list. Roundtrips faithfully. Generic
       --   Serialize over the Wound record below; fields are
@@ -828,7 +836,7 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisInventory   = uiInventory ui
     , uisEquipped    = uiEquipment ui
     , uisAccessories = uiAccessories ui
-    , uisFactionId   = uiFactionId ui
+    , uisFactionId   = factionTag (uiFactionId ui)   -- typed → wire (#912)
     , uisWounds      = uiWounds ui
     , uisScars       = uiScars ui
     , uisImmuneResponse = uiImmuneResponse ui
@@ -843,8 +851,14 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
 --   @page@ is the world the units are loaded into (always the load
 --   target, "main_world"); every restored unit is stamped with it so the
 --   runtime-only world scoping holds after a load (#78).
+--
+--   The third component is every DISTINCT unrecognized faction tag seen
+--   in this snapshot, sorted (#912). Those units load as
+--   'Unit.Faction.fallbackFaction' — a bad tag never fails a load — and
+--   the list exists so the caller can warn once per distinct tag instead
+--   of once per unit, however many units share it.
 fromUnitSnapshot ∷ WorldPageId → HM.HashMap Text UnitDef → UnitSnapshot
-                 → (UnitManager, [UnitId])
+                 → (UnitManager, [UnitId], [Text])
 fromUnitSnapshot page defs snap =
     let pairs = HM.toList (usnInstances snap)
         resolved = [ (uid, fromUnitInstanceSnapshot page d s)
@@ -855,13 +869,21 @@ fromUnitSnapshot page defs snap =
                    | (uid, s) ← pairs
                    , not (HM.member (uisDefName s) defs)
                    ]
+        -- Only the units that actually made it in: a dropped orphan's
+        -- tag is not a live unit's problem.
+        unknownFactions = L.sort $ HS.toList $ HS.fromList
+                   [ uisFactionId s
+                   | (_, s) ← pairs
+                   , HM.member (uisDefName s) defs
+                   , isNothing (parseFaction (uisFactionId s))
+                   ]
         um = UnitManager
                 { umDefs      = defs
                 , umInstances = HM.fromList resolved
                 , umSelected  = mempty
                 , umNextId    = usnNextId snap
                 }
-    in (um, orphans)
+    in (um, orphans, unknownFactions)
 
 fromUnitInstanceSnapshot ∷ WorldPageId → UnitDef → UnitInstanceSnapshot
                          → UnitInstance
@@ -894,7 +916,10 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s
-    , uiFactionId   = uisFactionId s
+    -- wire → typed (#912). An unrecognized tag degrades to the inert
+    -- fallback rather than failing the load; 'fromUnitSnapshot' hands
+    -- the raw tags back so the caller can say so once each.
+    , uiFactionId   = factionFromTag (uisFactionId s)
     , uiWounds      = uisWounds s
     , uiScars       = uisScars s
     , uiImmuneResponse = uisImmuneResponse s
