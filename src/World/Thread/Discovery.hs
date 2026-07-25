@@ -16,15 +16,13 @@ module World.Thread.Discovery
 import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.PlayerEvent.Emit (emitEventFullOnPage)
 import Location.Discovery (DiscoveryHit(..), findDiscoveries)
+import Location.Instance (LocationLifecycle(..), setLocationLifecycle)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 
@@ -50,10 +48,9 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     case mParams of
         Nothing → pure ()
         Just p → do
-            -- Location defs (their discovery margins) come through the
-            -- `content-registries` capability (#890).
-            registry ← readIORef
-                (crLocationDefsRef (toContentRegistriesCapability env))
+            -- Every discovery input — bounds, margin, display name,
+            -- lifecycle — is stored on the instance itself (#911), so
+            -- this tick no longer reads the location-def registry at all.
             um ← readIORef (unitManagerRef env)
             mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             let isActivePage = case mActive of
@@ -64,22 +61,27 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
                     | (uid, inst) ← sortOn fst (HM.toList (umInstances um))
                     , uiPage inst ≡ pageId
                     ]
-                hits = findDiscoveries (wgpWorldSize p) registry
-                                        (wgpLocationOverlay p)
-                                        (wgpLocationDiscovered p)
+                hits = findDiscoveries (wgpWorldSize p)
+                                        (wgpLocationInstances p)
                                         pageUnits
             forM_ hits $ \hit → do
-                atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
-                    Just p' →
-                        ( Just p'
-                            { wgpLocationDiscovered =
-                                HS.insert (dhCoord hit) (wgpLocationDiscovered p')
-                            }
-                        , ()
-                        )
-                    Nothing → (mP, ())
-                emitEventFullOnPage env "location_discovery" "World.Thread.Discovery"
-                    ("Discovered: " <> dhLabel hit)
-                    (if isActivePage then Just (dhAnchor hit) else Nothing)
-                    (Just (unUnitId (dhUnit hit)))
-                    (Just pageText)
+                -- The lifecycle promotion is the persisted transition
+                -- (#911) — 'setLocationLifecycle' refuses a backward or
+                -- same-state move, so an instance already discovered (or
+                -- past it) neither changes nor re-emits. The event fires
+                -- only on a promotion that actually landed, preserving
+                -- #780's exactly-once contract even if two ticks raced.
+                promoted ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
+                    Just p' → case setLocationLifecycle (dhInstance hit)
+                                        LifecycleDiscovered
+                                        (wgpLocationInstances p') of
+                        Just instances' →
+                            (Just p' { wgpLocationInstances = instances' }, True)
+                        Nothing → (mP, False)
+                    Nothing → (mP, False)
+                when promoted $
+                    emitEventFullOnPage env "location_discovery" "World.Thread.Discovery"
+                        ("Discovered: " <> dhLabel hit)
+                        (if isActivePage then Just (dhAnchor hit) else Nothing)
+                        (Just (unUnitId (dhUnit hit)))
+                        (Just pageText)

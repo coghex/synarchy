@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 -- Deliberate orphan: Serialize for HashSet, used by the save path
--- (wgpLocationContentsSpawned rides into world.synworld).
+-- (wgpLocationStamped rides into world.synworld).
 {-# OPTIONS_GHC -Wno-orphans #-}
 module World.Generate.Types
     ( WorldGenParams(..)
@@ -34,6 +34,7 @@ import World.Weather.Types (ClimateParams, ClimateState
 import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)
 import World.Magma.Init (buildVolcanoCtx)
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
+import Location.Instance (LocationInstances(..), emptyLocationInstances)
 import World.Chunk.Types (ChunkCoord)
 
 -- | Pure, serializable world generation parameters.
@@ -69,16 +70,36 @@ data WorldGenParams = WorldGenParams
       --   deterministic overlay pass (#89). Serialized (appended to the
       --   manual instance below) so a loaded world keeps its layout
       --   without recomputation.
-    , wgpLocationContentsSpawned ∷ !(HS.HashSet ChunkCoord)
-      -- ^ One-time content-spawn flag (#90): chunks whose placed
-      --   location has already had its `contents` spawned (units,
-      --   items, buildings, …). Deliberately INDEPENDENT of
-      --   'wgpLocationStamped' below — that independence matters: a
-      --   floor-less location type would otherwise re-run every chunk
-      --   load, and a player demolishing the floor would otherwise
-      --   re-trigger a full re-stamp including contents. Persisted
-      --   alongside 'wgpLocationOverlay' so a save never re-spawns
-      --   contents already spawned.
+    , wgpLocationInstances ∷ !LocationInstances
+      -- ^ Per-page placed-location instance table (#911): one record
+      --   per overlay entry, keyed by a stable
+      --   'Location.Instance.LocationInstanceId' allocated at placement
+      --   time from the deterministic overlay above. Carries each
+      --   location's definition id, anchor, absolute bounds (#777),
+      --   discovery margin, display name, gameplay LIFECYCLE, and its
+      --   one-time content-spawn flag (#90).
+      --
+      --   This replaced two former chunk-keyed sets — a chunk is not a
+      --   location, so @wgpLocationDiscovered@ (#780) and
+      --   @wgpLocationContentsSpawned@ (#90) became
+      --   'Location.Instance.liLifecycle' and
+      --   'Location.Instance.liContentsSpawned'. Their INDEPENDENCE
+      --   from each other and from 'wgpLocationStamped' below is
+      --   preserved exactly: discovery never spawns contents, spawning
+      --   contents never discovers, and neither is implied by a stamp.
+      --
+      --   The lifecycle is checked + promoted every world tick by
+      --   'World.Thread.Discovery.tickLocationDiscovery' against every
+      --   page in 'wmWorlds' (not just the visible one — discovery must
+      --   fire on a hidden page a player unit is simulated on),
+      --   independent of the pause flag so a freshly loaded,
+      --   auto-paused save with a unit already standing in a location's
+      --   margin discovers it immediately.
+      --
+      --   Serialized. 'Location.Instance.lisPendingLegacy' is the one
+      --   transient part (skipped by the manual instance below and by
+      --   the save DTO, like 'wgpVolcanoCtx'), holding a pre-#911
+      --   save's per-chunk flags only until the load path resolves them.
     , wgpLocationStamped ∷ !(HS.HashSet ChunkCoord)
       -- ^ One-time geometry-stamp flag (#424): chunks whose placed
       --   location has already had its builder run. Was formerly
@@ -90,31 +111,21 @@ data WorldGenParams = WorldGenParams
       --   marker, set once on first stamp and never revisited by
       --   player structure edits, so it stays true even after the
       --   anchor tile is cleared.
-    , wgpLocationDiscovered ∷ !(HS.HashSet ChunkCoord)
-      -- ^ Player-knowledge flag (#780): chunks whose placed location
-      --   has transitioned undiscovered → discovered — a player-
-      --   faction unit has entered its 'Location.Bounds.expandBounds'
-      --   discovery-margin halo at least once. Deliberately INDEPENDENT
-      --   of 'wgpLocationStamped' / 'wgpLocationContentsSpawned' above:
-      --   a location can be discovered before or after its geometry
-      --   stamps or its contents spawn, and stamping/spawning must
-      --   never itself mark a location discovered. Checked + mutated
-      --   every world tick by 'World.Thread.Discovery.
-      --   tickLocationDiscovery' against every page in 'wmWorlds' (not
-      --   just the visible one — discovery must fire on a hidden
-      --   page a player unit is simulated on), independent of the
-      --   pause flag so a freshly loaded, auto-paused save with a unit
-      --   already standing in a location's margin discovers it
-      --   immediately.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
     } deriving (Show, Eq, Generic, NFData)
 
--- | Manual Serialize: every field except @wgpVolcanoCtx@. Field order
---   matches the data declaration so the byte layout is identical to
---   the pre-Magma Generic-derived encoding — existing saves load
---   unchanged.
+-- | Manual Serialize: every field except @wgpVolcanoCtx@, plus the
+--   equally transient 'Location.Instance.lisPendingLegacy' inside
+--   @wgpLocationInstances@ (the instance table is written as its
+--   allocator + map, so a decoded table always comes back with nothing
+--   pending). Field order matches the data declaration.
+--
+--   NB this instance is NOT the save path — @world.synworld@ goes
+--   through the frozen 'World.Save.Component.WorldGen.WorldGenParamsDTO'
+--   and its own per-component versioning. This is the plain structural
+--   encoding the params carry as an ordinary 'Serialize' value.
 instance Serialize WorldGenParams where
     put p = do
         put (wgpSeed p)
@@ -137,9 +148,9 @@ instance Serialize WorldGenParams where
         put (wgpOreLevers p)
         put (wgpTimelineParams p)
         put (wgpLocationOverlay p)
-        put (wgpLocationContentsSpawned p)
+        put (lisNextId (wgpLocationInstances p))
+        put (lisById (wgpLocationInstances p))
         put (wgpLocationStamped p)
-        put (wgpLocationDiscovered p)
     get = do
         seed       ← get
         ws         ← get
@@ -161,9 +172,9 @@ instance Serialize WorldGenParams where
         oreLevers  ← get
         timelineP  ← get
         locOverlay ← get
-        locSpawned ← get
+        locNextId  ← get
+        locById    ← get
         locStamped ← get
-        locDiscovered ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -186,9 +197,12 @@ instance Serialize WorldGenParams where
             , wgpOreLevers        = oreLevers
             , wgpTimelineParams   = timelineP
             , wgpLocationOverlay  = locOverlay
-            , wgpLocationContentsSpawned = locSpawned
+            , wgpLocationInstances = LocationInstances
+                { lisNextId        = locNextId
+                , lisById          = locById
+                , lisPendingLegacy = Nothing
+                }
             , wgpLocationStamped  = locStamped
-            , wgpLocationDiscovered = locDiscovered
             , wgpVolcanoCtx       = vc
             }
 
@@ -219,9 +233,8 @@ defaultWorldGenParams = WorldGenParams
     , wgpOreLevers = defaultOreLevers
     , wgpTimelineParams = defaultTimelineParams
     , wgpLocationOverlay = emptyLocationOverlay
-    , wgpLocationContentsSpawned = HS.empty
+    , wgpLocationInstances = emptyLocationInstances
     , wgpLocationStamped = HS.empty
-    , wgpLocationDiscovered = HS.empty
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

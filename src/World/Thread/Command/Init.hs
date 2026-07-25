@@ -30,6 +30,7 @@ import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import Location.Types (allLocations)
+import Location.Instance (buildLocationInstances)
 import Location.Overlay (computeLocationOverlay)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -190,13 +191,20 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- ocean + lake/river data (locations keep clear of water, #414).
     -- Empty (and skipped) when no defs are loaded — the common
     -- headless-dump path stays byte-identical and zero-cost.
-    locDefs ← allLocations <$> readIORef (locationDefsRef env)
-    let params = params0
-            { wgpLocationOverlay =
-                computeLocationOverlay seed worldSize plates oceanMap oceanDist
+    locRegistry ← readIORef (locationDefsRef env)
+    let locDefs = allLocations locRegistry
+        overlay = computeLocationOverlay seed worldSize plates oceanMap oceanDist
                     (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
+        params = params0
+            { wgpLocationOverlay   = overlay
+            -- Instance ids (#911) are allocated HERE, at placement time,
+            -- from the deterministic overlay's canonical order — not at
+            -- stamp time — so an id is stable across save/load and
+            -- across chunk eviction/reload.
+            , wgpLocationInstances = buildLocationInstances locRegistry overlay
             }
     _ ← evaluate (force (wgpLocationOverlay params))
+    _ ← evaluate (force (wgpLocationInstances params))
 
     writeIORef (wsGenParamsRef worldState) (Just params)
     

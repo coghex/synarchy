@@ -15,7 +15,6 @@ module World.Render.Zoom.Icons
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlTextures (TextureNameRegistry, lookupTextureName)
@@ -24,9 +23,9 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld, p
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Location.Types (LocationDef(..), LocationRegistry, allLocations, locationIconTextureName)
-import Location.Overlay.Types (overlayToList)
-import World.Chunk.Types (ChunkCoord(..))
-import World.Types (WorldGenParams(..), chunkSize)
+import Location.Instance
+    (LocationInstance(..), instancesToList, isDiscoveredLifecycle)
+import World.Types (WorldGenParams(..))
 import World.Grid (gridToWorld)
 import World.Render.Zoom.ViewBounds (ZoomViewBounds, isChunkInView, bestZoomWrapOffset)
 
@@ -98,14 +97,21 @@ iconSortKeyBase = 1000.0
 -- | Pure per-frame icon-quad generation, mirroring 'World.Render.Zoom.
 --   Quads.makeMapQuads': the SAME cylindrical wrap
 --   ('bestZoomWrapOffset') and view-frustum culling ('isChunkInView')
---   terrain quads use, applied to each placed location's anchor tile
---   instead of a chunk box. Iterates 'overlayToList' order (sorted by
---   @(cx,cy)@, never hashmap-iteration order) for deterministic quad
---   ordering call over call — no two frames with unchanged inputs can
---   reorder or flicker. Always axis-aligned / screen-upright: the
---   facing rotation is already baked into 'gridToWorld's world position
---   for the anchor, and the quad itself carries no additional rotation,
---   so it stays upright regardless of camera facing. 'alpha' is passed
+--   terrain quads use, applied to each placed location's stored anchor
+--   tile instead of a chunk box. Iterates 'instancesToList' order
+--   (sorted by instance id, never hashmap-iteration order) for
+--   deterministic quad ordering call over call — no two frames with
+--   unchanged inputs can reorder or flicker.
+--
+--   Texture selection preserves the pre-#911 boolean split exactly:
+--   'isDiscoveredLifecycle' picks the discovered texture at
+--   'Location.Instance.LifecycleDiscovered' and every later lifecycle
+--   state, the undiscovered one at @unknown@ / @hinted@.
+--
+--   Always axis-aligned / screen-upright: the facing rotation is already
+--   baked into 'gridToWorld's world position for the anchor, and the
+--   quad itself carries no additional rotation, so it stays upright
+--   regardless of camera facing. 'alpha' is passed
 --   through as-is (the caller supplies the same zoomAlpha terrain
 --   fades with) and is the ONLY thing 'ZoomMapMode' or day/night could
 --   otherwise dim — icon color is always plain white × alpha, never
@@ -124,22 +130,20 @@ makeLocationIconQuads params iconMap facing vb camX camY alpha iconSize layer lo
     | iconSize ≤ 0 = V.empty
     | otherwise =
         let ws = wgpWorldSize params
-            overlay = wgpLocationOverlay params
-            discovered = wgpLocationDiscovered params
             half = iconSize / 2.0
-            entries = zip [iconSortKeyBase ..] (overlayToList overlay)
-        in V.mapMaybe (\(sortKey, (coord@(ChunkCoord cx cy), lid)) → do
-               (undiscTex, discTex) ← HM.lookup lid iconMap
-               let hlf = chunkSize `div` 2
-                   gx = cx * chunkSize + hlf
-                   gy = cy * chunkSize + hlf
+            entries = zip [iconSortKeyBase ..]
+                          (instancesToList (wgpLocationInstances params))
+        in V.mapMaybe (\(sortKey, inst) → do
+               (undiscTex, discTex) ← HM.lookup (liDefId inst) iconMap
+               let (gx, gy) = liAnchor inst
                    (baseX, baseY) = gridToWorld facing gx gy
                    (offX, offY) = bestZoomWrapOffset facing ws camX camY baseX baseY
                    wrappedX = baseX + offX
                    wrappedY = baseY + offY
                    drawX = wrappedX - half
                    drawY = wrappedY - half
-                   tex = if HS.member coord discovered then discTex else undiscTex
+                   tex = if isDiscoveredLifecycle (liLifecycle inst)
+                            then discTex else undiscTex
                if isChunkInView vb drawX drawY iconSize iconSize
                    then Just (emitIconQuad tex drawX drawY iconSize layer alpha
                                             sortKey gx gy lookupSlot defFmSlot)

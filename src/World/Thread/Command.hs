@@ -82,6 +82,7 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldPlantRowCropAtCommand)
 import World.Thread.Command.Location
     (handleWorldMarkLocationContentsSpawnedCommand
+    ,handleWorldSetLocationLifecycleCommand
     ,handleWorldMarkLocationStampedCommand)
 
 -- * Command Handler
@@ -225,8 +226,10 @@ handleWorldCommand env logger WorldDestroyAll
   = handleWorldDestroyAllCommand env logger
 handleWorldCommand env _ (WorldApplyFluids batch)
   = handleApplyFluidsCommand env batch
-handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId gx gy)
-  = handleWorldMarkLocationContentsSpawnedCommand (toWorldSimCapability env) pageId gx gy
+handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId iid)
+  = handleWorldMarkLocationContentsSpawnedCommand (toWorldSimCapability env) pageId iid
+handleWorldCommand env _ (WorldSetLocationLifecycle pageId iid lifecycle)
+  = handleWorldSetLocationLifecycleCommand (toWorldSimCapability env) pageId iid lifecycle
 handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
   = handleWorldMarkLocationStampedCommand (toWorldSimCapability env) pageId gx gy
 

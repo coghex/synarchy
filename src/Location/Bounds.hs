@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 -- | Pure spatial-bounds arithmetic for location definitions (#777): an
 --   inclusive, axis-aligned tile box, either relative to a location's
 --   anchor tile (as authored in a definition's YAML @bounds:@ block) or
@@ -30,6 +30,9 @@ module Location.Bounds
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Control.DeepSeq (NFData)
+import Data.Serialize (Serialize)
 import World.Plate (worldWidthTiles)
 
 -- | An inclusive, axis-aligned tile box in offsets relative to a
@@ -39,7 +42,7 @@ data RelBounds = RelBounds
     , rbMinY ∷ !Int
     , rbMaxX ∷ !Int
     , rbMaxY ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | An inclusive, axis-aligned tile box in absolute world tile
 --   coordinates — a 'RelBounds' anchored somewhere via 'translateBounds'.
@@ -48,7 +51,7 @@ data AbsBounds = AbsBounds
     , abMinY ∷ !Int
     , abMaxX ∷ !Int
     , abMaxY ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | True iff min ≤ max on both axes — the shape every location's
 --   authored bounds must satisfy. 'Engine.Asset.YamlLocations' rejects

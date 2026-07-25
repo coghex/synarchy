@@ -17,8 +17,7 @@ import Building.Types
 import World.Tile.Types (WorldTileData, lookupChunk)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Generate (globalToChunk)
-import Location.Types (LocationRegistry)
-import Location.Overlay.Types (LocationOverlay)
+import Location.Instance (LocationInstances)
 import Location.Placement (placedLocationBounds, nearestLocationDistance)
 import Location.Bounds (AbsBounds(..), boundsIntersect, remotePortalThresholdTiles)
 
@@ -34,7 +33,7 @@ data PlacementResult
 --     3. have no fluid (water / lava / river)
 --     4. not be occupied by an existing building
 --     5. for a `bdIsStarting` def only (#778): not intersect the
---        absolute bounds of any location placed on this world page —
+--        stored absolute bounds of any location placed on this page —
 --        the starting portal can't land inside a ruin. Ordinary
 --        construction is unaffected, so locations remain occupiable/
 --        repairable/incorporable later.
@@ -43,30 +42,28 @@ data PlacementResult
 canPlaceAt
     ∷ BuildingManager
     → WorldTileData
-    → LocationRegistry  -- ^ registered location defs (for #778 bounds)
-    → LocationOverlay   -- ^ this world page's placed-location overlay
+    → LocationInstances -- ^ this page's placed locations (for #778 bounds)
     → Int               -- ^ world size in chunks (seam-aware bounds check)
     → BuildingDef
     → Int           -- ^ anchor gx
     → Int           -- ^ anchor gy
     → PlacementResult
-canPlaceAt bm wtd locs overlay worldSize def gx gy
+canPlaceAt bm wtd instances worldSize def gx gy
     | bdPlacement def ≡ "flat_ground" =
-        checkFlatGround bm wtd locs overlay worldSize def gx gy
+        checkFlatGround bm wtd instances worldSize def gx gy
     | otherwise = NotPlaceable
         ("unknown placement kind: " <> bdPlacement def)
 
 checkFlatGround
     ∷ BuildingManager
     → WorldTileData
-    → LocationRegistry
-    → LocationOverlay
+    → LocationInstances
     → Int
     → BuildingDef
     → Int
     → Int
     → PlacementResult
-checkFlatGround bm wtd locs overlay worldSize def gx gy =
+checkFlatGround bm wtd instances worldSize def gx gy =
     let tiles = footprintTiles gx gy (bdTileW def) (bdTileH def)
         zs    = traverse (lookupSurfaceZ wtd) tiles
     in case zs of
@@ -74,7 +71,7 @@ checkFlatGround bm wtd locs overlay worldSize def gx gy =
         Just (z0:rest)
             | any (≠ z0) rest → NotPlaceable "ground is uneven"
             | any (tileHasBuilding bm) tiles → NotPlaceable "tile already occupied"
-            | bdIsStarting def ∧ overlapsAnyLocation worldSize locs overlay def gx gy →
+            | bdIsStarting def ∧ overlapsAnyLocation worldSize instances def gx gy →
                 NotPlaceable "inside a location's bounds"
             | otherwise → Placeable
         Just [] → NotPlaceable "empty footprint"   -- defensive; tileW/H≥1
@@ -85,9 +82,9 @@ checkFlatGround bm wtd locs overlay worldSize def gx gy =
 --   evaluated when 'bdIsStarting' short-circuits to it — this module's
 --   Strict pragma would otherwise force it unconditionally.
 overlapsAnyLocation
-    ∷ Int → LocationRegistry → LocationOverlay → BuildingDef → Int → Int → Bool
-overlapsAnyLocation worldSize locs overlay def gx gy =
-    any (boundsIntersect worldSize footprint) (placedLocationBounds locs overlay)
+    ∷ Int → LocationInstances → BuildingDef → Int → Int → Bool
+overlapsAnyLocation worldSize instances def gx gy =
+    any (boundsIntersect worldSize footprint) (placedLocationBounds instances)
   where
     footprint = AbsBounds gx gy (gx + bdTileW def - 1) (gy + bdTileH def - 1)
 
@@ -104,14 +101,14 @@ data RemoteCheck
     deriving (Show, Eq)
 
 -- | Classify a def's placement at (gx, gy) against every location
---   placed on this page's overlay.
+--   placed on this page.
 remoteCheck
-    ∷ LocationRegistry → LocationOverlay → Int → BuildingDef → Int → Int
+    ∷ LocationInstances → Int → BuildingDef → Int → Int
     → RemoteCheck
-remoteCheck locs overlay worldSize def gx gy
+remoteCheck instances worldSize def gx gy
     | not (bdIsStarting def) = NotStartingBuilding
     | otherwise = RemoteDistance
-        (nearestLocationDistance worldSize locs overlay footprint)
+        (nearestLocationDistance worldSize instances footprint)
   where
     footprint = AbsBounds gx gy (gx + bdTileW def - 1) (gy + bdTileH def - 1)
 

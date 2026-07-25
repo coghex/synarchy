@@ -28,7 +28,10 @@ import World.Types
 import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
-import Location.Types (LocationDef(..))
+import Location.Types
+    (LocationDef(..), emptyLocationRegistry, registerLocation)
+import Location.Instance
+    (LocationInstance(..), buildLocationInstances, instancesToList)
 import Location.Bounds (RelBounds(..))
 import Location.Overlay
     ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..) )
@@ -222,13 +225,20 @@ spec = do
             fmap wgpLocationStamped back `shouldBe` Right sample
 
         it "geometry-stamp flag is independent of the content-spawn flag (#424)" $ \_env → do
-            -- The two one-time flags are keyed by the same ChunkCoord but
-            -- must not alias each other's HashSet — a chunk marked stamped
-            -- is not thereby marked content-spawned, and vice versa.
+            -- The chunk-keyed stamp flag and the per-instance content-spawn
+            -- flag (#911) must not alias: a chunk marked stamped is not
+            -- thereby marked content-spawned, and vice versa.
             let coord = ChunkCoord 5 (-2)
-                p = defaultWorldGenParams { wgpLocationStamped = HS.singleton coord }
+                overlay = HM.singleton coord ("flat_test" ∷ Text)
+                registry = registerLocation flatDef emptyLocationRegistry
+                p = defaultWorldGenParams
+                        { wgpLocationStamped = HS.singleton coord
+                        , wgpLocationInstances =
+                            buildLocationInstances registry overlay
+                        }
             HS.member coord (wgpLocationStamped p) `shouldBe` True
-            HS.member coord (wgpLocationContentsSpawned p) `shouldBe` False
+            map liContentsSpawned
+                (instancesToList (wgpLocationInstances p)) `shouldBe` [False]
 
         it "chunkSeamChebyshev measures across the U seam (#422)" $ \_env → do
             -- worldSize 8 → halfW 4, canonical u = cx − cy ∈ [−4, 4).

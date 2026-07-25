@@ -210,7 +210,36 @@ The terminology above matches what shipped: "remote-start threshold" is the
 `building.remoteCheck` distance gate, "discovery" is the expanded-bounds
 approach margin firing a `location_discovery` player event, and the
 undiscovered/discovered icon pair is what `World.Render.Zoom.Icons` renders
-from each location's persisted discovery flag.
+from each location's persisted lifecycle state.
+
+**Step 2 (instance identity and lifecycle) — #911.** Each placed location is
+now a first-class persisted record (`Location.Instance.LocationInstance`),
+keyed per world page by a stable `LocationInstanceId` allocated at placement
+time from the deterministic overlay. It carries its definition id, anchor,
+resolved absolute bounds, discovery margin, display name, one-time
+content-spawn flag, and its lifecycle
+(`unknown → hinted → discovered → active → cleared → depleted`).
+`world.listPlacedLocations()` reports all of it and
+`world.getLocationInstance(id)` looks one up by id.
+
+Two deliberate boundaries on what #911 landed:
+
+- **The states past `discovered` are defined, persisted, and reachable
+  programmatically (`world.setLocationLifecycle`), but nothing in the game
+  drives an instance into them yet.** The encounter (step 4), reward
+  (step 5), and retrieval (step 6) work is what they exist to serve.
+- **`hinted` is currently unreachable, and that is correct.** Every location
+  is cartographically visible from world generation and stays that way for
+  now — a deliberate development-phase simplification: the player can always
+  see something is there, and it stays unexplored until a player-controlled
+  unit discovers it by proximity. `hinted` is for a future class of locations
+  that are *not* visible by default and must be revealed by information
+  rather than proximity. That class is planned but unbuilt; the state is
+  documented here so it is not later mistaken for dead weight.
+
+Display names are a placeholder derived from each definition's `label`.
+Wiring them to the language/naming system (#708) is deliberately separate
+work.
 
 Steps 4 onward (a combat encounter, a transformational reward, retrieval and
 return, survival tuning, the first-session objective panel, and the full

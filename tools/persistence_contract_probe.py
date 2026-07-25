@@ -332,7 +332,8 @@ def sample_live_state(port: int, portal_bid: int, atk: int) -> dict:
     hits the ONE documented, deliberate exception to that rule:
     World.Thread.Discovery.tickLocationDiscovery (#780) runs independent
     of the pause flag and can flip wgpLocationDiscovered on the very
-    first post-load tick if a unit already stands in such a margin."""
+    first post-load tick if a unit already stands in such a margin
+    (since #911 that is the instance's lifecycle, not a chunk set)."""
     return {
         "date": send(port, f"return world.getDate('{PAGE}')"),
         "activePage": send(port, "return world.getActiveWorldId()"),

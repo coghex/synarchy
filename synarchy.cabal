@@ -499,6 +499,7 @@ library
                      Engine.Scripting.Lua.API.Blood
                      Location.Types
                      Location.Bounds
+                     Location.Instance
                      Location.Overlay.Types
                      Location.Overlay
                      Location.Placement
@@ -1084,6 +1085,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
                    Test.Headless.Location.Discovery
+                   Test.Headless.Location.Instance
                    Test.Headless.Location.MapIcons
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning

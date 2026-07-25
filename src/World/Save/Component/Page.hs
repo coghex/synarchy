@@ -74,12 +74,17 @@ module World.Save.Component.Page
     , worldActivityCodec
     , PageCoreDTO(..)
     , WorldPagesDTO(..)
+    , PageCoreDTOv1(..)
+    , WorldPagesDTOv1(..)
+    , WorldPages(..)
+    , migrateWorldPagesV1
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
     , WorldActivityDTO(..)
       -- * Frozen leaf DTOs (requirement 4)
     , WorldGenParamsDTO(..)
+    , WorldGenParamsDTOv1(..)
     , WorldIdentityDTO(..)
     , WorldEditDTO(..)
     , MineDesignationDTO(..)
@@ -96,6 +101,8 @@ module World.Save.Component.Page
     , SpoilPileDTO(..)
     , toWorldGenParamsDTO
     , fromWorldGenParamsDTO
+    , fromWorldGenParamsDTOv1
+    , toWorldGenParamsDTOv1
     , toItemInstanceDTO
     , fromItemInstanceDTO
     , toGroundItemDTO
@@ -108,18 +115,24 @@ module World.Save.Component.Page
     ) where
 
 import UPrelude
+import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.Text as T
+import qualified Data.Serialize as S
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
 import Power.Types (emptyPowerNodes)
 import World.Save.Component.WorldGen
-    (WorldGenParamsDTO(..), toWorldGenParamsDTO, fromWorldGenParamsDTO)
+    ( WorldGenParamsDTO(..), toWorldGenParamsDTO, fromWorldGenParamsDTO
+    , WorldGenParamsDTOv1(..), fromWorldGenParamsDTOv1
+    , toWorldGenParamsDTOv1 )
+import Location.Instance (locationInstanceAllocatorErrors)
+import World.Generate.Types (WorldGenParams(..))
 import World.Chunk.Types (ChunkCoord)
 import World.Page.Types (WorldPageId, WorldIdentity(..))
-import World.Render.Zoom.Types (ZoomMapMode)
+import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Edit.Types (WorldEdit(..), WorldEdits, emptyWorldEdits)
 import World.Fluid.Types (FluidType)
 import World.Material.Id (MaterialId)
@@ -467,6 +480,8 @@ fromEditsDTO = HM.map (map fromWorldEditDTO)
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
+--   This is the CURRENT (v2) wire shape — see 'PageCoreDTOv1' for the
+--   frozen pre-#911 one.
 data PageCoreDTO = PageCoreDTO
     { pcPageId      ∷ !WorldPageId
     , pcGenParams   ∷ !WorldGenParamsDTO
@@ -485,12 +500,71 @@ newtype WorldPagesDTO = WorldPagesDTO { wpdPages ∷ [PageCoreDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
-worldPagesCodec ∷ ComponentCodec WorldPagesDTO
-worldPagesCodec = serializeCodec
-    worldPagesComponentId 1 True []
-    encodePages (\_ d → Right d) validatePages
+-- | The FROZEN v1 wire shape, preserved verbatim for decode-only
+--   backward compatibility: identical to 'PageCoreDTO' except that its
+--   gen params are 'WorldGenParamsDTOv1' (three chunk-keyed location
+--   sets, no instance table — #911 replaced two of them). Never edited;
+--   a further schema change adds a v3 type instead (frozen-DTO boundary
+--   rule). "World.Save.Compat.SessionV90"'s B1 path builds these too,
+--   since v90 bytes carry exactly the v1 gen params.
+data PageCoreDTOv1 = PageCoreDTOv1
+    { pc1PageId      ∷ !WorldPageId
+    , pc1GenParams   ∷ !WorldGenParamsDTOv1
+    , pc1CameraX     ∷ !Float
+    , pc1CameraY     ∷ !Float
+    , pc1TimeHour    ∷ !Int
+    , pc1TimeMinute  ∷ !Int
+    , pc1DateYear    ∷ !Int
+    , pc1DateMonth   ∷ !Int
+    , pc1DateDay     ∷ !Int
+    , pc1MapMode     ∷ !ZoomMapMode
+    , pc1Identity    ∷ !(Maybe WorldIdentityDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv1 = WorldPagesDTOv1 { wpd1Pages ∷ [PageCoreDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The canonical decoded value of the @world-pages@ component, kept
+--   separate from either wire DTO ("World.Save.Component.Types": the
+--   canonical type a codec decodes INTO is the migration target). It is
+--   the base 'PageSnapshot' map every other page-scoped component then
+--   writes onto, plus the page ids in encoded order — the map alone
+--   cannot answer the duplicate-page-id invariant, since a 'HM.HashMap'
+--   silently collapses a duplicate key.
+data WorldPages = WorldPages
+    { wpPageIds ∷ ![WorldPageId]
+    , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
+    } deriving (Show)
+
+-- | Hand-rolled codec (mirrors 'World.Save.Component.Entities.unitSimCodec'
+--   — 'serializeCodec' has no real multi-version dispatch) now that
+--   @world-pages@ needs a v1→v2 migration. Encoding always writes the
+--   current v2 shape; v1 payloads decode through 'migrateWorldPagesV1'.
+worldPagesCodec ∷ ComponentCodec WorldPages
+worldPagesCodec = ComponentCodec
+    { ccId        = worldPagesComponentId
+    , ccVersion   = 2
+    , ccInputVers = [1, 2]
+    , ccRequired  = True
+    , ccDeps      = []
+    , ccEncode    = \snap →
+        S.encode (WorldPagesDTO (map toPageCore (orderedPages snap)))
+    , ccDecode    = \v bytes → case v of
+        2 → decodeInto v (basePageSnapshots ∷ WorldPagesDTO → WorldPages) bytes
+        1 → decodeInto v migrateWorldPagesV1 bytes
+        _ → Left (ComponentError worldPagesComponentId v DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+    , ccValidate  = validatePages
+    }
   where
-    encodePages snap = WorldPagesDTO (map toPageCore (orderedPages snap))
+    decodeInto ∷ Serialize d
+               ⇒ Word32 → (d → WorldPages) → BS.ByteString
+               → Either ComponentError WorldPages
+    decodeInto v build bytes = case S.decode bytes of
+        Left err → Left (ComponentError worldPagesComponentId v DecodePhase
+                           ("malformed payload: " <> T.pack err))
+        Right d  → Right (build d)
     toPageCore p = PageCoreDTO
         { pcPageId     = pgsPageId p
         , pcGenParams  = toWorldGenParamsDTO (pgsGenParams p)
@@ -510,37 +584,95 @@ worldPagesCodec = serializeCodec
 --   level (round-14 review) so "World.Save.Compat.SessionV90"'s B1
 --   migration path can run the SAME validator a modern envelope's
 --   decode always does, rather than skip it entirely.
-validatePages ∷ WorldPagesDTO → [ComponentError]
-validatePages (WorldPagesDTO ps)
-    | null ps = [ ComponentError worldPagesComponentId 1 ValidatePhase
-                    "no world pages in save" ]
+validatePages ∷ WorldPages → [ComponentError]
+validatePages wp
+    | null (wpPageIds wp) = [err "no world pages in save"]
     | otherwise =
-        [ ComponentError worldPagesComponentId 1 ValidatePhase
-            ("duplicate page id " <> tshow pid)
+        [ err ("duplicate page id " <> tshow pid)
         | (pid, n) ← HM.toList
-                      (HM.fromListWith (+) [ (pcPageId p, 1 ∷ Int) | p ← ps ])
-            , n > 1 ]
+                      (HM.fromListWith (+) [ (p, 1 ∷ Int) | p ← wpPageIds wp ])
+        , n > 1 ]
+        -- #911: the page-local location-instance allocator, mirroring
+        -- @world-activity@'s own ground-item allocator check.
+        ⧺ [ err ("page '" <> tshow (pgsPageId p) <> "': " <> msg)
+          | p   ← HM.elems (wpBase wp)
+          , msg ← locationInstanceAllocatorErrors
+                      (wgpLocationInstances (pgsGenParams p))
+          ]
+  where err = ComponentError worldPagesComponentId 2 ValidatePhase
 
--- | Turn the decoded page cores into the base 'PageSnapshot' map every
+-- | Turn the decoded v2 page cores into the base 'PageSnapshot' map every
 --   other page-scoped component then writes onto (assembly). All entity/
 --   activity/edit fields start empty and are overwritten by their own
 --   REQUIRED components; a valid save leaves none of these placeholders.
-basePageSnapshots ∷ WorldPagesDTO → HM.HashMap WorldPageId PageSnapshot
-basePageSnapshots (WorldPagesDTO ps) =
-    HM.fromList [ (pcPageId p, toBase p) | p ← ps ]
+basePageSnapshots ∷ WorldPagesDTO → WorldPages
+basePageSnapshots (WorldPagesDTO ps) = WorldPages
+    { wpPageIds = map pcPageId ps
+    , wpBase    = HM.fromList [ (pcPageId p, toBase p) | p ← ps ]
+    }
   where
-    toBase p = PageSnapshot
-        { pgsPageId       = pcPageId p
-        , pgsGenParams    = fromWorldGenParamsDTO (pcGenParams p)
-        , pgsCameraX      = pcCameraX p
-        , pgsCameraY      = pcCameraY p
-        , pgsTimeHour     = pcTimeHour p
-        , pgsTimeMinute   = pcTimeMinute p
-        , pgsDateYear     = pcDateYear p
-        , pgsDateMonth    = pcDateMonth p
-        , pgsDateDay      = pcDateDay p
-        , pgsMapMode      = pcMapMode p
-        , pgsIdentity     = fromWorldIdentityDTO <$> pcIdentity p
+    toBase p = (blankPageSnapshot (pcPageId p)
+                    (fromWorldGenParamsDTO (pcGenParams p)))
+        { pgsCameraX    = pcCameraX p
+        , pgsCameraY    = pcCameraY p
+        , pgsTimeHour   = pcTimeHour p
+        , pgsTimeMinute = pcTimeMinute p
+        , pgsDateYear   = pcDateYear p
+        , pgsDateMonth  = pcDateMonth p
+        , pgsDateDay    = pcDateDay p
+        , pgsMapMode    = pcMapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pcIdentity p
+        }
+
+-- | The v1→v2 migration (#911): decode the frozen v1 page cores into the
+--   same base 'PageSnapshot' map, with each page's gen params rebuilt by
+--   'fromWorldGenParamsDTOv1' — which leaves the instance table empty and
+--   the page's old per-chunk discovered / contents-spawned sets PENDING
+--   on it. Turning those into instances needs each definition's
+--   bounds / margin / label, and no component decoder has the location
+--   registry, so the load path resolves them
+--   ('Location.Instance.resolveLegacyLocationInstances') at its
+--   content-validation stage before publication.
+--   @wgpLocationStamped@ rides across untouched — it stays a chunk
+--   property (#424).
+migrateWorldPagesV1 ∷ WorldPagesDTOv1 → WorldPages
+migrateWorldPagesV1 (WorldPagesDTOv1 ps) = WorldPages
+    { wpPageIds = map pc1PageId ps
+    , wpBase    = HM.fromList [ (pc1PageId p, toBase p) | p ← ps ]
+    }
+  where
+    toBase p = (blankPageSnapshot (pc1PageId p)
+                    (fromWorldGenParamsDTOv1 (pc1GenParams p)))
+        { pgsCameraX    = pc1CameraX p
+        , pgsCameraY    = pc1CameraY p
+        , pgsTimeHour   = pc1TimeHour p
+        , pgsTimeMinute = pc1TimeMinute p
+        , pgsDateYear   = pc1DateYear p
+        , pgsDateMonth  = pc1DateMonth p
+        , pgsDateDay    = pc1DateDay p
+        , pgsMapMode    = pc1MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc1Identity p
+        }
+
+-- | The zeroed base 'PageSnapshot' both the v2 and v1 paths above build
+--   on, so the two can never drift in which placeholder fields they
+--   leave for the other components to fill. Each caller record-updates
+--   the page-core scalars it decoded; everything left here is a
+--   placeholder a REQUIRED component overwrites during assembly.
+blankPageSnapshot ∷ WorldPageId → WorldGenParams → PageSnapshot
+blankPageSnapshot pid params =
+    PageSnapshot
+        { pgsPageId       = pid
+        , pgsGenParams    = params
+        , pgsCameraX      = 0
+        , pgsCameraY      = 0
+        , pgsTimeHour     = 0
+        , pgsTimeMinute   = 0
+        , pgsDateYear     = 0
+        , pgsDateMonth    = 0
+        , pgsDateDay      = 0
+        , pgsMapMode      = ZMDefault
+        , pgsIdentity     = Nothing
         , pgsEdits        = emptyWorldEdits
         , pgsMineDesignations      = HM.empty
         , pgsConstructDesignations = HM.empty

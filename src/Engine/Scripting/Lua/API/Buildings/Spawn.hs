@@ -27,7 +27,7 @@ import Location.Bounds (remotePortalThresholdTiles)
 import Unit.Pathing.Cost (lookupTerrainZ)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Tile.Types (WorldTileData)
-import Location.Overlay.Types (emptyLocationOverlay)
+import Location.Instance (emptyLocationInstances)
 
 -- * Spawn / destroy
 
@@ -62,15 +62,14 @@ buildingSpawnFn env = do
                 case (HM.lookup defName (bmDefs bm), mTarget) of
                     (Just def, Just (pid, ws)) → do
                         wtd ← readIORef (wsTilesRef ws)
-                        locs ← readIORef (locationDefsRef env)
                         mParams ← readIORef (wsGenParamsRef ws)
-                        let overlay = maybe emptyLocationOverlay
-                                            wgpLocationOverlay mParams
+                        let locInstances = maybe emptyLocationInstances
+                                                 wgpLocationInstances mParams
                             worldSizeChunks = maybe 0 wgpWorldSize mParams
                         case canPlaceAt
                                 (bm { bmInstances =
                                         buildingsOnPage pid (bmInstances bm) })
-                                wtd locs overlay worldSizeChunks def gx gy of
+                                wtd locInstances worldSizeChunks def gx gy of
                             NotPlaceable _ → pure Nothing
                             Placeable → do
                                 let gz = floorZAt wtd gx gy
@@ -135,15 +134,14 @@ buildingCanPlaceAtFn env = do
                         case mWtd of
                             Nothing  → pure (NotPlaceable "no world loaded")
                             Just wtd → do
-                                locs ← readIORef (locationDefsRef env)
                                 mParams ← readIORef (wsGenParamsRef ws)
-                                let overlay = maybe emptyLocationOverlay
-                                                    wgpLocationOverlay mParams
+                                let locInstances = maybe emptyLocationInstances
+                                                         wgpLocationInstances mParams
                                     worldSizeChunks = maybe 0 wgpWorldSize mParams
                                 pure (canPlaceAt
                                     (bm { bmInstances =
                                             buildingsOnPage pid (bmInstances bm) })
-                                    wtd locs overlay worldSizeChunks def gx gy)
+                                    wtd locInstances worldSizeChunks def gx gy)
             case result of
                 Placeable → do
                     Lua.pushboolean True
@@ -184,12 +182,11 @@ buildingRemoteCheckFn env = do
             mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case (HM.lookup defName (bmDefs bm), mActive) of
                 (Just def, Just (_pid, ws)) → do
-                    locs ← readIORef (locationDefsRef env)
                     mParams ← readIORef (wsGenParamsRef ws)
-                    let overlay = maybe emptyLocationOverlay
-                                        wgpLocationOverlay mParams
+                    let locInstances = maybe emptyLocationInstances
+                                             wgpLocationInstances mParams
                         worldSizeChunks = maybe 0 wgpWorldSize mParams
-                    pure (remoteCheck locs overlay worldSizeChunks def gx gy)
+                    pure (remoteCheck locInstances worldSizeChunks def gx gy)
                 _ → pure NotStartingBuilding
         _ → pure NotStartingBuilding
     Lua.pushboolean (isRemote check)

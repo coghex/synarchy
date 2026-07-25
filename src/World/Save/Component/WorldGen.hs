@@ -63,6 +63,10 @@
 --   "Test.Headless.World.Save.Components" stays valid across this change.
 module World.Save.Component.WorldGen
     ( WorldGenParamsDTO(..)
+    , WorldGenParamsDTOv1(..)
+    , AbsBoundsDTO(..)
+    , LocationInstanceDTO(..)
+    , LocationInstancesDTO(..)
     , TectonicPlateDTO(..)
     , CalendarConfigDTO(..)
     , SunConfigDTO(..)
@@ -86,6 +90,10 @@ module World.Save.Component.WorldGen
     , ClimateStateDTO(..)
     , toWorldGenParamsDTO
     , fromWorldGenParamsDTO
+    , fromWorldGenParamsDTOv1
+    , toWorldGenParamsDTOv1
+    , toLocationInstancesDTO
+    , fromLocationInstancesDTO
     , toClimateStateDTO
     , fromClimateStateDTO
     ) where
@@ -111,6 +119,11 @@ import World.Weather.Types
     , SurfaceType, SurfaceBudget(..) )
 import World.Geology.Ore.Types (OreLevers(..))
 import Location.Overlay.Types (LocationOverlay)
+import Location.Bounds (AbsBounds(..))
+import Location.Instance
+    ( LocationInstance(..), LocationInstances(..), LocationInstanceId
+    , LocationLifecycle, pendingLegacyFlags, instancesToList
+    , isDiscoveredLifecycle )
 import World.Chunk.Types (ChunkCoord)
 
 -- Small config / param records --------------------------------------
@@ -517,17 +530,114 @@ fromClimateStateDTO d = ClimateState
     , csSolarConst = clsSolarConst d
     }
 
+-- Placed-location instances (#911) -----------------------------------
+
+-- | Frozen mirror of 'Location.Bounds.AbsBounds'. An inclusive tile box
+--   is definitionally four coordinates, so this could arguably be a
+--   leaf like 'ChunkCoord' — it is frozen anyway because it is reached
+--   only through 'LocationInstanceDTO', whose whole point is that the
+--   live location record WILL gain fields (encounter, loot, and cleared
+--   state are the next expedition-loop issues), and freezing the pair
+--   together keeps the boundary in one place.
+data AbsBoundsDTO = AbsBoundsDTO
+    { abdMinX ∷ !Int
+    , abdMinY ∷ !Int
+    , abdMaxX ∷ !Int
+    , abdMaxY ∷ !Int
+    } deriving (Show, Eq, Generic, Serialize)
+
+toAbsBoundsDTO ∷ AbsBounds → AbsBoundsDTO
+toAbsBoundsDTO b = AbsBoundsDTO (abMinX b) (abMinY b) (abMaxX b) (abMaxY b)
+
+fromAbsBoundsDTO ∷ AbsBoundsDTO → AbsBounds
+fromAbsBoundsDTO d = AbsBounds (abdMinX d) (abdMinY d) (abdMaxX d) (abdMaxY d)
+
+-- | Frozen mirror of 'Location.Instance.LocationInstance' — a LIVE
+--   gameplay record by construction (its lifecycle and content-spawn
+--   flag are mutated in place, and the expedition arc adds encounter /
+--   loot / progression fields to it), so the boundary rule
+--   ("World.Save.Component.Types") requires an explicit field-by-field
+--   conversion rather than embedding it. 'LocationInstanceId' is a leaf
+--   id and 'LocationLifecycle' a payload-free append-only enum, both
+--   reused as-is exactly like 'ChunkCoord' / 'ZoomMapMode'.
+data LocationInstanceDTO = LocationInstanceDTO
+    { lidId              ∷ !LocationInstanceId
+    , lidDefId           ∷ !Text
+    , lidChunk           ∷ !ChunkCoord
+    , lidAnchorX         ∷ !Int
+    , lidAnchorY         ∷ !Int
+    , lidBounds          ∷ !AbsBoundsDTO
+    , lidDiscoveryMargin ∷ !Int
+    , lidDisplayName     ∷ !Text
+    , lidLifecycle       ∷ !LocationLifecycle
+    , lidContentsSpawned ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationInstanceDTO ∷ LocationInstance → LocationInstanceDTO
+toLocationInstanceDTO i = LocationInstanceDTO
+    { lidId              = liId i
+    , lidDefId           = liDefId i
+    , lidChunk           = liChunk i
+    , lidAnchorX         = fst (liAnchor i)
+    , lidAnchorY         = snd (liAnchor i)
+    , lidBounds          = toAbsBoundsDTO (liBounds i)
+    , lidDiscoveryMargin = liDiscoveryMargin i
+    , lidDisplayName     = liDisplayName i
+    , lidLifecycle       = liLifecycle i
+    , lidContentsSpawned = liContentsSpawned i
+    }
+
+fromLocationInstanceDTO ∷ LocationInstanceDTO → LocationInstance
+fromLocationInstanceDTO d = LocationInstance
+    { liId              = lidId d
+    , liDefId           = lidDefId d
+    , liChunk           = lidChunk d
+    , liAnchor          = (lidAnchorX d, lidAnchorY d)
+    , liBounds          = fromAbsBoundsDTO (lidBounds d)
+    , liDiscoveryMargin = lidDiscoveryMargin d
+    , liDisplayName     = lidDisplayName d
+    , liLifecycle       = lidLifecycle d
+    , liContentsSpawned = lidContentsSpawned d
+    }
+
+-- | Frozen mirror of the per-page instance table: its allocator plus
+--   its instances. 'Location.Instance.lisPendingLegacy' has no field
+--   here on purpose — it is a transient v1-migration carry that can
+--   never be true of anything on disk, so 'fromLocationInstancesDTO'
+--   always rebuilds it as 'Nothing'.
+data LocationInstancesDTO = LocationInstancesDTO
+    { lisdNextId ∷ !Int
+    , lisdById   ∷ !(HM.HashMap LocationInstanceId LocationInstanceDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationInstancesDTO ∷ LocationInstances → LocationInstancesDTO
+toLocationInstancesDTO l = LocationInstancesDTO
+    { lisdNextId = lisNextId l
+    , lisdById   = HM.map toLocationInstanceDTO (lisById l)
+    }
+
+fromLocationInstancesDTO ∷ LocationInstancesDTO → LocationInstances
+fromLocationInstancesDTO d = LocationInstances
+    { lisNextId        = lisdNextId d
+    , lisById          = HM.map fromLocationInstanceDTO (lisdById d)
+    , lisPendingLegacy = Nothing
+    }
+
 -- WorldGenParams ----------------------------------------------------
 
 -- | Frozen mirror of 'WorldGenParams' (a mutable runtime record that
 --   gains fields as worldgen features land — the #89/#90/#424/#780
---   location flags are the recent examples). Field order matches
---   'WorldGenParams''s MANUAL 'Serialize' instance exactly (every field
---   except the transient @wgpVolcanoCtx@, which that instance also skips
---   and rebuilds on load), so the derived cereal layout here is
---   byte-identical to embedding the record directly. Each nested live
---   config/state record is a frozen DTO (see this module's haddock);
---   'GeoTimeline' and the content-collection aliases are reused as leaves.
+--   location flags were the recent examples, and #911 replaced two of
+--   them with the instance table below). Field order matches
+--   'WorldGenParams''s declaration order (every field except the
+--   transient @wgpVolcanoCtx@, which its manual 'Serialize' instance
+--   also skips and rebuilds on load). Each nested live config/state
+--   record is a frozen DTO (see this module's haddock); 'GeoTimeline'
+--   and the content-collection aliases are reused as leaves.
+--
+--   This is the CURRENT (v2) shape, carried by @world-pages@ v2.
+--   'WorldGenParamsDTOv1' below is the frozen shape that shipped before
+--   #911 and is decode-only.
 data WorldGenParamsDTO = WorldGenParamsDTO
     { gpSeed                    ∷ !Word64
     , gpWorldSize               ∷ !Int
@@ -549,9 +659,8 @@ data WorldGenParamsDTO = WorldGenParamsDTO
     , gpOreLevers               ∷ !OreLeversDTO
     , gpTimelineParams          ∷ !TimelineParamsDTO
     , gpLocationOverlay         ∷ !LocationOverlay
-    , gpLocationContentsSpawned ∷ !(HS.HashSet ChunkCoord)
+    , gpLocationInstances       ∷ !LocationInstancesDTO
     , gpLocationStamped         ∷ !(HS.HashSet ChunkCoord)
-    , gpLocationDiscovered      ∷ !(HS.HashSet ChunkCoord)
     } deriving (Show, Eq, Generic, Serialize)
 
 toWorldGenParamsDTO ∷ WorldGenParams → WorldGenParamsDTO
@@ -576,9 +685,8 @@ toWorldGenParamsDTO p = WorldGenParamsDTO
     , gpOreLevers               = toOreLeversDTO (wgpOreLevers p)
     , gpTimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
     , gpLocationOverlay         = wgpLocationOverlay p
-    , gpLocationContentsSpawned = wgpLocationContentsSpawned p
+    , gpLocationInstances       = toLocationInstancesDTO (wgpLocationInstances p)
     , gpLocationStamped         = wgpLocationStamped p
-    , gpLocationDiscovered      = wgpLocationDiscovered p
     }
 
 -- | Rebuild the live record from the DTO, restoring the transient
@@ -609,8 +717,114 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpOreLevers               = fromOreLeversDTO (gpOreLevers d)
     , wgpTimelineParams          = fromTimelineParamsDTO (gpTimelineParams d)
     , wgpLocationOverlay         = gpLocationOverlay d
-    , wgpLocationContentsSpawned = gpLocationContentsSpawned d
+    , wgpLocationInstances       = fromLocationInstancesDTO (gpLocationInstances d)
     , wgpLocationStamped         = gpLocationStamped d
-    , wgpLocationDiscovered      = gpLocationDiscovered d
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
+
+-- Frozen pre-#911 worldgen params (@world-pages@ v1) ------------------
+
+-- | The FROZEN v1 shape of 'WorldGenParamsDTO', preserved verbatim for
+--   decode-only backward compatibility: before #911 a page's placed
+--   locations were three chunk-keyed sets rather than an instance
+--   table. Never edited — a further schema change adds a v3 type
+--   instead (frozen-DTO boundary rule). Decoded by @world-pages@ v1 and
+--   by the legacy B1 path ("World.Save.Compat.SessionV90", whose v90
+--   bytes embed exactly these fields).
+data WorldGenParamsDTOv1 = WorldGenParamsDTOv1
+    { gp1Seed                    ∷ !Word64
+    , gp1WorldSize               ∷ !Int
+    , gp1PlateCount              ∷ !Int
+    , gp1Plates                  ∷ ![TectonicPlateDTO]
+    , gp1Calender                ∷ !CalendarConfigDTO
+    , gp1SunConfig               ∷ !SunConfigDTO
+    , gp1MoonConfig              ∷ !MoonConfigDTO
+    , gp1GeoTimeline             ∷ !GeoTimeline
+    , gp1OceanMap                ∷ !OceanMap
+    , gp1OceanDist               ∷ !OceanDistMap
+    , gp1ClimateParams           ∷ !ClimateParamsDTO
+    , gp1ClimateState            ∷ !ClimateStateDTO
+    , gp1ErosionIntensity        ∷ !Float
+    , gp1VolcanicActivity        ∷ !Float
+    , gp1LavaPoolDepth           ∷ !Int
+    , gp1LavaPoolRadius          ∷ !Int
+    , gp1WaterfallQuantum        ∷ !Int
+    , gp1OreLevers               ∷ !OreLeversDTO
+    , gp1TimelineParams          ∷ !TimelineParamsDTO
+    , gp1LocationOverlay         ∷ !LocationOverlay
+    , gp1LocationContentsSpawned ∷ !(HS.HashSet ChunkCoord)
+    , gp1LocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    , gp1LocationDiscovered      ∷ !(HS.HashSet ChunkCoord)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Rebuild the live record from a v1 DTO. The instance table comes
+--   back EMPTY with the v1 chunk flags held pending
+--   ('Location.Instance.pendingLegacyFlags'): turning them into
+--   instances needs each definition's bounds / margin / label, and no
+--   component decoder has the location registry. The load path resolves
+--   them at its content-validation stage — the same stage that already
+--   rejects a save naming an unregistered location def — before
+--   anything is published.
+fromWorldGenParamsDTOv1 ∷ WorldGenParamsDTOv1 → WorldGenParams
+fromWorldGenParamsDTOv1 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                    = gp1Seed d
+    , wgpWorldSize               = gp1WorldSize d
+    , wgpPlateCount              = gp1PlateCount d
+    , wgpPlates                  = map fromTectonicPlateDTO (gp1Plates d)
+    , wgpCalender                = fromCalendarConfigDTO (gp1Calender d)
+    , wgpSunConfig               = fromSunConfigDTO (gp1SunConfig d)
+    , wgpMoonConfig              = fromMoonConfigDTO (gp1MoonConfig d)
+    , wgpGeoTimeline             = gp1GeoTimeline d
+    , wgpOceanMap                = gp1OceanMap d
+    , wgpOceanDist               = gp1OceanDist d
+    , wgpClimateParams           = fromClimateParamsDTO (gp1ClimateParams d)
+    , wgpClimateState            = fromClimateStateDTO (gp1ClimateState d)
+    , wgpErosionIntensity        = gp1ErosionIntensity d
+    , wgpVolcanicActivity        = gp1VolcanicActivity d
+    , wgpLavaPoolDepth           = gp1LavaPoolDepth d
+    , wgpLavaPoolRadius          = gp1LavaPoolRadius d
+    , wgpWaterfallQuantum        = gp1WaterfallQuantum d
+    , wgpOreLevers               = fromOreLeversDTO (gp1OreLevers d)
+    , wgpTimelineParams          = fromTimelineParamsDTO (gp1TimelineParams d)
+    , wgpLocationOverlay         = gp1LocationOverlay d
+    , wgpLocationInstances       =
+        pendingLegacyFlags (gp1LocationDiscovered d) (gp1LocationContentsSpawned d)
+    , wgpLocationStamped         = gp1LocationStamped d
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+-- | Encode a live record into the FROZEN v1 shape. Production NEVER
+--   writes v1 — 'worldPagesCodec' always encodes the current version —
+--   so this exists solely so the migration tests (and the tracked v90
+--   fixture builder) can synthesize a genuine pre-#911 payload to
+--   decode. The three location chunk sets are reconstructed from the
+--   instance table, which is what a pre-#911 build would have written.
+toWorldGenParamsDTOv1 ∷ WorldGenParams → WorldGenParamsDTOv1
+toWorldGenParamsDTOv1 p = WorldGenParamsDTOv1
+    { gp1Seed                    = wgpSeed p
+    , gp1WorldSize               = wgpWorldSize p
+    , gp1PlateCount              = wgpPlateCount p
+    , gp1Plates                  = map toTectonicPlateDTO (wgpPlates p)
+    , gp1Calender                = toCalendarConfigDTO (wgpCalender p)
+    , gp1SunConfig               = toSunConfigDTO (wgpSunConfig p)
+    , gp1MoonConfig              = toMoonConfigDTO (wgpMoonConfig p)
+    , gp1GeoTimeline             = wgpGeoTimeline p
+    , gp1OceanMap                = wgpOceanMap p
+    , gp1OceanDist               = wgpOceanDist p
+    , gp1ClimateParams           = toClimateParamsDTO (wgpClimateParams p)
+    , gp1ClimateState            = toClimateStateDTO (wgpClimateState p)
+    , gp1ErosionIntensity        = wgpErosionIntensity p
+    , gp1VolcanicActivity        = wgpVolcanicActivity p
+    , gp1LavaPoolDepth           = wgpLavaPoolDepth p
+    , gp1LavaPoolRadius          = wgpLavaPoolRadius p
+    , gp1WaterfallQuantum        = wgpWaterfallQuantum p
+    , gp1OreLevers               = toOreLeversDTO (wgpOreLevers p)
+    , gp1TimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp1LocationOverlay         = wgpLocationOverlay p
+    , gp1LocationContentsSpawned = HS.fromList
+        [ liChunk i | i ← instances, liContentsSpawned i ]
+    , gp1LocationStamped         = wgpLocationStamped p
+    , gp1LocationDiscovered      = HS.fromList
+        [ liChunk i | i ← instances, isDiscoveredLifecycle (liLifecycle i) ]
+    }
+  where instances = instancesToList (wgpLocationInstances p)

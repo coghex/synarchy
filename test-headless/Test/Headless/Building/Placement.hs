@@ -36,7 +36,9 @@ import Location.Types
     ( LocationDef(..), LocationRegistry, emptyLocationRegistry
     , registerLocation
     )
-import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
+import Location.Overlay.Types (LocationOverlay)
+import Location.Instance
+    (LocationInstances, buildLocationInstances, emptyLocationInstances)
 import Location.Bounds (RelBounds(..))
 
 -- * Fixtures
@@ -147,6 +149,12 @@ registry1 = registerLocation (locDef "loc1") emptyLocationRegistry
 overlay1 ∷ LocationOverlay
 overlay1 = HM.singleton (ChunkCoord 0 0) "loc1"
 
+-- | The placed-location instance table #778's exclusion now reads
+--   (#911) — built from the overlay above exactly the way world init
+--   builds it, so the stored bounds are the same (6,6)..(10,10) box.
+instances1 ∷ LocationInstances
+instances1 = buildLocationInstances registry1 overlay1
+
 -- | An unoccupied manager — the location-exclusion tests don't need
 --   any existing buildings.
 noBuildings ∷ BuildingManager
@@ -176,7 +184,7 @@ spec = describe "Portal location exclusion (#778)" $ do
 
     describe "Building.Placement.canPlaceAt against a placed location" $ do
         let wtd = worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5]
-            check gx gy = canPlaceAt noBuildings wtd registry1 overlay1 0
+            check gx gy = canPlaceAt noBuildings wtd instances1 0
                                       portalDef gx gy
 
         it "rejects a footprint completely inside location bounds" $
@@ -200,7 +208,7 @@ spec = describe "Portal location exclusion (#778)" $ do
                     check gx gy `shouldBe` Placeable
 
         it "does not reject an ordinary non-starting building at the same coordinates" $
-            canPlaceAt noBuildings wtd registry1 overlay1 0 ordinaryDef 8 8
+            canPlaceAt noBuildings wtd instances1 0 ordinaryDef 8 8
                 `shouldBe` Placeable
 
         it "does not reject when this page's overlay has no locations \
@@ -213,33 +221,33 @@ spec = describe "Portal location exclusion (#778)" $ do
             -- coordinate is rejected on the page that DOES place loc1
             -- above. Cross-page isolation falls out of that per-page
             -- scoping rather than anything canPlaceAt itself branches on.
-            canPlaceAt noBuildings wtd registry1 emptyLocationOverlay 0
+            canPlaceAt noBuildings wtd emptyLocationInstances 0
                        portalDef 8 8
                 `shouldBe` Placeable
 
     describe "distinct rejection reasons (review amendment)" $ do
         it "\"chunk not loaded\" when the footprint's chunk isn't loaded" $
-            canPlaceAt noBuildings (worldWithChunks []) registry1 overlay1 0
+            canPlaceAt noBuildings (worldWithChunks []) instances1 0
                        portalDef 100 100
                 `shouldBe` NotPlaceable "chunk not loaded"
 
         it "\"ground is uneven\" when the footprint spans two terrain heights" $
             canPlaceAt noBuildings (worldWithChunks [unevenChunk])
-                       emptyLocationRegistry emptyLocationOverlay 0
+                       emptyLocationInstances 0
                        (mkDef True 2 1) 0 0
                 `shouldBe` NotPlaceable "ground is uneven"
 
         it "\"tile already occupied\" when an existing building covers the tile" $
             canPlaceAt (occupiedAt 8 8)
                        (worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5])
-                       emptyLocationRegistry emptyLocationOverlay 0
+                       emptyLocationInstances 0
                        portalDef 8 8
                 `shouldBe` NotPlaceable "tile already occupied"
 
         it "the location-overlap reason differs from the other three" $
             case canPlaceAt noBuildings
                              (worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5])
-                             registry1 overlay1 0 portalDef 8 8 of
+                             instances1 0 portalDef 8 8 of
                 NotPlaceable reason → do
                     reason `shouldBe` "inside a location's bounds"
                     reason `shouldNotSatisfy`
@@ -256,11 +264,11 @@ spec = describe "Portal location exclusion (#778)" $ do
         it "the same inputs always produce the same result" $
             canPlaceAt noBuildings
                        (worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5])
-                       registry1 overlay1 0 portalDef 8 8
+                       instances1 0 portalDef 8 8
                 `shouldBe`
                 canPlaceAt noBuildings
                            (worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5])
-                           registry1 overlay1 0 portalDef 8 8
+                           instances1 0 portalDef 8 8
 
     describe "cylindrical U-seam overlap (mirrors #777's Location.Bounds contract)" $ do
         -- worldSize 2 chunks -> worldWidthTiles 32, halfW 16. loc1 is
@@ -269,10 +277,11 @@ spec = describe "Portal location exclusion (#778)" $ do
         -- (6,22)..(10,26), which DOES contain footprint tile (8,24) —
         -- physically adjacent across the wrap even though the raw
         -- coordinates are far apart.
-        let seamOverlay = HM.singleton (ChunkCoord 1 0) "loc1"
+        let seamInstances = buildLocationInstances registry1
+                                (HM.singleton (ChunkCoord 1 0) "loc1")
             seamWtd = worldWithChunks [flatChunkAt (ChunkCoord 0 1) 5]
-            seamCheck ws = canPlaceAt noBuildings seamWtd registry1
-                                       seamOverlay ws portalDef 8 24
+            seamCheck ws = canPlaceAt noBuildings seamWtd seamInstances
+                                       ws portalDef 8 24
 
         it "does not intersect under the raw (non-wrapping) coordinates" $
             seamCheck 0 `shouldBe` Placeable

@@ -668,13 +668,43 @@ before touching each area:
   never compare `getVegAt` to raw id 77. Gates:
   `flora_growth_probe.py` (registers a max-tolerance `probe_berry`
   species), `till_probe.py`.
-- **Location discovery (#780)** — persisted per-page one-way flag,
-  flipped when a `uiFactionId == "player"` unit enters the def's
-  `discovery_margin` halo; ticks for EVERY loaded page, independent of
-  pause; emits exactly one `location_discovery` event (hidden-page
-  discoveries omit clickable coords). `world.listPlacedLocations()`.
-  Independent of the stamped/contents-spawned flags. Gates:
-  `location_content_probe.py`; hspec `--match "Location discovery"`.
+- **Location instances (#911)** — a placed location is a persisted
+  per-page record (`Location.Instance`) keyed by a stable
+  `LocationInstanceId` (from 1), allocated at PLACEMENT time in the
+  deterministic overlay's `overlayToList` order — never at stamp time,
+  never from hashmap order — so ids survive save/load and chunk
+  eviction. It stores its definition id, anchor, resolved absolute
+  bounds (#777), discovery margin, display name (placeholder from the
+  def's `label`; #708 wiring is separate), one-time content-spawn flag
+  (#90), and lifecycle `unknown → hinted → discovered → active →
+  cleared → depleted`. Consumers read the STORED values, never
+  re-derive them from the live registry. `wgpLocationStamped` stays
+  chunk-keyed (#424) and was untouched. Transitions are one-way
+  (`promoteLifecycle` refuses backward AND same-state), which is what
+  makes discovery fire exactly one event. Nothing drives an instance
+  past `discovered` yet; `hinted` is deliberately unreachable (every
+  location is cartographically visible for now — it is reserved for a
+  future information-revealed class, don't delete it). Queries:
+  `world.listPlacedLocations([pageId])` (extended, not repurposed —
+  `id` is still the DEFINITION id; `instance_id`/`lifecycle`/`name`/
+  `contents_spawned` are new), `world.getLocationInstance(id[, pageId])`,
+  `world.setLocationLifecycle(id, name[, pageId])`,
+  `world.markLocationContentsSpawnedById(id[, pageId])`. The
+  coordinate-addressed `hasSpawnedLocationContents`/
+  `markLocationContentsSpawned` remain compatibility wrappers resolving
+  to the chunk's first instance. Persistence: `world-pages` v2, with a
+  frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
+  against the location registry at the load path's content-validation
+  stage (`resolveLegacyLocations`) before publication. Gates: hspec
+  `--match "Location instance identity"`, `location_content_probe.py`.
+- **Location discovery (#780)** — a one-way lifecycle promotion to
+  `discovered`, fired when a `uiFactionId == "player"` unit enters the
+  instance's `discovery_margin` halo; ticks for EVERY loaded page,
+  independent of pause; emits exactly one `location_discovery` event
+  (hidden-page discoveries omit clickable coords). Independent of the
+  stamped/contents-spawned flags. Gates:
+  `location_content_probe.py`, `location_embark_probe.py`; hspec
+  `--match "Location discovery"` / `--match "Location map icons"`.
 - **Logging streams** — event log: `engine.getEventLog()`, emit via
   `engine.emitEvent(cat,text)` / `emitEventAt` /
   `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if

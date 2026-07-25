@@ -38,7 +38,8 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , renderMissingMaterialRef
                         , missingFloraReferences
                         , renderMissingFloraRef
-                        , missingLocationOverlayReferences
+                        , missingLocationDefReferences
+                        , resolveLegacyLocations
                         , renderMissingLocationRef
                         , missingInfectionReferences
                         , renderMissingInfectionRef)
@@ -584,7 +585,7 @@ continueLoad env logger requestId saveName descriptors = do
                 missingFlora =
                     missingFloraReferences floraCat pages
                 missingLocations =
-                    missingLocationOverlayReferences locationDefIds pages
+                    missingLocationDefReferences locationDefIds pages
                 missingInfections =
                     missingInfectionReferences infMgr pages
                 allMissing = length missing + length missingItems
@@ -631,6 +632,22 @@ continueLoad env logger requestId saveName descriptors = do
                     failLoad (loadStatusRef env) requestId msg
                 Lua.pushboolean False
               else do
+                -- #911: a pre-instance-identity save carries its
+                -- locations as per-chunk discovered / contents-spawned
+                -- sets with no instance table. Turning those into
+                -- instances needs each definition's bounds / margin /
+                -- label, which no component decoder can reach — so the
+                -- pure decode left them PENDING and they are resolved
+                -- HERE, against the same registry the check above just
+                -- validated every location id against, before anything
+                -- is staged or published. Total and idempotent: a save
+                -- already carrying instances (or a page with no
+                -- locations at all) passes through untouched, so stored
+                -- instance state is never overwritten from a definition
+                -- edited since placement.
+                let resolvedSaveData = saveData
+                        { sdWorlds = map (resolveLegacyLocations locReg)
+                                         (sdWorlds saveData) }
                 -- issue #761 requirement 11: decode + migrate +
                 -- component-locally-validate EVERY registered Lua
                 -- component before touching any live Lua state. Any
@@ -662,7 +679,7 @@ continueLoad env logger requestId saveName descriptors = do
                         -- reference contract — see
                         -- "World.Save.Integrity"'s haddock) — logged as
                         -- diagnostics only (requirement 16).
-                        let known = knownEntitiesFromSaveData saveData
+                        let known = knownEntitiesFromSaveData resolvedSaveData
                             edges = [ LuaRefEdge c k i o p
                                     | (c, k, i, o, p) ← luaRefs ]
                             -- componentVersions (round-2 review, issue
@@ -685,7 +702,7 @@ continueLoad env logger requestId saveName descriptors = do
                         -- touches no live ref (requirement 6), so
                         -- nothing here needs to wait for it.
                         Q.writeQueue (worldQueue env)
-                            (WorldLoadTransaction requestId saveData matReg)
+                            (WorldLoadTransaction requestId resolvedSaveData matReg)
                     Lua.pushboolean True
 
 -- | Pop the Lua error message at the top of the stack and log it
