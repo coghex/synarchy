@@ -95,6 +95,12 @@ LOG_S3 = "/tmp/location_embark_session3_engine.log"
 
 PORTAL = "acolyte_portal"
 RUIN_LABEL = "Small Ruin"  # data/locations/ruin_small.yaml `label`
+# The world page phase 0 generates the fixture on. A load keeps every
+# saved page's OWN id (#763: no main_world remap), so every session below
+# must address this same page -- both are named from this one constant so
+# they cannot drift apart again.
+FIXTURE_PAGE = "ew"
+
 SAVE_BASE = "location_embark_base"     # portal-free fixture, loaded by (a) and (b)
 SAVE_LOCAL = "location_embark_local"   # (b)'s own save, reloaded by (c)
 
@@ -129,7 +135,7 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 # --------------------------------------------------------------------------
 # Location/discovery helpers
 # --------------------------------------------------------------------------
-def list_locations_sorted(port: int, page: str = "main_world") -> list[dict]:
+def list_locations_sorted(port: int, page: str = FIXTURE_PAGE) -> list[dict]:
     raw = send(port, f"return world.listPlacedLocations('{page}')")
     try:
         data = json.loads(raw) if raw and raw not in ("nil", "null", "{}", "[]") else []
@@ -429,7 +435,7 @@ def order_move_to(port: int, target_gx: int, target_gy: int, cx0: int, cy0: int)
 # Phase 1: headless fixture prep
 # --------------------------------------------------------------------------
 def prepare_fixture(port: int, seeds: list[int], size: int, min_ruins: int = 2,
-                     page: str = "ew"):
+                     page: str = FIXTURE_PAGE):
     """Try each seed in turn until one places >= min_ruins ruin_small
     locations, then save it as SAVE_BASE. Returns (seed, ruins) or
     (None, []) if every candidate seed falls short — a fail-fast
@@ -816,7 +822,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
 
     # -- step 20 (prep): save this session's world for the reload check. --
     check("save this session's world", "true" in send(
-        port, f"engine.saveWorld('main_world', '{SAVE_LOCAL}'); "
+        port, f"engine.saveWorld('{FIXTURE_PAGE}', '{SAVE_LOCAL}'); "
               f"return 'true'").lower())
     time.sleep(0.5)
     return True
