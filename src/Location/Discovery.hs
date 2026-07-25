@@ -1,9 +1,9 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 -- | Pure discovery-transition detection (#780): given a page's placed
---   location instances (#911) and the positions of every
---   player-controlled unit currently on that page, decides which
---   locations just transitioned from undiscovered to discovered this
---   tick. A location is discovered the instant a player-faction unit's
+--   location instances (#911) and the positions of every unit currently
+--   on that page, decides which locations just transitioned from
+--   undiscovered to discovered this tick. A location is discovered the
+--   instant a PLAYER-OWNED unit's ('Unit.Faction.isPlayerOwned', #912)
 --   tile falls inside its stored absolute bounds (#777) expanded by its
 --   stored discovery margin — reusing the exact seam-aware containment
 --   'Location.Bounds.boundsContainsPoint' already provides. This module
@@ -27,6 +27,7 @@ import Location.Instance
     ( LocationInstance(..), LocationInstances, LocationInstanceId
     , LocationLifecycle(..), instancesToList, promoteLifecycle )
 import Location.Bounds (expandBounds, boundsContainsPoint)
+import Unit.Faction (Faction, isPlayerOwned)
 import World.Chunk.Types (ChunkCoord)
 
 -- | One location that transitions to discovered this tick: the instance
@@ -47,12 +48,17 @@ data DiscoveryHit uid = DiscoveryHit
 -- | Which placed locations transition to discovered THIS tick, given
 --   the page's world size (chunks, same unit 'World.Generate.Types.
 --   wgpWorldSize' already uses), its instance table, and every
---   currently-known unit's (id, faction id, gx, gy) on this page —
---   hostile, wildlife, neutral, and unrelated debug factions included;
---   the player-control faction contract (@factionId == "player"@ — the
---   tag every player-spawn path, including a portal-spawned unit,
---   assigns) is applied HERE, so a non-player unit standing inside a
---   location's bounds never contributes a hit.
+--   currently-known unit's (id, faction, gx, gy) on this page — units of
+--   every faction included, since the filter is applied HERE.
+--
+--   Discovery asks 'Unit.Faction.isPlayerOwned' — "is this the player's
+--   OWN unit?" (#912) — which is deliberately NOT the same question as
+--   "is this unit friendly to the player?". 'Unit.Faction.FactionDebug'
+--   is allied with the player and takes player orders, yet is not
+--   player-owned, so a debug unit still never discovers a location by
+--   walking through it. Answering the alliance question here instead
+--   would be a silent, player-visible behavior change; that is exactly
+--   why "Unit.Faction" keeps ownership and alliance apart.
 --
 --   Only a transition 'promoteLifecycle' accepts is reported: an
 --   instance already at 'LifecycleDiscovered' or beyond
@@ -68,11 +74,11 @@ data DiscoveryHit uid = DiscoveryHit
 --   match in @units@, so a caller wanting a deterministic discoverer
 --   should pass units in a stable order (e.g. sorted by unit id).
 findDiscoveries
-    ∷ Int → LocationInstances → [(uid, Text, Int, Int)] → [DiscoveryHit uid]
+    ∷ Int → LocationInstances → [(uid, Faction, Int, Int)] → [DiscoveryHit uid]
 findDiscoveries worldSize instances units =
     let playerUnits =
-            [ (uid, gx, gy) | (uid, factionId, gx, gy) ← units
-                             , factionId ≡ "player" ]
+            [ (uid, gx, gy) | (uid, faction, gx, gy) ← units
+                             , isPlayerOwned faction ]
     in [ DiscoveryHit (liId inst) (liChunk inst) (liAnchor inst)
                       (liDisplayName inst) uid
        | inst ← instancesToList instances

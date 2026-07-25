@@ -59,10 +59,11 @@ end
 -- Right-click on a unit → Info / Attack context menu. Callers run
 -- this before the move-when-selected branch so right-clicking a unit
 -- doesn't get interpreted as a move-to-tile order. "Attack" only
--- appears when at least one player-faction unit is selected; it's
--- greyed when every player attacker shares the target's faction (no
+-- appears when at least one player-COMMANDABLE unit is selected; it's
+-- greyed when none of them is permitted to attack the target (no
 -- friendly-fire by default — the force-attack override lands in a
--- later phase).
+-- later phase). Both questions come from the shared faction model
+-- (#912), not from comparing tags here.
 function M.tryUnitMenu(x, y)
     local targetUid = unit.hitTestAt(x, y)
     if not targetUid then return false end
@@ -89,36 +90,36 @@ function M.tryUnitMenu(x, y)
               item.deselect()
           end },
     }
-    -- Filter selection down to player-commandable
-    -- attackers (faction "player" or "debug"), excluding
-    -- the target itself.
+    -- Filter selection down to units that can take orders at all,
+    -- excluding the target itself. That's the COMMANDABILITY
+    -- property (#912) — a different question from "friendly to the
+    -- player", which is why it isn't the relation below.
     local attackers = {}
     for _, uid in ipairs(selectedUids) do
-        local fac = unit.getFaction(uid)
         if uid ~= targetUid
-           and (fac == "player" or fac == "debug") then
+           and faction.isPlayerCommandable(unit.getFaction(uid)) then
             table.insert(attackers, uid)
         end
     end
     if #attackers > 0 then
-        -- Friendly check: every attacker shares the
-        -- target's faction → Attack greyed. Debug-faction
-        -- attackers bypass this check entirely (the whole
-        -- point of "debug" is no friendly-fire restriction
-        -- so the player can stage acolyte-vs-acolyte
-        -- fights in the debug overlay).
-        local allFriendly = true
+        -- Friendly check: Attack is greyed unless at least one
+        -- attacker is actually PERMITTED to hit the target.
+        -- faction.canAttack folds in the debug faction's
+        -- unrestricted-combat property (the whole point of "debug"
+        -- is no friendly-fire restriction so the player can stage
+        -- acolyte-vs-acolyte fights in the debug overlay), so this
+        -- no longer carries its own inline special case.
+        local anyPermitted = false
         for _, uid in ipairs(attackers) do
-            local fac = unit.getFaction(uid)
-            if fac == "debug" or fac ~= targetFac then
-                allFriendly = false
+            if faction.canAttack(unit.getFaction(uid), targetFac) then
+                anyPermitted = true
                 break
             end
         end
         local unitAi = require("scripts.unit_ai")
         table.insert(items, {
             label    = "Attack",
-            enabled  = not allFriendly,
+            enabled  = anyPermitted,
             callback = function()
                 -- Player order → committed (holds far longer
                 -- before futility breaks it; soft, not absolute).
