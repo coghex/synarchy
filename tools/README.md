@@ -367,6 +367,54 @@ python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --ga
 python3 tools/ci_expensive_gates.py --self-test
 ```
 
+## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
+
+`tools/gameplay_scenarios.py` is a small on-demand runner for *watching*
+first-expedition gameplay, not for gating it. **It is deliberately outside
+CI**: it is not registered in `run_probes.py`, not classified in
+`ci_probes.py`, not invoked by any workflow, and deliberately not named
+`*_probe.py` — the probe registry and its classification self-test key off
+registered probe names only, so it cannot be selected by the blocking probe
+gate. Its **exit status reports setup/runtime failure only, never a
+gameplay-balance verdict**: a unit that dies, starves, never reaches a
+waypoint or goes untreated is reported as an observation and still exits 0.
+Survival-pressure tuning on top of these observations is #919's job.
+
+```bash
+python3 tools/gameplay_scenarios.py --list
+python3 tools/gameplay_scenarios.py --test expedition
+python3 tools/gameplay_scenarios.py --test first-aid
+```
+
+Both scenarios boot their own headless engine (default port 9925, `--port`
+overrides; never 8008), spawn the real starting party — five acolytes plus
+one technomule, player faction, with each def's real `starting_inventory` —
+tear the engine down in a `finally`, and save nothing.
+
+- **`expedition`** (~5 min) generates a deterministic world (seed 42, size
+  64, 3 plates), derives a base camp and a fixed out-and-back route from
+  that world, provisions two acolytes off the STATIONARY mule through
+  `unit.transferItemToUnit` (capacity-gated the way the fetch AI gates it),
+  then walks the pair 3 × 8 tiles out and straight back under the real
+  player move order (`unitAi.commandMove`). It reports, at every waypoint:
+  inventory, carrying weight vs capacity, hunger/calories/hydration/
+  exhaustion/stamina, blood and bleed rate, pain, wounds and their dressing
+  state, the AI's current action/role/treatment claim, and position —
+  plus an observations list for anything that ended a trip early.
+- **`first-aid`** (~2 min) builds a wide arena ridge, issues the mule's
+  pre-stocked `first_aid_kit` to the selected expedition acolyte via the
+  same transfer path, walks that acolyte off the ridge for a real fall,
+  administers first aid through `unit.treatBleeding` the moment the injury
+  lands, and reports the injury, the treatment call's full result
+  (part/kind/method/bandages used/attempts/residual seep/message), the
+  kit's remaining contents and holder, whether the medic AI claimed the
+  patient on its own, and the final unit state.
+
+An unclassified `tools/*.py` path makes CI's path-selective probe gate fall
+back to its full CI-eligible probe set for that PR — that is `ci_probes.py`'s
+pre-existing conservative default for unknown paths, not this script running
+in CI.
+
 ## Playtest harness (`playtest/`)
 
 `tools/playtest/` is the naive-player UX playtest harness (H1, #647 —
@@ -533,6 +581,7 @@ tools/
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── language_report.py      (generated-language native-name report/check, #710)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
+├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── video_window_check.py   (GUI-attached video/window settings check, #891 — see above)
 ├── playtest/               (naive-player UX playtest harness — see above)
