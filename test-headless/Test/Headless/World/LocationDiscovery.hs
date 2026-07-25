@@ -15,7 +15,6 @@ module Test.Headless.World.LocationDiscovery (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import Data.IORef (writeIORef, readIORef)
