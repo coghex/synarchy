@@ -705,6 +705,24 @@ before touching each area:
   stamped/contents-spawned flags. Gates:
   `location_content_probe.py`, `location_embark_probe.py`; hspec
   `--match "Location discovery"` / `--match "Location map icons"`.
+- **Expedition retrieval (#920)** — recovering an item from a remote
+  location uses ONLY the direct-RTS verbs a player already has
+  (`unitAi.commandPickup` → `unitAi.commandMove` home → adjacent
+  `unit.depositToCargo`); the design doc forbids a caravan/logistics
+  interface until direct retrieval proves inadequate. `commandPickup`
+  gates capacity at COMMAND time (refuses, returns false, emits a
+  player-visible `unit_warning` naming carrier and item, sets no
+  `pickupOrder`) AND still on ARRIVAL, both measuring
+  `unit.getCarryingWeight` against the ground instance's live
+  `item.listGround().weight` — keep both; the load changes en route. A
+  completed pickup emits a `unit_event` naming the item, tagged with
+  the carrier's uid — that is the surface answering "who has it".
+  `pickup_timeout` and `unit_ai_core`'s `TASK_TIMEOUT_SEC` are STALL
+  timers, not total-trip budgets: they reset on a new closest approach,
+  so a long-but-progressing leg completes while an unreachable target
+  still gives up. Don't restore the from-`issuedAt`/`startedAt` shape —
+  it capped ordered retrieval at ~21 tiles and ordered moves at ~42.
+  Gate: `expedition_retrieval_probe.py` (manual-only).
 - **Logging streams** — event log: `engine.getEventLog()`, emit via
   `engine.emitEvent(cat,text)` / `emitEventAt` /
   `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if

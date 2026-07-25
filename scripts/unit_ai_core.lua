@@ -49,7 +49,11 @@ end
 --   currentAction      = "idle" | "wander" | "follow_command" | ...,
 --   actionStartedAt    = <posix>,
 --   nextActionAt       = <posix>,
---   commandedTask      = { x, y, speed, startedAt } | nil,
+--   commandedTask      = { x, y, speed, startedAt,
+--                          bestDist, progressAt } | nil,
+--                                           -- bestDist/progressAt are
+--                                           -- maintainTask's stall
+--                                           -- bookkeeping (#920)
 --   knownWaterSources  = { {x, y}, ... },   -- dedup'd by distance;
 --                                           -- empty list = none known
 --   role               = "miner"|"woodcutter"|"builder"|"smith"
@@ -62,7 +66,11 @@ local aiState = unitAi.aiState
 
 -- Constants for arrival detection on commanded tasks.
 local TASK_ARRIVAL_TILES = 0.6
+-- TASK_TIMEOUT_SEC is a STALL budget, not a total-trip budget — see
+-- maintainTask. TASK_PROGRESS_TILES is how much closer the unit must
+-- get before that budget resets.
 local TASK_TIMEOUT_SEC   = 60.0
+local TASK_PROGRESS_TILES = 0.5
 
 -----------------------------------------------------------
 -- Helpers
@@ -253,14 +261,26 @@ local function maintainTask(uid, s)
     end
 
     -- Arrival check.
-    if distance(info.gridX, info.gridY, task.x, task.y)
-       <= TASK_ARRIVAL_TILES then
+    local d = distance(info.gridX, info.gridY, task.x, task.y)
+    if d <= TASK_ARRIVAL_TILES then
         s.commandedTask = nil
         return
     end
 
-    -- Timeout check (handles unreachable destinations).
-    if engine.gameTime() - task.startedAt > TASK_TIMEOUT_SEC then
+    -- Timeout check (handles unreachable destinations) — a STALL timer,
+    -- not a total-trip budget (#920). An expedition's return leg is tens
+    -- of tiles of perfectly good walking, and a survival interruption
+    -- (drink/eat/sleep) eats into it; measuring from startedAt dropped
+    -- such an order mid-journey even though the carrier was still
+    -- closing on its destination. The deadline resets only on a NEW
+    -- closest approach, so a unit circling an unreachable target never
+    -- refreshes it and still gives up after TASK_TIMEOUT_SEC.
+    if not task.bestDist or d < task.bestDist - TASK_PROGRESS_TILES then
+        task.bestDist   = d
+        task.progressAt = engine.gameTime()
+    end
+    if engine.gameTime() - (task.progressAt or task.startedAt)
+       > TASK_TIMEOUT_SEC then
         s.commandedTask = nil
     end
 end
