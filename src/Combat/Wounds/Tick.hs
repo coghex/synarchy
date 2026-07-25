@@ -17,7 +17,7 @@ import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Environment (lookupEnv)
 import Combat.Types (CombatEvent(..))
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -81,7 +81,7 @@ tickAllWounds env dt = do
     -- Active world's climate, for per-unit infection selection + onset speed.
     -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.
     mClim ← do
-        mWs ← activeWorldState env
+        mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mWs of
             Just ws → do
                 mp ← readIORef (wsGenParamsRef ws)

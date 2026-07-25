@@ -24,7 +24,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldState, freshItemInstanceId)
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom, freshItemInstanceId)
 import Unit.Types
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Roll (rollItemSpec, rollItemWeight)
@@ -38,7 +38,7 @@ import Item.Types (ItemInstance(..), itemMatches, itemContentsSig, ItemDef(..), 
 -- | The active (shown) world, or the first one if none is explicitly
 --   shown. Mirrors the helper in API.Items.
 activeWorldU ∷ EngineEnv → IO (Maybe WorldState)
-activeWorldU = activeWorldState
+activeWorldU env = activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
 
 -- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
 --   to the unit's inventory. Fill is clamped to the def's container

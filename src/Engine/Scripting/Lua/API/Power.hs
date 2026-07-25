@@ -34,7 +34,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import World.Time.Types (worldTimeToSunAngle)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
@@ -98,7 +98,7 @@ powerPlaceNodeFn env = do
                             let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
                             wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                             pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
-                        Nothing → activeWorldPage env
+                        Nothing → activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                     case mTarget of
                         Nothing → pure (Left "no active world")
                         Just (pid, ws) →
@@ -209,7 +209,7 @@ powerGetNodeFn env = do
     mNode ← case idArg of
         Nothing → return Nothing
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) → do
@@ -226,7 +226,7 @@ powerGetNodeForBuildingFn env = do
     mNode ← case idArg of
         Nothing → return Nothing
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) → do
@@ -241,7 +241,7 @@ powerGetNodeForBuildingFn env = do
 powerListNodesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 powerListNodesFn env = do
     nodeList ← Lua.liftIO $ do
-        mPage ← activeWorldPage env
+        mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mPage of
             Nothing      → return []
             Just (_, ws) → allNodes ⊚ readIORef (wsPowerNodesRef ws)
@@ -308,7 +308,7 @@ pageWorldSize ws = maybe 0 wgpWorldSize ⊚ readIORef (wsGenParamsRef ws)
 --   read — no bill excluded.
 activeNetworkSnapshots ∷ EngineEnv → IO [PN.PowerNetworkSnapshot]
 activeNetworkSnapshots env = do
-    mPage ← activeWorldPage env
+    mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mPage of
         Nothing → pure []
         Just (pageId, ws) → do

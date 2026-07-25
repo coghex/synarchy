@@ -16,7 +16,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Random (randomR)
-import Engine.Core.State (EngineEnv(..), activeWorldState,
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom,
                           freshItemInstanceId)
 import World.Types
 import World.Flora.Growth (floraGrowth, harvestOpen)
@@ -55,7 +55,7 @@ worldHarvestFloraFn env = do
                 gy = fromIntegral gy'
                 tagFilter = TE.decodeUtf8Lenient <$> mTag
             mSpawned ← Lua.liftIO $ do
-                mWs ← activeWorldState env
+                mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do

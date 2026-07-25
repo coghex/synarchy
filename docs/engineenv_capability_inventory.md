@@ -237,7 +237,7 @@ the pattern for any later capability with a thread-private field:
 | Interface | Fields | Who may import it |
 |---|---|---|
 | `Engine.Core.Capability.Render` (`RenderCapability`) | all 21 of §5's `render-gpu-asset` fields, `engineStateRef` included | production modules whose execution domain §5 records as `MainRender` only |
-| `Engine.Core.Capability.RenderView` (`RenderViewCapability`) | a strict subset — the 13 fields §5 records a `WorldThread`/`LuaThread`/`InputThread` reader or writer for; **never `engineStateRef`** | any consumer, including every worker-thread one |
+| `Engine.Core.Capability.RenderView` (`RenderViewCapability`) | a strict subset — the 14 fields §5 records a `WorldThread`/`LuaThread`/`InputThread` reader or writer for (13 when #891 landed; `fpsRef` joined in #893, §7.2); **never `engineStateRef`** | any consumer, including every worker-thread one |
 
 Both are projections **of `EngineEnv`**, one-way, over the identical
 live containers (§7.2) — the narrower view is not derived from the
@@ -671,7 +671,7 @@ directory-name guessing:
 | Target capability | Modules (every current temporary full-`EngineEnv` consumer, individually assigned) | Roadmap entry |
 |---|---|---|
 | `core-init` | `Engine.Graphics.Vulkan.Command.Record`, `Engine.Scripting.Lua.API.Log` | §7.1 |
-| `render-gpu-asset` | *(none — migrated by #891 (E3): all 45 former entries now reach their render fields through `Engine.Core.Capability.Render` (the `MainRender`-only 21-field record) or `Engine.Core.Capability.RenderView` (the worker-safe 13-field view that never carries `engineStateRef`), per §3.1; none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.2 |
+| `render-gpu-asset` | *(none — migrated by #891 (E3): all 45 former entries now reach their render fields through `Engine.Core.Capability.Render` (the `MainRender`-only 21-field record) or `Engine.Core.Capability.RenderView` (the worker-safe view that never carries `engineStateRef` — 13 fields when #891 landed, 14 since #893 added `fpsRef`), per §3.1; none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.2 |
 | `input-lua-transport` | `Engine.Input.Callback`, `Engine.Input.Thread`, `Engine.Input.Thread.Char`, `Engine.Input.Thread.Dispatch`, `Engine.Input.Thread.Keyboard`, `Engine.Input.Thread.Mouse.Activation`, `Engine.Input.Thread.Scroll`, `Engine.Scripting.Lua.API.InputInject`, `Engine.Scripting.Lua.API.Keybinds`, `World.Log`, `World.Thread.Helpers` | §7.3 |
 | `world-sim-render-handoff` | `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init` — the E5b remainder, named individually per #893's requirement 2 so nothing is silently dropped between the a/b pair. #893 (E5a) removed this row's other 50 entries; each of the four left still dereferences at least one of the seven coupled render-handoff fields §7.4 lists, and #894 (E5b) migrates them. | §7.4 |
 | `units-buildings-combat` | `Building.Thread.Command`, `Combat.Resolution`, `Combat.Resolution.Events`, `Combat.Resolution.Wear`, `Combat.Thread`, `Combat.Wounds.Tick`, `Engine.Input.State`, `Engine.Scripting.Lua.API.ActionOutcome`, `Engine.Scripting.Lua.API.Buildings.Materials`, `Engine.Scripting.Lua.API.Buildings.Progress`, `Engine.Scripting.Lua.API.Buildings.Query`, `Engine.Scripting.Lua.API.Buildings.Selection`, `Engine.Scripting.Lua.API.Buildings.Spawn`, `Engine.Scripting.Lua.API.Buildings.Yaml`, `Engine.Scripting.Lua.API.Combat`, `Engine.Scripting.Lua.API.Craft.Bill`, `Engine.Scripting.Lua.API.Craft.Execute`, `Engine.Scripting.Lua.API.Equipment.Accessory`, `Engine.Scripting.Lua.API.Equipment.Render`, `Engine.Scripting.Lua.API.Equipment.Slot`, `Engine.Scripting.Lua.API.Forage.Harvest`, `Engine.Scripting.Lua.API.Items.Ground`, `Engine.Scripting.Lua.API.Power`, `Engine.Scripting.Lua.API.Units.Cargo`, `Engine.Scripting.Lua.API.Units.Combat`, `Engine.Scripting.Lua.API.Units.Equipment`, `Engine.Scripting.Lua.API.Units.Inventory`, `Engine.Scripting.Lua.API.Units.List`, `Engine.Scripting.Lua.API.Units.Medical`, `Engine.Scripting.Lua.API.Units.Query`, `Engine.Scripting.Lua.API.Units.Selection`, `Engine.Scripting.Lua.API.Units.Spawn`, `Engine.Scripting.Lua.API.Units.Stats`, `Engine.Scripting.Lua.API.Units.Survival`, `Engine.Scripting.Lua.API.Units.Yaml`, `Unit.Selection`, `Unit.Thread`, `Unit.Thread.Command`, `Unit.Thread.Command.Lifecycle`, `Unit.Thread.Command.Motion`, `Unit.Thread.Command.Pose`, `Unit.Thread.Command.Spawn`, `Unit.Thread.Movement`, `Unit.Thread.Movement.Climb`, `World.Thread.Command.Cursor.Common`, `World.Thread.Command.Edit.Dig`, `World.Thread.Discovery`, `World.Thread.ItemTemp`, `World.Thread.Power` | §7.5 |
@@ -888,7 +888,12 @@ change, no behaviour change.
   the nine now does so through `WorldSimCapability` — the same
   "mixed-capability modules adopt the record" step §7.6 describes for
   #890 — while **keeping its own §6.2 entry** until its own child
-  migrates it. That is 48 modules, including `Unit.Thread`,
+  migrates it. That covers the indirect reads too: a call to
+  `activeWorldState`/`activeWorldPage` dereferences `worldManagerRef`
+  just as much as naming the field does, so those call sites moved to
+  `activeWorldStateFrom`/`activeWorldPageFrom` over
+  `wsWorldManagerRef` as well (review round 2). That is 55 modules,
+  including `Unit.Thread`,
   `Unit.Thread.Movement`, `Combat.Thread`, `Combat.Resolution`, the
   `Engine.Input.Thread.*` timestamping readers, `Engine.PlayerEvent.Emit`,
   the `API.Units.*`/`API.Buildings.*`/`API.Craft.*` families, the

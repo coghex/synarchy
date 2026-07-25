@@ -21,7 +21,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldState, freshItemInstanceId)
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom, freshItemInstanceId)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
 import Item.Roll (rollItemWeight)
@@ -43,7 +43,7 @@ resolveItemPage ∷ EngineEnv → Maybe Text → IO (Maybe WorldState)
 resolveItemPage env (Just pid) = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     pure $ lookup (WorldPageId pid) (wmWorlds mgr)
-resolveItemPage env Nothing = activeWorldState env
+resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
 
 -- | item.spawnGround(defName, x, y [, props] [, pageId]) → gid | nil
 --   Spawns an item into the world at float tile coords. Optional
@@ -122,7 +122,7 @@ itemSpawnGroundFn env = do
 --   def declares a quality spec.
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     im  ← Lua.liftIO $ readIORef (itemManagerRef env)
     case mWs of
         Nothing → Lua.pushnil >> return 1
@@ -178,7 +178,7 @@ itemRemoveGroundFn env = do
     idArg ← Lua.tointeger 1
     case idArg of
         Just n → do
-            mWs ← Lua.liftIO $ activeWorldState env
+            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
@@ -192,7 +192,7 @@ itemRemoveGroundFn env = do
 -- | item.groundCount() → n (headless tests / HUD readouts)
 itemGroundCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemGroundCountFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Nothing → Lua.pushinteger 0 >> return 1
         Just ws → do
@@ -212,7 +212,7 @@ itemGetGroundTempFn env = do
     mT ← case idArg of
         Nothing → pure Nothing
         Just n → Lua.liftIO $ do
-            mWs ← activeWorldState env
+            mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Nothing → pure Nothing
                 Just ws → do
@@ -251,7 +251,7 @@ itemSetGroundTempFn env = do
             let mT = case tArg of
                     Just (Lua.Number d) → Just (realToFrac d ∷ Float)
                     _                   → Nothing
-            mWs ← Lua.liftIO $ activeWorldState env
+            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
@@ -282,7 +282,7 @@ itemPickupGroundFn env = do
     gidArg ← Lua.tointeger 2
     case (uidArg, gidArg) of
         (Just u, Just g) → do
-            mWs ← Lua.liftIO $ activeWorldState env
+            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do

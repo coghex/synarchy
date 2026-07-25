@@ -29,7 +29,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Data.List (sortOn)
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import Craft.Types
 import Craft.Bills
 import Unit.Types (UnitId(..), UnitManager(..))
@@ -67,7 +67,7 @@ craftAddBillFn env = do
                 mTarget = targetArg ≫= \t →
                     if t > 0 then Just (fromIntegral t ∷ Int) else Nothing
             result ← Lua.liftIO $ do
-                mPage ← activeWorldPage env
+                mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 rm    ← readIORef (recipeManagerRef env)
                 bm    ← readIORef (buildingManagerRef env)
                 let gate = do
@@ -147,7 +147,7 @@ craftSetBillPausedFn env = do
     ok ← case idArg of
         Nothing → return False
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return False
                 Just (_, ws) →
@@ -170,7 +170,7 @@ craftSetBillWorkingFn env = do
     ok ← case idArg of
         Nothing → return False
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return False
                 Just (_, ws) →
@@ -190,7 +190,7 @@ craftReorderBillFn env = do
     dirArg ← Lua.tostring 2
     ok ← case (idArg, dirArg >>= toDirection) of
         (Just n, Just dir) → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return False
                 Just (_, ws) →
@@ -213,7 +213,7 @@ withBillId env act = do
     ok ← case idArg of
         Nothing → return False
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return False
                 Just (_, ws) → act ws (BillId (fromIntegral n))
@@ -233,7 +233,7 @@ craftClaimBillFn env = do
     timeoutArg ← Lua.tonumber 3
     ok ← case (idArg, uidArg, timeoutArg) of
         (Just n, Just u, Just tmo) → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return False
                 Just (_, ws) → do
@@ -259,7 +259,7 @@ craftAddBillProgressFn env = do
     deltaArg ← Lua.tonumber 2
     result ← case (idArg, deltaArg) of
         (Just n, Just delta) → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) →
@@ -280,7 +280,7 @@ craftCompleteBillCycleFn env = do
     result ← case idArg of
         Nothing → return Nothing
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) →
@@ -297,7 +297,7 @@ craftGetBillFn env = do
     mBill ← case idArg of
         Nothing → return Nothing
         Just n  → Lua.liftIO $ do
-            mPage ← activeWorldPage env
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) → do
@@ -314,7 +314,7 @@ craftGetBillsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftGetBillsFn env = do
     bidArg ← Lua.tointeger 1
     billList ← Lua.liftIO $ do
-        mPage ← activeWorldPage env
+        mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         case mPage of
             Nothing      → return []
             Just (_, ws) → do

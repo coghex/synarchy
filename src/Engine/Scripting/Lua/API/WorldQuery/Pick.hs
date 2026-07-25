@@ -15,7 +15,7 @@ import Engine.Core.Capability.WorldSim
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import World.Types
@@ -34,7 +34,7 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup
 --   isometric tilt, camera facing, elevation, and u-wrap boundary.
 worldGetHoverTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetHoverTileFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Just ws → do
             cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
@@ -58,7 +58,7 @@ worldGetHoverTileFn env = do
 --   to the tile center.
 worldGetHoverPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetHoverPosFn env = do
-    mWs ← Lua.liftIO $ activeWorldState env
+    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
     case mWs of
         Just ws → do
             cs ← Lua.liftIO $ readIORef (wsCursorRef ws)

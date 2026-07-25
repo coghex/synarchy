@@ -7,10 +7,12 @@ module Engine.Scripting.Lua.API.Buildings.Selection
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
 import Building.Types
 import Building.HitTest (hitTestBuildingAt)
 
@@ -42,7 +44,7 @@ buildingSelectFn env = do
     case idArg of
         Just n → do
             let bid = BuildingId (fromIntegral n)
-            mActive ← Lua.liftIO $ activeWorldPage env
+            mActive ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
                 -- Only select a building of the ACTIVE world (#76) that
                 -- still exists; otherwise leave the previous selection.
@@ -66,7 +68,7 @@ buildingGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetSelectedFn env = do
     mBid ← Lua.liftIO $ do
         bm ← readIORef (buildingManagerRef env)
-        mActive ← activeWorldPage env
+        mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         pure $ case bmSelected bm of
             Just bid
                 | Just bi      ← HM.lookup bid (bmInstances bm)
