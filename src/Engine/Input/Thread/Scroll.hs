@@ -20,7 +20,19 @@ import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef)
 import Engine.Core.Log (logDebug, LogCategory(..))
-import Engine.Core.State
+-- #892 (E4): `luaQueue` through the input capability's worker-safe
+-- view; the SS7.3 cross-capability surface through the records that
+-- already exist for it — `core-init` for the logger (#889) and the
+-- worker-safe render view for window/framebuffer geometry (#891) —
+-- and explicit narrow values for the two capabilities that have none
+-- yet: `uiManagerRef` (`ui-hud-events`, #897) and `actionOutcomeRef`
+-- (`units-buildings-combat`, #895).
+import Engine.Core.State (EngineEnv, uiManagerRef, actionOutcomeRef)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
@@ -35,11 +47,11 @@ import UI.InputOwnership (routeScroll, isGameplayBlocked)
 --   is.
 dispatchScrollEvent ∷ EngineEnv → InputState → Double → Double → IO InputState
 dispatchScrollEvent env inpSt x y = do
-    logger ← readIORef (loggerRef env)
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
 
-    (winW, winH) ← readIORef (windowSizeRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    (winW, winH) ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
+    (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
 
     -- Check both shifts independently: released keys keep a map
     -- entry with keyPressed=False, so a nested left-then-right
@@ -101,7 +113,7 @@ dispatchScrollEvent env inpSt x y = do
       else case routeScroll (mouseX, mouseY) uiMgr of
         Just elemHandle@(ElementHandle eh) → do
             logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
-            Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y shiftHeld)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIScrollEvent elemHandle x y shiftHeld)
             recordScrollOutcome "accepted" "ui_scroll" (Just eh)
         -- No capturing surface under the cursor. #744: a visible
         -- modal boundary with nothing of its own here must not leak
@@ -118,11 +130,11 @@ dispatchScrollEvent env inpSt x y = do
               recordScrollOutcome "noop" "ui_modal_block" Nothing
           | shiftHeld → do
               logDebug logger CatInput "Shift+scroll: z-slice adjustment"
-              Q.writeQueue (luaQueue env) (LuaZSliceScroll x y)
+              Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaZSliceScroll x y)
               recordScrollOutcome "accepted" "z_slice" Nothing
           | otherwise → do
               logDebug logger CatInput "Scroll: game scroll (camera zoom)"
-              Q.writeQueue (luaQueue env) (LuaScrollEvent x y)
+              Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaScrollEvent x y)
               recordScrollOutcome "accepted" "game_scroll" Nothing
 
     return inpSt

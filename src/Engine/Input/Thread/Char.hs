@@ -17,7 +17,17 @@ import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef, atomicModifyIORef')
+-- #892 (E4): the input capability's worker-safe view for `luaQueue`,
+-- plus three explicit narrow values for the SS7.3 cross-capability
+-- surface — `focusManagerRef`/`uiManagerRef` (`ui-hud-events`, #897)
+-- and `actionOutcomeRef` (`units-buildings-combat`, #895). The
+-- `uiManagerRef` access stays the single `atomicModifyIORef'`
+-- validate-and-transition it already was; nothing about #745's focus
+-- behavior changes.
 import Engine.Core.State
+    (EngineEnv, focusManagerRef, uiManagerRef, actionOutcomeRef)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
@@ -108,10 +118,10 @@ dispatchCharEvent env inpSt c =
         uiFocus ← atomicModifyIORef' (uiManagerRef env) validateFocus
         case (fmCurrentFocus focusMgr, uiFocus) of
           (Just (FocusId fid), _) → do
-            Q.writeQueue (luaQueue env) (LuaCharInput fid c)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCharInput fid c)
             return $ accumulateCharOutcome inpSt True "shell_text" (Just fid)
           (Nothing, Just (ElementHandle eh)) → do
-            Q.writeQueue (luaQueue env) (LuaUICharInput c)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUICharInput c)
             return $ accumulateCharOutcome inpSt True "ui_text" (Just eh)
           (Nothing, Nothing) →
             return $ accumulateCharOutcome inpSt False "dropped_unfocused" Nothing

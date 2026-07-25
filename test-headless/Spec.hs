@@ -122,6 +122,7 @@ import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
+import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
 import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
@@ -163,6 +164,7 @@ main = hspec $ do
         -- Capability-projection aliasing (#891): pure handle-equality
         -- checks against the already-booted env — no worldgen, no
         -- mutation, so it rides the shared engine above.
+        describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
         describe "Capability.WorldSim projections" CapabilityWorldSim.spec
     -- Own engine (not the shared-worlds one above): the #707 save/load

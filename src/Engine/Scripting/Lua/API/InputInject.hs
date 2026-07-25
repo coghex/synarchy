@@ -69,7 +69,17 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (IORef, readIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
-import Engine.Core.State (EngineEnv(..))
+-- #892 (E4): this module runs on the @LuaThread@ and is one of the two
+-- production holders of the FULL 'InputCapability' — it is the sole
+-- non-boot owner of the Lua-private barrier-token allocator
+-- ('icInputBarrierNextRef'). Boot config comes from `core-init` (#889)
+-- and window/framebuffer geometry from the worker-safe render view
+-- (#891), the SS7.3 cross-capability surface this module actually uses.
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.Input (InputCapability(..), toInputCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Thread (ThreadControl)
 import Engine.Core.Types (EngineConfig(..))
 import qualified Engine.Core.Queue as Q
@@ -117,9 +127,9 @@ consumeTimeoutMicros = 2 * 1000 * 1000
 settle ∷ EngineEnv → LuaBackendState → IORef ThreadControl → Int → IO Bool
 settle env ls stateRef timeoutMicros = do
     processLuaMsgs env ls stateRef
-    tok ← newBarrierToken (inputBarrierNextRef env)
-    Q.writeQueue (inputQueue env) (InputBarrier tok)
-    ok ← waitForBarrier (inputBarrierRef env) tok timeoutMicros
+    tok ← newBarrierToken (icInputBarrierNextRef (toInputCapability env))
+    Q.writeQueue (icInputQueue (toInputCapability env)) (InputBarrier tok)
+    ok ← waitForBarrier (icInputBarrierRef (toInputCapability env)) tok timeoutMicros
     processLuaMsgs env ls stateRef
     pure ok
 
@@ -144,8 +154,9 @@ injectAndSettle ∷ EngineEnv → LuaBackendState → IORef ThreadControl
                 → Int → [InputEvent] → IO SettleResult
 injectAndSettle env ls stateRef timeoutMicros evs = do
     _ ← settle env ls stateRef timeoutMicros
-    primaryOk ← injectEvents (inputBarrierNextRef env) (inputBarrierRef env)
-                              (inputQueue env) timeoutMicros evs
+    let cap = toInputCapability env
+    primaryOk ← injectEvents (icInputBarrierNextRef cap) (icInputBarrierRef cap)
+                              (icInputQueue cap) timeoutMicros evs
     settled ← settle env ls stateRef timeoutMicros
     pure $ if not primaryOk then SettleIndeterminateTimedOut
            else if settled then SettleOk
@@ -200,8 +211,8 @@ withWindowCoords ∷ EngineEnv → Double → Double
                  → Lua.LuaE Lua.Exception Lua.NumResults
 withWindowCoords env x y k = do
     sizes ← Lua.liftIO $ do
-        win ← readIORef (windowSizeRef env)
-        fb  ← readIORef (framebufferSizeRef env)
+        win ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
+        fb  ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
         pure (win, fb)
     case uncurry fbToWindow sizes (x, y) of
         Just posWin → k posWin
@@ -214,7 +225,7 @@ withWindowCoords env x y k = do
 headlessGuard ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
               → Lua.LuaE Lua.Exception Lua.NumResults
 headlessGuard env k
-    | ecHeadless (engineConfig env) = pushError $
+    | ecHeadless (ccEngineConfig (toCoreCapability env)) = pushError $
         "input: no input pipeline — this engine is running --headless; "
         <> "input injection needs a rendering instance (windowed or "
         <> "--offscreen)"

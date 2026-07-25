@@ -25,14 +25,25 @@ import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef)
 import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
-import Engine.Core.State
+-- #892 (E4): `inputStateRef` through the input capability's
+-- worker-safe view, the logger/lifecycle/input-thread-started flag
+-- through `core-init` (#889), and `saveBarrierRef` as an explicit
+-- narrow value — the SS7.3 cross-capability read into
+-- `save-load-coordination`, which has no record of its own (SS7.8's
+-- own row is empty; its modules are permanent SS6.1 exceptions). The
+-- opaque `EngineEnv` is still threaded into 'runInputLoop'/
+-- 'processInputs', which hand it on to not-yet-narrowed callees.
+import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Core.Thread
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Input.Thread.Dispatch (processInputs, processInput)
 
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
-    let logRef        = loggerRef env
+    let logRef        = ccLoggerRef (toCoreCapability env)
     logger ← readIORef logRef
     stateRef ← newIORef ThreadRunning
     doneVar ← newEmptyMVar
@@ -46,7 +57,7 @@ startInputThread env = do
             -- SaveInput belongs in a transaction's owner set (round 3
             -- review: it must not be a hard requirement headless boot
             -- can never satisfy).
-            writeIORef (inputThreadActiveRef env) True
+            writeIORef (ccInputThreadActiveRef (toCoreCapability env)) True
             tid ← forkIO $ runInputLoop env stateRef `finally` putMVar doneVar ()
             return tid
         )
@@ -59,7 +70,7 @@ startInputThread env = do
 runInputLoop ∷ EngineEnv → IORef ThreadControl → IO ()
 runInputLoop env stateRef = do
   control ← readIORef stateRef
-  logger ← readIORef (loggerRef env)
+  logger ← readIORef (ccLoggerRef (toCoreCapability env))
   case control of
     ThreadStopped → do
         logDebug logger CatInput "Input thread stopping..."
@@ -89,7 +100,7 @@ runInputLoop env stateRef = do
             -- dispatched against the replacement session.
             locked ← captureLocked (saveBarrierRef env)
             unless locked $ do
-                inpSt ← readIORef (inputStateRef env)
+                inpSt ← readIORef (ivInputStateRef (toInputViewCapability env))
                 -- processInputs publishes to inputStateRef after each
                 -- event it processes (#697) — no batch write here.
                 _ ← processInputs env inpSt
@@ -99,9 +110,9 @@ runInputLoop env stateRef = do
             pure True
           )
           (\(e ∷ SomeException) → do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef (toCoreCapability env))
             logError logger CatInput $ "Input thread crashed: " <> T.pack (show e)
-            writeIORef (lifecycleRef env) CleaningUp
+            writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
             pure False
           )
         when ok $ runInputLoop env stateRef

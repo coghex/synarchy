@@ -481,11 +481,11 @@ rather than an `EngineEnv` field (§7.6).
 ## 6. Full-`EngineEnv` compatibility boundary
 
 **Live since issue #889 (E1, landed); recounted by #890 (E2), #891
-(E3) and #893 (E5a).** 198 files under `src/`/`app/` import
-`Engine.Core.State` in some form. Of those, 104 have genuine
+(E3), #893 (E5a) and #892 (E4).** 200 files under `src/`/`app/` import
+`Engine.Core.State` in some form. Of those, 93 have genuine
 unrestricted field-level access:
 `Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 103 files that
+imports nothing) plus 92 files that
 import it either as an explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
@@ -498,11 +498,11 @@ this exact same two-shape definition against `src/`/`app/` on every
 run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 198
+grep -rl "import Engine.Core.State" src app | wc -l                    # 200
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 103 have full access, 95 do not:
+# script logic below; 92 have full access, 108 do not:
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
 #        itself plus its 12 `Register.*` submodules; all import the bare
 #        `EngineEnv` TYPE with no constructor access, and two of them
@@ -561,16 +561,30 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 198
 #        `loadStatusRef`, `actionOutcomeRef`, `hudActivePageRef`,
 #        `saveBarrierRef`). The other 22 of #893's 50 now import
 #        `Engine.Core.State` not at all and are outside this accounting.
+#   2  × `Engine.Core.Capability.Input` / `.InputView` (new by #892 —
+#        the two `input-lua-transport` projection modules of §7.3, in
+#        the same LuaThread-only/worker-safe shape §3.1 defines for
+#        render; each imports the bare `EngineEnv` type plus only its
+#        own field accessors, never `EngineEnv(..)`)
+#   11 × the #892-narrowed `input-lua-transport` modules, all of which
+#        still import `Engine.Core.State` narrowly: `Engine.Input.Callback`
+#        for the `EngineLifecycle(..)` type alone (it holds no `EngineEnv`
+#        at all), and the other ten for an opaque `EngineEnv` type to hand
+#        to a not-yet-narrowed helper (`Engine.Input.State`,
+#        `Engine.Input.Thread.Mouse`) and/or individually named accessors
+#        of fields belonging to capabilities #894–#899 have yet to migrate
+#        (`focusManagerRef`, `uiManagerRef`, `actionOutcomeRef`,
+#        `saveBarrierRef`) — see §7.3's cross-capability surface.
 ```
 
-The remaining 95 files that import `Engine.Core.State` (198 − 103) are
+The remaining 108 files that import `Engine.Core.State` (200 − 92) are
 exactly the ones enumerated above — none of them are consumers this
 document needs to classify: an opaque `EngineEnv` type import, one or
 more individually named field accessors, or an unrelated `EngineState`
 import none grant the unrestricted access this section is about.
 Adding back `Engine.Core.State.hs` itself (the definer, which imports
-nothing and so is outside the 198/103/95 accounting entirely) gives
-the 104 total full-access modules this section classifies.
+nothing and so is outside the 200/92/108 accounting entirely) gives
+the 93 total full-access modules this section classifies.
 
 This section names the intended *end state*: what should still
 legitimately construct, carry, or inspect the **complete** `EngineEnv`
@@ -578,7 +592,7 @@ once the epic's capability split has landed, versus what merely has
 full access today because nothing narrower exists yet. It is
 deliberately narrow — narrow enough to become the literal allowlist
 for #537's final unrestricted-access audit (per requirement 6) — which
-means most of today's 104 full-access files are **not** listed as
+means most of today's 93 full-access files are **not** listed as
 permanent below; they belong in the temporary section (§6.2), each
 assigned individually (no wildcards, no catch-all) to one of §7's
 bounded follow-up issues.
@@ -604,7 +618,7 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 25 permanent modules (24 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 104 − 25 = 79 full-access
+which imports nothing). The remaining 93 − 25 = 68 full-access
 modules are temporary, enumerated exhaustively in §6.2.
 
 Since issue #889, this permanent allowlist and §6.2's temporary
@@ -615,7 +629,7 @@ live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 79 remaining full-access modules is individually
+Every one of the 68 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -672,15 +686,15 @@ directory-name guessing:
 |---|---|---|
 | `core-init` | `Engine.Graphics.Vulkan.Command.Record`, `Engine.Scripting.Lua.API.Log` | §7.1 |
 | `render-gpu-asset` | *(none — migrated by #891 (E3): all 45 former entries now reach their render fields through `Engine.Core.Capability.Render` (the `MainRender`-only 21-field record) or `Engine.Core.Capability.RenderView` (the worker-safe view that never carries `engineStateRef` — 13 fields when #891 landed, 14 since #893 added `fpsRef`), per §3.1; none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.2 |
-| `input-lua-transport` | `Engine.Input.Callback`, `Engine.Input.Thread`, `Engine.Input.Thread.Char`, `Engine.Input.Thread.Dispatch`, `Engine.Input.Thread.Keyboard`, `Engine.Input.Thread.Mouse.Activation`, `Engine.Input.Thread.Scroll`, `Engine.Scripting.Lua.API.InputInject`, `Engine.Scripting.Lua.API.Keybinds`, `World.Log`, `World.Thread.Helpers` | §7.3 |
+| `input-lua-transport` | *(none — migrated by #892 (E4): all 11 former entries now reach their input fields through `Engine.Core.Capability.Input` (the `LuaThread`-only eight-field record) or `Engine.Core.Capability.InputView` (the worker-safe five-field view that carries neither `inputBarrierNextRef` nor `currentKeyDownRef`), per the §3.1 rule §7.3 applies here; `Engine.Input.Callback` needed no record at all — its API already took the two live handles explicitly, so it merely narrowed its bare import to the `EngineLifecycle` type. None of the 11 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.3 |
 | `world-sim-render-handoff` | `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init` — the E5b remainder, named individually per #893's requirement 2 so nothing is silently dropped between the a/b pair. #893 (E5a) removed this row's other 50 entries; each of the four left still dereferences at least one of the seven coupled render-handoff fields §7.4 lists, and #894 (E5b) migrates them. | §7.4 |
 | `units-buildings-combat` | `Building.Thread.Command`, `Combat.Resolution`, `Combat.Resolution.Events`, `Combat.Resolution.Wear`, `Combat.Thread`, `Combat.Wounds.Tick`, `Engine.Input.State`, `Engine.Scripting.Lua.API.ActionOutcome`, `Engine.Scripting.Lua.API.Buildings.Materials`, `Engine.Scripting.Lua.API.Buildings.Progress`, `Engine.Scripting.Lua.API.Buildings.Query`, `Engine.Scripting.Lua.API.Buildings.Selection`, `Engine.Scripting.Lua.API.Buildings.Spawn`, `Engine.Scripting.Lua.API.Buildings.Yaml`, `Engine.Scripting.Lua.API.Combat`, `Engine.Scripting.Lua.API.Craft.Bill`, `Engine.Scripting.Lua.API.Craft.Execute`, `Engine.Scripting.Lua.API.Equipment.Accessory`, `Engine.Scripting.Lua.API.Equipment.Render`, `Engine.Scripting.Lua.API.Equipment.Slot`, `Engine.Scripting.Lua.API.Forage.Harvest`, `Engine.Scripting.Lua.API.Items.Ground`, `Engine.Scripting.Lua.API.Power`, `Engine.Scripting.Lua.API.Units.Cargo`, `Engine.Scripting.Lua.API.Units.Combat`, `Engine.Scripting.Lua.API.Units.Equipment`, `Engine.Scripting.Lua.API.Units.Inventory`, `Engine.Scripting.Lua.API.Units.List`, `Engine.Scripting.Lua.API.Units.Medical`, `Engine.Scripting.Lua.API.Units.Query`, `Engine.Scripting.Lua.API.Units.Selection`, `Engine.Scripting.Lua.API.Units.Spawn`, `Engine.Scripting.Lua.API.Units.Stats`, `Engine.Scripting.Lua.API.Units.Survival`, `Engine.Scripting.Lua.API.Units.Yaml`, `Unit.Selection`, `Unit.Thread`, `Unit.Thread.Command`, `Unit.Thread.Command.Lifecycle`, `Unit.Thread.Command.Motion`, `Unit.Thread.Command.Pose`, `Unit.Thread.Command.Spawn`, `Unit.Thread.Movement`, `Unit.Thread.Movement.Climb`, `World.Thread.Command.Cursor.Common`, `World.Thread.Command.Edit.Dig`, `World.Thread.Discovery`, `World.Thread.ItemTemp`, `World.Thread.Power` | §7.5 |
 | `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
 | `ui-hud-events` | `Engine.Input.Thread.Mouse`, `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.Focus`, `Engine.Scripting.Lua.API.PlayerEvent`, `Engine.Scripting.Lua.API.UI.Element`, `Engine.Scripting.Lua.API.UI.Focus`, `Engine.Scripting.Lua.API.UI.Hierarchy`, `Engine.Scripting.Lua.API.UI.Page`, `Engine.Scripting.Lua.API.UI.Property`, `Engine.Scripting.Lua.API.UI.TextInput`, `Engine.Scripting.Lua.API.UI.Tooltip`, `Engine.Scripting.Lua.Message.Scene`, `UI.Tooltip.State` | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 0 + 11 + 4 + 49 + 0 + 13 + 0 = 79) match
-104 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 0 + 0 + 4 + 49 + 0 + 13 + 0 = 68) match
+93 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -818,18 +832,83 @@ scope, per the issue text).
   fields including `screenshotRequestQueue`, and all 14 view fields,
   each asserted to be the same live container as `EngineEnv`'s).
 
-### 7.3 `input-lua-transport`
+### 7.3 `input-lua-transport` — **LANDED (#892, E4)**
 
 - **Dependencies:** `core-init`.
-- **Independent migration:** Mostly yes. `focusManagerRef` is
-  classified under `ui-hud-events` rather than here specifically
-  because `Engine.Input.Thread.Keyboard`/`Char` write it directly for
-  keyboard control-focus navigation (#745) — this capability's own
-  migration and `ui-hud-events`'s will need to land in an order (or
-  together) that keeps that direct write working.
-- **Follow-up scope:** One issue narrowing `Engine.Input.Thread.*`/
-  `Engine.Input.Inject`/`Engine.Input.Callback` and the Lua-transport
-  queue producers/consumers to an `InputCapability` record.
+- **Outcome:** §6.2's `input-lua-transport` row is now empty. All 11
+  assigned modules dropped unrestricted `EngineEnv` access; the
+  capability is exposed as **two interfaces**, exactly the §3.1 shape
+  `render-gpu-asset` uses:
+
+  | Interface | Fields | Who may hold it |
+  |---|---|---|
+  | `Engine.Core.Capability.Input` (`InputCapability`) | all 8 of §5's `input-lua-transport` fields | `LuaThread` modules only — `Engine.Scripting.Lua.API.InputInject`, `Engine.Scripting.Lua.API.Keybinds` |
+  | `Engine.Core.Capability.InputView` (`InputViewCapability`) | `inputQueue`, `inputBarrierRef`, `inputStateRef`, `keyBindingsRef`, `luaQueue` | everything else — the input thread's dispatch chain and the world thread's Lua-message producers |
+
+  The split is not stylistic. §5 marks two fields `LuaThread`-private:
+  `inputBarrierNextRef` (the synthetic-injection barrier-token
+  **allocator**) and `currentKeyDownRef` (the transient `onKeyDown`
+  current-key handoff). Because E1 exports every capability record as
+  `Capability(..)` — constructor *and* accessors — a single eight-field
+  record visible to the input thread would hand it a way to allocate
+  barrier tokens and to inspect or clobber the Lua thread's in-flight
+  key, whatever the Haddock said. The view therefore **contains neither
+  field at all**: the input thread gets `inputBarrierRef` (the
+  processed **watermark** it publishes) and nothing more. Both records
+  are independent one-way projections of `EngineEnv` — the view is
+  never derived from the full record.
+
+  `luaToEngineQueue` is deliberately absent from the view (E1's "no
+  unused capability records ahead of need", applied field-by-field):
+  its only production consumers are the permanently full-access §6.1
+  orchestration modules plus two API modules that already import the
+  accessor narrowly, so no module this migration narrows needs it.
+
+  `tools/engine_env_capability_audit.py`'s `audit_input_boundary`
+  enforces all three parts on every run, both directions, the same way
+  `audit_render_boundary` does for §3.1: only an
+  `INPUT_LUA_ONLY_MODULES` module may import the full record; only an
+  `INPUT_LUA_ONLY_FIELD_OWNERS` module may *name* either private field
+  (or its `ic`-prefixed accessor); and the view must not so much as
+  mention them. `Test.Headless.Capability.Input` covers projection
+  aliasing for both records — including that the two same-typed
+  `TVar Int` barrier fields resolve to their correct, distinct live
+  containers, and that repeated projection mints nothing fresh.
+- **Cross-capability surface (all of it).** These reads/writes cross
+  out of `input-lua-transport` and are legitimate; per E1 a narrowed
+  module takes its own capability record **plus strictly narrower
+  values**, so each rides either an existing capability record or an
+  individually named accessor import. None of them pulls a future
+  migration into this one's scope:
+
+  | Field(s) | Owning capability | How the input modules reach it |
+  |---|---|---|
+  | `loggerRef`, `lifecycleRef`, `engineConfig`, `inputThreadActiveRef` | `core-init` | `Engine.Core.Capability.Core` (#889) |
+  | `windowSizeRef`, `framebufferSizeRef` | `render-gpu-asset` | `Engine.Core.Capability.RenderView` (#891) — the worker-safe view |
+  | `gameTimeRef` | `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` (#893) |
+  | `focusManagerRef`, `uiManagerRef` | `ui-hud-events` | named accessor imports — #897 has yet to build a record |
+  | `actionOutcomeRef` | `units-buildings-combat` | named accessor import — #895 has yet to build a record |
+  | `saveBarrierRef` | `save-load-coordination` | named accessor import — §7.8's own row is empty; its modules are permanent §6.1 exceptions |
+
+  On the focus pair specifically: `Engine.Input.Thread.Char` and
+  `.Keyboard` **read** `focusManagerRef` (they never write it) and
+  perform `atomicModifyIORef'` validate/transition steps on
+  `uiManagerRef` for keyboard control-focus navigation (#745). Both
+  keep the identical refs and the identical atomicity after this
+  migration — the one-atomic-transition discipline §5's `uiManagerRef`
+  row records is unchanged, and so is every #745 behavior. This is why
+  E4 did not have to wait for #897, and why #897 does not have to
+  revisit #745 when it lands: it inherits two named accessor imports,
+  not a behavior.
+- **Not this capability's:** `Engine.Input.Thread.Mouse` is assigned to
+  `ui-hud-events` (§6.2) — its dominant usage is pointer routing
+  through the UI manager — so #897 migrates it, and
+  `Engine.Input.Thread.Dispatch` keeps handing it an opaque `EngineEnv`
+  meanwhile. `Engine.Input.Inject` and `Engine.Input.State` were never
+  full-access consumers of this capability: `Engine.Input.Inject`
+  imports `Engine.Core.State` not at all (its API already takes live
+  handles explicitly), and `Engine.Input.State` is a §6.2
+  `units-buildings-combat` module.
 
 ### 7.4 `world-sim-render-handoff` — **E5a LANDED (#893); E5b (#894) open**
 

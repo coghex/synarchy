@@ -25,7 +25,13 @@ import qualified HsLua as Lua
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+-- #892 (E4): this module runs on the @LuaThread@ and is the other of
+-- the two production holders of the FULL 'InputCapability' — it is the
+-- sole non-boot owner of the Lua-private @onKeyDown@ current-key
+-- handoff ('icCurrentKeyDownRef'). The logger rides `core-init` (#889).
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.Input (InputCapability(..), toInputCapability)
 import Engine.Input.Bindings
   ( KeyBindings, loadKeyBindings, saveKeyBindings, keyMatchesAction
   , reservedActions, parseKeyName, glfwKeyName, isReservedKeyName )
@@ -111,7 +117,7 @@ readKeyList idx = do
 -- | engine.getKeybinds() → { action = { key1, key2, ... }, ... }
 getKeybindsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getKeybindsFn env = do
-    bindings ← Lua.liftIO $ readIORef (keyBindingsRef env)
+    bindings ← Lua.liftIO $ readIORef (icKeyBindingsRef (toInputCapability env))
     pushBindings bindings
     return 1
 
@@ -129,7 +135,7 @@ setActionKeysFn env = do
           | isEditableAction (TE.decodeUtf8Lenient actionBS)
           , all isBindableKey keys → do
             let action = TE.decodeUtf8Lenient actionBS
-            Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
+            Lua.liftIO $ atomicModifyIORef' (icKeyBindingsRef (toInputCapability env)) $ \b →
                 (Map.insert action keys b, ())
             Lua.pushboolean True
         _ → Lua.pushboolean False
@@ -149,7 +155,7 @@ addActionKeyFn env = do
           , isBindableKey (TE.decodeUtf8Lenient keyBS) → do
             let action = TE.decodeUtf8Lenient actionBS
                 key    = TE.decodeUtf8Lenient keyBS
-            Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
+            Lua.liftIO $ atomicModifyIORef' (icKeyBindingsRef (toInputCapability env)) $ \b →
                 let cur = Map.findWithDefault [] action b
                     new = if key `elem` cur then cur else cur ++ [key]
                 in (Map.insert action new b, ())
@@ -171,7 +177,7 @@ removeActionKeyFn env = do
           | isEditableAction (TE.decodeUtf8Lenient actionBS) → do
             let action = TE.decodeUtf8Lenient actionBS
                 key    = TE.decodeUtf8Lenient keyBS
-            changed ← Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
+            changed ← Lua.liftIO $ atomicModifyIORef' (icKeyBindingsRef (toInputCapability env)) $ \b →
                 case Map.lookup action b of
                     Just cur | key `elem` cur →
                         (Map.insert action (filter (/= key) cur) b, True)
@@ -208,7 +214,7 @@ removeActionKeysMatchingFn env = do
                   in if null remaining                 then []
                      else if length remaining ≡ length cur then [sk]
                      else map glfwKeyName remaining
-            changed ← Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
+            changed ← Lua.liftIO $ atomicModifyIORef' (icKeyBindingsRef (toInputCapability env)) $ \b →
                 case Map.lookup action b of
                     Just curList →
                         let newList = concatMap rewrite curList
@@ -225,8 +231,8 @@ removeActionKeysMatchingFn env = do
 saveKeybindsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveKeybindsFn env = do
     Lua.liftIO $ do
-        bindings ← readIORef (keyBindingsRef env)
-        logger ← readIORef (loggerRef env)
+        bindings ← readIORef (icKeyBindingsRef (toInputCapability env))
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         saveKeyBindings logger "config/keybinds.local.yaml" bindings
     Lua.pushboolean True
     return 1
@@ -237,9 +243,9 @@ saveKeybindsFn env = do
 loadDefaultKeybindsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 loadDefaultKeybindsFn env = do
     bindings ← Lua.liftIO $ do
-        logger ← readIORef (loggerRef env)
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         defaults ← loadKeyBindings logger "config/keybinds_default.yaml"
-        writeIORef (keyBindingsRef env) defaults
+        writeIORef (icKeyBindingsRef (toInputCapability env)) defaults
         return defaults
     pushBindings bindings
     return 1
@@ -262,7 +268,7 @@ loadDefaultKeybindsFn env = do
 --   capture so the key it binds round-trips to the exact key pressed.
 getCurrentKeyNameFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getCurrentKeyNameFn env = do
-    mKey ← Lua.liftIO $ readIORef (currentKeyDownRef env)
+    mKey ← Lua.liftIO $ readIORef (icCurrentKeyDownRef (toInputCapability env))
     case mKey of
         Just g  → Lua.pushstring (TE.encodeUtf8 (glfwKeyName g))
         Nothing → Lua.pushnil
@@ -277,8 +283,8 @@ keyMatchesActionFn env = do
             let name   = TE.decodeUtf8Lenient keyBS
                 action = TE.decodeUtf8Lenient actionBS
             matches ← Lua.liftIO $ do
-                bindings ← readIORef (keyBindingsRef env)
-                mKey     ← readIORef (currentKeyDownRef env)
+                bindings ← readIORef (icKeyBindingsRef (toInputCapability env))
+                mKey     ← readIORef (icCurrentKeyDownRef (toInputCapability env))
                 return $ case mKey of
                     Just g  → keyMatchesAction g action bindings
                     Nothing → any (\g → keyMatchesAction g action bindings)

@@ -15,7 +15,13 @@ module Engine.Input.Thread.Mouse.Activation
 
 import UPrelude
 import Data.IORef (readIORef)
-import Engine.Core.State
+-- #892 (E4): the input capability's worker-safe view for `luaQueue`,
+-- plus `uiManagerRef` as an explicit narrow value — a documented SS7.3
+-- cross-capability read into `ui-hud-events`, whose own record #897
+-- introduces.
+import Engine.Core.State (EngineEnv, uiManagerRef)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
@@ -44,7 +50,7 @@ resolvePendingActivation env x y winW winH fbW fbH (Just pending) = do
                 mgr' ← readIORef (uiManagerRef env)
                 return (resolveActivation releasePos mgr' pending)
     case outcome of
-        Activate h cb → Q.writeQueue (luaQueue env) $ case paKind pending of
+        Activate h cb → Q.writeQueue (ivLuaQueue (toInputViewCapability env)) $ case paKind pending of
             PointerLeftClick  → LuaUIClickEvent h cb x y
             PointerRightClick → LuaUIRightClickEvent h cb x y
         Cancel _ → return ()

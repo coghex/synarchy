@@ -19,7 +19,9 @@ import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log ( LoggerState, LogCategory(..), LogLevel(..)
                        , logInfo, logDebug, logThreadInfo, logThreadDebug )
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Geology.Types
@@ -73,7 +75,7 @@ makeWorldLogger env logRef dest = do
     logger ← readIORef logRef
     return WorldLogger
         { wlLogger   = logger
-        , wlLuaQueue = luaQueue env
+        , wlLuaQueue = ivLuaQueue (toInputViewCapability env)
         , wlDest     = dest
         , wlGeoV     = Normal
         , wlHydroV   = Normal
