@@ -32,6 +32,7 @@ import World.Save.Compat.SessionV90
 import World.Save.Integrity (integrityErrorCap)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
+import Location.Types (emptyLocationRegistry)
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), BuildingInstanceSnapshot(..)
@@ -42,7 +43,7 @@ import World.Save.Types
     , MissingBillOutputItemRef(..), missingBillOutputItemReferences
     , MissingConstructDefRef(..)
     , missingConstructDefReferences
-    , WorldPageSave(..) )
+    , WorldPageSave(..), resolveLegacyLocationParams )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
@@ -144,7 +145,7 @@ minimalPage pid = PageSnapshot
 minimalWorldPageSaveV90 ∷ WorldPageId → WorldPageSaveV90
 minimalWorldPageSaveV90 pid = WorldPageSaveV90
     { wp90PageId       = pid
-    , wp90GenParams    = toWorldGenParamsDTO defaultGP
+    , wp90GenParams    = toWorldGenParamsDTOv1 defaultGP
     , wp90CameraX      = 0
     , wp90CameraY      = 0
     , wp90CameraZoom   = 1
@@ -482,7 +483,7 @@ spec = do
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))
             check (ccEncode coreSessionCodec)   (ccDecode coreSessionCodec 1)
-            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 1)
+            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 2)
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
             check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
@@ -495,7 +496,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 1
+            ccVersion worldPagesCodec `shouldBe` 2
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -515,11 +516,13 @@ spec = do
 
         it "world-pages self-validates a duplicate page id (component-local \
            \invariant)" $ do
-            let dup = WorldPagesDTO [pageCore page1, pageCore page1]
+            let dup = basePageSnapshots
+                        (WorldPagesDTO [pageCore page1, pageCore page1])
             ccValidate worldPagesCodec dup `shouldSatisfy` (not . null)
 
         it "world-pages self-validates an empty page set" $
-            ccValidate worldPagesCodec (WorldPagesDTO []) `shouldSatisfy` (not . null)
+            ccValidate worldPagesCodec (basePageSnapshots (WorldPagesDTO []))
+                `shouldSatisfy` (not . null)
 
         -- #760 round 8: per-page allocator validation for the three
         -- per-page (not global) id counters — craft bills, power nodes,
@@ -623,10 +626,10 @@ spec = do
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \
            \requirement 10)" $
-            case ccDecode worldPagesCodec 1 (ccEncode worldPagesCodec richSnapshot) of
-                Right (WorldPagesDTO ps) →
-                    [ wgpSeed (fromWorldGenParamsDTO (pcGenParams p))
-                    | p ← ps, pcPageId p ≡ page1 ]
+            case ccDecode worldPagesCodec 2 (ccEncode worldPagesCodec richSnapshot) of
+                Right wp →
+                    [ wgpSeed (pgsGenParams p)
+                    | p ← maybeToList (HM.lookup page1 (wpBase wp)) ]
                         `shouldBe` [123456]
                 Left e → expectationFailure (T.unpack (renderComponentError e))
 
@@ -734,14 +737,14 @@ spec = do
     describe "page-scoping (requirement 8)" $ do
         it "rejects a page-scoped slice set missing a page the authority \
            \declares" $ do
-            let base = basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2])
+            let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2]))
                 bad  = BuildingsDTO
                     [ PageBuildingsDTO page1 HM.empty ]  -- page2 missing
             applyBuildings 1 1 bad base `shouldSatisfy` isLeft
 
         it "rejects a page-scoped slice for a page the authority does NOT \
            \declare" $ do
-            let base = basePageSnapshots (WorldPagesDTO [pageCore page1])
+            let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1]))
                 bad  = BuildingsDTO
                     [ PageBuildingsDTO page1 HM.empty
                     , PageBuildingsDTO page2 HM.empty ]
@@ -749,7 +752,7 @@ spec = do
 
         it "reports the component's real encoded version (NOT a placeholder \
            \0) on a page-set mismatch (requirement 6)" $ do
-            let base = basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2])
+            let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2]))
                 bad  = BuildingsDTO [ PageBuildingsDTO page1 HM.empty ]  -- page2 missing
             case applyBuildings 1 10 bad base of
                 Left es → do
@@ -759,7 +762,7 @@ spec = do
                 Right _ → expectationFailure "expected a page-mismatch error"
 
         it "accepts a slice set matching the authority exactly" $ do
-            let base = basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2])
+            let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2]))
                 ok   = BuildingsDTO
                     [ PageBuildingsDTO page1 HM.empty
                     , PageBuildingsDTO page2 HM.empty ]
@@ -767,7 +770,7 @@ spec = do
 
         it "reconstructs the building allocator from the global counter, \
            \not a per-page copy (requirement 9)" $ do
-            let base = basePageSnapshots (WorldPagesDTO [pageCore page1])
+            let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1]))
                 ok   = BuildingsDTO [ PageBuildingsDTO page1 HM.empty ]
             case applyBuildings 1 42 ok base of
                 Right m  → (bsnNextId . pgsBuildings <$> HM.lookup page1 m)
@@ -1025,7 +1028,17 @@ spec = do
                 Left err → expectationFailure (T.unpack err)
                 Right (meta, snap, _luaComponents, isMigrated) → do
                     meta `shouldBe` richMeta
-                    snap `shouldBe` richSnapshot
+                    -- These are pre-#911 bytes (@world-pages@ v1), so
+                    -- their pages come back with the old per-chunk
+                    -- location flags PENDING rather than an instance
+                    -- table -- exactly the state the load path then
+                    -- resolves against the location registry before
+                    -- publication. Applying that same resolution here
+                    -- (this fixture places no locations, so the registry
+                    -- is empty) is what makes the comparison against the
+                    -- current snapshot shape meaningful rather than
+                    -- vacuous.
+                    resolveFixturePages snap `shouldBe` richSnapshot
                     isMigrated `shouldBe` False
 
     -- | Issue #766 (save-overhaul C4) completes what #760's acceptance
@@ -1317,6 +1330,17 @@ spec = do
                 Right d → fromTexPaletteDTO d `shouldBe` tp
 
 -- Helpers -----------------------------------------------------------
+
+-- | The load path's own pre-#911 location resolution
+--   ('World.Save.Types.resolveLegacyLocations'), applied to every page
+--   of a decoded snapshot.
+resolveFixturePages ∷ SessionSnapshot → SessionSnapshot
+resolveFixturePages snap = snap
+    { snapPages = HM.map resolvePage (snapPages snap) }
+  where
+    resolvePage p = p
+        { pgsGenParams =
+            resolveLegacyLocationParams emptyLocationRegistry (pgsGenParams p) }
 
 isLeftC ∷ Either ComponentError a → Bool
 isLeftC (Left _) = True

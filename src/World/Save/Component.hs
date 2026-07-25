@@ -90,7 +90,7 @@ saveComponentRegistry =
     , registerComponent texPaletteCodec
         (\_ d snap → Right (coreSessionTexPalette d snap))
     , registerComponent worldPagesCodec
-        (\_ d snap → Right snap { snapPages = basePageSnapshots d })
+        (\_ d snap → Right snap { snapPages = wpBase d })
     , registerComponent worldEditsCodec
         (\ver d snap → onPages snap (applyWorldEdits ver d))
     , registerComponent worldActivityCodec

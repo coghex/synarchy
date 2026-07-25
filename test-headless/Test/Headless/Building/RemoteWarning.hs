@@ -23,6 +23,7 @@ import Location.Types
     , registerLocation
     )
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
+import Location.Instance (buildLocationInstances)
 import Location.Bounds (RelBounds(..), remotePortalThresholdTiles)
 
 -- * Fixtures
@@ -95,10 +96,14 @@ westEdgeAt relMinX =
 
 -- | 'remoteCheck' with the world size moved to the front — reads
 --   better at each call site below (@checkAt worldSize locs overlay
---   def gx gy@) than repeating the positional 0 in the middle.
+--   def gx gy@) than repeating the positional 0 in the middle. #911
+--   moved the placed-location input from (registry, overlay) to the
+--   instance table 'buildLocationInstances' derives from exactly that
+--   pair at world init, so the fixtures below stay unchanged.
 checkAt ∷ Int → LocationRegistry → LocationOverlay → BuildingDef → Int → Int
         → RemoteCheck
-checkAt worldSize locs overlay def gx gy = remoteCheck locs overlay worldSize def gx gy
+checkAt worldSize locs overlay def gx gy =
+    remoteCheck (buildLocationInstances locs overlay) worldSize def gx gy
 
 spec ∷ Spec
 spec = describe "Remote portal warning" $ do

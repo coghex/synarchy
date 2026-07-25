@@ -106,15 +106,15 @@ import World.Save.Snapshot
 import World.Save.Component.Session
     ( TexPaletteDTO(..), fromTexPaletteDTO, validateTexPalette )
 import World.Save.Component.Page
-    ( WorldGenParamsDTO
+    ( WorldGenParamsDTOv1
     , WorldIdentityDTO(..), WorldEditDTO(..), MineDesignationDTO(..)
     , ConstructDesignationDTO(..), ChopDesignationDTO(..)
     , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)
     , GroundItemsDTO(..), SpoilPileDTO(..)
-    , PageCoreDTO(..), WorldPagesDTO(..)
+    , PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
     , PageEditsDTO(..), WorldEditsDTO(..)
     , PageActivityDTO(..), WorldActivityDTO(..)
-    , basePageSnapshots, applyWorldEdits, applyWorldActivity
+    , migrateWorldPagesV1, applyWorldEdits, applyWorldActivity
     , validatePages, validateWorldActivity )
 import World.Save.Component.Entities
     ( BuildingInstanceDTO, PageBuildingsDTO(..), BuildingsDTO(..)
@@ -161,7 +161,7 @@ data UnitSnapshotV90 = UnitSnapshotV90
 --   "Test.Headless.World.Save.Compat").
 data WorldPageSaveV90 = WorldPageSaveV90
     { wp90PageId       ∷ !WorldPageId
-    , wp90GenParams    ∷ !WorldGenParamsDTO
+    , wp90GenParams    ∷ !WorldGenParamsDTOv1
     , wp90CameraX      ∷ !Float
     , wp90CameraY      ∷ !Float
     , wp90CameraZoom   ∷ !Float
@@ -295,20 +295,20 @@ migrateSessionV90 meta sd = do
                     \Lua deserializer was removed) -- refusing to migrate \
                     \rather than silently discard persisted Lua state")]
     let ps = sd90Worlds sd
-        pagesDTO = WorldPagesDTO (map toPageCoreV90 ps)
+        pagesValue = migrateWorldPagesV1 (WorldPagesDTOv1 (map toPageCoreV90 ps))
         activityDTO = WorldActivityDTO (map toPageActivityV90 ps)
         craftBillsDTO =
             migrateCraftBillsDTOv1 (CraftBillsDTOv1 (map toPageCraftBillsV90 ps))
         powerNodesDTO =
             migratePowerNodesDTOv1 (PowerNodesDTOv1 (map toPagePowerNodesV90 ps))
         componentLocalErrs = capComponentErrors $
-            validatePages pagesDTO
+            validatePages pagesValue
             ++ validateTexPalette (sd90TexPalette sd)
             ++ validateWorldActivity activityDTO
             ++ validateCraftBills craftBillsDTO
             ++ validatePowerNodes powerNodesDTO
     when (not (null componentLocalErrs)) $ Left componentLocalErrs
-    let base = basePageSnapshots pagesDTO
+    let base = wpBase pagesValue
     afterEdits ← applyWorldEdits 1
         (WorldEditsDTO (map toPageEditsV90 ps)) base
     afterActivity ← applyWorldActivity 1 activityDTO afterEdits
@@ -378,19 +378,23 @@ integrityErr ∷ IntegrityError → ComponentError
 integrityErr e = ComponentError (ieComponent e) (ieVersion e) AssemblePhase
     (iePath e <> ": " <> ieCode e <> ": " <> ieMessage e)
 
-toPageCoreV90 ∷ WorldPageSaveV90 → PageCoreDTO
-toPageCoreV90 p = PageCoreDTO
-    { pcPageId     = wp90PageId p
-    , pcGenParams  = wp90GenParams p
-    , pcCameraX    = wp90CameraX p
-    , pcCameraY    = wp90CameraY p
-    , pcTimeHour   = wp90TimeHour p
-    , pcTimeMinute = wp90TimeMinute p
-    , pcDateYear   = wp90DateYear p
-    , pcDateMonth  = wp90DateMonth p
-    , pcDateDay    = wp90DateDay p
-    , pcMapMode    = wp90MapMode p
-    , pcIdentity   = wp90Identity p
+-- | v90 bytes carry exactly the pre-#911 @world-pages@ v1 gen params, so
+--   this migrates through the SAME 'migrateWorldPagesV1' path a v1
+--   envelope takes — including the per-chunk location flags left pending
+--   for the load path to resolve into instances (#911).
+toPageCoreV90 ∷ WorldPageSaveV90 → PageCoreDTOv1
+toPageCoreV90 p = PageCoreDTOv1
+    { pc1PageId     = wp90PageId p
+    , pc1GenParams  = wp90GenParams p
+    , pc1CameraX    = wp90CameraX p
+    , pc1CameraY    = wp90CameraY p
+    , pc1TimeHour   = wp90TimeHour p
+    , pc1TimeMinute = wp90TimeMinute p
+    , pc1DateYear   = wp90DateYear p
+    , pc1DateMonth  = wp90DateMonth p
+    , pc1DateDay    = wp90DateDay p
+    , pc1MapMode    = wp90MapMode p
+    , pc1Identity   = wp90Identity p
     }
 
 toPageEditsV90 ∷ WorldPageSaveV90 → PageEditsDTO

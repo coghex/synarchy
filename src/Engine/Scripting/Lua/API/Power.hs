@@ -43,7 +43,7 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
-import Location.Overlay.Types (emptyLocationOverlay)
+import Location.Instance (emptyLocationInstances)
 import Craft.Bills (BillId(..))
 import Craft.Types (RecipeDef(..), lookupRecipe)
 import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
@@ -142,15 +142,14 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                     rollback item ix
                     pure (Left ("no building def for " <> defName))
                 Just def → do
-                    locs ← readIORef (locationDefsRef env)
                     mParams ← readIORef (wsGenParamsRef ws)
-                    let overlay = maybe emptyLocationOverlay
-                                        wgpLocationOverlay mParams
+                    let locInstances = maybe emptyLocationInstances
+                                             wgpLocationInstances mParams
                         worldSizeChunks = maybe 0 wgpWorldSize mParams
                     case canPlaceAt
                             (bm { bmInstances =
                                     buildingsOnPage pid (bmInstances bm) })
-                            wtd locs overlay worldSizeChunks def gx gy of
+                            wtd locInstances worldSizeChunks def gx gy of
                         NotPlaceable reason → do
                             rollback item ix
                             pure (Left reason)

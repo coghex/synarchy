@@ -1,7 +1,7 @@
 {
   "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py (--add-baseline registers a fixture's checksum/summary together).",
   "envelopeFramingVersion": 1,
-  "frozenDtoFingerprint": "19f98dc669c3aac00778f6c26a8246b649b6101b43919455999c1dc7d3bb2e5b",
+  "frozenDtoFingerprint": "353a9c9742439a882cb1679f162671bfe055af4a9697a66cd0102c6c65acf027",
   "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs, plus every leaf DTO its frozen types embed, transitively resolved wherever actually defined (World.Save.Component.Page/.Entities/.Session/.WorldGen)",
   "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\"",
   "envelopeFramingFingerprint": "582c54fe18f585b36a28acc552339851d1e54db5812db0a384de416bbec99198",
@@ -370,6 +370,93 @@
           "sizeBytes": null,
           "provenance": "Recovered verbatim from git history: commit 988c2727 (\"Introduce the tagged, checksummed save envelope (#759, save-overhaul B1)\"), Test.Headless.World.Save.Envelope's trackedEnvelopeFixtureHex constant. Stored as an inline hex literal (matching that historical file's own convention) rather than a tracked binary blob, since a `git show` of that exact commit is the authoritative, independently-reproducible source -- see the module haddock.",
           "expectedCanonicalSummary": null
+        }
+      ]
+    },
+    {
+      "id": "d1-location-instance-identity",
+      "description": "Placed-location instance identity (issue #911, epic #159 phase 3): world-pages became v2, replacing WorldGenParams' per-chunk wgpLocationDiscovered/wgpLocationContentsSpawned sets with a per-page LocationInstances table keyed by a stable LocationInstanceId (definition id, anchor, absolute bounds, discovery margin, lifecycle, display name, content-spawn flag). wgpLocationStamped deliberately stays chunk-keyed (#424). This baseline tracks a REAL current-format session written by the live engine at world-pages v2, so the NEW shape has its own compatibility coverage; the pre-#911 v1 shape stays tracked by the b2/b3/c3 baselines above, whose payloads decode through World.Save.Component.Page.migrateWorldPagesV1 and are then resolved against the location registry (Location.Instance.resolveLegacyLocationInstances) before publication.",
+      "declaredAt": "2026-07-25",
+      "declaredByIssue": 911,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldPagesV1 (v1 -> v2), Location.Instance.resolveLegacyLocationInstances (chunk flags -> instances, at the load path's content-validation stage)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "d1-location-instance-identity-session",
+          "path": "test-headless/data/save-compat/d1-location-instance-identity.bin",
+          "kind": "complete-session",
+          "sha256": "e3bd2a8af31ec0ac6b2eec3e538eb1256b47b16823fd5067ddbd5d2177a7f49d",
+          "sizeBytes": 432485,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 8, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0, 0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/d1-location-instance-identity.expected.json"
         }
       ]
     }

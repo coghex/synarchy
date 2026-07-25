@@ -29,6 +29,9 @@ import Location.Types
     , registerLocation, locationIconTextureName
     )
 import Location.Overlay.Types (LocationOverlay)
+import Location.Instance
+    ( LocationInstance(..), LocationLifecycle(..), buildLocationInstances
+    , instancesToList, setLocationLifecycle )
 import Location.Bounds (RelBounds(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Grid (gridToWorld)
@@ -69,6 +72,19 @@ registryWithIcons =
     registerLocation (locDef "loc1" (Just ("hidden.png", "discovered.png")))
         emptyLocationRegistry
 
+-- | Every def id the icon-quad scenarios below place. #911 builds
+--   instances from the overlay through the registry, so a placed id
+--   must be registered to become an instance at all — including
+--   "no_icons" (registered, but declaring no @map_icons@ pair, which
+--   is what that scenario is about) and the two extra ids the
+--   deterministic-ordering scenario places.
+registryForQuads ∷ LocationRegistry
+registryForQuads = foldr registerLocation registryWithIcons
+    [ locDef "no_icons" Nothing
+    , locDef "loc2" (Just ("hidden2.png", "discovered2.png"))
+    , locDef "loc3" (Just ("hidden3.png", "discovered3.png"))
+    ]
+
 overlayAt ∷ Int → Int → Text → LocationOverlay
 overlayAt cx cy lid = HM.singleton (ChunkCoord cx cy) lid
 
@@ -81,11 +97,22 @@ openView ∷ ZoomViewBounds
 openView = ZoomViewBounds
     { zvLeft = -1.0e9, zvRight = 1.0e9, zvTop = -1.0e9, zvBottom = 1.0e9 }
 
+-- | #911: the renderer reads the placed-location INSTANCE table, so the
+--   fixtures below keep expressing a scenario as (overlay, discovered
+--   chunks) and this translates it exactly the way world init + the
+--   discovery tick would — build the instances from the overlay, then
+--   promote the named chunks' instances to 'LifecycleDiscovered'.
 paramsWith ∷ LocationOverlay → HS.HashSet ChunkCoord → WorldGenParams
 paramsWith overlay discovered = defaultWorldGenParams
-    { wgpLocationOverlay = overlay
-    , wgpLocationDiscovered = discovered
+    { wgpLocationOverlay   = overlay
+    , wgpLocationInstances = foldr promote base
+        [ liId i | i ← instancesToList base
+                 , HS.member (liChunk i) discovered ]
     }
+  where
+    base = buildLocationInstances registryForQuads overlay
+    promote iid lis =
+        fromMaybe lis (setLocationLifecycle iid LifecycleDiscovered lis)
 
 -- | Run the generator with FaceSouth, camera at the origin, full alpha,
 --   a fixed 4-unit icon size — the common case most scenarios below
@@ -314,8 +341,10 @@ spec = describe "Location map icons" $ do
                 (paramsWith overlay3 HS.empty) iconMap3
                 FaceSouth openView 0 0 1.0 4.0 (LayerId 2)
                 (\(TextureHandle n) → n) (-1)
-        it "matches overlayToList's sorted-by-(cx,cy) order" $
-            -- (cx,cy): loc2@(-3,4) < loc3@(0,0) < loc1@(2,-1)
+        it "matches instance-id order, allocated in overlayToList's \
+           \sorted-by-(cx,cy) order" $
+            -- (cx,cy): loc2@(-3,4) < loc3@(0,0) < loc1@(2,-1), so the
+            -- instance ids run 1, 2, 3 in that same order.
             V.map sqTexture (run ())
                 `shouldBe` V.fromList
                     [TextureHandle 12, TextureHandle 13, TextureHandle 11]

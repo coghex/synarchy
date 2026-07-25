@@ -9,24 +9,54 @@ module Engine.Scripting.Lua.API.World.Edit
     , worldPlantRowCropAtFn
     , worldSetCellFn
     , worldMarkLocationContentsSpawnedFn
+    , worldMarkLocationContentsSpawnedByIdFn
+    , worldSetLocationLifecycleFn
     , worldMarkLocationStampedFn
     ) where
 
 import UPrelude
 import qualified HsLua as Lua
+import Data.ByteString (ByteString)
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom)
+import Location.Instance
+    ( LocationInstance(..), LocationInstanceId(..)
+    , instancesInChunk, lifecycleFromName )
+import World.Generate.Coordinates (globalToChunk)
 import World.Types hiding (activeWorldPage)
 import World.Material (MaterialId(..), materialIdByName)
 
+-- | The live page this call targets: the named one when a pageId string
+--   is given (even hidden), the active world otherwise. 'Nothing' when
+--   neither resolves.
+targetPage ∷ WorldSimCapability → Maybe ByteString → IO (Maybe WorldPageId)
+targetPage wsc pageArg = case pageArg of
+    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8Lenient pidBS)))
+    Nothing    → fmap fst <$> activeWorldPageFrom (wsWorldManagerRef wsc)
+
+-- | That page's live gen params, when it has any.
+pageParams ∷ WorldSimCapability → WorldPageId → IO (Maybe WorldGenParams)
+pageParams wsc pid = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
+    case lookup pid (wmWorlds mgr) of
+        Nothing → pure Nothing
+        Just ws → readIORef (wsGenParamsRef ws)
+
 -- | world.markLocationContentsSpawned(gx, gy [, pageId]) — one-time
---   content-spawn flag (#90). An explicit pageId targets that live
---   page (even hidden); omitted defaults to the active world. No-op
---   (queues nothing) when neither resolves to a live page.
+--   content-spawn flag (#90). COORDINATE-ADDRESSED compatibility
+--   wrapper (#911): it resolves the chunk containing (gx, gy) and marks
+--   the FIRST (lowest-id) instance anchored there, matching what
+--   @world.hasSpawnedLocationContents@ reports and what
+--   @scripts/locations.lua@ has always meant — placement never puts two
+--   locations in one chunk. A caller that must address a specific
+--   instance uses @world.markLocationContentsSpawnedById@. An explicit
+--   pageId targets that live page (even hidden); omitted defaults to
+--   the active world. No-op (queues nothing) when neither resolves to a
+--   live page, or when no instance is anchored in that chunk.
 worldMarkLocationContentsSpawnedFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldMarkLocationContentsSpawnedFn wsc = do
     gxArg   ← Lua.tointeger 1
@@ -35,16 +65,73 @@ worldMarkLocationContentsSpawnedFn wsc = do
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
             Lua.liftIO $ do
-                mPid ← case pageArg of
-                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8Lenient pidBS)))
-                    Nothing    → (fmap fst) <$> activeWorldPageFrom (wsWorldManagerRef wsc)
-                case mPid of
-                    Just pid → Q.writeQueue (wsWorldQueue wsc) $
-                        WorldMarkLocationContentsSpawned pid
-                            (fromIntegral gx) (fromIntegral gy)
-                    Nothing  → pure ()
+                mPid ← targetPage wsc pageArg
+                forM_ mPid $ \pid → do
+                    mParams ← pageParams wsc pid
+                    let (coord, _) =
+                            globalToChunk (fromIntegral gx) (fromIntegral gy)
+                        insts = maybe [] (instancesInChunk coord
+                                           . wgpLocationInstances) mParams
+                    case insts of
+                        (inst:_) → Q.writeQueue (wsWorldQueue wsc) $
+                            WorldMarkLocationContentsSpawned pid (liId inst)
+                        [] → pure ()
             return 0
         _ → return 0
+
+-- | world.markLocationContentsSpawnedById(instanceId [, pageId]) — the
+--   instance-addressed one-time content-spawn flag (#90/#911). Marking
+--   one instance never touches another, including a second instance
+--   anchored in the same chunk. No-op when the page doesn't resolve; an
+--   unknown instance id is a no-op on the world thread.
+worldMarkLocationContentsSpawnedByIdFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldMarkLocationContentsSpawnedByIdFn wsc = do
+    idArg   ← Lua.tointeger 1
+    pageArg ← Lua.tostring 2
+    case idArg of
+        Just rawId → do
+            Lua.liftIO $ do
+                mPid ← targetPage wsc pageArg
+                forM_ mPid $ \pid → Q.writeQueue (wsWorldQueue wsc) $
+                    WorldMarkLocationContentsSpawned pid
+                        (LocationInstanceId (fromIntegral rawId))
+            return 0
+        Nothing → return 0
+
+-- | world.setLocationLifecycle(instanceId, lifecycle [, pageId]) → bool
+--   (#911). @lifecycle@ is one of "unknown" / "hinted" / "discovered" /
+--   "active" / "cleared" / "depleted". Returns whether the request was
+--   ACCEPTED for queueing (a known state name and a resolvable page) —
+--   the world thread then applies it only if it moves the instance
+--   strictly forward, so a backward or same-state request changes
+--   nothing. Poll @world.getLocationInstance@ for the settled state.
+--   This is how the states past @discovered@ are reachable
+--   programmatically before the encounter/reward/retrieval gameplay
+--   that will drive them exists.
+worldSetLocationLifecycleFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetLocationLifecycleFn wsc = do
+    idArg    ← Lua.tointeger 1
+    stateArg ← Lua.tostring 2
+    pageArg  ← Lua.tostring 3
+    let mLifecycle =
+            lifecycleFromName . TE.decodeUtf8Lenient =<< stateArg
+    case (idArg, mLifecycle) of
+        (Just rawId, Just lifecycle) → do
+            queued ← Lua.liftIO $ do
+                mPid ← targetPage wsc pageArg
+                case mPid of
+                    Nothing → pure False
+                    Just pid → do
+                        Q.writeQueue (wsWorldQueue wsc) $
+                            WorldSetLocationLifecycle pid
+                                (LocationInstanceId (fromIntegral rawId))
+                                lifecycle
+                        pure True
+            Lua.pushboolean queued
+            return 1
+        _ → Lua.pushboolean False >> return 1
 
 -- | world.markLocationStamped(gx, gy [, pageId]) — one-time geometry-stamp
 --   flag (#424). An explicit pageId targets that live page (even hidden);

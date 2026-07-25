@@ -1,9 +1,10 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
 -- | IO-level coverage for "Location discovery" (#780) that
 --   'Test.Headless.Location.Discovery's pure spec can't reach: the
---   real 'World.Thread.Discovery.tickLocationDiscovery' mutating
---   'wgpLocationDiscovered' through 'wsGenParamsRef' and emitting a
---   player event through the real 'Engine.PlayerEvent.Emit' surface.
+--   real 'World.Thread.Discovery.tickLocationDiscovery' promoting a
+--   placed location's instance lifecycle (#911) through
+--   'wsGenParamsRef' and emitting a player event through the real
+--   'Engine.PlayerEvent.Emit' surface.
 --   No world/unit thread is started — mirrors
 --   'Test.Headless.Unit.LineOfSight's synthetic-page pattern (a bare
 --   'initializeEngineHeadless', hand-built 'WorldManager' +
@@ -29,6 +30,9 @@ import Location.Types
     , registerLocation
     )
 import Location.Overlay.Types (LocationOverlay)
+import Location.Instance
+    ( LocationInstance(..), LocationLifecycle(..), buildLocationInstances
+    , instancesToList )
 import Location.Bounds (RelBounds(..))
 import Unit.Direction (Direction(..))
 import Unit.Types
@@ -81,10 +85,22 @@ testUnit page faction gx gy = UnitInstance
 newPage ∷ EngineEnv → WorldPageId → IO WorldState
 newPage env pageId = do
     ws ← emptyWorldState
-    writeIORef (wsGenParamsRef ws) $ Just defaultWorldGenParams
-        { wgpLocationOverlay = overlay1 }
+    writeIORef (wsGenParamsRef ws) $ Just pageParams
     writeIORef (worldManagerRef env) $ WorldManager [(pageId, ws)] [pageId]
     pure ws
+
+-- | The gen params every page below starts from: loc1's overlay plus
+--   the instance table world init would build from it (#911).
+pageParams ∷ WorldGenParams
+pageParams = defaultWorldGenParams
+    { wgpLocationOverlay   = overlay1
+    , wgpLocationInstances = buildLocationInstances registry1 overlay1
+    }
+
+-- | Each placed location's lifecycle on a page, in instance-id order —
+--   what the per-chunk discovered set used to answer.
+lifecyclesOf ∷ Maybe WorldGenParams → Maybe [LocationLifecycle]
+lifecyclesOf = fmap (map liLifecycle . instancesToList . wgpLocationInstances)
 
 initEnv ∷ IO EngineEnv
 initEnv = do
@@ -110,7 +126,7 @@ spec = beforeAll initEnv $
 
             tickLocationDiscovery env pageId ws
             mp1 ← readIORef (wsGenParamsRef ws)
-            (wgpLocationDiscovered ⊚ mp1) `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+            lifecyclesOf mp1 `shouldBe` Just [LifecycleDiscovered]
 
             evs1 ← eventsFor env 101
             map peCategory evs1 `shouldBe` ["location_discovery"]
@@ -122,7 +138,7 @@ spec = beforeAll initEnv $
             -- discovered — no second event, no change to the set.
             tickLocationDiscovery env pageId ws
             mp2 ← readIORef (wsGenParamsRef ws)
-            (wgpLocationDiscovered ⊚ mp2) `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+            lifecyclesOf mp2 `shouldBe` Just [LifecycleDiscovered]
             evs2 ← eventsFor env 101
             length evs2 `shouldBe` 1
 
@@ -136,7 +152,7 @@ spec = beforeAll initEnv $
 
             tickLocationDiscovery env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
-            (wgpLocationDiscovered ⊚ mp) `shouldBe` Just HS.empty
+            lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             evs ← eventsFor env 202
             evs `shouldBe` []
 
@@ -146,11 +162,9 @@ spec = beforeAll initEnv $
             let pageActive = WorldPageId "disc_active"
                 pageHidden = WorldPageId "disc_hidden"
             wsActive ← emptyWorldState
-            writeIORef (wsGenParamsRef wsActive) $ Just defaultWorldGenParams
-                { wgpLocationOverlay = overlay1 }
+            writeIORef (wsGenParamsRef wsActive) $ Just pageParams
             wsHidden ← emptyWorldState
-            writeIORef (wsGenParamsRef wsHidden) $ Just defaultWorldGenParams
-                { wgpLocationOverlay = overlay1 }
+            writeIORef (wsGenParamsRef wsHidden) $ Just pageParams
             -- Only pageActive is visible/active; pageHidden is loaded
             -- (simulated) but not shown — mirrors a second live world
             -- page kept around while the player looks at the first.
@@ -169,10 +183,8 @@ spec = beforeAll initEnv $
 
             mpActive ← readIORef (wsGenParamsRef wsActive)
             mpHidden ← readIORef (wsGenParamsRef wsHidden)
-            (wgpLocationDiscovered ⊚ mpActive)
-                `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
-            (wgpLocationDiscovered ⊚ mpHidden)
-                `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+            lifecyclesOf mpActive `shouldBe` Just [LifecycleDiscovered]
+            lifecyclesOf mpHidden `shouldBe` Just [LifecycleDiscovered]
 
             evsActive ← eventsFor env 301
             evsHidden ← eventsFor env 302
@@ -211,7 +223,7 @@ spec = beforeAll initEnv $
             Right reqId ← beginLoad (loadStatusRef env) "probe_load"
             tickWorldTime env 1.0
             mpDuring ← readIORef (wsGenParamsRef ws)
-            (wgpLocationDiscovered ⊚ mpDuring) `shouldBe` Just HS.empty
+            lifecyclesOf mpDuring `shouldBe` Just [LifecycleUnknown]
             evsDuring ← eventsFor env 401
             evsDuring `shouldBe` []
 
@@ -220,7 +232,6 @@ spec = beforeAll initEnv $
             failLoad (loadStatusRef env) reqId "test abort"
             tickWorldTime env 1.0
             mpAfter ← readIORef (wsGenParamsRef ws)
-            (wgpLocationDiscovered ⊚ mpAfter)
-                `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+            lifecyclesOf mpAfter `shouldBe` Just [LifecycleDiscovered]
             evsAfter ← eventsFor env 401
             map peCategory evsAfter `shouldBe` ["location_discovery"]

@@ -39,7 +39,9 @@ module World.Save.Types
     , missingFloraReferences
     , MissingLocationRef(..)
     , renderMissingLocationRef
-    , missingLocationOverlayReferences
+    , missingLocationDefReferences
+    , resolveLegacyLocations
+    , resolveLegacyLocationParams
     , MissingInfectionRef(..)
     , renderMissingInfectionRef
     , missingInfectionReferences
@@ -50,8 +52,12 @@ import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
+import Location.Instance
+    ( LocationInstance(..), instancesToList, resolveLegacyLocationInstances )
+import Location.Types (LocationRegistry)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
@@ -1229,9 +1235,11 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
 
 -- Location-overlay-id validation (issue #763 round-7 review) ---------
 
--- | A saved location-overlay entry ('WorldGenParams.wgpLocationOverlay',
---   one per stamped chunk) whose location id does not resolve against
---   the currently-registered 'Location.Types.LocationRegistry'. Unlike
+-- | A saved location reference — an overlay entry
+--   ('WorldGenParams.wgpLocationOverlay', one per placed chunk) or a
+--   placed-location INSTANCE (#911, 'WorldGenParams.wgpLocationInstances')
+--   — whose location id does not resolve against the
+--   currently-registered 'Location.Types.LocationRegistry'. Unlike
 --   'MaterialId'/'FloraId', this is a plain Text key — same shape as
 --   'MissingDefRef' — but it lives on 'WorldGenParams' rather than
 --   inside 'WorldPageSave' proper, which is why it needed its own
@@ -1239,7 +1247,8 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
 --   'HS.HashSet' membership test. A missing location definition would
 --   otherwise silently skip location discovery/placement-bounds
 --   checks for that chunk after publication instead of rejecting the
---   load.
+--   load — and, since #911, would leave a pre-#911 save's chunk flags
+--   with no instance to migrate onto.
 data MissingLocationRef = MissingLocationRef
     { mlrPage  ∷ !WorldPageId
     , mlrCoord ∷ !(Int, Int)
@@ -1253,19 +1262,60 @@ renderMissingLocationRef r =
         <> mlrLocId r <> "'"
   where unWorldPageId (WorldPageId t) = t
 
--- | Every saved location-overlay reference, across all pages, that does
---   not resolve against the currently-registered location definitions.
+-- | Every saved location reference, across all pages, that does not
+--   resolve against the currently-registered location definitions.
 --   Empty ⇒ every reference resolves and the load may proceed.
-missingLocationOverlayReferences
+--
+--   #911 made this the successor to the overlay-only check: BOTH the
+--   overlay entries and the placed instances are covered, so a v2 save
+--   whose instance names a def this build no longer registers is
+--   rejected too. Deduplicated by (page, chunk, id) — an instance and
+--   the overlay entry it was placed from name the same def in the same
+--   chunk, so the pair reports once.
+missingLocationDefReferences
     ∷ HS.HashSet Text                     -- ^ registered location def ids
     → [(WorldPageId, WorldPageSave)]
     → [MissingLocationRef]
-missingLocationOverlayReferences locationDefs pages = concatMap pageRefs pages
+missingLocationDefReferences locationDefs pages = concatMap pageRefs pages
   where
     pageRefs (pid, w) =
-        [ MissingLocationRef pid (cx, cy) locId
-        | (ChunkCoord cx cy, locId) ← HM.toList (wgpLocationOverlay (wpsGenParams w))
+        [ MissingLocationRef pid coord locId
+        | (coord, locId) ← L.nub (overlayRefs w ⧺ instanceRefs w)
         , not (HS.member locId locationDefs) ]
+    overlayRefs w =
+        [ ((cx, cy), locId)
+        | (ChunkCoord cx cy, locId)
+            ← HM.toList (wgpLocationOverlay (wpsGenParams w)) ]
+    instanceRefs w =
+        [ ((cx, cy), liDefId inst)
+        | inst ← instancesToList (wgpLocationInstances (wpsGenParams w))
+        , let ChunkCoord cx cy = liChunk inst ]
+
+-- | Resolve one loaded page's PENDING pre-#911 per-chunk location flags
+--   into real instances, against the registry the caller has already
+--   checked every location id against
+--   ('missingLocationDefReferences'). Total and idempotent: a page whose
+--   instance table carries nothing pending — a v2 (post-#911) save, a
+--   freshly generated world, or a page already resolved — is returned
+--   unchanged, so a definition edited since placement can never
+--   overwrite an existing instance's stored bounds, margin, or display
+--   name. Called by the load path AFTER content validation and BEFORE
+--   staging/publication ('Engine.Scripting.Lua.API.Save.loadSaveFn'):
+--   the pure component decoders have no registry to resolve against.
+resolveLegacyLocations ∷ LocationRegistry → WorldPageSave → WorldPageSave
+resolveLegacyLocations registry w =
+    w { wpsGenParams = resolveLegacyLocationParams registry (wpsGenParams w) }
+
+-- | 'resolveLegacyLocations' at the gen-params level — the actual work,
+--   exposed separately so any other stage holding a page's params (and
+--   the migration gates) applies the SAME resolution rather than
+--   re-deriving it.
+resolveLegacyLocationParams
+    ∷ LocationRegistry → WorldGenParams → WorldGenParams
+resolveLegacyLocationParams registry params = params
+    { wgpLocationInstances =
+        resolveLegacyLocationInstances registry
+            (wgpLocationOverlay params) (wgpLocationInstances params) }
 
 -- Infection-definition validation (issue #763 round-8 review) --------
 

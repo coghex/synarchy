@@ -10,16 +10,11 @@ import Engine.Scripting.Lua.API.Forage
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.Plant (worldGetPlantSuitabilityFn)
 import Engine.Core.State (EngineEnv)
-import Engine.Core.Capability.ContentRegistries
-  (toContentRegistriesCapability)
 import qualified HsLua as Lua
 
 -- | Populate and install the @world@ and @flora@ global tables.
 registerWorldAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
 registerWorldAPI env = do
-  -- world.listPlacedLocations joins placements against the location-def
-  -- registry through the `content-registries` capability (#890).
-  let regs = toContentRegistriesCapability env
   Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn (toWorldSimCapability env))
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn (toWorldSimCapability env))
@@ -112,11 +107,17 @@ registerWorldAPI env = do
   registerLuaFunction "getAmbientAt" (worldGetAmbientAtFn (toWorldSimCapability env))
   registerLuaFunction "getSunAngleAt" (worldGetSunAngleAtFn (toWorldSimCapability env))
   registerLuaFunction "listPlacedLocations"
-    (worldListPlacedLocationsFn regs env)
+    (worldListPlacedLocationsFn env)
+  registerLuaFunction "getLocationInstance"
+    (worldGetLocationInstanceFn env)
   registerLuaFunction "hasSpawnedLocationContents"
     (worldHasSpawnedLocationContentsFn env)
   registerLuaFunction "markLocationContentsSpawned"
     (worldMarkLocationContentsSpawnedFn (toWorldSimCapability env))
+  registerLuaFunction "markLocationContentsSpawnedById"
+    (worldMarkLocationContentsSpawnedByIdFn (toWorldSimCapability env))
+  registerLuaFunction "setLocationLifecycle"
+    (worldSetLocationLifecycleFn (toWorldSimCapability env))
   registerLuaFunction "hasStampedLocation"
     (worldHasStampedLocationFn env)
   registerLuaFunction "markLocationStamped"

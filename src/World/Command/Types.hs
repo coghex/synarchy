@@ -12,6 +12,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
+import Location.Instance (LocationInstanceId, LocationLifecycle)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
@@ -311,13 +312,24 @@ data WorldCommand
         -- ^ Sim → World: apply the sim's settled/active fluid results to
         --   the visible world's 'wsTilesRef'. The world thread is the
         --   SOLE writer of 'wsTilesRef'; the sim never touches it.
-    | WorldMarkLocationContentsSpawned WorldPageId Int Int
-        -- ^ worldId, gx, gy. One-time content-spawn flag (#90): marks the
-        --   chunk containing (gx, gy) as having had its placed location's
-        --   `contents` spawned, in 'WorldGenParams.wgpLocationContentsSpawned'
-        --   — so a later chunk (re)load never respawns them. The world
+    | WorldMarkLocationContentsSpawned WorldPageId LocationInstanceId
+        -- ^ worldId, location instance id. One-time content-spawn flag
+        --   (#90), per INSTANCE since #911: marks that placed location as
+        --   having had its `contents` spawned
+        --   ('Location.Instance.liContentsSpawned') — so a later chunk
+        --   (re)load never respawns them. Marking one instance never
+        --   touches another, including a second instance anchored in the
+        --   same chunk. Deliberately independent of the instance's
+        --   lifecycle and of the chunk-keyed stamp flag (#424). The world
         --   thread is the sole owner of WorldGenParams; Lua queues this
         --   rather than mutating wsGenParamsRef directly.
+    | WorldSetLocationLifecycle WorldPageId LocationInstanceId LocationLifecycle
+        -- ^ worldId, location instance id, requested lifecycle state
+        --   (#911). Applied only when it moves the instance STRICTLY
+        --   forward along @unknown → hinted → discovered → active →
+        --   cleared → depleted@ ('Location.Instance.promoteLifecycle');
+        --   a backward or same-state request is silently refused, so
+        --   the one-way discovery guarantee holds no matter who asks.
     | WorldMarkLocationStamped WorldPageId Int Int
         -- ^ worldId, gx, gy. One-time geometry-stamp flag (#424): marks the
         --   chunk containing (gx, gy) as having had its placed location's

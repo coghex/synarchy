@@ -54,10 +54,12 @@ import World.Save.Component.Types (ComponentError(..))
 import World.Save.Compat.SessionV90
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
-    , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..) )
+    , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..)
+    , resolveLegacyLocationParams )
+import Location.Types (emptyLocationRegistry)
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
-import World.Save.Component.Page (fromWorldGenParamsDTO)
+import World.Save.Component.Page (fromWorldGenParamsDTOv1)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
 import Building.Types (BuildingId(..))
@@ -500,7 +502,18 @@ spec = do
                         -- gap -- Test.Headless.World.Save.Compat.hs's own
                         -- probe counterpart already proves the real-engine
                         -- round trip in that case.
-                        let reencoded = encodeSessionSnapshot meta snap luaComponents
+                        -- A pre-#911 fixture decodes with its old
+                        -- per-chunk location flags PENDING; the load path
+                        -- resolves them against the location registry
+                        -- before publication, so the next save writes
+                        -- resolved instances. Applying that same
+                        -- resolution first is what makes this an
+                        -- equivalence check on the shape production
+                        -- actually re-encodes (these fixtures place no
+                        -- locations, so the registry is empty).
+                        let resolved = resolveSnapshotLocations snap
+                            reencoded =
+                                encodeSessionSnapshot meta resolved luaComponents
                             actualLuaNames =
                                 HS.fromList [ n | (n, _, _, _) ← luaComponents ]
                         case decodeSessionEnvelope luaNames actualLuaNames reencoded of
@@ -509,7 +522,7 @@ spec = do
                                                      \equivalence: " <> T.unpack err)
                             Right (meta', snap', _, _) → do
                                 meta' `shouldBe` meta
-                                snap' `shouldBe` snap
+                                snap' `shouldBe` resolved
 
         it "the manifest-driven canonical check's page-set comparison \
            \genuinely distinguishes an incomplete/extra page set from the \
@@ -578,7 +591,7 @@ spec = do
                         `shouldBe` [WorldPageId "main_world"]
                     case sd90Worlds sd of
                         (p:_) → do
-                            let gp = fromWorldGenParamsDTO (wp90GenParams p)
+                            let gp = fromWorldGenParamsDTOv1 (wp90GenParams p)
                             wgpSeed gp `shouldBe` 42
                             wgpWorldSize gp `shouldBe` 128
                             wgpPlateCount gp `shouldBe` 10
@@ -1063,3 +1076,14 @@ trackedB1EnvelopeFixtureHex =
     \010000000000000000000000000000000000000000000000000000000000\
     \000000000000010000000000000000000000010000000000000000000000\
     \0000000000000000000000000000"
+
+-- | The load path's own pre-#911 location resolution
+--   ('World.Save.Types.resolveLegacyLocationParams'), applied to every
+--   page of a decoded snapshot.
+resolveSnapshotLocations ∷ SessionSnapshot → SessionSnapshot
+resolveSnapshotLocations snap = snap
+    { snapPages = HM.map resolvePage (snapPages snap) }
+  where
+    resolvePage p = p
+        { pgsGenParams =
+            resolveLegacyLocationParams emptyLocationRegistry (pgsGenParams p) }
