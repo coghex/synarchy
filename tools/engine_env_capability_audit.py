@@ -481,13 +481,15 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # Engine.Core.Capability.RenderView (worker threads) -- see the SS3
     # boundary enforcement below.
     "render-gpu-asset": frozenset(),
-    "input-lua-transport": frozenset({
-        "Engine.Input.Callback", "Engine.Input.Thread", "Engine.Input.Thread.Char",
-        "Engine.Input.Thread.Dispatch", "Engine.Input.Thread.Keyboard",
-        "Engine.Input.Thread.Mouse.Activation", "Engine.Input.Thread.Scroll",
-        "Engine.Scripting.Lua.API.InputInject", "Engine.Scripting.Lua.API.Keybinds",
-        "World.Log", "World.Thread.Helpers",
-    }),
+    # Emptied by issue #892 (E4): all 11 modules now reach their input
+    # fields through Engine.Core.Capability.Input (the LuaThread-only
+    # eight-field record) or Engine.Core.Capability.InputView (the
+    # worker-safe view that carries neither `inputBarrierNextRef` nor
+    # `currentKeyDownRef`) -- see the SS7.3 boundary enforcement below.
+    # `Engine.Input.Callback` needed no record at all: its API already
+    # took the two live handles explicitly, so it merely narrowed its
+    # bare import to the `EngineLifecycle` type.
+    "input-lua-transport": frozenset(),
     # Shrunk from 54 to 4 by issue #893 (E5a): every module whose
     # `EngineEnv` use was covered by the nine world/sim fields now
     # reaches them through Engine.Core.Capability.WorldSim. The four
@@ -788,6 +790,148 @@ def audit_render_boundary(
     return violations
 
 
+# ===========================================================================
+# SS7.3 LuaThread ownership boundary (issue #892, capability split E4)
+# ===========================================================================
+#
+# The exact same shape as the SS3 render boundary above, for the exact
+# same reason, applied to `input-lua-transport`'s two LuaThread-PRIVATE
+# fields: `inputBarrierNextRef` (SS5: "`LuaThread` (only)" -- the
+# synthetic-injection barrier-token allocator) and `currentKeyDownRef`
+# (SS5: "`LuaThread` (only)" -- the transient `onKeyDown` current-key
+# handoff). E1's convention exports each record as `Capability(..)`, so
+# a single eight-field record visible to the input/world threads would
+# hand them a way to allocate barrier tokens and to inspect or clobber
+# the Lua thread's in-flight key. #892 therefore splits the capability
+# into two interfaces, enforced by the same three checks:
+#
+#   1. Only a module that runs on `LuaThread` may import the full
+#      `Engine.Core.Capability.Input`.
+#   2. Only the two fields' genuine owners may name either one (or its
+#      `ic`-prefixed accessor) at all.
+#   3. The worker-visible view must not so much as MENTION either field
+#      -- no field, no accessor, no re-export, hence no path to reach it.
+#
+# Sets 1 and 2 are checked in BOTH directions, like SS3's and SS6's.
+INPUT_CAPABILITY_MODULE = "Engine.Core.Capability.Input"
+INPUT_VIEW_MODULE = "Engine.Core.Capability.InputView"
+
+# Production modules that legitimately run on `LuaThread` and may hold
+# the full eight-field record. Both are SS6.2 `input-lua-transport`
+# modules #892 migrated whose execution domain SS5 records as
+# `LuaThread`: `API.InputInject` is the barrier allocator's only
+# non-boot owner, `API.Keybinds` the current-key handoff's.
+#
+# A module reached from the input or world thread does NOT belong here.
+# In particular `Engine.Input.Thread.Dispatch` publishes the barrier
+# WATERMARK (`inputBarrierRef`) and must satisfy the boundary with the
+# worker-safe view alone -- the view carries the watermark precisely so
+# it never needs the allocator.
+INPUT_LUA_ONLY_MODULES = frozenset({
+    "Engine.Scripting.Lua.API.InputInject",
+    "Engine.Scripting.Lua.API.Keybinds",
+})
+
+# The only production modules that may name either LuaThread-private
+# field: `Engine.Core.State` declares them, `Engine.Core.Init` seeds
+# them, `Engine.Core.Capability.Input` projects them into the
+# LuaThread-only record, and the three LuaThread consumers actually use
+# them -- `Engine.Scripting.Lua.Thread.Dispatch` (a permanent SS6.1
+# full-access orchestration module: it is what WRITES
+# `currentKeyDownRef` around each `onKeyDown` broadcast) plus the two
+# SS6.2 modules above.
+#
+# `Engine.Core.Monad` is deliberately absent: unlike `engineStateRef`
+# it never names either field -- the CPS Reader environment carries
+# them structurally, as part of `EngineEnv`, without mentioning them.
+INPUT_LUA_ONLY_FIELD_OWNERS = frozenset({
+    "Engine.Core.State", "Engine.Core.Init", INPUT_CAPABILITY_MODULE,
+    "Engine.Scripting.Lua.Thread.Dispatch",
+    "Engine.Scripting.Lua.API.InputInject",
+    "Engine.Scripting.Lua.API.Keybinds",
+})
+
+_INPUT_LUA_ONLY_FIELD_RE = re.compile(
+    r"(?<![A-Za-z0-9_'])"
+    r"(?:(?:icI|i)nputBarrierNextRef|(?:icC|c)urrentKeyDownRef)"
+    r"(?![A-Za-z0-9_'])")
+
+
+def audit_input_boundary(
+    sources: dict[str, str], *,
+    lua_only: frozenset[str] = INPUT_LUA_ONLY_MODULES,
+    field_owners: frozenset[str] = INPUT_LUA_ONLY_FIELD_OWNERS,
+) -> list[str]:
+    """Pure core of the SS7.3 LuaThread boundary check. `sources` is
+    `{relative_path: source_text}` for every production Haskell file
+    (the same input `classify_production_sources` takes)."""
+    violations: list[str] = []
+    live_input_importers: set[str] = set()
+    live_field_users: set[str] = set()
+    view_source: str | None = None
+
+    for relpath, text in sorted(sources.items()):
+        module = module_identifier(relpath)
+        code = _strip_haskell_comments(text)
+        if module == INPUT_VIEW_MODULE:
+            view_source = code
+        if imports_module(text, INPUT_CAPABILITY_MODULE):
+            live_input_importers.add(module)
+        if _INPUT_LUA_ONLY_FIELD_RE.search(code):
+            live_field_users.add(module)
+
+    for module in sorted(live_input_importers - lua_only - {INPUT_CAPABILITY_MODULE}):
+        violations.append(
+            f"`{module}` imports `{INPUT_CAPABILITY_MODULE}` but is not a "
+            f"`LuaThread` module (INPUT_LUA_ONLY_MODULES in "
+            f"tools/engine_env_capability_audit.py) -- the full input "
+            f"capability carries `inputBarrierNextRef` and "
+            f"`currentKeyDownRef`, which "
+            f"docs/engineenv_capability_inventory.md SS5 makes `LuaThread` "
+            f"private. Use `{INPUT_VIEW_MODULE}`'s worker-safe view "
+            f"instead; a dual-domain module must satisfy the boundary with "
+            f"the view alone")
+
+    for module in sorted(lua_only - live_input_importers):
+        violations.append(
+            f"`{module}` is listed in INPUT_LUA_ONLY_MODULES but no longer "
+            f"imports `{INPUT_CAPABILITY_MODULE}` -- remove the stale entry "
+            f"so the checked-in LuaThread set stays an exact mirror of the "
+            f"live one, not merely an upper bound")
+
+    for module in sorted(live_field_users - field_owners):
+        violations.append(
+            f"`{module}` names `inputBarrierNextRef`/`currentKeyDownRef` "
+            f"(or an `ic`-prefixed accessor) but is not one of their owners "
+            f"(INPUT_LUA_ONLY_FIELD_OWNERS in "
+            f"tools/engine_env_capability_audit.py) -- "
+            f"docs/engineenv_capability_inventory.md SS5 confines the "
+            f"barrier-token allocator and the `onKeyDown` current-key "
+            f"handoff to `LuaThread`")
+
+    for module in sorted(field_owners - live_field_users):
+        violations.append(
+            f"`{module}` is listed in INPUT_LUA_ONLY_FIELD_OWNERS but no "
+            f"longer names `inputBarrierNextRef`/`currentKeyDownRef` -- "
+            f"remove the stale entry")
+
+    if view_source is None:
+        violations.append(
+            f"`{INPUT_VIEW_MODULE}` is missing from the production sources "
+            f"-- the worker-safe input view is what keeps non-`LuaThread` "
+            f"consumers off the barrier allocator and the current-key "
+            f"handoff; SS7.3's boundary has no enforcement without it")
+    elif _INPUT_LUA_ONLY_FIELD_RE.search(view_source):
+        violations.append(
+            f"`{INPUT_VIEW_MODULE}` mentions `inputBarrierNextRef`/"
+            f"`currentKeyDownRef` -- the worker-visible input view must "
+            f"provide NO path to either `LuaThread`-private field (no "
+            f"field, no accessor, no re-export); see "
+            f"docs/engineenv_capability_inventory.md SS7.3")
+
+    return violations
+
+
 def scan_production_sources(repo_root: Path) -> dict[str, str]:
     """IO wrapper: `{relative_path: source_text}` for every production
     Haskell file under `repo_root`."""
@@ -958,13 +1102,23 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
+    input_violations = audit_input_boundary(production_sources)
+    if input_violations:
+        print(f"{len(input_violations)} SS7.3 LuaThread input boundary "
+              f"violation(s):")
+        for v in input_violations:
+            print(f"  - {v}")
+        return 1
+
     total_fields = len(extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN))
     print(f"engine-env capability-inventory audit: {total_fields} EngineEnv "
           f"field(s) all classified, {len(unrestricted) + 1} full-access "
           f"modules (incl. the {PERMANENT_DEFINER} definer) within the SS6 "
           f"ratchet, {len(RENDER_MAIN_ONLY_MODULES)} MainRender module(s) "
           f"holding the full render capability and no non-owner naming "
-          f"`engineStateRef` (SS3)")
+          f"`engineStateRef` (SS3), {len(INPUT_LUA_ONLY_MODULES)} LuaThread "
+          f"module(s) holding the full input capability and no non-owner "
+          f"naming `inputBarrierNextRef`/`currentKeyDownRef` (SS7.3)")
     return 0
 
 

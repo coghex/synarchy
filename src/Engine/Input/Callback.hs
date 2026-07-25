@@ -5,7 +5,13 @@ import UPrelude
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (IORef, readIORef)
 import Engine.Input.Types
-import Engine.Core.State
+-- #892 (E4): this module's whole `Engine.Core.State` need is the
+-- lifecycle enum its `whenRunning` gate compares against — it never
+-- touches an `EngineEnv` at all (its API already takes the two live
+-- handles explicitly). So it drops the bare import for the narrow
+-- type import rather than taking a capability record it would have no
+-- use for.
+import Engine.Core.State (EngineLifecycle(..))
 import Engine.Core.Queue
 
 setupCallbacks ∷ GLFW.Window → IORef EngineLifecycle → Queue InputEvent → IO ()

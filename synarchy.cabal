@@ -331,6 +331,8 @@ library
                      Engine.Core.State
                      Engine.Core.Capability.Core
                      Engine.Core.Capability.ContentRegistries
+                     Engine.Core.Capability.Input
+                     Engine.Core.Capability.InputView
                      Engine.Core.Capability.Render
                      Engine.Core.Capability.RenderView
                      Engine.Core.Capability.WorldSim
@@ -1086,6 +1088,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Capability.Input
                    Test.Headless.Capability.Render
                    Test.Headless.Capability.WorldSim
                    Test.Headless.Lua.DebugQueue

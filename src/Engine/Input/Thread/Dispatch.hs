@@ -20,7 +20,23 @@ import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (modifyTVar')
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.Log (logDebug, LogCategory(..))
-import Engine.Core.State
+-- #892 (E4): this module's own four input fields (`inputQueue`,
+-- `inputStateRef`, `inputBarrierRef`, `luaQueue`) come from the input
+-- capability's worker-safe view — never the full record, which carries
+-- the Lua-private barrier ALLOCATOR this side must not reach: the
+-- input thread only ever publishes the processed watermark. The SS7.3
+-- cross-capability surface rides the records that already exist for it
+-- (`core-init` for the logger, the worker-safe render view for
+-- window/framebuffer geometry). The bare `EngineEnv` stays only as an
+-- opaque value handed to not-yet-narrowed callees
+-- ('Engine.Input.State', 'Engine.Input.Thread.Mouse' — the latter
+-- assigned to `ui-hud-events`, #897).
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Input.State (releaseHeldButtons, updateWindowState)
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
@@ -32,7 +48,7 @@ import Engine.Input.Thread.Scroll (dispatchScrollEvent)
 
 processInputs ∷ EngineEnv → InputState → IO InputState
 processInputs env inpSt = do
-    mEvent ← Q.tryReadQueue (inputQueue env)
+    mEvent ← Q.tryReadQueue (ivInputQueue (toInputViewCapability env))
     case mEvent of
         Just event → do
             newState ← processInput env inpSt event
@@ -43,7 +59,7 @@ processInputs env inpSt = do
             -- happens-before that broadcast's STM enqueue below, so a
             -- callback can never observe a state older than the events
             -- that preceded its own.
-            writeIORef (inputStateRef env) newState
+            writeIORef (ivInputStateRef (toInputViewCapability env)) newState
             processInputs env newState
         Nothing → do
             -- F4 (#730): flush a still-pending char-aggregate batch at
@@ -55,7 +71,7 @@ processInputs env inpSt = do
             -- via inputStateRef like the Just branch above, or the
             -- next drain re-reads the unflushed batch and double-pushes it.
             flushed ← flushPendingCharBatch env inpSt
-            writeIORef (inputStateRef env) flushed
+            writeIORef (ivInputStateRef (toInputViewCapability env)) flushed
             return flushed
 
 -- | F4 (#730): flush any pending char-aggregate outcome (see
@@ -95,7 +111,7 @@ dispatchInput env inpSt event = case event of
     -- handler polls shift as held, and the release still lands
     -- afterwards (no stuck keys).
     InputFollowup evs → do
-        Q.writeQueue (luaQueue env) (LuaInjectFollowup evs)
+        Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaInjectFollowup evs)
         return inpSt
     -- Completion marker for synthetic injection (#727): everything
     -- queued ahead of this barrier (FIFO, this is the only consumer)
@@ -105,21 +121,21 @@ dispatchInput env inpSt event = case event of
     -- watermark backwards, even though allocation+push order already
     -- guarantees monotonic processing order here.
     InputBarrier tok → do
-        atomically $ modifyTVar' (inputBarrierRef env) (max tok)
+        atomically $ modifyTVar' (ivInputBarrierRef (toInputViewCapability env)) (max tok)
         return inpSt
     InputScrollEvent x y →
         dispatchScrollEvent env inpSt x y
     InputWindowEvent winEv → do
-        logger ← readIORef (loggerRef env)
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         case winEv of
           WindowResize w h → do
             logDebug logger CatInput $ "Window resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
-            writeIORef (windowSizeRef env) (w, h)
-            Q.writeQueue (luaQueue env) (LuaWindowResize w h)
+            writeIORef (rvWindowSizeRef (toRenderViewCapability env)) (w, h)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaWindowResize w h)
           FramebufferResize w h → do
             logDebug logger CatInput $ "Framebuffer resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
-            writeIORef (framebufferSizeRef env) (w, h)
-            Q.writeQueue (luaQueue env) (LuaFramebufferResize w h)
+            writeIORef (rvFramebufferSizeRef (toRenderViewCapability env)) (w, h)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaFramebufferResize w h)
           WindowFocus focused → do
             logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
             unless focused $ releaseHeldButtons env inpSt

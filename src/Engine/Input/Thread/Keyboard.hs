@@ -20,7 +20,19 @@ import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, LogCategory(..))
+-- #892 (E4): `luaQueue`/`keyBindingsRef` through the input
+-- capability's worker-safe view, the logger through `core-init`
+-- (#889), and explicit narrow values for the SS7.3 cross-capability
+-- surface #897/#895 have yet to give records to. The #745
+-- control-focus path keeps reading `focusManagerRef` and performing
+-- its `atomicModifyIORef'` validate/traverse transitions on
+-- `uiManagerRef` exactly as before — same refs, same atomicity, no
+-- behavior change.
 import Engine.Core.State
+    (EngineEnv, focusManagerRef, uiManagerRef, actionOutcomeRef)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Input.Bindings (KeyBindings, parseKeyName)
 import Engine.Input.State
 import Engine.Input.Types
@@ -123,100 +135,100 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
 
     case (shellMode, uiFocus) of
       (TextInputMode (FocusId fid),_) → do
-        logger ← readIORef (loggerRef env)
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logDebug logger CatInput $ "Input mode: ShellTextInput, focusId=" <> T.pack (show fid)
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) LuaShellToggle
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaShellToggle
             markMatched "shellToggle"
         -- Lua side clears focus: shell.onFocusLost → engine.releaseFocus()
         when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) $ LuaFocusLost fid
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) $ LuaFocusLost fid
             markMatched "focusLost"
         -- isKeyDown includes Pressed+Repeating for held-key repeat;
         -- KeyState'Pressed is single-fire only. Backspace, arrows,
         -- and delete intentionally repeat for text editing UX.
         when (key ≡ KeyBackspace ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) (LuaTextBackspace fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaTextBackspace fid)
             markMatched "backspace"
         when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) (LuaTextSubmit fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaTextSubmit fid)
             markMatched "submit"
         when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) (LuaTabPressed fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaTabPressed fid)
             markMatched "tab"
         when (key ≡ KeyUp ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) (LuaCursorUp fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCursorUp fid)
             markMatched "cursorUp"
         when (key ≡ KeyDown ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) (LuaCursorDown fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCursorDown fid)
             markMatched "cursorDown"
         when (key ≡ KeyLeft ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) (LuaCursorLeft fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCursorLeft fid)
             markMatched "cursorLeft"
         when (key ≡ KeyRight ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) (LuaCursorRight fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCursorRight fid)
             markMatched "cursorRight"
         when ((key ≡ KeyHome ∧ keyState ≡ GLFW.KeyState'Pressed)
              ∨ (key ≡ KeyA ∧ keyState ≡ GLFW.KeyState'Pressed
                ∧ (GLFW.modifierKeysControl mods))) $ do
-            Q.writeQueue (luaQueue env) (LuaCursorHome fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCursorHome fid)
             markMatched "cursorHome"
         when ((key ≡ KeyEnd ∧ keyState ≡ GLFW.KeyState'Pressed)
              ∨ (key ≡ KeyE ∧ keyState ≡ GLFW.KeyState'Pressed
                ∧ (GLFW.modifierKeysControl mods))) $ do
-            Q.writeQueue (luaQueue env) (LuaCursorEnd fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCursorEnd fid)
             markMatched "cursorEnd"
         when (key ≡ KeyDelete ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) (LuaTextDelete fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaTextDelete fid)
             markMatched "delete"
         when (key ≡ KeyC ∧ keyState ≡ GLFW.KeyState'Pressed
                ∧ (GLFW.modifierKeysControl mods)) $ do
-            Q.writeQueue (luaQueue env) (LuaInterrupt fid)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaInterrupt fid)
             markMatched "interrupt"
         when shouldRecord $ do
             matched ← readIORef matchedRef
             recordKeyOutcome env "shell_text" matched (Just fid)
 
       (GameInputMode, Just (ElementHandle elemId)) → do
-        logger ← readIORef (loggerRef env)
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logDebug logger CatInput $ "Input mode: UITextInput, elementId=" <> T.pack (show elemId)
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) LuaShellToggle
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaShellToggle
             markMatched "shellToggle"
         when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) LuaUIEscape
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUIEscape
             markMatched "uiEscape"
         when (key ≡ KeyBackspace ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) LuaUIBackspace
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUIBackspace
             markMatched "backspace"
         when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) LuaUISubmit
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUISubmit
             markMatched "submit"
         when (key ≡ KeyLeft ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) LuaUICursorLeft
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUICursorLeft
             markMatched "cursorLeft"
         when (key ≡ KeyRight ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) LuaUICursorRight
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUICursorRight
             markMatched "cursorRight"
         when ((key ≡ KeyHome ∧ keyState ≡ GLFW.KeyState'Pressed)
              ∨ (key ≡ KeyA ∧ keyState ≡ GLFW.KeyState'Pressed
                ∧ (GLFW.modifierKeysControl mods))) $ do
-            Q.writeQueue (luaQueue env) LuaUIHome
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUIHome
             markMatched "cursorHome"
         when ((key ≡ KeyEnd ∧ keyState ≡ GLFW.KeyState'Pressed)
              ∨ (key ≡ KeyE ∧ keyState ≡ GLFW.KeyState'Pressed
                ∧ (GLFW.modifierKeysControl mods))) $ do
-            Q.writeQueue (luaQueue env) LuaUIEnd
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUIEnd
             markMatched "cursorEnd"
         when (key ≡ KeyDelete ∧ isKeyDown keyState) $ do
-            Q.writeQueue (luaQueue env) LuaUIDelete
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUIDelete
             markMatched "delete"
         when shouldRecord $ do
             matched ← readIORef matchedRef
             recordKeyOutcome env "ui_text" matched (Just elemId)
 
       (GameInputMode, Nothing) → do
-        logger ← readIORef (loggerRef env)
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
 
         -- #745: keyboard CONTROL focus — Tab/Shift+Tab traversal,
@@ -241,7 +253,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- Lua focus-ring consumer never sees a stale handle linger
         -- after the control it names went invalid.
         when (controlFocus ≢ getControlFocus mgr0) $
-            Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged controlFocus)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIControlFocusChanged controlFocus)
 
         when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             let step = if GLFW.modifierKeysShift mods then prevFocus else nextFocus
@@ -264,13 +276,13 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
                 -- transition, so only notify Lua when the handle
                 -- really changed.
                 when (newFocus ≢ priorFocus) $
-                    Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+                    Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIControlFocusChanged newFocus)
                 markMatched "controlFocusTab"
                 writeIORef controlFocusConsumedRef True
 
         when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed ∧ isJust controlFocus) $ do
             atomicModifyIORef' (uiManagerRef env) $ \m → (clearControlFocus m, ())
-            Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged Nothing)
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIControlFocusChanged Nothing)
             markMatched "controlFocusEscape"
             writeIORef controlFocusConsumedRef True
 
@@ -297,18 +309,18 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
                             -- already wired via UI.setOnClick gets
                             -- keyboard activation with no widget-side
                             -- change at all.
-                            Q.writeQueue (luaQueue env) (LuaUIClickEvent elemHandle callback 0 0)
+                            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIClickEvent elemHandle callback 0 0)
                             markMatched "controlFocusActivate"
                             writeIORef controlFocusConsumedRef True
                 let steppable = maybe False ueSteppable mFocusedEl
                 when ((key ≡ KeyLeft ∨ key ≡ KeyRight) ∧ keyState ≡ GLFW.KeyState'Pressed ∧ steppable) $ do
-                    Q.writeQueue (luaQueue env)
+                    Q.writeQueue (ivLuaQueue (toInputViewCapability env))
                         (LuaUIStepEvent elemHandle (if key ≡ KeyLeft then (-1) else 1))
                     markMatched "controlFocusStep"
                     writeIORef controlFocusConsumedRef True
 
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-            Q.writeQueue (luaQueue env) LuaShellToggle
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaShellToggle
             markMatched "openShell"
         -- #745 review round 2: a key the control-focus layer above
         -- just consumed (Tab/Shift+Tab, Enter/Space, or a steppable
@@ -322,7 +334,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- keeps reaching gameplay exactly as before #745.
         controlFocusConsumedFresh ← readIORef controlFocusConsumedRef
         when (key ≠ KeyGrave ∧ not (controlFocusConsumedFresh ∨ alreadyConsumed)) $ do
-            let lq = luaQueue env
+            let lq = ivLuaQueue (toInputViewCapability env)
             -- Carry the exact GLFW key alongside the merged logical key:
             -- onKeyDown still gets the merged name string, but
             -- engine.keyMatchesAction uses the precise key to resolve
@@ -334,7 +346,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
                 Q.writeQueue lq (LuaKeyUpEvent key)
         when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             logDebug logger CatInput "Action triggered: escape"
-            Q.writeQueue (luaQueue env) LuaUIEscape
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaUIEscape
             markMatched "escape"
         -- Gameplay-domain keys always broadcast onKeyDown (Grave
         -- excepted above), but "accepted" (#771) is conditional on an
@@ -346,7 +358,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- "gameplay_key", descriptive reason) instead of a false
         -- "accepted".
         when shouldRecord $ do
-            bindings ← readIORef (keyBindingsRef env)
+            bindings ← readIORef (ivKeyBindingsRef (toInputViewCapability env))
             matched ← readIORef matchedRef
             let handler = case matched of
                     Just m  → Just m

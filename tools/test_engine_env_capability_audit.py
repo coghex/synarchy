@@ -25,6 +25,7 @@ from engine_env_capability_audit import (  # type: ignore
     classify_state_import, parse_temporary_boundary, audit_ratchet,
     scan_production_unrestricted_importers, audit_render_boundary,
     scan_production_sources, RENDER_CAPABILITY_MODULE, RENDER_VIEW_MODULE,
+    audit_input_boundary, INPUT_CAPABILITY_MODULE, INPUT_VIEW_MODULE,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -793,6 +794,180 @@ def test_real_repo_render_boundary_holds():
            f"issue #891's render-gpu-asset migration, got: {violations}")
 
 
+# ----- SS7.3 LuaThread input boundary (issue #892, capability split E4) -
+#
+# Same shape as the SS3 fixtures above, for `input-lua-transport`'s two
+# LuaThread-private fields. A worker-thread module must have NO
+# interface through which it can allocate a barrier token
+# (`inputBarrierNextRef`) or reach the `onKeyDown` current-key handoff
+# (`currentKeyDownRef`) -- it gets the barrier WATERMARK and nothing
+# else. These fixtures exercise `audit_input_boundary`'s pure core with
+# synthetic sources, never by editing real production modules.
+
+_LUA = "Lua.Api.Mod"
+_INPUT_WORKER = "Input.Worker.Mod"
+
+
+def _input_sources(*, worker_imports_full=False, worker_names_alloc=False,
+                   worker_names_keydown=False, view_names_field=False,
+                   include_view=True, lua_imports_full=True):
+    """Minimal synthetic production tree: one LuaThread module, one
+    input-thread worker module, and the worker-safe view module."""
+    view_body = "module Engine.Core.Capability.InputView where\n"
+    if view_names_field:
+        view_body += "  ivInputBarrierNextRef = inputBarrierNextRef env\n"
+    else:
+        view_body += "  ivInputBarrierRef = inputBarrierRef env\n"
+
+    lua_body = f"module {_LUA} where\n"
+    if lua_imports_full:
+        lua_body = f"import {INPUT_CAPABILITY_MODULE}\n" + lua_body
+
+    worker_body = f"module {_INPUT_WORKER} where\n"
+    if worker_imports_full:
+        worker_body = f"import {INPUT_CAPABILITY_MODULE}\n" + worker_body
+    else:
+        worker_body = f"import {INPUT_VIEW_MODULE}\n" + worker_body
+    if worker_names_alloc:
+        worker_body += "  t = newBarrierToken (icInputBarrierNextRef cap)\n"
+    if worker_names_keydown:
+        worker_body += "  k = readIORef (currentKeyDownRef env)\n"
+
+    sources = {
+        "src/Lua/Api/Mod.hs": lua_body,
+        "src/Input/Worker/Mod.hs": worker_body,
+    }
+    if include_view:
+        sources["src/Engine/Core/Capability/InputView.hs"] = view_body
+    return sources
+
+
+def test_input_boundary_clean_tree_has_no_violations():
+    violations = audit_input_boundary(
+        _input_sources(),
+        lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(violations == [],
+           f"a tree where only the LuaThread module imports the full input "
+           f"capability, the worker imports only the view, and the view "
+           f"names neither private field must pass, got: {violations}")
+
+
+def test_input_boundary_worker_importing_full_capability_rejected():
+    violations = audit_input_boundary(
+        _input_sources(worker_imports_full=True),
+        lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(any(_INPUT_WORKER in v and INPUT_CAPABILITY_MODULE in v
+               for v in violations),
+           "a non-LuaThread production module importing the full "
+           "InputCapability must be rejected -- that record carries the "
+           "barrier-token allocator and the onKeyDown current-key handoff, "
+           "which SS5 makes LuaThread-private")
+
+
+def test_input_boundary_non_owner_naming_allocator_rejected():
+    violations = audit_input_boundary(
+        _input_sources(worker_names_alloc=True),
+        lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(any(_INPUT_WORKER in v and "inputBarrierNextRef" in v
+               for v in violations),
+           "a production module outside INPUT_LUA_ONLY_FIELD_OWNERS naming "
+           "inputBarrierNextRef/icInputBarrierNextRef must be rejected -- "
+           "the input thread publishes the watermark, it never allocates")
+
+
+def test_input_boundary_non_owner_naming_current_key_rejected():
+    violations = audit_input_boundary(
+        _input_sources(worker_names_keydown=True),
+        lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(any(_INPUT_WORKER in v and "currentKeyDownRef" in v
+               for v in violations),
+           "a production module outside INPUT_LUA_ONLY_FIELD_OWNERS naming "
+           "currentKeyDownRef/icCurrentKeyDownRef must be rejected too -- "
+           "both private fields are covered, not just the barrier one")
+
+
+def test_input_boundary_watermark_is_not_confused_with_allocator():
+    # The whole point of the split: `inputBarrierRef` (the watermark the
+    # input thread publishes) must stay freely nameable, or the check
+    # would forbid the very access the view exists to grant. A substring
+    # -blind rule would flag it, since `inputBarrierNextRef` contains no
+    # `inputBarrierRef` but a sloppy `inputBarrier` prefix match would
+    # catch both.
+    sources = _input_sources()
+    sources["src/Input/Worker/Mod.hs"] += (
+        "  w = modifyTVar' (ivInputBarrierRef view) (max tok)\n")
+    violations = audit_input_boundary(
+        sources, lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(violations == [],
+           f"naming the barrier WATERMARK (inputBarrierRef/"
+           f"ivInputBarrierRef) must never be a violation -- it is exactly "
+           f"what the worker-safe view grants, got: {violations}")
+
+
+def test_input_boundary_private_field_in_a_comment_is_not_a_violation():
+    # Haddock on the view legitimately EXPLAINS why the fields are
+    # absent; only live code counts, or the enforcement would forbid
+    # documenting its own rule.
+    sources = _input_sources()
+    sources["src/Engine/Core/Capability/InputView.hs"] = (
+        "-- | Deliberately carries no inputBarrierNextRef and no\n"
+        "--   currentKeyDownRef field.\n"
+        "module Engine.Core.Capability.InputView where\n"
+        "  ivInputBarrierRef = inputBarrierRef env  -- not the allocator\n")
+    violations = audit_input_boundary(
+        sources, lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(violations == [],
+           f"a Haddock/line comment mentioning either private field must "
+           f"not count as naming it, got: {violations}")
+
+
+def test_input_boundary_view_carrying_private_field_rejected():
+    violations = audit_input_boundary(
+        _input_sources(view_names_field=True),
+        lua_only=frozenset({_LUA}),
+        field_owners=frozenset({INPUT_VIEW_MODULE}))
+    expect(any(INPUT_VIEW_MODULE in v for v in violations),
+           "the worker-visible view must be rejected if it so much as "
+           "names a LuaThread-private field -- even being listed as an "
+           "owner must not buy it an exemption from the structural check")
+
+
+def test_input_boundary_missing_view_module_rejected():
+    violations = audit_input_boundary(
+        _input_sources(include_view=False),
+        lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(any(INPUT_VIEW_MODULE in v and "missing" in v
+               for v in violations),
+           "deleting the worker-safe input view must fail loudly -- "
+           "SS7.3's boundary has no enforcement without it")
+
+
+def test_input_boundary_stale_lua_only_entry_rejected():
+    violations = audit_input_boundary(
+        _input_sources(lua_imports_full=False),
+        lua_only=frozenset({_LUA}), field_owners=frozenset())
+    expect(any(_LUA in v and "stale" in v for v in violations),
+           "a stale INPUT_LUA_ONLY_MODULES entry must be flagged, so the "
+           "checked-in LuaThread set stays an exact mirror of the live one")
+
+
+def test_input_boundary_stale_field_owner_rejected():
+    violations = audit_input_boundary(
+        _input_sources(),
+        lua_only=frozenset({_LUA}),
+        field_owners=frozenset({"Ghost.Owner"}))
+    expect(any("Ghost.Owner" in v and "stale" in v for v in violations),
+           "a stale INPUT_LUA_ONLY_FIELD_OWNERS entry must be flagged too")
+
+
+def test_real_repo_input_boundary_holds():
+    violations = audit_input_boundary(scan_production_sources(REPO_ROOT))
+    expect(violations == [],
+           f"the real repo must satisfy SS7.3's LuaThread input boundary "
+           f"after issue #892's input-lua-transport migration, got: "
+           f"{violations}")
+
+
 def test_audit_against_the_real_repo():
     real_source = (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8")
     real_inventory = (REPO_ROOT / "docs" /
@@ -860,6 +1035,17 @@ def main() -> int:
         test_boundary_stale_main_only_entry_rejected,
         test_boundary_stale_state_ref_owner_rejected,
         test_real_repo_render_boundary_holds,
+        test_input_boundary_clean_tree_has_no_violations,
+        test_input_boundary_worker_importing_full_capability_rejected,
+        test_input_boundary_non_owner_naming_allocator_rejected,
+        test_input_boundary_non_owner_naming_current_key_rejected,
+        test_input_boundary_watermark_is_not_confused_with_allocator,
+        test_input_boundary_private_field_in_a_comment_is_not_a_violation,
+        test_input_boundary_view_carrying_private_field_rejected,
+        test_input_boundary_missing_view_module_rejected,
+        test_input_boundary_stale_lua_only_entry_rejected,
+        test_input_boundary_stale_field_owner_rejected,
+        test_real_repo_input_boundary_holds,
     ]
 
     for t in tests:
