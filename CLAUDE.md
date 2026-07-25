@@ -6,6 +6,26 @@ Deep per-issue history (review-round narratives, verification stories) was trimm
 file on 2026-07-23 — see `docs/history/claude_md_2026-07-23_pretrim.md`, git history, and the
 referenced issues/PRs when you need the full story behind a contract stated here.
 
+## Current Phase: the expedition arc
+
+The project is building the expedition gameplay arc.
+`docs/expedition_gameplay_loop.md` is the authority for what that arc
+contains, and its scope rule gates new discretionary work:
+
+> Every proposed system in this arc must strengthen at least one of these
+> verbs: **prepare, travel, discover, confront, extract, return, invest.**
+> If a feature does not improve one of those verbs, or the colony decisions
+> that support them, it does not belong in the first 30-minute slice.
+
+**Always exempt:** correctness, stability, and data integrity — crashes,
+regressions, data loss, and broken CI gates are in scope regardless of the
+verbs. The rule constrains discretionary *new* work; it is never a reason to
+defer a real bug.
+
+**Expiry:** the rule applies until the arc's end-to-end gate lands — step 9,
+"Gate the full slice", of the loop doc. Once that scenario passes, this
+section comes out and the gate stops applying.
+
 ## Build Commands
 
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
