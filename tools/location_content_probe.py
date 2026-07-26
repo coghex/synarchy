@@ -682,6 +682,27 @@ def main() -> int:
                 else:
                     failures.append(
                         f"per-unit location memory lost on reload: {still}")
+                # …and the engine-side integrity graph RESOLVED it: a
+                # VALID memory must never be reported as dangling. That
+                # is only true if its page survives every hop from the
+                # references() hook to World.Save.Integrity — the
+                # save_modules flatteners rebuild each edge field by
+                # field, and an id alone resolves against nothing for a
+                # per-page kind. LOG is truncated per boot, so this
+                # names only this process's load.
+                try:
+                    with open(LOG, encoding="utf-8", errors="replace") as fh:
+                        bad = [ln.strip() for ln in fh
+                               if "integrity diagnostic" in ln
+                               and "location_instance" in ln]
+                except OSError as e:
+                    bad = [f"could not read {LOG}: {e}"]
+                if not bad:
+                    print("PASS: the restored memory resolved in the integrity "
+                          "graph — no location_instance dangling diagnostic")
+                else:
+                    failures.append(
+                        f"a VALID location memory was reported as dangling: {bad}")
             else:
                 failures.append(
                     "phase 2 could not re-check per-unit location memory: "

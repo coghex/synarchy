@@ -906,6 +906,53 @@ spec = do
             , "assert(#prep.references == 2, 'expected exactly 2 edges, got ' .. #prep.references)"
             ]
 
+        it "carries EVERY diagnostic/resolution field a references() hook \
+           \sets -- owner, path AND page -- through both snapshotAll and \
+           \prepareLoad, not just component/kind/id (#915)" $
+            -- The flatteners rebuild each edge field by field, so a hook
+            -- reporting a field they don't copy loses it silently before
+            -- Haskell ever sees it. For `page` that is not cosmetic: a
+            -- location_instance id is PER PAGE, so an edge arriving
+            -- without its page resolves against nothing and every valid
+            -- memory would be reported as dangling
+            -- (World.Save.Integrity.luaEdgeResolves). Asserted on the
+            -- real snapshotAll/prepareLoad results, since a hook's own
+            -- return value proves nothing about what the flattener kept.
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local function edge() return {{ kind='location_instance',"
+            , "  id=3, owner=7, path='unit[7].knownLocations[1]',"
+            , "  page='main_world' }} end"
+            , "saveModules.register('refs_page', { version=1, inputVersions={1},"
+            , "  required=true, scope='global', deps={},"
+            , "  snapshot=function() return { k = 1 } end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() end,"
+            , "  references=function(d) return edge() end })"
+            , "local function checkEdges(refs, what)"
+            , "  assert(type(refs) == 'table', what .. ': no references array')"
+            , "  assert(#refs == 1, what .. ': expected 1 edge, got ' .. #refs)"
+            , "  local r = refs[1]"
+            , "  assert(r.component == 'refs_page', what .. ': component lost')"
+            , "  assert(r.kind == 'location_instance', what .. ': kind lost')"
+            , "  assert(r.id == 3, what .. ': id lost')"
+            , "  assert(r.owner == 7, what .. ': owner lost')"
+            , "  assert(r.path == 'unit[7].knownLocations[1]',"
+            , "         what .. ': path lost')"
+            , "  assert(r.page == 'main_world', what .. ': page lost')"
+            , "end"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, 'expected snapshotAll to succeed')"
+            , "checkEdges(snap.references, 'snapshotAll')"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'refs_page', version = 1, payload = codec.encode({k = 1}) },"
+            , "})"
+            , "assert(prep.ok, 'expected prepareLoad to succeed')"
+            , "checkEdges(prep.references, 'prepareLoad')"
+            ]
+
         it "correlates abortPreparedLoad(requestId) with the request id \
            \prepareLoad stashed, so a stale abort for an OLD, already- \
            \superseded request cannot clear a NEWER requests prepared \
