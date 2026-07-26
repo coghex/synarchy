@@ -91,7 +91,7 @@ reconciles with `EngineConfig`'s (see CH-2) or `VideoConfig`'s.
 That paragraph belongs to `gameTimeRef` (declared four lines earlier at
 `:304`), which is left completely undocumented. A pure doc-motion fix.
 
-### CH-5. Two record fields share one source line in `GraphicsState`
+### [#936] CH-5. Two record fields share one source line in `GraphicsState`
 `Engine/Core/State.hs:456`:
 
 ```haskell
