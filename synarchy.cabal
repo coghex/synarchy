@@ -334,6 +334,7 @@ library
                      Engine.Core.Capability.Building
                      Engine.Core.Capability.Core
                      Engine.Core.Capability.ContentRegistries
+                     Engine.Core.Capability.Events
                      Engine.Core.Capability.Input
                      Engine.Core.Capability.InputView
                      Engine.Core.Capability.Render
@@ -1102,6 +1103,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Capability.Building
+                   Test.Headless.Capability.Events
                    Test.Headless.Capability.Input
                    Test.Headless.Capability.Render
                    Test.Headless.Capability.Ui

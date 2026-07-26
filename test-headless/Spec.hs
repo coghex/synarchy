@@ -127,6 +127,7 @@ import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
+import qualified Test.Headless.Capability.Events as CapabilityEvents
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
 import qualified Test.Headless.Capability.Ui as CapabilityUi
@@ -172,6 +173,7 @@ main = hspec $ do
         -- checks against the already-booted env — no worldgen, no
         -- mutation, so it rides the shared engine above.
         describe "Capability.Building projections" CapabilityBuilding.spec
+        describe "Capability.Events projections" CapabilityEvents.spec
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
         describe "Capability.Ui projections" CapabilityUi.spec

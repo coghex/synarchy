@@ -27,8 +27,8 @@ needed.
 ## 1. Scope
 
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-(`:67`) with exactly **81 fields** (`engineConfig` at `:68` through
-`popupQueueRef` at `:375`). Every one of the 81 has exactly one row in
+(`:67`) with exactly **82 fields** (`engineConfig` at `:68` through
+`popupQueueRef` at `:388`). Every one of the 82 has exactly one row in
 §5 below, matching the same field set
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
 §1 already enumerates and
@@ -283,7 +283,7 @@ construct their `EngineEnv` via the exact same function,
 (graphical/offscreen/preview via `initializeEngine`; headless/dump via
 `initializeEngineHeadlessWith`, which calls `initializeEngineWith` and
 then only flips `ecHeadless = True` on the returned `EngineConfig` —
-`src/Engine/Core/Init.hs:358-363`). What genuinely differs per profile
+`src/Engine/Core/Init.hs:359-364`). What genuinely differs per profile
 is **which worker threads get started afterward**, which is what
 drives several fields' realistic Reader/Writer role lists in §5 (e.g.
 `InputThread` never touches anything under headless/dump; nothing
@@ -327,7 +327,7 @@ dependencies, cross-references, or compatibility-boundary remarks.
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
-| `engineConfig` | boot-process | `AnyThread` (read via the engine environment value itself from every thread — e.g. `ecHeadless` gates GPU-only paths in `Engine.Graphics.Vulkan.Command.Record`) | None (immutable after boot — each `app/App/*.hs` applies one record-update for `ecDebugPort`/`ecBootProfile`/`ecPreviewTarget`/`ecHeadless` from CLI args before any worker thread starts, e.g. `app/App/Graphical.hs:39-48`) | Plain `EngineConfig` record field, no `IORef` — safe from any thread precisely because it is never mutated after boot | `Engine.Core.Init.initializeEngineWith` sets `defaultEngineConfig` (`src/Engine/Core/Init.hs:264`) | None — plain data, reclaimed at process exit | Immutable-boot-configuration carve-out (no writers) is intentional, not a missing decision. |
+| `engineConfig` | boot-process | `AnyThread` (read via the engine environment value itself from every thread — e.g. `ecHeadless` gates GPU-only paths in `Engine.Graphics.Vulkan.Command.Record`) | None (immutable after boot — each `app/App/*.hs` applies one record-update for `ecDebugPort`/`ecBootProfile`/`ecPreviewTarget`/`ecHeadless` from CLI args before any worker thread starts, e.g. `app/App/Graphical.hs:39-48`) | Plain `EngineConfig` record field, no `IORef` — safe from any thread precisely because it is never mutated after boot | `Engine.Core.Init.initializeEngineWith` sets `defaultEngineConfig` (`src/Engine/Core/Init.hs:265`) | None — plain data, reclaimed at process exit | Immutable-boot-configuration carve-out (no writers) is intentional, not a missing decision. |
 | `loggerRef` | boot-shutdown | `AnyThread` (every thread logs through it — `Unit.Thread`, `Combat.Thread`, `World.Thread`, `Sim.Thread`, `Engine.Scripting.Lua.Thread`, `Engine.Loop`) | `AnyThread` (`Engine.Core.Log`'s `logInfo`/`logDebug`/`logWarn` write through this ref from any thread) | `IORef LoggerState`; the logger backend batches/flushes internally | `Engine.Core.Init.initializeEngineWith` (`src/Engine/Core/Init.hs:157-158`); backend is `stdout` (graphical/headless) or `stderr` (dump, so stdout stays clean JSON) | Explicitly flushed via `shutdownLogger`, last, after every worker thread has stopped (`src/Engine/Loop/Shutdown.hs:104-107`) and in each `App.*` module's own error branch | Must outlive every other thread's own shutdown log line — hence torn down last, not merely GC'd. |
 | `lifecycleRef` | boot-process | `AnyThread` (every worker run-loop polls it each tick — `Unit.Thread`, `Combat.Thread`, `World.Thread`, `Sim.Thread`, `Engine.Scripting.Lua.Thread`, `Engine.Input.Thread`, `Engine.Loop`) | `AnyThread` (the initial-running transition), `MainRender` (sets the final stopped value) | `IORef EngineLifecycle` (`EngineStarting|EngineRunning|CleaningUp|EngineStopped`) | `Engine.Core.Init.initializeEngineWith` seeds `EngineStarting` (`src/Engine/Core/Init.hs:154`) | Set to `EngineStopped` as literally the last step of `Engine.Loop.Shutdown.shutdownEngine`, after every worker thread has stopped and the logger has flushed (`src/Engine/Loop/Shutdown.hs:106-108`) | — |
 | `inputThreadActiveRef` | boot-process | `LuaThread` (save-barrier owner-set computation — `API.Save:188`'s `saveWorldFn`, `Thread.Dispatch:408`'s `handleLoadStaged` — consults it to decide whether the input owner slot belongs in a save/load transaction's owner set) | `Boot` (set to true exactly once by `Engine.Input.Thread.startInputThread:49`, on the CALLING thread, immediately BEFORE it forks the actual input thread via `forkIO`; never written again) | `IORef Bool`, write-once | `Engine.Core.Init.initializeEngineWith` seeds `False` (`src/Engine/Core/Init.hs:237`) | None | Boot-profile-derived fact (only Graphical/Offscreen/Preview start an input thread — §4); primary owner is `core-init` even though its principal *consumer* is `save-load-coordination` — see §7. |
@@ -336,7 +336,7 @@ dependencies, cross-references, or compatibility-boundary remarks.
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
-| `engineStateRef` | boot-shutdown | `MainRender` (only; see §3, the main-thread-private invariant) | `MainRender` (only) | `IORef EngineState`, single-thread-owned; no atomic ops needed since only one thread ever touches it | `Engine.Core.Init.initializeEngineWith` seeds `defaultEngineState` (`src/Engine/Core/Init.hs:262`) | Contents (every Vulkan handle in the nested `GraphicsState`) explicitly destroyed by `Engine.Loop.Shutdown.shutdownEngine` — `deviceWaitIdle`, transient-texture cleanups, `runAllCleanups (vulkanCleanup state)`, explicit sampler/buffer destruction (`src/Engine/Loop/Shutdown.hs:41-84`) — before GLFW/thread teardown; the `IORef` container itself is never destroyed, only overwritten/zeroed | See §3 in full. |
+| `engineStateRef` | boot-shutdown | `MainRender` (only; see §3, the main-thread-private invariant) | `MainRender` (only) | `IORef EngineState`, single-thread-owned; no atomic ops needed since only one thread ever touches it | `Engine.Core.Init.initializeEngineWith` seeds `defaultEngineState` (`src/Engine/Core/Init.hs:263`) | Contents (every Vulkan handle in the nested `GraphicsState`) explicitly destroyed by `Engine.Loop.Shutdown.shutdownEngine` — `deviceWaitIdle`, transient-texture cleanups, `runAllCleanups (vulkanCleanup state)`, explicit sampler/buffer destruction (`src/Engine/Loop/Shutdown.hs:41-84`) — before GLFW/thread teardown; the `IORef` container itself is never destroyed, only overwritten/zeroed | See §3 in full. |
 | `videoConfigRef` | boot-process | `MainRender` (`Engine.Graphics.Vulkan.Init`/`Engine.Graphics.Vulkan.Recreate`, `Engine.Loop.Timing`, and each graphics-capable boot module's own window-creation read — `app/App/Graphical.hs:57`, `app/App/Offscreen.hs:65`, `app/App/Preview.hs:52` — all AFTER `startInputThread`/`startLuaThread` (and, in Graphical/Offscreen, every other worker thread) have already been started, so per §2.2 this is `MainRender`, not `Boot`, in every boot profile), `LuaThread` (`API.Config:36`'s `getVideoConfigFn`, direct query) | `LuaThread` (`Engine.Scripting.Lua.API.Config` — direct settings Apply/Save/Defaults, called synchronously from Lua), `MainRender` (`Engine.Scripting.Lua.Message.Video`'s `handleSetVSync`/`handleSetMSAA`, dispatched via `processLuaMessages` from `Engine.Loop.mainLoop`/`Engine.Loop.Headless`) | `IORef VideoConfig`, multi-writer via `atomicModifyIORef'` | Loaded from `config/video.local.yaml` (or default) (`src/Engine/Core/Init.hs:176-180`) | None | Settings-apply path (#748/#750) reads this on `MainRender` to rebuild the swapchain. Lua-triggered writes split by mechanism: a direct `API.Config` call (e.g. `engine.setVideoConfig`) writes synchronously on `LuaThread`; a call that must also touch the live Vulkan device (VSync/MSAA) instead enqueues onto `luaToEngineQueue` and is applied later, on `MainRender`, when `processLuaMessages` drains it — see `input-lua-transport`'s `luaToEngineQueue`/`luaQueue` rows. |
 | `windowSizeRef` | boot-process | `WorldThread` (screen-space quad builders, `World/Render/*Quads.hs`, and `Unit.HitTest`'s hit-testing, reached via `World.Render.CursorQuads`/`updateWorldTiles`), `LuaThread` (`API.Input`, `API.InputInject`, `API.WorldQuery.Pick`, and `Unit.HitTest`/`Building.HitTest` called directly from `API.Buildings.Selection`/`API.Units.Selection`/`API.WorldQuery.Pick`), `MainRender` (`Engine.Loop.Camera`, `Engine.Loop.Frame`), `InputThread` (`Input.Thread.Mouse:56`, `Input.Thread.Scroll:39` — cursor/wheel coordinate conversion) | `InputThread` (native resize callback, `Engine.Input.Thread.Dispatch:117`), `MainRender` (`Engine.Graphics.Window.GLFW:109`, `Engine.Loop.Frame:384`, and `Engine.Scripting.Lua.Message.Video`'s `handleSetResolution`/`handleSetWindowMode` for synthetic/Lua-triggered resolution changes — dispatched via `processLuaMessages`, never the Lua thread itself) | `IORef (Int,Int)`, multi-writer, last-write-wins (no cross-writer ordering guarantee) | Seeded from the loaded `VideoConfig` (`src/Engine/Core/Init.hs:181`) | None | Same multi-writer shape as `framebufferSizeRef`/`windowStateRef` below. |
 | `windowPosRef` | boot-process | `LuaThread` (`API.Input`'s `getWindowPosFn`, registered as the diagnostic `debug.getWindowPos` — the only reader) | `MainRender` (only; `Engine.Graphics.Window.GLFW`'s `createWindow` and `Engine.Scripting.Lua.Message.Video`'s `handleSetResolution`/`handleSetWindowMode`, dispatched via `processLuaMessages`, never the Lua thread itself) | `IORef (Int,Int)`, single-writer-thread, last-write-wins | `(0,0)`, replaced by the real position at window creation (`src/Engine/Core/Init.hs:182`) | None | Publish-on-change, NOT a live cursor: no GLFW window-position callback is installed, so a user dragging the window leaves this stale until the next publish. It exists because `GLFW.getWindowPos` is main-thread-only, so #907's windowed-geometry restore is otherwise unobservable from a Lua-side check; `tools/video_window_check.py` forces a publish before reading. |
@@ -457,15 +457,16 @@ rather than an `EngineEnv` field (§7.6).
 
 ### `ui-hud-events`
 
-The first four fields are the UI/focus/HUD half #897 (E7a) migrated:
-every production consumer reaches them through
+Both halves are migrated. The first four fields are the UI/focus/HUD
+half #897 (E7a) moved: every production consumer reaches them through
 `Engine.Core.Capability.Ui`'s `UiCapability` rather than a field
 accessor, apart from the four §7.7 names as deliberate exceptions
 (`Engine.Core.State`, `Engine.Core.Init`, the projection module
-itself, and §6.1's `World.Load.Publish`). The record's own field
-documentation restates the reader/writer/lifecycle facts below. The
-last four fields are the event/notification/popup half, still on named
-accessors until #898 (E7b).
+itself, and §6.1's `World.Load.Publish`). The last four are the
+event/notification/popup half #898 (E7b) moved, reached through
+`Engine.Core.Capability.Events`'s `EventsCapability` under the same
+rule and with the same four kinds of exception. Each record's own
+field documentation restates the reader/writer/lifecycle facts below.
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
@@ -473,10 +474,10 @@ accessors until #898 (E7b).
 | `focusManagerRef` | session-replaced | `InputThread` (`Thread.Keyboard`/`Thread.Char` — Tab/Shift+Tab control-focus navigation, #745), `LuaThread` (`API.Focus`) | `InputThread`/`LuaThread` (the same two roles as Readers), `WorldThread` (load publish, `src/World/Load/Publish.hs:284`) | `IORef FocusManager` | `createFocusManager` (`src/Engine/Core/Init.hs:201`) | None | — |
 | `hudActivePageRef` | session-replaced | `WorldThread` (`Thread.Cursor` — HUD refresh-on-active-world-change, #129) | `WorldThread` (also load publish, `World.Load.Publish:283`, resynced from `wmVisible`) | `IORef (Maybe WorldPageId)` | `Nothing` (`src/Engine/Core/Init.hs:198`) | None | — |
 | `textBuffersRef` | boot-process | `LuaThread` (only; `API.Text`, direct queries) | `MainRender` (only; `Engine.Scripting.Lua.Message.Scene`, dispatched via `processLuaMessages` — never the Lua thread itself) | `IORef (Map ObjectId Text)` | `Map.empty` (`src/Engine/Core/Init.hs:202`) | None | Editable-widget text keyed by `ObjectId`, per the UI text-buffer coordinate contract. |
-| `eventStoreRef` | session-replaced | `LuaThread` (`API.PlayerEvent:99`'s `readEventLog` — `engine.getEventLog()`, the event-log panel's query) | `WorldThread` (`World.Thread.Discovery`'s `emitEventFullOnPage`, `World.Thread.Command.Save.WriteWorld`'s `emitEvent`, and load publish `World.Load.Publish:294`, reset to empty), `LuaThread` (`API.PlayerEvent`'s `emitEvent`/`emitEventAt`/`emitEventFull` — `engine.emitEvent`/`emitEventAt`/`emitEventForUnit` — and `API.Save`'s save/load-lifecycle emits) | `TVar (Seq PlayerEvent)`, multi-writer STM, ~1000-entry ring | `newTVarIO Seq.empty` (`src/Engine/Core/Init.hs:260`) | None | Explicitly session-only, never serialized. No live `Unit.Thread`/`Combat.Thread` call site emits a player event today, despite `Engine.PlayerEvent.Emit`'s own module comment claiming it's "safe to call from world, unit, and Lua threads concurrently" (a thread-safety guarantee about the STM primitive, not a claim that a unit-thread caller currently exists) — verified by grepping every real `emitEvent*` call site. |
-| `notificationCfgRef` | boot-process | `AnyThread` (the `emitEvent` read path) | `LuaThread` (Phase 2 settings tab toggles, per the field's own doc comment) | `IORef NotificationCfg` | `loadNotificationCfg` merges `data/notification_categories.yaml` + `config/notifications.local.yaml` (`src/Engine/Core/Init.hs:256-259`) | None | — |
-| `notificationOrder` | boot-process | `LuaThread` (settings tab render order) | None (captured once at boot from the YAML registry order — categories can't be added/removed at runtime, per the field's own doc comment) | Plain `![Text]`, no `IORef` | `loadNotificationCfg`'s second return value (`src/Engine/Core/Init.hs:256-259`) | None | Immutable-boot-configuration carve-out, same shape as `engineConfig`. |
-| `popupQueueRef` | session-replaced | None (write-only today — no `readTVar`/`readTVarIO` on this ref exists anywhere in the codebase; live popup delivery goes through a separate `LuaShowPopup` message sent via `luaQueue` at the same emit call site, `Engine.PlayerEvent.Emit:119-121`, not by draining this TVar back out, despite `EngineEnv`'s own field-doc comment at `src/Engine/Core/State.hs:377-378` claiming the Lua side drains this via the LuaShowPopup broadcast — that comment is itself stale/inaccurate. This TVar exists for inspection/debug querying and as a Phase 2 stable source for the notifications panel, per the same comment.) | `WorldThread`/`LuaThread` (same `emitEvent` producers as `eventStoreRef`, filtered to popup-enabled categories, `Engine.PlayerEvent.Emit:118`), `WorldThread` (load publish, `World.Load.Publish:295`, reset to empty) | `TVar (Seq PlayerEvent)` | `newTVarIO Seq.empty` (`src/Engine/Core/Init.hs:261`) | None | — |
+| `eventStoreRef` | session-replaced | `LuaThread` (`API.PlayerEvent:101`'s `readEventLog` — `engine.getEventLog()`, the event-log panel's query) | `WorldThread` (`World.Thread.Discovery`'s `emitEventFullOnPage`, `World.Thread.Command.Save.WriteWorld`'s `emitEvent`, and load publish `World.Load.Publish:295`, reset to empty), `LuaThread` (`API.PlayerEvent`'s `emitEvent`/`emitEventAt`/`emitEventFull` — `engine.emitEvent`/`emitEventAt`/`emitEventForUnit` — and `API.Save`'s save/load-lifecycle emits) | `TVar (Seq PlayerEvent)`, multi-writer STM, ~1000-entry ring | `newTVarIO Seq.empty` (`src/Engine/Core/Init.hs:261`) | None | Explicitly session-only, never serialized. No live `Unit.Thread`/`Combat.Thread` call site emits a player event today — verified by grepping every real `emitEvent*` call site. `Engine.PlayerEvent.Emit`'s module comment, `EngineEnv`'s own field doc and `Engine.Core.Init`'s seeding comment all used to read as if unit-thread emitters existed; #898 corrected all three to state the STM primitive's any-thread safety separately from the world-and-Lua-thread call sites that actually exist. |
+| `notificationCfgRef` | boot-process | `AnyThread` (the `emitEvent` read path) | `LuaThread` (Phase 2 settings tab toggles, per the field's own doc comment) | `IORef NotificationCfg` | `loadNotificationCfg` merges `data/notification_categories.yaml` + `config/notifications.local.yaml` (`src/Engine/Core/Init.hs:257-260`) | None | — |
+| `notificationOrder` | boot-process | `LuaThread` (settings tab render order) | None (captured once at boot from the YAML registry order — categories can't be added/removed at runtime, per the field's own doc comment) | Plain `![Text]`, no `IORef` | `loadNotificationCfg`'s second return value (`src/Engine/Core/Init.hs:257-260`) | None | Immutable-boot-configuration carve-out, same shape as `engineConfig`. |
+| `popupQueueRef` | session-replaced | None (write-only today — no `readTVar`/`readTVarIO` on this ref exists anywhere in the codebase; live popup delivery goes through a separate `LuaShowPopup` message sent via `luaQueue` at the same emit call site, `Engine.PlayerEvent.Emit:134-137`, not by draining this TVar back out. `EngineEnv`'s own field doc used to claim the Lua side drains this via the `LuaShowPopup` broadcast; #898 corrected it to state the write-only reality. This TVar exists for inspection/debug querying and as a Phase 2 stable source for the notifications panel, per the same comment.) | `WorldThread`/`LuaThread` (same `emitEvent` producers as `eventStoreRef`, filtered to popup-enabled categories, `Engine.PlayerEvent.Emit:134`), `WorldThread` (load publish, `World.Load.Publish:296`, reset to empty) | `TVar (Seq PlayerEvent)` | `newTVarIO Seq.empty` (`src/Engine/Core/Init.hs:262`) | None | — |
 
 ### `save-load-coordination`
 
@@ -491,11 +492,12 @@ accessors until #898 (E7b).
 ## 6. Full-`EngineEnv` compatibility boundary
 
 **Live since issue #889 (E1, landed); recounted by #890 (E2), #891
-(E3), #893 (E5a), #892 (E4), #895 (E6a), #897 (E7a) and #896 (E6b).**
-201 files under `src/`/`app/` import `Engine.Core.State` in some form.
-Of those, 33 have genuine unrestricted field-level access:
+(E3), #893 (E5a), #892 (E4), #895 (E6a), #897 (E7a), #896 (E6b) and
+#898 (E7b).**
+202 files under `src/`/`app/` import `Engine.Core.State` in some form.
+Of those, 31 have genuine unrestricted field-level access:
 `Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 32 files that
+imports nothing) plus 30 files that
 import it either as an explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
@@ -508,11 +510,11 @@ this exact same two-shape definition against `src/`/`app/` on every
 run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 201
+grep -rl "import Engine.Core.State" src app | wc -l                    # 202
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 32 have full access, 169 do not:
+# script logic below; 30 have full access, 172 do not:
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
 #        itself plus its 12 `Register.*` submodules; all import the bare
 #        `EngineEnv` TYPE with no constructor access, and two of them
@@ -630,6 +632,18 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 201
 #   1  × `Engine.Core.Capability.Ui` (new by #897 — the UI/focus/HUD
 #        half of the `ui-hud-events` projection; bare `EngineEnv` type
 #        plus its four field accessors, never `EngineEnv(..)`)
+#   1  × `Engine.Core.Capability.Events` (new by #898 — the
+#        event/notification/popup half of the `ui-hud-events`
+#        projection; bare `EngineEnv` type plus its four field
+#        accessors, never `EngineEnv(..)`)
+#   2  × the #898-narrowed `ui-hud-events` modules,
+#        `Engine.PlayerEvent.Emit` and
+#        `Engine.Scripting.Lua.API.PlayerEvent`: both still take an
+#        opaque `EngineEnv` (their callers are unchanged) and project
+#        `EventsCapability` from it, alongside the narrower
+#        `CoreCapability` (`loggerRef`), `WorldSimCapability`
+#        (`gameTimeRef`/`enginePausedRef`) and `InputViewCapability`
+#        (`luaQueue`) records the emit path already needed
 #   11 × the #897-narrowed `ui-hud-events` modules, all of which still
 #        import `Engine.Core.State` narrowly: the seven
 #        `Engine.Scripting.Lua.API.UI.*` modules and
@@ -641,14 +655,14 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 201
 #        explicit-narrow rule keeps it on
 ```
 
-The remaining 169 files that import `Engine.Core.State` (201 − 32) are
+The remaining 172 files that import `Engine.Core.State` (202 − 30) are
 exactly the ones enumerated above — none of them are consumers this
 document needs to classify: an opaque `EngineEnv` type import, one or
 more individually named field accessors, or an unrelated `EngineState`
 import none grant the unrestricted access this section is about.
 Adding back `Engine.Core.State.hs` itself (the definer, which imports
-nothing and so is outside the 201/32/169 accounting entirely) gives
-the 33 total full-access modules this section classifies.
+nothing and so is outside the 202/30/172 accounting entirely) gives
+the 31 total full-access modules this section classifies.
 
 This section names the intended *end state*: what should still
 legitimately construct, carry, or inspect the **complete** `EngineEnv`
@@ -656,7 +670,7 @@ once the epic's capability split has landed, versus what merely has
 full access today because nothing narrower exists yet. It is
 deliberately narrow — narrow enough to become the literal allowlist
 for #537's final unrestricted-access audit (per requirement 6) — which
-means some of today's 33 full-access files are **not** listed as
+means some of today's 31 full-access files are **not** listed as
 permanent below; they belong in the temporary section (§6.2), each
 assigned individually (no wildcards, no catch-all) to one of §7's
 bounded follow-up issues.
@@ -682,7 +696,7 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 25 permanent modules (24 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 33 − 25 = 8 full-access
+which imports nothing). The remaining 31 − 25 = 6 full-access
 modules are temporary, enumerated exhaustively in §6.2.
 
 Since issue #889, this permanent allowlist and §6.2's temporary
@@ -693,7 +707,7 @@ live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 8 remaining full-access modules is individually
+Every one of the 6 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -701,7 +715,7 @@ assignment method, applied uniformly and mechanically rather than by
 directory-name guessing:
 
 1. For each module, scan its source for every occurrence of one of the
-   81 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
+   82 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
    ...`/`atomicModifyIORef' ... env`/`writeIORef ... env` patterns, and
    plain field-name references) and tally which capability group (§5's
    heading structure) each hit belongs to.
@@ -754,11 +768,11 @@ directory-name guessing:
 | `world-sim-render-handoff` | `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init` — the E5b remainder, named individually per #893's requirement 2 so nothing is silently dropped between the a/b pair. #893 (E5a) removed this row's other 50 entries; each of the four left still dereferences at least one of the seven coupled render-handoff fields §7.4 lists, and #894 (E5b) migrates them. | §7.4 |
 | `units-buildings-combat` | *(none — migrated by #895 (E6a) and #896 (E6b) together: E6a's 35 entries reach the ten unit/combat fields through `Engine.Core.Capability.UnitCombat`, and E6b's remaining 14 reach the three building fields through `Engine.Core.Capability.Building` — `Building.Thread.Command` by taking that record plus the logger ref and `WorldSimCapability` as explicit parameters and so dropping its `Engine.Core.State` import entirely, the other 13 by projecting from the `EngineEnv` they still take. None of the 49 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.5 |
 | `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
-| `ui-hud-events` | `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.PlayerEvent` — the E7b remainder, named individually per #897's requirement 2 so nothing is silently dropped between the a/b pair. #897 (E7a) removed this row's other 11 entries; both of the two left dereference at least one of the four event/notification/popup fields §7.7 lists, and #898 (E7b) migrates them. | §7.7 |
+| `ui-hud-events` | *(none — migrated in two halves: #897 (E7a) moved 11 UI-dominant entries onto `Engine.Core.Capability.Ui`, and #898 (E7b) moved the two event-dominant ones (`Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.PlayerEvent`) onto `Engine.Core.Capability.Events`. None of the 13 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 0 + 0 + 4 + 0 + 0 + 2 + 0 = 8) match
-33 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 0 + 0 + 4 + 0 + 0 + 0 + 0 = 6) match
+31 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -1217,7 +1231,7 @@ same containers.
   `Engine.Input.Callback` use. That removes the one reason `Unit.Thread`
   was ever on this list (it no longer hands its whole environment
   across the boundary) and drops `Building.Thread.Command` out of §6's
-  201-file accounting entirely, since it now imports
+  importer accounting entirely, since it now imports
   `Engine.Core.State` not at all. **The unit tick's scheduling
   boundary is unchanged:** the drain still runs outside the pause-only
   movement block, still inside the save barrier's `unless locked` gate,
@@ -1293,7 +1307,7 @@ same containers.
   `EngineEnv` parameters listed above disappear as §7.2/§7.4/§7.5
   land; nothing further is owed to `content-registries` itself.
 
-### 7.7 `ui-hud-events` — **E7a LANDED (#897); E7b (#898) open**
+### 7.7 `ui-hud-events` — **FULLY LANDED (E7a #897; E7b #898)**
 
 - **Dependencies:** `render-gpu-asset` (`UI.Render` needs both UI state
   and render/GPU handles — a genuine cross-capability read, not a
@@ -1304,11 +1318,13 @@ same containers.
   through.
 - **Independent migration:** Partial, exactly as this entry predicted —
   and the split fell where predicted too. The UI/focus/HUD half moved
-  on its own in E7a; the event/notification/popup half stays with E7b.
+  on its own in E7a; the event/notification/popup half followed in
+  E7b, needing nothing from E7a beyond the shared convention.
 - **Follow-up scope:** Two child issues, as anticipated — E7a (#897)
   for the UI/focus/HUD fields, E7b (#898) for the
   event/notification/popup ones. The two halves have almost no
-  consumers in common, which is what made the split clean.
+  consumers in common, which is what made the split clean. Both have
+  landed; this group's §6.2 row is empty.
 
 **What landed in E7a (#897):**
 `Engine.Core.Capability.Ui` exports `UiCapability` over exactly the
@@ -1382,8 +1398,74 @@ containers.
   `Engine.Scripting.Lua.API.PlayerEvent`. Both are event-dominant:
   they need `eventStoreRef`, `notificationCfgRef`, `notificationOrder`
   and/or `popupQueueRef`, none of which `UiCapability` carries, and
-  neither touches any of E7a's four fields — so #898 is a clean
+  neither touches any of E7a's four fields — so #898 was a clean
   subtraction rather than a re-audit.
+
+**What landed in E7b (#898):**
+`Engine.Core.Capability.Events` exports `EventsCapability` over
+exactly the four event/notification/popup fields (`eventStoreRef`,
+`notificationCfgRef`, `notificationOrder`, `popupQueueRef`) plus the
+total one-way projection `toEventsCapability`, following §7.1/#889's
+convention (same live handles, never a copy; no import of a consumer).
+It is a pure refactor — no `EngineEnv` field-set change, no behaviour
+change: category gating (`log`/`popup`/`pause`), coalescing, the
+~1000-entry ring cap, `engine.getEventLog()`'s payload including the
+`uid` tagging, `LuaShowPopup` popup delivery, the notification
+registry order and its runtime overrides are all the same call
+sequence over the same containers.
+
+- **Field prefix `ec`.** The convention's single-word form (initial +
+  `c`) collides with none of the landed records' prefixes (`cc`, `cr`,
+  `ic`, `iv`, `rc`, `rv`, `uc`, `uic`, `ws`), so no §7.7-style
+  exception was needed here.
+- **One record, no split.** This half owns no thread-private field
+  either: both `TVar`s are multi-writer STM, `notificationCfgRef` is
+  read on `AnyThread` from the emit path, and `notificationOrder` is
+  an immutable boot value. So one record, no main-only/worker-safe
+  pair, and no §3.1-style import boundary in the audit beyond §6's
+  ratchet.
+- **Fully narrowed:** both of this row's remaining §6.2 entries —
+  `Engine.PlayerEvent.Emit` and
+  `Engine.Scripting.Lua.API.PlayerEvent`. Each still imports
+  `Engine.Core.State`, but only for the opaque `EngineEnv` type: their
+  public signatures are unchanged (`emitEvent env …` and the Lua
+  registration functions still take an `EngineEnv`), and every field
+  read now goes through a projection. Besides `EventsCapability` they
+  project the strictly narrower records the emit path already needed —
+  `CoreCapability` (`loggerRef`, for the unknown-category warning),
+  `WorldSimCapability` (`gameTimeRef` for the event timestamp,
+  `enginePausedRef` for a `pause`-flagged category) and
+  `InputViewCapability` (`luaQueue`, for the `LuaShowPopup` message
+  that is the real popup delivery path).
+- **Producers assigned elsewhere were not force-migrated.**
+  `World.Thread.Discovery` (its own `world-sim-render-handoff`
+  narrowing) and the save/load emit sites
+  (`World.Thread.Command.Save.WriteWorld`,
+  `Engine.Scripting.Lua.API.Save` — §6.1 permanent orchestration) call
+  the same unchanged `emitEvent*` API and keep their established
+  access. `Engine.Core.Init` (seeds the refs), `Engine.Core.State`
+  (declares them), the projection module itself and
+  `World.Load.Publish` (§6.1, which resets both `TVar`s) stay
+  named-accessor consumers by design — the same four kinds of
+  exception E7a left.
+- **Three steering-text corrections rode along**, each a §5 row this
+  document had flagged as stale: `EngineEnv`'s `popupQueueRef` field
+  doc no longer claims the Lua side drains the TVar (it is write-only;
+  delivery is the separate `LuaShowPopup` message), and
+  `Engine.PlayerEvent.Emit`'s module comment plus `Engine.Core.Init`'s
+  seeding comment now state the STM primitive's any-thread safety
+  separately from the world-and-Lua-thread call sites that actually
+  exist — no unit- or combat-thread emitter does.
+- **Enforcement:** the §6 ratchet (`TEMPORARY_CEILING`'s
+  `ui-hud-events` set shrunk 2 → 0, checked in both directions against
+  the live scan and against §6.2), plus projection-aliasing coverage
+  in `Test.Headless.Capability.Events` — the three ref-shaped fields
+  asserted to be the same live container as `EngineEnv`'s,
+  `notificationOrder` asserted by value (it has no identity),
+  stability across repeated projection (E7b re-projects inline on
+  every emit), and an explicit check that the two same-typed
+  `TVar (Seq PlayerEvent)` fields are neither transposed nor aliased
+  to each other — a swap the compiler cannot catch.
 
 ### 7.8 `save-load-coordination`
 
