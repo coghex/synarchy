@@ -27,14 +27,16 @@ import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 
 -- | Check one page's placed locations against every currently-known
---   PLAYER-faction unit on it, mark any newly-qualifying location
+--   PLAYER-OWNED unit on it, mark any newly-qualifying location
 --   discovered, and emit one attributable player event per transition.
 --   A no-op when the page has no live gen params yet (mirrors
---   'World.Thread.ItemTemp.tickItemTemperatures'). "Player-controlled"
---   is the current player-control faction contract: 'uiFactionId' ==
---   "player" (portal-spawned units use this tag) — hostile, wildlife,
---   neutral, and unrelated debug factions never discover a location by
---   moving through it.
+--   'World.Thread.ItemTemp.tickItemTemperatures'). Which units count is
+--   NOT decided here: this hands every unit on the page to
+--   'findDiscoveries', which applies 'Unit.Faction.isPlayerOwned' — the
+--   shared definition of "the player's own unit" (#912). Ownership is
+--   narrower than alliance on purpose, so a debug unit (allied with the
+--   player, commandable by them, but not owned) still never discovers a
+--   location by moving through it.
 --
 --   Every emitted event names its 'peSourcePage' (#780) since this
 --   tick runs on every loaded page, not just the active one — but a

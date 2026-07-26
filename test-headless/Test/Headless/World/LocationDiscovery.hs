@@ -34,6 +34,7 @@ import Location.Instance
     , instancesToList )
 import Location.Bounds (RelBounds(..))
 import Unit.Direction (Direction(..))
+import Unit.Faction (Faction(..))
 import Unit.Types
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
@@ -61,7 +62,7 @@ overlay1 = HM.singleton (ChunkCoord 0 0) "loc1"
 -- | Minimal unit fixture — only the fields 'World.Thread.Discovery'
 --   reads (uiPage, uiFactionId, uiGridX/Y) matter; the rest are inert
 --   placeholders, mirroring 'Test.Headless.Unit.LineOfSight.testUnit'.
-testUnit ∷ WorldPageId → Text → Float → Float → UnitInstance
+testUnit ∷ WorldPageId → Faction → Float → Float → UnitInstance
 testUnit page faction gx gy = UnitInstance
     { uiDefName = "test", uiName = "", uiPage = page
     , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
@@ -121,7 +122,7 @@ spec = beforeAll initEnv $
             ws ← newPage env pageId
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 101)
-                    (testUnit pageId "player" 8 8) }
+                    (testUnit pageId FactionPlayer 8 8) }
 
             tickLocationDiscovery env pageId ws
             mp1 ← readIORef (wsGenParamsRef ws)
@@ -147,12 +148,32 @@ spec = beforeAll initEnv $
             ws ← newPage env pageId
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 202)
-                    (testUnit pageId "hostile" 8 8) }
+                    (testUnit pageId FactionHostile 8 8) }
 
             tickLocationDiscovery env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             evs ← eventsFor env 202
+            evs `shouldBe` []
+
+        it "a DEBUG-faction unit standing inside the margin discovers \
+           \nothing and emits no event, even though it is allied with \
+           \the player and takes player orders (#912)" $ \env → do
+            -- The regression an ownership→alliance collapse would break.
+            -- Debug is player-COMMANDABLE and player-ALLIED; discovery
+            -- asks player-OWNED, which it is not. Distinct from the
+            -- hostile case above precisely because those other two
+            -- answers are True here.
+            let pageId = WorldPageId "disc_debug"
+            ws ← newPage env pageId
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 203)
+                    (testUnit pageId FactionDebug 8 8) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
+            evs ← eventsFor env 203
             evs `shouldBe` []
 
         it "a location discovered on a HIDDEN page is attributed to that \
@@ -172,8 +193,8 @@ spec = beforeAll initEnv $
                              [pageActive]
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.fromList
-                    [ (UnitId 301, testUnit pageActive "player" 8 8)
-                    , (UnitId 302, testUnit pageHidden "player" 8 8)
+                    [ (UnitId 301, testUnit pageActive FactionPlayer 8 8)
+                    , (UnitId 302, testUnit pageHidden FactionPlayer 8 8)
                     ]
                 }
 
@@ -217,7 +238,7 @@ spec = beforeAll initEnv $
             ws ← newPage env pageId
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 401)
-                    (testUnit pageId "player" 8 8) }
+                    (testUnit pageId FactionPlayer 8 8) }
 
             Right reqId ← beginLoad (loadStatusRef env) "probe_load"
             tickWorldTime env 1.0

@@ -22,6 +22,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Unit.Direction (Direction(..))
+import Unit.Faction (Faction(..))
 import Unit.LineOfSight (unitVisibleTiles, unitAwareness, nightPerceptionFactor)
 import Unit.Types
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
@@ -85,7 +86,7 @@ testUnit page gx gy gz facing = UnitInstance
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = "player", uiWounds = []
+    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

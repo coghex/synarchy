@@ -373,10 +373,14 @@ local function contentOffset(def, entry)
 end
 
 local function spawnUnitContent(def, entry, gx, gy, worldId)
-    local faction = entry.faction or "hostile"
+    -- Named factionTag, not `faction`: `faction` is the engine's global
+    -- relation/property table (#912), and shadowing it inside a spawn
+    -- helper is a trap waiting for the next edit here.
+    local factionTag = entry.faction or "hostile"
     for _ = 1, (entry.count or 1) do
         local ox, oy = contentOffset(def, entry)
-        local uid = unit.spawn(entry.id, gx + ox, gy + oy, nil, faction, worldId)
+        local uid = unit.spawn(entry.id, gx + ox, gy + oy, nil,
+                               factionTag, worldId)
         if uid == -1 then
             engine.logWarn("locations: unknown unit content '" ..
                 tostring(entry.id) .. "'")

@@ -32,6 +32,8 @@ import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
+import Unit.Faction
+    ( defaultSpawnFaction, fallbackFaction, factionTag, parseFaction )
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Sim.Types (Pose(..))
@@ -43,9 +45,20 @@ import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
 --
 --   Signature: unit.spawn(defName, gx, gy, [gz], [factionId], [pageId])
---   factionId is the spawn-time faction tag — "player" for player-
---   controlled, "wildlife" for everything else. Defaults to
---   "wildlife" when omitted. The arg can sit at slot 4 (when gz is
+--   factionId is the spawn-time faction tag — one of the canonical
+--   'Unit.Faction.factionTag' values ("player", "wildlife", "hostile",
+--   "neutral", "debug"). This is the ingress boundary (#912): the tag is
+--   parsed to a typed 'Faction' here, and an unrecognized one warns once
+--   for this request and resolves to 'Unit.Faction.fallbackFaction'
+--   rather than travelling onward as an unvalidated string.
+--
+--   Omitting it is DELIBERATE, not an oversight: it yields
+--   'Unit.Faction.defaultSpawnFaction' ("wildlife"), which is what the
+--   world-gen animal spawns want. Every source that means something else
+--   already passes its tag explicitly (portal spawns → "player", the
+--   debug overlay → "debug", location contents → "hostile").
+--
+--   The arg can sit at slot 4 (when gz is
 --   omitted) or slot 5 (when both are supplied); both shapes work
 --   so callers don't have to pass an explicit nil for gz.
 --   pageId (slot 6) optionally pins the spawn to a specific live world
@@ -87,13 +100,12 @@ unitSpawnFn env = do
                 gy = case yArg of
                          Just (Lua.Number n) → realToFrac n
                          _                   → 0.0
-                -- Resolve faction: slot 5 wins if present, else slot 4
-                -- (only when it's actually a Lua string), else default.
-                factionId = case factionArg5 of
-                    Just fbs → TE.decodeUtf8Lenient fbs
-                    Nothing → case factionArg4 of
-                        Just fbs → TE.decodeUtf8Lenient fbs
-                        Nothing  → "wildlife"
+                -- Resolve the RAW faction tag: slot 5 wins if present,
+                -- else slot 4 (only when it's actually a Lua string).
+                -- Nothing = the caller omitted it → defaultSpawnFaction.
+                rawFactionTag = case factionArg5 of
+                    Just fbs → Just (TE.decodeUtf8Lenient fbs)
+                    Nothing  → TE.decodeUtf8Lenient <$> factionArg4
 
             result ← Lua.liftIO $ do
                 -- Check def exists
@@ -139,6 +151,22 @@ unitSpawnFn env = do
                                             <> "), defaulting Z=0"
                                         return 0
 
+                        -- Ingress parse (#912): from here on the faction
+                        -- is typed. An unrecognized tag warns ONCE for
+                        -- this request and degrades to the inert
+                        -- fallback rather than rejecting the spawn.
+                        faction ← case rawFactionTag of
+                            Nothing  → return defaultSpawnFaction
+                            Just tag → case parseFaction tag of
+                                Just f  → return f
+                                Nothing → do
+                                    logger ← readIORef (loggerRef env)
+                                    logWarn logger CatAsset $
+                                        "unit.spawn: unrecognized faction tag '"
+                                        <> tag <> "' — spawning as '"
+                                        <> factionTag fallbackFaction <> "'"
+                                    return fallbackFaction
+
                         -- Allocate ID
                         uid ← atomicModifyIORef' (unitManagerRef env) $ \um' →
                             let (uid', um'') = nextUnitId um'
@@ -147,7 +175,7 @@ unitSpawnFn env = do
                         -- Enqueue spawn command, stamped with the active
                         -- world so the unit is world-scoped (#78).
                         Q.writeQueue (unitQueue env) $
-                            UnitSpawn uid name gx gy gz factionId pageId
+                            UnitSpawn uid name gx gy gz faction pageId
 
                         return (fromIntegral (unUnitId uid) ∷ Int)
 
@@ -433,8 +461,13 @@ unitGetPosFn env = do
                     return 3
 
 -- | unit.getFaction(uid) → string | nil
---   Returns the spawn-time-assigned faction tag ("player", "wildlife",
---   etc.). Used by the right-click menu's hostile/friendly check.
+--   Returns the unit's canonical faction tag ("player", "wildlife",
+--   etc.). Kept as-is for compatibility (#912): scripts still identify a
+--   unit's faction with this, but they must NOT compare two of these
+--   strings to decide policy — feed the tag to the @faction@ global
+--   ('Engine.Scripting.Lua.API.Faction'), which answers ownership,
+--   commandability, alliance, and attack permission from the one typed
+--   model the engine itself uses.
 unitGetFactionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetFactionFn env = do
     idArg ← Lua.tointeger 1
@@ -446,7 +479,8 @@ unitGetFactionFn env = do
                 um ← readIORef (unitManagerRef env)
                 pure (uiFactionId <$> HM.lookup uid (umInstances um))
             case mFac of
-                Just f  → Lua.pushstring (TE.encodeUtf8 f) >> return 1
+                Just f  → Lua.pushstring (TE.encodeUtf8 (factionTag f))
+                              >> return 1
                 Nothing → Lua.pushnil >> return 1
 
 -- | unit.exists(uid) → bool
