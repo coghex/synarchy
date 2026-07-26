@@ -23,7 +23,8 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import UI.Types
 import UI.Manager
 import qualified UI.TextBuffer as TB
@@ -33,7 +34,7 @@ uiEnableTextInputFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiEnableTextInputFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (enableTextInput (ElementHandle $ fromIntegral e) mgr, ())
         Nothing → pure ()
     return 0
@@ -44,7 +45,7 @@ uiGetTextFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case getTextBuffer (ElementHandle $ fromIntegral e) mgr of
                 Just buf → Lua.pushstring (TE.encodeUtf8 $ tbContent buf)
                 Nothing  → Lua.pushnil
@@ -60,7 +61,7 @@ uiSetTextInputFn env = do
         (Just e, Just txtBS) → do
             let txt        = TE.decodeUtf8Lenient txtBS
                 elemHandle = ElementHandle (fromIntegral e)
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let newBuffer = TextBuffer { tbContent = txt, tbCursor = T.length txt }
                 in (setTextBuffer elemHandle newBuffer mgr, ())
         _ → pure ()
@@ -72,7 +73,7 @@ uiGetCursorFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case getTextBuffer (ElementHandle $ fromIntegral e) mgr of
                 Just buf → Lua.pushinteger (fromIntegral $ tbCursor buf)
                 Nothing  → Lua.pushnil
@@ -87,7 +88,7 @@ uiSetCursorFn env = do
     case (elemArg, posArg) of
         (Just e, Just pos) → do
             let elemHandle = ElementHandle (fromIntegral e)
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (modifyTextBuffer elemHandle (\buf →
                     buf { tbCursor = max 0 (min (T.length $ tbContent buf) (fromIntegral pos)) }
                 ) mgr, ())
@@ -104,7 +105,7 @@ uiInsertCharFn env = do
             let elemHandle = ElementHandle (fromIntegral e)
                 charText   = TE.decodeUtf8Lenient charBS
             case T.uncons charText of
-                Just (c, _) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+                Just (c, _) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                     (modifyTextBuffer elemHandle (TB.insertChar c) mgr, ())
                 Nothing → pure ()
         _ → pure ()
@@ -115,7 +116,7 @@ uiDeleteBackwardFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiDeleteBackwardFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.deleteBackward mgr, ())
         Nothing → pure ()
     return 0
@@ -125,7 +126,7 @@ uiDeleteForwardFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiDeleteForwardFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.deleteForward mgr, ())
         Nothing → pure ()
     return 0
@@ -135,7 +136,7 @@ uiCursorLeftFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiCursorLeftFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorLeft mgr, ())
         Nothing → pure ()
     return 0
@@ -145,7 +146,7 @@ uiCursorRightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiCursorRightFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorRight mgr, ())
         Nothing → pure ()
     return 0
@@ -155,7 +156,7 @@ uiCursorHomeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiCursorHomeFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorHome mgr, ())
         Nothing → pure ()
     return 0
@@ -165,7 +166,7 @@ uiCursorEndFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiCursorEndFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorEnd mgr, ())
         Nothing → pure ()
     return 0

@@ -13,7 +13,8 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import UI.Types
 import UI.Manager
@@ -31,7 +32,7 @@ uiNewElementFn env = do
             let name       = TE.decodeUtf8Lenient nameBS
                 pageHandle = PageHandle (fromIntegral p)
 
-            handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            handle ← Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let (elemH, newMgr) = createElement name (realToFrac w) (realToFrac h) pageHandle mgr
                 in (newMgr, elemH)
 
@@ -64,7 +65,7 @@ uiNewBoxFn env = do
                 pageHandle   = PageHandle (fromIntegral p)
                 overflow     = realToFrac ovf
 
-            handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            handle ← Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let (elemH, newMgr) = createBox name (realToFrac w) (realToFrac h)
                                         boxTexHandle tileSize color overflow pageHandle mgr
                 in (newMgr, elemH)
@@ -101,7 +102,7 @@ uiLoadBoxTexturesFn env = do
                     , btsSW     = TextureHandle (fromIntegral sw)
                     }
 
-            handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            handle ← Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let (h, newMgr) = registerBoxTextures texSet mgr
                 in (newMgr, h)
 
@@ -132,7 +133,7 @@ uiNewTextFn env = do
                 pageHandle = PageHandle (fromIntegral p)
                 size       = realToFrac s
 
-            handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            handle ← Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let (elemH, newMgr) = createText name text fontHandle size color pageHandle mgr
                 in (newMgr, elemH)
 
@@ -161,7 +162,7 @@ uiNewSpriteFn env = do
                 color     = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
                 pageHandle = PageHandle (fromIntegral p)
 
-            handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            handle ← Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let (elemH, newMgr) = createSprite name (realToFrac w) (realToFrac h) texHandle color pageHandle mgr
                 in (newMgr, elemH)
 

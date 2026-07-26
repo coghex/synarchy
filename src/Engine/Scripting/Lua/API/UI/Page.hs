@@ -13,7 +13,8 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Scripting.Lua.API.UI.Focus (applyAndNotifyControlFocus)
 import UI.Types
 import UI.Manager
@@ -29,7 +30,7 @@ uiNewPageFn env = do
             let name  = TE.decodeUtf8Lenient nameBS
                 layer = parseLayer (TE.decodeUtf8Lenient layerBS)
 
-            handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            handle ← Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 let (h, newMgr) = createPage name layer mgr
                 in (newMgr, h)
 
@@ -57,7 +58,7 @@ uiShowPageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiShowPageFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
-        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just n → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (showPage (PageHandle $ fromIntegral n) mgr, ())
         Nothing → pure ()
     return 0
@@ -88,7 +89,7 @@ uiSetPageInputExclusiveFn env = do
     handleArg    ← Lua.tointeger 1
     exclusiveArg ← Lua.toboolean 2
     case handleArg of
-        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just n → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setPageInputExclusive (PageHandle $ fromIntegral n) exclusiveArg mgr, ())
         Nothing → pure ()
     return 0

@@ -22,14 +22,15 @@ import Data.IORef (readIORef)
 import Engine.Core.Log (logDebug, LogCategory(..))
 -- #892 (E4): `luaQueue` through the input capability's worker-safe
 -- view; the SS7.3 cross-capability surface through the records that
--- already exist for it — `core-init` for the logger (#889) and the
--- worker-safe render view for window/framebuffer geometry (#891) —
--- and explicit narrow values for two cross-capability reads:
--- `uiManagerRef` (`ui-hud-events`, #897, which still has no record)
--- and `actionOutcomeRef` (`units-buildings-combat`, whose record #895
--- landed but which SS7.5's explicit-narrow rule deliberately keeps
--- this input-thread reader off).
-import Engine.Core.State (EngineEnv, uiManagerRef, actionOutcomeRef)
+-- already exist for it — `core-init` for the logger (#889), the
+-- worker-safe render view for window/framebuffer geometry (#891) and,
+-- since #897 (E7a), the UI capability for `uiManagerRef`. The one
+-- remaining explicit narrow value is `actionOutcomeRef`
+-- (`units-buildings-combat`, whose record #895 landed but which
+-- SS7.5's explicit-narrow rule deliberately keeps this input-thread
+-- reader off).
+import Engine.Core.State (EngineEnv, actionOutcomeRef)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
@@ -96,7 +97,7 @@ dispatchScrollEvent env inpSt x y = do
         mouseX = realToFrac rawX * scaleX
         mouseY = realToFrac rawY * scaleY
 
-    uiMgr ← readIORef (uiManagerRef env)
+    uiMgr ← readIORef (uicUiManagerRef (toUiCapability env))
 
     -- #744: the same zero-size window/framebuffer guard the click
     -- path uses, now shared by BOTH plain and Shift-held wheel — the

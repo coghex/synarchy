@@ -23,7 +23,8 @@ import Engine.Asset.Handle (TextureHandle, FontHandle)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.State (EngineState(..))
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Scene.Base
 import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
@@ -50,7 +51,7 @@ handleSpawnText oid x y fontHandle text color layer size = do
           Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
             env ← ask
-            liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
+            liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
               (Map.insert oid text m, ())
           Nothing → logDebugM CatLua $ "Failed to add text object " <> T.pack (show oid)
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
@@ -58,7 +59,7 @@ handleSpawnText oid x y fontHandle text color layer size = do
 handleSetText ∷ ObjectId → Text → EngineM ε σ ()
 handleSetText objId text = do
     env ← ask
-    liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
+    liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
       (Map.insert objId text m, ())
     -- Bool result ignored: setText on a missing node is a no-op by design.
     _ ← modifySceneNode objId $ \node → node { nodeText = Just text }

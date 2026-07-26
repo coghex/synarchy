@@ -1,0 +1,121 @@
+{-# LANGUAGE UnicodeSyntax #-}
+-- | The UI\/focus\/HUD half of the @ui-hud-events@ capability (epic
+--   #537, issue #897 — E7a): exactly the four fields
+--   'docs/engineenv_capability_inventory.md' SS7.7 splits off from the
+--   event\/notification\/popup half (#898), in SS5's own table order.
+--
+--   Follows E1's convention (stated in full in
+--   "Engine.Core.Capability.Core"): one record named
+--   @\<Name\>Capability@, one total one-way @to\<Name\>Capability@
+--   projection, every field the exact same live 'IORef' handle
+--   'EngineEnv' already carries (never a copy or a reconstruction),
+--   and no import of any consumer of this module.
+--
+--   == Field prefix
+--
+--   The convention prefixes fields with the record's own initials,
+--   appending a @c@ for a single-word name (@cc@\/@rc@\/@ic@ for
+--   @Core@\/@Render@\/@Input@). That would make this record's prefix
+--   @uc@ — already 'Engine.Core.Capability.UnitCombat.UnitCombatCapability'\'s
+--   (#895). Two capability records sharing one prefix would be
+--   actively misleading in any module that holds both, so this record
+--   uses __@uic@__ — @ui@ plus the same trailing @c@.
+--
+--   == No thread-private field, so no split record
+--
+--   Unlike @render-gpu-asset@ (SS3.1) and @input-lua-transport@
+--   (SS7.3), this capability owns nothing one thread privately owns:
+--   SS5 records a reader and a writer on more than one thread for
+--   'uicUiManagerRef' and 'uicFocusManagerRef', and the two
+--   single-role fields ('uicHudActivePageRef' — @WorldThread@;
+--   'uicTextBuffersRef' — read on @LuaThread@, written on
+--   @MainRender@) are ordinary session\/boot state, not a
+--   thread-private allocator or handoff slot. So there is one record
+--   here, not a main-only\/worker-safe pair, and
+--   @tools/engine_env_capability_audit.py@ needs no import boundary
+--   for it beyond the SS6 ratchet.
+--
+--   == Concurrency contract these handles carry (SS5)
+--
+--   'uicUiManagerRef' is genuinely multi-writer —
+--   @LuaThread@\/@InputThread@\/@WorldThread@\/@MainRender@ all mutate
+--   it — and every writer uses @atomicModifyIORef'@ rather than a
+--   read\/modify\/write pair. The input thread's keyboard and
+--   character dispatch validate focus and control focus inside ONE
+--   such atomic transition precisely because they race the Lua
+--   thread's concurrent element mutations (#745). Projecting this
+--   record changes none of that: it hands out the same container, so
+--   the atomicity discipline lives at the call sites exactly as
+--   before.
+--
+--   == Lifecycle (SS5, and @World.Load.Publish.resetTransientState@)
+--
+--   Three of the four are @session-replaced@ and ARE reset by a load
+--   publish — 'uicUiManagerRef' (text focus + control focus cleared),
+--   'uicFocusManagerRef' (current focus cleared, registered targets
+--   kept) and 'uicHudActivePageRef' (reset to 'Nothing', then
+--   resynced from @wmVisible@). 'uicTextBuffersRef' is
+--   @boot-process@: the scene-object text map is NOT touched by
+--   @resetTransientState@, and its entries follow their scene objects'
+--   own lifetimes instead.
+--
+--   Like the other capability modules, this one imports only the
+--   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'
+--   type plus its four field accessors) rather than @EngineEnv(..)@ or
+--   a bare import, so it is not itself a full-@EngineEnv@-access
+--   consumer under the SS6 ratchet.
+module Engine.Core.Capability.Ui
+  ( UiCapability(..)
+  , toUiCapability
+  ) where
+
+import UPrelude
+import qualified Data.Map.Strict as Map
+import Data.IORef (IORef)
+import Engine.Scene.Base (ObjectId)
+import UI.Focus (FocusManager)
+import UI.Types (UIPageManager)
+import World.Types (WorldPageId)
+import Engine.Core.State
+  ( EngineEnv
+  , uiManagerRef, focusManagerRef, hudActivePageRef, textBuffersRef
+  )
+
+-- | The UI\/focus\/HUD slice of @ui-hud-events@: the whole UI page
+--   tree (pages, elements, text\/control focus, tooltip state), the
+--   Lua-facing focus-target registry, the page id the global HUD info
+--   panel currently reflects, and the editable-widget text buffers
+--   keyed by scene 'ObjectId'. See
+--   'docs/engineenv_capability_inventory.md' SS5 @ui-hud-events@ and
+--   SS7.7.
+data UiCapability = UiCapability
+  { -- | Multi-writer via @atomicModifyIORef'@ across
+    --   @LuaThread@\/@InputThread@\/@WorldThread@\/@MainRender@;
+    --   @session-replaced@ (a load publish clears text and control
+    --   focus, and Lua rebuilds the tree).
+    uicUiManagerRef      ∷ IORef UIPageManager
+    -- | @InputThread@\/@LuaThread@ read and write it (#745 Tab\/
+    --   Shift+Tab navigation, @API.Focus@); @session-replaced@ — a
+    --   load publish clears the CURRENT focus only, keeping
+    --   registered targets.
+  , uicFocusManagerRef   ∷ IORef FocusManager
+    -- | @WorldThread@ only (@World.Thread.Cursor@'s HUD
+    --   refresh-on-active-world-change, #129); @session-replaced@.
+  , uicHudActivePageRef  ∷ IORef (Maybe WorldPageId)
+    -- | Read on @LuaThread@ (@API.Text@), written on @MainRender@
+    --   (@Engine.Scripting.Lua.Message.Scene@, dispatched by
+    --   @processLuaMessages@ — never the Lua thread itself);
+    --   @boot-process@, and deliberately NOT reset by
+    --   @World.Load.Publish.resetTransientState@.
+  , uicTextBuffersRef    ∷ IORef (Map.Map ObjectId Text)
+  }
+
+-- | Total projection — every field aliases the identical live
+--   container 'EngineEnv' already carries; nothing is copied.
+toUiCapability ∷ EngineEnv → UiCapability
+toUiCapability env = UiCapability
+  { uicUiManagerRef     = uiManagerRef env
+  , uicFocusManagerRef  = focusManagerRef env
+  , uicHudActivePageRef = hudActivePageRef env
+  , uicTextBuffersRef   = textBuffersRef env
+  }

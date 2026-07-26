@@ -14,8 +14,8 @@ import Engine.Asset.Handle (FontHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Util (calculateTextWidthScaled)
-import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue
-  , textBuffersRef )
+import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
@@ -119,7 +119,7 @@ getTextFn env = do
   case objIdNum of
     Just idVal → do
       mText ← Lua.liftIO $ do
-        buffers ← readIORef (textBuffersRef env)
+        buffers ← readIORef (uicTextBuffersRef (toUiCapability env))
         return $ Map.lookup (ObjectId (fromIntegral idVal)) buffers
       case mText of
         Just txt → Lua.pushstring (TE.encodeUtf8 txt)

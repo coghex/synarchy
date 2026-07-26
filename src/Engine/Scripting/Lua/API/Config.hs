@@ -25,8 +25,8 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue
-  , uiManagerRef )
+import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (logInfo, LogCategory(..))
@@ -264,7 +264,7 @@ setTooltipDwellMsFn env = do
     Lua.liftIO $ do
         atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
             (c { vcTooltipDwellMs = dwell }, ())
-        atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             let tts = upmTooltip mgr
                 newStyle = (ttsStyle tts) { tsDwellMs = fromIntegral dwell }
             in (mgr { upmTooltip = tts { ttsStyle = newStyle } }, ())
@@ -289,7 +289,7 @@ setTooltipHintDelayMsFn env = do
     Lua.liftIO $ do
         atomicModifyIORef' (rvVideoConfigRef (toRenderViewCapability env)) $ \c →
             (c { vcTooltipHintDelayMs = delay }, ())
-        atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             let tts = upmTooltip mgr
                 newStyle = (ttsStyle tts) { tsHintDelayMs = fromIntegral delay }
             in (mgr { upmTooltip = tts { ttsStyle = newStyle } }, ())

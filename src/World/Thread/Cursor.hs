@@ -12,7 +12,8 @@ import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.State (EngineEnv, hudActivePageRef, resolveActiveWorld)
+import Engine.Core.State (EngineEnv, resolveActiveWorld)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Fluids (isOceanChunk)
@@ -44,10 +45,10 @@ pollCursorInfo env = do
     -- without touching any cursor field, so the per-world snapshot below
     -- can't see the change; without this the panel keeps showing the
     -- previous world's text until the cursor next moves (issue #129).
-    lastActive ← readIORef (hudActivePageRef env)
+    lastActive ← readIORef (uicHudActivePageRef (toUiCapability env))
     let activePid = fst <$> mActive
     when (activePid ≢ lastActive) $
-        writeIORef (hudActivePageRef env) activePid
+        writeIORef (uicHudActivePageRef (toUiCapability env)) activePid
     forM_ mActive $ \(pid, worldState) → do
         cs   ← readIORef (wsCursorRef worldState)
         snap ← readIORef (wsCursorSnapshotRef worldState)
