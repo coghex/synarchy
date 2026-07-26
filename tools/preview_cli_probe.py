@@ -23,6 +23,13 @@ Checks:
      and a ".." component in the middle of the path all reject before
      boot (never touching a file outside the category root).
   6. A directory given as a simple-category item rejects before boot.
+  7. --preview units/<name> (#887): an unknown unit, a name carrying
+     path structure, absolute/".."/"." traversal shapes, and a unit
+     directory with no animations/ subtree all reject before boot —
+     exactly like the simple-category rejections above, so a bad unit
+     target can never reach a window either. A KNOWN unit is
+     deliberately NOT booted here (that would open a real GLFW window,
+     which is why tools/preview_probe.py stays manual-only/needs-gpu).
 
 Usage:
   python3 tools/preview_cli_probe.py
@@ -32,6 +39,7 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 
@@ -128,6 +136,56 @@ def check_directory_as_item() -> bool:
                  f"rc={r.returncode} stderr={r.stderr.strip()!r}")
 
 
+def check_unit_targets() -> bool:
+    """#887: every --preview units/<name> rejection, pre-boot.
+
+    The expected substrings come straight from
+    Engine.Preview.Unit.unitFocusErrorMessage — a wording change there
+    without one here is exactly the drift this catches.
+    """
+    print("7. units/<name> pre-boot rejections (#887): unknown / unsafe / "
+          "no-animations")
+    results = []
+    for label, target, expect in [
+        ("unknown unit", "units/nosuch", "no such unit"),
+        ("name with path structure", "units/acolyte/animations",
+         "must be a single directory name"),
+        ("absolute path", "units//etc", "must be a single directory name"),
+        ("leading .. traversal", "units/../../etc",
+         "must be a single directory name"),
+        ("bare dot", "units/.", "must be a single directory name"),
+        ("bare dot-dot", "units/..", "must be a single directory name"),
+    ]:
+        r = run_cli("--preview", target)
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and expect in r.stderr)
+        results.append(check(f"units: {label}", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+
+    # A real directory under assets/textures/units that holds no
+    # animations/ subtree: the one rejection that needs a fixture,
+    # created and removed here so the repo tree is never left dirty.
+    empty_unit = os.path.join("assets", "textures", "units",
+                              "_cli_probe_empty_887")
+    created = False
+    try:
+        if not os.path.exists(empty_unit):
+            os.mkdir(empty_unit)
+            created = True
+        r = run_cli("--preview", "units/_cli_probe_empty_887")
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and "no animations" in r.stderr)
+        results.append(check("units: directory with no animations/ subtree", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+    finally:
+        if created:
+            os.rmdir(empty_unit)
+
+    return all(results)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     # Every registered probe accepts --port (#723) so tools/run_probes.py
@@ -147,6 +205,7 @@ def main() -> int:
     results.append(check_nonexistent_simple_item())
     results.append(check_path_containment())
     results.append(check_directory_as_item())
+    results.append(check_unit_targets())
 
     passed = all(results)
     print(f"\n  {'PASS' if passed else 'FAIL'}: --preview CLI contract"

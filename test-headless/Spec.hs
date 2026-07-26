@@ -34,6 +34,7 @@ import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
+import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -193,6 +194,7 @@ main = hspec $ do
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
+    describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec

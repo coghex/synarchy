@@ -1,6 +1,13 @@
 -- List UI component (selectable list with hover highlight + optional scrollbar)
 -- Modeled after dropdown.lua but simpler: no text input, no arrow button.
--- Items are { text = "...", value = "..." }
+-- Items are { text = "...", value = "...", icon = <textureHandle> }
+--
+-- `icon` is OPT-IN and inert unless the list was created with
+-- params.iconSize (#887): without it no icon element is created at all
+-- and every existing caller behaves exactly as before. With it, each
+-- visible slot gains a square sprite left of its label and the label
+-- indents past it; an item with no `icon` simply leaves its slot's
+-- sprite hidden.
 local scale = require("scripts.ui.scale")
 local scrollbar = require("scripts.ui.scrollbar")
 local list = {}
@@ -73,6 +80,13 @@ function list.new(params)
     local items = params.items or {}
     local maxVisible = params.maxVisible or 10
 
+    -- Optional per-row icon column (#887). nil = no icons at all (the
+    -- historical behavior); a number is the unscaled square edge, the
+    -- same `* uiscale` treatment every other dimension above gets.
+    local iconSize = params.iconSize and math.max(1, math.floor(params.iconSize * uiscale)) or nil
+    -- Where the label starts: past the icon column when there is one.
+    local labelX = iconSize and (textPadding * 2 + iconSize) or textPadding
+
     -- Horizontal text alignment. Defaults to "left" (legacy behavior:
     -- text sits at x + textPadding). "center" / "right" compute an
     -- offset per-item using engine.getTextWidth so labels of varying
@@ -104,6 +118,8 @@ function list.new(params)
         uiscale = uiscale,
         zIndex = params.zIndex or 1,
         textAlign = textAlign,
+        iconSize = iconSize,
+        labelX = labelX,
         -- Colors
         textColor = textColor,
         highlightColor = highlightColor,
@@ -159,6 +175,26 @@ function list.new(params)
         UI.setZIndex(hlId, ls.zIndex)
         UI.setVisible(hlId, false)
 
+        -- Optional icon column (#887): one square sprite per visible
+        -- slot, vertically centered, created only when the caller asked
+        -- for icons. Starts on the item's own handle (or hidden when
+        -- the item has none); refreshSlots keeps it in sync from then on.
+        local iconId = nil
+        if iconSize then
+            local item0 = items[i]
+            iconId = UI.newSprite(
+                ls.name .. "_icon_" .. i,
+                iconSize, iconSize,
+                (item0 and item0.icon) or highlightTex,
+                1.0, 1.0, 1.0, 1.0,
+                ls.page
+            )
+            UI.addChild(ls.viewportId, iconId,
+                textPadding, slotY + math.floor((itemHeight - iconSize) / 2))
+            UI.setZIndex(iconId, ls.zIndex + 1)
+            UI.setVisible(iconId, (item0 and item0.icon) ~= nil)
+        end
+
         -- Text label
         local dataIndex = i
         local itemText = ""
@@ -178,7 +214,7 @@ function list.new(params)
         -- and "right" we need each item's pixel width to position
         -- correctly; "left" is just a constant offset. Relative to the
         -- viewport (0,0 = the list's own top-left), not the page.
-        local textX = textPadding
+        local textX = labelX
         if textAlign == "center" or textAlign == "right" then
             local tw = engine.getTextWidth(ls.font, itemText, fontSize)
             if textAlign == "center" then
@@ -212,6 +248,7 @@ function list.new(params)
             hitId = hitId,
             textId = txtId,
             highlightId = hlId,
+            iconId = iconId,
             slot = i,
         })
     end
@@ -267,6 +304,7 @@ function list.destroy(id)
         if slot.hitId then UI.deleteElement(slot.hitId) end
         if slot.textId then UI.deleteElement(slot.textId) end
         if slot.highlightId then UI.deleteElement(slot.highlightId) end
+        if slot.iconId then UI.deleteElement(slot.iconId) end
     end
     if ls.viewportId then UI.deleteElement(ls.viewportId) end
 
@@ -306,6 +344,15 @@ function list.refreshSlots(id)
             local item = ls.items[dataIndex]
             UI.setText(slot.textId, item.text)
 
+            if slot.iconId then
+                if item.icon then
+                    UI.setSpriteTexture(slot.iconId, item.icon)
+                    UI.setVisible(slot.iconId, true)
+                else
+                    UI.setVisible(slot.iconId, false)
+                end
+            end
+
             -- Determine colors based on selection state
             if dataIndex == ls.selectedIndex then
                 UI.setVisible(slot.highlightId, true)
@@ -321,6 +368,7 @@ function list.refreshSlots(id)
         else
             UI.setText(slot.textId, "")
             UI.setVisible(slot.highlightId, false)
+            if slot.iconId then UI.setVisible(slot.iconId, false) end
         end
     end
 end
@@ -568,8 +616,14 @@ function list.setVisible(id, visible)
         UI.setVisible(slot.textId, visible)
         if not visible then
             UI.setVisible(slot.highlightId, false)
+            if slot.iconId then UI.setVisible(slot.iconId, false) end
         end
     end
+    -- Re-showing an ICON list only (no behavior change for every other
+    -- caller): refreshSlots is the single owner of per-slot icon
+    -- visibility — an item with no icon must stay hidden — so let it
+    -- decide rather than blanket-showing every icon element here.
+    if visible and ls.iconSize then list.refreshSlots(id) end
 
     if ls.scrollbarId then
         scrollbar.setVisible(ls.scrollbarId, visible and ls.needsScroll)
@@ -651,6 +705,15 @@ end
 
 function list.isListCallback(callbackName)
     return callbackName == LIST_ITEM_CALLBACK
+end
+
+-- The shared highlight chrome handle (#887): lets a caller reuse the
+-- ONE texture list.init() already loaded for its own selection
+-- markers/hit boxes instead of issuing a second engine.loadTexture for
+-- the same path (there is no dedup at that layer — every call allocates
+-- a fresh handle). nil until list.init() has run.
+function list.getChromeTexture()
+    return highlightTex
 end
 
 -----------------------------------------------------------

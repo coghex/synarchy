@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""--preview real-boot browser probe (#632 Phase 1, #886 Phase 2).
+"""--preview real-boot browser probe (#632 Phase 1, #886 Phase 2, #887 Phase 3).
 
 Needs a GPU (a real GLFW window — --preview has no offscreen variant) —
 manual-only, never CI-gated (see tools/preview_cli_probe.py for the
@@ -9,9 +9,9 @@ instead of waiting for a manual dev-machine run).
 
 Checks:
   1. Boot profile + preview target over the debug console
-     (engine.getBootProfile/getPreviewTarget), grouped+item form
-     ("units/acolyte") — the Phase 1 (#632) placeholder-label boot path,
-     unaffected by #886.
+     (engine.getBootProfile/getPreviewTarget) on a still-placeholder
+     grouped category ("flora/example") — the Phase 1 (#632)
+     placeholder-label boot path, which #888 will replace.
   2. Simple-category list mode (--preview icons): the texture filter is
      forced to nearest regardless of the persisted video config; the
      discovered entry list (require("scripts.preview_manager").dump())
@@ -30,7 +30,21 @@ Checks:
   3. Focused item mode (--preview icons/<item>): texture filter forced
      to nearest; no list (dump().rows is absent/empty) while the
      requested texture resolves; a resize reflows the panel bounds.
-  4. Trimmed loading (Requirement 5): engine.getLoadedTexturePaths() —
+  4. Unit animation viewer (--preview units/acolyte, #887): the
+     animation list matches a filesystem-derived expectation exactly and
+     in order; the default selection is idle/south; the known YAML
+     fps/loop values for the selected clip are reported; the frame index
+     advances over wall time; clicking a DIFFERENT list row (located
+     from the dump, never hardcoded coordinates) changes the selected
+     animation and restarts the clip; clicking a mirrored direction cell
+     (located the same way) enlarges it and reports its real source
+     direction; a resize preserves the animation, direction, and scroll
+     offset; only the requested unit's textures load.
+  5. Missing-YAML defaults (--preview units/tiller, #887): a unit with
+     no data/units/<name>.yaml at all still browses, with fps=8 /
+     loop=true on every animation and all eight direction cells
+     populated by the inferred five-direction mirroring.
+  6. Trimmed loading (Requirement 5): engine.getLoadedTexturePaths() —
      the engine's OWN authoritative record of every texture ever loaded
      this session (Engine.Asset's apAssetPaths, populated by
      engine.loadTexture's Haskell handler itself, not any Lua caller's
@@ -92,6 +106,34 @@ def dump(port: int):
     return got if isinstance(got, dict) else {}
 
 
+def window_size(port: int) -> tuple[int, int]:
+    """The current WINDOW dimensions (engine.getVideoConfig's vcWidth/
+    vcHeight) — the coordinate space engine.setResolution actually
+    writes.
+
+    Resize checks below MUST resize relative to these, never to
+    previewManager's reported panelBounds: the panel is derived from the
+    FRAMEBUFFER, which on a HiDPI display is 2x the window, and is
+    further reduced by the browser's margins and list column. Feeding a
+    panel height back into setResolution therefore asks for a window far
+    larger than intended, so a "shrink" could silently grow the
+    framebuffer and leave the visible row count unchanged."""
+    got = send_json(port, "local w, h = engine.getVideoConfig(); return {w = w, h = h}")
+    if isinstance(got, dict) and got.get("w") and got.get("h"):
+        return int(got["w"]), int(got["h"])
+    return 800, 600
+
+
+def framebuffer_size(port: int) -> tuple[int, int]:
+    """The current FRAMEBUFFER dimensions — what the browser's layout is
+    actually derived from, and (on a HiDPI display) a whole-number
+    multiple of the window size window_size() reports."""
+    got = send_json(port, "local w, h = engine.getFramebufferSize(); return {w = w, h = h}")
+    if isinstance(got, dict) and got.get("w") and got.get("h"):
+        return int(got["w"]), int(got["h"])
+    return 800, 600
+
+
 def poll_state(port: int, want: str, seconds: float = 10.0, interval: float = 0.2) -> dict:
     """Poll previewManager.dump() until .state == want (texture upload is
     async — onAssetLoaded lands a tick or two after the request)."""
@@ -150,21 +192,27 @@ def expected_entries(category: str) -> list[str]:
 
 
 def check_grouped_real_boot(port: int) -> bool:
+    # A still-placeholder grouped category (#888 replaces it) — units is
+    # the real viewer as of #887 and is covered by check 4 below.
     print("1. grouped+item real boot: boot profile + preview target (Phase 1 placeholder)")
-    proc = boot(port, log=LOG, mode=("--preview", "units/acolyte"),
-                label="preview engine (grouped)")
+    proc = boot(port, log=LOG, mode=("--preview", "flora/example"),
+                label="preview engine (grouped placeholder)")
     try:
         profile = send(port, "return engine.getBootProfile()")
         ok1 = check("boot profile == preview", profile == "preview", profile)
 
         target = send_json(port, "return engine.getPreviewTarget()")
         ok2 = check(
-            "preview target == units/acolyte",
+            "preview target == flora/example",
             isinstance(target, dict)
-            and target.get("category") == "units"
-            and target.get("item") == "acolyte",
+            and target.get("category") == "flora"
+            and target.get("item") == "example",
             target)
-        return ok1 and ok2
+
+        d = dump(port)
+        ok3 = check("mode == placeholder (grouped categories #888 has yet to land)",
+                    d.get("mode") == "placeholder", d.get("mode"))
+        return ok1 and ok2 and ok3
     finally:
         quit_engine(port, proc)
 
@@ -249,9 +297,11 @@ def check_simple_list_mode(port: int) -> bool:
         prev_bounds = before_resize.get("panelBounds") or {}
         prev_selected = before_resize.get("selected") or {}
         prev_scroll = before_resize.get("scrollOffset")
-        new_w = int(prev_bounds.get("width", 400)) + 300
-        new_h = int(prev_bounds.get("height", 300)) + 200
-        send(port, f"return engine.setResolution({new_w}, {new_h})", timeout=10.0)
+        # Resize relative to the WINDOW, never to panelBounds — see
+        # window_size()'s docstring for why the latter is a unit error.
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
         after_resize = poll_until(
             10.0, lambda: (dump(port).get("panelBounds") or {}) != prev_bounds
                 and dump(port))
@@ -295,13 +345,32 @@ def check_simple_list_mode(port: int) -> bool:
         # 512px-tall list inside a 320px-tall panel).
         rows_before_shrink = len(after_resize.get("rows") or [])
         prev_h = (after_resize.get("panelBounds") or {}).get("height")
-        shrink_w = int(prev_bounds.get("width", 400))
-        shrink_h = max(200, int((prev_h or 400) * 0.5))
-        send(port, f"return engine.setResolution({shrink_w}, {shrink_h})", timeout=10.0)
+        # Self-calibrating rather than a guessed fraction: solve for the
+        # WINDOW height that leaves room for about half the rows
+        # currently shown. A fixed fraction can't work across displays —
+        # the browser's row budget is floor(panelHeight / itemHeight),
+        # where panelHeight comes from the FRAMEBUFFER (2x the window on
+        # HiDPI) and itemHeight scales with the user's UI scale, so on a
+        # retina screen at a small UI scale even a halved window can
+        # still fit all 67 icons and "shrink" nothing at all.
+        cur_win_w, cur_win_h = window_size(port)
+        _, cur_fb_h = framebuffer_size(port)
+        fb_ratio = (cur_fb_h / cur_win_h) if cur_win_h else 1.0
+        target_rows = max(4, rows_before_shrink // 2)
+        target_win_h = max(200, int((target_rows * item_height + 80) / fb_ratio))
+        send(port, f"return engine.setResolution({cur_win_w}, {target_win_h})",
+             timeout=10.0)
         after_shrink = poll_until(
             10.0, lambda: (dump(port).get("panelBounds") or {}).get("height") != prev_h
                 and dump(port))
         after_shrink = after_shrink or dump(port)
+        # Report a failed resize as itself rather than as a confusing
+        # row-count mismatch — the two have very different causes.
+        shrunk_h = (after_shrink.get("panelBounds") or {}).get("height")
+        ok_shrank = check("the shrink actually changed the panel height",
+                          shrunk_h is not None and prev_h is not None
+                          and shrunk_h < prev_h,
+                          f"before={prev_h} after={shrunk_h}")
         ok_shrink_rows = check("visible row count decreases on shrink",
                               len(after_shrink.get("rows") or []) < rows_before_shrink,
                               f"before={rows_before_shrink} "
@@ -319,8 +388,8 @@ def check_simple_list_mode(port: int) -> bool:
 
         return all([ok_filter, ok_mode, ok_count, ok_entries, ok_first, ok_ready,
                     ok_click, ok_scroll, ok_resize_bounds, ok_resize_selection,
-                    ok_resize_scroll, ok_grow_fit, ok_shrink_rows, ok_shrink_fit,
-                    ok_trimmed, ok_no_gameplay])
+                    ok_resize_scroll, ok_grow_fit, ok_shrank, ok_shrink_rows,
+                    ok_shrink_fit, ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 
@@ -357,9 +426,10 @@ def check_focused_item_mode(port: int) -> bool:
         # preserve, but the panel/sprite still must reflow, not overflow
         # or go stale (previewManager.onFramebufferResize).
         prev_bounds = d.get("panelBounds") or {}
-        new_w = int(prev_bounds.get("width", 400)) + 300
-        new_h = int(prev_bounds.get("height", 300)) + 200
-        send(port, f"return engine.setResolution({new_w}, {new_h})", timeout=10.0)
+        # Window units, not panel bounds — see window_size()'s docstring.
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
         after_resize = poll_until(
             10.0, lambda: (dump(port).get("panelBounds") or {}) != prev_bounds
                 and dump(port)) or dump(port)
@@ -373,6 +443,300 @@ def check_focused_item_mode(port: int) -> bool:
         quit_engine(port, proc)
 
 
+GAME_DIRECTION_ORDER = ["south", "south-west", "west", "north-west",
+                        "north", "north-east", "east", "south-east"]
+
+# The five stored directions a bilaterally-symmetric animation ships;
+# the other three are mirrored at draw time.
+MIRROR_SOURCE = {"south-west": "south-east", "west": "east",
+                 "north-west": "north-east"}
+
+
+# Every spelling Engine.Preview.Unit.parseDirectionDirName accepts, so
+# this expectation stays a faithful independent implementation of the
+# documented rule rather than a stricter one that would false-fail on a
+# short-form direction folder.
+DIRECTION_SPELLINGS = frozenset(
+    [d.lower() for d in GAME_DIRECTION_ORDER]
+    + ["s", "sw", "w", "nw", "n", "ne", "e", "se"])
+
+
+def expected_unit_animations(unit: str) -> list[str]:
+    """Independent, filesystem-derived expectation for the animation
+    list — mirrors Engine.Preview.Unit.discoverUnitAnimations's contract
+    (direct children of animations/ that hold at least one recognized,
+    non-symlinked direction folder with at least one non-symlinked .png,
+    case-sensitive lexicographic) without importing any Haskell/Lua
+    code."""
+    root = os.path.join("assets", "textures", "units", unit, "animations")
+    out = []
+    for name in os.listdir(root):
+        animdir = os.path.join(root, name)
+        if not os.path.isdir(animdir) or os.path.islink(animdir):
+            continue
+        has_frames = False
+        for d in os.listdir(animdir):
+            if d.lower() not in DIRECTION_SPELLINGS:
+                continue
+            ddir = os.path.join(animdir, d)
+            if not os.path.isdir(ddir) or os.path.islink(ddir):
+                continue
+            if any(f.lower().endswith(".png")
+                   and not os.path.islink(os.path.join(ddir, f))
+                   for f in os.listdir(ddir)):
+                has_frames = True
+                break
+        if has_frames:
+            out.append(name)
+    return sorted(out)
+
+
+def expected_yaml_meta(unit: str, animation: str):
+    """(fps, loop) as declared in data/units/<unit>.yaml, or None when
+    the file or the entry is absent. Parsed with a deliberately dumb
+    line scanner rather than PyYAML (not a probe dependency) — the unit
+    files are uniformly two-space-indented, so the animation's own
+    fps:/loop: lines are the first ones after its key at a deeper
+    indent."""
+    path = os.path.join("data", "units", unit + ".yaml")
+    if not os.path.exists(path):
+        return None
+    key = animation + ":"
+    fps = loop = None
+    indent = None
+    with open(path) as fh:
+        for line in fh:
+            stripped = line.strip()
+            cur = len(line) - len(line.lstrip())
+            if indent is None:
+                if stripped == key:
+                    indent = cur
+                continue
+            if stripped and cur <= indent:
+                break
+            if stripped.startswith("fps:"):
+                fps = float(stripped.split(":", 1)[1].strip())
+            elif stripped.startswith("loop:"):
+                loop = stripped.split(":", 1)[1].strip() == "true"
+    if indent is None:
+        return None
+    # The YAML's own per-field defaults when the entry omits them.
+    return (8.0 if fps is None else fps, True if loop is None else loop)
+
+
+def click_element(port: int, bounds: dict) -> None:
+    """Click the centre of a dump-reported interactive rect — the
+    offscreen_probe.py convention: coordinates ALWAYS come from the
+    dump, never from a hardcoded layout guess."""
+    x = int(bounds.get("x", 0) + bounds.get("w", bounds.get("width", 0)) / 2)
+    y = int(bounds.get("y", 0) + bounds.get("h", bounds.get("height", 0)) / 2)
+    send(port, f"return input.click({x}, {y})", timeout=10.0)
+
+
+def poll_unit_ready(port: int, seconds: float = 15.0) -> dict:
+    """Poll until the unit viewer has a playing animation (its textures
+    upload asynchronously, so the first dumps carry no playback yet)."""
+    got = poll_until(seconds, lambda: (
+        (lambda d: d if (d.get("playback") or {}).get("ready") else None)(dump(port))))
+    return got or dump(port)
+
+
+def check_units_mode(port: int) -> bool:
+    print("4. unit animation viewer (--preview units/acolyte)")
+    unit = "acolyte"
+    proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
+                label="preview engine (units)")
+    try:
+        expected = expected_unit_animations(unit)
+        d = poll_unit_ready(port)
+
+        ok_mode = check("mode == unit", d.get("mode") == "unit", d.get("mode"))
+        ok_filter = check("texture filter forced to nearest",
+                          send(port, "return select(10, engine.getVideoConfig())")
+                          == "nearest")
+
+        # Requirement 1: the FULL ordered animation list, cross-checked
+        # against the filesystem — a count-only check can't catch an
+        # omission or substitution past the visible rows.
+        listed = [e.get("label") for e in (d.get("entries") or [])]
+        ok_entries = check("animation list matches the filesystem-derived "
+                           "expectation exactly, in order",
+                           listed == expected,
+                           f"dumped={listed[:5]}...({len(listed)}) "
+                           f"expected={expected[:5]}...({len(expected)})"
+                           if listed != expected else "")
+
+        # Requirement 2: idle (or the first animation), direction south.
+        pb = d.get("playback") or {}
+        ok_default = check("default selection is idle / south",
+                           d.get("defaultAnim") == "idle"
+                           and pb.get("animation") == "idle"
+                           and pb.get("direction") == "south",
+                           f"defaultAnim={d.get('defaultAnim')} playback={pb}")
+
+        # Requirement 5: the clip's effective fps/loop come from the
+        # unit's own YAML when it declares them.
+        want_meta = expected_yaml_meta(unit, "idle")
+        ok_meta = check("effective fps/loop match data/units/acolyte.yaml",
+                        want_meta is not None
+                        and abs((pb.get("fps") or 0) - want_meta[0]) < 1e-6
+                        and pb.get("loop") == want_meta[1],
+                        f"dump=({pb.get('fps')}, {pb.get('loop')}) yaml={want_meta}")
+
+        # Requirement 3/4: every direction cell present, in game order,
+        # with the three western ones reporting their real mirror source.
+        dirs = pb.get("directions") or []
+        ok_dirs = check("all eight direction cells, in the game's own order",
+                        [c.get("direction") for c in dirs] == GAME_DIRECTION_ORDER,
+                        [c.get("direction") for c in dirs])
+        mirrored = {c["direction"]: c.get("source")
+                    for c in dirs if c.get("mirrored")}
+        ok_mirror = check("mirrored cells report their real source direction",
+                          mirrored == MIRROR_SOURCE, mirrored)
+
+        # Requirement 9: the frame index advances over WALL time. idle
+        # runs at the YAML's fps, so a second is many frames — poll for
+        # any change rather than asserting a specific index.
+        # NB the 1-tuple: poll_until returns on a TRUTHY value, and a
+        # frame index of 0 is falsy — returning the bare index would
+        # silently poll past a real advance back to frame zero.
+        before = ((dump(port).get("playback") or {}).get("frameIndex"))
+        after = poll_until(6.0, lambda: (
+            (lambda i: (i,) if i != before else None)(
+                (dump(port).get("playback") or {}).get("frameIndex"))))
+        ok_advance = check("frame index advances over wall time",
+                           after is not None and after[0] != before,
+                           f"before={before} after={after}")
+
+        # Requirement 3: clicking a direction cell enlarges it — pick a
+        # MIRRORED one so source-direction reporting is exercised through
+        # a real click, not just the initial dump. Done BEFORE the
+        # animation switch below, deliberately: `idle` is a flip:true
+        # clip, whereas the first visible row (attack_heavy_RH_dagger)
+        # declares flip:false and so has no mirrored cell at all.
+        target = next((c for c in dirs if c.get("mirrored")), None)
+        if target is None:
+            ok_cell = check("clicking a direction cell enlarges it", False,
+                            "no mirrored direction cell to click")
+        else:
+            click_element(port, target.get("bounds") or {})
+            after_click = poll_until(6.0, lambda: (
+                (lambda p: p if p.get("direction") == target["direction"] else None)(
+                    (dump(port).get("playback") or {}))))
+            after_click = after_click or (dump(port).get("playback") or {})
+            ok_cell = check("clicking a mirrored direction cell enlarges it and "
+                            "reports its source direction",
+                            after_click.get("direction") == target["direction"]
+                            and after_click.get("mirrored") is True
+                            and after_click.get("sourceDirection")
+                                == MIRROR_SOURCE.get(target["direction"]),
+                            after_click)
+
+        # Resize: animation, direction, and scroll offset all survive
+        # (the #887 amendment's reflow contract). Run right after the
+        # direction click so the direction under test is the MIRRORED
+        # one just selected, not merely the south default.
+        pre = dump(port)
+        pre_pb = pre.get("playback") or {}
+        pre_bounds = pre.get("panelBounds") or {}
+        pre_scroll = pre.get("scrollOffset")
+        # Window units, not panel bounds — see window_size()'s docstring.
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
+        post = poll_until(10.0, lambda: (
+            (lambda s: s if (s.get("panelBounds") or {}) != pre_bounds else None)(
+                dump(port)))) or dump(port)
+        post_pb = post.get("playback") or {}
+        ok_resize = check("animation, direction, and scroll offset all survive a resize",
+                          post_pb.get("animation") == pre_pb.get("animation")
+                          and post_pb.get("direction") == pre_pb.get("direction")
+                          and post.get("scrollOffset") == pre_scroll,
+                          f"before=({pre_pb.get('animation')}, "
+                          f"{pre_pb.get('direction')}, {pre_scroll}) "
+                          f"after=({post_pb.get('animation')}, "
+                          f"{post_pb.get('direction')}, {post.get('scrollOffset')})")
+
+        # Requirement 3: selecting a different animation (row located
+        # from the dump, never a hardcoded coordinate) switches the clip
+        # — and the NEW clip's effective fps/loop come from its own YAML
+        # entry, a second, independent metadata data point.
+        rows = post.get("rows") or []
+        other = next((r for r in rows
+                      if r.get("label") not in (None, post_pb.get("animation"))), None)
+        if other is None:
+            ok_select = check("selecting another animation changes the clip",
+                              False, "no second visible row to click")
+        else:
+            click_element(port, other.get("bounds") or {})
+            d2 = poll_unit_ready(port)
+            d2_pb = d2.get("playback") or {}
+            want2 = expected_yaml_meta(unit, other["label"])
+            ok_select = check("selecting another animation (via row bounds, not "
+                              "hardcoded coords) switches the clip and its metadata",
+                              (d2.get("selected") or {}).get("label") == other["label"]
+                              and d2_pb.get("animation") == other["label"]
+                              and want2 is not None
+                              and abs((d2_pb.get("fps") or 0) - want2[0]) < 1e-6
+                              and d2_pb.get("loop") == want2[1],
+                              f"clicked={other['label']} "
+                              f"selected={(d2.get('selected') or {}).get('label')} "
+                              f"playback=({d2_pb.get('animation')}, "
+                              f"{d2_pb.get('fps')}, {d2_pb.get('loop')}) yaml={want2}")
+
+        # Requirement 6: only THIS unit's textures (plus list chrome).
+        root_prefix = os.path.join("assets", "textures", "units", unit) + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
+        ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
+
+        return all([ok_mode, ok_filter, ok_entries, ok_default, ok_meta,
+                    ok_dirs, ok_mirror, ok_advance, ok_select, ok_cell,
+                    ok_resize, ok_trimmed, ok_no_gameplay])
+    finally:
+        quit_engine(port, proc)
+
+
+def check_units_without_yaml(port: int) -> bool:
+    print("5. unit with NO data/units YAML (--preview units/tiller): documented defaults")
+    unit = "tiller"
+    proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
+                label="preview engine (units, no yaml)")
+    try:
+        ok_no_yaml = check("the fixture really has no unit YAML (or this "
+                           "check proves nothing)",
+                           not os.path.exists(os.path.join("data", "units",
+                                                           unit + ".yaml")))
+        d = poll_unit_ready(port)
+        expected = expected_unit_animations(unit)
+        listed = [e.get("label") for e in (d.get("entries") or [])]
+        ok_entries = check("animation list matches the filesystem-derived "
+                           "expectation exactly, in order",
+                           listed == expected, f"dumped={listed} expected={expected}")
+
+        ok_defaults = check("every animation falls back to fps=8 / loop=true",
+                            all(abs((e.get("fps") or 0) - 8.0) < 1e-6
+                                and e.get("loop") is True
+                                for e in (d.get("entries") or [])),
+                            [(e.get("label"), e.get("fps"), e.get("loop"))
+                             for e in (d.get("entries") or [])])
+
+        # The inferred five-direction mirroring still populates all
+        # eight cells for an asset-only unit.
+        pb = d.get("playback") or {}
+        dirs = [c.get("direction") for c in (pb.get("directions") or [])]
+        ok_dirs = check("inferred mirroring still populates all eight cells",
+                        dirs == GAME_DIRECTION_ORDER, dirs)
+
+        root_prefix = os.path.join("assets", "textures", "units", unit) + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
+        ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
+
+        return all([ok_no_yaml, ok_entries, ok_defaults, ok_dirs,
+                    ok_trimmed, ok_no_gameplay])
+    finally:
+        quit_engine(port, proc)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9150)
@@ -382,6 +746,8 @@ def main() -> int:
         check_grouped_real_boot(args.port),
         check_simple_list_mode(args.port),
         check_focused_item_mode(args.port),
+        check_units_mode(args.port),
+        check_units_without_yaml(args.port),
     ]
 
     passed = all(results)

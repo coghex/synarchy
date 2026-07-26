@@ -64,6 +64,7 @@ module UI.Manager
   , setTextColor
   , setSpriteTexture
   , setSpriteColor
+  , setSpriteFlipX
     -- * Queries
   , getElementAbsolutePosition
   , isEffectivelyVisible
