@@ -457,9 +457,19 @@ rather than an `EngineEnv` field (§7.6).
 
 ### `ui-hud-events`
 
+The first four fields are the UI/focus/HUD half #897 (E7a) migrated:
+every production consumer reaches them through
+`Engine.Core.Capability.Ui`'s `UiCapability` rather than a field
+accessor, apart from the four §7.7 names as deliberate exceptions
+(`Engine.Core.State`, `Engine.Core.Init`, the projection module
+itself, and §6.1's `World.Load.Publish`). The record's own field
+documentation restates the reader/writer/lifecycle facts below. The
+last four fields are the event/notification/popup half, still on named
+accessors until #898 (E7b).
+
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
-| `uiManagerRef` | session-replaced | `MainRender` (`UI.Render`), `InputThread` (`Input.Thread.Keyboard:93`'s `validateFocus`, read on every keyboard dispatch), `LuaThread` (`API.UI.TextInput:47`'s `UI.getText`, `API.UI.Hierarchy:104`'s `UI.findElementAt`, and every other direct `UI.*` query) | `LuaThread` (every `UI.*` API module — `API.UI.Focus/Property/Tooltip/Hierarchy`, `API.Config`), `WorldThread` (load publish `World.Load.Publish:286`), `InputThread` (`Input.Thread.Keyboard:93,234`, atomic focus/control-focus validation on every keyboard dispatch — round 4 review notes this races the Lua thread's own concurrent element mutations, hence the atomic transition rather than a separate read/write pair), `MainRender` (`UI.Tooltip.State:50`'s `updateTooltipState`, the per-frame tooltip tick called from `Engine.Loop.Frame`, `atomicModifyIORef'`) | `IORef UIPageManager`, multi-writer via `atomicModifyIORef'` | `emptyUIPageManager` (`src/Engine/Core/Init.hs:196`) | None | Entire UI tree is rebuilt by Lua on load, per `docs/persistence_state_inventory.md`. |
+| `uiManagerRef` | session-replaced | `MainRender` (`UI.Render`), `InputThread` (`Input.Thread.Keyboard:109`'s `validateFocus`, read on every keyboard dispatch), `LuaThread` (`API.UI.TextInput:48`'s `UI.getText`, `API.UI.Hierarchy:105`'s `UI.findElementAt`, and every other direct `UI.*` query) | `LuaThread` (every `UI.*` API module — `API.UI.Focus/Property/Tooltip/Hierarchy`, `API.Config`), `WorldThread` (load publish `World.Load.Publish:286`), `InputThread` (`Input.Thread.Keyboard:109,250`, atomic focus/control-focus validation on every keyboard dispatch — round 4 review notes this races the Lua thread's own concurrent element mutations, hence the atomic transition rather than a separate read/write pair), `MainRender` (`UI.Tooltip.State:64`'s `updateTooltipState`, the per-frame tooltip tick called from `Engine.Loop.Frame`, `atomicModifyIORef'`) | `IORef UIPageManager`, multi-writer via `atomicModifyIORef'` | `emptyUIPageManager` (`src/Engine/Core/Init.hs:196`) | None | Entire UI tree is rebuilt by Lua on load, per `docs/persistence_state_inventory.md`. |
 | `focusManagerRef` | session-replaced | `InputThread` (`Thread.Keyboard`/`Thread.Char` — Tab/Shift+Tab control-focus navigation, #745), `LuaThread` (`API.Focus`) | `InputThread`/`LuaThread` (the same two roles as Readers), `WorldThread` (load publish, `src/World/Load/Publish.hs:284`) | `IORef FocusManager` | `createFocusManager` (`src/Engine/Core/Init.hs:201`) | None | — |
 | `hudActivePageRef` | session-replaced | `WorldThread` (`Thread.Cursor` — HUD refresh-on-active-world-change, #129) | `WorldThread` (also load publish, `World.Load.Publish:283`, resynced from `wmVisible`) | `IORef (Maybe WorldPageId)` | `Nothing` (`src/Engine/Core/Init.hs:198`) | None | — |
 | `textBuffersRef` | boot-process | `LuaThread` (only; `API.Text`, direct queries) | `MainRender` (only; `Engine.Scripting.Lua.Message.Scene`, dispatched via `processLuaMessages` — never the Lua thread itself) | `IORef (Map ObjectId Text)` | `Map.empty` (`src/Engine/Core/Init.hs:202`) | None | Editable-widget text keyed by `ObjectId`, per the UI text-buffer coordinate contract. |
@@ -481,11 +491,11 @@ rather than an `EngineEnv` field (§7.6).
 ## 6. Full-`EngineEnv` compatibility boundary
 
 **Live since issue #889 (E1, landed); recounted by #890 (E2), #891
-(E3), #893 (E5a), #892 (E4) and #895 (E6a).** 201 files under
-`src/`/`app/` import `Engine.Core.State` in some form. Of those, 58
-have genuine unrestricted field-level access:
+(E3), #893 (E5a), #892 (E4), #895 (E6a) and #897 (E7a).** 201 files
+under `src/`/`app/` import `Engine.Core.State` in some form. Of those,
+47 have genuine unrestricted field-level access:
 `Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 57 files that
+imports nothing) plus 46 files that
 import it either as an explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
@@ -502,7 +512,7 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 201
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 57 have full access, 144 do not:
+# script logic below; 46 have full access, 155 do not:
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
 #        itself plus its 12 `Register.*` submodules; all import the bare
 #        `EngineEnv` TYPE with no constructor access, and two of them
@@ -534,16 +544,19 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 201
 #        the two `render-gpu-asset` projection modules of §3.1; each
 #        imports the bare `EngineEnv` type plus only its own field
 #        accessors, never `EngineEnv(..)`)
-#   41 × the #891-narrowed `render-gpu-asset` modules that still import
+#   40 × the #891-narrowed `render-gpu-asset` modules that still import
 #        `Engine.Core.State` narrowly — for `EngineState(..)`/
 #        `GraphicsState(..)` (the CPS state σ, not `EngineEnv`), for an
 #        opaque `EngineEnv` type to hand to a not-yet-narrowed helper,
-#        and/or for individually named accessors of fields belonging to
-#        capabilities #892–#899 have yet to migrate (`luaQueue`,
-#        `loggerRef`, ...). The other 4 of #891's 45
+#        and/or for individually named accessors (`luaQueue`,
+#        `loggerRef`, ...) — either of a field whose own capability
+#        (#894–#899) has yet to migrate, or of one a landed capability
+#        left on a pre-existing narrow reader. The other 5 of #891's 45
 #        (`Vulkan.Command.Text`, `Vulkan.Texture.Bindless`,
-#        `Vulkan.Texture.DefaultFaceMap`, `Scene.Batch.Text`) now import
-#        `Engine.Core.State` not at all and are outside this accounting.
+#        `Vulkan.Texture.DefaultFaceMap`, `Scene.Batch.Text` and — since
+#        #897 took its last accessor, `uiManagerRef` — `UI.Render`) now
+#        import `Engine.Core.State` not at all and are outside this
+#        accounting.
 #   1  × `Engine.Core.Capability.WorldSim` (new by #893 — the world/sim
 #        half of the `world-sim-render-handoff` projection; bare
 #        `EngineEnv` type plus its nine field accessors, never
@@ -587,21 +600,34 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 201
 #        still import `Engine.Core.State` narrowly: `Engine.Input.Callback`
 #        for the `EngineLifecycle(..)` type alone (it holds no `EngineEnv`
 #        at all), and the other ten for an opaque `EngineEnv` type to hand
-#        to a not-yet-narrowed helper (`Engine.Input.State`,
+#        to a helper that still takes one (`Engine.Input.State`,
 #        `Engine.Input.Thread.Mouse`) and/or individually named accessors
 #        of fields belonging to capabilities #894–#899 have yet to migrate
-#        (`focusManagerRef`, `uiManagerRef`, `actionOutcomeRef`,
-#        `saveBarrierRef`) — see §7.3's cross-capability surface.
+#        (`actionOutcomeRef`, `saveBarrierRef`) — see §7.3's
+#        cross-capability surface. #897 took `focusManagerRef`/
+#        `uiManagerRef` off that surface.
+#   1  × `Engine.Core.Capability.Ui` (new by #897 — the UI/focus/HUD
+#        half of the `ui-hud-events` projection; bare `EngineEnv` type
+#        plus its four field accessors, never `EngineEnv(..)`)
+#   11 × the #897-narrowed `ui-hud-events` modules, all of which still
+#        import `Engine.Core.State` narrowly: the seven
+#        `Engine.Scripting.Lua.API.UI.*` modules and
+#        `Engine.Scripting.Lua.API.Focus` for the bare `EngineEnv` type
+#        alone; `Engine.Scripting.Lua.Message.Scene` and
+#        `UI.Tooltip.State` for `EngineState(..)`/`TimingState(..)` (the
+#        CPS state σ, not `EngineEnv`); and `Engine.Input.Thread.Mouse`
+#        for the type plus the one `actionOutcomeRef` accessor §7.5's
+#        explicit-narrow rule keeps it on
 ```
 
-The remaining 108 files that import `Engine.Core.State` (200 − 92) are
+The remaining 155 files that import `Engine.Core.State` (201 − 46) are
 exactly the ones enumerated above — none of them are consumers this
 document needs to classify: an opaque `EngineEnv` type import, one or
 more individually named field accessors, or an unrelated `EngineState`
 import none grant the unrestricted access this section is about.
 Adding back `Engine.Core.State.hs` itself (the definer, which imports
-nothing and so is outside the 200/92/108 accounting entirely) gives
-the 93 total full-access modules this section classifies.
+nothing and so is outside the 201/46/155 accounting entirely) gives
+the 47 total full-access modules this section classifies.
 
 This section names the intended *end state*: what should still
 legitimately construct, carry, or inspect the **complete** `EngineEnv`
@@ -609,7 +635,7 @@ once the epic's capability split has landed, versus what merely has
 full access today because nothing narrower exists yet. It is
 deliberately narrow — narrow enough to become the literal allowlist
 for #537's final unrestricted-access audit (per requirement 6) — which
-means most of today's 93 full-access files are **not** listed as
+means most of today's 47 full-access files are **not** listed as
 permanent below; they belong in the temporary section (§6.2), each
 assigned individually (no wildcards, no catch-all) to one of §7's
 bounded follow-up issues.
@@ -635,7 +661,7 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 25 permanent modules (24 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 93 − 25 = 68 full-access
+which imports nothing). The remaining 47 − 25 = 22 full-access
 modules are temporary, enumerated exhaustively in §6.2.
 
 Since issue #889, this permanent allowlist and §6.2's temporary
@@ -646,7 +672,7 @@ live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 33 remaining full-access modules is individually
+Every one of the 22 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -707,11 +733,11 @@ directory-name guessing:
 | `world-sim-render-handoff` | `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init` — the E5b remainder, named individually per #893's requirement 2 so nothing is silently dropped between the a/b pair. #893 (E5a) removed this row's other 50 entries; each of the four left still dereferences at least one of the seven coupled render-handoff fields §7.4 lists, and #894 (E5b) migrates them. | §7.4 |
 | `units-buildings-combat` | `Building.Thread.Command`, `Engine.Scripting.Lua.API.Buildings.Materials`, `Engine.Scripting.Lua.API.Buildings.Progress`, `Engine.Scripting.Lua.API.Buildings.Query`, `Engine.Scripting.Lua.API.Buildings.Selection`, `Engine.Scripting.Lua.API.Buildings.Spawn`, `Engine.Scripting.Lua.API.Buildings.Yaml`, `Engine.Scripting.Lua.API.Craft.Bill`, `Engine.Scripting.Lua.API.Craft.Execute`, `Engine.Scripting.Lua.API.Power`, `Engine.Scripting.Lua.API.Units.Cargo`, `Unit.Thread`, `World.Thread.ItemTemp`, `World.Thread.Power` — the E6b remainder, named individually per #895's requirement 2 so nothing is silently dropped between the a/b pair. #895 (E6a) removed this row's other 35 entries; thirteen of the fourteen left dereference at least one of the three building fields §7.5 lists, and the fourteenth (Unit.Thread) hands its whole environment to the building-command drain that runs on the unit thread, there being no separate building thread (§2.2). All fourteen already reach every other field of this group through the E6a capability record §7.5 names, so a building field is the only thing keeping any of them here; #896 (E6b) migrates them. | §7.5 |
 | `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
-| `ui-hud-events` | `Engine.Input.Thread.Mouse`, `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.Focus`, `Engine.Scripting.Lua.API.PlayerEvent`, `Engine.Scripting.Lua.API.UI.Element`, `Engine.Scripting.Lua.API.UI.Focus`, `Engine.Scripting.Lua.API.UI.Hierarchy`, `Engine.Scripting.Lua.API.UI.Page`, `Engine.Scripting.Lua.API.UI.Property`, `Engine.Scripting.Lua.API.UI.TextInput`, `Engine.Scripting.Lua.API.UI.Tooltip`, `Engine.Scripting.Lua.Message.Scene`, `UI.Tooltip.State` | §7.7 |
+| `ui-hud-events` | `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.PlayerEvent` — the E7b remainder, named individually per #897's requirement 2 so nothing is silently dropped between the a/b pair. #897 (E7a) removed this row's other 11 entries; both of the two left dereference at least one of the four event/notification/popup fields §7.7 lists, and #898 (E7b) migrates them. | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 0 + 0 + 4 + 14 + 0 + 13 + 0 = 33) match
-58 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 0 + 0 + 4 + 14 + 0 + 2 + 0 = 22) match
+47 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -1175,18 +1201,97 @@ call sequence over the same containers.
   `EngineEnv` parameters listed above disappear as §7.2/§7.4/§7.5
   land; nothing further is owed to `content-registries` itself.
 
-### 7.7 `ui-hud-events`
+### 7.7 `ui-hud-events` — **E7a LANDED (#897); E7b (#898) open**
 
 - **Dependencies:** `render-gpu-asset` (`UI.Render` needs both UI state
   and render/GPU handles — a genuine cross-capability read, not a
   migration blocker but something the eventual record boundary must
   accommodate), `input-lua-transport` (`focusManagerRef`, see §7.3).
-- **Independent migration:** Partial, for the reasons above.
-- **Follow-up scope:** One issue for the UI/focus/HUD fields
-  (`uiManagerRef`, `focusManagerRef`, `hudActivePageRef`,
-  `textBuffersRef`), one for the event/notification/popup fields
-  (`eventStoreRef`, `notificationCfgRef`, `notificationOrder`,
-  `popupQueueRef`) — the two halves have almost no consumers in common.
+  Both were already satisfied when E7a ran: #891 and #892 had landed,
+  so every cross-read this group makes already had a record to reach
+  through.
+- **Independent migration:** Partial, exactly as this entry predicted —
+  and the split fell where predicted too. The UI/focus/HUD half moved
+  on its own in E7a; the event/notification/popup half stays with E7b.
+- **Follow-up scope:** Two child issues, as anticipated — E7a (#897)
+  for the UI/focus/HUD fields, E7b (#898) for the
+  event/notification/popup ones. The two halves have almost no
+  consumers in common, which is what made the split clean.
+
+**What landed in E7a (#897):**
+`Engine.Core.Capability.Ui` exports `UiCapability` over exactly the
+four UI/focus/HUD fields (`uiManagerRef`, `focusManagerRef`,
+`hudActivePageRef`, `textBuffersRef`) plus the total one-way projection
+`toUiCapability`, following §7.1/#889's convention (same live
+`IORef`s, never a copy; no import of a consumer). It is a pure
+refactor — no `EngineEnv` field-set change, no behaviour change:
+pointer routing, modal boundaries, press/release activation, keyboard
+control focus, text-input buffers, tooltip dwell/lock and the HUD
+active-page tracking are all the same call sequence over the same
+containers.
+
+- **One record, no split.** Unlike §3.1's `render-gpu-asset` and
+  §7.3's `input-lua-transport`, this capability owns no
+  thread-private field: §5 records readers *and* writers on more than
+  one thread for `uiManagerRef`/`focusManagerRef`, and the two
+  single-role fields (`hudActivePageRef` — `WorldThread`;
+  `textBuffersRef` — read on `LuaThread`, written on `MainRender`) are
+  ordinary session/boot state, not an allocator or a handoff slot. So
+  there is one record and no main-only/worker-safe pair, and the audit
+  needs no import boundary for it beyond §6's ratchet.
+- **Field prefix `uic`, not `uc`.** The convention appends a `c` to a
+  single-word record's initial (`cc`/`rc`/`ic`), which would collide
+  with `UnitCombatCapability`'s `uc` (#895). Two capability records
+  sharing one prefix would be actively misleading in any module
+  holding both, so this record uses `ui` + `c`.
+- **Fully narrowed:** all 11 of this row's UI-dominant §6.2 entries —
+  `Engine.Input.Thread.Mouse`, `Engine.Scripting.Lua.API.Focus`, the
+  seven `Engine.Scripting.Lua.API.UI.*` modules (`Element`, `Focus`,
+  `Hierarchy`, `Page`, `Property`, `TextInput`, `Tooltip`),
+  `Engine.Scripting.Lua.Message.Scene` and `UI.Tooltip.State`. All 11
+  still import `Engine.Core.State`, but narrowly (see §6's accounting
+  for exactly what each one still needs).
+- **Mixed and already-narrow consumers adopted the record too.** Four
+  modules outside §6.2 reached one of these fields by named accessor
+  and would otherwise have kept a bare ref alive with no future
+  ratchet entry to remove it: `UI.Render` (`uiManagerRef` — now off
+  `Engine.Core.State` entirely), `Engine.Scripting.Lua.API.Config`
+  (`uiManagerRef`), `Engine.Scripting.Lua.API.Text` (`textBuffersRef`)
+  and `World.Thread.Cursor` (`hudActivePageRef`). The three
+  input-thread modules §7.3 left on explicit `focusManagerRef`/
+  `uiManagerRef` values pending this record —
+  `Engine.Input.Thread.Keyboard`, `.Char` and `.Scroll` — plus
+  `Engine.Input.Thread.Mouse.Activation` took it as well; #745's
+  atomic focus/control-focus transitions are the identical
+  `atomicModifyIORef'` calls over the identical container, since a
+  projection hands out the live handle. `Engine.Core.Init` (seeds the
+  refs), `Engine.Core.State` (declares them), the projection module
+  itself and `World.Load.Publish` (§6.1 permanent load orchestration,
+  which resets three of the four) stay named-accessor consumers by
+  design.
+- **`Engine.Input.Thread.Mouse` and its #787 budget.** §7.5 recorded
+  this module as the one that could not adopt `UnitCombatCapability`
+  because it sat exactly at its 500-line budget
+  (`tools/haskell_module_budget.py`). E7a narrowed it anyway, at
+  exactly 500 lines: its import block moved to one-line form, which
+  paid for the four capability imports it now carries
+  (`Core`/`InputView`/`RenderView`/`Ui`). `actionOutcomeRef` is still
+  the explicit narrow value §7.5's rule assigns it.
+- **Enforcement:** the §6 ratchet (`TEMPORARY_CEILING`'s
+  `ui-hud-events` set shrunk 13 → 2, checked in both directions
+  against the live scan and against §6.2), plus projection-aliasing
+  coverage in `Test.Headless.Capability.Ui` — all four fields asserted
+  to be the same live container as `EngineEnv`'s, stability across
+  repeated projection (E7a re-projects inline at most call sites,
+  several times within a single input event), and an explicit check
+  that the two focus-carrying refs are not transposed.
+- **Deferred to E7b (#898) — named individually, nothing silently
+  dropped:** `Engine.PlayerEvent.Emit` and
+  `Engine.Scripting.Lua.API.PlayerEvent`. Both are event-dominant:
+  they need `eventStoreRef`, `notificationCfgRef`, `notificationOrder`
+  and/or `popupQueueRef`, none of which `UiCapability` carries, and
+  neither touches any of E7a's four fields — so #898 is a clean
+  subtraction rather than a re-audit.
 
 ### 7.8 `save-load-coordination`
 

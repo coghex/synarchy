@@ -16,7 +16,10 @@ module Engine.Scripting.Lua.API.UI.Focus
 import UPrelude
 import qualified HsLua as Lua
 import Data.IORef (atomicModifyIORef', readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import qualified Engine.Core.Queue as Q
 import UI.Types
@@ -27,7 +30,7 @@ uiSetFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiSetFocusFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementFocus (ElementHandle $ fromIntegral e) mgr, ())
         Nothing → pure ()
     return 0
@@ -35,14 +38,14 @@ uiSetFocusFn env = do
 -- | UI.clearFocus()
 uiClearFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiClearFocusFn env = do
-    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+    Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
         (clearElementFocus mgr, ())
     return 0
 
 -- | UI.getFocus() -> elementHandle or nil
 uiGetFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiGetFocusFn env = do
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     case getElementFocus mgr of
         Just (ElementHandle h) → Lua.pushinteger (fromIntegral h)
         Nothing                → Lua.pushnil
@@ -52,7 +55,7 @@ uiGetFocusFn env = do
 uiHasFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiHasFocusFn env = do
     elemArg ← Lua.tointeger 1
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     let isFocused = case (elemArg, getElementFocus mgr) of
             (Just e, Just (ElementHandle h)) → fromIntegral e ≡ h
             _                                → False
@@ -82,14 +85,15 @@ uiHasFocusFn env = do
 --   rather than three independent copies drifting apart.
 applyAndNotifyControlFocus ∷ EngineEnv → (UIPageManager → UIPageManager) → IO ()
 applyAndNotifyControlFocus env f = do
-    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \mgr →
+    mChanged ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
         let mgr' = f mgr
         in ( mgr'
            , if getControlFocus mgr' ≡ getControlFocus mgr
              then Nothing else Just (getControlFocus mgr')
            )
     case mChanged of
-        Just newFocus → Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+        Just newFocus → Q.writeQueue (ivLuaQueue (toInputViewCapability env))
+                                     (LuaUIControlFocusChanged newFocus)
         Nothing → pure ()
 
 -- | UI.setControlFocus(elementHandle)
@@ -111,7 +115,7 @@ uiClearControlFocusFn env = do
 -- | UI.getControlFocus() -> elementHandle or nil
 uiGetControlFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiGetControlFocusFn env = do
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     case getControlFocus mgr of
         Just (ElementHandle h) → Lua.pushinteger (fromIntegral h)
         Nothing                → Lua.pushnil
@@ -121,7 +125,7 @@ uiGetControlFocusFn env = do
 uiHasControlFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiHasControlFocusFn env = do
     elemArg ← Lua.tointeger 1
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     let isFocused = case (elemArg, getControlFocus mgr) of
             (Just e, Just (ElementHandle h)) → fromIntegral e ≡ h
             _                                → False

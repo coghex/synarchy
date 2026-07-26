@@ -24,7 +24,8 @@ import qualified Data.Vector as V
 import qualified HsLua as Lua
 import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Asset.Handle (FontHandle(..), TextureHandle(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import UI.Types
 import UI.Manager (setElementTooltip, clearElementTooltip)
 import UI.Tooltip (setTooltipStyle, lockActiveTooltip, clearTooltipLock
@@ -48,7 +49,7 @@ uiSetTooltipFn env = do
                   , ttSprites  = []
                   , ttMaxWidth = Nothing
                   }
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (setElementTooltip elemH content mgr, ())
         _ → pure ()
     return 0
@@ -62,7 +63,7 @@ uiClearTooltipFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e →
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (clearElementTooltip (ElementHandle (fromIntegral e)) mgr, ())
         Nothing → pure ()
     return 0
@@ -106,7 +107,7 @@ uiSetTooltipRichFn env = do
                   , ttSprites  = sprites
                   , ttMaxWidth = realToFrac <$> mMaxW
                   }
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (setElementTooltip elemH content mgr, ())
         _ → pure ()
     return 0
@@ -213,7 +214,7 @@ uiSetTooltipStyleFn env = do
           mSepCol    ← readColor    styleIdx "separatorColor"
           mSepThick  ← getOptNumber styleIdx "separatorThickness"
           mSepTex    ← getOptInt    styleIdx "separatorTexture"
-          Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+          Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
               let cur = ttsStyle (upmTooltip mgr)
                   new = cur
                     { tsFont        = maybe (tsFont cur)
@@ -300,14 +301,14 @@ getOptString tbl name = do
 --   No-op if no tooltip is visible.
 uiLockTooltipFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiLockTooltipFn env = do
-    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+    Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
         (lockActiveTooltip mgr, ())
     return 0
 
 -- | UI.unlockTooltip() — release the lock and hide the tooltip.
 uiUnlockTooltipFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiUnlockTooltipFn env = do
-    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+    Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
         (clearTooltipLock mgr, ())
     return 0
 
@@ -315,13 +316,13 @@ uiUnlockTooltipFn env = do
 --   otherwise.
 uiToggleTooltipLockFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiToggleTooltipLockFn env = do
-    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+    Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
         (toggleTooltipLock mgr, ())
     return 0
 
 -- | UI.isTooltipLocked() -> boolean
 uiIsTooltipLockedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiIsTooltipLockedFn env = do
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     Lua.pushboolean (isTooltipLocked mgr)
     return 1

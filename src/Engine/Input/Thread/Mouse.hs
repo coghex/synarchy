@@ -12,27 +12,27 @@ module Engine.Input.Thread.Mouse
   ) where
 
 import UPrelude
-import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, LogCategory(..))
-import Engine.Core.State
+import Engine.Core.State (EngineEnv, actionOutcomeRef)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.InputView (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.RenderView (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
+import Engine.Core.Capability.WorldSim (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
 import Engine.Input.Inject (windowToFb)
 import qualified Engine.Core.Queue as Q
-import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
-                  , clearTooltipLock, toggleTooltipLock)
-import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer
-                          , isPointerSurfaceBlocked)
+import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip, clearTooltipLock, toggleTooltipLock)
+import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer, isPointerSurfaceBlocked)
 import UI.Manager.Query (isElementDragActivation)
-import UI.ControlActivation (PendingActivation(..), ActivationOutcome(..)
-                             , activationOutcomeName, beginActivation)
+import UI.ControlActivation (PendingActivation(..), ActivationOutcome(..), activationOutcomeName, beginActivation)
 import Engine.Input.Thread.Mouse.Activation (resolvePendingActivation)
 import UI.FocusNavigation (isEligibleControl)
 import UI.Manager (setControlFocus, clearControlFocus, getControlFocus)
@@ -51,12 +51,12 @@ uiDragThresholdPx = 4
 --   is.
 dispatchMouseEvent ∷ EngineEnv → InputState → GLFW.MouseButton → (Double, Double) → GLFW.MouseButtonState → IO InputState
 dispatchMouseEvent env inpSt btn pos state = do
-    let lq = luaQueue env
+    let lq = ivLuaQueue (toInputViewCapability env)
         (x, y) = pos
-    logger ← readIORef (loggerRef env)
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
 
-    (winW, winH) ← readIORef (windowSizeRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    (winW, winH) ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
+    (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
     -- F4 (#774): the oracle's recorded `where` must share F1/F2/F3's
     -- framebuffer-pixel space, not the window coords the routing/
     -- hit-test math below (mouseX/mouseY) and every Lua-dispatched
@@ -130,7 +130,7 @@ dispatchMouseEvent env inpSt btn pos state = do
 
         logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
 
-        uiMgr ← readIORef (uiManagerRef env)
+        uiMgr ← readIORef (uicUiManagerRef (toUiCapability env))
         let mousePos = (mouseX, mouseY)
 
         -- Zero-size window/framebuffer (minimize): winW/winH = 0 makes
@@ -166,7 +166,7 @@ dispatchMouseEvent env inpSt btn pos state = do
           GLFW.MouseButton'3 →
             if isTooltipVisible uiMgr
               then do
-                atomicModifyIORef' (uiManagerRef env) $ \m →
+                atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \m →
                     (toggleTooltipLock m, ())
                 recordRouteOutcome "accepted" (Just "tooltip_lock_toggle")
                 return ClickSwallowed
@@ -221,12 +221,12 @@ dispatchMouseEvent env inpSt btn pos state = do
                 return ClickSwallowed
               else do
                 when locked $
-                    atomicModifyIORef' (uiManagerRef env) $ \m →
+                    atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \m →
                         (clearTooltipLock m, ())
                 -- Re-read manager after the unlock mutation so we
                 -- don't hit-test against the now-hidden tooltip page.
                 uiMgr' ← if locked
-                            then readIORef (uiManagerRef env)
+                            then readIORef (uicUiManagerRef (toUiCapability env))
                             else return uiMgr
                 case btn of
                   -- #742: routePointer scopes the underlying element
@@ -247,7 +247,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                     -- on those same non-focusing routes below. Reports
                     -- an actual transition the same way Tab/Escape/
                     -- validation-repair already do.
-                    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \m →
+                    mChanged ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \m →
                         let target = case leftRoute of
                                 RouteElement eh _ | isEligibleControl eh m → Just eh
                                 _ → Nothing

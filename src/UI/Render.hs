@@ -18,7 +18,7 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logWarnM)
-import Engine.Core.State (uiManagerRef)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts, GlyphInstance(..))
@@ -103,7 +103,7 @@ mergeLayeredTextItems = Map.map mergeInLayer
 renderUIPages ∷ EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
     env ← ask
-    mgr ← liftIO $ readIORef (uiManagerRef env)
+    mgr ← liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     
     maybeBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
 
