@@ -502,6 +502,7 @@ library
                      Blood.Render
                      Blood.Impact
                      Blood.Trail
+                     Blood.Pool
                      Engine.Scripting.Lua.API.Blood
                      Location.Types
                      Location.Bounds

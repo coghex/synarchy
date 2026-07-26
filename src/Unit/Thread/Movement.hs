@@ -46,12 +46,16 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
-                  , Wound(..))
+                  , Wound(..), TrailState(..))
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle, pickImpactWound)
 import Blood.Trail
     ( defaultTrailThresholds, consumeTrailMarks, TrailMarkOut(..)
     , spawnTrailMark
+    )
+import Blood.Pool
+    ( defaultPoolThresholds, classifyOngoing, OngoingMode(..)
+    , consumePoolLayers, PoolLayerOut(..), poolLayerOffset, spawnPoolLayer
     )
 import Combat.Wounds (externalBleedRateFor, dominantExternalBleedWound)
 import Unit.Thread.Movement.Types
@@ -212,8 +216,10 @@ tickAllMovement dt env utsRef = do
                         in spawnImpactBlood (toWorldSimCapability env) (uiPage inst) gx gy gz
                              kind sev angle seed (Just uid) now
 
-    -- Bleeding trails (#882): the MOVING half of ongoing external
-    -- bleeding. Only units carrying an active trail accumulator
+    -- Ongoing bleeding (#882 trails + #883 pooling): both halves are
+    -- driven from here, from ONE per-unit accumulator, with exactly one
+    -- of them consuming it per tick (see Blood.Pool.classifyOngoing).
+    -- Only units carrying an active trail accumulator
     -- (uiTrailState — populated by Combat.Wounds.Tick's conserved
     -- external-loss accounting; Nothing for a unit that has never bled
     -- externally) do any work here. `um`'s uiGridX/Y still mirrors this
@@ -275,30 +281,85 @@ tickAllMovement dt env utsRef = do
                                    else
                                      let stepDist = sqrt ((nx - ox) * (nx - ox)
                                                          + (ny - oy) * (ny - oy))
-                                         (ts', popped) =
-                                             consumeTrailMarks defaultTrailThresholds
-                                                 stepDist dt now ts
                                          repKind = maybe T.empty woundKind
                                              (dominantExternalBleedWound def liveInst)
-                                         mkMark i m =
-                                             ( uiPage liveInst
-                                             , ox + tmoFraction m * (nx - ox)
-                                             , oy + tmoFraction m * (ny - oy)
-                                             , nz
-                                             , repKind
-                                             , tmoVolume m
-                                             , round (now * 1000.0)
-                                                 + fromIntegral (unUnitId uid) + i
-                                             , Just uid
-                                             )
-                                         marks = zipWith mkMark [0 ∷ Int ..] popped
+                                         seedFor i = round (now * 1000.0)
+                                             + fromIntegral (unUnitId uid) + i
+                                         -- #883: which half owns this
+                                         -- tick, by DISPLACEMENT from the
+                                         -- cluster anchor (never this
+                                         -- tick's step — a unit shuffling
+                                         -- in place must keep feeding one
+                                         -- pool, not restart a cluster
+                                         -- every tick). Uses the END-of-
+                                         -- tick position, the same fresh
+                                         -- sim state the step is measured
+                                         -- against.
+                                         (mode, tsC) =
+                                             classifyOngoing defaultPoolThresholds
+                                                 (nx, ny) ts
+                                         (ts', marks) = case mode of
+                                           ModeTravel →
+                                             let (tsT, popped) =
+                                                   consumeTrailMarks
+                                                     defaultTrailThresholds
+                                                     stepDist dt now tsC
+                                                 mkMark i m =
+                                                     ( uiPage liveInst
+                                                     , ox + tmoFraction m * (nx - ox)
+                                                     , oy + tmoFraction m * (ny - oy)
+                                                     , nz
+                                                     , repKind
+                                                     , tmoVolume m
+                                                     , seedFor i
+                                                     , Just uid
+                                                     )
+                                             in (tsT, zipWith mkMark [0 ∷ Int ..] popped)
+                                           ModeDwell →
+                                             -- Bank this tick's step so a
+                                             -- resumed trail still has to
+                                             -- clear its own distance gate,
+                                             -- then grow the local pool.
+                                             let tsB = tsC { tsDistSinceMark =
+                                                     tsDistSinceMark tsC
+                                                         + max 0 stepDist }
+                                                 -- (nx, ny) is where the
+                                                 -- unit ACTUALLY is; a
+                                                 -- cluster's first layer
+                                                 -- re-anchors there, so a
+                                                 -- walk-then-stop pools
+                                                 -- under the stopped unit
+                                                 -- rather than back at the
+                                                 -- last radius crossing.
+                                                 (tsP, layers) =
+                                                   consumePoolLayers
+                                                     defaultPoolThresholds
+                                                     (nx, ny) now tsB
+                                                 (ax, ay) = fromMaybe (nx, ny)
+                                                     (tsClusterAnchor tsP)
+                                                 mkLayer i l =
+                                                     let sd = seedFor i
+                                                         (dx, dy) = poolLayerOffset
+                                                             defaultPoolThresholds
+                                                             sd (ploIndex l)
+                                                     in ( uiPage liveInst
+                                                        , ax + dx, ay + dy, nz
+                                                        , repKind
+                                                        , ploVolume l
+                                                        , sd
+                                                        , Just uid
+                                                        )
+                                             in (tsP, zipWith mkLayer [0 ∷ Int ..] layers)
+                                         tagged = [ (mode, m) | m ← marks ]
                                      in ( HM.insert uid
                                             (liveInst { uiTrailState = Just ts' }) accMap
-                                        , accMarks ++ marks )
+                                        , accMarks ++ tagged )
                 (finalMap, allMarks) = foldl' processOne (umInstances um', []) trailSteps
             in (um' { umInstances = finalMap }, allMarks)
-    forM_ trailMarks $ \(page, gx, gy, gz, kind, vol, seed, mSrc) →
-        spawnTrailMark (toWorldSimCapability env) page gx gy gz kind vol (impactFallbackAngle seed) seed mSrc now
+    forM_ trailMarks $ \(mode, (page, gx, gy, gz, kind, vol, seed, mSrc)) →
+        (case mode of ModeTravel → spawnTrailMark; ModeDwell → spawnPoolLayer)
+            (toWorldSimCapability env) page gx gy gz kind vol
+            (impactFallbackAngle seed) seed mSrc now
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)
