@@ -2,8 +2,8 @@
 -- | The units-and-combat half of the @units-buildings-combat@
 --   capability (epic #537, issue #895 — E6a): the ten fields
 --   'docs/engineenv_capability_inventory.md' §7.5 identifies as the
---   part that moves first, separate from the three building fields
---   E6b (#896) migrates.
+--   part that moved first, separate from the three building fields
+--   E6b (#896) migrated onto "Engine.Core.Capability.Building".
 --
 --   Units and combat move __together__ because they already share
 --   @unitQueue@\/@combatQueue@'s producer\/consumer relationship and
@@ -28,17 +28,18 @@
 --   The three __building__ fields — @buildingManagerRef@,
 --   @buildingQueue@ and @buildingGhostRef@ — are a conceptually
 --   separate domain (§5's own note: \"Building\" is a domain, not a
---   thread; its commands are drained on @UnitThread@). §7.5 assigns
---   them to E6b (#896); per #889's \"no unused capability records
---   ahead of need\", applied field-by-field, they are absent here
---   rather than present-but-unused. The 14 §6.2 modules that
---   genuinely need them keep their temporary full-access entry until
---   #896 lands — including "Unit.Thread" itself, which hands its whole
---   environment to @Building.Thread.Command.processAllBuildingCommands@
---   on the unit thread. Each of those 14 still routes any access to
---   one of the ten fields below through this record (or an explicit
---   narrow value), so the only thing keeping them unrestricted is a
---   building field.
+--   thread; its commands are drained on @UnitThread@). §7.5 assigned
+--   them to E6b (#896), which has since landed
+--   "Engine.Core.Capability.Building" over exactly those three; per
+--   #889's \"no unused capability records ahead of need\", applied
+--   field-by-field, they are absent here rather than
+--   present-but-unused. A module that needs both halves takes both
+--   records — "Unit.Thread" is the worked example: it drains the
+--   building command queue on the unit thread (there is no building
+--   thread), and since #896 hands
+--   @Building.Thread.Command.processAllBuildingCommands@ that narrow
+--   record plus the logger and world\/sim view rather than its whole
+--   environment.
 --
 --   == @statRNGRef@ is shared, and stays shared
 --

@@ -502,30 +502,19 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Structure", "World.Thread",
         "World.Thread.Command.Basic", "World.Thread.Command.Init",
     }),
-    # Shrunk from 49 to 14 by issue #895 (E6a): every module whose
-    # `EngineEnv` use was covered by the ten unit/combat fields now
-    # reaches them through Engine.Core.Capability.UnitCombat (or, for
-    # World.Thread.Command.Edit.Dig, through the explicit narrow
-    # `statRNGRef`/`unitQueue` parameters its caller now supplies).
-    # The 14 below still need one or more of the THREE building fields
-    # (buildingManagerRef, buildingQueue, buildingGhostRef), which
-    # #896 (E6b) migrates -- see SS7.5. `Unit.Thread` is on the list
-    # for the same reason without naming a building field itself: it
-    # hands its whole environment to
+    # Emptied by issues #895 (E6a) and #896 (E6b): E6a moved the ten
+    # unit/combat fields onto Engine.Core.Capability.UnitCombat (49 -> 14,
+    # or -- for World.Thread.Command.Edit.Dig -- onto the explicit narrow
+    # `statRNGRef`/`unitQueue` parameters its caller supplies), and E6b
+    # moved the three building fields (buildingManagerRef, buildingQueue,
+    # buildingGhostRef) onto Engine.Core.Capability.Building (14 -> 0).
+    # `Unit.Thread` was on E6a's list without naming a building field
+    # itself, because it handed its whole environment to
     # `Building.Thread.Command.processAllBuildingCommands`, which it
-    # drains on the unit thread. All 14 already route every access to
-    # one of E6a's ten fields through the capability record, so a
-    # building field is the ONLY thing keeping any of them
-    # unrestricted.
-    "units-buildings-combat": frozenset({
-        "Building.Thread.Command",
-        "Engine.Scripting.Lua.API.Buildings.Materials", "Engine.Scripting.Lua.API.Buildings.Progress",
-        "Engine.Scripting.Lua.API.Buildings.Query", "Engine.Scripting.Lua.API.Buildings.Selection",
-        "Engine.Scripting.Lua.API.Buildings.Spawn", "Engine.Scripting.Lua.API.Buildings.Yaml",
-        "Engine.Scripting.Lua.API.Craft.Bill", "Engine.Scripting.Lua.API.Craft.Execute",
-        "Engine.Scripting.Lua.API.Power", "Engine.Scripting.Lua.API.Units.Cargo",
-        "Unit.Thread", "World.Thread.ItemTemp", "World.Thread.Power",
-    }),
+    # drains on the unit thread (there is no building thread, SS2.2);
+    # that drain now takes the building capability plus the logger and
+    # world/sim view explicitly instead -- see SS7.5.
+    "units-buildings-combat": frozenset(),
     # Emptied by issue #890 (E2): all nine modules now reach their
     # registries through Engine.Core.Capability.ContentRegistries.
     "content-registries": frozenset(),

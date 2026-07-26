@@ -24,10 +24,21 @@
 --   'ContentRegistriesCapability', and the one @units-buildings-combat@
 --   field this module writes (the unit manager) is passed in as the bare
 --   'IORef' it is. 'repairAtFn' still takes an 'EngineEnv', but purely
---   as the opaque token the not-yet-narrowed station gate
---   ('validateStation') demands — this module dereferences no
---   'EngineEnv' field itself, and that parameter goes away when
---   @units-buildings-combat@ migrates (SS7.5).
+--   as the opaque token the station gate ('validateStation') demands —
+--   this module dereferences no 'EngineEnv' field itself.
+--
+--   That parameter did __not__ go away when @units-buildings-combat@
+--   migrated (#895\/#896, SS7.5), as an earlier version of this comment
+--   predicted it would. The gate is not a single-capability consumer:
+--   it composes FOUR already-landed records
+--   ('ContentRegistriesCapability' for the recipe, 'BuildingCapability'
+--   for the station, 'UnitCombatCapability' for the crafter,
+--   'WorldSimCapability' for the game clock) and then calls
+--   @Engine.Scripting.Lua.API.Power.isRecipePoweredAt@, which composes
+--   two of the same four again plus per-page world state. An 'EngineEnv'
+--   is what those projections are taken FROM, so the token stays until
+--   something narrows the gate itself — which is not any SS7 row's
+--   scope, since no capability owns it.
 module Engine.Scripting.Lua.API.Repair
     ( repairGetFn
     , repairGetNamesFn

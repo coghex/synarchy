@@ -10,13 +10,15 @@ module Engine.Scripting.Lua.API.Buildings.Progress
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Building.Types
 
 -- | building.setSpawnRemaining(bid, n) — initialize the spawn-roster
@@ -32,7 +34,7 @@ buildingSetSpawnRemainingFn env = do
         (Just n, Just count) → do
             let bid = BuildingId (fromIntegral n)
                 rem = max 0 (fromIntegral count)
-            Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, ())
                     Just inst →
@@ -57,7 +59,7 @@ buildingGetSpawnRemainingFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mRem ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure (biSpawnRemaining <$> HM.lookup bid (bmInstances bm))
             case mRem of
                 Just r → do
@@ -79,7 +81,7 @@ buildingConsumeSpawnFn env = do
             return 1
         Just n → do
             let bid = BuildingId (fromIntegral n)
-            mRem ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            mRem ← Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
                     Just inst →
@@ -107,7 +109,7 @@ buildingGetBuildProgressFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mProg ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure (biBuildProgress <$> HM.lookup bid (bmInstances bm))
             case mProg of
                 Just p → do
@@ -130,7 +132,7 @@ buildingGetBuildRequiredFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mReq ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     def  ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -154,7 +156,7 @@ buildingAddBuildProgressFn env = do
         (Just n, Just (Lua.Number d)) → do
             let bid   = BuildingId (fromIntegral n)
                 delta = realToFrac d ∷ Float
-            mNew ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            mNew ← Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
                     Just inst →
@@ -187,7 +189,7 @@ buildingGetActivityFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mLabel ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → pure Nothing
                     Just inst → case HM.lookup (biDefName inst) (bmDefs bm) of

@@ -4,6 +4,8 @@ module Engine.Scripting.Lua.API.Buildings.Yaml
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -12,7 +14,7 @@ import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
@@ -108,7 +110,7 @@ loadBuildingYamlFn env backendState = do
                             , bdStateAnims      = stateAnims
                             , bdPowerDrain      = bydPowerDrain def
                             }
-                    atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                    atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                         (bm { bmDefs = HM.insert name bdef (bmDefs bm) }, ())
 
                     logDebug logger CatAsset $
