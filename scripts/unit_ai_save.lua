@@ -268,8 +268,18 @@ function M.register(unitAi, aiState)
         -- unit_ai_save_refs.lua's wrapUnitState haddock for why this is
         -- the closest Lua equivalent to psSim's SamePageRef-typed
         -- HashMap key).
-        version = 3,
-        inputVersions = { 1, 2, 3 },
+        -- v4 (issue #915): per-unit location knowledge
+        -- (aiState[uid].knownLocations, see
+        -- scripts/unit_ai_locations.lua) -- a new durable,
+        -- reference-bearing field, so a schema evolution rather than a
+        -- silent addition. v1/v2/v3 payloads predate the field and
+        -- decode with it ABSENT (a unit that never saw a location is
+        -- exactly what "no memory" means); it is deliberately NOT
+        -- back-filled from the player-wide discovery state, which is a
+        -- different fact entirely (what the PLAYER has mapped, not what
+        -- this acolyte has seen).
+        version = 4,
+        inputVersions = { 1, 2, 3, 4 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -285,7 +295,11 @@ function M.register(unitAi, aiState)
         -- see the persistence contract). "item_instance"
         -- (repairJob.instanceId) is carried inventory, owned by the
         -- "units" component's own snapshot, not a separate one.
-        deps = { "units", "buildings", "craft-bills", "world-activity" },
+        -- "location_instance" (knownLocations, #915) resolves against
+        -- "world-pages", which owns each page's placed-location
+        -- instance table (#911).
+        deps = { "units", "buildings", "craft-bills", "world-activity",
+                 "world-pages" },
         snapshot = function()
             -- Serialize only LIVE units' state. aiState is a global
             -- singleton that accumulates entries and never drops them when
@@ -321,6 +335,12 @@ function M.register(unitAi, aiState)
             -- wrapped but no __owner yet -- addOwnerToAiState adds ONLY
             -- that, without re-wrapping fields that are already wrapped.
             -- v3 payloads are already complete (identity).
+            --
+            -- v3 -> v4 (#915) is identity too: the only v4 addition is
+            -- knownLocations, and a v3 payload's ABSENCE of it is
+            -- already the correct v4 value. Nothing infers it -- see
+            -- the version field's own comment above for why
+            -- back-filling from player-wide discovery would be wrong.
             if version == 1 then return refsMod.wrapAiState(data) end
             if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data

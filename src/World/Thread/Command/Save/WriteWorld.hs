@@ -53,7 +53,8 @@ import World.Generate.Coordinates (chunkToGlobal)
 --   at all — Lua-owned state is no longer part of 'SessionSnapshot'.
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → Text → [(Text, Word32, Bool, BS.ByteString)]
-                       → [(Text, Text, Int, Maybe Int, Text)] → IO ()
+                       → [(Text, Text, Int, Maybe Int, Text, Maybe Text)]
+                       → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                         luaRefs = do
     mgr ← readIORef (worldManagerRef env)
@@ -254,8 +255,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- dangling-reference contract) — logged as
                                 -- diagnostics only (requirement 16).
                                 let knownLua = buildKnownEntities snap
-                                    luaEdges = [ LuaRefEdge c k i o p
-                                               | (c, k, i, o, p) ← luaRefs ]
+                                    luaEdges = [ LuaRefEdge c k i o p pg
+                                               | (c, k, i, o, p, pg) ← luaRefs ]
                                     -- componentVersions (round-2 review,
                                     -- issue #764): luaComponents already
                                     -- carries each component's just-

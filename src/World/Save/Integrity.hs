@@ -79,6 +79,9 @@ import World.Save.Snapshot
     ( SessionSnapshot(..), PageSnapshot(..), allItemInstanceIds )
 import World.Save.Types (BuildingSnapshot(..), UnitSnapshot(..))
 import Item.Ground (GroundItems(..))
+import Location.Instance
+    (LocationInstance(..), LocationInstanceId(..), instancesToList)
+import World.Generate.Types (WorldGenParams(..))
 
 -- | One structured integrity finding (requirement 10): which component
 --   + schema version + data path produced it, what kind of reference is
@@ -318,12 +321,19 @@ duplicateGlobalIdErrors snap = concat
 --   for these two kinds goes through @keUnitPage@ (the owning unit's
 --   page, threaded from the reference edge's own @owner@ — see
 --   'LuaRefEdge').
+--   @keLocationsByPage@ (#915) is per-page for the same reason, but
+--   resolved differently: a per-unit location memory names its own page
+--   explicitly on the wire ('lrePage'), rather than borrowing the owning
+--   unit's, because the page is part of the reference's durable identity
+--   @(WorldPageId, LocationInstanceId)@ (#911) and must survive
+--   independently of where the remembering unit happens to be.
 data KnownEntities = KnownEntities
     { keUnits             ∷ !(HS.HashSet Int)
     , keBuildings         ∷ !(HS.HashSet Int)
     , keBillsByPage       ∷ !(HM.HashMap WorldPageId (HS.HashSet Int))
     , keItemInstances     ∷ !(HS.HashSet Int)
     , keGroundItemsByPage ∷ !(HM.HashMap WorldPageId (HS.HashSet Int))
+    , keLocationsByPage   ∷ !(HM.HashMap WorldPageId (HS.HashSet Int))
     , keUnitPage          ∷ !(HM.HashMap Int WorldPageId)
     , keNextUnitId        ∷ !Int
     , keNextBuildingId    ∷ !Int
@@ -348,6 +358,12 @@ buildKnownEntities snap = KnownEntities
     , keGroundItemsByPage = HM.fromList
         [ (pid, HS.fromList (HM.keys (gisItems (pgsGroundItems page))))
         | (pid, page) ← HM.toList (snapPages snap) ]
+    , keLocationsByPage = HM.fromList
+        [ (pid, HS.fromList
+              [ unLocationInstanceId (liId inst)
+              | inst ← instancesToList
+                    (wgpLocationInstances (pgsGenParams page)) ])
+        | (pid, page) ← HM.toList (snapPages snap) ]
     , keUnitPage = HM.fromList
         [ (fromIntegral (unUnitId uid), pid)
         | (pid, page) ← HM.toList (snapPages snap)
@@ -371,12 +387,20 @@ buildKnownEntities snap = KnownEntities
 --   'refEdgeError' already uses for Haskell-side findings — see
 --   @unit_ai_save_refs.lua@'s @unitAiReferences@ and
 --   @building_spawn.lua@'s @buildingSpawnReferences@, which build it.
+--   @lrePage@ (#915) is the edge's OWN declared world page, for the one
+--   reference kind whose id means nothing without it
+--   (@location_instance@ — a per-page allocator whose durable identity
+--   IS @(page, id)@, see #911). Unlike @craft_bill@/@ground_item@,
+--   which borrow the owning unit's page, a location memory must name
+--   its page itself: the page is part of what the unit remembers, not
+--   an incidental fact about where the unit currently stands.
 data LuaRefEdge = LuaRefEdge
     { lreComponent ∷ !Text
     , lreKind      ∷ !Text
     , lreId        ∷ !Int
     , lreOwner     ∷ !(Maybe Int)
     , lrePath      ∷ !Text
+    , lrePage      ∷ !(Maybe Text)
     } deriving (Show, Eq)
 
 -- | Does this edge resolve against the known entity sets? An unknown
@@ -391,19 +415,31 @@ data LuaRefEdge = LuaRefEdge
 --   owner, or an owner that itself doesn't resolve to a live unit, the
 --   edge is reported as not resolving rather than falling back to a
 --   session-wide (and therefore potentially wrong-page) match.
+--
+--   @location_instance@ (#915) resolves against the edge's OWN declared
+--   page ('lrePage') — a page missing from the restored session, or an
+--   edge that declares none at all, is reported as not resolving rather
+--   than matched session-wide, which is what stops two pages' equally-
+--   numbered instance ids from aliasing.
 luaEdgeResolves ∷ KnownEntities → LuaRefEdge → Bool
 luaEdgeResolves ke e = case lreKind e of
-    "unit"          → HS.member (lreId e) (keUnits ke)
-    "building"      → HS.member (lreId e) (keBuildings ke)
-    "item_instance" → HS.member (lreId e) (keItemInstances ke)
-    "craft_bill"    → resolvesOnOwnerPage (keBillsByPage ke)
-    "ground_item"   → resolvesOnOwnerPage (keGroundItemsByPage ke)
-    _               → True
+    "unit"              → HS.member (lreId e) (keUnits ke)
+    "building"          → HS.member (lreId e) (keBuildings ke)
+    "item_instance"     → HS.member (lreId e) (keItemInstances ke)
+    "craft_bill"        → resolvesOnOwnerPage (keBillsByPage ke)
+    "ground_item"       → resolvesOnOwnerPage (keGroundItemsByPage ke)
+    "location_instance" → resolvesOnDeclaredPage (keLocationsByPage ke)
+    _                   → True
   where
     resolvesOnOwnerPage byPage =
         case lreOwner e ⌦ (`HM.lookup` keUnitPage ke) of
             Nothing  → False
             Just pid → maybe False (HS.member (lreId e)) (HM.lookup pid byPage)
+    resolvesOnDeclaredPage byPage =
+        case lrePage e of
+            Nothing   → False
+            Just page → maybe False (HS.member (lreId e))
+                              (HM.lookup (WorldPageId page) byPage)
 
 -- | An id at/above the relevant GLOBAL allocator can never have
 --   belonged to a real entity (requirement 8's "allocators that could
@@ -443,12 +479,14 @@ luaReferenceErrors componentVersions ke edges =
         , ieVersion = HM.lookupDefault 0 (lreComponent e) componentVersions
         , iePath = path
         , ieRefKind = luaKind (lreKind e)
-        , ieRefValue = T.pack (show (lreId e))
-        , ieExpectedScope = scopeText (lreKind e)
+        , ieRefValue = refValue
+        , ieExpectedScope = if lreKind e ≡ "location_instance"
+                              then locationScopeText e
+                              else scopeText (lreKind e)
         , ieActual = "not found in the loaded session"
         , ieCode = code
         , ieMessage = "lua component '" <> lreComponent e <> "' " <> path
-            <> " references " <> lreKind e <> " " <> T.pack (show (lreId e))
+            <> " references " <> lreKind e <> " " <> refValue
             <> " which does not resolve (tolerated: cleared at reconcile time)"
         }
     | e ← edges
@@ -458,20 +496,36 @@ luaReferenceErrors componentVersions ke edges =
     , let path = if T.null (lrePath e)
                    then lreKind e <> "#" <> T.pack (show (lreId e))
                    else lrePath e
+    -- A per-page id alone is not a usable diagnostic value for a kind
+    -- whose durable identity is (page, id) — a bare "3" names nothing
+    -- an operator could look up. #915's location memories therefore
+    -- report "page=<pid>,id=<n>", so both halves of the identity appear
+    -- in the rendered finding, not only the path.
+    , let refValue = case (lreKind e, lrePage e) of
+            ("location_instance", Just page) →
+                "page=" <> page <> ",id=" <> T.pack (show (lreId e))
+            _ → T.pack (show (lreId e))
     ]
   where
     luaKind k = case k of
-        "unit"          → RefUnit
-        "building"      → RefBuilding
-        "craft_bill"    → RefBill
-        "item_instance" → RefItemInstance
-        "ground_item"   → RefGroundItem
-        _               → RefUnit
+        "unit"              → RefUnit
+        "building"          → RefBuilding
+        "craft_bill"        → RefBill
+        "item_instance"     → RefItemInstance
+        "ground_item"       → RefGroundItem
+        "location_instance" → RefLocationInstance
+        _                   → RefUnit
     -- craft_bill/ground_item are PER-PAGE allocators, resolved against
     -- the owning unit's page specifically (see 'luaEdgeResolves') — the
     -- expected scope text says so, rather than claiming "global" for a
-    -- reference that was never checked session-wide.
+    -- reference that was never checked session-wide. location_instance
+    -- is per-page too, but resolved against the page the EDGE declares,
+    -- so its text names that page when the edge carries one.
     scopeText k = case k of
         "craft_bill"  → "owning unit's page (per-page allocator)"
         "ground_item" → "owning unit's page (per-page allocator)"
         _             → "global (session-wide allocator)"
+    locationScopeText e = case lrePage e of
+        Just page → "world page '" <> page <> "' (per-page allocator)"
+        Nothing   → "the reference's own declared world page \
+                     \(per-page allocator; none declared)"

@@ -40,7 +40,6 @@ local function grantWorkXP(uid, skill, amount)
     unit.addXP(uid, skill, amount)
 end
 
-
 -----------------------------------------------------------
 -- Per-unit AI state, keyed by uid. Hung off the module table so it
 -- survives reloads via the package.loaded singleton above.
@@ -53,6 +52,8 @@ end
 --                          progressAt } | nil,  -- last 2: #920 stall
 --   knownWaterSources  = { {x, y}, ... },   -- dedup'd by distance;
 --                                           -- empty list = none known
+--   knownLocations     = { {page,id,x,y} }, -- dedup'd by IDENTITY,
+--                                           -- see unit_ai_locations
 --   role               = "miner"|"woodcutter"|"builder"|"smith"
 --                        |"laborer"| nil,   -- derived each thought
 --                                           -- tick (unit_roles.lua);

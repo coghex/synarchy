@@ -35,6 +35,7 @@ import World.Save.Reference
 import World.Save.Integrity
 import World.Save.Snapshot
 import World.Save.Component.Types (craftBillsComponentId, powerNodesComponentId)
+import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Entities
     ( CraftBillDTO(..), CraftBillDTOv1(..), migrateCraftBillDTOv1
     , PowerNodeDTO(..), PowerNodeDTOv1(..), migratePowerNodeDTOv1
@@ -168,9 +169,14 @@ spec = do
         it "renders every RefKind constructor to a distinct, stable string" $ do
             let kinds = [ RefPage, RefUnit, RefBuilding, RefItemInstance
                         , RefBill, RefPowerNode, RefGroundItem
-                        , RefContent ContentUnit ]
+                        , RefContent ContentUnit, RefLocationInstance ]
                 texts = map refKindText kinds
             L.nub texts `shouldBe` texts   -- every kind renders distinctly
+            -- The Lua `kind` vocabulary and this enum must render
+            -- identically or a diagnostic naming one would not match a
+            -- diagnostic naming the other (#915's memories are reported
+            -- from Lua, resolved in Haskell).
+            refKindText RefLocationInstance `shouldBe` "location_instance"
 
         it "renders every ContentKind constructor to a distinct string" $ do
             let kinds = [ ContentUnit, ContentItem, ContentBuilding
@@ -201,11 +207,12 @@ spec = do
             let ke = KnownEntities
                     { keUnits = HS.singleton 5, keBuildings = HS.empty
                     , keBillsByPage = HM.empty, keItemInstances = HS.empty
-                    , keGroundItemsByPage = HM.empty, keUnitPage = HM.empty
+                    , keGroundItemsByPage = HM.empty
+                    , keLocationsByPage = HM.empty, keUnitPage = HM.empty
                     , keNextUnitId = 100
                     , keNextBuildingId = 100, keNextItemId = 100 }
-                unitEdge     = LuaRefEdge "test" "unit" 5 Nothing ""
-                buildingEdge = LuaRefEdge "test" "building" 5 Nothing ""
+                unitEdge     = LuaRefEdge "test" "unit" 5 Nothing "" Nothing
+                buildingEdge = LuaRefEdge "test" "building" 5 Nothing "" Nothing
             luaReferenceErrors HM.empty ke [unitEdge] `shouldBe` []
             length (luaReferenceErrors HM.empty ke [buildingEdge]) `shouldBe` 1
 
@@ -400,12 +407,18 @@ spec = do
                 , keBillsByPage = HM.fromList [ (page1, HS.fromList [1]) ]
                 , keItemInstances = HS.fromList [500]
                 , keGroundItemsByPage = HM.fromList [ (page1, HS.fromList [1]) ]
+                -- #915: page1 carries location instances 1 and 2; page2
+                -- carries only instance 1 -- the same NUMBER on both
+                -- pages, which is exactly the aliasing a page-scoped
+                -- resolution has to refuse.
+                , keLocationsByPage = HM.fromList
+                    [ (page1, HS.fromList [1, 2]), (page2, HS.fromList [1]) ]
                 , keUnitPage = HM.fromList [ (1, page1), (2, page2) ]
                 , keNextUnitId = 50
                 , keNextBuildingId = 50, keNextItemId = 1000 }
 
         it "a Lua reference that resolves produces no diagnostic" $
-            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 1 Nothing ""]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 1 Nothing "" Nothing]
                 `shouldBe` []
 
         it "a dangling Lua reference (target legitimately gone) is a \
@@ -414,13 +427,13 @@ spec = do
             -- id 30 sits BELOW keNextUnitId (50) -- a unit that could
             -- legitimately have existed and died, unlike 999 below
             -- (which could never have been allocated at all).
-            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 30 Nothing "" Nothing] of
                 [d]   → ieCode d `shouldBe` "dangling-reference"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "an id at/above the allocator is coded as an allocator-reuse \
            \hazard, not an ordinary dangling reference (requirement 8)" $
-            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 999 Nothing ""] of
+            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 999 Nothing "" Nothing] of
                 [d]   → ieCode d `shouldBe` "ref-exceeds-allocator"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
@@ -429,10 +442,10 @@ spec = do
            \'kind#id' string, and falls back to the synthetic form only \
            \when the edge itself carries no path" $ do
             case luaReferenceErrors HM.empty ke
-                    [LuaRefEdge "unit_ai" "unit" 30 Nothing "unit[7].attackTargetUid"] of
+                    [LuaRefEdge "unit_ai" "unit" 30 Nothing "unit[7].attackTargetUid" Nothing] of
                 [d]   → iePath d `shouldBe` "unit[7].attackTargetUid"
                 other → expectationFailure ("expected one finding, got " <> show other)
-            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+            case luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "unit" 30 Nothing "" Nothing] of
                 [d]   → iePath d `shouldBe` "unit#30"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
@@ -442,11 +455,11 @@ spec = do
            \id defaults to version 0 rather than crashing" $ do
             let versions = HM.fromList [("unit_ai", 2)]
             case luaReferenceErrors versions ke
-                    [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+                    [LuaRefEdge "unit_ai" "unit" 30 Nothing "" Nothing] of
                 [d]   → ieVersion d `shouldBe` 2
                 other → expectationFailure ("expected one finding, got " <> show other)
             case luaReferenceErrors versions ke
-                    [LuaRefEdge "some_other_component" "unit" 30 Nothing ""] of
+                    [LuaRefEdge "some_other_component" "unit" 30 Nothing "" Nothing] of
                 [d]   → ieVersion d `shouldBe` 0
                 other → expectationFailure ("expected one finding, got " <> show other)
 
@@ -455,34 +468,34 @@ spec = do
            \one (round-2 review) — never claims 'global' for craft_bill/ \
            \ground_item" $ do
             case luaReferenceErrors HM.empty ke
-                    [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing ""] of
+                    [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing "" Nothing] of
                 [d]   → T.unpack (ieExpectedScope d) `shouldContain` "per-page"
                 other → expectationFailure ("expected one finding, got " <> show other)
             case luaReferenceErrors HM.empty ke
-                    [LuaRefEdge "unit_ai" "unit" 30 Nothing ""] of
+                    [LuaRefEdge "unit_ai" "unit" 30 Nothing "" Nothing] of
                 [d]   → T.unpack (ieExpectedScope d) `shouldContain` "global"
                 other → expectationFailure ("expected one finding, got " <> show other)
 
         it "permitted gameplay cycles (mutual combat/AI targets) never \
            \produce a finding — existence-only checking has no cycle \
            \concept to reject (requirement 9)" $ do
-            let mutual = [ LuaRefEdge "unit_ai" "unit" 1 Nothing ""
-                         , LuaRefEdge "unit_ai" "unit" 2 Nothing "" ]
+            let mutual = [ LuaRefEdge "unit_ai" "unit" 1 Nothing "" Nothing
+                         , LuaRefEdge "unit_ai" "unit" 2 Nothing "" Nothing ]
                          -- 1 targets 2, 2 targets 1
             luaReferenceErrors HM.empty ke mutual `shouldBe` []
 
         it "an unknown kind string never manufactures a false positive \
            \(a registration-time vocabulary mismatch is the audit's job, \
            \not this validator's)" $
-            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "not_a_real_kind" 1 Nothing ""]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "not_a_real_kind" 1 Nothing "" Nothing]
                 `shouldBe` []
 
         it "a craft_bill/ground_item reference resolves when the OWNING \
            \unit's page has a matching id (requirement 8's page-scoped \
            \per-page-allocator resolution)" $ do
-            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 1) ""]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 1) "" Nothing]
                 `shouldBe` []
-            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 1) ""]
+            luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 1) "" Nothing]
                 `shouldBe` []
 
         it "a craft_bill/ground_item reference does NOT resolve against a \
@@ -491,18 +504,84 @@ spec = do
            \reference (requirement 8)" $ do
             -- unit #2 lives on page2, which has no bill/ground-item #1 --
             -- only page1 does. Must NOT falsely resolve.
-            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 2) ""])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 2) "" Nothing])
                 `shouldBe` 1
-            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 2) ""])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "ground_item" 1 (Just 2) "" Nothing])
                 `shouldBe` 1
 
         it "a craft_bill/ground_item reference with no owner (or an \
            \unresolvable owner) never resolves -- there is no session-wide \
            \fallback for a per-page-allocated kind" $ do
-            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing ""])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 Nothing "" Nothing])
                 `shouldBe` 1
-            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 999) ""])
+            length (luaReferenceErrors HM.empty ke [LuaRefEdge "unit_ai" "craft_bill" 1 (Just 999) "" Nothing])
                 `shouldBe` 1
+
+    describe "integrity graph — per-unit location memory (#915)" $ do
+        -- Same fixture as above: page1 has location instances 1 and 2,
+        -- page2 has only instance 1.
+        let ke = KnownEntities
+                { keUnits = HS.fromList [1, 2], keBuildings = HS.empty
+                , keBillsByPage = HM.empty, keItemInstances = HS.empty
+                , keGroundItemsByPage = HM.empty
+                , keLocationsByPage = HM.fromList
+                    [ (page1, HS.fromList [1, 2]), (page2, HS.fromList [1]) ]
+                , keUnitPage = HM.fromList [ (1, page1), (2, page2) ]
+                , keNextUnitId = 50, keNextBuildingId = 50, keNextItemId = 50 }
+            locEdge i page path =
+                LuaRefEdge "unit_ai" "location_instance" i (Just 1) path page
+
+        it "resolves against the page the EDGE declares" $
+            luaReferenceErrors HM.empty ke
+                [ locEdge 1 (Just "page1") "unit[1].knownLocations[1]"
+                , locEdge 2 (Just "page1") "unit[1].knownLocations[2]" ]
+                `shouldBe` []
+
+        it "does NOT resolve a same-numbered instance from another page \
+           \-- equal instance ids on two pages must never alias" $
+            -- Instance 2 exists on page-one only. A memory declaring
+            -- page-two must report, even though the OWNING unit (#1)
+            -- lives on page-one where 2 does exist: the page travels
+            -- with the memory, not with the unit.
+            case luaReferenceErrors HM.empty ke
+                    [ locEdge 2 (Just "page2") "unit[1].knownLocations[1]" ] of
+                [d]   → ieCode d `shouldBe` "dangling-reference"
+                other → expectationFailure ("expected one finding, got " <> show other)
+
+        it "an unknown page never falls back to a session-wide match" $
+            length (luaReferenceErrors HM.empty ke
+                        [ locEdge 1 (Just "no-such-page") "p" ]) `shouldBe` 1
+
+        it "an edge with no declared page never resolves — a per-page id \
+           \names nothing on its own" $
+            length (luaReferenceErrors HM.empty ke [ locEdge 1 Nothing "p" ])
+                `shouldBe` 1
+
+        it "a missing memory's diagnostic names its component, field \
+           \path, page AND id, and the location_instance kind — a bare \
+           \id would identify nothing" $
+            case luaReferenceErrors (HM.fromList [("unit_ai", 4)]) ke
+                    [ locEdge 7 (Just "page1") "unit[1].knownLocations[2]" ] of
+                [d] → do
+                    ieComponent d `shouldBe` ComponentId "lua.unit_ai"
+                    ieVersion d `shouldBe` 4
+                    iePath d `shouldBe` "unit[1].knownLocations[2]"
+                    ieRefKind d `shouldBe` RefLocationInstance
+                    ieRefValue d `shouldBe` "page=page1,id=7"
+                    T.unpack (ieExpectedScope d) `shouldContain` "page1"
+                    T.unpack (ieMessage d) `shouldContain` "location_instance"
+                    T.unpack (ieMessage d) `shouldContain` "unit_ai"
+                    ieCode d `shouldBe` "dangling-reference"
+                other → expectationFailure ("expected one finding, got " <> show other)
+
+        it "a dangling memory never suppresses its resolving siblings — \
+           \exactly one finding, for the one entry that is gone" $
+            case luaReferenceErrors HM.empty ke
+                    [ locEdge 1 (Just "page1") "unit[1].knownLocations[1]"
+                    , locEdge 9 (Just "page1") "unit[1].knownLocations[2]"
+                    , locEdge 2 (Just "page1") "unit[1].knownLocations[3]" ] of
+                [d]   → iePath d `shouldBe` "unit[1].knownLocations[2]"
+                other → expectationFailure ("expected one finding, got " <> show other)
 
     describe "deterministic ordering + truncation (requirement 10)" $ do
         it "sorts findings deterministically by (component, path, value, code)" $ do

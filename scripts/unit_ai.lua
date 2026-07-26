@@ -27,7 +27,8 @@
 -- wired into the action registry. Shared plumbing (per-unit state,
 -- goal layer, distance/footprint geometry, water-source memory) lives
 -- in scripts/unit_ai_core.lua; the materials-sourcing ladder is in
--- scripts/unit_ai_fetch.lua.
+-- scripts/unit_ai_fetch.lua; per-unit location knowledge (#915) is in
+-- scripts/unit_ai_locations.lua.
 
 local unitAi = package.loaded["scripts.unit_ai"] or {}
 package.loaded["scripts.unit_ai"] = unitAi
@@ -59,6 +60,10 @@ local pickup        = require("scripts.unit_ai_pickup")
 local medic         = require("scripts.unit_ai_medic")
 local sleepGoal     = require("scripts.unit_ai_sleep")
 local mentalAi      = require("scripts.unit_ai_mental")
+-- Per-unit location knowledge (#915): the experiential layer beside the
+-- player-wide cartographic discovery state. Own submodule because
+-- unit_ai_core.lua is at its line budget.
+local locations     = require("scripts.unit_ai_locations")
 -- Persistent save-component registration (issue #761) + the raw-id
 -- reference field lists scrubStaleRefs below needs -- split out to
 -- stay under the #538 module line budget.
@@ -331,6 +336,7 @@ end
 function unitAi.init(scriptId)
     engine.logInfo("Unit AI initializing...")
     unitAiSave.register(unitAi, aiState)
+    locations.register(unitAi, aiState)
 end
 
 -- Clear any ref that doesn't point at a surviving loaded-page entity out
@@ -409,16 +415,33 @@ function unitAi.onSaveLoaded(survUnitIds, survBuildingIds)
     for k, v in pairs(rebuilt) do aiState[k] = v; kept = kept + 1 end
 
     local scrubbed = 0
+    local forgotten = 0
     for uid, s in pairs(aiState) do
         if survUnitSet[uid] then
             scrubbed = scrubbed + scrubStaleRefs(s, survUnitSet, survBuildingSet)
+            -- #915: a location memory is scrubbed against the RESTORED
+            -- session's own instance tables, not against the unit/
+            -- building survivor sets above -- its target is a
+            -- (page, instance id) pair owned by the world-pages
+            -- component, which those sets say nothing about.
+            forgotten = forgotten + locations.scrubStaleKnownLocations(uid, s)
         end
     end
     engine.logInfo("Unit AI: reconciled AI state after load ("
-        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed)")
+        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed, "
+        .. forgotten .. " stale location memory/memories dropped)")
 end
 
 function unitAi.update(dt)
+    -- Location awareness (#915) is recorded BEFORE the pause guard on
+    -- purpose. Its engine-side source (World.Thread.Discovery's shared
+    -- halo predicate) is deliberately pause-independent -- a freshly
+    -- loaded, auto-paused save can come up with a unit already standing
+    -- in a location's margin -- and gating acquisition on unpause here
+    -- would quietly reintroduce the dependency the engine side avoids.
+    -- Recording a memory is not simulation: it mutates only aiState,
+    -- never the world.
+    locations.ingestAwareness(core.ensureState)
     if require("scripts.pause").isPaused() then return end
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end

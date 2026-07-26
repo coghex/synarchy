@@ -764,6 +764,26 @@ before touching each area:
   stamped/contents-spawned flags. Gates:
   `location_content_probe.py`, `location_embark_probe.py`; hspec
   `--match "Location discovery"` / `--match "Location map icons"`.
+- **Per-unit location knowledge (#915)** — the EXPERIENTIAL layer beside
+  that CARTOGRAPHIC one, and neither derives from the other: global
+  lifecycle = "the player has mapped it", `aiState[uid].knownLocations`
+  = "this acolyte knows where it is". Keyed by the durable
+  `(page, instance id)` pair — dedup is by IDENTITY, never by distance
+  (don't copy `knownWaterSources`' 6-tile rule across; two locations are
+  never the same location). Both layers come from ONE containment
+  enumeration in `Location.Discovery` (`findDiscoveries` /
+  `findAwareness`), so they cannot drift; awareness additionally reports
+  EVERY qualifying unit and ignores lifecycle, so a unit arriving at an
+  already-mapped ruin still learns it. `world.getLocationAwareness()`
+  walks every loaded page; `scripts/unit_ai.lua` ingests it BEFORE its
+  pause guard, mirroring the discovery tick's pause independence.
+  Persisted via `lua.unit_ai` v4 as typed
+  `{__ref="location_instance", page, id, x, y}` entries (v1-v3 decode
+  with the field ABSENT — never inferred from discovery); a memory whose
+  `(page, id)` is missing from the restored session is a non-blocking
+  diagnostic, scrubbed at reconcile time. Sharing over the radio and
+  radio range are deliberately deferred. Gates: hspec `--match "unit
+  location knowledge"`, `location_content_probe.py`.
 - **Expedition retrieval (#920)** — recovering an item from a remote
   location uses ONLY the direct-RTS verbs a player already has
   (`unitAi.commandPickup` → `unitAi.commandMove` home → adjacent

@@ -28,6 +28,16 @@ location's chunk loads, end to end:
      re-checking without the unit moving emits no duplicate; the
      discovered state survives save -> quit -> fresh restart -> load
      alongside the geometry/contents from check 2.
+  5. Per-unit location knowledge (#915): the unit that entered the
+     margin gains its OWN memory of the location — keyed by the
+     (page, instance id) identity, recorded while the sim is PAUSED
+     (acquisition mirrors the discovery tick's pause independence) — a
+     second player unit standing elsewhere does not, a unit arriving at
+     an ALREADY-discovered location still learns it without a second
+     lifecycle transition or event, the memory survives the same save ->
+     restart -> load round trip, and (phase 4, two pages loaded at once)
+     it is keyed to the page it was learned on rather than to a bare,
+     cross-page-ambiguous instance number.
 
 Headless skips the GUI data-loading step, so defs are registered by
 hand here (items/units/buildings/loot_tables/locations), same as
@@ -48,7 +58,8 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (quit_engine, boot, send, wait_load_published,
+                      load_ai_stack)
 
 LOG = "/tmp/location_content_engine.log"
 
@@ -243,6 +254,54 @@ def discovery_events(port: int, label: str) -> list[dict]:
             if e.get("category") == "location_discovery" and e.get("text") == text]
 
 
+def known_locations(port: int, uid: int) -> set[str]:
+    """(#915) The per-unit location memories `uid` holds, as a set of
+    "<page>#<instance id>" keys. Read through unitAi.getKnownLocations —
+    the public query surface AI candidates use — and flattened to a
+    string so an empty result is unambiguous (an empty Lua table would
+    serialize identically to an empty object)."""
+    lua = (f"local ai = require('scripts.unit_ai'); "
+           f"local out = {{}}; "
+           f"for _, k in ipairs(ai.getKnownLocations({uid})) do "
+           f"out[#out+1] = k.page .. '#' .. tostring(k.id) end; "
+           f"return table.concat(out, ',')")
+    raw = send(port, lua).strip().strip('"')
+    return {p for p in raw.split(",") if p}
+
+
+def halo_box(e: dict) -> tuple[int, int, int, int]:
+    """A placed location's discovery halo as inclusive absolute tile
+    bounds — its stored bounds (#777) expanded by its stored margin,
+    exactly what Location.Discovery tests containment against."""
+    b = e.get("bounds") or {}
+    m = int(e.get("discovery_margin") or 0)
+    return (int(b.get("min_x", e["gx"])) - m, int(b.get("min_y", e["gy"])) - m,
+            int(b.get("max_x", e["gx"])) + m, int(b.get("max_y", e["gy"])) + m)
+
+
+def pick_far_tile(la: list[dict], origin: tuple[int, int],
+                  slack: int = 6) -> tuple[int, int] | None:
+    """A tile comfortably outside EVERY placed location's halo — where a
+    second unit can stand and stay ignorant (#915)."""
+    ox, oy = origin
+    for d in range(24, 400, 8):
+        for cand in ((ox + d, oy), (ox, oy + d), (ox + d, oy + d),
+                     (ox - d, oy), (ox, oy - d)):
+            if all(not (x0 - slack <= cand[0] <= x1 + slack
+                        and y0 - slack <= cand[1] <= y1 + slack)
+                   for x0, y0, x1, y1 in map(halo_box, la)):
+                return cand
+    return None
+
+
+def wait_knows(port: int, uid: int, key: str, tries: int = 40) -> bool:
+    for _ in range(tries):
+        if key in known_locations(port, uid):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def spawn_unit(port: int, def_name: str, gx: int, gy: int, faction: str, page: str) -> int:
     """unit.spawn(...) returns the new unit's numeric id, or -1 on failure."""
     r = send(port, f"return unit.spawn('{def_name}', {gx}, {gy}, nil, '{faction}', '{page}')")
@@ -286,6 +345,10 @@ def main() -> int:
     ruins: list[dict] = []
     counts1: dict = {}
     geoms1: dict = {}
+    # #915: the "<page>#<instance id>" memory key phase 1 proves a unit
+    # learned, and the units that hold it — re-checked after the load.
+    r0mem_key: str = ""
+    mem_uids: tuple[int, ...] = ()
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
     proc = boot(args.port, log=LOG)
@@ -441,7 +504,89 @@ def main() -> int:
                 failures.append(
                     f"expected still exactly one event after leave+return, got {evs_again}")
 
-            # The two synthetic units above are now part of 'wa' — refresh
+            # ---- Per-unit location knowledge (#915): the EXPERIENTIAL
+            #      layer beside the player-wide CARTOGRAPHIC state above.
+            #      The unit AI stack owns that memory, so load it here —
+            #      after every check above, and with the sim PAUSED so
+            #      the AI's own decisions (wander, forage, water-seeking)
+            #      can never move a unit or pick up one of the ground
+            #      items phase 2 re-counts. Pausing is not a workaround
+            #      here, it is part of the contract under test: awareness
+            #      is ingested BEFORE unitAi.update's pause guard,
+            #      mirroring World.Thread.Discovery's own pause
+            #      independence, so a paused session still learns. ----
+            send(args.port, "engine.setPaused(true); return 'ok'")
+            load_ai_stack(args.port)
+            r0inst = next((e for e in placed(args.port, "wa")
+                           if (e["cx"], e["cy"]) == r0key), None)
+            far = pick_far_tile(la, (ruin0["gx"], ruin0["gy"]))
+            if r0inst is None or far is None:
+                failures.append(
+                    f"#915 setup failed: instance={r0inst!r} far_tile={far!r}")
+            else:
+                r0mem = f"wa#{r0inst['instance_id']}"
+                if wait_knows(args.port, player_uid, r0mem):
+                    print(f"PASS: the unit that entered the margin gained its "
+                          f"own memory of the ruin ({r0mem}) — while PAUSED")
+                else:
+                    failures.append(
+                        f"unit {player_uid} inside the margin never learned "
+                        f"{r0mem}: {known_locations(args.port, player_uid)}")
+
+                load_chunk(args.port, far[0] // 16, far[1] // 16)
+                far_uid = spawn_unit(args.port, "acolyte", far[0], far[1],
+                                     "player", "wa")
+                time.sleep(1.5)
+                if far_uid >= 0 and r0mem not in known_locations(args.port, far_uid):
+                    print(f"PASS: a second player unit ({far_uid}) elsewhere did "
+                          f"NOT learn the ruin — knowledge is not shared for free")
+                else:
+                    failures.append(
+                        f"remote unit {far_uid} learned {r0mem} without going "
+                        f"there: {known_locations(args.port, far_uid)}")
+
+                # The player-wide layer is untouched by any of this: still
+                # discovered, still exactly one event.
+                evs_915 = discovery_events(args.port, ruin_label)
+                if discovered_flags(args.port, "wa").get(r0key) is True \
+                        and len(evs_915) == 1:
+                    print("PASS: per-unit memory changed neither the "
+                          "discovered lifecycle nor the event count")
+                else:
+                    failures.append(
+                        f"#915 disturbed the player-wide layer: "
+                        f"discovered={discovered_flags(args.port, 'wa').get(r0key)!r} "
+                        f"events={evs_915}")
+
+                # …and a unit arriving at an ALREADY-discovered location
+                # still learns it: acquisition is not gated on the
+                # one-time lifecycle promotion or its event.
+                send(args.port, f"unit.setPos({far_uid}, {ruin0['gx']}, "
+                                f"{ruin0['gy']}); return 'ok'")
+                if wait_knows(args.port, far_uid, r0mem):
+                    print(f"PASS: unit {far_uid} arriving at an already-"
+                          f"discovered ruin still learned it")
+                else:
+                    failures.append(
+                        f"unit {far_uid} entering an already-discovered margin "
+                        f"never learned {r0mem}: "
+                        f"{known_locations(args.port, far_uid)}")
+                evs_late = discovery_events(args.port, ruin_label)
+                if len(evs_late) == 1:
+                    print("PASS: that later arrival emitted no second "
+                          "location_discovery event")
+                else:
+                    failures.append(
+                        f"a later arrival re-emitted discovery event(s): {evs_late}")
+                mem_uids = (player_uid, far_uid)
+                r0mem_key = r0mem
+
+            # Deliberately still PAUSED through the save below: a load
+            # comes up paused anyway (#763), so this keeps phase 1 and
+            # phase 2 in the same sim state, and keeps the AI from moving
+            # units or picking up the ground items phase 2 re-counts.
+
+            # The synthetic units above are now part of 'wa' — refresh
             # counts1 so phase 2's "reload does not respawn contents"
             # comparison accounts for them too (they persist like any
             # other unit, unrelated to the ruin's one-time content flag).
@@ -459,6 +604,12 @@ def main() -> int:
         proc = boot(args.port, log=LOG)
         try:
             load_defs(args.port)
+            # #915: the unit AI stack must be loaded BEFORE the load, so
+            # the (required) lua.unit_ai component has a registered
+            # reader — and so onSaveLoaded's reconcile, which scrubs a
+            # location memory whose instance is absent from the restored
+            # session, actually runs.
+            load_ai_stack(args.port)
             send(args.port, "engine.loadSave('loc_content_probe'); return 'queued'")
             # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
             # saved page ("wa", its own id verbatim -- no more main_world
@@ -518,6 +669,23 @@ def main() -> int:
             else:
                 failures.append(
                     f"ruin floor texture lost the damaged variant on reload: {tex}")
+
+            # #915: per-unit location memory rides the lua.unit_ai
+            # component (now v4) through the same round trip, and its
+            # (page, instance id) reference still resolves — so the
+            # reconcile pass keeps it rather than scrubbing it.
+            if r0mem_key and mem_uids:
+                still = {uid: known_locations(args.port, uid) for uid in mem_uids}
+                if all(r0mem_key in ks for ks in still.values()):
+                    print(f"PASS: per-unit location memory ({r0mem_key}) survived "
+                          f"save -> quit -> restart -> load for units {mem_uids}")
+                else:
+                    failures.append(
+                        f"per-unit location memory lost on reload: {still}")
+            else:
+                failures.append(
+                    "phase 2 could not re-check per-unit location memory: "
+                    "phase 1 never established one")
         finally:
             quit_engine(args.port, proc)
     elif not ruins:
@@ -753,6 +921,53 @@ def main() -> int:
                             failures.append(
                                 "phase 4: no acolyte unit spawned from dense_ruin "
                                 "unit content on hidden page 'sw2'")
+
+                        # #915 multi-page: a location's durable identity
+                        # is (page, instance id), so a memory must carry
+                        # the page it was learned on. With TWO pages
+                        # loaded ('arena' and 'sw2'), a bare instance id
+                        # would be ambiguous — assert the memory is keyed
+                        # to 'sw2' specifically, and that the same number
+                        # resolves as an instance only there.
+                        send(args.port, "engine.setPaused(true); return 'ok'")
+                        load_ai_stack(args.port)
+                        sw2 = next((e for e in placed(args.port, "sw2")
+                                    if (e["gx"], e["gy"]) == (gx, gy)), None)
+                        p_uid = spawn_unit(args.port, "acolyte", gx, gy,
+                                            "player", "sw2")
+                        if sw2 is None or p_uid < 0:
+                            failures.append(
+                                f"phase 4 (#915) setup failed: instance={sw2!r} "
+                                f"uid={p_uid}")
+                        else:
+                            iid = sw2["instance_id"]
+                            if wait_knows(args.port, p_uid, f"sw2#{iid}"):
+                                print(f"PASS: the memory is keyed to page 'sw2' "
+                                      f"(instance {iid}), not to the other loaded "
+                                      f"page")
+                            else:
+                                failures.append(
+                                    f"phase 4 (#915): unit {p_uid} on 'sw2' never "
+                                    f"learned sw2#{iid}: "
+                                    f"{known_locations(args.port, p_uid)}")
+                            if f"arena#{iid}" in known_locations(args.port, p_uid):
+                                failures.append(
+                                    f"phase 4 (#915): instance {iid} aliased onto "
+                                    f"page 'arena'")
+                            here = send(args.port,
+                                f"return world.getLocationInstance({iid}, 'sw2') "
+                                f"and 'y' or 'n'").strip('"')
+                            there = send(args.port,
+                                f"return world.getLocationInstance({iid}, 'arena') "
+                                f"and 'y' or 'n'").strip('"')
+                            if here == "y" and there == "n":
+                                print(f"PASS: instance id {iid} resolves on 'sw2' "
+                                      f"and nowhere else — a page-blind lookup "
+                                      f"would have been ambiguous")
+                            else:
+                                failures.append(
+                                    f"phase 4 (#915): instance {iid} page scoping "
+                                    f"wrong (sw2={here} arena={there})")
     finally:
         quit_engine(args.port, proc)
 

@@ -226,7 +226,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `injury_log_probe.py` | logging arc (general) | arena | Injury-log stream roundtrip: `injury.emit`/`drainEvents`, `unit.injure`, `emitEventForUnit` tagging. |
 | `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
-| `location_content_probe.py` | #90, #91 | worldgen + arena | Location content spawning + ruin probe. |
+| `location_content_probe.py` | #90, #91, #915 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer and the per-unit location-knowledge layer beside it. |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
 | `location_stamp_idempotent_probe.py` | #424 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load. |
 | `lua_orphan_prune_probe.py` | #195 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load. |

@@ -12,31 +12,40 @@
 --   all any more. The remaining 'EngineEnv' parameter is purely the
 --   opaque token the not-yet-narrowed @world-sim-render-handoff@
 --   page-lookup services ('activeWorldState', 'worldStateByPage')
---   demand — this module dereferences no 'EngineEnv' field itself, and
---   that parameter goes away when @world-sim-render-handoff@ migrates
---   (SS7.4).
+--   demand — this module dereferences no 'EngineEnv' field itself
+--   (#915's awareness query reaches the unit manager through
+--   'UnitCombatCapability', the same projection
+--   "World.Thread.Discovery" uses), and that parameter goes away when
+--   @world-sim-render-handoff@ migrates (SS7.4).
 module Engine.Scripting.Lua.API.WorldQuery.Location
     ( worldListPlacedLocationsFn
     , worldGetLocationInstanceFn
+    , worldGetLocationAwarenessFn
     , worldHasSpawnedLocationContentsFn
     , worldHasStampedLocationFn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified HsLua as Lua
 import Data.ByteString (ByteString)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import Data.List (sortOn)
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
+import Location.Discovery (AwarenessHit(..), findAwareness)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), LocationInstances
     , instancesToList, instancesInChunk, lookupLocationInstance
     , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances )
 import Location.Bounds (AbsBounds(..))
+import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Generate.Coordinates (globalToChunk)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 
@@ -120,6 +129,73 @@ worldGetLocationInstanceFn env = do
                     (LocationInstanceId (fromIntegral rawId)) instances of
                 Nothing   → Lua.pushnil >> return 1
                 Just inst → pushInstanceTable inst >> return 1
+
+-- | world.getLocationAwareness() → array of
+--   @{ uid, page, instance_id, gx, gy }@ rows: every PLAYER-OWNED unit
+--   (#912) currently standing inside a placed location's discovery-margin
+--   halo, on EVERY loaded page — the acquisition surface for #915's
+--   per-unit location memory (@scripts\/unit_ai_locations.lua@).
+--
+--   This is deliberately a stateless, idempotent QUERY rather than a
+--   drained event stream: the caller re-asks and re-records, and its own
+--   identity dedup makes a repeat row a no-op. What matters is that it
+--   preserves all three properties of the player-wide discovery tick it
+--   shares its predicate with ("World.Thread.Discovery"):
+--
+--   * the same 'Unit.Faction.isPlayerOwned' filter and the same
+--     seam-aware expanded-bounds containment, because both come from
+--     the SAME pure enumeration ('Location.Discovery.findAwareness' /
+--     'Location.Discovery.findDiscoveries' share @haloContacts@);
+--   * every LOADED page, not only the active/visible one — hence
+--     @page@ on every row, since a location's durable identity is
+--     @(page, instance_id)@ and bare instance ids alias across pages;
+--   * pause independence — nothing here reads the pause flag, and
+--     @scripts\/unit_ai.lua@ calls it BEFORE its own pause guard.
+--
+--   Reports awareness regardless of lifecycle: a unit arriving at a ruin
+--   the player mapped long ago still learns where it is, which is
+--   exactly the difference between the experiential and cartographic
+--   layers.
+worldGetLocationAwarenessFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetLocationAwarenessFn env = do
+    rows ← Lua.liftIO (locationAwarenessRows env)
+    Lua.newtable
+    forM_ (zip [1 ..] rows) $ \(i, (pageText, hit)) → do
+        Lua.newtable
+        pushIntField' "uid" (unUnitId (ahUnit hit))
+        Lua.pushstring (TE.encodeUtf8 pageText)
+        Lua.setfield (-2) "page"
+        pushIntField' "instance_id" (unLocationInstanceId (ahInstance hit))
+        pushIntField' "gx" (fst (ahAnchor hit))
+        pushIntField' "gy" (snd (ahAnchor hit))
+        Lua.rawseti (-2) i
+    return 1
+  where
+    pushIntField' name v = do
+        Lua.pushinteger (fromIntegral v)
+        Lua.setfield (-2) name
+
+-- | Every loaded page's awareness hits, page-id text carried alongside.
+--   Units are partitioned by 'uiPage' and passed in unit-id order, the
+--   same way 'World.Thread.Discovery.tickLocationDiscovery' does, so the
+--   row order is deterministic across runs.
+locationAwarenessRows ∷ EngineEnv → IO [(Text, AwarenessHit UnitId)]
+locationAwarenessRows env = do
+    um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    let allUnits = sortOn fst (HM.toList (umInstances um))
+    fmap concat $ forM (wmWorlds mgr) $ \(pageId@(WorldPageId pageText), ws) → do
+        mParams ← readIORef (wsGenParamsRef ws)
+        pure $ case mParams of
+            Nothing → []
+            Just p  →
+                let pageUnits =
+                        [ (uid, uiFactionId inst
+                          , floor (uiGridX inst), floor (uiGridY inst))
+                        | (uid, inst) ← allUnits, uiPage inst ≡ pageId ]
+                in [ (pageText, hit)
+                   | hit ← findAwareness (wgpWorldSize p)
+                                          (wgpLocationInstances p) pageUnits ]
 
 -- | One instance as a Lua table (the shape both queries above return).
 pushInstanceTable ∷ LocationInstance → Lua.LuaE Lua.Exception ()
