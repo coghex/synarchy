@@ -5,7 +5,7 @@ oversized modules, misplaced functions, and poor names. Each entry is scoped to
 be filed as its own issue. Working order: engine core → engine subsystems →
 world → gameplay → Lua → tools → docs.
 
-Status legend: `[ ]` not filed · `[#N]` filed as issue N
+Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[deferred]` blocked on a stated precondition
 
 > **Methodology note (corrected 2026-07-25).** The "unreferenced export" scans
 > in batches 2-11 originally searched `src/`, `app/`, and `test/` only, and
@@ -26,6 +26,146 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N
 >
 > Anything claiming a function is unused has been checked against
 > `src/ app/ test/ test-headless/` together.
+
+## Status
+
+- [x] CH-1. `EngineM`'s `ε` type parameter is dead weight on ~295 signatures — [#931]
+- [x] CH-2. `EngineConfig` carries four fields that nothing reads — [#932]
+- [x] CH-3. Vulkan reports the application name as "Vulkan Device Test" — [#933]
+- [x] CH-4. `EngineEnv.inputThreadActiveRef` carries `gameTimeRef`'s haddock — [#934]
+- [x] CH-5. Two record fields share one source line in `GraphicsState` — [#936]
+- [x] CH-6. Three of four `LogBackend` constructors are never constructed — [#942]
+- [x] CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad` — [#943]
+- [x] CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim — [#944]
+- [x] CH-9. `extractCallSite`'s skip-list is an untested, order-sensitive trap — [#945]
+- [x] CH-10. Three whole error domains are never constructed — [#946]
+- [ ] CH-11. `ErrorContext` is exported by field but not by name — [deferred]: #946 must land
+- [x] CH-12. `Engine.Core.Var` is a production module used only by tests — [#947]
+- [x] CH-13. `luaQueue` is misnamed relative to its sibling — [no-issue]
+- [ ] CH-14. Capability-record conventions are documented in three places — [deferred]: #899 must land
+- [x] CH-15. Cross-cutting: 136 comments cite PR review rounds — [#949]
+- [x] CH-16. Cross-cutting: 555 files repeat a global `LANGUAGE` pragma — [#950]
+- [x] CH-17. `Show Font` drops its closing brace when a cleanup action is present — [#951]
+- [x] CH-18. `AssetConfig` advertises four features that do not exist — [#952]
+- [ ] CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie
+- [ ] CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose
+- [ ] CH-21. The module-budget guard has a subdirectory hole, and code already sits in it
+- [ ] CH-22. The 500-line norm guards 6 Lua files while 30 exceed it
+- [ ] CH-23. Oversized Haskell modules are now concentrated in `World/Save/`
+- [ ] CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
+- [ ] CH-25. `tools/` is 122 flat Python files
+- [ ] CH-26. `CHANGELOG.md` has not been touched in 18 months
+- [ ] CH-27. Minor defects worth folding into one cleanup issue
+- [ ] CH-28. Five modules are not in `synarchy.cabal` — never compiled, never linted
+- [ ] CH-29. Dead types kept alive by other dead types
+- [ ] CH-30. The demo quad vertex buffer is uploaded to the GPU every boot and never drawn
+- [ ] CH-31. The bindless texture limit is duplicated in five places with no check
+- [ ] CH-32. `Bindless.hs`'s header claims 64× the real texture limit
+- [ ] CH-33. `Texture.System`'s "legacy path" is a throw
+- [ ] CH-34. `destroyBindlessTextureSystem` is exported, never called, and incomplete
+- [ ] CH-35. The uniform buffer layout is hand-maintained across five declarations
+- [ ] CH-36. `fontFragmentShaderCode` is dead, and says so
+- [ ] CH-37. `graphicsState` nested-record-update boilerplate, 50×
+- [ ] CH-38. Naming inconsistencies in the graphics records
+- [ ] CH-39. Minor graphics defects for one cleanup issue
+- [ ] CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme
+- [ ] CH-41. The 500-line module budget doesn't constrain function size
+- [ ] CH-42. Three different facade idioms across nine sibling API domains
+- [ ] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
+- [ ] CH-44. Two `Focus` modules, neither of which says which focus it means
+- [ ] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler
+- [ ] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface
+- [ ] CH-47. `Engine.Core.Log`'s callsite skip-list has a matching hazard here
+- [ ] CH-48. Minor Lua-tree defects for one cleanup issue
+- [ ] CH-49. Cross-cutting: normalise the enforced Unicode operators (owner decision recorded)
+- [ ] CH-50. `Engine.Graphics.Transform` is a fully dead module
+- [ ] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator
+- [ ] CH-52. 14 verbatim copies of the same YAML loader
+- [ ] CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things
+- [ ] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module
+- [ ] CH-55. `Engine.Core.Init`'s three exports have no callers
+- [ ] CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout
+- [ ] CH-57. Minor remaining-Engine defects for one cleanup issue
+- [ ] CH-58. `--seed`, `--worldSize`, and `--plates` are silently ignored outside `--dump`
+- [ ] CH-59. `allLayers` is not all layers
+- [ ] CH-60. The preview category list is duplicated as an error-message string
+- [ ] CH-61. Five boot modes hand-copy the same error-recovery block
+- [ ] CH-62. `shutdownEngine`'s five positional parameters are mutually swappable
+- [ ] CH-63. Three separate main loops
+- [ ] CH-64. `--dump` emits three fields that no documentation mentions
+- [ ] CH-65. `App/Dump.hs` hand-concatenates JSON
+- [ ] CH-66. Primitive-obsession in the dump signatures
+- [ ] CH-67. `parseRegion` silently substitutes a default for malformed input
+- [ ] CH-68. Two module haddocks enumerate the boot modes and both are stale
+- [ ] CH-69. Minor `app/` defects for one cleanup issue
+- [ ] CH-70. The save system's item enumeration is implemented three times
+- [ ] CH-71. `WorldPageId` has no accessor, so ten sites hand-write one
+- [ ] CH-72. Nine near-identical `Missing*Ref` types, misplaced in `Types.hs`
+- [ ] CH-73. `serializeCodec` cannot express the migration the component system exists for
+- [ ] CH-74. `Component/Entities.hs` is five components in one 1139-line module
+- [ ] CH-75. `tshow` is invented four times, while 570 sites don't use it
+- [ ] CH-76. Envelope compat is named after the epic's internal phase letters
+- [ ] CH-77. `LuaComponentSpec` is a bare 4-tuple
+- [ ] CH-78. `Envelope.hs` is 860 lines beside an `Envelope/` directory
+- [ ] CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current
+- [ ] CH-80. "River" logic lives in four unrelated namespaces
+- [ ] CH-81. `World.Fluids` and `World.Fluid.*` differ by one letter
+- [ ] CH-82. The per-tile fluid-surface fold is written five times in one file
+- [ ] CH-83. The river-flat surface rule is written four times, and its comment overstates its own coverage
+- [ ] CH-84. `floorDivCS` is hand-rolled five times, with an unreachable branch, next to a correct helper
+- [ ] CH-85. `moSurface` is always empty, its lookup can never succeed, and two comments say it drives lava placement
+- [ ] CH-86. `composeFluidMap`'s haddock documents a parameter it does not have
+- [ ] CH-87. 43 modules carry `-fprof-auto`, defeating the cabal's `-fprof-late` profiling strategy
+- [ ] CH-88. Four dead bindings that `Strict` actually evaluates
+- [ ] CH-89. Material IDs are a hardcoded Haskell table mirroring `data/materials/*.yaml`
+- [ ] CH-90. 194 unreferenced exports in `src/World/`
+- [ ] CH-91. Minor worldgen defects for one cleanup issue
+- [ ] CH-92. `baseTileW` / `baseTileH` are defined identically in eight modules
+- [ ] CH-93. `World.ZoomMap` is a facade that inverts its own dependency direction
+- [ ] CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped
+- [ ] CH-95. Two zoom namespaces with a real but unstated split
+- [ ] CH-96. `docs/history/README.md` justifies an archive with a false claim
+- [ ] CH-97. Duplicate module basenames across the render stack
+- [ ] CH-98. A fifth dead binding in `BuildPixels.hs` (extends CH-88)
+- [ ] CH-99. Minor Thread/Render/ZoomMap defects for one cleanup issue
+- [ ] CH-100. The save-critical enums tell you to bump the wrong version, and CLAUDE.md agrees with them
+- [ ] CH-101. Two components store the same enum two different ways; only one is order-safe
+- [ ] CH-102. The codebase's only `TODO` is a comment claiming TODOs exist
+- [ ] CH-103. `Unit.Types.Combat` holds anatomy, not combat
+- [ ] CH-104. The append-only enum policy is unenforced, in a codebase full of enforcement
+- [ ] CH-105. Minor Unit/Combat defects for one cleanup issue
+- [ ] CH-106. Six worker threads hand-implement one identical lifecycle
+- [ ] CH-107. 22 directories exist solely to hold a single `Types.hs`
+- [ ] CH-108. Power hardware is hardcoded in Haskell while 16 other content categories are YAML
+- [ ] CH-109. Nineteen lines of reasoning prove two functions are dead, and they are still there
+- [ ] CH-110. Minor Sim/Power/Infection/Craft defects for one cleanup issue
+- [ ] CH-111. `applyFacingF` — the camera rotation — is defined three times, identically
+- [ ] CH-112. `validRelBounds` documents a validation it doesn't perform
+- [ ] CH-113. Quad vertex construction is written out longhand in eight places
+- [ ] CH-114. Minor Building/Structure/Location defects for one cleanup issue
+- [ ] CH-115. The `synarchy-test-graphical` suite is built by CI but never run
+- [ ] CH-116. The four largest files in the project are test modules
+- [ ] CH-117. Seven test modules bypass the shared engine harness
+- [ ] CH-118. `test/` and `test-headless/` were absent from this audit's own tooling
+- [ ] CH-119. Minor remaining-Haskell defects for one cleanup issue
+- [ ] CH-120. Five focus modules, and three have no module haddock at all
+- [ ] CH-121. `src/UI` is the densest concentration of review-round archaeology
+- [ ] CH-122. Verified: the UI tree's "single source of truth" claims are true
+- [ ] CH-123. Minor UI defects for one cleanup issue
+- [ ] CH-124. `truncateToWidth` has five divergent implementations, and users can see the difference
+- [ ] CH-125. `clamp` is defined 11 times; `formatGameTimeHMS` 4 times, identically
+- [ ] CH-126. `shell.wrapText` says "by character" and iterates by byte
+- [ ] CH-127. Four features are split across both a flat file and a same-named directory
+- [ ] CH-128. Five Lua modules sit at exactly the 500-line cap
+- [ ] CH-129. `probelib` is imported by 71 of 72 probes and then reimplemented
+- [ ] CH-130. The seven largest files in the project are all tests and tooling
+- [ ] CH-131. `tools/` is 122 flat files that divide cleanly by role
+- [ ] CH-132. Minor `tools/` defects for one cleanup issue
+- [ ] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped
+- [ ] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem
+- [ ] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
+- [ ] CH-136. Minor doc defects for one cleanup issue
+- [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
 
 ---
 
@@ -167,7 +307,9 @@ taxonomy that reads as the canonical Lua error vocabulary and is inert.
 Also dead here: `tryEngine` (0 uses), `TestError` (a test-only constructor in
 a production error domain).
 
-### CH-11. `ErrorContext` is exported by field but not by name
+### [deferred] CH-11. `ErrorContext` is exported by field but not by name
+> **Deferred:** #946 removes `AssetFailedCleanup` and rewrites this exception taxonomy — resume after #946 is closed by a merged implementation, then re-read `Engine.Core.Error.Exception` and scope only the surviving export, alias, and comment defects.
+
 `Engine.Core.Error.Exception`'s export list omits the `ErrorContext` type
 while exporting its accessor `contextCallStack`, and `EngineException(..)`
 exposes `errorContext ∷ ErrorContext`. Downstream code can read the field but
@@ -179,7 +321,7 @@ pointless aliases for `throwError`/`catchError` (3 and 2 uses); `AssetError`'s
 `AssetFailedCleanup` is the one constructor with no haddock; the
 `ExceptionType` constructor comments are misaligned by 1-5 columns.
 
-### CH-12. `Engine.Core.Var` is a production module used only by tests
+### [#947] CH-12. `Engine.Core.Var` is a production module used only by tests
 `src/Engine/Core/Var.hs` exports a thin renaming of `Control.Concurrent.STM`
 (`Var = TVar`, `newVar = newTVar`, …). Its only importers are
 `test/Test/Engine/Core/Var.hs` (which tests it) and three Vulkan test modules.
@@ -188,7 +330,9 @@ that exercises `dupVar`.
 
 Fix: delete, or move under `test/`. Note the tests are testing STM itself.
 
-### CH-13. `luaQueue` is misnamed relative to its sibling
+### [no-issue] CH-13. `luaQueue` is misnamed relative to its sibling
+> **Disposition:** No issue — `luaQueue` is intentionally a destination-named, multi-producer Lua inbox: input, world, main-render, unit/combat, and Lua threads enqueue `LuaMsg`, while only the opposite queue has a single Lua origin; renaming it `engineToLuaQueue` would misstate its source.
+
 `EngineEnv` has `luaToEngineQueue` (Lua → engine) and `luaQueue` (engine →
 Lua). The direction-neutral name for the directional queue makes call sites
 ambiguous. `Engine.Core.Init` already knows the right name — it binds the
@@ -196,7 +340,9 @@ local as `engineToLuaQueue` and then assigns `luaQueue = engineToLuaQueue`.
 
 Fix: rename the field to `engineToLuaQueue`.
 
-### CH-14. Capability-record conventions are documented in three places
+### [deferred] CH-14. Capability-record conventions are documented in three places
+> **Deferred:** #899 will rewrite `CLAUDE.md`'s `EngineEnv` guidance and add the post-flip capability procedure to the authoritative inventory, changing two of the three duplicated surfaces — resume after #899 is closed by a merged implementation, then re-read those documents and scope only any surviving `Core.hs`/global-convention duplication.
+
 `Engine/Core/Capability/Core.hs` opens with a 63-line module haddock stating
 the conventions **every** capability record must follow (naming, one-way
 projection, shared containers, no back-imports, no records ahead of need,
@@ -207,7 +353,7 @@ which the haddock itself names as the authority.
 Three copies drift. The rules belong in the inventory doc; `Core.hs` should
 document `CoreCapability` and link out.
 
-### CH-15. Cross-cutting: 136 comments cite PR review rounds
+### [#949] CH-15. Cross-cutting: 136 comments cite PR review rounds
 `grep -rniE "round [0-9]+ (review|of review)|review round [0-9]+" src app`
 returns 136 hits, e.g. `-- ^ #745 review round 12: bumped ONLY by a
 route-affecting…`, `-- (round 9 review, issue #763)`. `UI/` is the densest
@@ -219,7 +365,7 @@ made this call for itself ("Deep per-issue history … was trimmed from this
 file"); the same principle applies in source. The *invariant* should stay, the
 *provenance* should go (an issue number alone is fine).
 
-### CH-16. Cross-cutting: 555 files repeat a global `LANGUAGE` pragma
+### [#950] CH-16. Cross-cutting: 555 files repeat a global `LANGUAGE` pragma
 `UnicodeSyntax` is in `common lang`'s `default-extensions`, imported by all
 four cabal components — yet 555 modules re-declare it in a `{-# LANGUAGE #-}`
 pragma. `OverloadedStrings` (also global) is re-declared in 66. Pure noise on
@@ -230,7 +376,7 @@ implies the extension is *not* on elsewhere.
 
 ## Batch 2 — `Engine/Loop`, `Engine/Input`, `Engine/Asset`, structure (swept 2026-07-25)
 
-### CH-17. `Show Font` drops its closing brace when a cleanup action is present
+### [#951] CH-17. `Show Font` drops its closing brace when a cleanup action is present
 `Engine/Asset/Types.hs:114`:
 
 ```haskell
@@ -241,7 +387,7 @@ The `" }"` is inside the *else* string, so any `Font` that has a cleanup
 action — i.e. every loaded font — renders as `Font { … fCleanup = <present>`
 with no terminating brace. A real (cosmetic) bug in a hand-written `Show`.
 
-### CH-18. `AssetConfig` advertises four features that do not exist
+### [#952] CH-18. `AssetConfig` advertises four features that do not exist
 `Engine.Asset.Types.AssetConfig` declares `acMaxTextureAtlases`,
 `acMaxShaderPrograms`, `acPreloadAssets`, `acEnableHotReload`. It is
 constructed exactly once — positionally, as `AssetConfig 100 100 True True` in
