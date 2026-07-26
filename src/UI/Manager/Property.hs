@@ -19,6 +19,7 @@ module UI.Manager.Property
   , setTextColor
   , setSpriteTexture
   , setSpriteColor
+  , setSpriteFlipX
   , setElementTooltip
   , clearElementTooltip
   , getElementTooltip
@@ -151,6 +152,15 @@ setSpriteColor ∷ ElementHandle → (Float, Float, Float, Float) → UIPageMana
 setSpriteColor handle color = modifyElement handle `flip` \elem →
     case ueRenderData elem of
         RenderSprite style → elem { ueRenderData = RenderSprite style { ussColor = color } }
+        _ → elem
+
+-- | Draw this sprite horizontally mirrored (#887). Purely visual — it
+--   changes neither the element's geometry nor its interactive bounds,
+--   so a flipped cell hit-tests exactly like an unflipped one.
+setSpriteFlipX ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setSpriteFlipX handle flipX = modifyElement handle `flip` \elem →
+    case ueRenderData elem of
+        RenderSprite style → elem { ueRenderData = RenderSprite style { ussFlipX = flipX } }
         _ → elem
 
 -- | Set the right-click callback on an element

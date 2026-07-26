@@ -268,6 +268,14 @@ data UITextStyle = UITextStyle
 data UISpriteStyle = UISpriteStyle
   { ussTexture ∷ TextureHandle
   , ussColor   ∷ (Float, Float, Float, Float)
+  , ussFlipX   ∷ Bool
+    -- ^ Draw the sprite horizontally mirrored (#887): the renderer
+    --   swaps the quad's U coordinates, the same mechanism
+    --   'Unit.Render' already uses for the W/SW/NW mirror fallback.
+    --   'False' for every sprite that never asks for it — the only
+    --   caller today is the @--preview units/\<name\>@ animation
+    --   viewer's mirrored direction cells, which must actually LOOK
+    --   mirrored, not merely report a flag.
   } deriving (Show)
 
 -- | Visual content for a tooltip. A tooltip can carry any combination

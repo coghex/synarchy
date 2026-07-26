@@ -10,6 +10,7 @@ module Test.Headless.UI.Clipping (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.List (nub)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
@@ -98,6 +99,16 @@ uvBounds vs =
         us = map x ts
         vvs = map y ts
     in ((minimum us, minimum vvs), (maximum us, maximum vvs))
+
+-- | The distinct U coordinates carried by the vertices sitting at the
+--   quad's LEFT screen edge. 'uvBounds' alone can't tell a mirrored quad
+--   from an unmirrored one (min/max are identical either way) — which
+--   side samples which U is the whole point of #887's flipX.
+uCoordsAtLeftEdge ∷ VS.Vector Vertex → [Float]
+uCoordsAtLeftEdge vs =
+    let vl = VS.toList vs
+        minX = minimum (map (x ∘ pos) vl)
+    in nub [x (tex v) | v ← vl, x (pos v) ≡ minX]
 
 spec ∷ Spec
 spec = do
@@ -375,7 +386,7 @@ spec = do
 
     describe "renderSpriteBatch — the real RenderSprite call site (UI.Render)" $ do
         it "unclipped: one batch spanning the sprite's full rect and UV" $
-            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) 10 10 50 50 (LayerId 0) Nothing
+            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) False 10 10 50 50 (LayerId 0) Nothing
             in do
                 V.length batches `shouldBe` 1
                 V.length items `shouldBe` 1
@@ -383,7 +394,7 @@ spec = do
                 uvBounds (rbVertices (V.head batches)) `shouldBe` ((0, 0), (1, 1))
 
         it "a partial clip produces one batch with clipped vertex bounds and a proportionally shrunk UV rect" $
-            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
+            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) False 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
             in case V.toList batches of
                 [b] → do
                     vertexBounds (rbVertices b) `shouldBe` ((50, 0), (100, 50))
@@ -391,10 +402,36 @@ spec = do
                 other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
 
         it "a clip fully excluding the sprite produces no batch at all" $
-            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) 200 200 50 50 (LayerId 0) (Just (0, 0, 100, 100))
+            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) False 200 200 50 50 (LayerId 0) (Just (0, 0, 100, 100))
             in do
                 batches `shouldSatisfy` V.null
                 items `shouldSatisfy` V.null
+
+        -- #887: the mirrored direction cells of the --preview
+        -- units/<name> viewer must actually LOOK mirrored, which means
+        -- real swapped U coordinates, not just a reported flag.
+        it "flipX swaps the U coordinates while leaving the screen rect alone" $
+            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) True 10 10 50 50 (LayerId 0) Nothing
+            in case V.toList batches of
+                [b] → do
+                    vertexBounds (rbVertices b) `shouldBe` ((10, 10), (60, 60))
+                    -- Left vertices now sample u=1, right ones u=0.
+                    uCoordsAtLeftEdge (rbVertices b) `shouldBe` [1]
+                other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
+
+        -- Mirroring is applied to the CLIPPED sub-rect, not the source
+        -- rect: clipping away the sprite's left half must leave the
+        -- mirrored quad sampling the texture's left half (u 0..0.5),
+        -- read right-to-left. Flipping before clipping would sample the
+        -- wrong half entirely.
+        it "flipX mirrors the CLIPPED UV slice, not the whole texture" $
+            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) True 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
+            in case V.toList batches of
+                [b] → do
+                    vertexBounds (rbVertices b) `shouldBe` ((50, 0), (100, 50))
+                    uvBounds (rbVertices b) `shouldBe` ((0.5, 0), (1, 1))
+                    uCoordsAtLeftEdge (rbVertices b) `shouldBe` [1]
+                other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
 
     describe "hover clipping (findElementAt — backs tooltip hover detection)" $ do
         it "does not return a row clipped out of view" $

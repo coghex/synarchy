@@ -23,7 +23,9 @@ end
 --   page, x, y, width, height -- overall browser bounds
 --   font, fontSize, itemHeight, maxVisible, uiscale, zIndex
 --   listWidthFraction (default 0.35), gap (default 20)
---   entries = { { label = "...", path = "..." }, ... }
+--   iconSize -- optional per-row thumbnail edge (#887); nil = no icons
+--   entries = { { label = "...", path = "...", icon = <handle> }, ... }
+--     'icon' is ignored unless iconSize was given.
 --   onSelect = function(path, label, index) end -- fired by
 --     assetBrowser.selectEntry (below) and by every later click/
 --     keyboard selection. NOT fired by 'new' itself — a caller doing
@@ -41,7 +43,7 @@ function assetBrowser.new(params)
 
     local items = {}
     for i, e in ipairs(params.entries or {}) do
-        items[i] = { text = e.label, value = e.path }
+        items[i] = { text = e.label, value = e.path, icon = e.icon }
     end
 
     -- The visible row count MUST fit params.height, not just default to
@@ -73,6 +75,7 @@ function assetBrowser.new(params)
         maxVisible = maxVisible,
         uiscale    = uiscale,
         zIndex     = params.zIndex or 1,
+        iconSize   = params.iconSize,
         items      = items,
         onSelect = function(value, text, index, _lid, _lname)
             if onSelect then onSelect(value, text, index) end

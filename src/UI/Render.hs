@@ -258,7 +258,7 @@ renderElementData mgr fontCache layerId elem absX absY clip =
         RenderSprite style → do
             let (w, h) = ueSize elem
                 (batches, items) = renderSpriteBatch (ussTexture style) (ussColor style)
-                                       absX absY w h layerId clip
+                                       (ussFlipX style) absX absY w h layerId clip
             pure (batches, items)
 
 -- | Pure: a sprite element's render batch, clipped. This is the ACTUAL
@@ -268,14 +268,24 @@ renderElementData mgr fontCache layerId elem absX absY clip =
 --   removing the clip here would show up as a batch/vertex mismatch,
 --   not just a passing geometry-only test. 'Nothing'-equivalent (empty
 --   vectors) when the clip excludes the sprite entirely.
-renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float)
+--
+--   'flipX' (#887) mirrors the sprite horizontally. It is applied AFTER
+--   clipping, to the clipped UV sub-rect: the clip already produced the
+--   @[u0,u1]@ slice the surviving screen rect samples, so mirroring is
+--   exactly "sample that slice right-to-left", i.e. @u0' = 1-u0@ paired
+--   with the left vertices and @u1' = 1-u1@ with the right. Flipping
+--   the source rect BEFORE clipping would instead mirror the clip
+--   itself, so a partially-clipped mirrored sprite would show the wrong
+--   slice.
+renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float) → Bool
                   → Float → Float → Float → Float → LayerId → Maybe ClipRect
                   → (V.Vector RenderBatch, V.Vector RenderItem)
-renderSpriteBatch tex color absX absY w h layerId clip =
+renderSpriteBatch tex color flipX absX absY w h layerId clip =
     case clipQuadUV clip (absX, absY, w, h) (0, 0, 1, 1) of
         Nothing → (V.empty, V.empty)
-        Just ((cx, cy, cw, ch), uv) →
-            let atlasId = lookupTextureSlot tex
+        Just ((cx, cy, cw, ch), (u0, v0, u1, v1)) →
+            let uv = if flipX then (1 - u0, v0, 1 - u1, v1) else (u0, v0, u1, v1)
+                atlasId = lookupTextureSlot tex
                 vertices = makeQuadVertices cx cy cw ch color atlasId uv
                 batch = RenderBatch
                     { rbTexture  = tex
