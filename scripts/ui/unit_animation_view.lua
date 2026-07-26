@@ -439,19 +439,26 @@ function unitAnimationView.dump(id)
             } or c.bounds,
         })
     end
-    return {
+    local out = {
         animation = v.anim and v.anim.name or nil,
         direction = v.direction,
-        mirrored = cell and cell.mirrored or false,
         sourceDirection = cell and cell.source or nil,
         frameIndex = v.frameIndex,
         frameCount = cell and #cell.frames or 0,
-        fps = v.anim and v.anim.fps or nil,
-        loop = v.anim and (v.anim.loop ~= false) or nil,
-        flip = v.anim and (v.anim.flip == true) or nil,
         ready = v.ready,
         directions = dirs,
     }
+    -- Assigned, never written as `x and y or z`: every field below can
+    -- legitimately BE false, and Lua's and/or collapses that to the
+    -- fallback — which reported loop=nil for a non-looping clip instead
+    -- of loop=false, exactly the case a `loop: false` animation needs.
+    out.mirrored = cell ~= nil and cell.mirrored == true
+    if v.anim then
+        out.fps = v.anim.fps
+        out.loop = v.anim.loop ~= false
+        out.flip = v.anim.flip == true
+    end
+    return out
 end
 
 return unitAnimationView

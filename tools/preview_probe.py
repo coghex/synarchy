@@ -106,6 +106,34 @@ def dump(port: int):
     return got if isinstance(got, dict) else {}
 
 
+def window_size(port: int) -> tuple[int, int]:
+    """The current WINDOW dimensions (engine.getVideoConfig's vcWidth/
+    vcHeight) — the coordinate space engine.setResolution actually
+    writes.
+
+    Resize checks below MUST resize relative to these, never to
+    previewManager's reported panelBounds: the panel is derived from the
+    FRAMEBUFFER, which on a HiDPI display is 2x the window, and is
+    further reduced by the browser's margins and list column. Feeding a
+    panel height back into setResolution therefore asks for a window far
+    larger than intended, so a "shrink" could silently grow the
+    framebuffer and leave the visible row count unchanged."""
+    got = send_json(port, "local w, h = engine.getVideoConfig(); return {w = w, h = h}")
+    if isinstance(got, dict) and got.get("w") and got.get("h"):
+        return int(got["w"]), int(got["h"])
+    return 800, 600
+
+
+def framebuffer_size(port: int) -> tuple[int, int]:
+    """The current FRAMEBUFFER dimensions — what the browser's layout is
+    actually derived from, and (on a HiDPI display) a whole-number
+    multiple of the window size window_size() reports."""
+    got = send_json(port, "local w, h = engine.getFramebufferSize(); return {w = w, h = h}")
+    if isinstance(got, dict) and got.get("w") and got.get("h"):
+        return int(got["w"]), int(got["h"])
+    return 800, 600
+
+
 def poll_state(port: int, want: str, seconds: float = 10.0, interval: float = 0.2) -> dict:
     """Poll previewManager.dump() until .state == want (texture upload is
     async — onAssetLoaded lands a tick or two after the request)."""
@@ -269,9 +297,11 @@ def check_simple_list_mode(port: int) -> bool:
         prev_bounds = before_resize.get("panelBounds") or {}
         prev_selected = before_resize.get("selected") or {}
         prev_scroll = before_resize.get("scrollOffset")
-        new_w = int(prev_bounds.get("width", 400)) + 300
-        new_h = int(prev_bounds.get("height", 300)) + 200
-        send(port, f"return engine.setResolution({new_w}, {new_h})", timeout=10.0)
+        # Resize relative to the WINDOW, never to panelBounds — see
+        # window_size()'s docstring for why the latter is a unit error.
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
         after_resize = poll_until(
             10.0, lambda: (dump(port).get("panelBounds") or {}) != prev_bounds
                 and dump(port))
@@ -315,13 +345,32 @@ def check_simple_list_mode(port: int) -> bool:
         # 512px-tall list inside a 320px-tall panel).
         rows_before_shrink = len(after_resize.get("rows") or [])
         prev_h = (after_resize.get("panelBounds") or {}).get("height")
-        shrink_w = int(prev_bounds.get("width", 400))
-        shrink_h = max(200, int((prev_h or 400) * 0.5))
-        send(port, f"return engine.setResolution({shrink_w}, {shrink_h})", timeout=10.0)
+        # Self-calibrating rather than a guessed fraction: solve for the
+        # WINDOW height that leaves room for about half the rows
+        # currently shown. A fixed fraction can't work across displays —
+        # the browser's row budget is floor(panelHeight / itemHeight),
+        # where panelHeight comes from the FRAMEBUFFER (2x the window on
+        # HiDPI) and itemHeight scales with the user's UI scale, so on a
+        # retina screen at a small UI scale even a halved window can
+        # still fit all 67 icons and "shrink" nothing at all.
+        cur_win_w, cur_win_h = window_size(port)
+        _, cur_fb_h = framebuffer_size(port)
+        fb_ratio = (cur_fb_h / cur_win_h) if cur_win_h else 1.0
+        target_rows = max(4, rows_before_shrink // 2)
+        target_win_h = max(200, int((target_rows * item_height + 80) / fb_ratio))
+        send(port, f"return engine.setResolution({cur_win_w}, {target_win_h})",
+             timeout=10.0)
         after_shrink = poll_until(
             10.0, lambda: (dump(port).get("panelBounds") or {}).get("height") != prev_h
                 and dump(port))
         after_shrink = after_shrink or dump(port)
+        # Report a failed resize as itself rather than as a confusing
+        # row-count mismatch — the two have very different causes.
+        shrunk_h = (after_shrink.get("panelBounds") or {}).get("height")
+        ok_shrank = check("the shrink actually changed the panel height",
+                          shrunk_h is not None and prev_h is not None
+                          and shrunk_h < prev_h,
+                          f"before={prev_h} after={shrunk_h}")
         ok_shrink_rows = check("visible row count decreases on shrink",
                               len(after_shrink.get("rows") or []) < rows_before_shrink,
                               f"before={rows_before_shrink} "
@@ -339,8 +388,8 @@ def check_simple_list_mode(port: int) -> bool:
 
         return all([ok_filter, ok_mode, ok_count, ok_entries, ok_first, ok_ready,
                     ok_click, ok_scroll, ok_resize_bounds, ok_resize_selection,
-                    ok_resize_scroll, ok_grow_fit, ok_shrink_rows, ok_shrink_fit,
-                    ok_trimmed, ok_no_gameplay])
+                    ok_resize_scroll, ok_grow_fit, ok_shrank, ok_shrink_rows,
+                    ok_shrink_fit, ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 
@@ -377,9 +426,10 @@ def check_focused_item_mode(port: int) -> bool:
         # preserve, but the panel/sprite still must reflow, not overflow
         # or go stale (previewManager.onFramebufferResize).
         prev_bounds = d.get("panelBounds") or {}
-        new_w = int(prev_bounds.get("width", 400)) + 300
-        new_h = int(prev_bounds.get("height", 300)) + 200
-        send(port, f"return engine.setResolution({new_w}, {new_h})", timeout=10.0)
+        # Window units, not panel bounds — see window_size()'s docstring.
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
         after_resize = poll_until(
             10.0, lambda: (dump(port).get("panelBounds") or {}) != prev_bounds
                 and dump(port)) or dump(port)
@@ -590,9 +640,10 @@ def check_units_mode(port: int) -> bool:
         pre_pb = pre.get("playback") or {}
         pre_bounds = pre.get("panelBounds") or {}
         pre_scroll = pre.get("scrollOffset")
-        send(port, "return engine.setResolution({}, {})".format(
-            int(pre_bounds.get("width", 400)) + 260,
-            int(pre_bounds.get("height", 300)) + 180), timeout=10.0)
+        # Window units, not panel bounds — see window_size()'s docstring.
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
         post = poll_until(10.0, lambda: (
             (lambda s: s if (s.get("panelBounds") or {}) != pre_bounds else None)(
                 dump(port)))) or dump(port)
