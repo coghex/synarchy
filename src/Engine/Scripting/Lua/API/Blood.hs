@@ -42,6 +42,7 @@ import Blood.Types
 import Blood.Texture (generateBloodTexture, bloodTextureHash, btiWidth, btiHeight)
 import Blood.Render (BloodRenderRecord(..), bloodRenderRecords)
 import Blood.Impact (defaultStyleForWound)
+import Blood.Pool (defaultPoolThresholds, poolAtBound)
 
 -- | Resolve which world page a blood op targets: a named page (any in
 --   wmWorlds, even hidden/non-active) when a page id is given, else
@@ -339,15 +340,24 @@ bloodClearFn env = do
     return 1
 
 -- | blood.getTrailState(uid) → { pendingVolume, distSinceMark,
---     lastMarkAt } | nil. Headless introspection (issue #882 requirement
---   7) for the bleeding-trail emitter's per-unit accumulator
---   ('Unit.Types.Trail.TrailState', written by
+--     lastMarkAt, clusterLayers, clusterAtBound [, clusterX, clusterY] }
+--   | nil. Headless introspection (issue #882 requirement 7, extended by
+--   issue #883 requirement 9) for the ongoing-bleeding emitter's
+--   per-unit accumulator ('Unit.Types.Trail.TrailState', written by
 --   'Combat.Wounds.Tick' and consumed by 'Unit.Thread.Movement' /
---   "Blood.Trail"). nil for a missing unit OR a unit with no active
---   trail (never bled externally, or cleared on death/despawn/zero
---   external bleed — see 'Unit.Types.Instance.uiTrailState').
+--   "Blood.Trail" / "Blood.Pool"). nil for a missing unit OR a unit with
+--   no active accumulator (never bled externally, or cleared on
+--   death/despawn/zero external bleed — see
+--   'Unit.Types.Instance.uiTrailState').
 --   @lastMarkAt@ is the absolute game-time seconds of the last placed
---   mark (or of the accumulator's creation, before any mark has fired).
+--   mark or pool layer (or of the accumulator's creation, before any
+--   has fired) — both halves share the one cadence clock.
+--   @clusterX@/@clusterY@ are the current pool cluster's anchor, ABSENT
+--   (nil) until the movement consumer has anchored one;
+--   @clusterLayers@ is how many layers this cluster has already spawned
+--   and @clusterAtBound@ whether it has spent its whole
+--   'Blood.Pool.ptMaxLayers' budget (after which continued bleeding in
+--   place adds no further marks).
 bloodGetTrailStateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodGetTrailStateFn env = do
     idArg ← Lua.tointeger 1
@@ -364,6 +374,15 @@ bloodGetTrailStateFn env = do
             putN "pendingVolume" (tsPendingVolume ts)
             putN "distSinceMark" (tsDistSinceMark ts)
             putN "lastMarkAt"    (tsLastMarkAt ts)
+            Lua.pushinteger (fromIntegral (tsClusterLayers ts))
+            Lua.setfield (-2) "clusterLayers"
+            Lua.pushboolean (poolAtBound defaultPoolThresholds ts)
+            Lua.setfield (-2) "clusterAtBound"
+            case tsClusterAnchor ts of
+                Nothing → pure ()
+                Just (ax, ay) → do
+                    putN "clusterX" ax
+                    putN "clusterY" ay
             return 1
         Nothing → Lua.pushnil >> return 1
 
