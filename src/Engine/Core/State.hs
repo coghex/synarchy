@@ -360,9 +360,13 @@ data EngineEnv = EngineEnv
     --   are resolved at spawn time by the world-gen overlay (#89/#90).
   , lootTableRegistryRef ∷ IORef LootTableRegistry
     -- ^ Registry of loot tables loaded from data/loot_tables/*.yaml at
-    --   boot. Rolled by `loot.roll` (Lua), which a `loot_table`
-    --   location content entry calls to resolve item ids at spawn
-    --   time (#90).
+    --   boot. Rolled from Lua to resolve a `loot_table` location content
+    --   entry's item ids at spawn time (#90). That spawn path calls
+    --   `loot.rollFor`, whose draw is a pure function of the world seed,
+    --   the placed instance id, and the entry/roll indices (#948) — it
+    --   does NOT touch 'statRNGRef'. The plain `loot.roll` still draws
+    --   from that shared entropy-seeded generator and remains for
+    --   ad-hoc, non-reproducible callers.
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

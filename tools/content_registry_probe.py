@@ -22,8 +22,12 @@ Phases:
      item.listDefs, equipment.getClass/getClassNames,
      infection.get/getNames, craft.get/getNames (+ repair.get/getNames,
      the repair-axis-filtered view of the same registry),
-     engine.listLocationDefs, and loot.roll (including the unknown-table
-     nil path).
+     engine.listLocationDefs, and both loot draws — loot.roll (the
+     shared-RNG compatibility surface, including the unknown-table nil
+     path) and loot.rollFor (#948: the seed-stable draw the placed-
+     location content-spawn path uses — repeatable for one context,
+     independent across contexts, nil for an unknown table or an
+     incomplete context).
   3. Reload — the loaders are PUBLIC verbs callable at any time, not a
      one-shot boot step (`Engine.Scripting.Lua.API.Register.Engine`), so
      a probe-authored substance file is loaded twice with a changed
@@ -208,6 +212,44 @@ def main():
         ok = unknown in ("null", "nil", "")
         passed = check(passed, ok, "loot.roll on an unknown table is nil",
                        f"got={unknown!r}")
+
+        # loot.rollFor (#948) is the seed-stable draw the placed-location
+        # content-spawn path uses: pure in (tableId, worldSeed,
+        # instanceId, entryIndex, rollIndex), reading no generator. Same
+        # process, repeated calls, identical context -> identical pick.
+        repeats = {send(port, "return loot.rollFor('ruin_common',42,1,3,1)")
+                   .strip().strip('"') for _ in range(8)}
+        ok = len(repeats) == 1 and repeats != {"null"} and repeats != {"nil"}
+        passed = check(passed, ok,
+                       "loot.rollFor repeats one pick for one context",
+                       f"picks={sorted(repeats)}")
+
+        # Distinct contexts are independent streams — vary each
+        # discriminator in turn and require the set of picks to move at
+        # all. (Not an all-distinct claim: chance may legitimately
+        # reselect the same entry.)
+        varied = {send(port, f"return loot.rollFor('ruin_common',{s},{i},{e},{r})")
+                  .strip().strip('"')
+                  for s, i, e, r in ((42, 1, 3, 1), (42, 2, 3, 1),
+                                     (42, 1, 1, 1), (42, 1, 3, 2),
+                                     (43, 1, 3, 1))}
+        ok = len(varied) > 1
+        passed = check(passed, ok,
+                       "loot.rollFor separates seed/instance/entry/roll",
+                       f"picks={sorted(varied)}")
+
+        # Unknown table -> nil, same as loot.roll. Incomplete context ->
+        # nil too, rather than silently falling back to the entropy path.
+        for lua, label in (
+                ("return loot.rollFor('no_such_table',42,1,3,1)",
+                 "loot.rollFor on an unknown table is nil"),
+                ("return loot.rollFor('ruin_common')",
+                 "loot.rollFor without a context is nil"),
+                ("return loot.rollFor('ruin_common',42,1)",
+                 "loot.rollFor with a partial context is nil")):
+            got = send(port, lua).strip().strip('"')
+            ok = got in ("null", "nil", "")
+            passed = check(passed, ok, label, f"got={got!r}")
 
         # --- Phase 3: loaders stay callable (insert/replace, not frozen)
         print("\n-- phase 3: reload semantics --")
