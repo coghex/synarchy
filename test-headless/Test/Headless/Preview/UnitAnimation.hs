@@ -76,8 +76,15 @@ withUnitFixture action = do
     createDirectoryIfMissing True (root </> "no_anims")
     (`finally` removeDirectoryRecursive root) (action root)
 
--- A symlinked unit directory: refused unconditionally, the same rule
--- Engine.Preview.Discovery applies to every path it walks.
+-- Two symlink shapes, both refused unconditionally (the same rule
+-- Engine.Preview.Discovery applies to every path it walks):
+--   linked/            -- the whole unit directory is a symlink
+--   real_unit/animations -> outside/animations
+--                      -- a REAL unit directory whose animations root is
+--                         a symlink into another tree. doesDirectoryExist
+--                         follows links, so without an lstat here this
+--                         unit would browse (and load textures from)
+--                         assets it does not own.
 withSymlinkedUnit ∷ (FilePath → IO ()) → IO ()
 withSymlinkedUnit action = do
     tmp ← getTemporaryDirectory
@@ -87,7 +94,10 @@ withSymlinkedUnit action = do
     writeFile (real </> "animations" </> "idle" </> "south" </> "frame_000.png") ""
     createDirectoryIfMissing True root
     createDirectoryLink real (root </> "linked")
+    createDirectoryIfMissing True (root </> "real_unit")
+    createDirectoryLink (real </> "animations") (root </> "real_unit" </> "animations")
     let cleanup = do
+            removeDirectoryLink (root </> "real_unit" </> "animations")
             removeDirectoryLink (root </> "linked")
             removeDirectoryRecursive root
             removeDirectoryRecursive real
@@ -273,6 +283,13 @@ spec = do
                 result ← resolveUnitDir root "linked"
                 result `shouldBe` Left UnitNameSymlink
 
+        it "rejects a REAL unit directory whose animations/ root is a \
+           \symlink — doesDirectoryExist follows links, so without an \
+           \lstat here the unit would browse another tree's assets" $
+            withSymlinkedUnit $ \root → do
+                result ← resolveUnitDir root "real_unit"
+                result `shouldBe` Left UnitNameSymlink
+
         it "rejects a directory with no animations/ subtree" $
             withUnitFixture $ \root → do
                 result ← resolveUnitDir root "no_anims"
@@ -297,6 +314,13 @@ spec = do
                 let fs = Map.lookup DirS =≪ lookup "unpadded" found
                 fmap (map (T.unpack ∘ T.takeWhileEnd (/= '/'))) fs
                     `shouldBe` Just ["frame_1.png", "frame_2.png", "frame_10.png"]
+
+        it "is empty for a symlinked animations/ root, standalone — this \
+           \function is exported and independently exercised, so it must \
+           \be symlink-safe without relying on resolveUnitDir first" $
+            withSymlinkedUnit $ \root → do
+                found ← discoverUnitAnimations (root </> "real_unit")
+                found `shouldBe` []
 
         it "finds every shipped acolyte animation the YAML never mentions \
            \(pushing_idle), proving the filesystem — not the YAML — is \

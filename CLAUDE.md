@@ -554,11 +554,15 @@ pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
 - **Reflow:** a resize preserves the selected animation, selected
   direction, list scroll offset, AND playback phase.
 - **Pre-boot rejection:** `units/<name>` must be exactly one contained,
-  non-symlinked direct child of `assets/textures/units` holding an
-  `animations/` subtree. An unknown unit, a name with path structure or
-  `.`/`..`/absolute traversal, a symlinked unit directory, and a unit
-  with no animations all exit 1 before a window exists. A missing YAML
-  is NOT a rejection.
+  non-symlinked direct child of `assets/textures/units` holding a
+  non-symlinked `animations/` subtree. An unknown unit, a name with path
+  structure or `.`/`..`/absolute traversal, a symlinked unit directory
+  OR symlinked `animations/` root, and a unit with no animations all
+  exit 1 before a window exists. Both symlink levels matter —
+  `doesDirectoryExist` follows links, so a real unit directory with a
+  symlinked `animations/` would otherwise browse and load another
+  tree's assets, breaking trimmed loading. A missing YAML is NOT a
+  rejection.
 - **Dump extension:** unit mode adds `unit`, the animation `entries`
   list (each with `fps`/`loop`/`flip`/`thumb`/`directionCount`),
   `defaultAnim`, and `playback` — current `animation`, `direction`,

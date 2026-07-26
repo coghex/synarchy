@@ -269,14 +269,21 @@ renderElementData mgr fontCache layerId elem absX absY clip =
 --   not just a passing geometry-only test. 'Nothing'-equivalent (empty
 --   vectors) when the clip excludes the sprite entirely.
 --
---   'flipX' (#887) mirrors the sprite horizontally. It is applied AFTER
---   clipping, to the clipped UV sub-rect: the clip already produced the
---   @[u0,u1]@ slice the surviving screen rect samples, so mirroring is
---   exactly "sample that slice right-to-left", i.e. @u0' = 1-u0@ paired
---   with the left vertices and @u1' = 1-u1@ with the right. Flipping
---   the source rect BEFORE clipping would instead mirror the clip
---   itself, so a partially-clipped mirrored sprite would show the wrong
---   slice.
+--   'flipX' (#887) mirrors the sprite horizontally. The mirror is a
+--   property of the ELEMENT, not of whatever slice of it survives the
+--   clip: a mirrored element spanning screen @[x, x+w]@ samples @u=1@ at
+--   its left edge and @u=0@ at its right, and a clip may only HIDE part
+--   of that — never change which texel a given screen position shows.
+--
+--   Hence @u' = 1-u@ applied pointwise to the clipped sub-rect's own
+--   endpoints, which reflects each one across the FULL texture. It is
+--   emphatically NOT "reverse the surviving @[u0,u1]@ interval" (i.e.
+--   swapping @u0@ and @u1@): for a surviving slice of @0..0.5@ this
+--   yields @1..0.5@, whereas swapping would yield @0.5..0@ and make the
+--   visible pixels change identity as the clip moves — a mirrored
+--   sprite scrolling inside a clipping viewport would animate its own
+--   content instead of simply being revealed. 'renderSpriteBatch — a
+--   clipped mirror agrees with an unclipped mirror' pins exactly this.
 renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float) → Bool
                   → Float → Float → Float → Float → LayerId → Maybe ClipRect
                   → (V.Vector RenderBatch, V.Vector RenderItem)

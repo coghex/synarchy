@@ -69,10 +69,12 @@ data UnitFocusError
   --   a path, so anything with structure is refused before the
   --   filesystem is touched at all.
   | UnitNameSymlink
-  -- ^ The unit directory is a symlink — refused unconditionally (not
-  --   just an escaping one), the same rule
+  -- ^ The unit directory, or its @animations\/@ root, is a symlink —
+  --   refused unconditionally (not just an escaping one), the same rule
   --   'Engine.Preview.Discovery.walkFiles' applies to every entry it
-  --   walks past.
+  --   walks past. Both levels matter: 'doesDirectoryExist' follows
+  --   links, so a real unit directory with a symlinked @animations\/@
+  --   would otherwise browse another tree's animations entirely.
   | UnitNotFound
   -- ^ No such directory under @assets\/textures\/units@ (the
   --   @units\/nosuch@ case), or the units root itself is missing.
@@ -86,7 +88,7 @@ unitFocusErrorMessage UnitNameEscapesRoot =
     "unit name must be a single directory name under assets/textures/units \
     \(no absolute paths, path separators, or \"..\" components)"
 unitFocusErrorMessage UnitNameSymlink =
-    "unit directory must not be a symlink"
+    "unit directory, and its animations/ directory, must not be a symlink"
 unitFocusErrorMessage UnitNotFound = "no such unit"
 unitFocusErrorMessage UnitNoAnimations =
     "unit has no animations/ directory"
@@ -322,11 +324,27 @@ resolveUnitDir root name
                                 if not (canonRoot `isPathPrefixOf` canonCand)
                                     then pure (Left UnitNameEscapesRoot)
                                     else do
-                                        hasAnims ← doesDirectoryExist
-                                            (candidate </> "animations")
-                                        pure $ if hasAnims
-                                            then Right candidate
-                                            else Left UnitNoAnimations
+                                        let animRoot = candidate </> "animations"
+                                        hasAnims ← doesDirectoryExist animRoot
+                                        if not hasAnims
+                                            then pure (Left UnitNoAnimations)
+                                            else do
+                                                -- The animations/ root gets
+                                                -- the SAME lstat as every
+                                                -- other level: a symlinked
+                                                -- one would otherwise let a
+                                                -- non-symlinked unit pull
+                                                -- animations and textures
+                                                -- from outside its own tree
+                                                -- (doesDirectoryExist follows
+                                                -- links), breaking both the
+                                                -- symlink rule and the
+                                                -- requested-unit-only
+                                                -- trimmed-loading contract.
+                                                animLink ← pathIsSymbolicLink animRoot
+                                                pure $ if animLink
+                                                    then Left UnitNameSymlink
+                                                    else Right candidate
 
 -- | Every animation the unit's asset tree holds, in the case-sensitive
 --   lexicographic directory-name order the list displays, each mapped
@@ -339,7 +357,11 @@ discoverUnitAnimations ∷ FilePath → IO [(Text, Map.Map Direction [Text])]
 discoverUnitAnimations unitDir = do
     let animRoot = unitDir </> "animations"
     exists ← doesDirectoryExist animRoot
-    if not exists
+    -- Repeated here, not just in 'resolveUnitDir': this function is
+    -- exported and independently exercised, so it must be symlink-safe
+    -- on its own rather than relying on a caller having checked first.
+    animLink ← if exists then pathIsSymbolicLink animRoot else pure False
+    if not exists ∨ animLink
         then pure []
         else do
             names ← listDirectory animRoot

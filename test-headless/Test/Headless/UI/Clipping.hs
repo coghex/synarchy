@@ -105,10 +105,18 @@ uvBounds vs =
 --   from an unmirrored one (min/max are identical either way) — which
 --   side samples which U is the whole point of #887's flipX.
 uCoordsAtLeftEdge ∷ VS.Vector Vertex → [Float]
-uCoordsAtLeftEdge vs =
+uCoordsAtLeftEdge = uCoordsAtEdge minimum
+
+-- | Same, for the quad's RIGHT screen edge. The pair together pin the
+--   mirror's ORIENTATION, which 'uvBounds' cannot see.
+uCoordsAtRightEdge ∷ VS.Vector Vertex → [Float]
+uCoordsAtRightEdge = uCoordsAtEdge maximum
+
+uCoordsAtEdge ∷ ([Float] → Float) → VS.Vector Vertex → [Float]
+uCoordsAtEdge pick vs =
     let vl = VS.toList vs
-        minX = minimum (map (x ∘ pos) vl)
-    in nub [x (tex v) | v ← vl, x (pos v) ≡ minX]
+        edgeX = pick (map (x ∘ pos) vl)
+    in nub [x (tex v) | v ← vl, x (pos v) ≡ edgeX]
 
 spec ∷ Spec
 spec = do
@@ -419,19 +427,37 @@ spec = do
                     uCoordsAtLeftEdge (rbVertices b) `shouldBe` [1]
                 other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
 
-        -- Mirroring is applied to the CLIPPED sub-rect, not the source
-        -- rect: clipping away the sprite's left half must leave the
-        -- mirrored quad sampling the texture's left half (u 0..0.5),
-        -- read right-to-left. Flipping before clipping would sample the
-        -- wrong half entirely.
-        it "flipX mirrors the CLIPPED UV slice, not the whole texture" $
-            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) True 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
-            in case V.toList batches of
-                [b] → do
-                    vertexBounds (rbVertices b) `shouldBe` ((50, 0), (100, 50))
-                    uvBounds (rbVertices b) `shouldBe` ((0.5, 0), (1, 1))
-                    uCoordsAtLeftEdge (rbVertices b) `shouldBe` [1]
-                other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
+        -- The invariant that fixes the mirror's meaning: a clip may only
+        -- HIDE part of a mirrored sprite, never change which texel a
+        -- given screen position shows. The element spans screen x
+        -- 50..150, so mirrored it samples u=1 at x=50 and u=0 at x=150,
+        -- hence u=0.5 at x=100. Clipping to x<=100 must therefore leave
+        -- u=1 on the left and u=0.5 on the right — the SAME values the
+        -- unclipped mirror has at those very positions.
+        --
+        -- Reversing the surviving [u0,u1] interval instead (swapping u0
+        -- and u1, so 0..0.5 becomes 0.5..0) is the tempting misreading:
+        -- it would make a mirrored sprite scrolling inside a clipping
+        -- viewport animate its own content rather than be revealed.
+        it "a clipped mirror agrees with an unclipped mirror at the same \
+           \screen position" $
+            let sprite clip = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) True 50 0 100 50 (LayerId 0) clip
+                (full, _) = sprite Nothing
+                (clipped, _) = sprite (Just (0, 0, 100, 100))
+            in case (V.toList full, V.toList clipped) of
+                ([f], [c]) → do
+                    -- Unclipped: the full mirrored span, u 1 -> 0.
+                    vertexBounds (rbVertices f) `shouldBe` ((50, 0), (150, 50))
+                    uCoordsAtLeftEdge (rbVertices f) `shouldBe` [1]
+                    uCoordsAtRightEdge (rbVertices f) `shouldBe` [0]
+                    -- Clipped to the left half: same u at x=50, and the
+                    -- new right edge (x=100) carries the unclipped
+                    -- mirror's own midpoint u, 0.5.
+                    vertexBounds (rbVertices c) `shouldBe` ((50, 0), (100, 50))
+                    uCoordsAtLeftEdge (rbVertices c) `shouldBe` [1]
+                    uCoordsAtRightEdge (rbVertices c) `shouldBe` [0.5]
+                    uvBounds (rbVertices c) `shouldBe` ((0.5, 0), (1, 1))
+                other → expectationFailure ("expected one batch each, got " ⧺ show other)
 
     describe "hover clipping (findElementAt — backs tooltip hover detection)" $ do
         it "does not return a row clipped out of view" $
