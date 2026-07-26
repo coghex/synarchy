@@ -398,10 +398,15 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                 | externalPortion ≤ 0 = uiTrailState inst
                 | otherwise = Just $ case uiTrailState inst of
                     Just ts → ts { tsPendingVolume = tsPendingVolume ts + externalPortion }
+                    -- No cluster anchor yet: the movement consumer
+                    -- (which is the only code that knows where the unit
+                    -- actually is) anchors one on its next tick (#883).
                     Nothing → TrailState
                         { tsPendingVolume = externalPortion
                         , tsDistSinceMark = 0
                         , tsLastMarkAt    = gt
+                        , tsClusterAnchor = Nothing
+                        , tsClusterLayers = 0
                         }
             bodyMass   = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
             maxBlood   = bodyMass * bloodMassRatio
