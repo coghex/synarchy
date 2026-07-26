@@ -9,11 +9,15 @@ module Engine.Scripting.Lua.API.Buildings.Materials
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Building.Types
 import Item.Types (itemTotalWeight)
 import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
@@ -30,7 +34,7 @@ buildingGetMaterialNeedFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mMat ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     def  ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -60,7 +64,7 @@ buildingGetMaterialDeliveredFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mMap ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure (biMaterialsDelivered <$> HM.lookup bid (bmInstances bm))
             case mMap of
                 Nothing → do
@@ -87,7 +91,7 @@ buildingAreMaterialsSatisfiedFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mOk ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     def  ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -119,14 +123,14 @@ buildingGetStorageFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mInst ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure (HM.lookup bid (bmInstances bm))
             case mInst of
                 Nothing → do
                     Lua.pushnil
                     return 1
                 Just inst → do
-                    itemMgr ← Lua.liftIO $ readIORef (itemManagerRef env)
+                    itemMgr ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] (biStorage inst)) $ \(i, item) → do
                         Lua.newtable
@@ -146,7 +150,7 @@ buildingGetStorageCapacityFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mCap ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     def  ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -176,8 +180,8 @@ buildingGetStorageWeightFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mW ← Lua.liftIO $ do
-                bm      ← readIORef (buildingManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
+                bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     pure $ sum (map (itemTotalWeight itemMgr) (biStorage inst))
