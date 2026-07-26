@@ -79,14 +79,14 @@ local function hasInfection(uid)
     return false
 end
 
--- A medic treats its own squad: same faction (a "debug" medic — staged
--- in the debug overlay — also treats player units so test fights can be
--- patched up).
+-- A medic treats its own side. Which factions count as "its own side"
+-- is the shared ALLY relation (#912), not a rule medic logic gets to
+-- state for itself: the player↔debug pairing that used to be spelled
+-- out here (so a debug medic staged in the overlay can patch up player
+-- units after a test fight) is now declared in the faction model, where
+-- swarm rallying reads the same answer.
 local function isAlly(uid, medicFaction)
-    local f = unit.getFaction(uid)
-    return f == medicFaction
-        or (medicFaction == "debug" and f == "player")
-        or (medicFaction == "player" and f == "debug")
+    return faction.areAllies(unit.getFaction(uid), medicFaction)
 end
 
 -- A best-medic who's fighting can't break off — that's what frees a

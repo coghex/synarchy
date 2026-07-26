@@ -14,6 +14,7 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState)
 import Unit.Types
+import Unit.Faction (Faction(..))
 import Unit.Sim.Types
 import Unit.Stats (rollStat, pickName, applyItemBuffs)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
@@ -27,8 +28,8 @@ import World.Types (WorldManager(..))
 import World.Page.Types (WorldPageId(..))
 
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
-                       → Float → Float → Int → Text → WorldPageId → IO ()
-handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId = do
+                       → Float → Float → Int → Faction → WorldPageId → IO ()
+handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
     um ← readIORef (unitManagerRef env)
     -- Drop the spawn if its world no longer exists. A spawn queued before
     -- world.destroyAll (Exit to Menu) would otherwise be drained after
@@ -163,7 +164,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId = do
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
                     , uiAccessories = initialAccessories
-                    , uiFactionId   = factionId
+                    , uiFactionId   = faction
                     , uiWounds      = []
                     , uiScars       = []
                     , uiImmuneResponse = 0

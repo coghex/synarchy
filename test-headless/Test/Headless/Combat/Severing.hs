@@ -12,6 +12,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
+import Unit.Faction (Faction(..))
 import Combat.Wounds (propagateSevering)
 
 -- Body: arm → hand → finger chain, so we can watch the loss propagate.
@@ -50,7 +51,7 @@ inst ws = UnitInstance
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty, uiKnowledge = HM.empty
     , uiInventory = [], uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = "t", uiWounds = ws, uiScars = []
+    , uiFactionId = FactionNeutral, uiWounds = ws, uiScars = []
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 5
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

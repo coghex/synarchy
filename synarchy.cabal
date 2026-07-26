@@ -255,6 +255,7 @@ library
                      Engine.Scripting.Lua.API.Register.Input
                      Engine.Scripting.Lua.API.Register.UI
                      Engine.Scripting.Lua.API.Register.Unit
+                     Engine.Scripting.Lua.API.Register.Faction
                      Engine.Scripting.Lua.API.Register.Building
                      Engine.Scripting.Lua.API.Register.Designation
                      Engine.Scripting.Lua.API.Register.Equipment
@@ -287,6 +288,7 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.UI.Placement
+                     Engine.Scripting.Lua.API.Faction
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.Yaml
                      Engine.Scripting.Lua.API.Units.Spawn
@@ -419,6 +421,7 @@ library
                      Unit.Injury
                      Unit.Command.Types
                      Unit.Direction
+                     Unit.Faction
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
@@ -1085,6 +1088,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
                    Test.Headless.Location.Discovery
+                   Test.Headless.Unit.Faction
+                   Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.MapIcons
                    Test.Headless.Building.Placement

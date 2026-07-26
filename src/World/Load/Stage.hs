@@ -27,6 +27,7 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
@@ -34,7 +35,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
@@ -55,6 +56,7 @@ import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import Building.Types (BuildingManager(..), BuildingId, BuildingDef)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
+import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
 import World.Thread.Helpers (unWorldPageId)
@@ -74,6 +76,10 @@ data PageStageResult = PageStageResult
     , psrBuildingOrphans ∷ ![BuildingId]
     , psrUnits       ∷ !UnitManager
     , psrUnitOrphans ∷ ![UnitId]
+    , psrUnitUnknownFactions ∷ ![Text]
+      -- ^ Distinct unrecognized faction tags this page's units carried
+      --   (#912). Those units load as 'Unit.Faction.fallbackFaction';
+      --   the session aggregate warns once per distinct tag.
     , psrUnitSimStates ∷ !(HM.HashMap UnitId UnitSimState)
     , psrCamera      ∷ !(Maybe Camera2D)
     , psrZoomAtlas   ∷ !(Maybe (Int, Int, BS.ByteString))
@@ -118,6 +124,17 @@ stageSession env logger saveData registry = case sdWorlds saveData of
 
         let buildingOrphans = concatMap psrBuildingOrphans results
             unitOrphans     = concatMap psrUnitOrphans results
+            -- Once per DISTINCT tag across the whole load transaction,
+            -- however many units or pages carried it (#912). Those units
+            -- are already loaded as the inert fallback — this is a
+            -- diagnostic, never a load failure.
+            unknownFactions = L.sort $ HS.toList $ HS.fromList $
+                                concatMap psrUnitUnknownFactions results
+        forM_ unknownFactions $ \tag →
+            logWarn logger CatWorld $
+                "Save load: unrecognized unit faction tag '" <> tag
+                <> "' — those units load as '"
+                <> factionTag fallbackFaction <> "'"
         if not (null buildingOrphans) ∨ not (null unitOrphans)
           then pure $ Left $ StageError $
                  "internal error: staging produced "
@@ -375,7 +392,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           pure (seeds, stamps, mCam, mZoomAtlasVal, mPreviewVal)
 
     let (restoredBm, bOrphans) = fromBuildingSnapshot pid buildingDefs (wpsBuildings wps)
-        (restoredUm, uOrphans) = fromUnitSnapshot pid unitDefs (wpsUnits wps)
+        (restoredUm, uOrphans, uUnknownFactions) =
+            fromUnitSnapshot pid unitDefs (wpsUnits wps)
         liveUids   = HM.keysSet (umInstances restoredUm)
         simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
                                       (wpsUnitSimStates wps)
@@ -391,6 +409,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         , psrBuildingOrphans = bOrphans
         , psrUnits           = restoredUm
         , psrUnitOrphans     = uOrphans
+        , psrUnitUnknownFactions = uUnknownFactions
         , psrUnitSimStates   = simStates'
         , psrCamera          = mCamera
         , psrZoomAtlas       = mZoomAtlas
