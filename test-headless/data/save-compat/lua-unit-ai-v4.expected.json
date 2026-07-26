@@ -1,0 +1,23 @@
+{
+  "$comment": "Expected canonical post-migration state for docs/save_compat/manifest.json's e1-unit-location-knowledge baseline's lua-unit-ai-v4 fixture (issue #915). The tracked .bin is a REAL v4-shaped unit_ai payload -- typed {__ref='location_instance', page, id, x, y} memories plus the v2/v3 wrapped fields and __owner -- produced by the PRODUCTION encoder itself (scripts/unit_ai_save_refs.lua's wrapAiState, then scripts/lib/data_codec.lua's M.encode) inside a real HsLua VM, not a hand-rolled table matching what the encoder is believed to emit. It exists because the e1 SESSION fixture's canonical summary is Lua-opaque by construction (SessionSnapshot carries no Lua state), so save_compat_audit alone cannot notice this typed memory being dropped or mis-encoded; Test.Headless.Lua.SaveModules's 'tracked v1 fixtures from disk' describe block drives these bytes through the real saveModules.prepareLoad/applyAll round trip and asserts exactly the values below. The two memories deliberately share instance id 1 on DIFFERENT pages -- the aliasing case a page-blind reference would get wrong.",
+  "componentId": "unit_ai",
+  "encodedVersion": 4,
+  "afterApply": {
+    "7": {
+      "currentAction": "idle",
+      "attackTargetUid": 8,
+      "knownLocations": [
+        { "page": "generated_page", "id": 1, "x": 104, "y": 40 },
+        { "page": "other_page", "id": 1, "x": 3, "y": 4 }
+      ]
+    }
+  },
+  "references": [
+    { "kind": "unit", "id": 7, "owner": 7, "path": "unit[7]" },
+    { "kind": "unit", "id": 8, "owner": 7, "path": "unit[7].attackTargetUid" },
+    { "kind": "location_instance", "id": 1, "owner": 7,
+      "page": "generated_page", "path": "unit[7].knownLocations[1]" },
+    { "kind": "location_instance", "id": 1, "owner": 7,
+      "page": "other_page", "path": "unit[7].knownLocations[2]" }
+  ]
+}

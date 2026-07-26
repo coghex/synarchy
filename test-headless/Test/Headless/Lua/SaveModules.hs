@@ -1744,6 +1744,63 @@ spec = do
                 , "  'non-reference fields must survive the migration untouched')"
                 ]
 
+        it "decodes the tracked lua-unit-ai-v4.bin fixture's per-unit \
+           \location memories (#915) through saveModules.prepareLoad/ \
+           \applyAll, keeping each entry's page, id and remembered anchor, \
+           \and reporting one page-qualified location_instance edge each" $ do
+            -- The complete-session baseline's canonical summary is
+            -- Lua-OPAQUE (SessionSnapshot carries no Lua state), so
+            -- save_compat_audit alone would pass even if this typed
+            -- memory were dropped or mis-encoded. THIS is the assertion
+            -- that would fail: real tracked bytes, produced by the real
+            -- wrapAiState encoder, driven through the real preparation
+            -- path — the same shape the e1 session fixture carries.
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/lua-unit-ai-v4.bin"
+            runsOkWithPayloads [("FIXTURE", bytes)] $ lns
+                [ "unit = { exists = function(_uid) return true end }"
+                , "item = { listDefs = function() return {} end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local fakeAiState = {}"
+                , "unitAiSave.register({}, fakeAiState)"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 4, payload = FIXTURE },"
+                , "})"
+                , "assert(prep.ok, 'the tracked v4 fixture must prepare cleanly: '"
+                , "  .. table.concat(prep.errors or {}, '; '))"
+                -- Each memory is reported as its OWN page-qualified edge:
+                -- an id alone would be ambiguous, since the fixture
+                -- deliberately carries the SAME instance id (1) on two
+                -- different pages.
+                , "local edges = {}"
+                , "for _, r in ipairs(prep.references) do"
+                , "  if r.kind == 'location_instance' then"
+                , "    edges[r.path] = r end end"
+                , "local a = edges['unit[7].knownLocations[1]']"
+                , "local b = edges['unit[7].knownLocations[2]']"
+                , "assert(a and a.id == 1 and a.page == 'generated_page'"
+                , "       and a.owner == 7, 'first memory edge wrong')"
+                , "assert(b and b.id == 1 and b.page == 'other_page'"
+                , "       and b.owner == 7, 'second memory edge wrong')"
+                , "saveModules.applyAll()"
+                , "local ks = fakeAiState[7].knownLocations"
+                , "assert(type(ks) == 'table' and #ks == 2,"
+                , "  'apply() must restore both memories')"
+                , "assert(ks[1].page == 'generated_page' and ks[1].id == 1"
+                , "       and ks[1].x == 104 and ks[1].y == 40,"
+                , "  'the first memory lost its page/id/anchor')"
+                , "assert(ks[2].page == 'other_page' and ks[2].id == 1"
+                , "       and ks[2].x == 3 and ks[2].y == 4,"
+                , "  'the second memory lost its page/id/anchor')"
+                -- aiState's LIVE shape never grows the wire tag.
+                , "assert(ks[1].__ref == nil and ks[2].__ref == nil,"
+                , "  'apply() must strip the __ref wire tag')"
+                -- …and the sibling reference fields still migrate.
+                , "assert(fakeAiState[7].attackTargetUid == 8,"
+                , "  'a v4 payload must still unwrap its other references')"
+                ]
+
         it "migrates the tracked lua-building-spawn-v1.bin fixture through \
            \saveModules.prepareLoad/applyAll to exactly the canonical \
            \unwrapped state and reference edges its .expected.json \

@@ -540,10 +540,19 @@
           "id": "e1-unit-location-knowledge-session",
           "path": "test-headless/data/save-compat/e1-unit-location-knowledge.bin",
           "kind": "complete-session",
-          "sha256": "d9a9a69526a018b1dac7a77daf433d774d2f3398095f8639593c7aaeffe51d47",
-          "sizeBytes": 432678,
-          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 8, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0, 0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "sha256": "24f29b64a98806e3d05ae4a7f41cfdb9cc182259f195d33c9861a9d537359707",
+          "sizeBytes": 1956142,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session --seed 42 --world-size 24 --plate-count 3 --spawn-building cargo_hold_S --spawn-unit acolyte --spawn-unit-at 104,40 --settle-seconds 3 --require-lua \"#(require('scripts.unit_ai').getKnownLocations(1) or {}) > 0\"): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 24, 3), building.spawn('cargo_hold_S', 0, 0), then unit.spawn('acolyte', 104, 40, 0, 'player') -- tile (104,40) is the anchor of the single ruin_small seed 42 places at this size, so the acolyte spawns INSIDE its discovery halo and the unit-AI tick ingests the memory before the save. --require-lua holds the save until aiState[1].knownLocations is actually non-empty, so this fixture can never silently regress to carrying only an ABSENT v4 field (which is exactly what its first revision did). worldSize 24 is the SMALLEST world that places a location at all (16 places none at any seed tried), hence the fixture's size. Then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed; note that summary is Lua-OPAQUE by construction, so the populated knownLocations payload is asserted separately by the lua-unit-ai-v4 component-focused fixture below.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/e1-unit-location-knowledge.expected.json"
+        },
+        {
+          "id": "lua-unit-ai-v4",
+          "path": "test-headless/data/save-compat/lua-unit-ai-v4.bin",
+          "kind": "component-focused",
+          "sha256": "10027630210e6bd355b94d3e8d20fd82c59cf87aa96813159a887292483003de",
+          "sizeBytes": 301,
+          "provenance": "Generated through the real codec: a LIVE-shaped aiState entry ({[7] = {currentAction='idle', attackTargetUid=8, knownLocations={{page='generated_page', id=1, x=104, y=40}, {page='other_page', id=1, x=3, y=4}}}}) run through the PRODUCTION encoder itself -- scripts/unit_ai_save_refs.lua's wrapAiState, then scripts/lib/data_codec.lua's M.encode -- inside a genuine HsLua VM (cabal repl, Lua.run/Lua.dostring, the SAME entry points collectLuaComponents uses in Engine.Scripting.Lua.API.Save), so the tracked bytes are what the real save path emits rather than a hand-written table believed to match it. Exists because the e1 SESSION fixture's canonical summary is Lua-OPAQUE by construction (SessionSnapshot carries no Lua state), so save_compat_audit alone would pass even if this typed memory were dropped or mis-encoded; Test.Headless.Lua.SaveModules's 'tracked v1 fixtures from disk' block drives these bytes through the real saveModules.prepareLoad/applyAll and asserts every page/id/anchor and both page-qualified location_instance edges. The two memories deliberately share instance id 1 on DIFFERENT pages -- the aliasing case a page-blind reference would get wrong.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/lua-unit-ai-v4.expected.json"
         }
       ]
     }
