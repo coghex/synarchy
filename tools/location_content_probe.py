@@ -13,11 +13,19 @@ location's chunk loads, end to end:
      `room_small`: all 25 floors present, a breached perimeter (some
      but not all of the 20 wall segments), exactly 3 corner posts, and
      every piece carrying the pack's "damaged" variant texture path.
+  1b/1c. Loot selection is seed-stable per placed instance (#948): two
+     further INDEPENDENT fresh processes regenerate the same seed from
+     scratch — one visiting the ruins in the same order as check 1, one
+     in the exact reverse — and every stable ruin instance ends up with
+     the same loot multiset it got the first time. Reversing the load
+     order must not swap or shift which ruin owns which reward.
   2. The one-time content-spawn flag AND the damaged geometry survive a
      save -> quit -> fresh restart -> load: revisiting the same chunk
-     does NOT respawn (counts stay exactly the same, not doubled), the
-     breach pattern replays identically, and the pieces still resolve
-     to the damaged variant art (the #91 variant round-trip).
+     does NOT respawn (counts stay exactly the same, not doubled), each
+     instance keeps the exact loot it was first given (#948 — nothing is
+     re-rolled across save/load or chunk eviction), the breach pattern
+     replays identically, and the pieces still resolve to the damaged
+     variant art (the #91 variant round-trip).
   3. An unknown content `kind` and an unknown content `id` both log a
      warning and are skipped rather than crashing the engine.
   4. Location discovery (#780): stamping a ruin's geometry and spawning
@@ -206,6 +214,47 @@ def ground_items(port: int) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def loot_by_instance(port: int, page: str) -> dict[int, list[str]]:
+    """Ground-item defName multiset per placed-location INSTANCE (#948),
+    attributed by the instance's own absolute bounds (#777).
+
+    Attribution by bounds is unambiguous here: ruin_small declares
+    min_spacing 5 chunks (data/locations/ruin_small.yaml), so no two
+    ruin footprints can overlap. Multiset, not sequence: ground items
+    carry no roll order, and their scatter COORDINATES are still
+    math.random-driven by design — this issue pins the selected
+    item-definition sequence, which the hspec fixed vectors cover
+    directly. Keyed by the stable instance id so the comparison is
+    immune to placement/query ORDER."""
+    items = ground_items(port)
+    out: dict[int, list[str]] = {}
+    for e in placed(port, page):
+        b = e.get("bounds") or {}
+        if not b or "instance_id" not in e:
+            continue
+        out[e["instance_id"]] = sorted(
+            it.get("defName", "?") for it in items
+            if b["min_x"] <= it.get("x", 1e9) <= b["max_x"]
+            and b["min_y"] <= it.get("y", 1e9) <= b["max_y"])
+    return out
+
+
+def stamp_ruins(port: int, ruins: list[dict], reverse: bool = False) -> None:
+    """Load every ruin's chunk and wait for its geometry + contents."""
+    order = list(reversed(ruins)) if reverse else list(ruins)
+    for e in order:
+        load_chunk(port, e["cx"], e["cy"])
+    for _ in range(60):
+        if all(has_floor(port, e["gx"], e["gy"]) for e in order):
+            break
+        time.sleep(0.5)
+    want = 4 * len(order)
+    for _ in range(20):
+        if spawn_counts(port)["ground_total"] >= want:
+            break
+        time.sleep(0.5)
+
+
 def spawn_counts(port: int) -> dict:
     items = ground_items(port)
     counts: dict[str, int] = {}
@@ -286,6 +335,7 @@ def main() -> int:
     ruins: list[dict] = []
     counts1: dict = {}
     geoms1: dict = {}
+    loot1: dict[int, list[str]] = {}
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
     proc = boot(args.port, log=LOG)
@@ -342,6 +392,19 @@ def main() -> int:
                     print(f"PASS: fixed-position '{fixed}' item present ({n} >= {len(ruins)})")
                 else:
                     failures.append(f"expected >= {len(ruins)} '{fixed}', got {n}")
+
+            # #948 baseline: which loot each STABLE ruin instance owns.
+            # Captured before the synthetic discovery units below (they
+            # are units, not ground items) so phases 1b/1c compare a
+            # pure content-spawn result.
+            loot1 = loot_by_instance(args.port, "wa")
+            print(f"  loot by instance: {loot1}")
+            if len(loot1) == len(ruins) and all(loot1.values()):
+                print(f"PASS: every ruin instance owns an attributable "
+                      f"loot multiset ({len(loot1)} instance(s))")
+            else:
+                failures.append(
+                    f"could not attribute loot to every ruin instance: {loot1}")
 
             registered = registered_item_names(args.port)
             unexpected = unregistered_item_ids(set(counts1["ground_by_name"]), registered)
@@ -452,6 +515,39 @@ def main() -> int:
     finally:
         quit_engine(args.port, proc)
 
+    # ---- Phase 1b/1c (#948): loot selection is seed-stable per placed
+    #      instance. Two more INDEPENDENT fresh processes generate the
+    #      same seed from scratch — one visiting the ruins in the same
+    #      order as phase 1, one in the exact reverse — and each ruin
+    #      instance must end up with the same loot multiset it got in
+    #      phase 1. Before this issue the rolls came off the shared,
+    #      entropy-seeded stat RNG, so both runs would disagree with
+    #      phase 1 and the reversed run would additionally SWAP which
+    #      ruin got which reward. ----
+    if ruins and loot1 and not failures:
+        for label, reverse in (("same order", False), ("reversed order", True)):
+            proc = boot(args.port, log=LOG)
+            try:
+                load_defs(args.port)
+                gen_world(args.port, "wa", args.seed, args.size)
+                again = [e for e in placed_ready(args.port) if e["id"] == "ruin_small"]
+                if len(again) != len(ruins):
+                    failures.append(
+                        f"#948 ({label}): fresh process placed {len(again)} "
+                        f"ruin(s), phase 1 placed {len(ruins)}")
+                    continue
+                stamp_ruins(args.port, again, reverse=reverse)
+                loot_n = loot_by_instance(args.port, "wa")
+                if loot_n == loot1:
+                    print(f"PASS: #948 fresh process, same seed, {label} — every "
+                          f"ruin instance owns the same loot ({loot_n})")
+                else:
+                    failures.append(
+                        f"#948 ({label}): per-instance loot differs from phase 1: "
+                        f"phase1={loot1} now={loot_n}")
+            finally:
+                quit_engine(args.port, proc)
+
     # ---- Phase 2: save -> quit -> fresh restart -> load -> revisit does
     #      NOT respawn (one-time flag persisted, independent of the
     #      structure.hasAt geometry check). ----
@@ -480,6 +576,20 @@ def main() -> int:
             else:
                 failures.append(
                     f"contents respawned on reload: before={counts1} after={counts2}")
+
+            # #948 + #90: the one-time flag means nothing is re-rolled,
+            # so each instance keeps the EXACT loot it was first given —
+            # through save -> quit -> fresh process -> load -> chunk
+            # reload. (The chunks above were evicted with the process and
+            # re-loaded after the transaction published.)
+            loot2 = loot_by_instance(args.port, "wa")
+            if loot2 == loot1:
+                print("PASS: per-instance loot survived save -> quit -> restart "
+                      "-> load -> chunk reload unchanged (never re-rolled)")
+            else:
+                failures.append(
+                    f"per-instance loot changed across save/load: "
+                    f"before={loot1} after={loot2}")
 
             # #780: discovered state survives save -> quit -> restart ->
             # load; the event itself does NOT (player events are
@@ -551,10 +661,13 @@ def main() -> int:
             "  - id: item_that_does_not_exist\n"
             "    weight: 1\n"
         )
-    # A single-entry loot table forces quinoa_sack to spawn deterministically
-    # through the real content-spawn path (locations.spawnContents ->
-    # loot.roll -> item.spawnGround), rather than depending on whether
-    # ruin_common's random 2/12-weight roll happens to select it (#800).
+    # A single-entry loot table forces quinoa_sack to spawn through the
+    # real content-spawn path (locations.spawnContents -> loot.rollFor ->
+    # item.spawnGround) whatever the roll context, rather than depending
+    # on whether ruin_common's 2/12-weight entry happens to be the one
+    # this instance's draw selects (#800). #948 made that draw seed-stable
+    # rather than random, but it is still weight-dependent — which entry a
+    # given instance lands on is not something to assert on here.
     quinoa_yaml = "/tmp/loc_content_probe_quinoa.yaml"
     with open(quinoa_yaml, "w") as fh:
         fh.write(
@@ -628,7 +741,7 @@ def main() -> int:
         if got_quinoa >= 1:
             print(f"PASS: a forced single-entry loot table deterministically "
                   f"spawned quinoa_sack ({got_quinoa}), independent of "
-                  f"ruin_common's random 2/12-weight roll")
+                  f"ruin_common's 2/12-weight entry")
         else:
             failures.append(
                 f"probe_quinoa_ruin's loot table did not spawn quinoa_sack: {counts3}")

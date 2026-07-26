@@ -19,7 +19,8 @@ registerItemAPI env = do
   -- loot.roll and item.listDefs read their catalogues through the
   -- `content-registries` capability (#890); loot.roll additionally needs
   -- the shared stat RNG, which belongs to `units-buildings-combat` and so
-  -- is passed as the bare IORef it is.
+  -- is passed as the bare IORef it is. loot.rollFor (#948) is the
+  -- seed-stable draw and is registry-only — it takes no RNG handle.
   let regs = toContentRegistriesCapability env
   -- Blood global (#604 + #606) — the world-scoped blood decal model +
   -- debug surface: spawn a decal (reusing a near-matching generated-
@@ -43,10 +44,14 @@ registerItemAPI env = do
   Lua.setglobal (Lua.Name "blood")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml
-  -- (loaded via engine.loadLootTableYaml). Consumed by a `loot_table`
-  -- location content entry (#90).
+  -- (loaded via engine.loadLootTableYaml). A `loot_table` location
+  -- content entry (#90) rolls through `rollFor`, whose result is a pure
+  -- function of the world seed + placed-instance id + content-entry
+  -- index + roll index (#948); `roll` is the uncontextual shared-RNG
+  -- draw kept for ad-hoc console/test callers.
   Lua.newtable
-  registerLuaFunction "roll" (lootRollFn regs (statRNGRef env))
+  registerLuaFunction "roll"    (lootRollFn regs (statRNGRef env))
+  registerLuaFunction "rollFor" (lootRollForFn regs)
   Lua.setglobal (Lua.Name "loot")
 
   Lua.newtable

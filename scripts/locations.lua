@@ -19,9 +19,12 @@
 -- locations.spawnContents(id, gx, gy, worldId) once per chunk load,
 -- independent of whether the geometry was (re)built this call. It
 -- dispatches each `contents` entry to unit.spawn / item.spawnGround /
--- building.spawn / loot.roll / a builder (for nested "structure"
+-- building.spawn / loot.rollFor / a builder (for nested "structure"
 -- content), gated by its own one-time engine flag
 -- (world.hasSpawnedLocationContents) so contents are never re-spawned.
+-- The loot draw is seed-stable per placed instance (#948) — see the
+-- "Content spawning" section below — so a ruin's rewards are as
+-- reproducible from the world seed as its geometry already was.
 
 local locations = {}
 
@@ -361,6 +364,16 @@ end
 -- That independence matters: a floor-less location type would
 -- otherwise re-run every load, and a player demolishing the floor
 -- would otherwise re-trigger every content spawn too.
+--
+-- Loot determinism (#948): a `loot_table` entry rolls through
+-- `loot.rollFor`, NOT the shared-RNG `loot.roll`. Its draw is a pure
+-- function of the world page's persisted seed, the placed location's
+-- stable instance id (#911), the entry's POSITIONAL index in
+-- `contents`, and the roll number — so the same ruin in the same world
+-- yields the same items in any process, whatever order chunks and
+-- locations load in, and whether or not the world was saved before its
+-- contents first spawned. Only the scatter COORDINATES below still use
+-- math.random; the selected item ids do not.
 
 -- Scatter within the def's own authoritative bounds (#777) — no
 -- independent per-builder radius table to keep in sync with it.
@@ -401,9 +414,14 @@ local function spawnItemContent(def, entry, gx, gy, worldId)
     end
 end
 
-local function spawnLootTableContent(def, entry, gx, gy, worldId)
-    for _ = 1, (entry.rolls or 1) do
-        local itemId = loot.roll(entry.id)
+-- `rollCtx` is the stable per-entry roll context built by
+-- locations.spawnContents (#948): { seed, instance, index }. Each roll
+-- adds its own 1-based roll number, so the entry's rolls are
+-- independent draws rather than one result repeated.
+local function spawnLootTableContent(def, entry, gx, gy, worldId, rollCtx)
+    for roll = 1, (entry.rolls or 1) do
+        local itemId = loot.rollFor(entry.id, rollCtx.seed, rollCtx.instance,
+                                    rollCtx.index, roll)
         if not itemId then
             engine.logWarn("locations: unknown loot table '" ..
                 tostring(entry.id) .. "'")
@@ -450,14 +468,14 @@ local function spawnStructureContent(def, entry, gx, gy, worldId)
     b(worldId, gx + ox, gy + oy, def)
 end
 
-local function dispatchContent(def, entry, gx, gy, worldId)
+local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
     local kind = entry.kind
     if kind == "unit" then
         spawnUnitContent(def, entry, gx, gy, worldId)
     elseif kind == "item" then
         spawnItemContent(def, entry, gx, gy, worldId)
     elseif kind == "loot_table" then
-        spawnLootTableContent(def, entry, gx, gy, worldId)
+        spawnLootTableContent(def, entry, gx, gy, worldId, rollCtx)
     elseif kind == "building" then
         spawnBuildingContent(def, entry, gx, gy, worldId)
     elseif kind == "structure" then
@@ -468,6 +486,26 @@ local function dispatchContent(def, entry, gx, gy, worldId)
     end
 end
 
+-- The stable identity this anchor's loot rolls key on (#948).
+--
+-- A location placed by the world-gen overlay owns a persisted instance
+-- id (#911), allocated at placement in deterministic order — that is
+-- the identity requirement 1 wants, and it survives save/load and chunk
+-- eviction unchanged. A location stamped BY HAND (the debug overlay,
+-- the console, the probes) has no placed instance at all, so fall back
+-- to a stable function of its anchor tile — the same mixing collapseRng
+-- uses — pushed into the NEGATIVE range, which allocated instance ids
+-- (they start at 1) can never occupy. Either way the id is durable
+-- state, never a counter or a load order.
+local function lootInstanceId(gx, gy, worldId)
+    for _, e in ipairs(world.listPlacedLocations(worldId) or {}) do
+        if e.gx == gx and e.gy == gy and e.instance_id then
+            return e.instance_id
+        end
+    end
+    return -(1 + ((gx * 73856093 + gy * 19349663) % 2147483647))
+end
+
 -- Spawn location `id`'s contents, anchored at (gx, gy) on page
 -- `worldId` — once, ever, for this chunk. Safe to call on every chunk
 -- load: a no-op once world.hasSpawnedLocationContents is true.
@@ -476,8 +514,18 @@ function locations.spawnContents(id, gx, gy, worldId)
     if world.hasSpawnedLocationContents(gx, gy, worldId) then return end
     local def = locations.getDef(id)
     if def then
-        for _, entry in ipairs(def.contents or {}) do
-            dispatchContent(def, entry, gx, gy, worldId)
+        -- Resolved once per spawn, after the one-time gate: both halves
+        -- are durable per-page state, and neither depends on which
+        -- chunks have loaded so far. A page with no gen params yet
+        -- (an arena) reports no seed — 0 keeps the draw defined and
+        -- still entropy-free.
+        local rollCtx = {
+            seed     = world.getSeed(worldId) or 0,
+            instance = lootInstanceId(gx, gy, worldId),
+        }
+        for index, entry in ipairs(def.contents or {}) do
+            rollCtx.index = index
+            dispatchContent(def, entry, gx, gy, worldId, rollCtx)
         end
     else
         engine.logWarn("locations: unknown location '" .. tostring(id) ..
