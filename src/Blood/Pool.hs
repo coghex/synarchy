@@ -147,6 +147,13 @@ data OngoingMode = ModeTravel | ModeDwell
 --   A unit with no anchor yet (first tick after it started bleeding)
 --   anchors where it stands and counts as dwelling; if it is in fact
 --   walking, the very next crossing flips it to 'ModeTravel'.
+--
+--   The anchor this parks is PROVISIONAL — it is only the reference
+--   point the radius test measures against, and for a unit that walked
+--   in and stopped it sits wherever the last crossing happened, up to
+--   'ptClusterRadius' short of where the unit actually came to rest.
+--   'consumePoolLayers' re-anchors to the unit's real position when the
+--   cluster emits its first layer, and freezes it from then on.
 classifyOngoing
     ∷ PoolThresholds → (Float, Float) → TrailState → (OngoingMode, TrailState)
 classifyOngoing pt (px, py) ts = case tsClusterAnchor ts of
@@ -194,10 +201,30 @@ poolAtBound pt ts = tsClusterLayers ts ≥ ptMaxLayers pt
 --   A popped layer resets BOTH gates (cadence via @tsLastMarkAt@,
 --   distance to zero): a pool layer is an emission like a trail mark,
 --   so the next trail mark is a full gate away from the pool rather
---   than stamped on top of it.
+--   than stamped on top of it. The cadence clock restarts at @now@ —
+--   any unspent part of the elapsed window is DISCARDED rather than
+--   carried forward. Carrying it forward would let a long
+--   volume-limited wait bank an arbitrary amount of cadence credit (a
+--   trickle taking 30 s to afford one layer banks ~28 s of it), and a
+--   sudden bleed-rate jump would then cash that in as a burst of layers
+--   milliseconds apart — 'ptMinCadence' is a hard floor between
+--   consecutive emissions, not an average. Discarding it costs nothing
+--   in partition invariance, since the effective interval was already
+--   @max(cadence-limited, volume-limited)@.
+--
+--   @pos@ is where the unit is RIGHT NOW. A cluster that has not
+--   emitted anything yet re-anchors there before its first layer:
+--   'classifyOngoing' can only park a provisional anchor at the last
+--   radius crossing, which for a unit that walked in and stopped
+--   short of another full crossing sits up to 'ptClusterRadius' BEHIND
+--   the stop point. Anchoring on the first actual layer puts the pool
+--   under the unit; every later layer in the cluster uses that frozen
+--   anchor, so an in-radius shuffle still feeds one pool instead of
+--   smearing it across the shuffle.
 consumePoolLayers
-    ∷ PoolThresholds → Double → TrailState → (TrailState, [PoolLayerOut])
-consumePoolLayers pt now ts0
+    ∷ PoolThresholds → (Float, Float) → Double → TrailState
+    → (TrailState, [PoolLayerOut])
+consumePoolLayers pt pos now ts0
     | tsPendingVolume ts0 ≤ 0 = (ts0, [])
     | n ≤ 0                   = (ts0, [])
     | otherwise               = (ts', layers)
@@ -217,14 +244,12 @@ consumePoolLayers pt now ts0
     share     = if n > 0 then tsPendingVolume ts0 / fromIntegral n else 0
     base      = tsClusterLayers ts0
     layers    = [ PoolLayerOut (base + i) share | i ← [0 .. n - 1] ]
-    -- Only the cadence multiples actually SPENT are consumed; any
-    -- remainder carries forward, so chopping the same dwell into
-    -- different tick sizes converges on the same layer count.
     ts'       = ts0
         { tsPendingVolume = 0
         , tsDistSinceMark = 0
-        , tsLastMarkAt    = now - (elapsed - fromIntegral n * ptMinCadence pt)
+        , tsLastMarkAt    = now
         , tsClusterLayers = base + n
+        , tsClusterAnchor = if base ≡ 0 then Just pos else tsClusterAnchor ts0
         }
 
 -- | Deterministic placement of layer @idx@ relative to the cluster

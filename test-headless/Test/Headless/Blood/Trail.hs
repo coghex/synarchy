@@ -533,13 +533,51 @@ poolArbitrationSpec =
         mode `shouldBe` ModeDwell
         tsClusterLayers ts' `shouldBe` 3
 
+    it "a walk-then-stop pools UNDER the stopped unit, not back at the last \
+       \radius crossing (round-1 review regression)" $ do
+        -- classifyOngoing can only park its provisional anchor where the
+        -- last crossing happened. A unit that walks in and stops short
+        -- of another full crossing is up to ptClusterRadius past that
+        -- point, so placing layers at the provisional anchor would drop
+        -- the pool a tile behind the corpse/casualty. The first layer
+        -- re-anchors to where the unit actually is.
+        let pt      = defaultPoolThresholds
+            crossed = (17.05, 40.0)   -- where the last trail mark landed
+            stopped = (18.0,  40.0)   -- where the unit actually came to rest
+            walking = emptyTrailState { tsClusterAnchor = Just crossed
+                                      , tsClusterLayers = 0
+                                      , tsPendingVolume = ptMinVolume pt }
+            (mode, tsC) = classifyOngoing pt stopped walking
+            (tsP, first) = consumePoolLayers pt stopped (ptMinCadence pt) tsC
+        -- Still within the radius of the crossing, so this is a dwell —
+        -- the provisional anchor survives classification unchanged...
+        mode `shouldBe` ModeDwell
+        tsClusterAnchor tsC `shouldBe` Just crossed
+        -- ...and the first layer moves it onto the unit.
+        length first `shouldBe` 1
+        tsClusterAnchor tsP `shouldBe` Just stopped
+
+    it "the anchor FREEZES after the first layer, so an in-radius shuffle \
+       \keeps feeding one pool instead of smearing it" $ do
+        let pt = defaultPoolThresholds
+            started = emptyTrailState { tsClusterAnchor = Just (18.0, 40.0)
+                                      , tsClusterLayers = 1
+                                      , tsPendingVolume = ptMinVolume pt }
+            -- The unit shuffles half a radius away before the next layer.
+            shuffled = (18.0 + ptClusterRadius pt / 2, 40.0)
+            (mode, tsC) = classifyOngoing pt shuffled started
+            (tsP, more) = consumePoolLayers pt shuffled (ptMinCadence pt) tsC
+        mode `shouldBe` ModeDwell
+        length more `shouldBe` 1
+        tsClusterAnchor tsP `shouldBe` Just (18.0, 40.0)
+
 poolCadenceSpec ∷ Spec
 poolCadenceSpec = describe "Blood.Pool.consumePoolLayers — cadence/volume gating" $ do
 
     it "pops nothing before the cadence has elapsed, however much blood is pending" $ do
         let pt  = defaultPoolThresholds
             ts0 = emptyTrailState { tsPendingVolume = 5.0, tsLastMarkAt = 0 }
-            (ts', ls) = consumePoolLayers pt (ptMinCadence pt * 0.99) ts0
+            (ts', ls) = consumePoolLayers pt origin (ptMinCadence pt * 0.99) ts0
         ls `shouldBe` []
         tsPendingVolume ts' `shouldBe` 5.0
 
@@ -547,13 +585,13 @@ poolCadenceSpec = describe "Blood.Pool.consumePoolLayers — cadence/volume gati
         let pt  = defaultPoolThresholds
             ts0 = emptyTrailState { tsPendingVolume = ptMinVolume pt * 0.9
                                   , tsLastMarkAt = 0 }
-            (ts', ls) = consumePoolLayers pt 1000 ts0
+            (ts', ls) = consumePoolLayers pt origin 1000 ts0
         ls `shouldBe` []
         tsPendingVolume ts' `shouldSatisfy` (\v → abs (v - ptMinVolume pt * 0.9) < 1e-6)
 
     it "pops nothing with no blood behind it at all (a cleared/clotted bleed)" $ do
         let pt = defaultPoolThresholds
-        snd (consumePoolLayers pt 1000 emptyTrailState) `shouldBe` []
+        snd (consumePoolLayers pt origin 1000 emptyTrailState) `shouldBe` []
 
     it "a popped layer resets BOTH gates, so the next trail mark is a full \
        \gate away rather than stamped on the pool" $ do
@@ -561,11 +599,36 @@ poolCadenceSpec = describe "Blood.Pool.consumePoolLayers — cadence/volume gati
             ts0 = emptyTrailState { tsPendingVolume = ptMinVolume pt
                                   , tsDistSinceMark = 0.8, tsLastMarkAt = 0 }
             now = ptMinCadence pt
-            (ts', ls) = consumePoolLayers pt now ts0
+            (ts', ls) = consumePoolLayers pt origin now ts0
         length ls `shouldBe` 1
         tsPendingVolume ts' `shouldBe` 0
         tsDistSinceMark ts' `shouldBe` 0
         tsLastMarkAt ts'    `shouldSatisfy` (\t → abs (t - now) < 1e-9)
+
+    it "ptMinCadence is a HARD floor between consecutive layers, even after a \
+       \long volume-limited wait (round-1 review regression)" $ do
+        -- A trickle takes far longer than one cadence window to afford
+        -- its first layer, so a big elapsed interval is standing behind
+        -- it. Carrying that unspent interval forward used to bank
+        -- arbitrary cadence credit: the moment the bleed rate jumped,
+        -- the accumulator could cash it in as a burst of layers
+        -- milliseconds apart. The clock must restart at the emission.
+        let pt  = defaultPoolThresholds
+            ts0 = emptyTrailState { tsPendingVolume = ptMinVolume pt
+                                  , tsLastMarkAt = 0 }
+            (ts1, first) = consumePoolLayers pt origin 100 ts0
+        length first `shouldBe` 1
+        tsLastMarkAt ts1 `shouldBe` 100
+        -- An arterial jump right afterwards: plenty of volume for many
+        -- layers, but no time has passed, so nothing may pop.
+        let (ts2, burst) = consumePoolLayers pt origin 100.05
+                               ts1 { tsPendingVolume = 20 * ptMinVolume pt }
+        burst `shouldBe` []
+        tsPendingVolume ts2 `shouldSatisfy` (\v → abs (v - 20 * ptMinVolume pt) < 1e-6)
+        -- ...and exactly one lands once a FULL fresh cadence has passed.
+        let (_, next) = consumePoolLayers pt origin (100 + ptMinCadence pt) ts1
+                            { tsPendingVolume = 20 * ptMinVolume pt }
+        length next `shouldBe` 1
 
     it "a heavy bleed pools FASTER and HEAVIER than a trickle over the same \
        \dwell (#883 requirement 4)" $ do
@@ -601,7 +664,7 @@ poolBoundSpec = describe "Blood.Pool — the per-cluster layer bound (#883 requi
             (tsSat, _) = dwell pt 0.05 400 0.5
             -- Keep bleeding in place well past saturation.
             tsMore = tsSat { tsPendingVolume = tsPendingVolume tsSat + 2.0 }
-            (tsAfter, more) = consumePoolLayers pt 100000 tsMore
+            (tsAfter, more) = consumePoolLayers pt origin 100000 tsMore
         more `shouldBe` []
         tsPendingVolume tsAfter `shouldBe` tsPendingVolume tsMore
         tsDistSinceMark tsAfter `shouldBe` tsDistSinceMark tsMore
@@ -636,7 +699,7 @@ poolBoundSpec = describe "Blood.Pool — the per-cluster layer bound (#883 requi
         let pt = defaultPoolThresholds
             (tsSat, _) = dwell pt 0.05 400 0.5
         tsClusterLayers tsSat `shouldBe` ptMaxLayers pt
-        snd (consumePoolLayers pt 1e6 tsSat { tsPendingVolume = 5 }) `shouldBe` []
+        snd (consumePoolLayers pt origin 1e6 tsSat { tsPendingVolume = 5 }) `shouldBe` []
 
 poolPartitionInvarianceSpec ∷ Spec
 poolPartitionInvarianceSpec =
@@ -765,6 +828,11 @@ poolImmutabilitySpec =
 defaultPoolVolume ∷ Float
 defaultPoolVolume = ptMinVolume defaultPoolThresholds
 
+-- | The unit position handed to 'consumePoolLayers' in the cases that
+--   are about cadence/volume/bound math rather than placement.
+origin ∷ (Float, Float)
+origin = (0, 0)
+
 magnitude ∷ (Float, Float) → Float
 magnitude (x, y) = sqrt (x * x + y * y)
 
@@ -791,7 +859,7 @@ dwellFrom pt ts0 clock0 dt ticks volPerTick = go ts0 clock0 [] ticks
     go ts clock acc k =
         let clock' = clock + dt
             ts1 = ts { tsPendingVolume = tsPendingVolume ts + volPerTick }
-            (ts2, popped) = consumePoolLayers pt clock' ts1
+            (ts2, popped) = consumePoolLayers pt origin clock' ts1
         in go ts2 clock' (acc ++ popped) (k - 1 ∷ Int)
 
 -- | The pool's answer to 'checkPartitionInvariance': the same dwell
@@ -805,7 +873,7 @@ checkPoolPartitionInvariance cadenceGates totalVol steps = do
     let pt = defaultPoolThresholds
         totalTime = cadenceGates * ptMinCadence pt
         (bigFinal, bigLayers) =
-            consumePoolLayers pt totalTime emptyTrailState { tsPendingVolume = totalVol }
+            consumePoolLayers pt origin totalTime emptyTrailState { tsPendingVolume = totalVol }
         (smallFinal, smallLayers) =
             dwellFrom pt emptyTrailState 0 (totalTime / fromIntegral steps)
                       steps (totalVol / fromIntegral steps)

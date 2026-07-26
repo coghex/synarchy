@@ -312,6 +312,17 @@ def grid_x(uid: int):
     return info.get("gridX") if isinstance(info, dict) else None
 
 
+def unit_pos(uid: int):
+    """Where the unit actually IS — the independent oracle the cluster
+    anchor has to agree with. Checking marks only against the anchor the
+    engine reports would accept a pool dropped anywhere at all."""
+    info = send_json(PORT, f"return unit.getInfo({uid})")
+    if not isinstance(info, dict) or "gridX" not in info:
+        print(f"FAIL (setup): unit.getInfo({uid}) -> {info!r}")
+        sys.exit(2)
+    return (float(info["gridX"]), float(info["gridY"]))
+
+
 def wait_arrival(uid: int, target_x: float, timeout: float = 90.0,
                   epsilon: float = 0.5) -> bool:
     """Poll until the unit's gridX is within epsilon of target_x (arrived
@@ -571,11 +582,16 @@ def main() -> int:
         if anchor is None:
             print("FAIL: getTrailState reports no cluster anchor while layering")
             return 1
-        # The anchor is where the unit is standing, not somewhere else.
-        ux, uy = 30.0, 30.0
-        if dist(anchor[0], anchor[1], ux, uy) > POOL_CLUSTER_RADIUS + EPS:
+        # The anchor sits ON the unit, checked against the unit's own
+        # reported position rather than the anchor's self-report — the
+        # pool must not be dropped somewhere the unit merely passed
+        # through. Tolerance is the jitter radius, not the cluster
+        # radius: a whole cluster-radius of slack would accept a pool a
+        # full tile away.
+        ux, uy = unit_pos(uid)
+        if dist(anchor[0], anchor[1], ux, uy) > POOL_JITTER_RADIUS + EPS:
             print(f"FAIL: cluster anchored {dist(anchor[0], anchor[1], ux, uy):.3f} "
-                  f"tiles from the unit (> {POOL_CLUSTER_RADIUS})")
+                  f"tiles from the unit at ({ux}, {uy}) (> {POOL_JITTER_RADIUS})")
             return 1
         early_layers = cluster_layers(uid)
         early_marks = pool_marks(anchor, impact_ids, uid)
@@ -740,6 +756,7 @@ def main() -> int:
             print("FAIL: no cluster anchored after the unit stopped")
             return 1
         route_ds = route_marks(uid, impact_ids)
+        stop_pos = unit_pos(uid)
         route_xs = [d["x"] for d in route_ds]
         if len(route_ds) < 2 or max(route_xs) - min(route_xs) < walk / 2:
             print(f"FAIL: the walked leg left no real trail "
@@ -754,11 +771,37 @@ def main() -> int:
             print(f"FAIL: no pool grew at the stop point after the walk "
                   f"(getTrailState={trail_state(uid)!r})")
             return 1
-        stop_n = len(pool_marks(stop_anchor, impact_ids, uid))
+        # The pool must sit under the STOPPED unit. The anchor
+        # classification parks before the first layer is the last radius
+        # crossing, which can be a full cluster radius short of where the
+        # unit actually came to rest — re-read it now that the cluster
+        # has really started, and check it against the unit's own
+        # position rather than trusting the anchor's self-report.
+        settled_anchor = cluster_anchor(uid)
+        settled_pos = unit_pos(uid)
+        if settled_anchor is None:
+            print("FAIL: the stop-point cluster lost its anchor while growing")
+            return 1
+        drift = dist(settled_anchor[0], settled_anchor[1], *settled_pos)
+        if drift > POOL_JITTER_RADIUS + EPS:
+            print(f"FAIL: the pool grew {drift:.3f} tiles from the stopped unit "
+                  f"(anchor {settled_anchor}, unit {settled_pos}) — a "
+                  f"walk-then-stop must pool AT the stop point, not back at "
+                  f"the last radius crossing")
+            return 1
+        stop_marks = pool_marks(settled_anchor, impact_ids, uid)
+        far = [d for d in stop_marks
+               if dist(d["x"], d["y"], *settled_pos) > POOL_JITTER_RADIUS + EPS]
+        if far:
+            print(f"FAIL: {len(far)} stop-point marks landed further than "
+                  f"{POOL_JITTER_RADIUS} tiles from the unit at {settled_pos}")
+            return 1
         print(f"PASS: walk-then-stop used ONE accumulator — {len(route_ds)} "
               f"trail marks spanning "
               f"{max(route_xs) - min(route_xs):.2f} tiles, then a "
-              f"{stop_n}-mark cluster at the stop point {stop_anchor}")
+              f"{len(stop_marks)}-mark cluster on the stopped unit "
+              f"(anchor {settled_anchor}, unit {settled_pos}, drift "
+              f"{drift:.3f})")
         destroy(uid)
 
         # --- 10(e). a collapsed unit pools; death drops the cluster --------

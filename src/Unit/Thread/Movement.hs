@@ -323,9 +323,18 @@ tickAllMovement dt env utsRef = do
                                              let tsB = tsC { tsDistSinceMark =
                                                      tsDistSinceMark tsC
                                                          + max 0 stepDist }
+                                                 -- (nx, ny) is where the
+                                                 -- unit ACTUALLY is; a
+                                                 -- cluster's first layer
+                                                 -- re-anchors there, so a
+                                                 -- walk-then-stop pools
+                                                 -- under the stopped unit
+                                                 -- rather than back at the
+                                                 -- last radius crossing.
                                                  (tsP, layers) =
                                                    consumePoolLayers
-                                                     defaultPoolThresholds now tsB
+                                                     defaultPoolThresholds
+                                                     (nx, ny) now tsB
                                                  (ax, ay) = fromMaybe (nx, ny)
                                                      (tsClusterAnchor tsP)
                                                  mkLayer i l =
