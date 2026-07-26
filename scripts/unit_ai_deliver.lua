@@ -25,6 +25,13 @@ local fetch = require("scripts.unit_ai_fetch")
 local inventoryCountOf     = fetch.inventoryCountOf
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
+-- Bound like the three above (unit_ai_construct.lua / unit_ai_repair.lua
+-- do the same). deliverUtility calls both of these; without the bindings
+-- they resolved as undefined GLOBALS and raised out of the whole unit_ai
+-- update tick — killing EVERY unit's AI, not just delivery — the moment
+-- an Appearing building with unmet material need came into scan range.
+local findTechnomule       = fetch.findTechnomule
+local groundCountOf        = fetch.groundCountOf
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")

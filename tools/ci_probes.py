@@ -216,6 +216,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
     "crop": (SLOW_WORLDGEN, "needs a real generated world for natural row-crop placement + "
                             "groundcover planting, plus a save/load round-trip"),
+    "expedition_retrieval": (SLOW_WORLDGEN, "needs a real generated world for a placed "
+                             "ruin_small and a walkable colony site tens of tiles from it, "
+                             "then walks both legs in real time across two engine boots "
+                             "with a real save/restart/load in the middle; it also leans "
+                             "on AI arbitration timing (pickup_ground, drink_from_canteen, "
+                             "notify_allies), so it is manual-only on both counts (#920)"),
     "plant": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover + "
                              "real climate/slope suitability data"),
     "till": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover to "
