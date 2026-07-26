@@ -184,10 +184,14 @@ getPreviewBrowseFn env = do
       Lua.pushstring (TE.encodeUtf8 value)
       Lua.setfield (-2) key
 
+    -- 'void': 'push' generalizes to an unconstrained result type here,
+    -- so a bare `push x` trips -Wunused-do-bind (an error under CI's
+    -- -Werror). Every pusher passed in returns (), so discarding is
+    -- correct as well as necessary.
     pushArray push xs = do
       Lua.newtable
       forM_ (zip [1 ∷ Int ..] xs) $ \(i, x) → do
-        push x
+        void (push x)
         Lua.rawseti (-2) (fromIntegral i)
 
     pushPreviewUnit unit = do
