@@ -127,6 +127,7 @@ import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
+import qualified Test.Headless.Capability.UnitCombat as CapabilityUnitCombat
 import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
 main ∷ IO ()
@@ -169,6 +170,7 @@ main = hspec $ do
         -- mutation, so it rides the shared engine above.
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
+        describe "Capability.UnitCombat projections" CapabilityUnitCombat.spec
         describe "Capability.WorldSim projections" CapabilityWorldSim.spec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world

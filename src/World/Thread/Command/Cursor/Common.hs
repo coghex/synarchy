@@ -9,10 +9,12 @@ module World.Thread.Command.Cursor.Common
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import World.Types (WorldPageId)
 import World.Thread.Helpers (unWorldPageId)
@@ -46,7 +48,7 @@ recordDesignationOutcome env kind rejectedReason gx1 gy1 requested applied = do
             | dropped > 0 =
                 ("partial", Just "designation filter dropped tiles in the swept rectangle")
             | otherwise = ("accepted", Nothing)
-    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+    pushActionOutcome (ucActionOutcomeRef (toUnitCombatCapability env)) ActionOutcome
         { aoTs        = gt
         , aoKind      = kind
         , aoOutcome   = outcome
@@ -72,7 +74,7 @@ recordDesignationOutcome env kind rejectedReason gx1 gy1 requested applied = do
 recordMissingWorldOutcome ∷ EngineEnv → Text → WorldPageId → Int → Int → IO ()
 recordMissingWorldOutcome env kind pageId gx1 gy1 = do
     gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+    pushActionOutcome (ucActionOutcomeRef (toUnitCombatCapability env)) ActionOutcome
         { aoTs        = gt
         , aoKind      = kind
         , aoOutcome   = "rejected"

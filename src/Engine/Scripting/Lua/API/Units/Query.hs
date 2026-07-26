@@ -16,13 +16,17 @@ module Engine.Scripting.Lua.API.Units.Query
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Thread.Movement (jumpMaxTiles, maxJumpHeight, lungeImpactSpeed)
 import Unit.LineOfSight (unitVisibleTiles)
@@ -49,8 +53,8 @@ unitGetAttackRangeFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mRange ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
-                im ← readIORef (itemManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → case HM.lookup "height" (uiStats inst) of
@@ -76,8 +80,8 @@ unitGetAttackCooldownFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mCD ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
-                im ← readIORef (itemManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → return $ Just (resolveCooldown im um inst)
@@ -102,7 +106,7 @@ unitGetAnimDurationFn env = do
             let uid      = UnitId (fromIntegral n)
                 animName = TE.decodeUtf8Lenient nameBs
             mDur ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
@@ -138,7 +142,7 @@ unitGetMaxSpeedFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mSpeed ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → case HM.lookup (uiDefName inst)
@@ -166,8 +170,8 @@ unitGetEquippedWeaponWeightFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mW ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
-                im ← readIORef (itemManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → return $ Just
@@ -194,7 +198,7 @@ unitGetWeaponWieldedFromFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPart ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → return $ Just
@@ -300,8 +304,8 @@ unitGetWeaponClassFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mClass ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
-                im ← readIORef (itemManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → case firstEquippedWeapon im
@@ -332,7 +336,7 @@ unitGetJumpReachFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mReach ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
@@ -370,7 +374,7 @@ unitLungeImpactSpeedFn env = do
                           Just (Lua.Number v) → realToFrac v
                           _                   → 0.0
             mh ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
@@ -403,7 +407,7 @@ unitGetActivityFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mAct ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiActivity <$> HM.lookup uid (umInstances um))
             case mAct of
                 Just label → do
@@ -428,7 +432,7 @@ unitGetCurrentAnimFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mAnim ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiCurrentAnim <$> HM.lookup uid (umInstances um))
             case mAnim of
                 Just anim → do
@@ -452,7 +456,7 @@ unitGetVisibleTilesFn env = do
             tiles ← Lua.liftIO $ unitVisibleTiles env uid
             -- Return nil specifically when the unit is missing
             -- (distinct from "exists but sees nothing", which is []).
-            um ← Lua.liftIO $ readIORef (unitManagerRef env)
+            um ← Lua.liftIO $ readIORef (ucUnitManagerRef (toUnitCombatCapability env))
             if not (HM.member uid (umInstances um))
                 then do
                     Lua.pushnil

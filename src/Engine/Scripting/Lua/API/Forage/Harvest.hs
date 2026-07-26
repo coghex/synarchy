@@ -9,6 +9,10 @@ module Engine.Scripting.Lua.API.Forage.Harvest
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified HsLua as Lua
@@ -16,8 +20,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Random (randomR)
-import Engine.Core.State (EngineEnv(..), activeWorldStateFrom,
-                          freshItemInstanceId)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import World.Types
 import World.Flora.Growth (floraGrowth, harvestOpen)
 import World.Flora.CropPlot (CropPlot(..), cropPlotElapsedDays,
@@ -147,19 +150,19 @@ worldHarvestFloraFn env = do
 spawnYields ∷ EngineEnv → WorldState → Int → Int → [(Text, Int, Int)]
             → IO [(Text, Int)]
 spawnYields env ws gx gy yields = do
-    itemMgr ← readIORef (itemManagerRef env)
+    itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
     fmap concat $ forM yields $ \(name, lo, hi) →
         case lookupItemDef name itemMgr of
             Nothing → pure []
             Just def → do
-                count ← atomicModifyIORef' (statRNGRef env) $ \g →
+                count ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g →
                     let (v, g') = randomR (lo, hi) g in (g', v)
                 forM [1 .. max 0 count] $ \_ → do
-                    qual ← rollItemSpec (idQualitySpec def) (statRNGRef env)
-                    cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
-                    wght ← rollItemWeight def (statRNGRef env)
+                    qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
+                    cond ← rollItemSpec (idConditionSpec def) (ucStatRNGRef (toUnitCombatCapability env))
+                    wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
                     iid ← freshItemInstanceId env
-                    (ju, jv) ← atomicModifyIORef' (statRNGRef env) $ \g →
+                    (ju, jv) ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g →
                         let (u, g')  = randomR (-0.3, 0.3 ∷ Float) g
                             (v, g'') = randomR (-0.3, 0.3 ∷ Float) g'
                         in (g'', (u, v))

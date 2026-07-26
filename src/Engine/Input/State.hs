@@ -2,6 +2,10 @@
 module Engine.Input.State where
 
 import UPrelude
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
@@ -9,7 +13,7 @@ import qualified Data.Set as Set
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
-import Engine.Core.State
+import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.Types
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Types
@@ -109,10 +113,10 @@ clearHeldInput state = state
 releaseHeldButtons ∷ EngineEnv → InputState → IO ()
 releaseHeldButtons env inpSt = do
     forM_ (heldButtonReleases inpSt) $ \(btn, mx, my, route) →
-        Q.writeQueue (luaQueue env) (LuaMouseUpEvent btn mx my route)
+        Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaMouseUpEvent btn mx my route)
     forM_ (Map.toList (inpPendingUIClick inpSt)) $ \(_btn, (kind, callback, px, py)) → do
         gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-        pushActionOutcome (actionOutcomeRef env) ActionOutcome
+        pushActionOutcome (ucActionOutcomeRef (toUnitCombatCapability env)) ActionOutcome
             { aoTs = gt, aoKind = kind, aoOutcome = "noop"
             , aoWhereX = Just px, aoWhereY = Just py, aoTarget = Nothing
             , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing

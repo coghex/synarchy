@@ -14,12 +14,14 @@ module World.Thread.Discovery
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Engine.PlayerEvent.Emit (emitEventFullOnPage)
 import Location.Discovery (DiscoveryHit(..), findDiscoveries)
 import Location.Instance (LocationLifecycle(..), setLocationLifecycle)
@@ -53,7 +55,7 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
             -- Every discovery input — bounds, margin, display name,
             -- lifecycle — is stored on the instance itself (#911), so
             -- this tick no longer reads the location-def registry at all.
-            um ← readIORef (unitManagerRef env)
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
             mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             let isActivePage = case mActive of
                     Just (activePageId, _) → activePageId ≡ pageId

@@ -33,13 +33,15 @@ module Unit.Thread.Movement
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Combat.Types (pushInjuryEvent)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Unit.Sim.Types
@@ -73,12 +75,12 @@ tickAllMovement dt env utsRef = do
     -- Defaults match human baseline (70 kg, toughness 1.0) — picked
     -- so a unit with no stats declared behaves like an unmodified
     -- acolyte against the impact thresholds.
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Pathing cost tunables (climb/ramp/fall/river/lake penalties +
     -- replan threshold), loaded once from config/pathing.yaml. Read per
     -- tick so a future settings UI that mutates the ref takes effect
     -- live; the read is a single IORef deref.
-    pc ← readIORef (pathingConfigRef env)
+    pc ← readIORef (ucPathingConfigRef (toUnitCombatCapability env))
     -- Surface-material registry for the per-tile movement factor (#312):
     -- soft/loose ground slows the unit and biases A* toward firm routes.
     -- Read once per tick (single IORef deref), like the pathing config.
@@ -125,7 +127,7 @@ tickAllMovement dt env utsRef = do
                    , xp > 0
                    ]
     when (not (null climbers)) $
-        atomicModifyIORef' (unitManagerRef env) $ \um' →
+        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
             let bumped = foldr applyClimbXP (umInstances um') climbers
             in (um' { umInstances = bumped }, ())
 
@@ -151,7 +153,7 @@ tickAllMovement dt env utsRef = do
                   injs  = fallInjuries sm def mass tough drop
             ]
     when (not (null fallResults)) $
-        atomicModifyIORef' (unitManagerRef env) $ \um' →
+        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
             let applyOne (uid, injs, _, _, _, _) m = case HM.lookup uid m of
                     Nothing → m
                     Just inst →
@@ -180,7 +182,7 @@ tickAllMovement dt env utsRef = do
                     [ fiPart i, fiKind i
                     , T.pack (show (round (fiSeverity i * 100) ∷ Int)) ]
                 | i ← injs ]
-        in pushInjuryEvent (injuryEventsRef env) now (unUnitId uid) "fall"
+        in pushInjuryEvent (ucInjuryEventsRef (toUnitCombatCapability env)) now (unUnitId uid) "fall"
              [ ("detail",   detail)
              , ("count",    T.pack (show (length injs)))
              , ("severity", T.pack (show worst)) ]
@@ -239,7 +241,7 @@ tickAllMovement dt env utsRef = do
                   nz = usGridZ ss
             ]
     trailMarks ← if null trailSteps then pure [] else
-        atomicModifyIORef' (unitManagerRef env) $ \um' →
+        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
             let processOne (accMap, accMarks) (uid, ox, oy, nx, ny, nz, def) =
                     case HM.lookup uid accMap of
                         Nothing → (accMap, accMarks)

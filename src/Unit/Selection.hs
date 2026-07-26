@@ -17,12 +17,14 @@ module Unit.Selection
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import Unit.Types (UnitManager(..), UnitInstance(..), UnitId(..))
 
@@ -40,7 +42,7 @@ selectUnit ∷ EngineEnv → UnitId → IO Bool
 selectUnit env uid = do
     mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     let mPage = fst <$> mActive
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         if onActivePage mPage um uid
         then (um { umSelected = HS.singleton uid }, True)
         else (um, False)
@@ -48,13 +50,13 @@ selectUnit env uid = do
 -- | Remove a single unit from the selection.
 deselectUnit ∷ EngineEnv → UnitId → IO ()
 deselectUnit env uid =
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         (um { umSelected = HS.delete uid (umSelected um) }, ())
 
 -- | Empty the selection.
 clearSelection ∷ EngineEnv → IO ()
 clearSelection env =
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         (um { umSelected = HS.empty }, ())
 
 -- | Replace the selection with a specific set. Filters out any IDs that
@@ -63,13 +65,13 @@ setSelection ∷ EngineEnv → HS.HashSet UnitId → IO ()
 setSelection env new = do
     mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     let mPage = fst <$> mActive
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         let live = HS.filter (onActivePage mPage um) new
         in (um { umSelected = live }, ())
 
 isSelected ∷ EngineEnv → UnitId → IO Bool
 isSelected env uid = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     pure (HS.member uid (umSelected um) ∧ onActivePage (fst <$> mActive) um uid)
 
@@ -77,7 +79,7 @@ isSelected env uid = do
 --   world (selection is global state; reads are world-scoped, #78).
 getSelected ∷ EngineEnv → IO (HS.HashSet UnitId)
 getSelected env = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     let mPage = fst <$> mActive
     pure (HS.filter (onActivePage mPage um) (umSelected um))

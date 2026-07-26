@@ -6,6 +6,8 @@ module Engine.Scripting.Lua.API.Units.Yaml
     where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -15,7 +17,7 @@ import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
@@ -254,7 +256,7 @@ loadUnitYamlFn env backendState = do
                             , udNaturalWeapon    = natWeapon
                             , udModifiers        = defMods
                             }
-                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
 
                     logDebug logger CatAsset $

@@ -20,13 +20,15 @@ module Engine.Scripting.Lua.API.Units.Stats
     where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 
@@ -46,7 +48,7 @@ unitGetSkillFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
             mVal ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → pure Nothing
                     Just inst → case HM.lookup name (uiSkills inst) of
@@ -80,7 +82,7 @@ unitSetSkillFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
                 lvl  = max 0 (realToFrac v)
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst →
@@ -107,7 +109,7 @@ unitGetKnowledgeFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
             mVal ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ HM.lookup uid (umInstances um)
                          ⌦ (HM.lookup name . uiKnowledge)
             case mVal of
@@ -129,7 +131,7 @@ unitSetKnowledgeFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
                 lvl  = max 0 (realToFrac v)
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst →
@@ -152,7 +154,7 @@ unitGetKnowledgeListFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mInst ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (HM.lookup uid (umInstances um))
             case mInst of
                 Nothing → return 1
@@ -189,7 +191,7 @@ unitAddXPFn env = do
                 name   = TE.decodeUtf8Lenient nameBS
                 amount = realToFrac amt
             mVal ← Lua.liftIO $
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
                         Just inst →
@@ -238,7 +240,7 @@ unitGetAllSkillsFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mEntries ← Lua.liftIO $ do
-                um  ← readIORef (unitManagerRef env)
+                um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
@@ -331,7 +333,7 @@ unitSetStatFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
                 clamped = max 0 (realToFrac v)
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst →
@@ -412,7 +414,7 @@ unitAddModifierFn env = do
                         , smExpiry = expiry
                         , smPercent = pct
                         }
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
@@ -446,7 +448,7 @@ unitRemoveModifierFn env = do
             let uid = UnitId (fromIntegral n)
                 src = TE.decodeUtf8Lenient srcBS
             removed ← Lua.liftIO $
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, 0 ∷ Int)
                         Just inst →
@@ -487,7 +489,7 @@ unitGetModifiersFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
             mMods ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing   → pure Nothing
                     Just inst → pure (Just
@@ -531,7 +533,7 @@ unitClearModifiersFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             cnt ← Lua.liftIO $
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, 0 ∷ Int)
                         Just inst →
@@ -550,7 +552,7 @@ unitClearModifiersFn env = do
 --   Returns Nothing if undefined under either category.
 getOrRollStat ∷ EngineEnv → UnitId → Text → IO (Maybe Float)
 getOrRollStat env uid name = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     case HM.lookup uid (umInstances um) of
         Nothing → return Nothing
         Just inst →
@@ -565,14 +567,14 @@ getOrRollStat env uid name = do
                         Just def → case HM.lookup name (udStatTemplates def) of
                             Nothing     → return Nothing
                             Just (b, r) → do
-                                v ← atomicModifyIORef' (statRNGRef env) $ \g0 →
+                                v ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
                                     let (val, g') = rollStat b r g0
                                     in (g', val)
                                 -- Cache the rolled value. If the unit was
                                 -- destroyed mid-roll, the lookup inside the
                                 -- atomic modify finds nothing and we silently
                                 -- drop — never resurrects a zombie unit.
-                                atomicModifyIORef' (unitManagerRef env) $ \um' →
+                                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
                                     case HM.lookup uid (umInstances um') of
                                         Nothing → (um', ())
                                         Just i  →
@@ -588,7 +590,7 @@ getOrRollStat env uid name = do
 --   Nothing if the unit doesn't exist.
 rollAllDefinedStats ∷ EngineEnv → UnitId → IO (Maybe [(Text, Float)])
 rollAllDefinedStats env uid = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     case HM.lookup uid (umInstances um) of
         Nothing → return Nothing
         Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
@@ -598,7 +600,7 @@ rollAllDefinedStats env uid = do
                 -- Roll any missing stats (one getOrRollStat each).
                 mapM_ (\(n, _) → getOrRollStat env uid n) templates
                 -- Re-read for final values (including any pre-existing).
-                um' ← readIORef (unitManagerRef env)
+                um' ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um') of
                     Nothing    → return (Just [])
                     Just inst' → return (Just (HM.toList (uiStats inst')))
@@ -613,7 +615,7 @@ getEffectiveStat env uid name = do
         Nothing   → pure Nothing
         Just base → do
             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-            um ← readIORef (unitManagerRef env)
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
             case HM.lookup uid (umInstances um) of
                 Nothing   → pure (Just base)   -- destroyed mid-call
                 Just inst →
@@ -630,7 +632,7 @@ effectiveAllStats env uid = do
         Nothing    → pure Nothing
         Just bases → do
             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-            um ← readIORef (unitManagerRef env)
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
             case HM.lookup uid (umInstances um) of
                 Nothing   → pure (Just bases)  -- destroyed mid-call
                 Just inst →

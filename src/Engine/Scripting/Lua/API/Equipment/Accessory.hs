@@ -9,11 +9,15 @@ module Engine.Scripting.Lua.API.Equipment.Accessory
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Equipment.Slot (removeFirstFromInventoryWhere)
 import Item.Types (ItemInstance(..), lookupItemDef, itemMatches, idKind,
                    idDisplayName, idUnequippable, idBuffs)
@@ -48,8 +52,8 @@ equipmentEquipAccessoryFn env = do
                 defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
@@ -108,8 +112,8 @@ equipmentUnequipAccessoryFn env = do
             let uid    = UnitId (fromIntegral n)
                 idx0   = fromIntegral i - 1
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →

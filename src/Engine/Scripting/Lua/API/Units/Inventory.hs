@@ -18,13 +18,17 @@ module Engine.Scripting.Lua.API.Units.Inventory
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldStateFrom, freshItemInstanceId)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Unit.Types
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Roll (rollItemSpec, rollItemWeight)
@@ -57,7 +61,7 @@ unitAddItemFn env = do
                     Just (Lua.Number d) → Just (realToFrac d ∷ Float)
                     _ → Nothing
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case lookupItemDef defName itemMgr of
                     Nothing → return False
                     Just def → do
@@ -69,10 +73,10 @@ unitAddItemFn env = do
                                             (fromMaybe (icDefaultFill c) mFillIn))
                                 Nothing → 0
                         qual ← rollItemSpec (idQualitySpec def)
-                                            (statRNGRef env)
+                                            (ucStatRNGRef (toUnitCombatCapability env))
                         cond ← rollItemSpec (idConditionSpec def)
-                                            (statRNGRef env)
-                        wght ← rollItemWeight def (statRNGRef env)
+                                            (ucStatRNGRef (toUnitCombatCapability env))
+                        wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
                         iid ← freshItemInstanceId env
                         let inst' = ItemInstance
                                 { iiDefName     = defName
@@ -85,7 +89,7 @@ unitAddItemFn env = do
                                 , iiInstanceId  = iid
                                 , iiTemp        = Nothing
                                 }
-                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
                                 Nothing → (um, False)
                                 Just u  →
@@ -152,7 +156,7 @@ unitGetItemTempFn env = do
             let uid = UnitId (fromIntegral n)
                 iid = fromIntegral iidI ∷ Word64
             mT ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → pure Nothing
                     Just inst → case findHeldItemById iid inst of
@@ -189,7 +193,7 @@ unitSetItemTempFn env = do
                 mT  = case tArg of
                     Just (Lua.Number d) → Just (realToFrac d ∷ Float)
                     _                   → Nothing
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, False)
                     Just inst →
@@ -232,7 +236,7 @@ unitRemoveItemFn env = do
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8Lenient nameBS
-            removed ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            removed ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just u  →
@@ -317,7 +321,7 @@ unitDropEquipmentToGroundFn env = do
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
                     mDrop ← Lua.liftIO $
-                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
                                 Nothing → (um, Nothing)
                                 Just inst →
@@ -368,7 +372,7 @@ unitDropItemToGroundFn env = do
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
                     mDrop ← Lua.liftIO $
-                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
                                 Nothing → (um, Nothing)
                                 Just inst →
@@ -414,7 +418,7 @@ unitDropItemByIdFn env = do
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
                     mDrop ← Lua.liftIO $
-                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
                                 Nothing → (um, Nothing)
                                 Just inst →
@@ -469,8 +473,8 @@ unitGetItemContentsFn env = do
                 want   = TE.decodeUtf8Lenient nameBS
                 wantId = maybe 0 fromIntegral instArg
             mRes ← Lua.liftIO $ do
-                um      ← readIORef (unitManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
+                um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → Nothing
                     Just inst →
@@ -547,8 +551,8 @@ unitGetInventoryFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mInv ← Lua.liftIO $ do
-                um      ← readIORef (unitManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
+                um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing   → Nothing
                     Just inst → Just (uiInventory inst, itemMgr)

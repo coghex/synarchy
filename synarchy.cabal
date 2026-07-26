@@ -337,6 +337,7 @@ library
                      Engine.Core.Capability.InputView
                      Engine.Core.Capability.Render
                      Engine.Core.Capability.RenderView
+                     Engine.Core.Capability.UnitCombat
                      Engine.Core.Capability.WorldSim
                      Engine.Save.Barrier
                      Engine.Load.Status
@@ -1097,6 +1098,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Capability.Input
                    Test.Headless.Capability.Render
+                   Test.Headless.Capability.UnitCombat
                    Test.Headless.Capability.WorldSim
                    Test.Headless.Lua.DebugQueue
                    Test.Headless.Lua.RenderQueue

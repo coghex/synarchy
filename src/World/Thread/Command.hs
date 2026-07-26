@@ -10,7 +10,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.MVar (putMVar)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.State (EngineEnv)
+import Engine.Core.State (EngineEnv, statRNGRef, unitQueue)
 import Engine.Core.Log (LoggerState)
 import World.Types
 import World.Thread.Command.Basic (handleWorldTickCommand
@@ -189,7 +189,8 @@ handleWorldCommand env logger (WorldSetVeg pageId gx gy z vegId)
 handleWorldCommand env logger (WorldPlantRowCropAt pageId gx gy cropName)
   = handleWorldPlantRowCropAtCommand (toWorldSimCapability env) logger pageId gx gy cropName
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
-  = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
+  = handleWorldDigTileCommand env (statRNGRef env) (unitQueue env) logger
+                              pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)
   = handleWorldAddTileCommand env logger pageId gx gy mat
 handleWorldCommand env logger (WorldSetWorldCursorSelectTexture pageId texHandle)

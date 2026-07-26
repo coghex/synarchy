@@ -10,11 +10,15 @@ module Engine.Scripting.Lua.API.Equipment.Render
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
                    ItemBuff(..), ItemContainer(..),
@@ -40,8 +44,8 @@ equipmentGetLoadoutFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
-                um      ← readIORef (unitManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
+                um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     pure (uiEquipment inst, itemMgr)
@@ -272,8 +276,8 @@ equipmentGetAccessoriesFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
-                um      ← readIORef (unitManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
+                um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     pure (uiAccessories inst, itemMgr)

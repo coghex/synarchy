@@ -4,6 +4,8 @@ module Unit.Thread
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -40,7 +42,9 @@ startUnitThread env = do
             lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
             -- utsRef now lives on EngineEnv (Phase 4 of save/load v2) so
             -- the world thread can read+write sim state at save/load.
-            tid ← forkIO $ unitLoop env stateRef lastTimeRef (utsRef env) `finally` putMVar doneVar ()
+            let uts = ucUtsRef (toUnitCombatCapability env)
+            tid ← forkIO $ unitLoop env stateRef lastTimeRef uts
+                             `finally` putMVar doneVar ()
             logInfo logger CatThread "Unit thread started"
             return tid
         )
@@ -126,7 +130,7 @@ publishToRender env utsRef = do
         then return ()
         else do
             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-            atomicModifyIORef' (unitManagerRef env) $ \um →
+            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 let defs = umDefs um
                     updated = HM.mapWithKey (\uid inst →
                         case HM.lookup uid simStates of

@@ -15,13 +15,17 @@ module Engine.Scripting.Lua.API.Items.Ground
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldStateFrom, freshItemInstanceId)
+import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
 import Item.Roll (rollItemWeight)
@@ -81,12 +85,12 @@ itemSpawnGroundFn env = do
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
             let name = TE.decodeUtf8Lenient nameBS
-            im ← Lua.liftIO $ readIORef (itemManagerRef env)
+            im ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
             mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
                     wght ← Lua.liftIO $
-                        rollItemWeight iDef (statRNGRef env)
+                        rollItemWeight iDef (ucStatRNGRef (toUnitCombatCapability env))
                     iid ← Lua.liftIO $ freshItemInstanceId env
                     -- No explicit fill from the caller → the def's
                     -- default_fill (so a loot-rolled quinoa sack spawns
@@ -123,7 +127,7 @@ itemSpawnGroundFn env = do
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
     mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
-    im  ← Lua.liftIO $ readIORef (itemManagerRef env)
+    im  ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
     case mWs of
         Nothing → Lua.pushnil >> return 1
         Just ws → do
@@ -294,7 +298,7 @@ itemPickupGroundFn env = do
                             Just gi → do
                                 let uid = UnitId (fromIntegral u)
                                 inserted ← atomicModifyIORef'
-                                    (unitManagerRef env) $ \um →
+                                    (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                                         case HM.lookup uid
                                                  (umInstances um) of
                                             Nothing → (um, False)

@@ -12,6 +12,10 @@ module Engine.Scripting.Lua.API.Craft.Execute
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
@@ -100,9 +104,9 @@ craftExecuteAtFn env = do
 validateStation ∷ EngineEnv → Maybe BillId → UnitId → Text → BuildingId
                 → IO (Either Text ())
 validateStation env mBillId uid rid bid = do
-    rm      ← readIORef (recipeManagerRef env)
+    rm      ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
     bm      ← readIORef (buildingManagerRef env)
-    um      ← readIORef (unitManagerRef env)
+    um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- #590: power is job-dependent — a recipe with no power_draw (the
     -- default) needs none checked at all, regardless of the station's
@@ -167,19 +171,19 @@ pushCraftResult (Left err) = do
 --   Success carries the created outputs' instance ids.
 executeCraft ∷ EngineEnv → UnitId → Text → IO (Either Text [Word64])
 executeCraft env uid rid = do
-    rm ← readIORef (recipeManagerRef env)
+    rm ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
     case lookupRecipe rid rm of
         Nothing → return (Left ("unknown recipe " <> rid))
         Just recipe | rdRepairAxis recipe ≢ Nothing →
             return (Left (rid <> " is a repair recipe: use repair.repairAt"))
         Just recipe → do
-            im ← readIORef (itemManagerRef env)
+            im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
             case mapM (resolve im) (rdOutputs recipe) of
                 Left err → return (Left err)
                 Right outs → do
                     instances ← concat
                         ⊚ mapM (rollOutputs env (rdOutputTemp recipe)) outs
-                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         applyCraft recipe instances uid um
   where
     resolve im ing = case lookupItemDef (riItem ing) im of
@@ -235,8 +239,8 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
 rollOutputs ∷ EngineEnv → Maybe Float → (RecipeIngredient, ItemDef)
             → IO [ItemInstance]
 rollOutputs env outputTemp (ing, def) = replicateM (max 0 (riCount ing)) $ do
-    qual ← rollItemSpec (idQualitySpec def) (statRNGRef env)
-    wght ← rollItemWeight def (statRNGRef env)
+    qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
+    wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
     iid  ← freshItemInstanceId env
     let fill = case idContainer def of
             Just c  → max 0 (min (icCapacity c) (icDefaultFill c))

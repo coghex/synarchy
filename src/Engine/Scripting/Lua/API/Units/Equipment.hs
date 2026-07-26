@@ -8,11 +8,15 @@ module Engine.Scripting.Lua.API.Units.Equipment
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Stats (applyItemBuffs)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..), ItemManager(..), lookupItemDef)
@@ -33,8 +37,8 @@ unitModifyItemFillFn env = do
                 defName = TE.decodeUtf8Lenient nameBS
                 delta   = realToFrac d ∷ Float
             applied ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, 0 ∷ Float)
                         Just inst →
@@ -70,8 +74,8 @@ unitModifyItemFillByIdFn env = do
                 iid   = fromIntegral iidI ∷ Word64
                 delta = realToFrac d ∷ Float
             mApplied ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
                         Just inst →
@@ -139,8 +143,8 @@ unitRepairItemFn env = do
                     _                   → 0
             -- For the accessory branch we may need the item def to refresh
             -- condition-scaled buffs; read the manager once up front.
-            itemMgr ← Lua.liftIO $ readIORef (itemManagerRef env)
-            mRes ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            itemMgr ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
+            mRes ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, Nothing)
                     Just inst → case applyRepairToUnit iid condD sharpD itemMgr inst of

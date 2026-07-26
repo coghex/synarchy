@@ -9,11 +9,15 @@ module Engine.Scripting.Lua.API.Units.Survival
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
@@ -36,7 +40,7 @@ unitDrinkFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitDrink uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitDrink uid
             Lua.pushboolean True
             return 1
 
@@ -53,7 +57,7 @@ unitEatFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitEat uid
             Lua.pushboolean True
             return 1
 
@@ -83,10 +87,10 @@ unitFeedFn env = do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8Lenient nameBS
             mCredited ← Lua.liftIO $ do
-                itemMgr ← readIORef (itemManagerRef env)
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case lookupItemDef defName itemMgr >>= idFood of
                     Nothing   → pure Nothing   -- no food data → can't feed
-                    Just food → atomicModifyIORef' (unitManagerRef env) $ \um →
+                    Just food → atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         case HM.lookup uid (umInstances um) of
                             Nothing → (um, Nothing)
                             -- Require a LIVE hunger pool: max_hunger is seeded
@@ -153,7 +157,7 @@ unitFeedFn env = do
                                                , Just (newH - cur) )
             case mCredited of
                 Just credited → do
-                    Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid
+                    Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitEat uid
                     Lua.pushnumber (Lua.Number (realToFrac credited))
                     return 1
                 Nothing → do
@@ -196,6 +200,6 @@ unitPickupFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitPickup uid
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $ UnitPickup uid
             Lua.pushboolean True
             return 1

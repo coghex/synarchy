@@ -4,12 +4,14 @@ module Unit.Thread.Command.Spawn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Engine.Core.State (EngineEnv, freshItemInstanceId, loggerRef)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState)
@@ -30,7 +32,7 @@ import World.Page.Types (WorldPageId(..))
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
                        → Float → Float → Int → Faction → WorldPageId → IO ()
 handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Drop the spawn if its world no longer exists. A spawn queued before
     -- world.destroyAll (Exit to Menu) would otherwise be drained after
     -- teardown and re-insert an orphan unit into the cleared manager (#58).
@@ -48,7 +50,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
         Just def → do
             initialStats ←
                 if udEagerStats def
-                then atomicModifyIORef' (statRNGRef env) $ \g0 →
+                then atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
                     let (rolled, g')   = HM.foldlWithKey'
                             (\(acc, g) name (b, r) →
                                 let (v, g'') = rollStat b r g
@@ -74,7 +76,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                 else return HM.empty
             -- Skills always roll at spawn so they have a starting
             -- level for the addSkillXP formula to operate on.
-            initialSkills ← atomicModifyIORef' (statRNGRef env) $ \g0 →
+            initialSkills ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
                 let (rolled, g') = HM.foldlWithKey'
                         (\(acc, g) name (b, r) →
                             let (v, g'') = rollStat b r g
@@ -83,7 +85,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                         (udSkillTemplates def)
                 in (g', rolled)
             -- Knowledge the unit spawns KNOWING, rolled like skills.
-            initialKnowledge ← atomicModifyIORef' (statRNGRef env) $ \g0 →
+            initialKnowledge ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
                 let (rolled, g') = HM.foldlWithKey'
                         (\(acc, g) name (b, r) →
                             let (v, g'') = rollStat b r g
@@ -95,7 +97,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
             -- pool if it has one (humanoids); animals stay unnamed ("").
             initialName ← case udNamePool def of
                 Nothing   → return ""
-                Just pool → atomicModifyIORef' (statRNGRef env) $ \g0 →
+                Just pool → atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
                     let (nm, g') = pickName pool g0 in (g', nm)
             -- Starting inventory: look each entry up in the ItemManager
             -- and build an ItemInstance. Unknown names are dropped
@@ -178,7 +180,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                     , uiClimbDest   = Nothing
                     , uiTrailState  = Nothing
                     }
-            atomicModifyIORef' (unitManagerRef env) $ \um' →
+            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
 
             let ss = UnitSimState
@@ -298,9 +300,9 @@ rollInstance env itemMgr name mFill =
                     Just c  → max 0 (min (icCapacity c)
                                 (fromMaybe (icDefaultFill c) mFill))
                     Nothing → 0
-            qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
-            cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
-            wght ← rollItemWeight def (statRNGRef env)
+            qual ← rollItemSpec (idQualitySpec def)   (ucStatRNGRef (toUnitCombatCapability env))
+            cond ← rollItemSpec (idConditionSpec def) (ucStatRNGRef (toUnitCombatCapability env))
+            wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
             -- Expand each (name, count, fill) content entry into `count`
             -- rolled instances, then drop unknown names.
             let reqs = [ (cName, cFill)
@@ -373,12 +375,12 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                 | otherwise → do
                                     qual ← rollItemSpec
                                              (idQualitySpec iDef)
-                                             (statRNGRef env)
+                                             (ucStatRNGRef (toUnitCombatCapability env))
                                     cond ← rollItemSpec
                                              (idConditionSpec iDef)
-                                             (statRNGRef env)
+                                             (ucStatRNGRef (toUnitCombatCapability env))
                                     wght ← rollItemWeight iDef
-                                             (statRNGRef env)
+                                             (ucStatRNGRef (toUnitCombatCapability env))
                                     iid ← freshItemInstanceId env
                                     return $ HM.insert slotId
                                         ItemInstance
@@ -440,9 +442,9 @@ buildStartingAccessories env logger itemMgr names = do
                 <> "' — skipping"
             return Nothing
         Just def → do
-            qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
-            cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
-            wght ← rollItemWeight def (statRNGRef env)
+            qual ← rollItemSpec (idQualitySpec def)   (ucStatRNGRef (toUnitCombatCapability env))
+            cond ← rollItemSpec (idConditionSpec def) (ucStatRNGRef (toUnitCombatCapability env))
+            wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
             iid ← freshItemInstanceId env
             return $ Just ItemInstance
                 { iiDefName     = name
