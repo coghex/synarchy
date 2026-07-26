@@ -49,11 +49,8 @@ end
 --   currentAction      = "idle" | "wander" | "follow_command" | ...,
 --   actionStartedAt    = <posix>,
 --   nextActionAt       = <posix>,
---   commandedTask      = { x, y, speed, startedAt,
---                          bestDist, progressAt } | nil,
---                                           -- bestDist/progressAt are
---                                           -- maintainTask's stall
---                                           -- bookkeeping (#920)
+--   commandedTask      = { x, y, speed, startedAt, bestDist,
+--                          progressAt } | nil,  -- last 2: #920 stall
 --   knownWaterSources  = { {x, y}, ... },   -- dedup'd by distance;
 --                                           -- empty list = none known
 --   role               = "miner"|"woodcutter"|"builder"|"smith"
@@ -66,9 +63,8 @@ local aiState = unitAi.aiState
 
 -- Constants for arrival detection on commanded tasks.
 local TASK_ARRIVAL_TILES = 0.6
--- TASK_TIMEOUT_SEC is a STALL budget, not a total-trip budget — see
--- maintainTask. TASK_PROGRESS_TILES is how much closer the unit must
--- get before that budget resets.
+-- TASK_TIMEOUT_SEC is a STALL budget (see maintainTask);
+-- TASK_PROGRESS_TILES is the closer-than-before step that resets it.
 local TASK_TIMEOUT_SEC   = 60.0
 local TASK_PROGRESS_TILES = 0.5
 
@@ -267,22 +263,15 @@ local function maintainTask(uid, s)
         return
     end
 
-    -- Timeout check (handles unreachable destinations) — a STALL timer,
-    -- not a total-trip budget (#920). An expedition's return leg is tens
-    -- of tiles of perfectly good walking, and a survival interruption
-    -- (drink/eat/sleep) eats into it; measuring from startedAt dropped
-    -- such an order mid-journey even though the carrier was still
-    -- closing on its destination. The deadline resets only on a NEW
-    -- closest approach, so a unit circling an unreachable target never
-    -- refreshes it and still gives up after TASK_TIMEOUT_SEC.
+    -- Timeout: a STALL timer, not a total-trip budget (#920). A long but
+    -- progressing leg must not be dropped for taking a while, so the
+    -- deadline resets ONLY on a new closest approach — circling an
+    -- unreachable target never refreshes it, and still gives up.
     if not task.bestDist or d < task.bestDist - TASK_PROGRESS_TILES then
-        task.bestDist   = d
-        task.progressAt = engine.gameTime()
+        task.bestDist, task.progressAt = d, engine.gameTime()
     end
-    if engine.gameTime() - (task.progressAt or task.startedAt)
-       > TASK_TIMEOUT_SEC then
-        s.commandedTask = nil
-    end
+    local stalled = engine.gameTime() - (task.progressAt or task.startedAt)
+    if stalled > TASK_TIMEOUT_SEC then s.commandedTask = nil end
 end
 
 -----------------------------------------------------------
