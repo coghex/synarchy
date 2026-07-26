@@ -27,8 +27,8 @@ needed.
 ## 1. Scope
 
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-(`:67`) with exactly **81 fields** (`engineConfig` at `:68` through
-`popupQueueRef` at `:388`). Every one of the 81 has exactly one row in
+(`:67`) with exactly **82 fields** (`engineConfig` at `:68` through
+`popupQueueRef` at `:388`). Every one of the 82 has exactly one row in
 §5 below, matching the same field set
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
 §1 already enumerates and
@@ -715,7 +715,7 @@ assignment method, applied uniformly and mechanically rather than by
 directory-name guessing:
 
 1. For each module, scan its source for every occurrence of one of the
-   81 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
+   82 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
    ...`/`atomicModifyIORef' ... env`/`writeIORef ... env` patterns, and
    plain field-name references) and tally which capability group (§5's
    heading structure) each hit belongs to.
