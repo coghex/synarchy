@@ -670,9 +670,79 @@ def find_instance_by_def(items: list, def_name: str, exclude: set):
 # --------------------------------------------------------------------------
 # Check 3 — survival interruption on the return leg
 # --------------------------------------------------------------------------
+def provision(port: int, carrier: int) -> None:
+    """Top the carrier back up for the return leg.
+
+    The probe deliberately retires the `find_water` goal so the water
+    search can't compete with the behaviour under test — which also means
+    the carrier will never go and refill. A ~28-tile round trip drains
+    the canteen it spawned with, and hydration attrition then collapses
+    it (observed: pose=collapsed at 41% hydration) and eventually kills
+    it (observed: pose=dead), which has nothing to do with retrieval but
+    fails every downstream check. A real session would send it to water;
+    the probe hands it a full canteen instead."""
+    send(port, f"unit.modifyItemFill({carrier}, 'canteen_steel_2l', 2.0); return 'ok'")
+    # The ENGINE's max_hydration is authoritative here. unit_stats.get's
+    # derived value disagreed with it (53.4 vs 38.7 on the same unit), and
+    # provisioning against the wrong maximum is what let the carrier keep
+    # sliding toward the 5% death_threshold in unit_resource_config.
+    maxh = _as_float(send(port, f"return unit.getStat({carrier},'max_hydration')"))
+    if maxh:
+        send(port, f"unit.setStat({carrier}, 'hydration', {maxh:.3f}); return 'ok'")
+
+
+def alive(port: int, carrier: int) -> str:
+    return send(port, f"return unit.getPose({carrier})")
+
+
+def hydration_fraction(port: int, carrier: int):
+    """hydration / max_hydration, both from the engine. Below 0.05 the
+    resource tick kills the unit outright (unit_resource_config's
+    death_threshold); below 0.20 it collapses. A probe that retires the
+    find_water goal has to watch this itself."""
+    cur = _as_float(send(port, f"return unit.getStat({carrier},'hydration')"))
+    mx = _as_float(send(port, f"return unit.getStat({carrier},'max_hydration')"))
+    if not cur or not mx or mx <= 0:
+        return None
+    return cur / mx
+
+
+def death_report(port: int, carrier: int) -> str:
+    """Why a carrier is down, from the player-facing streams.
+
+    A dead or collapsed carrier fails every downstream check at once, and
+    the pose alone doesn't say why. Survival deaths land in the event log
+    as survival_critical; non-combat harm (falls, hazards, wound deaths)
+    drains from injury.*; fights drain from combat.*. Reported together so
+    one failure line names the cause instead of prompting a re-run."""
+    # A SURVIVAL death (dehydration/starvation) reports through the
+    # EVENT LOG as survival_critical -- verified live: forcing hydration
+    # to 1% emits "X is dehydrated" then "X died of dehydration", both
+    # log=true even headless. It does NOT appear in injury.* or combat.*,
+    # so those two are reported alongside rather than instead: looking
+    # only at them once made a perfectly well-reported death read as
+    # silent.
+    events = [f"{e.get('category')}: {e.get('text')}" for e in event_log(port)
+              if e.get("uid") == carrier
+              and e.get("category") in ("survival_critical", "survival_warning",
+                                        "unit_warning")]
+    inj = send(port, "local t=injury.drainEvents() or {}; return #t")
+    cmb = send(port, "local t=combat.drainEvents() or {}; return #t")
+    return (f"last events {events[-3:]}; injury events drained={inj}, "
+            f"combat events drained={cmb}")
+
+
 def check_interrupted_return(chk: Checks, port: int, carrier: int, home,
                              instance_id):
     hx, hy = home
+    provision(port, carrier)
+    pose = alive(port, carrier)
+    hyd = hydration_fraction(port, carrier)
+    if not chk.ok(pose not in ("dead", "collapsed") and (hyd or 0) > 0.5,
+                  f"the carrier is on its feet and watered for the return leg "
+                  f"(pose {pose!r}, hydration {hyd if hyd is None else round(hyd, 3)}; "
+                  f"{death_report(port, carrier)})"):
+        return False
     send(port, f"require('scripts.unit_ai').commandMove({carrier},{hx},{hy}); "
                f"return 'ok'")
     started = unit_pos(port, carrier)
@@ -722,10 +792,27 @@ def check_interrupted_return(chk: Checks, port: int, carrier: int, home,
                       f"return s.commandedTask and 'pending' or 'dropped'") == "pending",
            "the return order is still pending (a request, not a cancellation)")
 
-    resumed = poll_until(120.0, lambda: (
-        current_action(port, carrier) == "follow_command"
-        and (lambda p: p and dist(p, home) < dist(at_interrupt, home) - 2.0)(
-            unit_pos(port, carrier))))
+    # Drain the injury/combat streams WHILE waiting, not after. A wound
+    # death reports through injury.drainEvents (falls, hazards, wound
+    # deaths), NOT the event log, and these are DRAINED streams -- one
+    # sample after the fact sees nothing, and in engine B they are empty
+    # anyway because player events do not survive save/load.
+    drained: list = []
+
+    def _resumed():
+        for stream in ("injury", "combat"):
+            got = send_json(port,
+                            f"local t={stream}.drainEvents() or {{}}; local o={{}}; "
+                            f"for _,e in ipairs(t) do o[#o+1]=tostring(e.kind or '?')"
+                            f"..'/'..tostring(e.cause or e.severity or e.text or '') "
+                            f"end; return o")
+            if isinstance(got, list) and got:
+                drained.extend(f"{stream}:{x}" for x in got)
+        return (current_action(port, carrier) == "follow_command"
+                and (lambda p: p and dist(p, home) < dist(at_interrupt, home) - 2.0)(
+                    unit_pos(port, carrier)))
+
+    resumed = poll_until(120.0, _resumed)
     # Diagnostics in the message: a stalled resume is almost always the
     # carrier being in some OTHER state, and "distance unchanged" alone
     # doesn't say which.
@@ -736,7 +823,7 @@ def check_interrupted_return(chk: Checks, port: int, carrier: int, home,
            f"({dist(at_interrupt, home):.1f} -> "
            f"{dist(unit_pos(port, carrier), home):.1f} tiles from home; "
            f"action={current_action(port, carrier)}, pose={pose}, "
-           f"hunger={hun}/{maxhun:.1f})")
+           f"hunger={hun}/{maxhun:.1f}; streams={drained[-8:]})")
 
     # The inbound leg gets the same scrutiny as the outbound one: a real
     # walk home, sampled over many ticks, not a snap-back. Bounded so the
@@ -951,6 +1038,13 @@ def main() -> int:
             if not chk.ok(published, f"the save loads and publishes ({status})"):
                 return 2
             send(args.port, f"world.show('{PAGE}'); return 'ok'")
+            # Same reason as the outbound provisioning: the carrier still
+            # has the whole inbound leg to walk and no way to seek water.
+            provision(args.port, carrier)
+            pose = alive(args.port, carrier)
+            chk.ok(pose not in ("dead", "collapsed"),
+                   f"the carrier survived the restart on its feet (pose {pose!r}; "
+                   f"{death_report(args.port, carrier)})")
             # Engine A explicitly loaded the chunks the expedition walks
             # through; engine B has to as well. After a load, chunks queue
             # progressively around the restored camera, and a carrier
