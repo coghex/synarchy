@@ -14,7 +14,20 @@ import UPrelude
 import qualified Data.Set as Set
 import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.Monad
-import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
+-- #897 (E7a): the per-frame tooltip tick's central mutation is
+-- `uiManagerRef`, so this module is assigned to `ui-hud-events` by
+-- evident purpose (SS6.2's step 3). Its layout geometry additionally
+-- READS three `render-gpu-asset` fields and the published input state
+-- — the documented cross-capability read — so those come from the
+-- worker-safe render view and the input view rather than a full
+-- `EngineEnv`. `EngineState`/`TimingState` are the CPS state σ, not
+-- `EngineEnv`.
+import Engine.Core.State (EngineState(..), TimingState(..))
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Graphics.Font.Data (FontCache)
 import Engine.Input.Types (InputState(..))
 import UI.Types
@@ -27,10 +40,11 @@ import UI.Tooltip.Render
 updateTooltipState ∷ EngineM ε σ ()
 updateTooltipState = do
     env ← ask
-    inp ← liftIO $ readIORef (inputStateRef env)
-    fontCache ← liftIO $ readIORef (fontCacheRef env)
-    (winW, winH) ← liftIO $ readIORef (windowSizeRef env)
-    (fbW, fbH)   ← liftIO $ readIORef (framebufferSizeRef env)
+    let rv = toRenderViewCapability env
+    inp ← liftIO $ readIORef (ivInputStateRef (toInputViewCapability env))
+    fontCache ← liftIO $ readIORef (rvFontCacheRef rv)
+    (winW, winH) ← liftIO $ readIORef (rvWindowSizeRef rv)
+    (fbW, fbH)   ← liftIO $ readIORef (rvFramebufferSizeRef rv)
     ts ← gets timingState
     let dtMs = realToFrac (deltaTime ts * 1000.0) ∷ Float
         (mxD, myD) = inpMousePos inp
@@ -47,7 +61,7 @@ updateTooltipState = do
         mouse = ( realToFrac mxD * scaleX
                 , realToFrac myD * scaleY ) ∷ (Float, Float)
         fbSize = (fromIntegral fbW, fromIntegral fbH) ∷ (Float, Float)
-    liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+    liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
         (tickTooltip mouse fbSize dtMs fontCache mgr, ())
 
 -- | Replace the active tooltip style. Exposed to Lua via

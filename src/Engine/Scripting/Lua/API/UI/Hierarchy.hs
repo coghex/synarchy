@@ -17,7 +17,8 @@ import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Scripting.Lua.API.UI.Focus (applyAndNotifyControlFocus)
 import UI.Types
 import UI.Manager
@@ -34,7 +35,7 @@ uiAddToPageFn env = do
         (Just p, Just e, Just x, Just y) → do
             let pageHandle = PageHandle    (fromIntegral p)
                 elemHandle = ElementHandle (fromIntegral e)
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (addElementToPage pageHandle elemHandle (realToFrac x) (realToFrac y) mgr, ())
         _ → pure ()
 
@@ -52,7 +53,7 @@ uiAddChildFn env = do
         (Just p, Just c, Just x, Just y) → do
             let parentHandle = ElementHandle (fromIntegral p)
                 childHandle  = ElementHandle (fromIntegral c)
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (addChildElement parentHandle childHandle (realToFrac x) (realToFrac y) mgr, ())
         _ → pure ()
 
@@ -101,7 +102,7 @@ uiFindElementAtFn env = do
     yArg ← Lua.tonumber 2
     case (xArg, yArg) of
         (Just x, Just y) → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case findElementAt (realToFrac x, realToFrac y) mgr of
                 Just (ElementHandle h) → Lua.pushinteger (fromIntegral h)
                 Nothing                → Lua.pushnil
@@ -114,7 +115,7 @@ uiGetElementOnClickFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case Map.lookup (ElementHandle $ fromIntegral e) (upmElements mgr) of
                 Just elem → case ueOnClick elem of
                     Just cb → Lua.pushstring (TE.encodeUtf8 cb)
@@ -133,7 +134,7 @@ uiFindHoverTargetFn env = do
     yArg ← Lua.tonumber 2
     case (xArg, yArg) of
         (Just x, Just y) → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case findElementAt (realToFrac x, realToFrac y) mgr of
                 Just hitElem → case findClickableAncestor hitElem mgr of
                     Just (ElementHandle h, cb) → do

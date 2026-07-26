@@ -22,17 +22,16 @@ import Data.IORef (readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, LogCategory(..))
 -- #892 (E4): `luaQueue`/`keyBindingsRef` through the input
 -- capability's worker-safe view, the logger through `core-init`
--- (#889), and explicit narrow values for the SS7.3 cross-capability
--- surface — `focusManagerRef`/`uiManagerRef`, which #897 has yet to
--- give a record to, and `actionOutcomeRef`, whose record #895 landed
--- but which SS7.5's explicit-narrow rule deliberately keeps this
--- input-thread reader off. The #745
+-- (#889), and — since #897 (E7a) — `focusManagerRef`/`uiManagerRef`
+-- through the UI capability. `actionOutcomeRef` stays an explicit
+-- narrow value: its record #895 landed, but SS7.5's explicit-narrow
+-- rule deliberately keeps this input-thread reader off it. The #745
 -- control-focus path keeps reading `focusManagerRef` and performing
 -- its `atomicModifyIORef'` validate/traverse transitions on
 -- `uiManagerRef` exactly as before — same refs, same atomicity, no
 -- behavior change.
-import Engine.Core.State
-    (EngineEnv, focusManagerRef, uiManagerRef, actionOutcomeRef)
+import Engine.Core.State (EngineEnv, actionOutcomeRef)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
@@ -106,8 +105,8 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
     -- focus pointing at a dead/hidden element instead of letting
     -- it capture the keyboard (all keys would route to UI-text
     -- mode below and be dropped by the Lua dispatcher).
-    focusMgr ← readIORef (focusManagerRef env)
-    uiFocus ← atomicModifyIORef' (uiManagerRef env) validateFocus
+    focusMgr ← readIORef (uicFocusManagerRef (toUiCapability env))
+    uiFocus ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) validateFocus
     let shellMode = getInputMode focusMgr
         key = fromGLFWKey glfwKey
         -- #745 review round 3: was this physical key ALREADY consumed
@@ -248,7 +247,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- etc.), and a plain write-back here would silently DISCARD
         -- any such concurrent mutation landed between the read and the
         -- write, not just ones touching control focus.
-        (mgr0, mgr1, controlFocus) ← atomicModifyIORef' (uiManagerRef env) $ \old →
+        (mgr0, mgr1, controlFocus) ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \old →
             let (validated, cf) = validateControlFocusIn old
             in (validated, (old, validated, cf))
         -- #745 review round 2: report a repair-triggered clear too —
@@ -266,7 +265,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
             -- snapshot) — otherwise a concurrent Lua-thread mutation
             -- between that snapshot and this write could invalidate
             -- the chosen target before it's installed.
-            (priorFocus, newFocus) ← atomicModifyIORef' (uiManagerRef env) $ \m →
+            (priorFocus, newFocus) ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \m →
                 let prior = getControlFocus m
                 in case step m prior of
                     Nothing     → (m, (prior, Nothing))
@@ -284,7 +283,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
                 writeIORef controlFocusConsumedRef True
 
         when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed ∧ isJust controlFocus) $ do
-            atomicModifyIORef' (uiManagerRef env) $ \m → (clearControlFocus m, ())
+            atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \m → (clearControlFocus m, ())
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIControlFocusChanged Nothing)
             markMatched "controlFocusEscape"
             writeIORef controlFocusConsumedRef True

@@ -18,17 +18,17 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Data.IORef (readIORef, atomicModifyIORef')
 -- #892 (E4): the input capability's worker-safe view for `luaQueue`,
--- plus three explicit narrow values for the SS7.3 cross-capability
--- surface — `focusManagerRef`/`uiManagerRef` (`ui-hud-events`, #897,
--- which still has no record) and `actionOutcomeRef`
+-- and — since #897 (E7a) — the UI capability for
+-- `focusManagerRef`/`uiManagerRef`. `actionOutcomeRef` stays the one
+-- explicit narrow value on the SS7.3 cross-capability surface
 -- (`units-buildings-combat`, whose record #895 landed but which
 -- SS7.5's explicit-narrow rule deliberately keeps this input-thread
 -- reader off — see `Engine.Core.Capability.UnitCombat`). The
 -- `uiManagerRef` access stays the single `atomicModifyIORef'`
 -- validate-and-transition it already was; nothing about #745's focus
 -- behavior changes.
-import Engine.Core.State
-    (EngineEnv, focusManagerRef, uiManagerRef, actionOutcomeRef)
+import Engine.Core.State (EngineEnv, actionOutcomeRef)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
 import Engine.Input.Types
@@ -117,8 +117,8 @@ dispatchCharEvent env inpSt c =
     if c ≡ '`'
       then return $ accumulateCharOutcome inpSt False "dropped_backtick" Nothing
       else do
-        focusMgr ← readIORef (focusManagerRef env)
-        uiFocus ← atomicModifyIORef' (uiManagerRef env) validateFocus
+        focusMgr ← readIORef (uicFocusManagerRef (toUiCapability env))
+        uiFocus ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) validateFocus
         case (fmCurrentFocus focusMgr, uiFocus) of
           (Just (FocusId fid), _) → do
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaCharInput fid c)

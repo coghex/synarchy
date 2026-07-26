@@ -40,7 +40,8 @@ import qualified Data.Set as Set
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
 import UI.Manager
@@ -56,7 +57,7 @@ uiSetPositionFn env = do
     yArg    ← Lua.tonumber  3
 
     case (elemArg, xArg, yArg) of
-        (Just e, Just x, Just y) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (Just e, Just x, Just y) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementPosition (ElementHandle $ fromIntegral e) (realToFrac x) (realToFrac y) mgr, ())
         _ → pure ()
 
@@ -70,7 +71,7 @@ uiSetSizeFn env = do
     hArg    ← Lua.tonumber  3
 
     case (elemArg, wArg, hArg) of
-        (Just e, Just w, Just h) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (Just e, Just w, Just h) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementSize (ElementHandle $ fromIntegral e) (realToFrac w) (realToFrac h) mgr, ())
         _ → pure ()
 
@@ -83,7 +84,7 @@ uiSetVisibleFn env = do
     visArg  ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementVisible (ElementHandle $ fromIntegral e) visArg mgr, ())
         Nothing → pure ()
 
@@ -95,7 +96,7 @@ uiIsPageVisibleFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
         Just n → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case getPage (PageHandle $ fromIntegral n) mgr of
                 Just page → Lua.pushboolean (upVisible page)
                 Nothing   → Lua.pushboolean False
@@ -108,7 +109,7 @@ uiIsPageInputExclusiveFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
         Just n → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case getPage (PageHandle $ fromIntegral n) mgr of
                 Just page → Lua.pushboolean (upInputExclusive page)
                 Nothing   → Lua.pushboolean False
@@ -121,7 +122,7 @@ uiIsPageInputExclusiveFn env = do
 --   scroll gate in scripts/ui_manager_scroll.lua.
 uiIsInputBlockedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiIsInputBlockedFn env = do
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     Lua.pushboolean (isGameplayBlocked mgr)
     return 1
 
@@ -137,7 +138,7 @@ uiIsPageInScopeFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
         Just n → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             Lua.pushboolean (isPageInScope (PageHandle $ fromIntegral n) mgr)
         Nothing → Lua.pushboolean False
     return 1
@@ -325,7 +326,7 @@ uiGetElementInfoFn env = do
         Nothing → Lua.pushnil >> return 1
         Just e  → do
             let handle = ElementHandle (fromIntegral e)
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             case getElement handle mgr of
                 Nothing → Lua.pushnil >> return 1
                 Just el → pushElementInfoTable handle el mgr >> return 1
@@ -340,7 +341,7 @@ uiGetElementInfoFn env = do
 --   the engine's own element tree to catch those too.
 uiGetVisibleElementsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiGetVisibleElementsFn env = do
-    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     let els = concatMap (\p → getPageElements (upHandle p) mgr) (getVisiblePages mgr)
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] els) $ \(i, el) → do
@@ -355,7 +356,7 @@ uiSetClickableFn env = do
     clickArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementClickable (ElementHandle $ fromIntegral e) clickArg mgr, ())
         Nothing → pure ()
 
@@ -370,7 +371,7 @@ uiSetPointerBlockingFn env = do
     blockArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementBlocksPointer (ElementHandle $ fromIntegral e) blockArg mgr, ())
         Nothing → pure ()
 
@@ -384,7 +385,7 @@ uiIsPointerBlockingFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             Lua.pushboolean (isElementPointerBlocking (ElementHandle $ fromIntegral e) mgr)
         Nothing → Lua.pushboolean False
     return 1
@@ -398,7 +399,7 @@ uiSetScrollCaptureFn env = do
     captureArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementCapturesScroll (ElementHandle $ fromIntegral e) captureArg mgr, ())
         Nothing → pure ()
 
@@ -410,7 +411,7 @@ uiIsScrollCapturingFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             Lua.pushboolean (isElementScrollCapturing (ElementHandle $ fromIntegral e) mgr)
         Nothing → Lua.pushboolean False
     return 1
@@ -424,7 +425,7 @@ uiSetDragActivationFn env = do
     dragArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementDragActivation (ElementHandle $ fromIntegral e) dragArg mgr, ())
         Nothing → pure ()
 
@@ -439,7 +440,7 @@ uiSetClipChildrenFn env = do
     clipsArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementClipChildren (ElementHandle $ fromIntegral e) clipsArg mgr, ())
         Nothing → pure ()
 
@@ -453,7 +454,7 @@ uiSetSteppableFn env = do
     stepArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementSteppable (ElementHandle $ fromIntegral e) stepArg mgr, ())
         Nothing → pure ()
 
@@ -467,7 +468,7 @@ uiSetTabIndexFn env = do
     idxArg  ← Lua.tointeger 2
 
     case (elemArg, idxArg) of
-        (Just e, Just idx) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (Just e, Just idx) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementTabIndex (ElementHandle $ fromIntegral e) (fromIntegral idx) mgr, ())
         _ → pure ()
 
@@ -485,7 +486,7 @@ uiSetInteractiveOverflowFn env = do
     interArg ← Lua.toboolean 2
 
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementInteractiveOverflow (ElementHandle $ fromIntegral e) interArg mgr, ())
         Nothing → pure ()
 
@@ -498,7 +499,7 @@ uiIsInteractiveOverflowFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             Lua.pushboolean (isElementInteractiveOverflow (ElementHandle $ fromIntegral e) mgr)
         Nothing → Lua.pushboolean False
     return 1
@@ -512,7 +513,7 @@ uiIsClipChildrenFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             Lua.pushboolean (isElementClipChildren (ElementHandle $ fromIntegral e) mgr)
         Nothing → Lua.pushboolean False
     return 1
@@ -526,7 +527,7 @@ uiGetEffectiveClipFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
         Just e → do
-            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
             pushEffectiveClipField (ElementHandle $ fromIntegral e) mgr
         Nothing → Lua.pushnil
     return 1
@@ -540,7 +541,7 @@ uiSetOnClickFn env = do
     case (elemArg, callbackArg) of
         (Just e, Just cbBS) → do
             let callback = TE.decodeUtf8Lenient cbBS
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (setElementOnClick (ElementHandle $ fromIntegral e) callback mgr, ())
         _ → pure ()
 
@@ -555,7 +556,7 @@ uiSetOnRightClickFn env = do
     case (elemArg, callbackArg) of
         (Just e, Just cbBS) → do
             let callback = TE.decodeUtf8Lenient cbBS
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (setElementOnRightClick (ElementHandle $ fromIntegral e) callback mgr, ())
         _ → pure ()
 
@@ -568,7 +569,7 @@ uiSetZIndexFn env = do
     zArg    ← Lua.tointeger 2
 
     case (elemArg, zArg) of
-        (Just e, Just z) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (Just e, Just z) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setElementZIndex (ElementHandle $ fromIntegral e) (fromIntegral z) mgr, ())
         _ → pure ()
 
@@ -590,7 +591,7 @@ uiSetColorFn env = do
         (Just e, Just r, Just g, Just b, Just a) → do
             let elemHandle = ElementHandle (fromIntegral e)
                 color      = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 case Map.lookup elemHandle (upmElements mgr) of
                     Nothing   → (mgr, ())
                     Just elem → case ueRenderData elem of
@@ -612,7 +613,7 @@ uiSetTextFn env = do
         (Just e, Just txtBS) → do
             let elemHandle = ElementHandle (fromIntegral e)
                 text       = TE.decodeUtf8Lenient txtBS
-            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
                 (setText elemHandle text mgr, ())
         _ → pure ()
 
@@ -625,7 +626,7 @@ uiSetSpriteTextureFn env = do
     texArg  ← Lua.tointeger 2
 
     case (elemArg, texArg) of
-        (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setSpriteTexture (ElementHandle $ fromIntegral e) (TextureHandle $ fromIntegral t) mgr, ())
         _ → pure ()
 
@@ -638,7 +639,7 @@ uiSetBoxTexturesFn env = do
     texArg  ← Lua.tointeger 2
 
     case (elemArg, texArg) of
-        (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setBoxTextures (ElementHandle $ fromIntegral e) (BoxTextureHandle $ fromIntegral t) mgr, ())
         _ → pure ()
 

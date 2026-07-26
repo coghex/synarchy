@@ -6,7 +6,8 @@ module Engine.Scripting.Lua.API.Focus
   ) where
 
 import UPrelude
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import UI.Focus (FocusId(..), registerFocusTarget, setFocus, clearFocus, fmCurrentFocus)
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
@@ -17,7 +18,7 @@ registerFocusableFn env = do
   tabIndex ← Lua.tointeger 2
   case tabIndex of
     Just (Lua.Integer idx) → do
-      fid ← Lua.liftIO $ atomicModifyIORef' (focusManagerRef env) $ \fm →
+      fid ← Lua.liftIO $ atomicModifyIORef' (uicFocusManagerRef (toUiCapability env)) $ \fm →
         let (newFid, newFm) = registerFocusTarget acceptsText (fromIntegral idx) fm
         in (newFm, newFid)
       let (FocusId n) = fid
@@ -30,20 +31,20 @@ requestFocusFn env = do
   mFid ← Lua.tointeger 1
   case mFid of
     Just (Lua.Integer n) → Lua.liftIO $
-      atomicModifyIORef' (focusManagerRef env) $ \fm →
+      atomicModifyIORef' (uicFocusManagerRef (toUiCapability env)) $ \fm →
         (setFocus (FocusId $ fromIntegral n) fm, ())
     Nothing → return ()
   return 0
 
 releaseFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 releaseFocusFn env = do
-  Lua.liftIO $ atomicModifyIORef' (focusManagerRef env) $ \fm →
+  Lua.liftIO $ atomicModifyIORef' (uicFocusManagerRef (toUiCapability env)) $ \fm →
       (clearFocus fm, ())
   return 0
 
 getFocusIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getFocusIdFn env = do
-  fm ← Lua.liftIO $ readIORef (focusManagerRef env)
+  fm ← Lua.liftIO $ readIORef (uicFocusManagerRef (toUiCapability env))
   case fmCurrentFocus fm of
     Just (FocusId n) → Lua.pushinteger (Lua.Integer $ fromIntegral n)
     Nothing          → Lua.pushnil
