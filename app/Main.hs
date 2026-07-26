@@ -11,6 +11,8 @@ import World.Generate.Config (minimumWorldSize, normalizeWorldSize
 import Engine.Core.Types (BootProfile(..), PreviewBrowse(..))
 import Engine.Preview.Discovery (discoverEntries, resolveFocusedEntry
                                 , focusErrorMessage, textureCategoryRoot)
+import Engine.Preview.Unit (buildPreviewUnit, unitFocusErrorMessage
+                           , unitsCategoryRoot)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
@@ -97,9 +99,24 @@ main = do
               putStrLn $ "select a specific " ⧺ cat
                   ⧺ ", e.g. --preview units/acolyte"
               exitSuccess
-          -- Grouped category/item: classification is canonical as of
-          -- this issue, but the actual browsing implementation is
-          -- #887 (units) / #888 (the rest) — keep Phase 1's (#632)
+          -- units/<name> (#887, Phase 3): resolve + validate the unit
+          -- BEFORE ever creating a window, exactly like a focused
+          -- simple-category item — an unknown unit, a name with path
+          -- structure, a symlinked directory, and a unit with no
+          -- animations/ tree all reject here.
+          GroupedPreviewCategory | cat ≡ "units", Just unitName ← mItem →
+              buildPreviewUnit unitsCategoryRoot unitName ⌦ \case
+                  Left err → do
+                      hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ unitName
+                          ⧺ ": " ⧺ T.unpack (unitFocusErrorMessage err)
+                      exitWith (ExitFailure 1)
+                  Right unit →
+                      runPreview (T.pack cat, Just (T.pack unitName))
+                                 (Just (PreviewUnitAnims unit))
+                                 (Just (fromMaybe 8008 port))
+          -- The remaining grouped categories (flora, buildings,
+          -- structures): classification is canonical, but their
+          -- browsing implementation is #888 — keep Phase 1's (#632)
           -- placeholder-label boot, no 'PreviewBrowse'.
           GroupedPreviewCategory → runPreview (T.pack cat, T.pack ⊚ mItem)
                                     Nothing (Just (fromMaybe 8008 port))

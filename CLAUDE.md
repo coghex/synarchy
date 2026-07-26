@@ -492,19 +492,21 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
   path, or a path containing `..` (including a symlink escape) all reject
   **before ever creating a window** — same pre-boot exit code convention
   as the unknown-category/missing-target errors below.
-- A grouped category's item form (`--preview units/acolyte`) still only
-  gets the Phase 1 placeholder-label boot (its own real browsing is
-  #887/#888) — this canonical contract only makes grouped *classification*
-  final, not its browsing implementation.
+- `flora`/`buildings`/`structures` item forms still only get the Phase 1
+  placeholder-label boot (their real browsing is #888) — this canonical
+  contract only makes grouped *classification* final, not every grouped
+  category's browsing implementation.
 - Trimmed loading: preview mode loads only its font, the list widget's
   own chrome textures (`assets/textures/ui/{highlight,scroll*}.png`,
   loaded once, list-mode only), and textures within the requested
-  category — never `data/*.yaml` gameplay catalogs, unrelated world/HUD
-  texture sets, or the normal script set.
+  category — never `data/*.yaml` gameplay catalogs (the units viewer's
+  ONE `data/units/<name>.yaml` read, below, is the sole exception),
+  unrelated world/HUD texture sets, or the normal script set.
 - Debug-console introspection: `require("scripts.preview_manager").dump()`
   (self-registered into `package.loaded` the same way `unit_ai.lua`/
   `debug.lua` are, despite being `engine.loadScript`-loaded, not
-  `require`d) reports `mode` (`"list"`/`"item"`/`"placeholder"`), `state`
+  `require`d) reports `mode`
+  (`"list"`/`"item"`/`"unit"`/`"placeholder"`), `state`
   (`"loading"`/`"ready"`/`"empty"`), the current `selected` entry, and in
   list mode the FULL ordered `entries` list (not just its `entryCount`
   — a probe needs the complete list to catch an omission/substitution
@@ -514,18 +516,71 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
   real `input.click`/`input.scroll` against a located row without ever
   hardcoding a screen coordinate.
 
+Units viewer (`--preview units/<name>`, #887; `Engine.Preview.Unit`
+pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
+
+- **The filesystem is authoritative.**
+  `assets/textures/units/<name>/animations/` decides which animations
+  exist, which directions each has, and the `frame_NNN.png` order
+  (NUMERIC, so an unpadded `frame_10` can't sort before `frame_2`).
+  `data/units/<name>.yaml` only AUGMENTS a matching animation with
+  `fps`/`loop`/`flip`. Three shipped animation folders
+  (`acolyte/pushing_idle`, `bear_brown/roar`, `technomule/hit_react`)
+  have no YAML entry and three unit asset trees have no YAML file at
+  all — all of them browse. Missing metadata falls back to the SAME
+  values `UnitYamlAnim`'s decoder defaults to: `fps=8`, `loop=true`,
+  `flip=false`.
+- **Ordering + default selection:** animations sort case-sensitively by
+  exact directory name (the same `Ord`-on-the-label rule
+  `Engine.Preview.Discovery.sortEntries` uses); `idle` is selected when
+  present, else the first entry in that order, direction south.
+- **Directions:** the game's own `S, SW, W, NW, N, NE, E, SE` order. A
+  directly authored direction ALWAYS wins; W/SW/NW mirror SE/E/NE only
+  when flipping is permitted. With no YAML entry the viewer INFERS
+  mirroring for exactly the canonical five-direction layout
+  `{S, SE, E, NE, N}` — any other stored set leaves its missing
+  directions unavailable rather than inventing them or falling back to
+  another unit's textures. A mirrored cell renders genuinely mirrored
+  via `UI.setSpriteFlipX` (#887's `ussFlipX`, applied to the CLIPPED UV
+  slice — flipping before clipping would sample the wrong slice).
+- **Playback:** ONE clock per selected animation. Every direction
+  computes its own index from the SAME elapsed value against its OWN
+  frame count, so unequal per-direction frame counts (four checked-in
+  acolyte animations have them) stay phase-aligned. Selecting a
+  different ANIMATION resets the clock; enlarging a different DIRECTION
+  does not. Non-loop end-of-clip HOLDS the last frame — the same clamp
+  `Unit.Render.pickFrame` applies in game. The frame index comes from a
+  wall clock, so the script tick rate only affects smoothness.
+- **Reflow:** a resize preserves the selected animation, selected
+  direction, list scroll offset, AND playback phase.
+- **Pre-boot rejection:** `units/<name>` must be exactly one contained,
+  non-symlinked direct child of `assets/textures/units` holding an
+  `animations/` subtree. An unknown unit, a name with path structure or
+  `.`/`..`/absolute traversal, a symlinked unit directory, and a unit
+  with no animations all exit 1 before a window exists. A missing YAML
+  is NOT a rejection.
+- **Dump extension:** unit mode adds `unit`, the animation `entries`
+  list (each with `fps`/`loop`/`flip`/`thumb`/`directionCount`),
+  `defaultAnim`, and `playback` — current `animation`, `direction`,
+  `mirrored`, `sourceDirection`, `frameIndex`, effective `fps`/`loop`,
+  plus a per-direction `directions` array carrying each cell's own
+  mirrored flag, source, frame index, and interactive bounds/handle
+  (enough to locate and click a real cell without a hardcoded
+  coordinate).
+
 Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
-check above the "always opens a real window" line) and
-`tools/preview_probe.py` (manual-only, `needs-gpu` — the real-boot
-browser checks: discovery/selection/scroll/resize via the dump, forced
-nearest filtering, and trimmed loading verified against
-`engine.getLoadedTexturePaths()` — `Engine.Asset`'s `apAssetPaths`,
-populated by `engine.loadTexture`'s own Haskell handler regardless of
-Lua caller, so this is the engine's own authoritative loaded-texture
-record, not previewManager's self-reported bookkeeping — plus the
-grouped-category placeholder boot). Focused hspec coverage for
-the pure discovery/labeling/ordering/containment logic:
-`cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`.
+check above the "always opens a real window" line, units rejections
+included) and `tools/preview_probe.py` (manual-only, `needs-gpu` — the
+real-boot browser checks: discovery/selection/scroll/resize via the
+dump, forced nearest filtering, the whole units viewer above, and
+trimmed loading verified against `engine.getLoadedTexturePaths()` —
+`Engine.Asset`'s `apAssetPaths`, populated by `engine.loadTexture`'s own
+Haskell handler regardless of Lua caller, so this is the engine's own
+authoritative loaded-texture record, not previewManager's self-reported
+bookkeeping — plus the grouped-category placeholder boot). Focused hspec
+coverage for the pure discovery/labeling/ordering/containment logic:
+`cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`
+and `--match "Preview.UnitAnimation"`.
 
 ### Dump mode (no TCP, JSON to stdout)
 

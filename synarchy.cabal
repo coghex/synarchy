@@ -343,6 +343,7 @@ library
                      Engine.Save.Barrier
                      Engine.Load.Status
                      Engine.Preview.Discovery
+                     Engine.Preview.Unit
                      Engine.Core.Types
                      Engine.Core.Log
                      Engine.Core.Log.Types
@@ -1008,6 +1009,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.QualityTier
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Preview.Discovery
+                   Test.Headless.Preview.UnitAnimation
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope

@@ -28,7 +28,8 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
 import Engine.Core.Types
-    (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..))
+    (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
+    , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
 import qualified HsLua as Lua
@@ -132,12 +133,21 @@ getPreviewTargetFn env = do
 
 -- | engine.getPreviewBrowse() → nil | {mode="list", entries={{label=,path=},...}}
 --   | {mode="item", entry={label=,path=}}
---   The simple-category browsing state @app/Main.hs@ resolved before
---   boot (#886): 'PreviewList' for a bare @--preview \<simple
---   category\>@, 'PreviewItem' for a validated
---   @--preview \<simple category\>/\<item\>@. 'nil' for a grouped
---   category (or outside 'BootPreview') — @scripts/preview_manager.lua@
---   falls back to the Phase 1 (#632) placeholder-label boot in that case.
+--   | {mode="unit", unit={name=,defaultAnim=,animations={...}}}
+--   The browsing state @app/Main.hs@ resolved before boot:
+--   'PreviewList' for a bare @--preview \<simple category\>@ (#886),
+--   'PreviewItem' for a validated
+--   @--preview \<simple category\>/\<item\>@ (#886), 'PreviewUnitAnims'
+--   for a validated @--preview units/\<name\>@ (#887). 'nil' for the
+--   remaining grouped categories (or outside 'BootPreview') —
+--   @scripts/preview_manager.lua@ falls back to the Phase 1 (#632)
+--   placeholder-label boot in that case.
+--
+--   The unit payload's @animations@ array is already in the viewer's
+--   display order, and each entry's @directions@ array is already in
+--   the game's @S, SW, W, NW, N, NE, E, SE@ order with unavailable
+--   directions omitted — 'Engine.Preview.Unit' owns those rules, the
+--   Lua side never re-derives them.
 getPreviewBrowseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getPreviewBrowseFn env = do
   case ecPreviewBrowse (ccEngineConfig (toCoreCapability env)) of
@@ -157,14 +167,57 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "mode"
       pushPreviewEntry entry
       Lua.setfield (-2) "entry"
+    Just (PreviewUnitAnims unit) → do
+      Lua.newtable
+      Lua.pushstring "unit"
+      Lua.setfield (-2) "mode"
+      pushPreviewUnit unit
+      Lua.setfield (-2) "unit"
   return 1
   where
     pushPreviewEntry entry = do
       Lua.newtable
-      Lua.pushstring (TE.encodeUtf8 (peLabel entry))
-      Lua.setfield (-2) "label"
-      Lua.pushstring (TE.encodeUtf8 (pePath entry))
-      Lua.setfield (-2) "path"
+      pushTextField "label" (peLabel entry)
+      pushTextField "path"  (pePath entry)
+
+    pushTextField key value = do
+      Lua.pushstring (TE.encodeUtf8 value)
+      Lua.setfield (-2) key
+
+    pushArray push xs = do
+      Lua.newtable
+      forM_ (zip [1 ∷ Int ..] xs) $ \(i, x) → do
+        push x
+        Lua.rawseti (-2) (fromIntegral i)
+
+    pushPreviewUnit unit = do
+      Lua.newtable
+      pushTextField "name" (puName unit)
+      pushTextField "defaultAnim" (puDefault unit)
+      pushArray pushPreviewAnim (puAnims unit)
+      Lua.setfield (-2) "animations"
+
+    pushPreviewAnim anim = do
+      Lua.newtable
+      pushTextField "name" (paName anim)
+      Lua.pushnumber (realToFrac (paFps anim))
+      Lua.setfield (-2) "fps"
+      Lua.pushboolean (paLoop anim)
+      Lua.setfield (-2) "loop"
+      Lua.pushboolean (paFlip anim)
+      Lua.setfield (-2) "flip"
+      pushTextField "thumb" (paThumb anim)
+      pushArray pushPreviewDir (paDirs anim)
+      Lua.setfield (-2) "directions"
+
+    pushPreviewDir d = do
+      Lua.newtable
+      pushTextField "direction" (pfdDirection d)
+      pushTextField "source"    (pfdSource d)
+      Lua.pushboolean (pfdMirrored d)
+      Lua.setfield (-2) "mirrored"
+      pushArray (Lua.pushstring ∘ TE.encodeUtf8) (pfdFrames d)
+      Lua.setfield (-2) "frames"
 
 -- | engine.realTime() → number
 --   POSIX wall-clock seconds (sub-second precision). Doesn't freeze
