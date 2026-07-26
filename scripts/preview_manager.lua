@@ -23,8 +23,18 @@
 -- loads lazily (one texture at a time, as each entry is selected) and
 -- never unloads (no engine.unloadTexture exists; acceptable for a
 -- short-lived debug/preview session).
+--
+-- #887 (Phase 3) adds a third real mode, "unit": engine.getPreviewBrowse()
+-- reports mode == "unit" for a validated --preview units/<name>, and the
+-- whole animation model (membership, ordering, per-direction frames,
+-- mirroring, fps/loop, default selection) arrives already resolved from
+-- Engine.Preview.Unit. The list holds animation names with frame-zero/
+-- south thumbnails; scripts/ui/unit_animation_view.lua owns the enlarged
+-- sprite, the direction row, and the shared playback clock.
 local label = require("scripts.ui.label")
 local assetBrowser = require("scripts.ui.asset_browser")
+local list = require("scripts.ui.list")
+local unitAnimationView = require("scripts.ui.unit_animation_view")
 
 -- #886: self-register into the require cache (the same convention
 -- scripts/unit_ai.lua and scripts/debug.lua use) so the debug console
@@ -38,9 +48,13 @@ local FONT_SIZE = 24
 local labelFont = nil
 local page = nil
 
--- mode: "placeholder" (Phase 1, grouped category) | "list" | "item"
+-- mode: "placeholder" (Phase 1, grouped category) | "list" | "item" | "unit"
 local mode = nil
 local readyState = "loading"  -- "loading" | "ready" | "empty"
+
+-- Thumbnail edge (unscaled) for the units list's per-row frame-zero/
+-- south icons — scripts/ui/list.lua applies the uiscale itself.
+local UNIT_THUMB_SIZE = 24
 
 -- Phase 1 placeholder (grouped category / no browse state).
 local labelId = nil
@@ -51,6 +65,11 @@ local entries = nil
 local focusedEntry = nil
 local panelBounds = nil
 local spriteId = nil
+
+-- Phase 3 (#887) unit-animation state.
+local unitData = nil    -- the resolved PreviewUnit table from the engine
+local animViewId = nil
+local selectedAnim = nil
 
 -- path -> texture handle, for entries already uploaded; never evicted
 -- (see the module comment above).
@@ -77,6 +96,28 @@ local function targetText()
     else
         return "Preview: " .. target.category
     end
+end
+
+-- Unit mode's texture accessor: hand back a handle for 'path'
+-- IMMEDIATELY (uploads are async, and both UI.newSprite and
+-- UI.setSpriteTexture tolerate a not-yet-resolved handle — the same
+-- thing scripts/ui/list.lua's own init() does with highlight.png), one
+-- engine.loadTexture per distinct path. There is no dedup at the
+-- engine.loadTexture layer, so this cache IS the dedup: without it a
+-- 60 Hz playback tick would allocate a fresh handle every frame.
+--
+-- Unlike list/item mode's requestTexture below, this never touches
+-- pendingHandle/readyState: unit mode has many textures in flight at
+-- once and drives its own readiness off engine.getTextureSize instead
+-- of a single-slot onAssetLoaded handshake.
+local function acquireTexture(path)
+    if not path then return nil end
+    local cached = textureCache[path]
+    if cached then return cached end
+    local handle = engine.loadTexture(path)
+    textureCache[path] = handle
+    table.insert(loadedPaths, path)
+    return handle
 end
 
 local function requestTexture(path)
@@ -212,6 +253,104 @@ local function buildFocusedUI(entry, fbW, fbH)
     requestTexture(entry.path)
 end
 
+-----------------------------------------------------------
+-- Unit animation viewer (#887, Phase 3)
+-----------------------------------------------------------
+
+local function findAnim(name)
+    for _, a in ipairs(unitData and unitData.animations or {}) do
+        if a.name == name then return a end
+    end
+    return nil
+end
+
+-- A genuine animation selection: always starts the clip fresh from the
+-- current wall clock. The resize path deliberately does NOT come
+-- through here (it must preserve the playback phase) — see buildUnitUI.
+local function onAnimSelected(value, _label, _index)
+    local anim = findAnim(value)
+    if not anim or not animViewId then return end
+    selectedAnim = value
+    -- "loading" until the frames actually upload; previewManager.update
+    -- promotes it, so `state` means the same thing here as in list/item
+    -- mode rather than reporting ready before anything is on screen.
+    readyState = "loading"
+    unitAnimationView.setAnimation(animViewId, anim, engine.realTime(), nil)
+end
+
+-- restoreAnim/restoreScroll/restoreDirection: nil for the initial build
+-- (a fresh default selection). Real values on the resize rebuild, where
+-- the #887 amendment requires the selected animation, selected
+-- direction, list scroll offset, AND playback phase to all survive — so
+-- the restore path silently re-selects the list row and only re-panels
+-- the view, never re-entering setAnimation (which would reset the clock).
+local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDirection)
+    mode = "unit"
+    unitData = unit
+
+    assetBrowser.init()
+
+    local listItems = {}
+    for i, a in ipairs(unit.animations or {}) do
+        listItems[i] = {
+            label = a.name,
+            path = a.name,
+            -- Requirement 1: a frame-zero/south thumbnail per row.
+            -- Empty thumb (an animation with no south frames at all)
+            -- simply leaves that row's icon hidden.
+            icon = (a.thumb ~= "" and acquireTexture(a.thumb)) or nil,
+        }
+    end
+
+    browserId = assetBrowser.new({
+        page = page,
+        font = labelFont,
+        x = 40, y = 40,
+        width = math.max(200, fbW - 80),
+        height = math.max(100, fbH - 80),
+        entries = listItems,
+        iconSize = UNIT_THUMB_SIZE,
+        onSelect = onAnimSelected,
+    })
+    panelBounds = assetBrowser.getPanelBounds(browserId)
+
+    if #listItems == 0 then
+        readyState = "empty"
+        return
+    end
+
+    if not animViewId then
+        animViewId = unitAnimationView.new({
+            page = page,
+            font = labelFont,
+            panel = panelBounds,
+            requestTexture = acquireTexture,
+            chromeTexture = list.getChromeTexture(),
+        })
+    else
+        unitAnimationView.setPanel(animViewId, panelBounds)
+    end
+
+    if restoreAnim then
+        assetBrowser.selectEntrySilently(browserId, restoreAnim)
+        selectedAnim = restoreAnim
+        -- Phase-preserving: only the panel geometry changed.
+        unitAnimationView.setPanel(animViewId, panelBounds)
+        if restoreDirection then
+            unitAnimationView.setDirection(animViewId, restoreDirection)
+        end
+    else
+        -- Requirement 2: idle (or the first animation), direction south
+        -- — both already decided by Engine.Preview.Unit / the view's own
+        -- resolveDirection, never re-derived here.
+        assetBrowser.selectEntry(browserId, unit.defaultAnim)
+    end
+
+    if restoreScroll and restoreScroll > 0 then
+        assetBrowser.setScrollOffset(browserId, restoreScroll)
+    end
+end
+
 function previewManager.init(scriptId)
     -- Requirement 3: nearest-neighbour is REQUIRED for the browser, not
     -- just the default — a user's persisted config/video.local.yaml can
@@ -235,6 +374,8 @@ function previewManager.onAssetLoaded(assetType, handle, path)
             buildListUI(browse.entries, fbW, fbH, nil, nil)
         elseif browse and browse.mode == "item" then
             buildFocusedUI(browse.entry, fbW, fbH)
+        elseif browse and browse.mode == "unit" then
+            buildUnitUI(browse.unit, fbW, fbH, nil, nil, nil)
         else
             -- Phase 1 (#632) placeholder: grouped category, or no
             -- browse state at all.
@@ -261,7 +402,20 @@ function previewManager.onAssetLoaded(assetType, handle, path)
     end
 end
 
+-- Playback is driven off a WALL clock (engine.realTime), not an
+-- accumulated dt: the tick rate only controls smoothness, never which
+-- frame is correct, so a slow or bursty tick can't desynchronize the
+-- direction row from the enlarged sprite.
 function previewManager.update(dt)
+    if not animViewId then return end
+    unitAnimationView.update(animViewId, engine.realTime())
+    -- Unit mode's readiness signal: the enlarged sprite has a real,
+    -- uploaded texture fitted to the panel. Same meaning "ready" carries
+    -- in list/item mode, so poll_state works uniformly across all three.
+    if readyState ~= "empty" then
+        local d = unitAnimationView.dump(animViewId)
+        readyState = (d and d.ready) and "ready" or "loading"
+    end
 end
 
 function previewManager.shutdown()
@@ -272,6 +426,10 @@ function previewManager.shutdown()
     if browserId then
         assetBrowser.destroy(browserId)
         browserId = nil
+    end
+    if animViewId then
+        unitAnimationView.destroy(animViewId)
+        animViewId = nil
     end
     if spriteId then
         UI.deleteElement(spriteId)
@@ -286,6 +444,8 @@ function previewManager.shutdown()
     entries = nil
     focusedEntry = nil
     panelBounds = nil
+    unitData = nil
+    selectedAnim = nil
     textureCache = {}
     loadedPaths = {}
     pendingHandle = nil
@@ -318,6 +478,14 @@ function previewManager.onUIScroll(elemHandle, dx, dy, _shiftHeld)
     assetBrowser.onScroll(elemHandle, dx, dy)
 end
 
+-- Requirement 3: clicking a direction cell enlarges that direction.
+-- Routed the same broadcast way as onListItemClick above — the engine
+-- calls the callback name UI.setOnClick registered on the cell's hit box.
+function previewManager.onPreviewDirectionClick(elemHandle)
+    if not animViewId then return false end
+    return unitAnimationView.handleCellClick(animViewId, elemHandle) ~= nil
+end
+
 -- Preview windows are resizable (App.Preview reuses the normal window
 -- config), so a bare-category list or a focused item must reflow on
 -- resize instead of leaving stale bounds/sprite dimensions behind
@@ -336,6 +504,19 @@ function previewManager.onFramebufferResize(width, height)
         buildListUI(entries, width, height, prevPath, prevScroll)
     elseif mode == "item" then
         refitFocusedPanel(width, height)
+    elseif mode == "unit" then
+        -- #887 amendment: selected animation, selected direction, list
+        -- scroll offset, AND playback phase all survive a reflow. The
+        -- list is rebuilt (its row geometry depends on the new size);
+        -- the animation view is only re-panelled, never re-selected.
+        local prevScroll = browserId and assetBrowser.getScrollOffset(browserId) or 0
+        local prevDump = animViewId and unitAnimationView.dump(animViewId)
+        if browserId then
+            assetBrowser.destroy(browserId)
+            browserId = nil
+        end
+        buildUnitUI(unitData, width, height, selectedAnim, prevScroll,
+                    prevDump and prevDump.direction or nil)
     end
     -- "placeholder" mode (Phase 1, #632): the label's fixed (40,40)
     -- position never overflows, so nothing to reflow.
@@ -371,6 +552,35 @@ function previewManager.dump()
     elseif mode == "item" then
         out.selected = { label = focusedEntry.label, path = focusedEntry.path }
         out.panelBounds = panelBounds
+    elseif mode == "unit" then
+        -- #887 Requirement 8 + its amendment: the animation-entry list,
+        -- aggregate playback state, AND per-direction entries carrying
+        -- their own mirrored flag, source direction, frame index, and
+        -- interactive bounds/handle — enough for a probe to locate and
+        -- click a real direction cell without a hardcoded coordinate.
+        out.unit = unitData and unitData.name or nil
+        out.entries = {}
+        for i, a in ipairs(unitData and unitData.animations or {}) do
+            out.entries[i] = {
+                label = a.name,
+                name = a.name,
+                fps = a.fps,
+                loop = a.loop,
+                flip = a.flip,
+                thumb = a.thumb,
+                directionCount = #(a.directions or {}),
+            }
+        end
+        out.entryCount = #out.entries
+        out.defaultAnim = unitData and unitData.defaultAnim or nil
+        out.selected = {
+            label = assetBrowser.getSelectedLabel(browserId),
+            path  = assetBrowser.getSelectedPath(browserId),
+        }
+        out.scrollOffset = assetBrowser.getScrollOffset(browserId)
+        out.rows = assetBrowser.dump(browserId)
+        out.panelBounds = panelBounds
+        out.playback = animViewId and unitAnimationView.dump(animViewId) or nil
     end
     return out
 end

@@ -258,7 +258,7 @@ renderElementData mgr fontCache layerId elem absX absY clip =
         RenderSprite style → do
             let (w, h) = ueSize elem
                 (batches, items) = renderSpriteBatch (ussTexture style) (ussColor style)
-                                       absX absY w h layerId clip
+                                       (ussFlipX style) absX absY w h layerId clip
             pure (batches, items)
 
 -- | Pure: a sprite element's render batch, clipped. This is the ACTUAL
@@ -268,14 +268,31 @@ renderElementData mgr fontCache layerId elem absX absY clip =
 --   removing the clip here would show up as a batch/vertex mismatch,
 --   not just a passing geometry-only test. 'Nothing'-equivalent (empty
 --   vectors) when the clip excludes the sprite entirely.
-renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float)
+--
+--   'flipX' (#887) mirrors the sprite horizontally. The mirror is a
+--   property of the ELEMENT, not of whatever slice of it survives the
+--   clip: a mirrored element spanning screen @[x, x+w]@ samples @u=1@ at
+--   its left edge and @u=0@ at its right, and a clip may only HIDE part
+--   of that — never change which texel a given screen position shows.
+--
+--   Hence @u' = 1-u@ applied pointwise to the clipped sub-rect's own
+--   endpoints, which reflects each one across the FULL texture. It is
+--   emphatically NOT "reverse the surviving @[u0,u1]@ interval" (i.e.
+--   swapping @u0@ and @u1@): for a surviving slice of @0..0.5@ this
+--   yields @1..0.5@, whereas swapping would yield @0.5..0@ and make the
+--   visible pixels change identity as the clip moves — a mirrored
+--   sprite scrolling inside a clipping viewport would animate its own
+--   content instead of simply being revealed. 'renderSpriteBatch — a
+--   clipped mirror agrees with an unclipped mirror' pins exactly this.
+renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float) → Bool
                   → Float → Float → Float → Float → LayerId → Maybe ClipRect
                   → (V.Vector RenderBatch, V.Vector RenderItem)
-renderSpriteBatch tex color absX absY w h layerId clip =
+renderSpriteBatch tex color flipX absX absY w h layerId clip =
     case clipQuadUV clip (absX, absY, w, h) (0, 0, 1, 1) of
         Nothing → (V.empty, V.empty)
-        Just ((cx, cy, cw, ch), uv) →
-            let atlasId = lookupTextureSlot tex
+        Just ((cx, cy, cw, ch), (u0, v0, u1, v1)) →
+            let uv = if flipX then (1 - u0, v0, 1 - u1, v1) else (u0, v0, u1, v1)
+                atlasId = lookupTextureSlot tex
                 vertices = makeQuadVertices cx cy cw ch color atlasId uv
                 batch = RenderBatch
                     { rbTexture  = tex

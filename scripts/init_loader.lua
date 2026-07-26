@@ -44,7 +44,13 @@ function M.load()
     -- has anything to attach to in this profile.
     if engine.getBootProfile() == "preview" then
         isPreview = true
-        previewScriptId = engine.loadScript("scripts/preview_manager.lua", 0.1)
+        -- ~60 Hz, not the 10 Hz a static texture browser needed (#887):
+        -- previewManager.update drives the units viewer's animation
+        -- playback. Correctness doesn't depend on this (the frame index
+        -- comes from a wall clock, so a slow tick just repeats a frame
+        -- rather than desynchronizing anything) — it only controls how
+        -- smooth an 8-24 fps clip looks.
+        previewScriptId = engine.loadScript("scripts/preview_manager.lua", 0.016)
         return
     end
 

@@ -31,6 +31,7 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiSetColorFn
   , uiSetTextFn
   , uiSetSpriteTextureFn
+  , uiSetSpriteFlipXFn
   , uiSetBoxTexturesFn
   ) where
 
@@ -629,6 +630,23 @@ uiSetSpriteTextureFn env = do
         (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setSpriteTexture (ElementHandle $ fromIntegral e) (TextureHandle $ fromIntegral t) mgr, ())
         _ → pure ()
+
+    return 0
+
+-- | UI.setSpriteFlipX(elementHandle, flipX)
+--   Draw the sprite horizontally mirrored (#887). Visual only — the
+--   element's geometry and interactive bounds are untouched, so a
+--   mirrored direction cell in the @--preview units/\<name\>@ viewer
+--   still hit-tests exactly like an unmirrored one.
+uiSetSpriteFlipXFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetSpriteFlipXFn env = do
+    elemArg ← Lua.tointeger 1
+    flipArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
+            (setSpriteFlipX (ElementHandle $ fromIntegral e) flipArg mgr, ())
+        Nothing → pure ()
 
     return 0
 
