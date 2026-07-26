@@ -149,7 +149,7 @@ Also: the `-- All internal: use most recent frame` comment on the fallback
 branch is wrong. `fallback` is the head of the *reversed* list — the oldest /
 outermost frame, which is precisely why it is the correct answer.
 
-### CH-10. Three whole error domains are never constructed
+### [#946] CH-10. Three whole error domains are never constructed
 `Engine.Core.Error.Exception` defines 49 constructors across 7 domains. 31 are
 never constructed outside their own declaration, including three complete
 domains:
