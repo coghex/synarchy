@@ -1,10 +1,17 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
--- | Tests for the pure bleeding-trail accumulator/mapping math (issue
---   #882): "Blood.Trail"'s 'consumeTrailMarks' (distance+cadence
---   gating, conserved volume, partition invariance) and its volume ->
---   texture-request mapping, plus "Combat.Wounds.Bleed"'s external- vs
---   internal-bleed kind classification the wound tick's conserved
---   external-loss accounting relies on.
+-- | Tests for the pure ongoing-bleeding accumulator/mapping math —
+--   BOTH halves, which share one 'Unit.Types.Trail.TrailState':
+--
+--   * the moving half (issue #882): "Blood.Trail"'s 'consumeTrailMarks'
+--     (distance+cadence gating, conserved volume, partition invariance)
+--     and its volume -> texture-request mapping;
+--   * the stationary half (issue #883): "Blood.Pool"'s
+--     'classifyOngoing' arbitration, 'consumePoolLayers' cadence/volume/
+--     bound math, layer placement, and its own texture mapping;
+--
+--   plus "Combat.Wounds.Bleed"'s external- vs internal-bleed kind
+--   classification the wound tick's conserved external-loss accounting
+--   relies on, and the shared lifecycle (destroy / save-load / death).
 module Test.Headless.Blood.Trail (spec) where
 
 import UPrelude
@@ -29,7 +36,10 @@ import Infection.Types (emptyInfectionManager)
 import Combat.Wounds (tickOneUnit)
 import qualified System.Random as Random
 import Blood.Trail
-import Blood.Types (BloodStyle(..), BloodStore(..), allDecals)
+import Blood.Pool
+import Blood.Types
+    (BloodStyle(..), FootprintBucket(..), BloodStore(..), BloodDecal(..)
+    , allDecals)
 import Combat.Wounds.Bleed (isExternallyBleedingKind)
 
 spec ∷ Spec
@@ -41,6 +51,13 @@ spec = do
   textureMappingSpec
   pageTargetingSpec
   lifecycleSpec
+  poolArbitrationSpec
+  poolCadenceSpec
+  poolBoundSpec
+  poolPartitionInvarianceSpec
+  poolPlacementSpec
+  poolTextureMappingSpec
+  poolImmutabilitySpec
 
 kindSpec ∷ Spec
 kindSpec = describe "Combat.Wounds.Bleed.isExternallyBleedingKind" $ do
@@ -57,20 +74,20 @@ gatingSpec ∷ Spec
 gatingSpec = describe "Blood.Trail.consumeTrailMarks — distance/cadence gating" $ do
 
     it "pops nothing when distance hasn't been covered, even with ample time and volume" $ do
-        let ts0 = TrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
+        let ts0 = emptyTrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
             (ts', marks) = consumeTrailMarks defaultTrailThresholds 0.1 100.0 100.0 ts0
         marks `shouldBe` []
         tsPendingVolume ts' `shouldBe` 5.0   -- untouched — nothing consumed
 
     it "pops nothing when cadence hasn't elapsed, even with ample distance and volume" $ do
-        let ts0 = TrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0, tsLastMarkAt = 100.0 }
+        let ts0 = emptyTrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0, tsLastMarkAt = 100.0 }
             (ts', marks) = consumeTrailMarks defaultTrailThresholds 50.0 0.01 100.01 ts0
         marks `shouldBe` []
         tsPendingVolume ts' `shouldBe` 5.0
 
     it "pops exactly one mark once BOTH gates are cleared" $ do
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 0.2, tsDistSinceMark = 0, tsLastMarkAt = 0 }
+            ts0 = emptyTrailState { tsPendingVolume = 0.2, tsDistSinceMark = 0, tsLastMarkAt = 0 }
             (_, marks) = consumeTrailMarks tp (ttMinDistance tp) (ttMinCadence tp)
                             (ttMinCadence tp) ts0
         length marks `shouldBe` 1
@@ -84,7 +101,7 @@ gatingSpec = describe "Blood.Trail.consumeTrailMarks — distance/cadence gating
         -- explicitly #883's scope, not this issue's), and must leave the
         -- banked state untouched for whenever movement actually resumes.
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 0.5
+            ts0 = emptyTrailState { tsPendingVolume = 0.5
                              , tsDistSinceMark = ttMinDistance tp
                              , tsLastMarkAt = 0 }
             (ts', marks) = consumeTrailMarks tp 0 (ttMinCadence tp) (ttMinCadence tp) ts0
@@ -102,7 +119,7 @@ gatingSpec = describe "Blood.Trail.consumeTrailMarks — distance/cadence gating
         -- than against the PRECEDING mark's own position — reachable on
         -- any catch-up tick after a speed change.
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0.9, tsLastMarkAt = 0 }
+            ts0 = emptyTrailState { tsPendingVolume = 5.0, tsDistSinceMark = 0.9, tsLastMarkAt = 0 }
             (_, marks) = consumeTrailMarks tp 10 6 6.1 ts0
             positions = map ((* 10) . tmoFraction) marks
             gaps = zipWith (-) (drop 1 positions) positions
@@ -115,7 +132,7 @@ gatingSpec = describe "Blood.Trail.consumeTrailMarks — distance/cadence gating
         -- mark once nothing is left to spend (issue #882 requirement
         -- 2/3 — never a fixed per-tick/per-gate stamp).
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
+            ts0 = emptyTrailState { tsPendingVolume = 0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
             (ts', marks) = consumeTrailMarks tp (ttMinDistance tp) (ttMinCadence tp)
                             (ttMinCadence tp) ts0
         marks `shouldBe` []
@@ -128,7 +145,7 @@ conservationSpec = describe "Blood.Trail.consumeTrailMarks — conserved volume"
 
     it "never invents or drops volume: popped marks sum to the pending total" $ do
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 3.7, tsDistSinceMark = 0, tsLastMarkAt = 0 }
+            ts0 = emptyTrailState { tsPendingVolume = 3.7, tsDistSinceMark = 0, tsLastMarkAt = 0 }
             -- A single big jump clearing 10 multiples of BOTH gates at once
             -- (the "catch-up" case) — every drop of pendingVolume must show
             -- up across the popped marks, never silently dropped.
@@ -140,7 +157,7 @@ conservationSpec = describe "Blood.Trail.consumeTrailMarks — conserved volume"
 
     it "catch-up marks spread across the step (never all stamped at one endpoint)" $ do
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 1.0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
+            ts0 = emptyTrailState { tsPendingVolume = 1.0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
             (_, marks) = consumeTrailMarks tp (10 * ttMinDistance tp)
                                             (10 * ttMinCadence tp) (10 * ttMinCadence tp) ts0
             fracs = map tmoFraction marks
@@ -151,7 +168,7 @@ conservationSpec = describe "Blood.Trail.consumeTrailMarks — conserved volume"
 
     it "leftover distance/time banked below a gate carries forward, never lost" $ do
         let tp  = defaultTrailThresholds
-            ts0 = TrailState { tsPendingVolume = 0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
+            ts0 = emptyTrailState { tsPendingVolume = 0, tsDistSinceMark = 0, tsLastMarkAt = 0 }
             -- Half the distance gate, half the cadence gate: no mark yet,
             -- but the progress must still be recorded for next tick.
             (ts', marks) = consumeTrailMarks tp (ttMinDistance tp / 2)
@@ -357,7 +374,7 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
     it "handleUnitDestroyCommand removes the unit — the trail-state query surface sees nothing" $ do
         env ← initEnv
         let uid = UnitId 1
-            liveTs = TrailState { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0 }
+            liveTs = emptyTrailState { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0 }
         writeIORef (unitManagerRef env)
             (emptyUnitManager { umDefs = HM.singleton "t" minimalDef
                               , umInstances = HM.singleton uid (minimalInst pageA (Just liveTs)) })
@@ -368,7 +385,7 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
 
     it "a save/load round-trip resets the trail accumulator, even if the original session had one" $ do
         let uid = UnitId 1
-            liveTs = TrailState { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0 }
+            liveTs = emptyTrailState { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0 }
             defs = HM.singleton "t" minimalDef
             um0 = emptyUnitManager
                 { umDefs = defs, umInstances = HM.singleton uid (minimalInst pageA (Just liveTs)) }
@@ -398,3 +415,469 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
             (inst', _, _) = tickOneUnit 100 minimalDef 0.1 emptyInfectionManager Nothing
                                 (Random.mkStdGen 1) inst False
         uiTrailState inst' `shouldBe` Nothing
+
+    -- #883: the SAME three lifecycle paths, now with a non-empty pool
+    -- cluster riding along — the cluster is transient state like the
+    -- rest of the accumulator and must never survive any of them.
+    it "a NON-EMPTY pool cluster resets on load, clears on death, and \
+       \disappears on destroy (#883 requirement 10)" $ do
+        let uid = UnitId 1
+            clusterTs = emptyTrailState
+                { tsPendingVolume = 0.4, tsDistSinceMark = 0.2, tsLastMarkAt = 5.0
+                , tsClusterAnchor = Just (12.5, 7.25), tsClusterLayers = 7 }
+            defs = HM.singleton "t" minimalDef
+            um0 = emptyUnitManager
+                { umDefs = defs
+                , umInstances = HM.singleton uid (minimalInst pageA (Just clusterTs)) }
+
+        -- (1) save/load round-trip: the whole accumulator, cluster
+        -- bookkeeping included, comes back Nothing.
+        let (um1, _, _) = fromUnitSnapshot pageA defs (toUnitSnapshot pageA um0)
+        case HM.lookup uid (umInstances um1) of
+            Nothing    → expectationFailure "unit vanished across the save/load round-trip"
+            Just inst' → uiTrailState inst' `shouldBe` Nothing
+
+        -- (2) destroy: the unit (and with it the cluster) is gone,
+        -- while decals spawned from that cluster stay independently
+        -- queryable — marks outlive their source (requirement 6).
+        env ← initEnv
+        ws ← emptyWorldState
+        writeIORef (worldManagerRef env) (WorldManager [(pageA, ws)] [pageA])
+        now ← readIORef (gameTimeRef env)
+        spawnPoolLayer (toWorldSimCapability env) pageA 12.5 7.25 0 "slash"
+            0.06 0 0 (Just uid) now
+        writeIORef (unitManagerRef env) um0
+        utsRef ← newIORef emptyUnitThreadState
+        handleUnitDestroyCommand env utsRef uid
+        um2 ← readIORef (unitManagerRef env)
+        HM.lookup uid (umInstances um2) `shouldBe` Nothing
+        store ← readIORef (wsBloodStoreRef ws)
+        length (allDecals (bstDecals store)) `shouldBe` 1
+
+        -- (3) death: the tick a unit bleeds out, the WHOLE accumulator
+        -- goes — cluster anchor and layer budget with it — so nothing
+        -- can keep layering onto a corpse's pool.
+        let w = Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.6
+                      , woundAt = 0, woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0
+                      , woundDressing = "", woundInfection = 0.0, woundClean = False
+                      , woundInfectionType = "", woundNecrosis = 0.0 }
+            tick i = let (i', _, _) = tickOneUnit 100 minimalDef 0.1
+                                          emptyInfectionManager Nothing
+                                          (Random.mkStdGen 1) i False
+                     in i'
+            dying   = (minimalInst pageA (Just clusterTs))
+                        { uiWounds = [w], uiBlood = 0.001 }
+            surviving = dying { uiBlood = 5.0 }
+            dying'  = tick dying
+            surviving' = tick surviving
+        -- The exsanguination clamp confirms this tick really was the
+        -- fatal one (the only path that clears while the wound is still
+        -- bleeding externally).
+        uiBlood dying' `shouldBe` 0
+        uiTrailState dying' `shouldBe` Nothing
+        -- ...and the clearing is death-specific: the SAME instance with
+        -- blood to spare keeps its cluster and keeps accumulating.
+        uiBlood surviving' `shouldSatisfy` (> 0)
+        (tsClusterLayers <$> uiTrailState surviving') `shouldBe` Just 7
+        (tsClusterAnchor <$> uiTrailState surviving') `shouldBe` Just (Just (12.5, 7.25))
+
+-- ----- #883: stationary/collapsed pooling -----
+
+poolArbitrationSpec ∷ Spec
+poolArbitrationSpec =
+  describe "Blood.Pool.classifyOngoing — travel vs dwell arbitration" $ do
+
+    it "anchors where the unit stands on the first tick, and dwells" $ do
+        let (mode, ts') = classifyOngoing defaultPoolThresholds (4, 9) emptyTrailState
+        mode `shouldBe` ModeDwell
+        tsClusterAnchor ts' `shouldBe` Just (4, 9)
+        tsClusterLayers ts' `shouldBe` 0
+
+    it "in-radius shuffling keeps feeding the SAME cluster — anchor and \
+       \layer budget both survive (#883 requirement 5)" $ do
+        let pt  = defaultPoolThresholds
+            r   = ptClusterRadius pt
+            ts0 = emptyTrailState { tsClusterAnchor = Just (10, 10)
+                                  , tsClusterLayers = 5 }
+            -- A ring of shuffle positions, all strictly inside the
+            -- radius but in different directions and adding up to far
+            -- more PATH distance than the radius itself.
+            shuffles = [ (10 + 0.9 * r, 10), (10, 10 + 0.9 * r)
+                       , (10 - 0.9 * r, 10), (10, 10 - 0.9 * r)
+                       , (10 + 0.6 * r, 10 + 0.6 * r) ]
+            step ts p = let (m, ts') = classifyOngoing pt p ts in (ts', m)
+            (tsN, modes) = foldl' (\(ts, ms) p → let (ts', m) = step ts p
+                                                 in (ts', ms ++ [m]))
+                                  (ts0, []) shuffles
+        modes `shouldBe` replicate (length shuffles) ModeDwell
+        tsClusterAnchor tsN `shouldBe` Just (10, 10)
+        tsClusterLayers tsN `shouldBe` 5
+
+    it "genuinely leaving the radius ends the cluster: fresh anchor AND a \
+       \fresh layer budget (#883 spec addition)" $ do
+        let pt  = defaultPoolThresholds
+            r   = ptClusterRadius pt
+            ts0 = emptyTrailState { tsClusterAnchor = Just (10, 10)
+                                  , tsClusterLayers = ptMaxLayers pt }
+            (mode, ts') = classifyOngoing pt (10 + r * 1.01, 10) ts0
+        mode `shouldBe` ModeTravel
+        tsClusterAnchor ts' `shouldBe` Just (10 + r * 1.01, 10)
+        tsClusterLayers ts' `shouldBe` 0
+        poolAtBound pt ts' `shouldBe` False
+
+    it "exactly at the radius is still dwelling (the boundary is inclusive)" $ do
+        let pt  = defaultPoolThresholds
+            ts0 = emptyTrailState { tsClusterAnchor = Just (10, 10)
+                                  , tsClusterLayers = 3 }
+            (mode, ts') = classifyOngoing pt (10 + ptClusterRadius pt, 10) ts0
+        mode `shouldBe` ModeDwell
+        tsClusterLayers ts' `shouldBe` 3
+
+    it "a walk-then-stop pools UNDER the stopped unit, not back at the last \
+       \radius crossing (round-1 review regression)" $ do
+        -- classifyOngoing can only park its provisional anchor where the
+        -- last crossing happened. A unit that walks in and stops short
+        -- of another full crossing is up to ptClusterRadius past that
+        -- point, so placing layers at the provisional anchor would drop
+        -- the pool a tile behind the corpse/casualty. The first layer
+        -- re-anchors to where the unit actually is.
+        let pt      = defaultPoolThresholds
+            crossed = (17.05, 40.0)   -- where the last trail mark landed
+            stopped = (18.0,  40.0)   -- where the unit actually came to rest
+            walking = emptyTrailState { tsClusterAnchor = Just crossed
+                                      , tsClusterLayers = 0
+                                      , tsPendingVolume = ptMinVolume pt }
+            (mode, tsC) = classifyOngoing pt stopped walking
+            (tsP, first) = consumePoolLayers pt stopped (ptMinCadence pt) tsC
+        -- Still within the radius of the crossing, so this is a dwell —
+        -- the provisional anchor survives classification unchanged...
+        mode `shouldBe` ModeDwell
+        tsClusterAnchor tsC `shouldBe` Just crossed
+        -- ...and the first layer moves it onto the unit.
+        length first `shouldBe` 1
+        tsClusterAnchor tsP `shouldBe` Just stopped
+
+    it "the anchor FREEZES after the first layer, so an in-radius shuffle \
+       \keeps feeding one pool instead of smearing it" $ do
+        let pt = defaultPoolThresholds
+            started = emptyTrailState { tsClusterAnchor = Just (18.0, 40.0)
+                                      , tsClusterLayers = 1
+                                      , tsPendingVolume = ptMinVolume pt }
+            -- The unit shuffles half a radius away before the next layer.
+            shuffled = (18.0 + ptClusterRadius pt / 2, 40.0)
+            (mode, tsC) = classifyOngoing pt shuffled started
+            (tsP, more) = consumePoolLayers pt shuffled (ptMinCadence pt) tsC
+        mode `shouldBe` ModeDwell
+        length more `shouldBe` 1
+        tsClusterAnchor tsP `shouldBe` Just (18.0, 40.0)
+
+poolCadenceSpec ∷ Spec
+poolCadenceSpec = describe "Blood.Pool.consumePoolLayers — cadence/volume gating" $ do
+
+    it "pops nothing before the cadence has elapsed, however much blood is pending" $ do
+        let pt  = defaultPoolThresholds
+            ts0 = emptyTrailState { tsPendingVolume = 5.0, tsLastMarkAt = 0 }
+            (ts', ls) = consumePoolLayers pt origin (ptMinCadence pt * 0.99) ts0
+        ls `shouldBe` []
+        tsPendingVolume ts' `shouldBe` 5.0
+
+    it "pops nothing below the volume floor, however long the unit has stood there" $ do
+        let pt  = defaultPoolThresholds
+            ts0 = emptyTrailState { tsPendingVolume = ptMinVolume pt * 0.9
+                                  , tsLastMarkAt = 0 }
+            (ts', ls) = consumePoolLayers pt origin 1000 ts0
+        ls `shouldBe` []
+        tsPendingVolume ts' `shouldSatisfy` (\v → abs (v - ptMinVolume pt * 0.9) < 1e-6)
+
+    it "pops nothing with no blood behind it at all (a cleared/clotted bleed)" $ do
+        let pt = defaultPoolThresholds
+        snd (consumePoolLayers pt origin 1000 emptyTrailState) `shouldBe` []
+
+    it "a popped layer resets BOTH gates, so the next trail mark is a full \
+       \gate away rather than stamped on the pool" $ do
+        let pt  = defaultPoolThresholds
+            ts0 = emptyTrailState { tsPendingVolume = ptMinVolume pt
+                                  , tsDistSinceMark = 0.8, tsLastMarkAt = 0 }
+            now = ptMinCadence pt
+            (ts', ls) = consumePoolLayers pt origin now ts0
+        length ls `shouldBe` 1
+        tsPendingVolume ts' `shouldBe` 0
+        tsDistSinceMark ts' `shouldBe` 0
+        tsLastMarkAt ts'    `shouldSatisfy` (\t → abs (t - now) < 1e-9)
+
+    it "ptMinCadence is a HARD floor between consecutive layers, even after a \
+       \long volume-limited wait (round-1 review regression)" $ do
+        -- A trickle takes far longer than one cadence window to afford
+        -- its first layer, so a big elapsed interval is standing behind
+        -- it. Carrying that unspent interval forward used to bank
+        -- arbitrary cadence credit: the moment the bleed rate jumped,
+        -- the accumulator could cash it in as a burst of layers
+        -- milliseconds apart. The clock must restart at the emission.
+        let pt  = defaultPoolThresholds
+            ts0 = emptyTrailState { tsPendingVolume = ptMinVolume pt
+                                  , tsLastMarkAt = 0 }
+            (ts1, first) = consumePoolLayers pt origin 100 ts0
+        length first `shouldBe` 1
+        tsLastMarkAt ts1 `shouldBe` 100
+        -- An arterial jump right afterwards: plenty of volume for many
+        -- layers, but no time has passed, so nothing may pop.
+        let (ts2, burst) = consumePoolLayers pt origin 100.05
+                               ts1 { tsPendingVolume = 20 * ptMinVolume pt }
+        burst `shouldBe` []
+        tsPendingVolume ts2 `shouldSatisfy` (\v → abs (v - 20 * ptMinVolume pt) < 1e-6)
+        -- ...and exactly one lands once a FULL fresh cadence has passed.
+        let (_, next) = consumePoolLayers pt origin (100 + ptMinCadence pt) ts1
+                            { tsPendingVolume = 20 * ptMinVolume pt }
+        length next `shouldBe` 1
+
+    it "a heavy bleed pools FASTER and HEAVIER than a trickle over the same \
+       \dwell (#883 requirement 4)" $ do
+        let pt      = defaultPoolThresholds
+            -- Same 15 s of standing still (short of the layer bound for
+            -- BOTH, so this compares rates rather than saturation), same
+            -- tick size; only the per-tick external loss differs by 20x.
+            trickle = dwell pt 0.0004 150 0.1
+            heavy   = dwell pt 0.008  150 0.1
+        length (snd heavy) `shouldSatisfy` (> length (snd trickle))
+        length (snd trickle) `shouldSatisfy` (> 0)
+        meanVolume (snd heavy) `shouldSatisfy` (> meanVolume (snd trickle))
+
+poolBoundSpec ∷ Spec
+poolBoundSpec = describe "Blood.Pool — the per-cluster layer bound (#883 requirement 3)" $ do
+
+    it "saturates at EXACTLY ptMaxLayers and then adds nothing more, however \
+       \long the unit keeps bleeding in place" $ do
+        let pt = defaultPoolThresholds
+            -- Far more time and blood than the bound could ever spend.
+            (tsSat, ls) = dwell pt 0.05 2000 0.5
+        length ls `shouldBe` ptMaxLayers pt
+        tsClusterLayers tsSat `shouldBe` ptMaxLayers pt
+        poolAtBound pt tsSat `shouldBe` True
+        -- Indices are the cluster's own 0..n-1, never restarted.
+        map ploIndex ls `shouldBe` [0 .. ptMaxLayers pt - 1]
+
+    it "at the bound the pending blood stays BANKED and the gates stay put \
+       \— no discard, and no catch-up burst when movement resumes \
+       \(#883 spec addition)" $ do
+        let pt = defaultPoolThresholds
+            tp = defaultTrailThresholds
+            (tsSat, _) = dwell pt 0.05 400 0.5
+            -- Keep bleeding in place well past saturation.
+            tsMore = tsSat { tsPendingVolume = tsPendingVolume tsSat + 2.0 }
+            (tsAfter, more) = consumePoolLayers pt origin 100000 tsMore
+        more `shouldBe` []
+        tsPendingVolume tsAfter `shouldBe` tsPendingVolume tsMore
+        tsDistSinceMark tsAfter `shouldBe` tsDistSinceMark tsMore
+        tsLastMarkAt tsAfter    `shouldBe` tsLastMarkAt tsMore
+        -- Resuming movement: the FIRST step still has to clear the
+        -- trail's own distance gate — a tiny step pops nothing even
+        -- though a huge volume and a huge elapsed time are banked.
+        let (_, popped) = consumeTrailMarks tp 0.05 0.05 100000.05 tsAfter
+        popped `shouldBe` []
+        -- And once the distance gate IS cleared, it is ONE mark, not a
+        -- burst proportional to the banked volume.
+        let (_, popped') = consumeTrailMarks tp (ttMinDistance tp) 0.05
+                                              100000.05 tsAfter
+        length popped' `shouldBe` 1
+
+    it "leaving the cluster radius grants a fresh budget — a second dwell \
+       \elsewhere pools again (the bound is per ACTIVE cluster)" $ do
+        let pt = defaultPoolThresholds
+            (tsSat, first) = dwell pt 0.05 400 0.5
+            -- Walk clean out of the radius, then stand still again.
+            (mode, tsMoved) =
+                classifyOngoing pt (100, 100) tsSat { tsClusterAnchor = Just (0, 0) }
+            (_, second) = dwellFrom pt tsMoved 200000 0.05 400 0.5
+        mode `shouldBe` ModeTravel
+        length first  `shouldBe` ptMaxLayers pt
+        length second `shouldBe` ptMaxLayers pt
+
+    it "the layer count is never re-derived from the decal store, so a \
+       \global FIFO eviction cannot reopen the budget" $ do
+        -- Structural: consumePoolLayers only ever reads/writes
+        -- tsClusterLayers, so an emptied store leaves it untouched.
+        let pt = defaultPoolThresholds
+            (tsSat, _) = dwell pt 0.05 400 0.5
+        tsClusterLayers tsSat `shouldBe` ptMaxLayers pt
+        snd (consumePoolLayers pt origin 1e6 tsSat { tsPendingVolume = 5 }) `shouldBe` []
+
+poolPartitionInvarianceSpec ∷ Spec
+poolPartitionInvarianceSpec =
+  describe "Blood.Pool.consumePoolLayers — timestep-partition invariance" $ do
+
+    it "an evenly-divisible dwell splits into the SAME layers/volume \
+       \regardless of tick count" $
+        checkPoolPartitionInvariance 8 0.4 80
+
+    it "an UNEVENLY-divisible dwell still matches within the documented \
+       \one-layer tolerance" $
+        checkPoolPartitionInvariance 6.4 0.37 37
+
+    it "a VOLUME-limited dwell (time alone would allow more layers) matches" $
+        -- 10 cadence windows' worth of time but only ~4 layers' worth of
+        -- blood: the volume floor, not the clock, sets the count.
+        checkPoolPartitionInvariance 10 (defaultPoolVolume * 4) 40
+
+    it "walk-then-stop-then-walk conserves every drop across the seam \
+       \(#883 requirement 5)" $ do
+        let pt = defaultPoolThresholds
+            tp = defaultTrailThresholds
+            totalVol = 0.9 ∷ Float
+            -- Leg 1: travelling — 3 whole distance/cadence gates.
+            ts0 = emptyTrailState { tsPendingVolume = totalVol / 3 }
+            (ts1, walked) = consumeTrailMarks tp (3 * ttMinDistance tp)
+                                (3 * ttMinCadence tp) (3 * ttMinCadence tp) ts0
+            -- Leg 2: stationary — the same accumulator, now pooling.
+            -- 200 ticks x 0.05 s = 10 s of standing still, over which
+            -- the wound tick credits the SAME per-leg share of blood.
+            (ts2, pooled) = dwellFrom pt ts1 (3 * ttMinCadence tp) 0.05 200
+                                (totalVol / 3 / 200)
+            -- Leg 3: moving again — the trail picks up where it left off.
+            ts2' = ts2 { tsPendingVolume = tsPendingVolume ts2 + totalVol / 3 }
+            (ts3, walked') = consumeTrailMarks tp (3 * ttMinDistance tp)
+                                (3 * ttMinCadence tp)
+                                (tsLastMarkAt ts2' + 3 * ttMinCadence tp) ts2'
+            emitted = sum (map tmoVolume walked) + sum (map ploVolume pooled)
+                    + sum (map tmoVolume walked')
+        walked  `shouldSatisfy` (not . null)
+        pooled  `shouldSatisfy` (not . null)
+        walked' `shouldSatisfy` (not . null)
+        (emitted + tsPendingVolume ts3) `shouldSatisfy` (\v → abs (v - totalVol) < 1e-3)
+
+poolPlacementSpec ∷ Spec
+poolPlacementSpec = describe "Blood.Pool.poolLayerOffset — placement" $ do
+
+    it "every layer lands within ptJitterRadius of the anchor" $
+        mapM_ (\(s, i) → magnitude (poolLayerOffset defaultPoolThresholds s i)
+                  `shouldSatisfy` (≤ ptJitterRadius defaultPoolThresholds + 1e-5))
+              [ (s, i) | s ← [0, 1, 7, 4242], i ← [0 .. 40] ]
+
+    it "is deterministic — the same (seed, index) always places the same layer" $
+        poolLayerOffset defaultPoolThresholds 99 4
+            `shouldBe` poolLayerOffset defaultPoolThresholds 99 4
+
+    it "successive layers never land on top of each other (overlapping, \
+       \not stacked)" $ do
+        let pt = defaultPoolThresholds
+            pts = [ poolLayerOffset pt 5 i | i ← [0 .. ptMaxLayers pt - 1] ]
+        length (nub pts) `shouldBe` length pts
+
+    it "two adjacent bleeders' clusters are not in lockstep (the seed \
+       \rotates the spiral) — #883 requirement 8" $
+        poolLayerOffset defaultPoolThresholds 0 3
+            `shouldNotBe` poolLayerOffset defaultPoolThresholds 90 3
+
+poolTextureMappingSpec ∷ Spec
+poolTextureMappingSpec = describe "Blood.Pool volume -> texture-request mapping" $ do
+
+    it "stays within the pool/drops vocabulary (never smear/spatter/streak)" $
+        mapM_ (\v → poolStyleFor v `shouldSatisfy` (`elem` [StylePool, StyleDrops]))
+              [0, 0.001, 0.01, 0.05, 0.1, 0.3, 0.4, 1.0, 5.0]
+
+    it "footprint is ALWAYS small — a pool grows by layering, never by one \
+       \bigger mark (the immutable-record decision)" $
+        mapM_ (\v → pbFootprint (poolBloodForVolume v) `shouldBe` FootprintSmall)
+              [0, 0.01, 0.05, 0.4, 5.0]
+
+    it "severity and opacity never get lighter as a layer's volume grows" $ do
+        let vols = [0, 0.001, 0.01, 0.05, 0.15, 0.4, 1.0]
+            sevs = map (pbSeverity . poolBloodForVolume) vols
+            opas = map (pbOpacity  . poolBloodForVolume) vols
+        sevs `shouldBe` sort sevs
+        opas `shouldBe` sort opas
+
+    it "the documented travel speed above which a unit never pools follows \
+       \from the radius and cadence" $
+        poolTravelSpeed defaultPoolThresholds `shouldSatisfy`
+            (\s → abs (s - ptClusterRadius defaultPoolThresholds
+                         / realToFrac (ptMinCadence defaultPoolThresholds)) < 1e-6)
+
+poolImmutabilitySpec ∷ Spec
+poolImmutabilitySpec =
+  describe "Blood.Pool growth is strictly ADDITIVE (#883 requirement 2 / \
+           \acceptance (g))" $
+    it "layering never mutates an existing BloodDecal — pre-existing records \
+       \compare EQUAL field-for-field afterwards, only new ids appear" $ do
+        env ← initEnv
+        ws  ← emptyWorldState
+        writeIORef (worldManagerRef env) (WorldManager [(pageA, ws)] [pageA])
+        now ← readIORef (gameTimeRef env)
+        let wsc = toWorldSimCapability env
+            pt  = defaultPoolThresholds
+            layer i = let (dx, dy) = poolLayerOffset pt 3 i
+                      in spawnPoolLayer wsc pageA (10 + dx) (10 + dy) 0 "slash"
+                             0.06 0 (3 + i) (Just (UnitId 1)) now
+        mapM_ layer [0 .. 2]
+        before ← allDecals . bstDecals <$> readIORef (wsBloodStoreRef ws)
+        length before `shouldBe` 3
+        mapM_ layer [3 .. 6]
+        after ← allDecals . bstDecals <$> readIORef (wsBloodStoreRef ws)
+        length after `shouldBe` 7
+        -- Whole-record equality (derived Eq on BloodDecal covers every
+        -- field, including the ones blood.listDecals cannot expose) for
+        -- each pre-existing id, and no id was reused.
+        let byId = HM.fromList [ (bdeId d, d) | d ← after ]
+        mapM_ (\d → HM.lookup (bdeId d) byId `shouldBe` Just d) before
+        length (nub (map bdeId after)) `shouldBe` 7
+
+-- ----- #883 shared helpers -----
+
+-- | 'ptMinVolume' of the defaults, as a plain value so test names can
+--   talk about "four layers' worth of blood" without repeating the
+--   record accessor.
+defaultPoolVolume ∷ Float
+defaultPoolVolume = ptMinVolume defaultPoolThresholds
+
+-- | The unit position handed to 'consumePoolLayers' in the cases that
+--   are about cadence/volume/bound math rather than placement.
+origin ∷ (Float, Float)
+origin = (0, 0)
+
+magnitude ∷ (Float, Float) → Float
+magnitude (x, y) = sqrt (x * x + y * y)
+
+meanVolume ∷ [PoolLayerOut] → Float
+meanVolume [] = 0
+meanVolume ls = sum (map ploVolume ls) / fromIntegral (length ls)
+
+-- | Simulate a unit standing still and bleeding: @ticks@ ticks of
+--   @dt@ seconds each, crediting @volPerTick@ litres of external loss
+--   per tick (exactly what "Combat.Wounds.Tick" does), from a fresh
+--   accumulator at game time 0.
+dwell ∷ PoolThresholds → Float → Int → Double → (TrailState, [PoolLayerOut])
+dwell pt volPerTick ticks dt = dwellFrom pt emptyTrailState 0 dt ticks volPerTick
+
+-- | 'dwell' from an arbitrary starting accumulator and clock — used to
+--   test a SECOND dwell after the unit walked away, and the pooling leg
+--   of a walk/stop/walk journey.
+dwellFrom
+    ∷ PoolThresholds → TrailState → Double → Double → Int → Float
+    → (TrailState, [PoolLayerOut])
+dwellFrom pt ts0 clock0 dt ticks volPerTick = go ts0 clock0 [] ticks
+  where
+    go ts _     acc 0 = (ts, acc)
+    go ts clock acc k =
+        let clock' = clock + dt
+            ts1 = ts { tsPendingVolume = tsPendingVolume ts + volPerTick }
+            (ts2, popped) = consumePoolLayers pt origin clock' ts1
+        in go ts2 clock' (acc ++ popped) (k - 1 ∷ Int)
+
+-- | The pool's answer to 'checkPartitionInvariance': the same dwell
+--   (@cadenceGates@ multiples of 'ptMinCadence') and the same external
+--   loss budget, delivered as ONE big update vs @steps@ small ones,
+--   must converge on the same layer count and conserve volume exactly
+--   in both — layer density must not depend on tick size (#883
+--   requirement 7).
+checkPoolPartitionInvariance ∷ Double → Float → Int → Expectation
+checkPoolPartitionInvariance cadenceGates totalVol steps = do
+    let pt = defaultPoolThresholds
+        totalTime = cadenceGates * ptMinCadence pt
+        (bigFinal, bigLayers) =
+            consumePoolLayers pt origin totalTime emptyTrailState { tsPendingVolume = totalVol }
+        (smallFinal, smallLayers) =
+            dwellFrom pt emptyTrailState 0 (totalTime / fromIntegral steps)
+                      steps (totalVol / fromIntegral steps)
+        conserved final ls = sum (map ploVolume ls) + tsPendingVolume final
+    conserved bigFinal   bigLayers   `shouldSatisfy` (\v → abs (v - totalVol) < 1e-4)
+    conserved smallFinal smallLayers `shouldSatisfy` (\v → abs (v - totalVol) < 1e-3)
+    abs (length smallLayers - length bigLayers) `shouldSatisfy` (≤ 1)

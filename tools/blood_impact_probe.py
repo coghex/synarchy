@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
 """Headless probe for issue #607: impact blood from fresh wounds.
 
-Boots headless, spawns one acolyte on a flat arena, and drives the
-debug `unit.injure(...)` path (Engine.Scripting.Lua.API.Units) end to
-end against the blood.* debug surface (#604/#606) to verify the
-wound-kind/severity -> impact-blood mapping (Blood.Impact).
+Boots headless, spawns a FRESH acolyte per case on a flat arena, and
+drives the debug `unit.injure(...)` path
+(Engine.Scripting.Lua.API.Units) end to end against the blood.* debug
+surface (#604/#606) to verify the wound-kind/severity -> impact-blood
+mapping (Blood.Impact).
+
+One unit per case, destroyed afterwards, because every case's exact
+decal-count assertion ("exactly 1", "none") is about the ONE-SHOT
+impact mark: since #883 a unit standing still with an externally
+bleeding wound also grows a local pool (Blood.Pool), so a unit reused
+across cases would keep accumulating wounds and start layering pool
+marks into a later case's count. A brand-new unit's accumulator is
+stamped at its first wound tick and cannot emit its first layer for
+another Blood.Pool.ptMinCadence seconds — far longer than the couple
+of console round-trips between the injure and the count.
 
 Checks:
   1. `stab` creates pool/drop-style blood near the unit.
@@ -95,10 +106,23 @@ def style_of(decal: dict) -> str:
     return tex["style"]
 
 
-def expect_no_blood(uid: int, kind: str, sev: float, label: str) -> None:
+def spawn_fresh() -> int:
+    """A brand-new unit per case (see the module docstring) — never
+    reused, so no prior case's ongoing bleed can layer a Blood.Pool
+    mark into this case's exact decal count."""
+    return spawn_acolyte(PORT, 10, 10, clear_water=False)
+
+
+def destroy(uid: int) -> None:
+    send(PORT, f"unit.destroy({uid}); return 'ok'", expect_result=False)
+
+
+def expect_no_blood(kind: str, sev: float, label: str) -> None:
     reset_blood()
+    uid = spawn_fresh()
     injure(uid, "torso", kind, sev)
     got = decals()
+    destroy(uid)
     if got:
         print(f"FAIL: {label} ({kind} sev={sev}) unexpectedly created "
               f"blood: {got!r}")
@@ -106,11 +130,13 @@ def expect_no_blood(uid: int, kind: str, sev: float, label: str) -> None:
     print(f"PASS: {label} ({kind} sev={sev}) created no blood")
 
 
-def expect_blood(uid: int, kind: str, sev: float, label: str,
+def expect_blood(kind: str, sev: float, label: str,
                   styles: tuple[str, ...] | None = None) -> dict:
     reset_blood()
+    uid = spawn_fresh()
     injure(uid, "torso", kind, sev)
     got = decals()
+    destroy(uid)
     if len(got) != 1:
         print(f"FAIL: {label} ({kind} sev={sev}) expected exactly 1 "
               f"decal, got {len(got)}: {got!r}")
@@ -141,12 +167,11 @@ def main() -> int:
     try:
         bootstrap_defs(PORT)
         init_arena(PORT)
-        uid = spawn_acolyte(PORT, 10, 10, clear_water=False)
 
         # --- 1/2. stab: pool/drops style, scales with severity --------
-        lo = expect_blood(uid, "stab", 0.1, "low-severity stab",
+        lo = expect_blood("stab", 0.1, "low-severity stab",
                            styles=("pool", "drops"))
-        hi = expect_blood(uid, "stab", 0.9, "high-severity stab",
+        hi = expect_blood("stab", 0.9, "high-severity stab",
                            styles=("pool", "drops"))
         if not (hi["opacity"] > lo["opacity"]):
             print(f"FAIL: high-severity stab opacity ({hi['opacity']}) is "
@@ -156,26 +181,26 @@ def main() -> int:
               f"stronger than low-severity stab (opacity={lo['opacity']:.3f})")
 
         # --- 3. slash: spatter/streak style -----------------------------
-        expect_blood(uid, "slash", 0.5, "slash", styles=("spatter", "streak"))
+        expect_blood("slash", 0.5, "slash", styles=("spatter", "streak"))
 
         # --- 4/5. ordinary blunt-family + fracture: no blood ------------
-        expect_no_blood(uid, "blunt", 0.5, "ordinary blunt")
-        expect_no_blood(uid, "blunt", 0.84, "REGRESSION: bashed/slammed "
+        expect_no_blood("blunt", 0.5, "ordinary blunt")
+        expect_no_blood("blunt", 0.84, "REGRESSION: bashed/slammed "
                          "blunt (just below the crushing/pulverizing/"
                          "pulping tier)")
-        expect_no_blood(uid, "fracture", 0.5, "ordinary fracture")
-        expect_no_blood(uid, "concussion", 0.5, "ordinary concussion")
+        expect_no_blood("fracture", 0.5, "ordinary fracture")
+        expect_no_blood("concussion", 0.5, "ordinary concussion")
 
         # --- 6. catastrophic blunt-family trauma: blood -----------------
-        expect_blood(uid, "blunt", 0.9, "crushing/pulverizing/pulping blunt")
-        expect_blood(uid, "fracture", 1.0, "destruction-level (crushed "
+        expect_blood("blunt", 0.9, "crushing/pulverizing/pulping blunt")
+        expect_blood("fracture", 1.0, "destruction-level (crushed "
                      "skull/ribcage) fracture")
-        expect_blood(uid, "concussion", 0.9, "pulverized-brain-level "
+        expect_blood("concussion", 0.9, "pulverized-brain-level "
                      "concussion")
 
         # --- 7. arterial/severed: always high-volume --------------------
         for kind in ("arterial", "severed"):
-            d = expect_blood(uid, kind, 0.05, f"low-nominal-severity {kind}")
+            d = expect_blood(kind, 0.05, f"low-nominal-severity {kind}")
             if d["severity"] == "minor":
                 print(f"FAIL: {kind} at low nominal severity still reads "
                       f"'minor' — expected a high-volume floor")
@@ -184,7 +209,7 @@ def main() -> int:
                   f"(never 'minor')")
 
         # --- 8. internal: no direct blood, even at max severity ---------
-        expect_no_blood(uid, "internal", 1.0, "internal (max severity)")
+        expect_no_blood("internal", 1.0, "internal (max severity)")
 
         # --- 9. clearing between cases leaves no stale decals -----------
         # Already exercised by every reset_blood() call above (each
