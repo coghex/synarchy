@@ -9,6 +9,8 @@ module Engine.Scripting.Lua.API.Units.Cargo
     where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
@@ -18,7 +20,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Unit.Types
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..), BuildingManager(..))
@@ -64,7 +66,7 @@ unitTransferItemToBuildingFn env = do
                     return 1
                 Just (item, ix) → do
                     delivered ← Lua.liftIO $
-                        atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                        atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                             case HM.lookup bid (bmInstances bm) of
                                 Nothing → (bm, False)
                                 Just inst →
@@ -192,7 +194,7 @@ unitDepositToCargoFn env = do
             -- or stocked kit can be kilograms heavier than its def mean,
             -- so checking idWeight here would let it overfill the cargo.
             okFits ← Lua.liftIO $ do
-                bm      ← readIORef (buildingManagerRef env)
+                bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ fromMaybe False $ do
@@ -227,7 +229,7 @@ unitDepositToCargoFn env = do
                         return 1
                     Just (item, ix) → do
                         ok ← Lua.liftIO $
-                            atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                            atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                                 case HM.lookup bid (bmInstances bm) of
                                     Nothing → (bm, False)
                                     Just inst →
@@ -291,7 +293,7 @@ unitWithdrawFromCargoFn env = do
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
-            mItem ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            mItem ← Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
                     Just inst →
@@ -324,7 +326,7 @@ unitWithdrawFromCargoFn env = do
                         -- the building's storage at its ORIGINAL index
                         -- (all-or-nothing; storage order is visible).
                         restored ← Lua.liftIO $
-                            atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                            atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                                 case HM.lookup bid (bmInstances bm) of
                                     Nothing → (bm, False)
                                     Just inst →

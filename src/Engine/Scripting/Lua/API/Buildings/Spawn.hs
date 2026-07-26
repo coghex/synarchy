@@ -9,13 +9,15 @@ module Engine.Scripting.Lua.API.Buildings.Spawn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
 import Building.Types
@@ -52,7 +54,7 @@ buildingSpawnFn env = do
                 gx      = fromIntegral x
                 gy      = fromIntegral y
             mBid ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 mTarget ← case pageArg of
                     Just pidBS → do
                         let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
@@ -74,10 +76,10 @@ buildingSpawnFn env = do
                             Placeable → do
                                 let gz = floorZAt wtd gx gy
                                 bid ← atomicModifyIORef'
-                                        (buildingManagerRef env) $ \bm' →
+                                        (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
                                             let (bid', bm'') = nextBuildingId bm'
                                             in (bm'', bid')
-                                Q.writeQueue (buildingQueue env) $
+                                Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
                                     BuildingSpawn bid defName gx gy gz pid
                                 pure (Just bid)
                     _ → pure Nothing
@@ -101,7 +103,7 @@ buildingDestroyFn env = do
             return 1
         Just n → do
             let bid = BuildingId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (buildingQueue env) $ BuildingDestroy bid
+            Lua.liftIO $ Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $ BuildingDestroy bid
             Lua.pushboolean True
             return 1
 
@@ -121,7 +123,7 @@ buildingCanPlaceAtFn env = do
                 gx      = fromIntegral x
                 gy      = fromIntegral y
             result ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 -- Occupancy is checked only against the ACTIVE world's
                 -- buildings — a building in another world must not block
@@ -178,7 +180,7 @@ buildingRemoteCheckFn env = do
             let defName = TE.decodeUtf8Lenient nameBS
                 gx      = fromIntegral x
                 gy      = fromIntegral y
-            bm ← readIORef (buildingManagerRef env)
+            bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
             mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case (HM.lookup defName (bmDefs bm), mActive) of
                 (Just def, Just (_pid, ws)) → do
@@ -223,7 +225,7 @@ buildingSetGhostFn env = do
                     case mWtd of
                         Just wtd → pure (floorZAt wtd gx gy)
                         Nothing  → pure 0
-                writeIORef (buildingGhostRef env) $ Just BuildingGhost
+                writeIORef (bcBuildingGhostRef (toBuildingCapability env)) $ Just BuildingGhost
                     { bgDefName = name
                     , bgGridX   = gx
                     , bgGridY   = gy
@@ -238,7 +240,7 @@ buildingSetGhostFn env = do
 
 buildingClearGhostFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingClearGhostFn env = do
-    Lua.liftIO $ writeIORef (buildingGhostRef env) Nothing
+    Lua.liftIO $ writeIORef (bcBuildingGhostRef (toBuildingCapability env)) Nothing
     Lua.pushboolean True
     return 1
 

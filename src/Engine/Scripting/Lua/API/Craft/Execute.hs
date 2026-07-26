@@ -12,6 +12,8 @@ module Engine.Scripting.Lua.API.Craft.Execute
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
@@ -22,7 +24,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Engine.Core.State (EngineEnv, freshItemInstanceId)
 import Craft.Bills (BillId(..))
 import Craft.Types
 import Craft.Execute (consumeIngredients, craftQuality, applyMentalQuality)
@@ -105,7 +107,7 @@ validateStation ∷ EngineEnv → Maybe BillId → UnitId → Text → BuildingI
                 → IO (Either Text ())
 validateStation env mBillId uid rid bid = do
     rm      ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
-    bm      ← readIORef (buildingManagerRef env)
+    bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- #590: power is job-dependent — a recipe with no power_draw (the

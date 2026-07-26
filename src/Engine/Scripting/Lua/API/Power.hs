@@ -27,6 +27,8 @@ module Engine.Scripting.Lua.API.Power
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
@@ -38,7 +40,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import World.Time.Types (worldTimeToSunAngle)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
@@ -139,7 +141,7 @@ placeNodeOn env ws pid defName uid gx gy role param = do
     case mPopped of
         Nothing → pure (Left ("unit has no " <> defName))
         Just (item, ix) → do
-            bm  ← readIORef (buildingManagerRef env)
+            bm  ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
             wtd ← readIORef (wsTilesRef ws)
             case HM.lookup defName (bmDefs bm) of
                 Nothing → do
@@ -160,10 +162,10 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                         Placeable → do
                             let gz = floorZAt wtd gx gy
                             bid ← atomicModifyIORef'
-                                    (buildingManagerRef env) $ \bm' →
+                                    (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
                                         let (bid', bm'') = nextBuildingId bm'
                                         in (bm'', bid')
-                            Q.writeQueue (buildingQueue env) $
+                            Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
                                 BuildingSpawn bid defName gx gy gz pid
                             nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
                                 addPowerNode bid role param
@@ -318,7 +320,7 @@ activeNetworkSnapshots env = do
             nodes ← readIORef (wsPowerNodesRef ws)
             wt    ← readIORef (wsTimeRef ws)
             td    ← readIORef (wsTilesRef ws)
-            bm    ← readIORef (buildingManagerRef env)
+            bm    ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
             now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             worldSize ← pageWorldSize ws
             let sunAngle   = worldTimeToSunAngle wt
@@ -342,7 +344,7 @@ activeNetworkSnapshots env = do
 --   what its recipes demand.
 isBuildingPowered ∷ EngineEnv → BuildingId → IO Bool
 isBuildingPowered env bid = do
-    bm ← readIORef (buildingManagerRef env)
+    bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     case HM.lookup bid (bmInstances bm) of
         Nothing → pure False
         Just inst → case HM.lookup (biDefName inst) (bmDefs bm) of
@@ -397,7 +399,7 @@ isRecipePoweredAt ∷ EngineEnv → Maybe BillId → BuildingId → Float → IO
 isRecipePoweredAt env mBillId bid drawW
     | drawW ≤ 0 = pure True
     | otherwise = do
-        bm ← readIORef (buildingManagerRef env)
+        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         case HM.lookup bid (bmInstances bm) of
             Nothing → pure False
             Just inst → do

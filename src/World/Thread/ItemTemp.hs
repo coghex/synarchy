@@ -22,13 +22,15 @@ module World.Thread.ItemTemp
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Building.Types (BuildingInstance(..), BuildingManager(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Temperature (coolItem, hasTrackedTemp)
@@ -101,9 +103,9 @@ tickUnitItems env pageId im ambientAt dtGame = do
 tickBuildingItems ∷ EngineEnv → WorldPageId → ItemManager
                   → (Int → Int → Float) → Float → IO ()
 tickBuildingItems env pageId im ambientAt dtGame = do
-    bm ← readIORef (buildingManagerRef env)
+    bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     when (any buildingTracked (bmInstances bm)) $
-        atomicModifyIORef' (buildingManagerRef env) $ \bm' →
+        atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
             (bm' { bmInstances = HM.map coolBuilding (bmInstances bm') }, ())
   where
     buildingTracked bi =
