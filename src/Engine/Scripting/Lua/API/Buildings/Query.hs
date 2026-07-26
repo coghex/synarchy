@@ -10,6 +10,8 @@ module Engine.Scripting.Lua.API.Buildings.Query
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -19,7 +21,7 @@ import qualified HsLua as Lua
 import Data.List (minimumBy)
 import Data.Ord (comparing)
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
 import Engine.Asset.Handle (TextureHandle(..))
@@ -29,7 +31,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 buildingGetStartingBuildingsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetStartingBuildingsFn env = do
     names ← Lua.liftIO $ do
-        bm ← readIORef (buildingManagerRef env)
+        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         pure [ n | (n, d) ← HM.toList (bmDefs bm), bdIsStarting d ]
     Lua.newtable
     forM_ (zip [1..] names) $ \(i, name) → do
@@ -49,7 +51,7 @@ buildingGetInfoFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mInst ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure (HM.lookup bid (bmInstances bm))
             case mInst of
                 Nothing → do
@@ -59,7 +61,7 @@ buildingGetInfoFn env = do
                     -- Resolve def once for display fields that come
                     -- from the def rather than the instance.
                     mDef ← Lua.liftIO $ do
-                        bm ← readIORef (buildingManagerRef env)
+                        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                         pure (HM.lookup (biDefName inst) (bmDefs bm))
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (biDefName inst))
@@ -104,7 +106,7 @@ buildingGetOperationsFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mOps ← Lua.liftIO $ do
-                bm ← readIORef (buildingManagerRef env)
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     def  ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -143,7 +145,7 @@ buildingFindStationFn env = do
                                              fromIntegral y ∷ Int)
                     _                → Nothing
             mBest ← Lua.liftIO $ do
-                bm      ← readIORef (buildingManagerRef env)
+                bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                 mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
                 pure $ case mActive of
@@ -177,7 +179,7 @@ buildingFindStationFn env = do
 buildingListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingListFn env = do
     result ← Lua.liftIO $ do
-        bm ← readIORef (buildingManagerRef env)
+        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         let entries = HM.toList (bmInstances bm)
         if null entries
         then return "No buildings placed"
@@ -201,7 +203,7 @@ buildingListFn env = do
 buildingGetActiveIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetActiveIdsFn env = do
     ids ← Lua.liftIO $ do
-        bm ← readIORef (buildingManagerRef env)
+        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         pure $ case mActive of
             Just (pid, _) → HM.keys (buildingsOnPage pid (bmInstances bm))
@@ -219,7 +221,7 @@ buildingGetActiveIdsFn env = do
 buildingListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingListDefsFn env = do
     defs ← Lua.liftIO $ do
-        bm ← readIORef (buildingManagerRef env)
+        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         return $ HM.elems (bmDefs bm)
     Lua.newtable
     forM_ (zip [1..] defs) $ \(i, d) → do

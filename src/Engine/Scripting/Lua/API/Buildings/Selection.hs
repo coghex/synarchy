@@ -7,12 +7,14 @@ module Engine.Scripting.Lua.API.Buildings.Selection
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Building.Types
 import Building.HitTest (hitTestBuildingAt)
 
@@ -45,7 +47,7 @@ buildingSelectFn env = do
         Just n → do
             let bid = BuildingId (fromIntegral n)
             mActive ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-            Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 -- Only select a building of the ACTIVE world (#76) that
                 -- still exists; otherwise leave the previous selection.
                 case (mActive, HM.lookup bid (bmInstances bm)) of
@@ -58,7 +60,7 @@ buildingSelectFn env = do
 -- | building.deselect() — clear any selection.
 buildingDeselectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingDeselectFn env = do
-    Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+    Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
         (bm { bmSelected = Nothing }, ())
     return 0
 
@@ -67,7 +69,7 @@ buildingDeselectFn env = do
 buildingGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetSelectedFn env = do
     mBid ← Lua.liftIO $ do
-        bm ← readIORef (buildingManagerRef env)
+        bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
         pure $ case bmSelected bm of
             Just bid

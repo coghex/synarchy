@@ -4,6 +4,7 @@ module Unit.Thread
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Building (toBuildingCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -17,7 +18,8 @@ import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.State
+    (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import Unit.Types
@@ -99,7 +101,18 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 -- render-state update pausing for the same brief window
                 -- 'processAllUnitCommands' already skips.
                 unless locked $ publishToRender env utsRef
-                unless locked $ processAllBuildingCommands env
+                -- Buildings have no thread of their own (§2.2 of the
+                -- capability inventory), so their queue is drained
+                -- here — still outside the pause-only movement block,
+                -- still inside the save barrier's `unless locked`
+                -- gate, and still before BOTH acknowledgements below.
+                -- Since #896 the drain takes the narrow building
+                -- capability plus the logger and world/sim view rather
+                -- than this thread's whole environment.
+                unless locked $ processAllBuildingCommands
+                    (loggerRef env)
+                    (toWorldSimCapability env)
+                    (toBuildingCapability env)
                 acknowledgeCurrent (saveBarrierRef env) SaveUnit
                 acknowledgeCurrent (saveBarrierRef env) SaveBuilding
 
