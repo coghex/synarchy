@@ -453,7 +453,7 @@ rather than an `EngineEnv` field (§7.6).
 | `infectionManagerRef` | boot-process | `CombatThread`/`UnitThread` (wound tick selects an infection), `LuaThread` (`API.Infection:90`'s `infection.get`, direct query) | `LuaThread` (`infection.loadYaml`) | `IORef InfectionManager` | `emptyInfectionManager` (`src/Engine/Core/Init.hs:245`) | None | — |
 | `recipeManagerRef` | boot-process | `LuaThread` (`craft.*`/`repair.*` API — the craft-bill AI itself is Lua code, so it reads this on `LuaThread`, not a Haskell unit thread), `WorldThread` (`World.Thread.Power:55`'s `tickPowerNetworks`, per-tick craft-bill power-draw lookup) | `LuaThread` (`engine.loadRecipeYaml`) | `IORef RecipeManager` | `emptyRecipeManager` (`src/Engine/Core/Init.hs:246`) | None | — |
 | `locationDefsRef` | boot-process | `LuaThread` (`locations.*`, `API.Power`, `API.WorldQuery.Location`, `API.Buildings.Spawn`), `WorldThread` (`World.Render.Zoom.Quads:85`, `World.Thread.Discovery:54`) | `LuaThread` (content load) | `IORef LocationRegistry` | `emptyLocationRegistry` (`src/Engine/Core/Init.hs:247`) | None | — |
-| `lootTableRegistryRef` | boot-process | `LuaThread` (`loot.roll`) | `LuaThread` (content load) | `IORef LootTableRegistry` | `emptyLootTableRegistry` (`src/Engine/Core/Init.hs:248`) | None | — |
+| `lootTableRegistryRef` | boot-process | `LuaThread` (`loot.roll`, `loot.rollFor`) | `LuaThread` (content load) | `IORef LootTableRegistry` | `emptyLootTableRegistry` (`src/Engine/Core/Init.hs:248`) | None | `loot.rollFor` (#948) reads this registry alone — its draw is a pure function of the caller's world-seed/instance/entry/roll context, so unlike `loot.roll` it consumes no `statRNGRef`. |
 
 ### `ui-hud-events`
 
