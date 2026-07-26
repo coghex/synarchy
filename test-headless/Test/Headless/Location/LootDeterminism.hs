@@ -6,30 +6,48 @@
 --   @contents@ list, and the roll number — instead of the shared,
 --   entropy-seeded stat RNG the one-argument @loot.roll@ still uses.
 --
---   The fixed vectors below PIN that mapping. They are a deliberate
---   fixture, not a derivation: a change to the mixing in
---   'LootTable.Roll', to the weighted walk, or to @ruin_common@'s
---   entries/weights is supposed to fail here and require an explicit
---   update, which is what stops the per-location reward mapping #921
---   balances against from drifting silently between builds.
+--   The fixed vectors below PIN that mapping, and they are computed
+--   from the SHIPPED data/loot_tables/ruin_common.yaml rather than from
+--   a copy of it. Requirement 8 covers loot-table DATA as well as the
+--   selection mapping: if the vectors ran against an in-test replica,
+--   re-weighting the real table would change what real ruins hand out
+--   while every example here still passed. So the live file is decoded
+--   once, checked against an explicit pin ('pinnedRuinCommon'), and then
+--   used for every draw — a change to the mixing, to the weighted walk,
+--   or to the table's entries/weights all fail here and all require a
+--   deliberate fixture update, which is what stops the per-location
+--   reward mapping #921 balances against from drifting silently.
 module Test.Headless.Location.LootDeterminism
     ( spec
     ) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.Yaml as Yaml
+import Engine.Asset.YamlLootTables
+    ( LootTableYamlDef(..), LootTableYamlEntry(..) )
 import LootTable.Types
     ( LootTableDef(..), LootTableEntry(..)
     , emptyLootTableRegistry, registerLootTable, lookupLootTable )
 import LootTable.Roll
     ( LootRollContext(..), lootRollUnit, pickByWeight, rollLootTableFor )
 
--- | The shipped data/loot_tables/ruin_common.yaml, mirrored here so the
---   vectors pin the SELECTION MAPPING rather than the YAML loader. #921
---   owns this table's composition; if it changes there, the vectors
---   below are updated deliberately alongside it.
-ruinCommon ∷ LootTableDef
-ruinCommon = LootTableDef
+-- | The engine's own YAML → registry conversion
+--   ('Engine.Scripting.Lua.API.LootTables.loadLootTableYamlFn'), so the
+--   vectors below are taken against the table the engine would actually
+--   roll, not a re-typed approximation of the file.
+toLootTableDef ∷ LootTableYamlDef → LootTableDef
+toLootTableDef d = LootTableDef
+    { ltdId      = ltydId d
+    , ltdEntries = [ LootTableEntry (ltyeId e) (ltyeWeight e)
+                   | e ← ltydEntries d ]
+    }
+
+-- | The pinned composition of data/loot_tables/ruin_common.yaml. #921
+--   owns this table's contents; when it changes there, this pin AND the
+--   vectors below are updated together, deliberately.
+pinnedRuinCommon ∷ LootTableDef
+pinnedRuinCommon = LootTableDef
     { ltdId = "ruin_common"
     , ltdEntries =
         [ LootTableEntry "rations"        3
@@ -65,6 +83,24 @@ tally def name n =
 
 spec ∷ Spec
 spec = describe "Location loot determinism" $ do
+
+    -- Decoded once, at spec-construction time — the same way
+    -- Test.Headless.Location.Bounds/MapIcons read the shipped
+    -- data/locations/*.yaml. Every draw below runs against THIS def.
+    shipped ← runIO
+        (Yaml.decodeFileEither "data/loot_tables/ruin_common.yaml")
+    let ruinCommon = either (const pinnedRuinCommon) toLootTableDef shipped
+
+    describe "shipped loot-table data" $ do
+        it "decodes data/loot_tables/ruin_common.yaml" $
+            either (\e → expectationFailure (show e)) (const (pure ())) shipped
+
+        -- The guard that makes the vectors bind the real data: re-weight
+        -- or re-order the YAML and this fails by name, alongside the
+        -- vectors themselves.
+        it "still holds exactly the entries and weights the vectors pin" $
+            fmap toLootTableDef shipped
+                `shouldSatisfy` either (const False) (≡ pinnedRuinCommon)
 
     describe "fixed vectors" $ do
         -- ruin_small's own contract: entry 3, two rolls, per instance.
