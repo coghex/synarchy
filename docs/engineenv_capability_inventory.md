@@ -929,7 +929,7 @@ scope, per the issue text).
   | `loggerRef`, `lifecycleRef`, `engineConfig`, `inputThreadActiveRef` | `core-init` | `Engine.Core.Capability.Core` (#889) |
   | `windowSizeRef`, `framebufferSizeRef` | `render-gpu-asset` | `Engine.Core.Capability.RenderView` (#891) — the worker-safe view |
   | `gameTimeRef` | `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` (#893) |
-  | `focusManagerRef`, `uiManagerRef` | `ui-hud-events` | named accessor imports — #897 has yet to build a record |
+  | `focusManagerRef`, `uiManagerRef` | `ui-hud-events` | `Engine.Core.Capability.Ui` (#897) — named accessor imports while E4 was the only one landed, swapped for the record when E7a landed |
   | `actionOutcomeRef` | `units-buildings-combat` | named accessor import — #895's `Engine.Core.Capability.UnitCombat` now exists, but §7.5's explicit-narrow rule deliberately keeps these input-thread readers off a record they would otherwise reach unit rosters and combat queues through |
   | `saveBarrierRef` | `save-load-coordination` | named accessor import — §7.8's own row is empty; its modules are permanent §6.1 exceptions |
 
@@ -940,14 +940,18 @@ scope, per the issue text).
   keep the identical refs and the identical atomicity after this
   migration — the one-atomic-transition discipline §5's `uiManagerRef`
   row records is unchanged, and so is every #745 behavior. This is why
-  E4 did not have to wait for #897, and why #897 does not have to
-  revisit #745 when it lands: it inherits two named accessor imports,
-  not a behavior.
+  E4 did not have to wait for #897, and why #897 did not have to
+  revisit #745 when it landed: it inherited two named accessor imports,
+  not a behavior. #897 (E7a) has since swapped both — in `.Char`,
+  `.Keyboard`, `.Scroll` and `.Mouse.Activation` — for
+  `Engine.Core.Capability.Ui`'s `uicFocusManagerRef`/`uicUiManagerRef`,
+  which alias the identical live containers, so the refs and the
+  atomicity are once again unchanged (§7.7).
 - **Not this capability's:** `Engine.Input.Thread.Mouse` is assigned to
   `ui-hud-events` (§6.2) — its dominant usage is pointer routing
-  through the UI manager — so #897 migrates it, and
-  `Engine.Input.Thread.Dispatch` keeps handing it an opaque `EngineEnv`
-  meanwhile. `Engine.Input.Inject` and `Engine.Input.State` were never
+  through the UI manager — so #897 (E7a) migrated it, and
+  `Engine.Input.Thread.Dispatch` still hands it an opaque `EngineEnv`
+  to project from. `Engine.Input.Inject` and `Engine.Input.State` were never
   full-access consumers of this capability: `Engine.Input.Inject`
   imports `Engine.Core.State` not at all (its API already takes live
   handles explicitly), and `Engine.Input.State` is a §6.2
@@ -1122,17 +1126,21 @@ call sequence over the same containers.
   the mixed-consumer step §7.4 and §7.6 describe. A building field is
   therefore the ONLY thing keeping any of the 14 unrestricted, which is
   what makes #896's scope a clean subtraction rather than a re-audit.
-  Two full-access modules in OTHER §6.2 rows also read one of the ten
-  — `Engine.Input.Thread.Mouse` (`ui-hud-events`, #897 —
-  `actionOutcomeRef`) and `World.Thread.Command.Basic` (the E5b
+  Two modules in OTHER §6.2 rows — both full-access when E6a ran — also
+  read one of the ten: `Engine.Input.Thread.Mouse` (`ui-hud-events`,
+  #897 — `actionOutcomeRef`) and `World.Thread.Command.Basic` (the E5b
   remainder, #894 — `unitQueue`). Those were deliberately left naming
   the field directly, per this issue's own requirement 3 ("no early
   migration is forced on modules assigned elsewhere"): they are not
   half of this issue's a/b pair, so touching them would pull #894/#897
   scope forward without shrinking this row. `Engine.Input.Thread.Mouse`
-  additionally sits exactly at its 500-line #787 module budget, which
-  adopting a record would breach. Each picks the record up when its own
-  child migrates it.
+  additionally sat exactly at its 500-line #787 module budget, leaving
+  no room for another import at the time. #897 (E7a) has since narrowed
+  it — inside that same 500 lines, by compacting its import block — and
+  kept `actionOutcomeRef` an explicit narrow value under this section's
+  own rule rather than adopting `UnitCombatCapability`.
+  `World.Thread.Command.Basic` picks its record up when #894 migrates
+  it.
 - **Cross-capability consumers of OTHER already-landed records:** the
   35 narrowed modules that also read a `content-registries`,
   `render-gpu-asset`, `input-lua-transport` or `world-sim-render-handoff`
