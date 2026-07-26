@@ -12,12 +12,14 @@ module Combat.Resolution.Events
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Data.IORef (atomicModifyIORef')
 import Combat.Types (CombatEvent(..), AttackMode(..), attackModeText)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..))
 import Unit.Command.Types (UnitCommand(..))
@@ -73,7 +75,7 @@ deathEvent gt atk tgt cause part kind = CombatEvent
 
 pushEvent ∷ EngineEnv → CombatEvent → IO ()
 pushEvent env ev =
-    atomicModifyIORef' (combatEventsRef env) $ \buf →
+    atomicModifyIORef' (ucCombatEventsRef (toUnitCombatCapability env)) $ \buf →
         (buf Seq.|> ev, ())
 
 -- | Set a unit to Dead via the engine's UnitKill command path
@@ -82,4 +84,4 @@ pushEvent env ev =
 --   sim-side pose and clears in-flight state.
 setDead ∷ EngineEnv → Word32 → IO ()
 setDead env tgtRaw =
-    Q.writeQueue (unitQueue env) (UnitKill (UnitId tgtRaw))
+    Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) (UnitKill (UnitId tgtRaw))

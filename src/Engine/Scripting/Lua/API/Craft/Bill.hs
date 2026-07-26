@@ -22,6 +22,10 @@ module Engine.Scripting.Lua.API.Craft.Bill
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
@@ -68,7 +72,7 @@ craftAddBillFn env = do
                     if t > 0 then Just (fromIntegral t ∷ Int) else Nothing
             result ← Lua.liftIO $ do
                 mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-                rm    ← readIORef (recipeManagerRef env)
+                rm    ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
                 bm    ← readIORef (buildingManagerRef env)
                 let gate = do
                         (pageId, ws) ← note "no active world" mPage
@@ -238,7 +242,7 @@ craftClaimBillFn env = do
                 Nothing      → return False
                 Just (_, ws) → do
                     now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-                    um  ← readIORef (unitManagerRef env)
+                    um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                     let alive c = HM.member c (umInstances um)
                     atomicModifyIORef' (wsCraftBillsRef ws) $
                         claimBill now (realToFrac tmo) alive

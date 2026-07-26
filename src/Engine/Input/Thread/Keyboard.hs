@@ -23,7 +23,10 @@ import Engine.Core.Log (logDebug, LogCategory(..))
 -- #892 (E4): `luaQueue`/`keyBindingsRef` through the input
 -- capability's worker-safe view, the logger through `core-init`
 -- (#889), and explicit narrow values for the SS7.3 cross-capability
--- surface #897/#895 have yet to give records to. The #745
+-- surface — `focusManagerRef`/`uiManagerRef`, which #897 has yet to
+-- give a record to, and `actionOutcomeRef`, whose record #895 landed
+-- but which SS7.5's explicit-narrow rule deliberately keeps this
+-- input-thread reader off. The #745
 -- control-focus path keeps reading `focusManagerRef` and performing
 -- its `atomicModifyIORef'` validate/traverse transitions on
 -- `uiManagerRef` exactly as before — same refs, same atomicity, no

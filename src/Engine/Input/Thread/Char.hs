@@ -19,8 +19,11 @@ import Engine.Core.Capability.WorldSim
 import Data.IORef (readIORef, atomicModifyIORef')
 -- #892 (E4): the input capability's worker-safe view for `luaQueue`,
 -- plus three explicit narrow values for the SS7.3 cross-capability
--- surface — `focusManagerRef`/`uiManagerRef` (`ui-hud-events`, #897)
--- and `actionOutcomeRef` (`units-buildings-combat`, #895). The
+-- surface — `focusManagerRef`/`uiManagerRef` (`ui-hud-events`, #897,
+-- which still has no record) and `actionOutcomeRef`
+-- (`units-buildings-combat`, whose record #895 landed but which
+-- SS7.5's explicit-narrow rule deliberately keeps this input-thread
+-- reader off — see `Engine.Core.Capability.UnitCombat`). The
 -- `uiManagerRef` access stays the single `atomicModifyIORef'`
 -- validate-and-transition it already was; nothing about #745's focus
 -- behavior changes.

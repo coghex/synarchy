@@ -27,6 +27,10 @@ module Engine.Scripting.Lua.API.Power
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Data.List (find)
@@ -123,7 +127,7 @@ powerPlaceNodeFn env = do
 placeNodeOn ∷ EngineEnv → WorldState → WorldPageId → Text → UnitId → Int → Int
             → PowerRole → Float → IO (Either Text (PowerNodeId, BuildingId))
 placeNodeOn env ws pid defName uid gx gy role param = do
-    mPopped ← atomicModifyIORef' (unitManagerRef env) $ \um →
+    mPopped ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing → (um, Nothing)
             Just u  → case popItemByName defName (uiInventory u) of
@@ -168,7 +172,7 @@ placeNodeOn env ws pid defName uid gx gy role param = do
     -- Splice the popped instance back at its ORIGINAL index — list
     -- order is gameplay/UI-visible (unit.getInventory), so a rejected
     -- placement must leave the unit's inventory exactly as it was.
-    rollback item ix = atomicModifyIORef' (unitManagerRef env) $ \um →
+    rollback item ix = atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing → (um, ())
             Just u  →
@@ -282,7 +286,7 @@ liveConsumersOn ∷ EngineEnv → Maybe BillId → WorldPageId → Double
                → BuildingManager → WorldState
                → IO (HM.HashMap BuildingId ((Int, Int), Float))
 liveConsumersOn env exclude pageId now bm ws = do
-    rm    ← readIORef (recipeManagerRef env)
+    rm    ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
     bills ← readIORef (wsCraftBillsRef ws)
     pure $ combineConsumers (consumersOn pageId now bm)
                 (activeCraftConsumersOn exclude pageId now bm rm bills)
@@ -452,7 +456,7 @@ powerIsStationPoweredForRecipeFn env = do
     billArg ← Lua.tointeger 3
     ok ← case (bidArg, ridArg) of
         (Just b, Just ridBS) → Lua.liftIO $ do
-            rm ← readIORef (recipeManagerRef env)
+            rm ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
             let rid     = TE.decodeUtf8Lenient ridBS
                 drawW   = maybe 0 rdPowerDraw (lookupRecipe rid rm)
                 mBillId = BillId . fromIntegral ⊚ billArg

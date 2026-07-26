@@ -14,11 +14,13 @@ module Combat.Resolution.Wear
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (atomicModifyIORef')
 import Combat.Types (AttackMode(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemManager(..), lookupItemDef)
 import Substance.Types (SubstanceManager, SubstanceDef(..), lookupSubstance)
@@ -65,7 +67,7 @@ weaponWear wsub load sharp cond =
 applyWeaponWear ∷ EngineEnv → LoggerState → ItemManager → SubstanceManager
                 → Word32 → Float → IO ()
 applyWeaponWear env logger im sm atkRaw load = do
-    mBroke ← atomicModifyIORef' (unitManagerRef env) $ \um →
+    mBroke ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup (UnitId atkRaw) (umInstances um) of
             Nothing   → (um, Nothing)
             Just inst → case findWeaponSlot (uiEquipment inst) of
@@ -109,7 +111,7 @@ applyWeaponWear env logger im sm atkRaw load = do
 applyArmorWear ∷ EngineEnv → LoggerState → ItemManager → SubstanceManager
                → Word32 → Text → Float → Float → IO ()
 applyArmorWear env logger im sm tgtRaw partId driver weaponHardness = do
-    broken ← atomicModifyIORef' (unitManagerRef env) $ \um →
+    broken ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup (UnitId tgtRaw) (umInstances um) of
             Nothing   → (um, [])
             Just inst →
@@ -171,7 +173,7 @@ staminaDrainStats mode inst =
 --   miss). See 'staminaDrainStats' for the pure formula.
 applyStaminaDrain ∷ EngineEnv → Word32 → AttackMode → IO ()
 applyStaminaDrain env atkRaw mode =
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         let uid = UnitId atkRaw
         in case HM.lookup uid (umInstances um) of
             Nothing → (um, ())

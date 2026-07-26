@@ -12,13 +12,15 @@ module Unit.Thread.Command.Pose
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Anim (stateKey)
 import Unit.Types
 import Unit.Sim.Types
@@ -103,7 +105,7 @@ handleUnitKillCommand env utsRef uid = do
     -- review). Stamping uiPose here directly closes that race; the
     -- next publishToRender idempotently re-derives the SAME "dead"
     -- string from usPose, so this never fights it.
-    atomicModifyIORef' (unitManagerRef env) $ \um →
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing   → (um, ())
             Just inst → (um { umInstances = HM.insert uid
@@ -166,7 +168,7 @@ handleUnitDrinkCommand env utsRef uid = do
     -- precondition stops us from interrupting another animated state
     -- (Walking moves are easy to interrupt, Collapsed/Reviving are
     -- not, so we just require Idle for simplicity).
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     let duration = case HM.lookup uid (umInstances um) of
             Nothing   → 0
             Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
@@ -204,7 +206,7 @@ handleUnitEatCommand env utsRef uid = do
     -- Same shape as UnitDrink. Plays the "eat" state animation and
     -- auto-reverts to Idle when the timer expires. Nutrition/inventory
     -- changes are applied Lua-side before this command is issued.
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     uts0 ← readIORef utsRef
     let mPose = usPose <$> HM.lookup uid (utsSimStates uts0)
         duration = case (HM.lookup uid (umInstances um), mPose) of
@@ -243,7 +245,7 @@ handleUnitPickupCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → I
 handleUnitPickupCommand env utsRef uid = do
     -- Same shape as UnitDrink. Plays the "pickup" state animation
     -- briefly, then auto-reverts to Idle.
-    um ← readIORef (unitManagerRef env)
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     let duration = case HM.lookup uid (umInstances um) of
             Nothing   → 0
             Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
@@ -283,7 +285,7 @@ handleUnitTransitionToCommand env utsRef uid target stride = do
     -- time and proportionally shortens the duration — used by the AI
     -- when chaining multiple transitions back-to-back.
     let s = max 1 stride
-    um  ← readIORef (unitManagerRef env)
+    um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     uts0 ← readIORef utsRef
     let mCurrentPose = usPose <$> HM.lookup uid (utsSimStates uts0)
         duration = case (HM.lookup uid (umInstances um), mCurrentPose) of

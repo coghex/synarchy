@@ -31,7 +31,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N
 
 ## Batch 1 — `src/Engine/Core/` (swept 2026-07-25)
 
-### CH-1. `EngineM`'s `ε` type parameter is dead weight on ~295 signatures
+### [#931] CH-1. `EngineM`'s `ε` type parameter is dead weight on ~295 signatures
 `Engine.Core.Monad` declares `newtype EngineM ε σ α` but the body hard-wires
 `EngineEnv`:
 
@@ -54,7 +54,7 @@ documents it as "ε = environment tag", which is not true.
 Fix: drop `ε`, or (if it must stay) document it as vestigial. Mechanical but
 wide; good candidate for a single sweeping PR.
 
-### CH-2. `EngineConfig` carries four fields that nothing reads
+### [#932] CH-2. `EngineConfig` carries four fields that nothing reads
 `windowWidth`, `windowHeight`, `enableVSync`, `enableDebug` have **zero** read
 sites in `src/`, `app/`, or `test/`. They are set once in
 `Engine.Core.Defaults.defaultEngineConfig` (800 / 600 / True / CPP-gated) and
@@ -69,7 +69,7 @@ toggle when it is a compile-time constant.
 Fix: delete all four (and the `#ifdef DEVELOPMENT` block that feeds
 `enableDebug`).
 
-### CH-3. Vulkan reports the application name as "Vulkan Device Test"
+### [#933] CH-3. Vulkan reports the application name as "Vulkan Device Test"
 `Engine.Core.Defaults.defaultGraphicsConfig` sets
 `gcAppName = "Vulkan Device Test"`, and `Engine.Graphics.Vulkan.Instance`
 passes it straight to `VkApplicationInfo.applicationName`. The shipped game
@@ -80,7 +80,7 @@ same file correctly uses `"Synarchy"`.
 Also here: `gcWidth`/`gcHeight` are a second hardcoded 800x600 that nothing
 reconciles with `EngineConfig`'s (see CH-2) or `VideoConfig`'s.
 
-### CH-4. `EngineEnv.inputThreadActiveRef` carries `gameTimeRef`'s haddock
+### [#934] CH-4. `EngineEnv.inputThreadActiveRef` carries `gameTimeRef`'s haddock
 `Engine/Core/State.hs:308-322`. Two `-- ^` blocks are stacked on
 `inputThreadActiveRef`; haddock concatenates them, so the rendered docs for
 "has the input thread started" end with:
@@ -91,7 +91,7 @@ reconciles with `EngineConfig`'s (see CH-2) or `VideoConfig`'s.
 That paragraph belongs to `gameTimeRef` (declared four lines earlier at
 `:304`), which is left completely undocumented. A pure doc-motion fix.
 
-### CH-5. Two record fields share one source line in `GraphicsState`
+### [#936] CH-5. Two record fields share one source line in `GraphicsState`
 `Engine/Core/State.hs:456`:
 
 ```haskell

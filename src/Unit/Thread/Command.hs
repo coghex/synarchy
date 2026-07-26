@@ -6,8 +6,10 @@ module Unit.Thread.Command
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Data.IORef (IORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Sim.Types (UnitThreadState)
 import Unit.Command.Types (UnitCommand(..))
 import qualified Engine.Core.Queue as Q
@@ -40,7 +42,7 @@ import Unit.Thread.Command.Pose
 
 processAllUnitCommands ∷ EngineEnv → IORef UnitThreadState → IO ()
 processAllUnitCommands env utsRef = do
-    mCmd ← Q.tryReadQueue (unitQueue env)
+    mCmd ← Q.tryReadQueue (ucUnitQueue (toUnitCombatCapability env))
     case mCmd of
         Just cmd → do
             handleUnitCommand env utsRef cmd

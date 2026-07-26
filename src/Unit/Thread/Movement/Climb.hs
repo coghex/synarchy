@@ -14,10 +14,12 @@ module Unit.Thread.Movement.Climb
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (atomicModifyIORef')
 import qualified System.Random as Random
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types (UnitId(..), UnitInstance(..))
 import Unit.Sim.Types
 import Unit.Thread.Movement.Types
@@ -81,7 +83,7 @@ rollClimbSlips env now statsFor sim = do
             ]
     if null newClimbers
         then return sim
-        else atomicModifyIORef' (statRNGRef env) $ \rng0 →
+        else atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \rng0 →
             let (rng', rolled) = foldl (rollOne now statsFor) (rng0, sim) newClimbers
             in (rng', rolled)
   where

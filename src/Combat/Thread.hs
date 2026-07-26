@@ -17,6 +17,8 @@ module Combat.Thread
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -25,7 +27,8 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.State
+    (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked, saveInProgress)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
@@ -131,7 +134,7 @@ processAllCommands ∷ EngineEnv → IO ()
 processAllCommands env = go
   where
     go = do
-        mCmd ← Q.tryReadQueue (combatQueue env)
+        mCmd ← Q.tryReadQueue (ucCombatQueue (toUnitCombatCapability env))
         case mCmd of
             Nothing  → pure ()
             Just cmd → do

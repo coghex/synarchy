@@ -14,9 +14,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Engine.Core.State (EngineEnv, freshItemInstanceId)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Unit.Command.Types (UnitCommand(..))
@@ -35,7 +35,7 @@ import World.Spoil.Logic (spoilTileOk, spoilStartVertex)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemInstance(..), lookupItemDef)
-import System.Random (randomR)
+import System.Random (StdGen, randomR)
 import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
                          , candidateVertices, promotableTiles
                          , debitPromotedTile, tileCornerVertices)
@@ -62,9 +62,11 @@ import World.Thread.Helpers (unWorldPageId)
 --
 --   No-ops when the tile isn't designated (e.g. two diggers raced and
 --   one finished it) or its chunk isn't loaded.
-handleWorldDigTileCommand ∷ EngineEnv → LoggerState → WorldPageId
+handleWorldDigTileCommand ∷ EngineEnv → IORef StdGen → Q.Queue UnitCommand
+    → LoggerState → WorldPageId
     → Int → Int → Float → Float → Float → Float → Float → IO ()
-handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
+handleWorldDigTileCommand env rngRef unitQ logger pageId gx gy ux uy amount
+                          skill percep = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -139,8 +141,8 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
                                 writeIORef (wsSpoilRef ws) piles'
                                 -- Promote any tile whose corners
                                 -- completed a full level.
-                                promoteFullSpoilTiles env logger pageId
-                                    ws startV
+                                promoteFullSpoilTiles env unitQ logger
+                                    pageId ws startV
                             _ → pure ()
                         -- Chunk-yield accumulator: deterministic, per
                         -- tile, scaled by the CURRENT digger's mining
@@ -158,7 +160,7 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
                                          + drained * rate
                                     n    = floor p ∷ Int
                                 when (n > 0) $
-                                    spawnYieldItems env logger ws
+                                    spawnYieldItems env rngRef logger ws
                                         chunkDef (gx, gy) n
                                 pure (p - fromIntegral n)
                             _ → pure (mdChunkProgress md)
@@ -178,13 +180,13 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
                                     Nothing → pure ()
                                     Just (gemDef, chance) → do
                                         roll ← atomicModifyIORef'
-                                            (statRNGRef env) $ \g →
+                                            rngRef $ \g →
                                             let (v, g') = randomR
                                                     (0, 1 ∷ Float) g
                                             in (g', v)
                                         when (roll < chance) $
-                                            spawnYieldItems env logger ws
-                                                gemDef (gx, gy) 1
+                                            spawnYieldItems env rngRef
+                                                logger ws gemDef (gx, gy) 1
                             atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
                                 (HM.delete (gx, gy) m, ())
                             handleWorldDeleteTileCommand env logger pageId gx gy
@@ -212,9 +214,9 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
 --   few times to keep ≥ 0.15 tiles from existing ground items so
 --   finds lay out as a scatter instead of a stack. Quality/condition
 --   roll from the item def's spec like any other instance.
-spawnYieldItems ∷ EngineEnv → LoggerState → WorldState → Text
+spawnYieldItems ∷ EngineEnv → IORef StdGen → LoggerState → WorldState → Text
                 → (Int, Int) → Int → IO ()
-spawnYieldItems env logger ws defName (gx, gy) n = do
+spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
     -- Dig-yield item defs come through the `content-registries`
     -- capability (#890).
     itemMgr ← readIORef
@@ -225,9 +227,9 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
                 "Dig yield: unknown item def '" <> defName
                   <> "' — dropping " <> T.pack (show n)
         Just iDef → forM_ [1 .. n] $ \_ → do
-            qual ← rollItemSpec (idQualitySpec iDef)   (statRNGRef env)
-            cond ← rollItemSpec (idConditionSpec iDef) (statRNGRef env)
-            wght ← rollItemWeight iDef (statRNGRef env)
+            qual ← rollItemSpec (idQualitySpec iDef)   rngRef
+            cond ← rollItemSpec (idConditionSpec iDef) rngRef
+            wght ← rollItemWeight iDef rngRef
             iid ← freshItemInstanceId env
             let inst = ItemInstance
                     { iiDefName     = defName
@@ -241,14 +243,14 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
                     , iiTemp        = Nothing
                     }
             gis ← readIORef (wsGroundItemsRef ws)
-            (px, py) ← pickScatterPos env gis
+            (px, py) ← pickScatterPos gis
             _ ← atomicModifyIORef' (wsGroundItemsRef ws) $
                     spawnGroundItem inst px py
             pure ()
   where
     -- Up to 6 candidate offsets inside the tile; first one clear of
     -- existing items wins, last candidate is the fallback.
-    pickScatterPos env' gis = go (6 ∷ Int)
+    pickScatterPos gis = go (6 ∷ Int)
       where
         clearOf (px, py) = all (\gi →
             let dx = giX gi - px
@@ -256,9 +258,9 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
             in dx * dx + dy * dy ≥ 0.15 * 0.15)
             (HM.elems (gisItems gis))
         go k = do
-            ox ← atomicModifyIORef' (statRNGRef env') $ \g →
+            ox ← atomicModifyIORef' rngRef $ \g →
                 let (v, g') = randomR (0.15, 0.85 ∷ Float) g in (g', v)
-            oy ← atomicModifyIORef' (statRNGRef env') $ \g →
+            oy ← atomicModifyIORef' rngRef $ \g →
                 let (v, g') = randomR (0.15, 0.85 ∷ Float) g in (g', v)
             let pos = (fromIntegral gx + ox, fromIntegral gy + oy)
             if k ≤ 1 ∨ clearOf pos
@@ -272,9 +274,9 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
 --   never re-fills a corner — one pass per promoted tile is enough,
 --   but promoting one tile can't complete another, so a single sweep
 --   over the candidate set suffices.
-promoteFullSpoilTiles ∷ EngineEnv → LoggerState → WorldPageId
-    → WorldState → (Int, Int) → IO ()
-promoteFullSpoilTiles env logger _pageId ws startV = do
+promoteFullSpoilTiles ∷ EngineEnv → Q.Queue UnitCommand → LoggerState
+    → WorldPageId → WorldState → (Int, Int) → IO ()
+promoteFullSpoilTiles env unitQ logger _pageId ws startV = do
     piles ← readIORef (wsSpoilRef ws)
     _registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let ready = promotableTiles piles (candidateVertices startV)
@@ -308,7 +310,7 @@ promoteFullSpoilTiles env logger _pageId ws startV = do
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Anything standing on the tile rides up.
-                        Q.writeQueue (unitQueue env) (UnitReGround tx ty)
+                        Q.writeQueue unitQ (UnitReGround tx ty)
                         logDebug logger CatWorld $
                             "Spoil promoted to terrain at "
                               <> T.pack (show tx) <> "," <> T.pack (show ty)

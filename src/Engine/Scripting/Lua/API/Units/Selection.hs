@@ -17,6 +17,8 @@ module Engine.Scripting.Lua.API.Units.Selection
     where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
@@ -25,7 +27,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Direction (Direction(..))
 import qualified Unit.Selection as Sel
@@ -165,7 +167,7 @@ unitSetAnimFn env = do
                 name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ do
                 now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
@@ -195,7 +197,7 @@ unitSetAnimOverrideFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
@@ -215,7 +217,7 @@ unitClearAnimOverrideFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             ok ← Lua.liftIO $
-                atomicModifyIORef' (unitManagerRef env) $ \um →
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
@@ -246,7 +248,7 @@ unitSetFacingFn env = do
                     return 1
                 Just dir → do
                     ok ← Lua.liftIO $ atomicModifyIORef'
-                                        (unitManagerRef env) $ \um →
+                                        (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         case HM.lookup uid (umInstances um) of
                             Nothing → (um, False)
                             Just inst →
@@ -305,7 +307,7 @@ unitSetFrozenFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
                 on  = onArg
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst →
@@ -332,7 +334,7 @@ unitSetForceLoopFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
                 on  = onArg
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just inst →

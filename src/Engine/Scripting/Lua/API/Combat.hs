@@ -29,6 +29,8 @@ module Engine.Scripting.Lua.API.Combat
     ) where
 
 import UPrelude
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
@@ -38,7 +40,7 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (IORef, atomicModifyIORef', readIORef)
 import qualified HsLua as Lua
 import Combat.Types (CombatCommand(..), CombatEvent(..), AttackMode(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import qualified Engine.Core.Queue as Q
 
 -- | combat.attack(attackerUid, targetUid [, mode]) → bool
@@ -63,7 +65,7 @@ combatAttackFn env = do
             _                   → 0.0
     case (aArg, tArg) of
         (Just a, Just t) → do
-            Lua.liftIO $ Q.writeQueue (combatQueue env) $
+            Lua.liftIO $ Q.writeQueue (ucCombatQueue (toUnitCombatCapability env)) $
                 CombatAttack (fromIntegral a) (fromIntegral t) mode reachBonus impactSpeed
             Lua.pushboolean True
             return 1
@@ -94,7 +96,7 @@ combatEmitDeathFn env = do
                     , ceTarget   = Just (fromIntegral t)
                     , cePayload  = HM.singleton "cause" cause
                     }
-            Lua.liftIO $ atomicModifyIORef' (combatEventsRef env) $ \buf →
+            Lua.liftIO $ atomicModifyIORef' (ucCombatEventsRef (toUnitCombatCapability env)) $ \buf →
                 (buf Seq.|> ev, ())
             Lua.pushboolean True
             return 1
@@ -115,7 +117,7 @@ combatEmitDeathFn env = do
 -- contents — events emitted by the combat thread during the drain are
 -- preserved for the next call.
 combatDrainEventsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-combatDrainEventsFn env = drainEventStream (combatEventsRef env)
+combatDrainEventsFn env = drainEventStream (ucCombatEventsRef (toUnitCombatCapability env))
 
 -- | Push one CombatEvent as a Lua table onto the stack (shared by the
 --   combat and injury drains — the injury stream reuses the CombatEvent
@@ -158,7 +160,7 @@ drainEventStream ref = do
 -- | injury.drainEvents() → array of event tables (same shape as
 --   combat.drainEvents). Drives the injury-log UI.
 injuryDrainEventsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-injuryDrainEventsFn env = drainEventStream (injuryEventsRef env)
+injuryDrainEventsFn env = drainEventStream (ucInjuryEventsRef (toUnitCombatCapability env))
 
 -- | injury.emit(victimUid, kind [, cause [, part [, woundKind [, severity]]]])
 --
@@ -195,7 +197,7 @@ injuryEmitFn env = do
                     , ceTarget   = Just (fromIntegral v)
                     , cePayload  = payload
                     }
-            Lua.liftIO $ atomicModifyIORef' (injuryEventsRef env) $ \buf →
+            Lua.liftIO $ atomicModifyIORef' (ucInjuryEventsRef (toUnitCombatCapability env)) $ \buf →
                 (buf Seq.|> ev, ())
             Lua.pushboolean True
             return 1
@@ -227,7 +229,7 @@ thoughtEmitFn env = do
                     , ceTarget   = Just (fromIntegral u)
                     , cePayload  = HM.singleton "text" (TE.decodeUtf8Lenient textBS)
                     }
-            Lua.liftIO $ atomicModifyIORef' (thoughtEventsRef env) $ \buf →
+            Lua.liftIO $ atomicModifyIORef' (ucThoughtEventsRef (toUnitCombatCapability env)) $ \buf →
                 (buf Seq.|> ev, ())
             Lua.pushboolean True
             return 1
@@ -236,4 +238,4 @@ thoughtEmitFn env = do
 -- | thought.drainEvents() → array of event tables (same shape as
 --   combat.drainEvents / injury.drainEvents). Drives thought_log.lua.
 thoughtDrainEventsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-thoughtDrainEventsFn env = drainEventStream (thoughtEventsRef env)
+thoughtDrainEventsFn env = drainEventStream (ucThoughtEventsRef (toUnitCombatCapability env))

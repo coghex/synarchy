@@ -481,11 +481,11 @@ rather than an `EngineEnv` field (§7.6).
 ## 6. Full-`EngineEnv` compatibility boundary
 
 **Live since issue #889 (E1, landed); recounted by #890 (E2), #891
-(E3), #893 (E5a) and #892 (E4).** 200 files under `src/`/`app/` import
-`Engine.Core.State` in some form. Of those, 93 have genuine
-unrestricted field-level access:
+(E3), #893 (E5a), #892 (E4) and #895 (E6a).** 201 files under
+`src/`/`app/` import `Engine.Core.State` in some form. Of those, 58
+have genuine unrestricted field-level access:
 `Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 92 files that
+imports nothing) plus 57 files that
 import it either as an explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
@@ -498,11 +498,11 @@ this exact same two-shape definition against `src/`/`app/` on every
 run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 200
+grep -rl "import Engine.Core.State" src app | wc -l                    # 201
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 92 have full access, 108 do not:
+# script logic below; 57 have full access, 144 do not:
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
 #        itself plus its 12 `Register.*` submodules; all import the bare
 #        `EngineEnv` TYPE with no constructor access, and two of them
@@ -566,6 +566,23 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 200
 #        the same LuaThread-only/worker-safe shape §3.1 defines for
 #        render; each imports the bare `EngineEnv` type plus only its
 #        own field accessors, never `EngineEnv(..)`)
+#   1  × `Engine.Core.Capability.UnitCombat` (new by #895 — the
+#        units-and-combat half of the `units-buildings-combat`
+#        projection; bare `EngineEnv` type plus its ten field
+#        accessors, never `EngineEnv(..)`)
+#   35 × the #895-narrowed `units-buildings-combat` modules, all of
+#        which still import `Engine.Core.State` narrowly — every one
+#        needs at least the bare `EngineEnv` type (they still take an
+#        `EngineEnv` and project from it), and several additionally
+#        name accessors of fields whose own capability has yet to
+#        migrate (`loggerRef`, `lifecycleRef`, `saveBarrierRef`) or the
+#        canonical `activeWorldStateFrom`/`activeWorldPageFrom`/
+#        `freshItemInstanceId` helpers. `World.Thread.Command.Edit.Dig`
+#        is the one that names NO field accessor at all: §7.5's
+#        explicit-narrow rule moved its `statRNGRef`/`unitQueue` reads
+#        onto ordinary function parameters supplied by
+#        `World.Thread.Command` (which named the two accessors itself,
+#        staying narrow)
 #   11 × the #892-narrowed `input-lua-transport` modules, all of which
 #        still import `Engine.Core.State` narrowly: `Engine.Input.Callback`
 #        for the `EngineLifecycle(..)` type alone (it holds no `EngineEnv`
@@ -629,7 +646,7 @@ live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 68 remaining full-access modules is individually
+Every one of the 33 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -688,13 +705,13 @@ directory-name guessing:
 | `render-gpu-asset` | *(none — migrated by #891 (E3): all 45 former entries now reach their render fields through `Engine.Core.Capability.Render` (the `MainRender`-only 21-field record) or `Engine.Core.Capability.RenderView` (the worker-safe view that never carries `engineStateRef` — 13 fields when #891 landed, 14 since #893 added `fpsRef`), per §3.1; none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.2 |
 | `input-lua-transport` | *(none — migrated by #892 (E4): all 11 former entries now reach their input fields through `Engine.Core.Capability.Input` (the `LuaThread`-only eight-field record) or `Engine.Core.Capability.InputView` (the worker-safe five-field view that carries neither `inputBarrierNextRef` nor `currentKeyDownRef`), per the §3.1 rule §7.3 applies here; `Engine.Input.Callback` needed no record at all — its API already took the two live handles explicitly, so it merely narrowed its bare import to the `EngineLifecycle` type. None of the 11 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.3 |
 | `world-sim-render-handoff` | `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init` — the E5b remainder, named individually per #893's requirement 2 so nothing is silently dropped between the a/b pair. #893 (E5a) removed this row's other 50 entries; each of the four left still dereferences at least one of the seven coupled render-handoff fields §7.4 lists, and #894 (E5b) migrates them. | §7.4 |
-| `units-buildings-combat` | `Building.Thread.Command`, `Combat.Resolution`, `Combat.Resolution.Events`, `Combat.Resolution.Wear`, `Combat.Thread`, `Combat.Wounds.Tick`, `Engine.Input.State`, `Engine.Scripting.Lua.API.ActionOutcome`, `Engine.Scripting.Lua.API.Buildings.Materials`, `Engine.Scripting.Lua.API.Buildings.Progress`, `Engine.Scripting.Lua.API.Buildings.Query`, `Engine.Scripting.Lua.API.Buildings.Selection`, `Engine.Scripting.Lua.API.Buildings.Spawn`, `Engine.Scripting.Lua.API.Buildings.Yaml`, `Engine.Scripting.Lua.API.Combat`, `Engine.Scripting.Lua.API.Craft.Bill`, `Engine.Scripting.Lua.API.Craft.Execute`, `Engine.Scripting.Lua.API.Equipment.Accessory`, `Engine.Scripting.Lua.API.Equipment.Render`, `Engine.Scripting.Lua.API.Equipment.Slot`, `Engine.Scripting.Lua.API.Forage.Harvest`, `Engine.Scripting.Lua.API.Items.Ground`, `Engine.Scripting.Lua.API.Power`, `Engine.Scripting.Lua.API.Units.Cargo`, `Engine.Scripting.Lua.API.Units.Combat`, `Engine.Scripting.Lua.API.Units.Equipment`, `Engine.Scripting.Lua.API.Units.Inventory`, `Engine.Scripting.Lua.API.Units.List`, `Engine.Scripting.Lua.API.Units.Medical`, `Engine.Scripting.Lua.API.Units.Query`, `Engine.Scripting.Lua.API.Units.Selection`, `Engine.Scripting.Lua.API.Units.Spawn`, `Engine.Scripting.Lua.API.Units.Stats`, `Engine.Scripting.Lua.API.Units.Survival`, `Engine.Scripting.Lua.API.Units.Yaml`, `Unit.Selection`, `Unit.Thread`, `Unit.Thread.Command`, `Unit.Thread.Command.Lifecycle`, `Unit.Thread.Command.Motion`, `Unit.Thread.Command.Pose`, `Unit.Thread.Command.Spawn`, `Unit.Thread.Movement`, `Unit.Thread.Movement.Climb`, `World.Thread.Command.Cursor.Common`, `World.Thread.Command.Edit.Dig`, `World.Thread.Discovery`, `World.Thread.ItemTemp`, `World.Thread.Power` | §7.5 |
+| `units-buildings-combat` | `Building.Thread.Command`, `Engine.Scripting.Lua.API.Buildings.Materials`, `Engine.Scripting.Lua.API.Buildings.Progress`, `Engine.Scripting.Lua.API.Buildings.Query`, `Engine.Scripting.Lua.API.Buildings.Selection`, `Engine.Scripting.Lua.API.Buildings.Spawn`, `Engine.Scripting.Lua.API.Buildings.Yaml`, `Engine.Scripting.Lua.API.Craft.Bill`, `Engine.Scripting.Lua.API.Craft.Execute`, `Engine.Scripting.Lua.API.Power`, `Engine.Scripting.Lua.API.Units.Cargo`, `Unit.Thread`, `World.Thread.ItemTemp`, `World.Thread.Power` — the E6b remainder, named individually per #895's requirement 2 so nothing is silently dropped between the a/b pair. #895 (E6a) removed this row's other 35 entries; thirteen of the fourteen left dereference at least one of the three building fields §7.5 lists, and the fourteenth (Unit.Thread) hands its whole environment to the building-command drain that runs on the unit thread, there being no separate building thread (§2.2). All fourteen already reach every other field of this group through the E6a capability record §7.5 names, so a building field is the only thing keeping any of them here; #896 (E6b) migrates them. | §7.5 |
 | `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
 | `ui-hud-events` | `Engine.Input.Thread.Mouse`, `Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.Focus`, `Engine.Scripting.Lua.API.PlayerEvent`, `Engine.Scripting.Lua.API.UI.Element`, `Engine.Scripting.Lua.API.UI.Focus`, `Engine.Scripting.Lua.API.UI.Hierarchy`, `Engine.Scripting.Lua.API.UI.Page`, `Engine.Scripting.Lua.API.UI.Property`, `Engine.Scripting.Lua.API.UI.TextInput`, `Engine.Scripting.Lua.API.UI.Tooltip`, `Engine.Scripting.Lua.Message.Scene`, `UI.Tooltip.State` | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 0 + 0 + 4 + 49 + 0 + 13 + 0 = 68) match
-93 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 0 + 0 + 4 + 14 + 0 + 13 + 0 = 33) match
+58 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -887,7 +904,7 @@ scope, per the issue text).
   | `windowSizeRef`, `framebufferSizeRef` | `render-gpu-asset` | `Engine.Core.Capability.RenderView` (#891) — the worker-safe view |
   | `gameTimeRef` | `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` (#893) |
   | `focusManagerRef`, `uiManagerRef` | `ui-hud-events` | named accessor imports — #897 has yet to build a record |
-  | `actionOutcomeRef` | `units-buildings-combat` | named accessor import — #895 has yet to build a record |
+  | `actionOutcomeRef` | `units-buildings-combat` | named accessor import — #895's `Engine.Core.Capability.UnitCombat` now exists, but §7.5's explicit-narrow rule deliberately keeps these input-thread readers off a record they would otherwise reach unit rosters and combat queues through |
   | `saveBarrierRef` | `save-load-coordination` | named accessor import — §7.8's own row is empty; its modules are permanent §6.1 exceptions |
 
   On the focus pair specifically: `Engine.Input.Thread.Char` and
@@ -996,24 +1013,120 @@ change, no behaviour change.
   same-shape-swap checks on `worldQueue`/`simQueue` and
   `enginePausedRef`/`gameTimeRef`.
 
-### 7.5 `units-buildings-combat`
+### 7.5 `units-buildings-combat` — **E6a LANDED (#895); E6b (#896) open**
 
 - **Dependencies:** `world-sim-render-handoff` (unit/building state
   routinely cross-references world position/material data — satisfied
   for the world/sim half since #893: those reads already go through
   `WorldSimCapability`, so this group's own migration only has to
   narrow the fields in §5's `units-buildings-combat` table), `core-init`.
-- **Independent migration:** Partial — `statRNGRef` is shared across
-  `UnitThread`/`CombatThread`/`WorldThread`/`LuaThread` (dig-yield
-  rolls), so it either needs its own tiny shared capability or this
-  group's record needs to be importable from `World.Thread.Command.Edit.Dig`
-  too.
-- **Follow-up scope:** One issue per sub-domain is likely cleanest given
-  the size (13 fields, three real consumer families — units, buildings,
-  combat) — e.g. units+combat together (they already share
+- **Independent migration:** Partial, exactly as this entry predicted.
+  The units-and-combat side moved on its own in E6a; the three building
+  fields are the separable part and stay with E6b. `statRNGRef` needed
+  neither a tiny shared capability nor a `UnitCombatCapability` import
+  from `World.Thread.Command.Edit.Dig` — see the explicit-narrow bullet
+  below.
+- **Follow-up scope:** Two child issues, as anticipated — E6a (#895)
+  for units+combat together (they already share
   `unitQueue`/`combatQueue`'s producer/consumer relationship and the
-  documented shutdown-ordering dependency between them), buildings
-  separately (consumed on `UnitThread` but conceptually its own domain).
+  documented shutdown-ordering dependency between them), E6b (#896) for
+  buildings (consumed on `UnitThread` but conceptually its own domain).
+
+**What landed in E6a (#895):**
+`Engine.Core.Capability.UnitCombat` exports `UnitCombatCapability` over
+exactly the ten unit/combat fields (`unitManagerRef`, `unitQueue`,
+`utsRef`, `statRNGRef`, `combatQueue`, `combatEventsRef`,
+`injuryEventsRef`, `thoughtEventsRef`, `actionOutcomeRef`,
+`pathingConfigRef`) plus the total one-way projection
+`toUnitCombatCapability`, following §7.1/#889's convention (same live
+`IORef`s/`Queue`s, never a copy; no import of a consumer). It is a pure
+refactor — no `EngineEnv` field-set change, no behaviour change: unit
+AI dispatch, movement, spawning, combat resolution cadence, wound
+ticks, the four event streams' drain contracts, and the
+combat-before-unit shutdown ordering are all byte-for-byte the same
+call sequence over the same containers.
+
+- **Fully narrowed:** 35 of this row's former 49 §6.2 entries. All 35
+  still import `Engine.Core.State`, but narrowly: every one needs at
+  least the bare `EngineEnv` type (each still takes an `EngineEnv` and
+  projects from it), and several additionally name an accessor of a
+  field whose own capability has yet to migrate (`loggerRef`,
+  `lifecycleRef`, `saveBarrierRef`) or one of the canonical
+  `activeWorldStateFrom`/`activeWorldPageFrom`/`freshItemInstanceId`
+  helpers.
+- **`statRNGRef` stayed shared, via the explicit-narrow rule.** This
+  entry's open question — whether the four-role `statRNGRef` needed its
+  own tiny capability — resolved to "no". A world-side consumer with no
+  other unit/combat business takes the live handle as an ordinary
+  function parameter instead of adopting the record.
+  `World.Thread.Command.Edit.Dig` is the worked example: its
+  `handleWorldDigTileCommand` (and the internal `spawnYieldItems` /
+  `promoteFullSpoilTiles` it drives) now take the `IORef StdGen` and
+  the `Queue UnitCommand` explicitly, supplied by its only caller
+  `World.Thread.Command`, which names those two accessors and stays
+  narrow itself. That is the same shape `Engine.Input.Callback` used in
+  #892 to need no input record at all. The same rule leaves the
+  pre-existing narrow readers of these fields exactly where they were —
+  `Unit.HitTest`/`Unit.LineOfSight`/`Unit.Render`,
+  `Engine.Scripting.Lua.API.Blood`, `API.Register.Craft`/`.Register.Item`,
+  `World.Thread.Command.Cursor.Plant`, `World.Thread.Command.Edit.Terrain`
+  and the three `Engine.Input.Thread.*` `actionOutcomeRef` readers of
+  §7.3 — since none of them holds full access to lose.
+- **Deferred to E6b (#896) — named individually, nothing silently
+  dropped:** `Building.Thread.Command`,
+  `Engine.Scripting.Lua.API.Buildings.Materials`, `.Progress`,
+  `.Query`, `.Selection`, `.Spawn` and `.Yaml`,
+  `Engine.Scripting.Lua.API.Craft.Bill`,
+  `Engine.Scripting.Lua.API.Craft.Execute`,
+  `Engine.Scripting.Lua.API.Power`,
+  `Engine.Scripting.Lua.API.Units.Cargo`, `Unit.Thread`,
+  `World.Thread.ItemTemp` and `World.Thread.Power`. Thirteen of them
+  name `buildingManagerRef`, `buildingQueue` or `buildingGhostRef`
+  directly; the fourteenth, `Unit.Thread`, hands its whole environment
+  to `Building.Thread.Command.processAllBuildingCommands` — there is no
+  separate building thread (§2.2), so the unit thread drains the
+  building command queue on its own OS thread and is a genuinely mixed
+  module until #896. Those 14 keep their §6.2 entry; together, E6a and
+  E6b clear the row completely.
+- **Mixed consumers adopted the record without leaving their row.**
+  Six of the 14 above also touch one of E6a's ten fields
+  (`API.Craft.Bill`, `API.Craft.Execute`, `API.Power`,
+  `API.Units.Cargo`, `Unit.Thread`, `World.Thread.ItemTemp`); every one
+  of those accesses now goes through `UnitCombatCapability`, exactly
+  the mixed-consumer step §7.4 and §7.6 describe. A building field is
+  therefore the ONLY thing keeping any of the 14 unrestricted, which is
+  what makes #896's scope a clean subtraction rather than a re-audit.
+  Two full-access modules in OTHER §6.2 rows also read one of the ten
+  — `Engine.Input.Thread.Mouse` (`ui-hud-events`, #897 —
+  `actionOutcomeRef`) and `World.Thread.Command.Basic` (the E5b
+  remainder, #894 — `unitQueue`). Those were deliberately left naming
+  the field directly, per this issue's own requirement 3 ("no early
+  migration is forced on modules assigned elsewhere"): they are not
+  half of this issue's a/b pair, so touching them would pull #894/#897
+  scope forward without shrinking this row. `Engine.Input.Thread.Mouse`
+  additionally sits exactly at its 500-line #787 module budget, which
+  adopting a record would breach. Each picks the record up when its own
+  child migrates it.
+- **Cross-capability consumers of OTHER already-landed records:** the
+  35 narrowed modules that also read a `content-registries`,
+  `render-gpu-asset`, `input-lua-transport` or `world-sim-render-handoff`
+  field now reach it through that capability's own record
+  (`ContentRegistriesCapability` for the item/equipment/infection/recipe
+  registries, `RenderViewCapability` for `cameraRef`,
+  `InputViewCapability` for `luaQueue`, `WorldSimCapability` for the
+  world/sim fields) rather than a named accessor — the same step E5a
+  took in the other direction.
+- **Enforcement:** the §6 ratchet (`TEMPORARY_CEILING`'s
+  `units-buildings-combat` set shrunk 49 → 14, checked in both
+  directions against the live scan and against §6.2), plus
+  projection-aliasing coverage in `Test.Headless.Capability.UnitCombat`
+  — all ten fields asserted to be the same live container as
+  `EngineEnv`'s, stability across repeated projection (E6a re-projects
+  inline at most call sites), and explicit non-transposition checks on
+  the three identically-typed `IORef (Seq CombatEvent)` streams
+  (`combatEventsRef`/`injuryEventsRef`/`thoughtEventsRef`), on the
+  `unitQueue`/`combatQueue` producer-consumer pair, and on the
+  `unitManagerRef`/`utsRef` pair a load publish swaps together.
 
 ### 7.6 `content-registries` — **LANDED (#890, E2)**
 

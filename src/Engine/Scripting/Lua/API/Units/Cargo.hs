@@ -9,6 +9,10 @@ module Engine.Scripting.Lua.API.Units.Cargo
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -43,7 +47,7 @@ unitTransferItemToBuildingFn env = do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8Lenient nameBS
-            mItem ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            mItem ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, Nothing)
                     Just u →
@@ -81,7 +85,7 @@ unitTransferItemToBuildingFn env = do
                         -- gameplay/UI-visible, so a rollback must leave
                         -- the source unchanged, not move the item.
                         restored ← Lua.liftIO $
-                            atomicModifyIORef' (unitManagerRef env) $ \um →
+                            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                                 case HM.lookup uid (umInstances um) of
                                     Nothing → (um, False)
                                     Just u →
@@ -136,7 +140,7 @@ unitTransferItemToUnitFn env = do
                 toUid   = UnitId (fromIntegral nT)
                 defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case (HM.lookup fromUid (umInstances um),
                       HM.lookup toUid   (umInstances um)) of
                     (Just uF, Just uT) →
@@ -189,8 +193,8 @@ unitDepositToCargoFn env = do
             -- so checking idWeight here would let it overfill the cargo.
             okFits ← Lua.liftIO $ do
                 bm      ← readIORef (buildingManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
-                um      ← readIORef (unitManagerRef env)
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ fromMaybe False $ do
                     inst         ← HM.lookup bid (bmInstances bm)
                     def          ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -205,7 +209,7 @@ unitDepositToCargoFn env = do
                 Lua.pushboolean False
                 return 1
             else do
-                mItem ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                mItem ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
                         Just u →
@@ -239,7 +243,7 @@ unitDepositToCargoFn env = do
                             -- into the unit's inventory at its ORIGINAL
                             -- index (all-or-nothing; order is visible).
                             restored ← Lua.liftIO $
-                                atomicModifyIORef' (unitManagerRef env) $ \um →
+                                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                                     case HM.lookup uid (umInstances um) of
                                         Nothing → (um, False)
                                         Just u →
@@ -305,7 +309,7 @@ unitWithdrawFromCargoFn env = do
                     return 1
                 Just (item, ix) → do
                     ok ← Lua.liftIO $
-                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
                                 Nothing → (um, False)
                                 Just u →
@@ -362,8 +366,8 @@ unitGetCarryingWeightFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mW ← Lua.liftIO $ do
-                um      ← readIORef (unitManagerRef env)
-                itemMgr ← readIORef (itemManagerRef env)
+                um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 let weightOf = itemTotalWeight itemMgr
                 pure $ do
                     u ← HM.lookup uid (umInstances um)
