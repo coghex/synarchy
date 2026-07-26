@@ -366,8 +366,10 @@ data EngineEnv = EngineEnv
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.
-    --   Multi-writer: world, unit, and Lua threads all push via
-    --   'Engine.PlayerEvent.emitEvent'. Read atomically by Lua-side
+    --   An STM TVar, so pushes from any thread are safe; the call
+    --   sites that actually exist today are the world thread and the
+    --   Lua thread, both via 'Engine.PlayerEvent.emitEvent' (no unit-
+    --   or combat-thread emitter exists). Read atomically by Lua-side
     --   queries (e.g. the event-log panel).
   , notificationCfgRef ∷ IORef NotificationCfg
     -- ^ Resolved notification settings keyed by category id. Loaded
@@ -384,11 +386,13 @@ data EngineEnv = EngineEnv
     --   their flags toggled. The settings tab uses this to render
     --   rows in the YAML order rather than HashMap iteration order.
   , popupQueueRef      ∷ TVar (Seq PlayerEvent)
-    -- ^ Events with popup display enabled, waiting to be picked up
-    --   by the Lua popup module. The Lua side drains this via the
-    --   'LuaShowPopup' broadcast; this TVar exists for inspection /
-    --   debug querying and as a Phase 2 stable source for the
-    --   notifications panel.
+    -- ^ Events with popup display enabled, appended at the same emit
+    --   call site that sends the live 'LuaShowPopup' message on
+    --   'luaQueue'. WRITE-ONLY today: that message — not a drain of
+    --   this TVar — is how the Lua popup module receives a popup, and
+    --   nothing reads this queue back out anywhere. It exists for
+    --   inspection / debug querying and as a Phase 2 stable source
+    --   for the notifications panel.
   } deriving (Eq)
 
 -- | Main-thread-private engine state, threaded through 'EngineM'.

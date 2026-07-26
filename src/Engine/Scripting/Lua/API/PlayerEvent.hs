@@ -15,8 +15,10 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified HsLua as Lua
 import Engine.Asset.YamlNotifications (writeNotificationOverrides)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.Events (EventsCapability(..), toEventsCapability)
 import Engine.Core.Log (LogCategory(..), logWarn)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.PlayerEvent (CategoryCfg(..))
 import Engine.PlayerEvent.Emit (PlayerEvent(..), emitEvent, emitEventAt
                                , emitEventFull, readEventLog)
@@ -150,8 +152,9 @@ getEventLogFn env = do
 --   build the per-category rows.
 getNotificationCfgFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getNotificationCfgFn env = do
-    cfgMap ← Lua.liftIO $ readIORef (notificationCfgRef env)
-    let order = notificationOrder env
+    let events = toEventsCapability env
+    cfgMap ← Lua.liftIO $ readIORef (ecNotificationCfgRef events)
+    let order = ecNotificationOrder events
     Lua.newtable
     forM_ (zip [1..] order) $ \(i, catId) →
         case HM.lookup catId cfgMap of
@@ -200,9 +203,9 @@ setNotificationOverridesFn env = do
             return 1
         else do
             updates ← readOverridesTable
-            logger ← Lua.liftIO $ readIORef (loggerRef env)
+            logger ← Lua.liftIO $ readIORef (ccLoggerRef (toCoreCapability env))
             updated ← Lua.liftIO $ atomicModifyIORef'
-                          (notificationCfgRef env) $ \cfg →
+                          (ecNotificationCfgRef (toEventsCapability env)) $ \cfg →
                 let merged = HM.foldrWithKey
                         (\catId (mLog, mPopup, mPause) acc →
                             case HM.lookup catId acc of

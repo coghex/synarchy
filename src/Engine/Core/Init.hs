@@ -248,8 +248,9 @@ initializeEngineWith logBackend = do
   lootTableRegistryRef ← newIORef emptyLootTableRegistry
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/), allocate the ring buffer and
-  -- popup queue. Both TVars are multi-writer (world/unit/Lua threads
-  -- can all push via Engine.PlayerEvent.emitEvent). The cfg IORef
+  -- popup queue. Both are STM TVars, so a push from any thread is
+  -- safe; the emitters that exist today are the world thread and the
+  -- Lua thread, via Engine.PlayerEvent.emitEvent. The cfg IORef
   -- is updated at runtime by the Phase 2 notifications settings tab.
   migrateLegacyConfig (Proxy ∷ Proxy OverridesFile) logger
     "config/notifications.yaml" "config/notifications.local.yaml"

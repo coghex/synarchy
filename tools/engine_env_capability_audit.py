@@ -529,17 +529,18 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # Emptied by issue #890 (E2): all nine modules now reach their
     # registries through Engine.Core.Capability.ContentRegistries.
     "content-registries": frozenset(),
-    # Shrunk from 13 to 2 by issue #897 (E7a): every module whose
-    # `EngineEnv` use was covered by the four UI/focus/HUD fields
-    # (uiManagerRef, focusManagerRef, hudActivePageRef, textBuffersRef)
-    # now reaches them through Engine.Core.Capability.Ui. The two below
-    # are the event-dominant remainder -- they need one or more of the
-    # FOUR event/notification/popup fields (eventStoreRef,
-    # notificationCfgRef, notificationOrder, popupQueueRef), which #898
-    # (E7b) migrates -- see SS7.7.
-    "ui-hud-events": frozenset({
-        "Engine.PlayerEvent.Emit", "Engine.Scripting.Lua.API.PlayerEvent",
-    }),
+    # Shrunk from 13 to 2 by issue #897 (E7a), then emptied by issue
+    # #898 (E7b): every module whose `EngineEnv` use was covered by the
+    # four UI/focus/HUD fields (uiManagerRef, focusManagerRef,
+    # hudActivePageRef, textBuffersRef) reaches them through
+    # Engine.Core.Capability.Ui, and the two event-dominant modules
+    # left (Engine.PlayerEvent.Emit,
+    # Engine.Scripting.Lua.API.PlayerEvent) now reach the four
+    # event/notification/popup fields (eventStoreRef,
+    # notificationCfgRef, notificationOrder, popupQueueRef) through
+    # Engine.Core.Capability.Events -- see SS7.7. Neither half has an
+    # unrestricted consumer left.
+    "ui-hud-events": frozenset(),
     "save-load-coordination": frozenset(),
 }
 

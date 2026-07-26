@@ -11,6 +11,12 @@ module Engine.PlayerEvent.Emit
     ) where
 
 import UPrelude
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.Events
+    (EventsCapability(..), toEventsCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
@@ -22,7 +28,7 @@ import Control.Concurrent.STM (STM, atomically, readTVarIO)
 import Control.Concurrent.STM.TVar (TVar, modifyTVar')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (logWarn, LogCategory(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
 import Engine.PlayerEvent
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 
@@ -34,10 +40,16 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 --   dev-log warning is written under 'CatEvent'. This is the
 --   loud-fail path for typos — better than silently swallowing.
 --
---   Thread-safe: 'eventStoreRef' and 'popupQueueRef' are STM TVars,
---   the Lua queue is internally STM-backed, and the pause flag is a
---   single atomic 'writeIORef'. Safe to call from world, unit, and
---   Lua threads concurrently.
+--   Thread-safe as a PRIMITIVE: 'ecEventStoreRef' and
+--   'ecPopupQueueRef' are STM TVars, the Lua queue is internally
+--   STM-backed, and the pause flag is a single atomic 'writeIORef',
+--   so concurrent callers on any thread are safe. That is a property
+--   of the primitive, not a claim about who calls it: the only call
+--   sites that exist today are on the @WorldThread@
+--   ("World.Thread.Discovery", @World.Thread.Command.Save.WriteWorld@)
+--   and the @LuaThread@ ("Engine.Scripting.Lua.API.PlayerEvent",
+--   @Engine.Scripting.Lua.API.Save@) — no unit- or combat-thread
+--   emitter exists.
 emitEvent ∷ EngineEnv
           → Text     -- ^ category id (e.g. "save_load")
           → Text     -- ^ source tag for dev debug (e.g. "World.Save")
@@ -93,10 +105,11 @@ emitEventFullOnPage ∷ EngineEnv
                     → Maybe Text            -- ^ optional source world page
                     → IO ()
 emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
-    cfgMap ← readIORef (notificationCfgRef env)
+    let events = toEventsCapability env
+    cfgMap ← readIORef (ecNotificationCfgRef events)
     case HM.lookup category cfgMap of
         Nothing → do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef (toCoreCapability env))
             logWarn logger CatEvent $
                 "emitEvent: unknown category '" <> category
                   <> "' from " <> source <> "; event dropped: "
@@ -115,11 +128,12 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
                     }
             when (ccLog cfg) $
                 atomically $
-                    pushBounded (ccLogCoalesceWindow cfg) (eventStoreRef env) ev
+                    pushBounded (ccLogCoalesceWindow cfg)
+                        (ecEventStoreRef events) ev
             when (ccPopup cfg) $ do
-                atomically $ modifyTVar' (popupQueueRef env) (|> ev)
+                atomically $ modifyTVar' (ecPopupQueueRef events) (|> ev)
                 let (r, g, b, a) = ccTextColor cfg
-                Q.writeQueue (luaQueue env)
+                Q.writeQueue (ivLuaQueue (toInputViewCapability env))
                     (LuaShowPopup category eventText r g b a mCoords)
             when (ccPause cfg) $
                 writeIORef (wsEnginePausedRef (toWorldSimCapability env)) True
@@ -156,4 +170,4 @@ pushBounded window ref ev = modifyTVar' ref $ \s →
 -- | Snapshot of the event log. Returns events oldest-first; the Lua
 --   side reverses if it wants newest-on-top.
 readEventLog ∷ EngineEnv → IO [PlayerEvent]
-readEventLog env = toList <$> readTVarIO (eventStoreRef env)
+readEventLog env = toList <$> readTVarIO (ecEventStoreRef (toEventsCapability env))
