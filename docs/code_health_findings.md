@@ -101,7 +101,7 @@ That paragraph belongs to `gameTimeRef` (declared four lines earlier at
 `vertexBuffer` is invisible when skimming the record and unreachable by a
 line-oriented grep for its declaration.
 
-### CH-6. Three of four `LogBackend` constructors are never constructed
+### [#942] CH-6. Three of four `LogBackend` constructors are never constructed
 `LogToFile`, `LogToCallback`, and `LogMulti` have no construction site
 anywhere in `src/`, `app/`, or `test/` — only `LogToHandle` is ever used. They
 carry live handling code in `writeLogEntry`, `writeThreadLogEntry`, and
@@ -115,7 +115,7 @@ but it is the kind of defect that ships the moment someone adopts `LogMulti`.
 Fix: delete the three unused constructors (preferred), or fix the `LogMulti`
 branch and add a test.
 
-### CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad`
+### [#943] CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad`
 Exported, documented, zero call sites: `traceLog`, `logException`,
 `getEnabledCategories`, `setCategoryLevel`, `logDebugS`, `logWarnS`,
 `withTiming`, `withTimingFor`, `logAndThrowFor`.
@@ -123,7 +123,7 @@ Exported, documented, zero call sites: `traceLog`, `logException`,
 `withTiming`/`withTimingFor`/`logAndThrowFor` are notable — they are #889
 capability-migration primitives that no consumer was ever narrowed onto.
 
-### CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim
+### [#944] CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim
 `Engine/Core/Log.hs:169-223`. The two functions are identical across 27 lines
 except for the final `writeLogEntry` vs `writeThreadLogEntry` call. Same
 duplication repeats one layer down in `Log/Format.hs` (`formatLogEntry` /
@@ -132,7 +132,7 @@ duplication repeats one layer down in `Log/Format.hs` (`formatLogEntry` /
 
 Fix: parameterise on the writer.
 
-### CH-9. `extractCallSite`'s skip-list is an untested, order-sensitive trap
+### [#945] CH-9. `extractCallSite`'s skip-list is an untested, order-sensitive trap
 `Engine/Core/Log.hs:134-167`. Source-location attribution depends on a
 hand-maintained list of *function name strings*; a rename or a new wrapper
 silently misattributes every log line, and nothing tests it.
