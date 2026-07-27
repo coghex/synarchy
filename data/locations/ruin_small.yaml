@@ -44,10 +44,17 @@ locations:
     # Content spawned once, the first time this location's chunk loads
     # (#90). Fixed-position entries land at that exact anchor offset;
     # entries without `position` scatter randomly within the room.
-    # A scavenge scene (#91): a dead radio and a dropped canteen where
-    # the occupants left them, plus 2 rolls of common ruin loot. Units
-    # in ruins are a future issue — none here by design.
+    # A scavenge scene (#91): 2 rolls of common ruin loot, scattered
+    # where the occupants left them. Units in ruins are a future issue —
+    # none here by design.
+    #
+    # #921: nothing here is a fixed `kind: item` entry any more. A ruin
+    # guarantees NO specific item — its contents come solely from the
+    # weighted loot table, so what a given ruin is worth is a draw, not
+    # a promise. (The radio and canteen that used to sit here are
+    # spawn-only starting equipment, data/units/acolyte.yaml; they are
+    # deliberately absent from ruin_common too.) Which items a
+    # particular ruin yields is still seed-stable and rolled exactly
+    # once per instance (#948) — the draw is fixed, just not authored.
     contents:
-      - { kind: item, id: radio, count: 1, position: {x: -1, y: -1} }
-      - { kind: item, id: canteen_steel_2l, count: 1, position: {x: 1, y: 0} }
       - { kind: loot_table, id: ruin_common, rolls: 2 }

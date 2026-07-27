@@ -6,13 +6,16 @@ this checks the `contents` list actually spawns things when a
 location's chunk loads, end to end:
 
   1. Visiting a `ruin_small` (#91: a partially-collapsed room) spawns
-     its contents — two fixed-position ground items (`radio`,
-     `canteen_steel_2l`) and two `ruin_common` loot-table rolls (also
-     ground items) — per ruin, and NO units or buildings (units in
-     ruins are deferred by design). The geometry is a damaged
-     `room_small`: all 25 floors present, a breached perimeter (some
-     but not all of the 20 wall segments), exactly 3 corner posts, and
-     every piece carrying the pack's "damaged" variant texture path.
+     its contents — two `ruin_common` loot-table rolls, as ground
+     items — per ruin, and NO units or buildings (units in ruins are
+     deferred by design). #921 removed the two fixed-position `radio` /
+     `canteen_steel_2l` entries this used to also expect: a ruin
+     guarantees NO specific item, so the only assertion left about
+     WHICH items appear is that each resolves to a registered def. The
+     geometry is a damaged `room_small`: all 25 floors present, a
+     breached perimeter (some but not all of the 20 wall segments),
+     exactly 3 corner posts, and every piece carrying the pack's
+     "damaged" variant texture path.
   1b/1c. Loot selection is seed-stable per placed instance (#948): two
      further INDEPENDENT fresh processes regenerate the same seed from
      scratch — one visiting the ruins in the same order as check 1, one
@@ -27,7 +30,10 @@ location's chunk loads, end to end:
      replays identically, and the pieces still resolve to the damaged
      variant art (the #91 variant round-trip).
   3. An unknown content `kind` and an unknown content `id` both log a
-     warning and are skipped rather than crashing the engine.
+     warning and are skipped rather than crashing the engine. Also
+     covers the fixed-position `kind: item` dispatch path, which #921
+     left no SHIPPED location exercising: a probe-local def spawns one
+     at a declared `position` and it must land on exactly that tile.
   4. Location discovery (#780): stamping a ruin's geometry and spawning
      its contents do NOT discover it; a hostile unit standing on it
      doesn't either; a player-faction unit within the def's discovery
@@ -79,6 +85,12 @@ LOG = "/tmp/location_content_engine.log"
 #: A location-instance id no page will ever have allocated (#915) —
 #: used to stage a memory whose (page, id) cannot resolve after a load.
 DANGLING_ID = 99999
+
+#: Ground items one ruin_small spawns: its `ruin_common` loot_table
+#: entry's 2 rolls, and nothing else. #921 removed the two fixed-position
+#: items that used to make this 4 — the count is now purely the roll
+#: count in data/locations/ruin_small.yaml.
+GROUND_PER_RUIN = 2
 
 
 def load_yaml_dir(port: int, directory: str, loader: str) -> None:
@@ -268,7 +280,7 @@ def stamp_ruins(port: int, ruins: list[dict], reverse: bool = False) -> None:
         if all(has_floor(port, e["gx"], e["gy"]) for e in order):
             break
         time.sleep(0.5)
-    want = 4 * len(order)
+    want = GROUND_PER_RUIN * len(order)
     for _ in range(20):
         if spawn_counts(port)["ground_total"] >= want:
             break
@@ -451,9 +463,9 @@ def main() -> int:
 
             # Content spawning has its own settle time — poll briefly
             # for the expected ground-item count.
-            # Each ruin (#91): 2 fixed items (radio + canteen) + 2
-            # loot_table rolls, all ground items; NO units or buildings.
-            want_ground = 4 * len(ruins)
+            # Each ruin (#91, #921): 2 loot_table rolls, both ground
+            # items; no fixed items, NO units or buildings.
+            want_ground = GROUND_PER_RUIN * len(ruins)
             counts1 = {}
             for _ in range(20):
                 counts1 = spawn_counts(args.port)
@@ -464,7 +476,8 @@ def main() -> int:
 
             if counts1["ground_total"] == want_ground:
                 print(f"PASS: {want_ground} ground item(s) spawned "
-                      f"(fixed radio + canteen + 2 loot_table rolls per ruin)")
+                      f"({GROUND_PER_RUIN} loot_table roll(s) per ruin, "
+                      f"no guaranteed item)")
             else:
                 failures.append(
                     f"expected {want_ground} ground item(s), got "
@@ -476,12 +489,22 @@ def main() -> int:
                 failures.append(
                     f"ruin_small spawned units/buildings it shouldn't: {counts1}")
 
-            for fixed in ("radio", "canteen_steel_2l"):
-                n = counts1["ground_by_name"].get(fixed, 0)
-                if n >= len(ruins):
-                    print(f"PASS: fixed-position '{fixed}' item present ({n} >= {len(ruins)})")
-                else:
-                    failures.append(f"expected >= {len(ruins)} '{fixed}', got {n}")
+            # #921: the ruin guarantees NOTHING specific. `radio` and
+            # `canteen_steel_2l` (spawn-only starting equipment) were the
+            # two entries removed, and they are absent from ruin_common
+            # too — so no ruin content on this page may be either. This
+            # is the direct inverse of the assertion that used to REQUIRE
+            # one of each per ruin; it fails if they are reinstated as
+            # fixed entries or quietly added to the loot table.
+            spawn_only = {d: counts1["ground_by_name"][d]
+                          for d in ("radio", "canteen_steel_2l")
+                          if counts1["ground_by_name"].get(d)}
+            if not spawn_only:
+                print("PASS: no spawn-only equipment (radio, canteen_steel_2l) "
+                      "in ruin content — nothing is guaranteed")
+            else:
+                failures.append(
+                    f"spawn-only equipment appeared in ruin content: {spawn_only}")
 
             # #948 baseline: which loot each STABLE ruin instance owns.
             # Captured before the synthetic discovery units below (they
@@ -500,8 +523,8 @@ def main() -> int:
             unexpected = unregistered_item_ids(set(counts1["ground_by_name"]), registered)
             if not unexpected:
                 print("PASS: all spawned ground items resolve to registered "
-                      "item definitions (item.listDefs(), fixed items + loot "
-                      "table entries)")
+                      "item definitions (item.listDefs(), every loot-table "
+                      "roll)")
             else:
                 failures.append(
                     f"unexpected ground item id(s) not in the item registry: {unexpected}")
@@ -969,7 +992,16 @@ def main() -> int:
     # this instance's draw selects (#800). #948 made that draw seed-stable
     # rather than random, but it is still weight-dependent — which entry a
     # given instance lands on is not something to assert on here.
+    #
+    # The second entry keeps the fixed-position `kind: item` dispatch
+    # branch (scripts/locations.lua spawnItemContent) under test: #921
+    # removed the last SHIPPED use of it, and an untested branch is one
+    # edit from silently breaking for the loot-container work that will
+    # want it back. `position` is the part with no other coverage — a
+    # scattered entry lands anywhere in bounds, so only a fixed one can
+    # be asserted to the exact tile.
     quinoa_yaml = "/tmp/loc_content_probe_quinoa.yaml"
+    FIXED_DEF, FIXED_OX, FIXED_OY = "radio", -1, 2
     with open(quinoa_yaml, "w") as fh:
         fh.write(
             "locations:\n"
@@ -983,6 +1015,8 @@ def main() -> int:
             "    discovery_margin: 6\n"
             "    contents:\n"
             "      - { kind: loot_table, id: probe_quinoa_table, rolls: 1 }\n"
+            f"      - {{ kind: item, id: {FIXED_DEF}, count: 1, "
+            f"position: {{x: {FIXED_OX}, y: {FIXED_OY}}} }}\n"
         )
     quinoa_loot_yaml = "/tmp/loc_content_probe_quinoa_loot.yaml"
     with open(quinoa_loot_yaml, "w") as fh:
@@ -1038,6 +1072,24 @@ def main() -> int:
              "return 'ok'")
         registered = registered_item_names(args.port)
         counts3 = spawn_counts(args.port)
+
+        # The fixed-position `kind: item` branch: exactly one instance,
+        # on the anchor + declared offset tile and no other. Checked by
+        # coordinate, so a scatter regression (ignoring `position`) fails
+        # here even though the item count would still be right.
+        fixed_at = [g for g in ground_items(args.port)
+                    if g.get("defName") == FIXED_DEF]
+        want_xy = (400 + FIXED_OX, 400 + FIXED_OY)
+        got_xy = [(round(g["x"]), round(g["y"])) for g in fixed_at]
+        if got_xy == [want_xy]:
+            print(f"PASS: the fixed-position 'kind: item' entry spawned one "
+                  f"{FIXED_DEF} at exactly {want_xy} (anchor + declared "
+                  f"offset), the branch #921 left no shipped location using")
+        else:
+            failures.append(
+                f"fixed-position item content wrong: expected one {FIXED_DEF} "
+                f"at {want_xy}, got {got_xy}")
+
         got_quinoa = counts3["ground_by_name"].get("quinoa_sack", 0)
         if got_quinoa >= 1:
             print(f"PASS: a forced single-entry loot table deterministically "
