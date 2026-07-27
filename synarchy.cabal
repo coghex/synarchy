@@ -1107,6 +1107,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Lua.TutorialProgress
                    Test.Headless.Lua.UnitAiLocations
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events

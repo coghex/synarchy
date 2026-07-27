@@ -111,6 +111,21 @@ function worldManager.createWorld(params)
     engine.logInfo("Creating world: " .. worldId
         .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")
 
+    -- Generating a world is the start of a NEW SESSION, and this is the
+    -- one funnel every generated world goes through (world_view.
+    -- createWorld, itself guarded so it only ever creates the session's
+    -- first world). Tutorial progress is session state living on a Lua
+    -- singleton that outlives any single world, so without this it
+    -- carries over from whatever was played or LOADED earlier in the
+    -- same process — start a new game after finishing an objective and
+    -- it begins already complete (#958).
+    --
+    -- A load never reaches here: it replaces the whole session
+    -- Haskell-side and restores progress through the save component's
+    -- own apply(), so resetting on this path cannot race it. Required
+    -- lazily to keep this module free of module-scope dependencies.
+    require("scripts.tutorial_progress").reset()
+
     -- Send init command with seed and world size
     -- This queues the WorldInit command; the world state will exist
     -- once the world thread processes it.

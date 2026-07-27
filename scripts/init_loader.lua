@@ -18,6 +18,7 @@ local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
 local locationStamperScriptId = nil
 local pauseScriptId = nil
+local tutorialProgressScriptId = nil
 local buildingInfoPanelScriptId = nil
 local itemInfoPanelScriptId = nil
 local cargoInventoryPanelScriptId = nil
@@ -132,6 +133,15 @@ function M.load()
     -- snapshot. No per-tick work; loaded so engine broadcasts (none
     -- needed today) and require()s from game scripts share state.
     pauseScriptId = engine.loadScript("scripts/pause.lua", 1.0)
+
+    -- Tutorial objective progress (#958): owns the durable completed-
+    -- objective set and the live subobjective checks, and registers the
+    -- "tutorial_progress" save component. No per-tick work in this
+    -- slice (evaluating the authored predicates is the next child) —
+    -- the slow tick is just what registers the module with the Lua
+    -- thread, same as popup/event_log above.
+    tutorialProgressScriptId = engine.loadScript(
+        "scripts/tutorial_progress.lua", 1.0)
 
     -- Building info watcher: mirrors unit_info_panel. Polls
     -- building.getSelected each tick and pushes a building schema
@@ -275,6 +285,9 @@ function M.shutdown()
     end
     if pauseScriptId then
         engine.killScript(pauseScriptId)
+    end
+    if tutorialProgressScriptId then
+        engine.killScript(tutorialProgressScriptId)
     end
     if buildingInfoPanelScriptId then
         engine.killScript(buildingInfoPanelScriptId)
