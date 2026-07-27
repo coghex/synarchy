@@ -150,6 +150,16 @@ local function queueNormalProfile()
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
+    -- The one active tutorial tree (#957). A DIRECTORY verb, not
+    -- addYamlDir: this slice supports exactly one tree, and neither
+    -- "a tree is present" nor "there is only one" can be checked from
+    -- inside a single file, so the engine enumerates data/tutorials/
+    -- itself in one call. Self-contained authored data — references no
+    -- other registry — so its position here is free; it only has to
+    -- come before the tutorial runtime reads it.
+    addItem("Loading tutorial...", function()
+        engine.loadTutorialDir("data/tutorials")
+    end)
     -- Locations load LAST (their content ids, incl. loot_table ids,
     -- reference the registries above; resolved at spawn time, #90).
     addYamlDir("data/locations",  "Loading locations...",  engine.loadLocationYaml)

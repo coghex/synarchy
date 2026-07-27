@@ -519,6 +519,9 @@ library
                      LootTable.Roll
                      Engine.Asset.YamlLootTables
                      Engine.Scripting.Lua.API.LootTables
+                     Tutorial.Types
+                     Engine.Asset.YamlTutorials
+                     Engine.Scripting.Lua.API.Tutorial
                      Language.Semantic.Types
                      Language.Semantic.Catalogue
                      Language.Semantic.English
@@ -1100,6 +1103,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.Instance
                    Test.Headless.Location.LootDeterminism
                    Test.Headless.Location.MapIcons
+                   Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules

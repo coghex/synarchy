@@ -1,0 +1,82 @@
+# The one active tutorial tree (#957, phase 1 of the tutorial epic #956).
+#
+# One file IS one complete tree — no wrapping list, like a loot table —
+# so every whole-tree check (duplicate ids, unknown references, cycles,
+# multiple parents, root/orphan shape) runs at this file's load, with no
+# cross-file finalization step. This slice supports exactly ONE tree: a
+# file under data/tutorials/ whose `id` is anything but `first_session`
+# is a load-time error rather than silently-inert data.
+#
+# Objectives are authored as a FLAT list joined by id references, which
+# is what makes "unknown reference", "multiple parents", and "cycle"
+# real, checkable failure classes.
+#
+# Two structural relationships, mutually exclusive per objective:
+#   children       — full objectives gated by this objective's completion.
+#   subobjectives  — the live component requirements of a COMPOSITE
+#                    objective (different completion semantics; the
+#                    runtime child enforces the difference).
+#
+# `kind` is explicit so it can disagree with the relationship authored
+# (an invalid combination is a load-time error, not a silent coercion):
+#   full          — may declare `children`, never `subobjectives`.
+#   composite     — must declare `subobjectives`, never `children`.
+#   subobjective  — a leaf; may only be named from a `subobjectives` list.
+#
+# `evaluator` is the stable key the Lua tutorial runtime will dispatch on
+# later. This file declares the keys; it implements no predicate.
+#
+# `order` is the display order WITHIN a sibling group (children of one
+# parent, or one composite's subobjectives). Ties break by id, so the
+# exposed tree order is deterministic either way.
+#
+# Structure (docs/expedition_gameplay_loop.md step 8):
+#   Place portal
+#     -> Secure water source
+#       -> Prepare an expedition
+#            - Prepare water
+#            - Prepare food
+id: first_session
+
+objectives:
+  - id: first_session_place_portal
+    kind: full
+    label: "Place portal"
+    tooltip: "Deploy the acolyte portal to anchor your colony to this world."
+    evaluator: place_portal
+    order: 1
+    children:
+      - first_session_secure_water
+
+  - id: first_session_secure_water
+    kind: full
+    label: "Secure water source"
+    tooltip: "Find drinkable water near the portal and make it reachable."
+    evaluator: secure_water_source
+    order: 1
+    children:
+      - first_session_prepare_expedition
+
+  - id: first_session_prepare_expedition
+    kind: composite
+    label: "Prepare an expedition"
+    tooltip: "Stock enough supplies for an acolyte to travel and return."
+    evaluator: prepare_expedition
+    order: 1
+    subobjectives:
+      - first_session_prepare_water
+      - first_session_prepare_food
+
+  - id: first_session_prepare_water
+    kind: subobjective
+    label: "Prepare water"
+    tooltip: "Carry enough water for the trip out and back."
+    evaluator: prepare_water
+    order: 1
+
+  - id: first_session_prepare_food
+    kind: subobjective
+    label: "Prepare food"
+    tooltip: "Carry enough food for the trip out and back."
+    evaluator: prepare_food
+    order: 2

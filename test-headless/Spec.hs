@@ -124,6 +124,7 @@ import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
+import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.Faction as LuaFaction
@@ -181,6 +182,10 @@ main = hspec $ do
         describe "Capability.Ui projections" CapabilityUi.spec
         describe "Capability.UnitCombat projections" CapabilityUnitCombat.spec
         describe "Capability.WorldSim projections" CapabilityWorldSim.spec
+        -- Same technique: no world dependency, just the live EngineEnv's
+        -- content-registry refs projected through the real capability so
+        -- the Lua-facing tutorial surface is exercised end to end (#957).
+        TutorialDefinitions.luaSpec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead
@@ -296,5 +301,6 @@ main = hspec $ do
     LocationInstance.spec
     LocationLootDeterminism.spec
     LocationMapIcons.spec
+    TutorialDefinitions.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec
