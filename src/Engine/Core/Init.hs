@@ -59,6 +59,7 @@ import Infection.Types (emptyInfectionManager)
 import Craft.Types (emptyRecipeManager)
 import Location.Types (emptyLocationRegistry)
 import LootTable.Types (emptyLootTableRegistry)
+import Tutorial.Types (emptyTutorialRegistry)
 import World.Types (emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
@@ -246,6 +247,7 @@ initializeEngineWith logBackend = do
   recipeManagerRef ← newIORef emptyRecipeManager
   locationDefsRef ← newIORef emptyLocationRegistry
   lootTableRegistryRef ← newIORef emptyLootTableRegistry
+  tutorialRegistryRef ← newIORef emptyTutorialRegistry
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/), allocate the ring buffer and
   -- popup queue. Both are STM TVars, so a push from any thread is
@@ -340,6 +342,7 @@ initializeEngineWith logBackend = do
         , recipeManagerRef         = recipeManagerRef
         , locationDefsRef    = locationDefsRef
         , lootTableRegistryRef = lootTableRegistryRef
+        , tutorialRegistryRef = tutorialRegistryRef
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef
         , notificationOrder  = notificationOrder

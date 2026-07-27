@@ -53,6 +53,7 @@ import Infection.Types (InfectionManager)
 import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
+import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible
                    , BloodTextureHandles)
@@ -367,6 +368,16 @@ data EngineEnv = EngineEnv
     --   does NOT touch 'statRNGRef'. The plain `loot.roll` still draws
     --   from that shared entropy-seeded generator and remains for
     --   ad-hoc, non-reproducible callers.
+  , tutorialRegistryRef ∷ IORef TutorialRegistry
+    -- ^ The one active tutorial definition tree, loaded from
+    --   data/tutorials/*.yaml at boot (#957). Pure authored data —
+    --   structure, presentation text, ordering, and the stable
+    --   evaluator keys the Lua tutorial runtime dispatches on; no
+    --   progress or completion state lives here. Written only by
+    --   `engine.loadTutorialYaml` and read back read-only through
+    --   `engine.getTutorialTree`. A file that fails validation
+    --   publishes nothing, so this stays at its explicit empty state
+    --   rather than holding a partial tree.
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

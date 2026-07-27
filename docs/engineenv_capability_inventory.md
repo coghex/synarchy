@@ -79,7 +79,7 @@ minimum bucket.
 | `input-lua-transport` | Input, keybindings, lifecycle, and Lua message transport: the input event queue, input-barrier tokens, live input device state, key bindings, and the two Lua↔engine message queues. |
 | `world-sim-render-handoff` | World, simulation, time, worldgen, and render handoff. Two halves (§7.4): the **world/sim** fields — the world manager, the world and sim command queues, sun angle, the flora and material registries, worldgen config, pause flag and game clock (migrated to `WorldSimCapability` by #893, E5a) — and the **coupled render-handoff set** (#894, E5b): the single-slot world-preview and zoom-atlas staging refs plus the preview generation counter, the layered world quads the frame loop merges, the blood-texture dispose queue, and the persistent structure texture palette with its runtime paletteId→handle table. |
 | `units-buildings-combat` | Units, combat, buildings, and pathing: the unit and building managers and their command queues, unit sim state, stat RNG, combat/injury/thought/action-outcome event streams, pathing tunables. |
-| `content-registries` | Items, crafting, equipment, substances, infections, locations, and loot: static, YAML-backed content registries loaded once and queried thereafter. |
+| `content-registries` | Items, crafting, equipment, substances, infections, locations, loot, and the tutorial definition tree: static, YAML-backed content registries loaded once and queried thereafter. |
 | `ui-hud-events` | UI, focus, HUD, selections, events, notifications, and popups: the UI page manager, focus manager, HUD active-page tracking, text-input buffers, the player-event store, notification config, popup queue. |
 | `save-load-coordination` | Save/load coordination, provenance, and identity allocation: the save barrier, load status, the staged-load handoff, last-save-time bookkeeping, the item-instance id allocator. |
 
@@ -454,6 +454,7 @@ rather than an `EngineEnv` field (§7.6).
 | `recipeManagerRef` | boot-process | `LuaThread` (`craft.*`/`repair.*` API — the craft-bill AI itself is Lua code, so it reads this on `LuaThread`, not a Haskell unit thread), `WorldThread` (`World.Thread.Power:55`'s `tickPowerNetworks`, per-tick craft-bill power-draw lookup) | `LuaThread` (`engine.loadRecipeYaml`) | `IORef RecipeManager` | `emptyRecipeManager` (`src/Engine/Core/Init.hs:246`) | None | — |
 | `locationDefsRef` | boot-process | `LuaThread` (`locations.*`, `API.Power`, `API.WorldQuery.Location`, `API.Buildings.Spawn`), `WorldThread` (`World.Render.Zoom.Quads:85`, `World.Thread.Discovery:54`) | `LuaThread` (content load) | `IORef LocationRegistry` | `emptyLocationRegistry` (`src/Engine/Core/Init.hs:247`) | None | — |
 | `lootTableRegistryRef` | boot-process | `LuaThread` (`loot.roll`, `loot.rollFor`) | `LuaThread` (content load) | `IORef LootTableRegistry` | `emptyLootTableRegistry` (`src/Engine/Core/Init.hs:248`) | None | `loot.rollFor` (#948) reads this registry alone — its draw is a pure function of the caller's world-seed/instance/entry/roll context, so unlike `loot.roll` it consumes no `statRNGRef`. |
+| `tutorialRegistryRef` | boot-process | `LuaThread` (`engine.getTutorialTree`, `Engine.Scripting.Lua.API.Tutorial:88`) | `LuaThread` (content load, `engine.loadTutorialYaml`) | `IORef TutorialRegistry` | `emptyTutorialRegistry` (`src/Engine/Core/Init.hs:249`) | None | The one active tutorial definition tree (#957). Unlike its sibling registries this holds at most ONE entry, so a load REPLACES rather than inserts; a file failing `Engine.Asset.YamlTutorials.validateTutorialDoc` publishes nothing and leaves the empty state. |
 
 ### `ui-hud-events`
 
@@ -533,7 +534,7 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 202
 #        never `EngineEnv(..)`)
 #   1  × `Engine.Core.Capability.ContentRegistries` (new by #890 — the
 #        `content-registries` projection module; bare `EngineEnv` type
-#        plus its seven field accessors, never `EngineEnv(..)`)
+#        plus its eight field accessors, never `EngineEnv(..)`)
 #   5  × the #890-narrowed content-registry API modules that still need
 #        an opaque `EngineEnv` to pass to a helper that takes one:
 #        `API.Items.Defs`, `API.Equipment.Class`, `API.Locations`
@@ -1276,7 +1277,10 @@ same containers.
   `ContentRegistriesCapability` over exactly the 7 fields plus the
   total one-way projection `toContentRegistriesCapability`, following
   §7.1/#889's convention (same live `IORef`s, never a copy; no import
-  of a consumer).
+  of a consumer). *(A capability record grows with its group: #957
+  added an 8th field, `tutorialRegistryRef`, and its sole consumer
+  `Engine.Scripting.Lua.API.Tutorial` reaches it through the record
+  from the start — it never held unrestricted access to narrow.)*
   - **Fully narrowed (the nine §6.2 entries, all removed above):**
     `Engine.Scripting.Lua.API.Craft.Recipe`, `.Equipment.Class`,
     `.Infection`, `.Items.Defs`, `.Locations`, `.LootTables`,

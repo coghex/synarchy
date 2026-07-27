@@ -1,7 +1,7 @@
 {-# LANGUAGE UnicodeSyntax #-}
 -- | The @content-registries@ capability record of the @EngineEnv@
 --   capability split (epic #537, issue #890 — E2, the first real
---   consumer migration after #889's E1 convention): the seven
+--   consumer migration after #889's E1 convention): the eight
 --   YAML-backed content registries
 --   'docs/engineenv_capability_inventory.md' SS5's @content-registries@
 --   table groups.
@@ -45,16 +45,17 @@ import Infection.Types (InfectionManager)
 import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
+import Tutorial.Types (TutorialRegistry)
 import Engine.Core.State
   ( EngineEnv
   , itemManagerRef, equipmentClassManagerRef, substanceManagerRef
   , infectionManagerRef, recipeManagerRef, locationDefsRef
-  , lootTableRegistryRef
+  , lootTableRegistryRef, tutorialRegistryRef
   )
 
 -- | The @content-registries@ capability: item defs, equipment classes,
 --   worked-material substances, infection defs, crafting recipes,
---   location defs, and loot tables. See
+--   location defs, loot tables, and the tutorial definition tree. See
 --   'docs/engineenv_capability_inventory.md' SS5 @content-registries@
 --   and SS7.6.
 data ContentRegistriesCapability = ContentRegistriesCapability
@@ -65,6 +66,7 @@ data ContentRegistriesCapability = ContentRegistriesCapability
   , crRecipeManagerRef         ∷ IORef RecipeManager
   , crLocationDefsRef          ∷ IORef LocationRegistry
   , crLootTableRegistryRef     ∷ IORef LootTableRegistry
+  , crTutorialRegistryRef      ∷ IORef TutorialRegistry
   }
 
 -- | Total projection — every field aliases the identical live
@@ -78,4 +80,5 @@ toContentRegistriesCapability env = ContentRegistriesCapability
   , crRecipeManagerRef         = recipeManagerRef env
   , crLocationDefsRef          = locationDefsRef env
   , crLootTableRegistryRef     = lootTableRegistryRef env
+  , crTutorialRegistryRef      = tutorialRegistryRef env
   }
