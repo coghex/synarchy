@@ -24,8 +24,10 @@ module Tutorial.Types
   , TutorialRegistry(..)
   , activeTutorialTreeId
   , emptyTutorialRegistry
-  , singleTutorialRegistry
+  , publishTutorialTree
+  , failTutorialLoad
   , activeTutorialTree
+  , tutorialLoadFailed
   , tutorialNodeList
   ) where
 
@@ -108,8 +110,17 @@ data TutorialTree = TutorialTree
 --   loaded-or-unavailable slot rather than a map: a tree that fails
 --   validation leaves 'Nothing' here (never a partially built tree),
 --   which is the state the Lua surface reports as \"no tutorial\".
-newtype TutorialRegistry = TutorialRegistry
-  { trTree ∷ Maybe TutorialTree
+--
+--   'trLoadFailed' is what makes that guarantee hold across SEVERAL
+--   files. @data/tutorials/@ is loaded one file per call, so without a
+--   latch the outcome would depend on directory order: a bad file
+--   loading after a good one would leave the good tree active, while
+--   the same pair in the other order would not. Once any load fails
+--   the session has no trustworthy tutorial, so the latch clears the
+--   published tree and refuses every later publish.
+data TutorialRegistry = TutorialRegistry
+  { trTree       ∷ Maybe TutorialTree
+  , trLoadFailed ∷ Bool
   } deriving (Show, Eq)
 
 -- | The one tree id this slice accepts. A @data/tutorials/@ file
@@ -120,15 +131,28 @@ activeTutorialTreeId ∷ Text
 activeTutorialTreeId = "first_session"
 
 emptyTutorialRegistry ∷ TutorialRegistry
-emptyTutorialRegistry = TutorialRegistry Nothing
+emptyTutorialRegistry = TutorialRegistry Nothing False
 
--- | The registry holding exactly the given tree. Loading a tree
---   REPLACES whatever was there — one active tree, always.
-singleTutorialRegistry ∷ TutorialTree → TutorialRegistry
-singleTutorialRegistry = TutorialRegistry ∘ Just
+-- | Publish a validated tree, REPLACING whatever was there — one
+--   active tree, always. A no-op once a load has failed: the session
+--   stays without a tutorial rather than picking up whichever file
+--   happened to be read last.
+publishTutorialTree ∷ TutorialTree → TutorialRegistry → TutorialRegistry
+publishTutorialTree tree reg
+  | trLoadFailed reg = reg
+  | otherwise        = TutorialRegistry (Just tree) False
+
+-- | Record a failed load: drop any published tree and latch, so
+--   nothing can publish for the rest of the session.
+failTutorialLoad ∷ TutorialRegistry → TutorialRegistry
+failTutorialLoad _ = TutorialRegistry Nothing True
 
 activeTutorialTree ∷ TutorialRegistry → Maybe TutorialTree
 activeTutorialTree = trTree
+
+-- | Whether a tutorial file has failed to load this session.
+tutorialLoadFailed ∷ TutorialRegistry → Bool
+tutorialLoadFailed = trLoadFailed
 
 -- | Depth-first flatten in display order (children before
 --   subobjectives, each group already ordered). Every objective

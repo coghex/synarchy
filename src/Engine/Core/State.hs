@@ -375,9 +375,11 @@ data EngineEnv = EngineEnv
     --   evaluator keys the Lua tutorial runtime dispatches on; no
     --   progress or completion state lives here. Written only by
     --   `engine.loadTutorialYaml` and read back read-only through
-    --   `engine.getTutorialTree`. A file that fails validation
-    --   publishes nothing, so this stays at its explicit empty state
-    --   rather than holding a partial tree.
+    --   `engine.getTutorialTree`. A file that fails to parse or
+    --   validate publishes nothing, drops any tree an earlier file
+    --   published, and latches so nothing publishes for the rest of
+    --   the session — so this is either the fully validated tree or
+    --   explicitly empty, never partial and never order-dependent.
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

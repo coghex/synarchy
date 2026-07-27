@@ -21,25 +21,30 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
   (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlTutorials (loadTutorialYaml)
 import Tutorial.Types
 
 -- | engine.loadTutorialYaml(path) — parses, validates, and publishes
---   one tutorial tree file, returning 1 on success and 0 on failure.
+--   one tutorial tree file, returning 1 when a tree is published and 0
+--   otherwise.
 --
 --   A file holds one WHOLE tree, so this is all-or-nothing: on any
---   parse or validation failure nothing is published (the registry
---   keeps whatever it already had, which at boot is the explicit empty
---   state) and 'loadTutorialYaml' has already logged an actionable
---   error naming the file and the offending objective. Boot never
---   aborts on a bad tutorial file — the game simply comes up without
---   onboarding, loudly.
+--   parse or validation failure nothing is published, the registry is
+--   left in its explicit empty\/unavailable state — DROPPING any tree
+--   a previous call published, and latching so no later call can
+--   republish — and 'loadTutorialYaml' has already logged an
+--   actionable error naming the file and the offending objective. That
+--   latch is what makes the outcome independent of the order
+--   @data\/tutorials\/@ happens to be read in: one bad file means the
+--   session has no tutorial, whichever position it occupies. Boot
+--   never aborts on a bad tutorial file — the game simply comes up
+--   without onboarding, loudly.
 loadTutorialYamlFn ∷ CoreCapability → ContentRegistriesCapability
                    → Lua.LuaE Lua.Exception Lua.NumResults
 loadTutorialYamlFn core regs = do
@@ -54,20 +59,34 @@ loadTutorialYamlFn core regs = do
         logger ← getLoggerFor core
         mTree ← loadTutorialYaml logger filePath
         case mTree of
-          Nothing → return (0 ∷ Int)
+          Nothing → do
+            atomicModifyIORef' (crTutorialRegistryRef regs) $ \reg →
+              (failTutorialLoad reg, ())
+            return (0 ∷ Int)
           Just tree → do
-            writeIORef (crTutorialRegistryRef regs)
-                       (singleTutorialRegistry tree)
-            logInfo logger CatAsset $
-              "loadTutorialYaml: loaded tutorial tree '" <> ttId tree
-              <> "' from " <> T.pack filePath
-            return 1
+            published ← atomicModifyIORef' (crTutorialRegistryRef regs) $
+              \reg → (publishTutorialTree tree reg, not (tutorialLoadFailed reg))
+            if published
+              then do
+                logInfo logger CatAsset $
+                  "loadTutorialYaml: loaded tutorial tree '" <> ttId tree
+                  <> "' from " <> T.pack filePath
+                return 1
+              else do
+                logWarn logger CatAsset $
+                  "loadTutorialYaml: not publishing tutorial tree '"
+                  <> ttId tree <> "' from " <> T.pack filePath
+                  <> " — an earlier tutorial file failed to load, so this"
+                  <> " session has no tutorial"
+                return 0
       Lua.pushnumber (Lua.Number (fromIntegral count))
       return 1
 
 -- | engine.getTutorialTree() → the active tutorial tree, or nil when
---   none is loaded (no tutorial file, or one that failed validation —
---   a partial tree is never published, so nil is unambiguous).
+--   none is loaded: no tutorial file at all, or any tutorial file that
+--   failed to parse or validate. A partial tree is never published and
+--   a failure drops whatever was published before it, so nil is
+--   unambiguous — \"there is no tutorial this session\".
 --
 --   Shape:
 --
