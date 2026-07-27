@@ -169,6 +169,24 @@ lazyTreePrelude = lns
     , viewHelpers
     ]
 
+-- | 'prelude' plus enough of a @world@\/@engine@ stub to run the REAL
+--   @scripts/world_manager.lua@. That module has no module-scope
+--   requires and reaches only these two globals, so the new-session
+--   boundary can be driven for real here rather than re-asserted from a
+--   copy of it.
+worldManagerPrelude ∷ Text
+worldManagerPrelude = lns
+    [ prelude
+    , "world = { inited = {},"
+    , "          init = function(id) world.inited[#world.inited + 1] = id end,"
+    , "          setTexture = function() end }"
+    , "engine.getTextureHandle = function() return -1 end"
+    , "local worldManager = require('scripts.world_manager')"
+    , "function newWorld(id)"
+    , "    worldManager.createWorld({ worldId = id or 'main_world' })"
+    , "end"
+    ]
+
 -- | One chunk: a prelude followed by the case body. Both halves are
 --   top level in the SAME chunk, so the prelude's @local TP@ (and
 --   @saveModules@\/@codec@ in 'savePrelude') stay in scope throughout.
@@ -362,6 +380,42 @@ spec = describe "Tutorial progress" $ do
             , "assert(TP.isCompleted('place_portal') == false)"
             , "assert(#TP.getViewModel().completedIds == 0)"
             , "assert(TP.getViewModel().rows[1].completed == false)"
+            ]
+
+    -- Round-2 review (PR #962): tutorial progress lives on a Lua
+    -- singleton that outlives any one world, and generating a new world
+    -- runs no part of the save/load path -- so a new game started after
+    -- playing or loading in the SAME process inherited the previous
+    -- session's completed objectives. Driven through the real
+    -- world_manager, not a restatement of it.
+    describe "new-session lifecycle" $ do
+        it "generating a world clears progress carried over from an \
+           \earlier session in the same process" $
+            runsOk $ withTP worldManagerPrelude
+            [ "TP.completeObjective('place_portal')"
+            , "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "assert(ids(TP.completedIds()) == 'place_portal')"
+            , "newWorld('main_world')"
+            , "assert(#world.inited == 1, 'world.init should still run')"
+            , "assert(#TP.completedIds() == 0,"
+            , "       'a new world must not inherit tutorial progress: '"
+            , "       .. ids(TP.completedIds()))"
+            , "assert(TP.isSubobjectiveChecked('prepare_water') == false)"
+            -- The TREE is session-global content, not per-world state,
+            -- so it must survive -- otherwise the fresh session has no
+            -- objectives at all.
+            , "local m = TP.getViewModel()"
+            , "assert(m.treeId == 'first_session')"
+            , "assert(activeIds(m) == 'place_portal', activeIds(m))"
+            ]
+
+        it "a second new world in the same process starts clean too" $
+            runsOk $ withTP worldManagerPrelude
+            [ "newWorld('main_world')"
+            , "TP.completeObjective('place_portal')"
+            , "TP.completeObjective('secure_water')"
+            , "newWorld('main_world')"
+            , "assert(#TP.completedIds() == 0, ids(TP.completedIds()))"
             ]
 
     describe "save component (requirements 1/6/7)" $ do
