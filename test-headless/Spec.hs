@@ -127,6 +127,7 @@ import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
+import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
@@ -187,6 +188,7 @@ main = hspec $ do
         -- content-registry refs projected through the real capability so
         -- the Lua-facing tutorial surface is exercised end to end (#957).
         TutorialDefinitions.luaSpec
+        LuaTutorialEvaluation.luaSpec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead
@@ -231,6 +233,7 @@ main = hspec $ do
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
     LuaTutorialProgress.spec
+    LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec

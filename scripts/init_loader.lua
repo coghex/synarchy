@@ -19,6 +19,7 @@ local tileEditorScriptId = nil
 local locationStamperScriptId = nil
 local pauseScriptId = nil
 local tutorialProgressScriptId = nil
+local tutorialEvalScriptId = nil
 local buildingInfoPanelScriptId = nil
 local itemInfoPanelScriptId = nil
 local cargoInventoryPanelScriptId = nil
@@ -136,12 +137,21 @@ function M.load()
 
     -- Tutorial objective progress (#958): owns the durable completed-
     -- objective set and the live subobjective checks, and registers the
-    -- "tutorial_progress" save component. No per-tick work in this
-    -- slice (evaluating the authored predicates is the next child) —
+    -- "tutorial_progress" save component. No per-tick work of its own —
     -- the slow tick is just what registers the module with the Lua
     -- thread, same as popup/event_log above.
     tutorialProgressScriptId = engine.loadScript(
         "scripts/tutorial_progress.lua", 1.0)
+
+    -- Tutorial objective evaluation (#959): binds the tree's authored
+    -- evaluator keys to predicates over live state and drives the
+    -- progress module above. Loaded AFTER it so the singleton exists
+    -- (the evaluator also resolves it lazily, so order is convention
+    -- rather than a dependency). 1s tick: onboarding objectives are
+    -- read at human pace, and the pass walks every player acolyte's
+    -- inventory, so there is nothing to gain from a faster cadence.
+    tutorialEvalScriptId = engine.loadScript(
+        "scripts/tutorial_eval.lua", 1.0)
 
     -- Building info watcher: mirrors unit_info_panel. Polls
     -- building.getSelected each tick and pushes a building schema
@@ -288,6 +298,9 @@ function M.shutdown()
     end
     if tutorialProgressScriptId then
         engine.killScript(tutorialProgressScriptId)
+    end
+    if tutorialEvalScriptId then
+        engine.killScript(tutorialEvalScriptId)
     end
     if buildingInfoPanelScriptId then
         engine.killScript(buildingInfoPanelScriptId)

@@ -23,6 +23,7 @@ registerBuildingAPI env = do
   registerLuaFunction "getActivity"         (buildingGetActivityFn env)
   registerLuaFunction "list"                (buildingListFn env)
   registerLuaFunction "getActiveIds"        (buildingGetActiveIdsFn env)
+  registerLuaFunction "existsWithDef"       (buildingExistsWithDefFn env)
   registerLuaFunction "listDefs"            (buildingListDefsFn env)
   registerLuaFunction "hitTestAt"           (buildingHitTestAtFn env)
   registerLuaFunction "select"              (buildingSelectFn env)

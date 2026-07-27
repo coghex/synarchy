@@ -1,7 +1,7 @@
 -- Tutorial objective PROGRESS (#958, phase 2 of the tutorial epic
 -- #956). #957 defined the tree; this module owns what the player has
--- done with it, and nothing else -- no predicates (the evaluation child
--- drives the write surface below), no HUD.
+-- done with it, and nothing else -- no predicates (#959's
+-- scripts/tutorial_eval.lua drives the write surface below), no HUD.
 --
 -- The module exists because the two kinds of progress a tutorial tree
 -- carries have OPPOSITE lifetimes, and conflating them is the bug this
@@ -530,9 +530,10 @@ end
 -----------------------------------------------------------
 
 -- Loaded via engine.loadScript so the save component registers once per
--- session and engine broadcasts reach the module. No update() yet --
--- this slice stores progress and answers queries; evaluating the
--- authored predicates that DRIVE it is the next child.
+-- session and engine broadcasts reach the module. No update() of its
+-- own: this module stores progress and answers queries, and the
+-- predicates that DRIVE it live in scripts/tutorial_eval.lua (#959),
+-- which ticks and calls the write surface above.
 function tutorialProgress.init(scriptId)
     engine.logInfo("Tutorial progress initializing...")
     tutorialProgress.register()

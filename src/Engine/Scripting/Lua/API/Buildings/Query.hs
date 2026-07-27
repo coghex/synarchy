@@ -6,6 +6,7 @@ module Engine.Scripting.Lua.API.Buildings.Query
     , buildingFindStationFn
     , buildingListFn
     , buildingGetActiveIdsFn
+    , buildingExistsWithDefFn
     , buildingListDefsFn
     ) where
 
@@ -213,6 +214,33 @@ buildingGetActiveIdsFn env = do
         Lua.pushinteger (fromIntegral (unBuildingId bid))
         Lua.rawseti (-2) (fromIntegral i)
     return 1
+
+-- | building.existsWithDef(defName) → bool. True iff at least one live
+--   building instance carries this def name, on ANY live world page.
+--
+--   Read-only and deliberately page-agnostic, which is the whole reason
+--   it exists: 'buildingGetActiveIdsFn' above is scoped to the active
+--   page, and 'buildingListFn' is a debug STRING rather than data, so a
+--   script asking the session-wide question "has this thing been placed
+--   at all?" had no honest surface to ask it through. The tutorial
+--   evaluator (#959) asks exactly that about the acolyte portal, whose
+--   progress is global per save rather than per page.
+--
+--   Existence, not a count: the callers this answers are latches, and a
+--   count would invite a consumer to treat a demolished-and-rebuilt
+--   portal as meaningful history it is not.
+buildingExistsWithDefFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingExistsWithDefFn env = do
+    mName ← Lua.tostring 1
+    case mName of
+        Nothing → Lua.pushboolean False >> return 1
+        Just raw → do
+            let name = TE.decodeUtf8Lenient raw
+            found ← Lua.liftIO $ do
+                bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
+                pure $ any ((≡ name) . biDefName) (HM.elems (bmInstances bm))
+            Lua.pushboolean found
+            return 1
 
 -- | building.listDefs() — Lua array of tables, one per registered
 --   building def. Each entry: {name, displayName, category, description,
