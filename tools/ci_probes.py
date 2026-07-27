@@ -117,7 +117,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                          "validation, and hidden-page multiworld "
                                          "building/unit spawn (#800 replaced the stale "
                                          "loot_names allowlist with the live item "
-                                         "registry, resolving the prior quinoa_sack flake)"),
+                                         "registry, resolving the prior quinoa_sack "
+                                         "flake; #915 added the per-unit location-"
+                                         "knowledge layer alongside the player-wide "
+                                         "discovery checks)"),
     "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
     "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
     "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),

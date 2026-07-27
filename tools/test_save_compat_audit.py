@@ -452,7 +452,13 @@ class _Args:
             # generate_current_format_session itself, so the actual
             # values never reach a real engine boot.
             port=9999, page_id="test_page", seed=1, world_size=8,
-            plate_count=3, spawn_building=None, spawn_unit=None)
+            plate_count=3, spawn_building=None, spawn_unit=None,
+            # #915: where to spawn --spawn-unit, how long to let ticks
+            # run before saving, and a predicate that must hold before
+            # the save -- for state a spawn verb never writes directly
+            # (a per-unit location memory is INGESTED by the unit-AI
+            # tick once the unit stands in a discovery halo).
+            spawn_unit_at="0,0", settle_seconds=0.0, require_lua=None)
         defaults.update(kwargs)
         self.__dict__.update(defaults)
 

@@ -110,6 +110,8 @@ registerWorldAPI env = do
     (worldListPlacedLocationsFn env)
   registerLuaFunction "getLocationInstance"
     (worldGetLocationInstanceFn env)
+  registerLuaFunction "getLocationAwareness"
+    (worldGetLocationAwarenessFn env)
   registerLuaFunction "hasSpawnedLocationContents"
     (worldHasSpawnedLocationContentsFn env)
   registerLuaFunction "markLocationContentsSpawned"

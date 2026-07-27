@@ -226,7 +226,7 @@ data WorldCommand
         --   via the WeAddTile edit path (debug terrain placement —
         --   same machinery spoil promotion uses, so it persists).
     | WorldSave WorldPageId Text Text [(Text, Word32, Bool, BS.ByteString)]
-        [(Text, Text, Int, Maybe Int, Text)]
+        [(Text, Text, Int, Maybe Int, Text, Maybe Text)]
         -- ^ pageId, save-name, request-timestamp (ISO 8601 microsecond
         --   precision, monotonically clamped), every currently-
         --   registered Lua save component (bare registry name, schema
@@ -236,8 +236,10 @@ data WorldCommand
         --   the whole Save/Envelope module graph into this one), and
         --   every reference edge those components' @references()@
         --   hooks reported on the SAME live snapshot (component id,
-        --   kind, target id, optional owning-unit id, source field path
-        --   — issue #764, save-overhaul C3, mirrors the load path's
+        --   kind, target id, optional owning-unit id, source field
+        --   path, and (#915) the edge's own declared world page for the
+        --   one kind whose id is page-local — issue #764,
+        --   save-overhaul C3, mirrors the load path's
         --   'prepareLuaLoad' result shape; the path is round-2 review's
         --   addition, replacing a synthetic "kind#id" diagnostic path
         --   with the actual field the edge came from). The Lua side captures the

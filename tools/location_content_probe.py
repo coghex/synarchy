@@ -36,6 +36,21 @@ location's chunk loads, end to end:
      re-checking without the unit moving emits no duplicate; the
      discovered state survives save -> quit -> fresh restart -> load
      alongside the geometry/contents from check 2.
+  5. Per-unit location knowledge (#915): the unit that entered the
+     margin gains its OWN memory of the location — keyed by the
+     (page, instance id) identity, recorded while the sim is PAUSED
+     (acquisition mirrors the discovery tick's pause independence) — a
+     second player unit standing elsewhere does not, a unit arriving at
+     an ALREADY-discovered location still learns it without a second
+     lifecycle transition or event, and the memory survives the same
+     save -> restart -> load round trip. A save also carries two
+     RESOLVING sibling memories plus one naming an instance id no page
+     ever allocated: the load still succeeds, the integrity graph logs
+     exactly one lua.unit_ai/location_instance diagnostic naming the
+     field and page/id, the real onSaveLoaded reconcile drops only that
+     entry, and no lifecycle changes. Phase 4 generates two same-seed
+     pages so the SAME instance id names a different real location on
+     each, and checks the two units' memories stay distinct.
 
 Headless skips the GUI data-loading step, so defs are registered by
 hand here (items/units/buildings/loot_tables/locations), same as
@@ -56,9 +71,14 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (quit_engine, boot, send, wait_load_published,
+                      load_ai_stack)
 
 LOG = "/tmp/location_content_engine.log"
+
+#: A location-instance id no page will ever have allocated (#915) —
+#: used to stage a memory whose (page, id) cannot resolve after a load.
+DANGLING_ID = 99999
 
 
 def load_yaml_dir(port: int, directory: str, loader: str) -> None:
@@ -292,6 +312,68 @@ def discovery_events(port: int, label: str) -> list[dict]:
             if e.get("category") == "location_discovery" and e.get("text") == text]
 
 
+def loc_instance_at(port: int, cx: int, cy: int, page: str) -> int:
+    """The stable instance id (#911) of the location at chunk (cx, cy) on
+    `page`, or -1. Scanned SERVER-side like `loc_at`, for the same
+    reason: on a dense page the full list is thousands of entries and
+    JSON round-tripping it is what this file deliberately avoids."""
+    lua = (f"local t = world.listPlacedLocations('{page}'); "
+           f"for _, e in ipairs(t) do if e.cx == {cx} and e.cy == {cy} then "
+           f"return e.instance_id end end; return -1")
+    try:
+        return int(float(send(port, lua, timeout=20.0).strip('"')))
+    except ValueError:
+        return -1
+
+
+def known_locations(port: int, uid: int) -> set[str]:
+    """(#915) The per-unit location memories `uid` holds, as a set of
+    "<page>#<instance id>" keys. Read through unitAi.getKnownLocations —
+    the public query surface AI candidates use — and flattened to a
+    string so an empty result is unambiguous (an empty Lua table would
+    serialize identically to an empty object)."""
+    lua = (f"local ai = require('scripts.unit_ai'); "
+           f"local out = {{}}; "
+           f"for _, k in ipairs(ai.getKnownLocations({uid})) do "
+           f"out[#out+1] = k.page .. '#' .. tostring(k.id) end; "
+           f"return table.concat(out, ',')")
+    raw = send(port, lua).strip().strip('"')
+    return {p for p in raw.split(",") if p}
+
+
+def halo_box(e: dict) -> tuple[int, int, int, int]:
+    """A placed location's discovery halo as inclusive absolute tile
+    bounds — its stored bounds (#777) expanded by its stored margin,
+    exactly what Location.Discovery tests containment against."""
+    b = e.get("bounds") or {}
+    m = int(e.get("discovery_margin") or 0)
+    return (int(b.get("min_x", e["gx"])) - m, int(b.get("min_y", e["gy"])) - m,
+            int(b.get("max_x", e["gx"])) + m, int(b.get("max_y", e["gy"])) + m)
+
+
+def pick_far_tile(la: list[dict], origin: tuple[int, int],
+                  slack: int = 6) -> tuple[int, int] | None:
+    """A tile comfortably outside EVERY placed location's halo — where a
+    second unit can stand and stay ignorant (#915)."""
+    ox, oy = origin
+    for d in range(24, 400, 8):
+        for cand in ((ox + d, oy), (ox, oy + d), (ox + d, oy + d),
+                     (ox - d, oy), (ox, oy - d)):
+            if all(not (x0 - slack <= cand[0] <= x1 + slack
+                        and y0 - slack <= cand[1] <= y1 + slack)
+                   for x0, y0, x1, y1 in map(halo_box, la)):
+                return cand
+    return None
+
+
+def wait_knows(port: int, uid: int, key: str, tries: int = 40) -> bool:
+    for _ in range(tries):
+        if key in known_locations(port, uid):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def spawn_unit(port: int, def_name: str, gx: int, gy: int, faction: str, page: str) -> int:
     """unit.spawn(...) returns the new unit's numeric id, or -1 on failure."""
     r = send(port, f"return unit.spawn('{def_name}', {gx}, {gy}, nil, '{faction}', '{page}')")
@@ -336,6 +418,14 @@ def main() -> int:
     counts1: dict = {}
     geoms1: dict = {}
     loot1: dict[int, list[str]] = {}
+    # #915: the "<page>#<instance id>" memory key phase 1 proves a unit
+    # learned, and the units that hold it — re-checked after the load.
+    r0mem_key: str = ""
+    mem_uids: tuple[int, ...] = ()
+    # …plus the unit phase 1 stages the dangling-memory case on, and the
+    # two resolving siblings that must survive alongside its removal.
+    dangling_uid: int = -1
+    sibling_keys: tuple[str, ...] = ()
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
     proc = boot(args.port, log=LOG)
@@ -504,7 +594,132 @@ def main() -> int:
                 failures.append(
                     f"expected still exactly one event after leave+return, got {evs_again}")
 
-            # The two synthetic units above are now part of 'wa' — refresh
+            # ---- Per-unit location knowledge (#915): the EXPERIENTIAL
+            #      layer beside the player-wide CARTOGRAPHIC state above.
+            #      The unit AI stack owns that memory, so load it here —
+            #      after every check above, and with the sim PAUSED so
+            #      the AI's own decisions (wander, forage, water-seeking)
+            #      can never move a unit or pick up one of the ground
+            #      items phase 2 re-counts. Pausing is not a workaround
+            #      here, it is part of the contract under test: awareness
+            #      is ingested BEFORE unitAi.update's pause guard,
+            #      mirroring World.Thread.Discovery's own pause
+            #      independence, so a paused session still learns. ----
+            send(args.port, "engine.setPaused(true); return 'ok'")
+            load_ai_stack(args.port)
+            r0inst = next((e for e in placed(args.port, "wa")
+                           if (e["cx"], e["cy"]) == r0key), None)
+            far = pick_far_tile(la, (ruin0["gx"], ruin0["gy"]))
+            if r0inst is None or far is None:
+                failures.append(
+                    f"#915 setup failed: instance={r0inst!r} far_tile={far!r}")
+            else:
+                r0mem = f"wa#{r0inst['instance_id']}"
+                if wait_knows(args.port, player_uid, r0mem):
+                    print(f"PASS: the unit that entered the margin gained its "
+                          f"own memory of the ruin ({r0mem}) — while PAUSED")
+                else:
+                    failures.append(
+                        f"unit {player_uid} inside the margin never learned "
+                        f"{r0mem}: {known_locations(args.port, player_uid)}")
+
+                load_chunk(args.port, far[0] // 16, far[1] // 16)
+                far_uid = spawn_unit(args.port, "acolyte", far[0], far[1],
+                                     "player", "wa")
+                time.sleep(1.5)
+                if far_uid >= 0 and r0mem not in known_locations(args.port, far_uid):
+                    print(f"PASS: a second player unit ({far_uid}) elsewhere did "
+                          f"NOT learn the ruin — knowledge is not shared for free")
+                else:
+                    failures.append(
+                        f"remote unit {far_uid} learned {r0mem} without going "
+                        f"there: {known_locations(args.port, far_uid)}")
+
+                # The player-wide layer is untouched by any of this: still
+                # discovered, still exactly one event.
+                evs_915 = discovery_events(args.port, ruin_label)
+                if discovered_flags(args.port, "wa").get(r0key) is True \
+                        and len(evs_915) == 1:
+                    print("PASS: per-unit memory changed neither the "
+                          "discovered lifecycle nor the event count")
+                else:
+                    failures.append(
+                        f"#915 disturbed the player-wide layer: "
+                        f"discovered={discovered_flags(args.port, 'wa').get(r0key)!r} "
+                        f"events={evs_915}")
+
+                # …and a unit arriving at an ALREADY-discovered location
+                # still learns it: acquisition is not gated on the
+                # one-time lifecycle promotion or its event.
+                send(args.port, f"unit.setPos({far_uid}, {ruin0['gx']}, "
+                                f"{ruin0['gy']}); return 'ok'")
+                if wait_knows(args.port, far_uid, r0mem):
+                    print(f"PASS: unit {far_uid} arriving at an already-"
+                          f"discovered ruin still learned it")
+                else:
+                    failures.append(
+                        f"unit {far_uid} entering an already-discovered margin "
+                        f"never learned {r0mem}: "
+                        f"{known_locations(args.port, far_uid)}")
+                evs_late = discovery_events(args.port, ruin_label)
+                if len(evs_late) == 1:
+                    print("PASS: that later arrival emitted no second "
+                          "location_discovery event")
+                else:
+                    failures.append(
+                        f"a later arrival re-emitted discovery event(s): {evs_late}")
+                mem_uids = (player_uid, far_uid)
+                r0mem_key = r0mem
+
+                # Stage the dangling-memory scenario for phase 2: the
+                # discoverer walks to a SECOND ruin (so it holds two
+                # genuinely-learned, resolving memories), then gets one
+                # more naming an instance id that does not exist. A
+                # never-allocated id cannot be produced by walking
+                # anywhere, so it is injected through the module's own
+                # public helper — the same call the ingest path makes.
+                ruin1 = next((e for e in ruins
+                              if (e["cx"], e["cy"]) != r0key), None)
+                r1inst = next((e for e in placed(args.port, "wa")
+                               if (e["cx"], e["cy"])
+                               == (ruin1["cx"], ruin1["cy"])), None) \
+                    if ruin1 else None
+                if r1inst is None:
+                    failures.append(
+                        "#915: need a SECOND ruin to stage two resolving "
+                        "sibling memories")
+                else:
+                    send(args.port, f"unit.setPos({player_uid}, "
+                                    f"{ruin1['gx']}, {ruin1['gy']}); return 'ok'")
+                    r1mem = f"wa#{r1inst['instance_id']}"
+                    if not wait_knows(args.port, player_uid, r1mem):
+                        failures.append(
+                            f"unit {player_uid} never learned the second ruin "
+                            f"{r1mem}: {known_locations(args.port, player_uid)}")
+                    send(args.port,
+                         f"local L = require('scripts.unit_ai_locations'); "
+                         f"local ai = require('scripts.unit_ai'); "
+                         f"L.addKnownLocation(ai.getState({player_uid}), 'wa', "
+                         f"{DANGLING_ID}, {ruin0['gx']}, {ruin0['gy']}); "
+                         f"return 'ok'")
+                    staged = known_locations(args.port, player_uid)
+                    want = {r0mem, r1mem, f"wa#{DANGLING_ID}"}
+                    if want <= staged:
+                        print(f"PASS: staged two resolving memories plus one "
+                              f"naming a nonexistent instance ({sorted(want)})")
+                        dangling_uid = player_uid
+                        sibling_keys = (r0mem, r1mem)
+                    else:
+                        failures.append(
+                            f"#915 could not stage the dangling-memory case: "
+                            f"want {sorted(want)}, got {sorted(staged)}")
+
+            # Deliberately still PAUSED through the save below: a load
+            # comes up paused anyway (#763), so this keeps phase 1 and
+            # phase 2 in the same sim state, and keeps the AI from moving
+            # units or picking up the ground items phase 2 re-counts.
+
+            # The synthetic units above are now part of 'wa' — refresh
             # counts1 so phase 2's "reload does not respawn contents"
             # comparison accounts for them too (they persist like any
             # other unit, unrelated to the ruin's one-time content flag).
@@ -555,6 +770,12 @@ def main() -> int:
         proc = boot(args.port, log=LOG)
         try:
             load_defs(args.port)
+            # #915: the unit AI stack must be loaded BEFORE the load, so
+            # the (required) lua.unit_ai component has a registered
+            # reader — and so onSaveLoaded's reconcile, which scrubs a
+            # location memory whose instance is absent from the restored
+            # session, actually runs.
+            load_ai_stack(args.port)
             send(args.port, "engine.loadSave('loc_content_probe'); return 'queued'")
             # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
             # saved page ("wa", its own id verbatim -- no more main_world
@@ -628,6 +849,86 @@ def main() -> int:
             else:
                 failures.append(
                     f"ruin floor texture lost the damaged variant on reload: {tex}")
+
+            # #915: per-unit location memory rides the lua.unit_ai
+            # component (now v4) through the same round trip, and its
+            # (page, instance id) reference still resolves — so the
+            # reconcile pass keeps it rather than scrubbing it.
+            if r0mem_key and mem_uids:
+                still = {uid: known_locations(args.port, uid) for uid in mem_uids}
+                if all(r0mem_key in ks for ks in still.values()):
+                    print(f"PASS: per-unit location memory ({r0mem_key}) survived "
+                          f"save -> quit -> restart -> load for units {mem_uids}")
+                else:
+                    failures.append(
+                        f"per-unit location memory lost on reload: {still}")
+                # The engine-side integrity graph must report EXACTLY the
+                # one memory phase 1 made unresolvable, and no other: a
+                # VALID memory is only ever resolvable if its page
+                # survives every hop from the references() hook to
+                # World.Save.Integrity (the save_modules flatteners
+                # rebuild each edge field by field, and an id alone
+                # resolves against nothing for a per-page kind). LOG is
+                # truncated per boot, so this names only this load.
+                try:
+                    with open(LOG, encoding="utf-8", errors="replace") as fh:
+                        diags = [ln.strip() for ln in fh
+                                 if "integrity diagnostic" in ln
+                                 and "location_instance" in ln]
+                except OSError as e:
+                    diags = [f"could not read {LOG}: {e}"]
+                want_bits = ("lua.unit_ai", f"page=wa,id={DANGLING_ID}",
+                             "knownLocations", "location_instance")
+                if len(diags) == 1 and all(b in diags[0] for b in want_bits):
+                    print(f"PASS: exactly one location_instance diagnostic, "
+                          f"naming lua.unit_ai + the knownLocations field + "
+                          f"page=wa,id={DANGLING_ID} — every VALID memory "
+                          f"resolved")
+                else:
+                    failures.append(
+                        f"expected exactly one dangling diagnostic naming "
+                        f"{want_bits}, got {diags}")
+
+                # …and the load SUCCEEDED anyway (already asserted via
+                # wait_load_published above), with the real
+                # apply/onSaveLoaded reconcile dropping ONLY the
+                # unresolvable entry — its resolving siblings intact.
+                if dangling_uid >= 0:
+                    after = known_locations(args.port, dangling_uid)
+                    if f"wa#{DANGLING_ID}" not in after \
+                            and all(k in after for k in sibling_keys):
+                        print(f"PASS: onSaveLoaded dropped ONLY the "
+                              f"unresolvable memory; unit {dangling_uid} kept "
+                              f"{sorted(sibling_keys)}")
+                    else:
+                        failures.append(
+                            f"dangling-memory scrub wrong for unit "
+                            f"{dangling_uid}: kept {sorted(after)}, expected "
+                            f"{sorted(sibling_keys)} without wa#{DANGLING_ID}")
+                    # Dropping a memory is a per-unit act: it must not
+                    # touch the player-wide layer either of its siblings
+                    # names.
+                    lifecycles = discovered_flags(args.port, "wa")
+                    sib_keys = {tuple(int(n) for n in k.split("#")[1:])
+                                for k in sibling_keys}
+                    undiscovered = [e for e in placed(args.port, "wa")
+                                    if (e["instance_id"],) in sib_keys
+                                    and not e.get("discovered")]
+                    if not undiscovered and any(lifecycles.values()):
+                        print("PASS: scrubbing a memory left every remembered "
+                              "location's player-wide lifecycle untouched")
+                    else:
+                        failures.append(
+                            f"lifecycle changed while scrubbing a memory: "
+                            f"{undiscovered}")
+                else:
+                    failures.append(
+                        "phase 2 could not re-check the dangling-memory case: "
+                        "phase 1 never staged one")
+            else:
+                failures.append(
+                    "phase 2 could not re-check per-unit location memory: "
+                    "phase 1 never established one")
         finally:
             quit_engine(args.port, proc)
     elif not ruins:
@@ -866,6 +1167,64 @@ def main() -> int:
                             failures.append(
                                 "phase 4: no acolyte unit spawned from dense_ruin "
                                 "unit content on hidden page 'sw2'")
+
+                        # #915 multi-page COLLISION: instance ids are
+                        # allocated PER PAGE, so the SAME number names
+                        # different real locations on different worlds.
+                        # 'sw3' is generated from the same seed/size as
+                        # 'sw2', so its dense placement is identical and
+                        # the centre-chunk location gets the identical
+                        # id — the case a page-blind memory would get
+                        # wrong. Both pages stay loaded throughout.
+                        send(args.port, "engine.setPaused(true); return 'ok'")
+                        load_ai_stack(args.port)
+                        send(args.port, f"world.init('sw3', {args.seed}, "
+                                        f"{args.size}, 3); return 'ok'")
+                        sw3xy = loc_at(args.port, 0, 0, "sw3")
+                        iid2 = wait_floor(args.port, gx, gy, page="sw3") \
+                            and loc_instance_at(args.port, 0, 0, "sw3")
+                        iid = loc_instance_at(args.port, 0, 0, "sw2")
+                        if sw3xy != (gx, gy) or iid < 0 or iid2 != iid:
+                            failures.append(
+                                f"phase 4 (#915) setup failed: same-seed pages "
+                                f"did not collide — sw2 ({gx},{gy})#{iid} vs "
+                                f"sw3 {sw3xy}#{iid2}")
+                        else:
+                            print(f"PASS: 'sw2' and 'sw3' both carry instance "
+                                  f"id {iid} at ({gx},{gy}) — a genuine "
+                                  f"cross-page id collision to test against")
+                            u2 = spawn_unit(args.port, "acolyte", gx, gy,
+                                            "player", "sw2")
+                            u3 = spawn_unit(args.port, "acolyte", gx, gy,
+                                            "player", "sw3")
+                            ok2 = u2 >= 0 and wait_knows(args.port, u2, f"sw2#{iid}")
+                            ok3 = u3 >= 0 and wait_knows(args.port, u3, f"sw3#{iid}")
+                            k2 = known_locations(args.port, u2)
+                            k3 = known_locations(args.port, u3)
+                            if ok2 and ok3 and f"sw3#{iid}" not in k2 \
+                                    and f"sw2#{iid}" not in k3:
+                                print(f"PASS: each unit learned ONLY its own "
+                                      f"page's instance {iid} — equal ids on "
+                                      f"two pages did not alias")
+                            else:
+                                failures.append(
+                                    f"phase 4 (#915): cross-page aliasing — "
+                                    f"unit {u2} on sw2 knows {sorted(k2)}, "
+                                    f"unit {u3} on sw3 knows {sorted(k3)}")
+                            resolves = {
+                                p: send(args.port,
+                                        f"return world.getLocationInstance("
+                                        f"{iid}, '{p}') and 'y' or 'n'").strip('"')
+                                for p in ("sw2", "sw3")}
+                            if resolves == {"sw2": "y", "sw3": "y"}:
+                                print(f"PASS: instance id {iid} resolves on BOTH "
+                                      f"pages — the memories stayed distinct "
+                                      f"because each carries its own page, not "
+                                      f"because only one page had that id")
+                            else:
+                                failures.append(
+                                    f"phase 4 (#915): expected instance {iid} on "
+                                    f"both pages, got {resolves}")
     finally:
         quit_engine(args.port, proc)
 

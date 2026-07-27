@@ -33,6 +33,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetSunAngleAtFn
     , worldListPlacedLocationsFn
     , worldGetLocationInstanceFn
+    , worldGetLocationAwarenessFn
     , worldHasSpawnedLocationContentsFn
     , worldHasStampedLocationFn
     ) where

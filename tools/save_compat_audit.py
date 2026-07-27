@@ -1145,6 +1145,22 @@ class GenerationError(Exception):
     """A real-engine fixture-generation step failed (requirement 21)."""
 
 
+#: How long --require-lua keeps retrying after --settle-seconds has
+#: elapsed. Generous: a predicate that depends on a Lua tick can miss its
+#: first window on a loaded machine, and the failure mode this exists to
+#: prevent (a silently state-free fixture) is far worse than a slow run.
+PREDICATE_RETRY_SECONDS = 30.0
+
+
+def _parse_tile(text: str) -> tuple[int, int]:
+    """Parse a "GX,GY" CLI tile argument."""
+    try:
+        gx_s, gy_s = text.split(",", 1)
+        return int(gx_s.strip()), int(gy_s.strip())
+    except ValueError:
+        raise SystemExit(f"--spawn-unit-at expects 'GX,GY', got {text!r}")
+
+
 def _make_isolated_gen_root(base: str) -> str:
     """A throwaway resource root: real scripts/assets/data/config
     (symlinked -- read-only content, safe to share) plus its OWN empty
@@ -1181,11 +1197,20 @@ def _bootstrap_gen_defs(send, port: int) -> None:
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):
             send(port, f"{fn}('{path}'); return 'ok'")
+    # Locations too (#915): they are placed AT world.init from the
+    # registry, so a def registered later can never appear in the
+    # generated world -- and a fixture that must capture per-unit
+    # location knowledge needs a real placed location to know about.
+    for path in sorted(glob.glob("data/locations/*.yaml")):
+        send(port, f"engine.loadLocationYaml('{path}'); return 'ok'")
 
 
 def generate_current_format_session(
         port: int, page_id: str, seed: int, world_size: int, plate_count: int,
-        spawn_building: str, spawn_unit: str, out_path: Path) -> None:
+        spawn_building: str, spawn_unit: str, out_path: Path,
+        spawn_unit_at: tuple[int, int] = (0, 0),
+        settle_seconds: float = 0.0,
+        require_lua: str | None = None) -> None:
     """Boot a REAL headless engine (isolated resource root -- see
     _make_isolated_gen_root), init a world, optionally spawn ONE building
     and/or ONE unit through the SAME engine.saveWorld/building.spawn/
@@ -1245,11 +1270,35 @@ def generate_current_format_session(
                 raise GenerationError(
                     f"building.spawn('{spawn_building}') rejected: {r!r}")
         if spawn_unit:
-            r = send(port, f"return unit.spawn('{spawn_unit}', 0, 0, 0, 'player')")
+            ux, uy = spawn_unit_at
+            r = send(port, f"return unit.spawn('{spawn_unit}', {ux}, {uy}, 0, "
+                            f"'player')")
             uid = as_int(r)
             if uid is None or uid < 0:
                 raise GenerationError(
-                    f"unit.spawn('{spawn_unit}') rejected: {r!r}")
+                    f"unit.spawn('{spawn_unit}') at ({ux},{uy}) rejected: {r!r}")
+
+        # Some state is not written by a spawn verb at all -- it is
+        # ACQUIRED by a tick once the entity is in the right place (#915's
+        # per-unit location memory is ingested by the unit-AI update from
+        # world.getLocationAwareness). Let those ticks run, and refuse to
+        # save until the caller's own predicate says the state is actually
+        # there: a fixture that silently comes out WITHOUT the shape it
+        # exists to track is worse than no fixture, because every audit
+        # downstream then passes on it.
+        if settle_seconds > 0:
+            time.sleep(settle_seconds)
+        if require_lua:
+            deadline = time.time() + max(settle_seconds, PREDICATE_RETRY_SECONDS)
+            while True:
+                r = send(port, f"return ({require_lua}) and 'y' or 'n'")
+                if r.strip().strip('"') == "y":
+                    break
+                if time.time() >= deadline:
+                    raise GenerationError(
+                        f"--require-lua never became true: {require_lua!r}")
+                time.sleep(0.5)
+
         saved = send(port, f"return engine.saveWorld('{page_id}', '{slot}')")
         if saved.strip() != "true":
             raise GenerationError(f"engine.saveWorld failed: {saved!r}")
@@ -1755,7 +1804,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             port=args.port, page_id=args.page_id, seed=args.seed,
             world_size=args.world_size, plate_count=args.plate_count,
             spawn_building=args.spawn_building, spawn_unit=args.spawn_unit,
-            out_path=fixture_path)
+            out_path=fixture_path, spawn_unit_at=_parse_tile(args.spawn_unit_at),
+            settle_seconds=args.settle_seconds, require_lua=args.require_lua)
     except GenerationError as e:
         # Round-16 review: generate_current_format_session no longer
         # ONLY writes fixture_path as an untouchable-if-failed last step
@@ -1787,8 +1837,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
             f"{args.seed}, {args.world_size}, {args.plate_count})"
             + (f", building.spawn('{args.spawn_building}', 0, 0)"
                if args.spawn_building else "")
-            + (f", unit.spawn('{args.spawn_unit}', 0, 0, 0, 'player')"
-               if args.spawn_unit else "")
+            + (f", unit.spawn('{args.spawn_unit}', {args.spawn_unit_at}, "
+               f"0, 'player')" if args.spawn_unit else "")
+            + (f", settled {args.settle_seconds}s"
+               if args.settle_seconds else "")
+            + (f" and held until `{args.require_lua}`"
+               if args.require_lua else "")
             + f", then engine.saveWorld -- the exact production save path "
               f"an ordinary player save takes. Its canonical summary was "
               f"derived directly from the real decoded SessionSnapshot "
@@ -1898,7 +1952,27 @@ def main() -> int:
                           "name to spawn at (0,0), e.g. cargo_hold_S")
     ap.add_argument("--spawn-unit", default=None,
                      help="--generate-session only: a real unit def name "
-                          "to spawn at (0,0), e.g. acolyte")
+                          "to spawn, e.g. acolyte (at --spawn-unit-at)")
+    ap.add_argument("--spawn-unit-at", default="0,0", metavar="GX,GY",
+                     help="--generate-session only: the tile to spawn "
+                          "--spawn-unit on, default '0,0'. A fixture that "
+                          "must capture state a unit only acquires SOMEWHERE "
+                          "specific (e.g. #915's per-unit location memory, "
+                          "learned by standing in a placed location's "
+                          "discovery halo) spawns it there rather than at "
+                          "the origin")
+    ap.add_argument("--settle-seconds", type=float, default=0.0,
+                     help="--generate-session only: seconds to let the "
+                          "engine + Lua ticks run between the spawns and "
+                          "engine.saveWorld, for state that is acquired by "
+                          "a tick rather than written by a spawn verb")
+    ap.add_argument("--require-lua", default=None, metavar="EXPR",
+                     help="--generate-session only: a single-line Lua "
+                          "expression that must evaluate to true before "
+                          "the save, re-tried across --settle-seconds. "
+                          "Generation FAILS if it never becomes true, so a "
+                          "fixture cannot silently come out missing the very "
+                          "state it was created to capture")
     ap.add_argument("--port", type=int, default=9280,
                      help="--generate-session only: debug-console port "
                           "for the generation engine boot")

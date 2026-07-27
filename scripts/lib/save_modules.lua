@@ -53,7 +53,8 @@
 --                              (used to build the envelope's known/
 --                              required id sets, requirement 12/13)
 --   snapshotAll()           -- {ok=true, components={{id,version,payload},..},
---                              references={{component=,kind=,id=,owner=,path=},..}}
+--                              references={{component=,kind=,id=,owner=,
+--                              path=,page=},..}}
 --                              or {ok=false, error=...} -- a REQUIRED
 --                              component's snapshot/validate/encode
 --                              failure aborts the WHOLE save (requirement
@@ -92,9 +93,10 @@
 --                              every currently-registered component.
 --                              from state a NEWER request just prepared.
 --                              references (issue #764, save-overhaul C3)
---                              is every {component=,kind=,id=,owner=,path=}
---                              edge every registered component's
---                              references() hook reported, flattened --
+--                              is every {component=,kind=,id=,owner=,
+--                              path=,page=} edge every registered
+--                              component's references() hook reported,
+--                              flattened --
 --                              the caller cross-validates these against
 --                              the loaded session's real entity sets.
 --   applyAll()              -- apply the prepared, already-validated
@@ -521,7 +523,7 @@ local function snapshotAllImpl()
                                 referenceEdges[#referenceEdges + 1] =
                                     { component = id, kind = r.kind,
                                       id = r.id, owner = r.owner,
-                                      path = r.path }
+                                      path = r.path, page = r.page }
                             end
                         end
                     end
@@ -669,7 +671,7 @@ local function prepareLoadImpl(componentsList, isMigratingLegacyBaseline)
                                         referenceEdges[#referenceEdges + 1] =
                                             { component = id, kind = r.kind,
                                               id = r.id, owner = r.owner,
-                                              path = r.path }
+                                              path = r.path, page = r.page }
                                     end
                                 end
                             end

@@ -36,6 +36,8 @@ M.AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
 --   unit_ai_pickup.lua's pickupOrder
 --   unit_ai_needs.lua's forageTarget/forageLoot
 --   unit_ai_farm.lua's harvestLoot
+--   unit_ai_locations.lua's knownLocations (#915 -- the only kind whose
+--     edge also carries its own `page`, see addRef below)
 -- (the *Candidate fields carry no reference here at all -- see
 -- unit_ai_save.lua's TRANSIENT_CANDIDATE_FIELDS: they are stripped
 -- before this function ever sees them.) CALLED by saveModules.prepareLoad
@@ -83,10 +85,19 @@ end
 -- of a synthetic "kind#id" string with no location in it.
 local function unitAiReferences(data)
     local refs = {}
-    local function addRef(kind, rawId, owner, path)
+    -- `page` (#915) is the edge's OWN declared world page, supplied only
+    -- by the one kind whose id is meaningless without it
+    -- (location_instance -- a PER-PAGE allocator whose durable identity
+    -- is (page, id), #911). Unlike craft_bill/ground_item, which borrow
+    -- the OWNING unit's page, a remembered location names its page
+    -- itself: the page is part of what was remembered, not a fact about
+    -- where the remembering unit currently stands. nil (and harmlessly
+    -- absent on the wire) for every other kind.
+    local function addRef(kind, rawId, owner, path, page)
         local id = refId(rawId)
         if id ~= nil then
-            refs[#refs + 1] = { kind = kind, id = id, owner = owner, path = path }
+            refs[#refs + 1] = { kind = kind, id = id, owner = owner,
+                                path = path, page = page }
         end
     end
     local function addRefList(kind, ids, owner, path)
@@ -137,6 +148,15 @@ local function unitAiReferences(data)
         end
         addRefList("ground_item", s.forageLoot, uid, prefix .. ".forageLoot")
         addRefList("ground_item", s.harvestLoot, uid, prefix .. ".harvestLoot")
+        -- Per-unit location memory (#915). Each entry IS its own typed
+        -- reference on the wire (see wrapUnitState), so the id is read
+        -- off the entry itself rather than a nested field.
+        if s.knownLocations then
+            for i, k in ipairs(s.knownLocations) do
+                addRef("location_instance", k.id, uid,
+                       prefix .. ".knownLocations[" .. i .. "]", k.page)
+            end
+        end
     end
     return refs
 end
@@ -171,6 +191,16 @@ local function unwrapRefList(vs)
     for i, v in ipairs(vs) do out[i] = unwrapRef(v) end
     return out
 end
+-- Per-unit location memory (#915): the wire codec lives with the module
+-- that owns the field's live shape (scripts/unit_ai_locations.lua) --
+-- both to keep this file inside its line budget and because a memory
+-- entry, unlike every field above, is not a bare id that gets boxed.
+-- It is already a record ({ page, id, x, y }), so the ENTRY ITSELF is
+-- the typed reference and only gains a `__ref` tag. Requiring it here
+-- is safe: unit_ai_locations.lua requires nothing at module scope.
+local locationsMod  = require("scripts.unit_ai_locations")
+local LOCATION_KIND = locationsMod.REF_KIND
+
 -- Shallow-copy `s[field]` and apply `fn` to its own `subfield`.
 local function mapNested(s, field, subfield, fn)
     if s[field] == nil then return end
@@ -230,6 +260,7 @@ local function wrapUnitState(uid, s)
     end
     copy.forageLoot = wrapRefList("ground_item", copy.forageLoot)
     copy.harvestLoot = wrapRefList("ground_item", copy.harvestLoot)
+    copy.knownLocations = locationsMod.wrapForSave(copy.knownLocations)
     return copy
 end
 
@@ -263,6 +294,7 @@ local function unwrapUnitState(s)
     end
     copy.forageLoot = unwrapRefList(copy.forageLoot)
     copy.harvestLoot = unwrapRefList(copy.harvestLoot)
+    copy.knownLocations = locationsMod.unwrapFromSave(copy.knownLocations)
     return copy
 end
 
@@ -382,6 +414,30 @@ local function checkOwnerRef(v, uid, errs)
             .. ") does not match its own key (" .. tostring(uid) .. ")"
     end
 end
+-- One persisted location memory (#915). checkRefTag already covers the
+-- typed-reference half (present, __ref == "location_instance", integer
+-- id >= 1 -- Location.Instance.firstLocationInstanceId, the same
+-- allocator base every non-ground-item kind uses). The rest is what
+-- makes a per-page identity usable at all: without a well-formed page
+-- string the id names nothing (two pages allocate the same numbers), and
+-- without numeric anchor coordinates the nearest-lookup arithmetic in
+-- unit_ai_locations.lua would error on a value that decoded "fine".
+local function checkKnownLocation(v, uid, path, errs)
+    local before = #errs
+    checkRefTag(v, LOCATION_KIND, uid, path, errs, true)
+    if #errs > before then return end
+    if type(v.page) ~= "string" or v.page == "" then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
+            .. " has a missing or non-string world page ("
+            .. tostring(v.page) .. ")"
+    end
+    if type(v.x) ~= "number" or type(v.y) ~= "number" then
+        errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. path
+            .. " has non-numeric remembered coordinates ("
+            .. tostring(v.x) .. ", " .. tostring(v.y) .. ")"
+    end
+end
+
 function M.validateRefTags(uid, s, errs)
     checkOwnerRef(s.__owner, uid, errs)
     for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
@@ -431,6 +487,11 @@ function M.validateRefTags(uid, s, errs)
     if s.harvestLoot then
         for i, v in ipairs(s.harvestLoot) do
             checkRefTag(v, "ground_item", uid, "harvestLoot[" .. i .. "]", errs)
+        end
+    end
+    if s.knownLocations then
+        for i, v in ipairs(s.knownLocations) do
+            checkKnownLocation(v, uid, "knownLocations[" .. i .. "]", errs)
         end
     end
 end

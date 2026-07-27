@@ -68,6 +68,11 @@ import World.Page.Types (WorldPageId)
 --   (requirement 1). 'RefContent' further distinguishes WHICH gameplay
 --   content catalogue a def-name reference resolves against — see
 --   'ContentKind'.
+--   'RefLocationInstance' is the one kind whose id is meaningless on its
+--   own: a 'Location.Instance.LocationInstanceId' is allocated PER PAGE
+--   (#911), so a reference to one must carry its owning page as real
+--   payload — see 'World.Save.Integrity.lrePage'. Appended last, per the
+--   append-only enum policy.
 data RefKind
     = RefPage
     | RefUnit
@@ -77,6 +82,7 @@ data RefKind
     | RefPowerNode
     | RefGroundItem
     | RefContent !ContentKind
+    | RefLocationInstance
     deriving (Show, Eq, Ord, Generic, Serialize)
 
 -- | Gameplay content catalogues a stable, kind-qualified def-name
@@ -130,6 +136,7 @@ refKindText k = case k of
     RefPowerNode    → "power_node"
     RefGroundItem   → "ground_item"
     RefContent ck   → "content_" <> contentKindText ck
+    RefLocationInstance → "location_instance"
 
 contentKindText ∷ ContentKind → Text
 contentKindText ck = case ck of

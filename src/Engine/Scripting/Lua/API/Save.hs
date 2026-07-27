@@ -44,6 +44,9 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingInfectionReferences
                         , renderMissingInfectionRef)
 import Location.Types (LocationRegistry(..), LocationDef(..))
+import Location.Instance
+    (LocationInstance(..), LocationInstanceId(..), instancesToList)
+import World.Generate.Types (WorldGenParams(..))
 import Building.Types (BuildingManager(..), BuildingId(..))
 import Unit.Types (UnitManager(..), UnitId(..))
 import Item.Types (ItemManager(..), ItemInstance(..))
@@ -444,6 +447,12 @@ knownEntitiesFromSaveData sd = KnownEntities
     , keGroundItemsByPage = HM.fromList
         [ (wpsPageId w, HS.fromList (HM.keys (gisItems (wpsGroundItems w))))
         | w ← pages ]
+    , keLocationsByPage = HM.fromList
+        [ (wpsPageId w, HS.fromList
+              [ unLocationInstanceId (liId inst)
+              | inst ← instancesToList
+                    (wgpLocationInstances (wpsGenParams w)) ])
+        | w ← pages ]
     , keUnitPage = HM.fromList
         [ (fromIntegral (unUnitId uid), wpsPageId w)
         | w ← pages, uid ← HM.keys (usnInstances (wpsUnits w)) ]
@@ -680,8 +689,8 @@ continueLoad env logger requestId saveName descriptors = do
                         -- "World.Save.Integrity"'s haddock) — logged as
                         -- diagnostics only (requirement 16).
                         let known = knownEntitiesFromSaveData resolvedSaveData
-                            edges = [ LuaRefEdge c k i o p
-                                    | (c, k, i, o, p) ← luaRefs ]
+                            edges = [ LuaRefEdge c k i o p pg
+                                    | (c, k, i, o, p, pg) ← luaRefs ]
                             -- componentVersions (round-2 review, issue
                             -- #764): 'descriptors' is this SAME load's
                             -- current Lua registry ({id,version,required}),
@@ -897,7 +906,7 @@ collectLuaComponents
     ∷ LoggerState
     → Lua.LuaE Lua.Exception
         (Either Text ( [(Text, Word32, Bool, BS.ByteString)]
-                     , [(Text, Text, Int, Maybe Int, Text)] ))
+                     , [(Text, Text, Int, Maybe Int, Text, Maybe Text)] ))
 collectLuaComponents logger = do
     ok ← callSaveModules1 logger "snapshotAll" 0 (return ())
     if not ok
@@ -970,8 +979,14 @@ readErrorStringField = do
 --   optional diagnostics-only fields: 'Nothing'/empty when absent or
 --   not the expected type, never a reason to drop the whole edge the
 --   way a malformed @component@/@kind@/@id@ does.
+--
+--   @page@ (#915) is optional in the same shape-tolerant sense, but for
+--   the one kind that declares it (@location_instance@) it is NOT merely
+--   diagnostic: a per-page instance id names nothing on its own, so an
+--   edge missing its page resolves against nothing — see
+--   'World.Save.Integrity.luaEdgeResolves'.
 readReferenceEdgeField
-    ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int, Text))
+    ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int, Text, Maybe Text))
 readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "component"
     mcompB ← Lua.tostring (-1)
@@ -988,12 +1003,16 @@ readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "path"
     mpathB ← Lua.tostring (-1)
     Lua.pop 1
+    _ ← Lua.getfield (-1) "page"
+    mpageB ← Lua.tostring (-1)
+    Lua.pop 1
     case (mcompB, mkindB, mid) of
         (Just compB, Just kindB, Just i) →
             return (Just ( TE.decodeUtf8Lenient compB
                          , TE.decodeUtf8Lenient kindB, fromIntegral i
                          , fromIntegral ⊚ mowner
-                         , maybe "" TE.decodeUtf8Lenient mpathB ))
+                         , maybe "" TE.decodeUtf8Lenient mpathB
+                         , TE.decodeUtf8Lenient ⊚ mpageB ))
         _ → return Nothing
 
 -- | Call @saveModules.prepareLoad(components, requestId, isMigrating)@
@@ -1020,7 +1039,7 @@ readReferenceEdgeField = do
 --   this never gates the load — see "World.Save.Integrity"'s haddock).
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)] → Bool
-    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text)])
+    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text, Maybe Text)])
 prepareLuaLoad logger requestId components isMigratingLegacyBaseline = do
     ok ← callSaveModules1 logger "prepareLoad" 3
             (pushComponentsArray components

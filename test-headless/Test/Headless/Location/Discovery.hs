@@ -22,7 +22,8 @@ import Location.Types
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Bounds (RelBounds(..))
-import Location.Discovery (DiscoveryHit(..), findDiscoveries)
+import Location.Discovery
+    (DiscoveryHit(..), findDiscoveries, AwarenessHit(..), findAwareness)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), LocationInstances
     , LocationLifecycle(..), buildLocationInstances, instancesToList
@@ -204,6 +205,72 @@ spec = describe "Location discovery" $ do
             let cleared = instancesAt LifecycleCleared
             setLocationLifecycle loc1Id LifecycleDiscovered cleared
                 `shouldBe` Nothing
+
+    describe "findAwareness: per-unit location knowledge (#915)" $ do
+        let aware1 uid = AwarenessHit loc1Id loc1Coord (8, 8) "Small Ruin" uid
+
+        it "reports the qualifying player unit inside the halo" $
+            findAwareness 0 instances1 (playerAt 8 8) `shouldBe` [aware1 1]
+
+        it "reports nothing for a unit outside the expanded bounds" $
+            findAwareness 0 instances1 (playerAt 17 8) `shouldBe` []
+
+        it "reports EVERY qualifying unit, not just the discoverer — two \
+           \acolytes in one halo both learn it" $
+            -- findDiscoveries attributes the transition to the first
+            -- qualifying unit alone; awareness must not inherit that.
+            findAwareness 0 instances1
+                [ (1, FactionPlayer, 8, 8), (2, FactionPlayer, 0, 0) ]
+                `shouldBe` [aware1 1, aware1 2]
+
+        it "keeps reporting a location that is ALREADY discovered — a \
+           \unit arriving later still learns it" $ do
+            -- The exact pairing that would break if awareness were
+            -- gated on the one-time lifecycle promotion: the player-wide
+            -- layer is finished with this location, the unit is not.
+            forM_ [ LifecycleDiscovered, LifecycleActive
+                  , LifecycleCleared, LifecycleDepleted ] $ \l → do
+                findDiscoveries 0 (instancesAt l) (playerAt 8 8)
+                    `shouldBe` []
+                findAwareness 0 (instancesAt l) (playerAt 8 8)
+                    `shouldBe` [aware1 1]
+
+        describe "player-OWNERSHIP contract is shared with discovery (#912)" $ do
+            forM_ [f | f ← allFactions, f ≢ FactionPlayer] $ \fid →
+                it (T.unpack (factionTag fid)
+                     <> " standing inside never gains awareness") $
+                    findAwareness 0 instances1 [(1, fid, 8, 8)] `shouldBe` []
+
+            it "a debug unit inside gains nothing while a player unit \
+               \alongside gains it" $
+                findAwareness 0 instances1
+                    [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 8, 8) ]
+                    `shouldBe` [aware1 2]
+
+        it "shares the seam-aware containment discovery uses — never a \
+           \second, independently-drifting geometry" $ do
+            findAwareness 0 seamInstances (playerAt 8 24) `shouldBe` []
+            findAwareness 2 seamInstances (playerAt 8 24)
+                `shouldBe` [AwarenessHit loc1Id (ChunkCoord 1 0) (24, 8)
+                                          "Small Ruin" 1]
+
+        it "carries the instance identity and anchor a memory keys on" $
+            case findAwareness 0 instances1 (playerAt 8 8) of
+                [h] → do
+                    ahInstance h `shouldBe` loc1Id
+                    ahAnchor h `shouldBe` (8, 8)
+                other → expectationFailure ("expected one hit, got " <> show other)
+
+        it "every discovery is also an awareness hit for the same unit \
+           \and instance — the two layers cannot disagree about geometry" $ do
+            let units = [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 8, 8)
+                        , (3, FactionPlayer, 0, 16), (4, FactionPlayer, 40, 40) ]
+                discovered = findDiscoveries 0 instances1 units
+                aware      = findAwareness 0 instances1 units
+            [ (dhInstance d, dhUnit d) | d ← discovered ]
+                `shouldBe` [(loc1Id, 2)]
+            [ (ahInstance a, ahUnit a) | a ← aware ]
+                `shouldBe` [(loc1Id, 2), (loc1Id, 3)]
 
     describe "WorldGenParams: discovery persistence" $ do
         it "every new location starts undiscovered by default" $

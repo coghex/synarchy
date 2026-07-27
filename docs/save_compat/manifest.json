@@ -459,6 +459,102 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/d1-location-instance-identity.expected.json"
         }
       ]
+    },
+    {
+      "id": "e1-unit-location-knowledge",
+      "description": "Per-unit location knowledge (issue #915, epic #918): lua.unit_ai became v4, adding aiState[uid].knownLocations -- a durable, reference-bearing list of typed {__ref='location_instance', page, id, x, y} memories keyed by the (WorldPageId, LocationInstanceId) identity #911 introduced. This baseline tracks a REAL current-format session written by the live engine at lua.unit_ai v4, so the NEW component shape has its own compatibility coverage; v1/v2/v3 payloads stay tracked by the b3/c3/d1 baselines above and decode with the field absent (never inferred from the player-wide discovery lifecycle).",
+      "declaredAt": "(fill in: YYYY-MM-DD)",
+      "declaredByIssue": 766,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "scripts/unit_ai_save.lua's decode (v1 -> wrapAiState, v2 -> addOwnerToAiState, v3 -> identity: knownLocations is absent in every pre-v4 payload and absent IS the correct v4 value)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "e1-unit-location-knowledge-session",
+          "path": "test-headless/data/save-compat/e1-unit-location-knowledge.bin",
+          "kind": "complete-session",
+          "sha256": "24f29b64a98806e3d05ae4a7f41cfdb9cc182259f195d33c9861a9d537359707",
+          "sizeBytes": 1956142,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session --seed 42 --world-size 24 --plate-count 3 --spawn-building cargo_hold_S --spawn-unit acolyte --spawn-unit-at 104,40 --settle-seconds 3 --require-lua \"#(require('scripts.unit_ai').getKnownLocations(1) or {}) > 0\"): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 24, 3), building.spawn('cargo_hold_S', 0, 0), then unit.spawn('acolyte', 104, 40, 0, 'player') -- tile (104,40) is the anchor of the single ruin_small seed 42 places at this size, so the acolyte spawns INSIDE its discovery halo and the unit-AI tick ingests the memory before the save. --require-lua holds the save until aiState[1].knownLocations is actually non-empty, so this fixture can never silently regress to carrying only an ABSENT v4 field (which is exactly what its first revision did). worldSize 24 is the SMALLEST world that places a location at all (16 places none at any seed tried), hence the fixture's size. Then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed; note that summary is Lua-OPAQUE by construction, so the populated knownLocations payload is asserted separately by the lua-unit-ai-v4 component-focused fixture below.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/e1-unit-location-knowledge.expected.json"
+        },
+        {
+          "id": "lua-unit-ai-v4",
+          "path": "test-headless/data/save-compat/lua-unit-ai-v4.bin",
+          "kind": "component-focused",
+          "sha256": "10027630210e6bd355b94d3e8d20fd82c59cf87aa96813159a887292483003de",
+          "sizeBytes": 301,
+          "provenance": "Generated through the real codec: a LIVE-shaped aiState entry ({[7] = {currentAction='idle', attackTargetUid=8, knownLocations={{page='generated_page', id=1, x=104, y=40}, {page='other_page', id=1, x=3, y=4}}}}) run through the PRODUCTION encoder itself -- scripts/unit_ai_save_refs.lua's wrapAiState, then scripts/lib/data_codec.lua's M.encode -- inside a genuine HsLua VM (cabal repl, Lua.run/Lua.dostring, the SAME entry points collectLuaComponents uses in Engine.Scripting.Lua.API.Save), so the tracked bytes are what the real save path emits rather than a hand-written table believed to match it. Exists because the e1 SESSION fixture's canonical summary is Lua-OPAQUE by construction (SessionSnapshot carries no Lua state), so save_compat_audit alone would pass even if this typed memory were dropped or mis-encoded; Test.Headless.Lua.SaveModules's 'tracked v1 fixtures from disk' block drives these bytes through the real saveModules.prepareLoad/applyAll and asserts every page/id/anchor and both page-qualified location_instance edges. The two memories deliberately share instance id 1 on DIFFERENT pages -- the aliasing case a page-blind reference would get wrong.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/lua-unit-ai-v4.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

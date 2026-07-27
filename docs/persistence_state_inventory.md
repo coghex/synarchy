@@ -581,7 +581,14 @@ resolve against the OWNING unit's page specifically (each `references()`
 edge carries an `owner` — the unit id it came from — since `BillId`/
 ground-item ids are PER-PAGE allocators, and a session-wide match would
 let a reference meant for one page's missing bill falsely resolve
-against an unrelated same-numbered bill elsewhere). Either way, a
+against an unrelated same-numbered bill elsewhere). `location_instance`
+(#915, per-unit location memory) is per-page too, but resolves against
+the page the EDGE ITSELF declares (`page` on the reference edge, and
+`page` inside the persisted `{__ref="location_instance", id, page, x, y}`
+entry) rather than the owning unit's: a placed location's durable
+identity is `(WorldPageId, LocationInstanceId)` (#911) and the page is
+part of what the unit remembers, not an incidental fact about where the
+remembering unit currently stands. Either way, a
 reference that doesn't resolve is a non-blocking diagnostic (dangling
 target, or one at/above its kind's allocator), never a load failure —
 the #761-established tolerated-dangling-reference contract. Classified
@@ -600,6 +607,7 @@ the `{__ref=kind, id=N}` wire shape and the v1→v2 migration.
 | `craft_bill` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `craft-bills` component (`BillId`) | Persist as identity/reference |
 | `item_instance` | `unit_ai_save_refs.lua` | session-wide (global allocator) | carried inventory, owned by the `units` component's own snapshot | Persist as identity/reference |
 | `ground_item` | `unit_ai_save_refs.lua` | owning unit's page (per-page allocator) | `world-activity` component (ground items) | Persist as identity/reference |
+| `location_instance` | `unit_ai_save_refs.lua` | the edge's OWN declared world page (per-page allocator) | `world-pages` component (`LocationInstanceId`, on the page's gen params) | Persist as identity/reference |
 
 ---
 
