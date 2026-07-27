@@ -22,6 +22,7 @@ module Engine.Asset.YamlTutorials
   , describeTutorialLoadError
   , validateTutorialDoc
   , loadTutorialYaml
+  , loadTutorialDir
   ) where
 
 import UPrelude
@@ -32,6 +33,8 @@ import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import System.Directory (doesDirectoryExist, listDirectory)
+import System.FilePath (takeExtension)
 import Engine.Core.Log (LoggerState, logDebug, logError, LogCategory(..))
 import Tutorial.Types
 
@@ -346,6 +349,61 @@ firstDuplicate = go HS.empty
     go seen (x:xs)
       | HS.member x seen = Just x
       | otherwise        = go (HS.insert x seen) xs
+
+-- | Load the WHOLE tutorial directory — the single call that decides
+--   whether the session has a tutorial. Unlike every sibling registry,
+--   which is populated one @engine.loadXYaml(file)@ call per file, this
+--   slice supports exactly ONE active tree, and \"exactly one\" is not
+--   a property any single file can establish. Enumerating the directory
+--   here is what makes both halves of that contract enforceable:
+--
+--   * __presence__ — a missing directory, or one with no @.yaml@ files,
+--     is a load-time error, not a silently absent tutorial;
+--   * __uniqueness__ — two files that both validate would otherwise
+--     race, the last one read winning, on an order the OS chooses. Two
+--     trees is an error instead.
+--
+--   Any per-file parse or validation failure fails the whole load —
+--   the tree is the all-or-nothing unit — and every failure path
+--   returns 'Nothing' after an actionable logged ERROR, so the caller
+--   publishes nothing and boot carries on with an explicitly empty
+--   tutorial registry. Files are visited in sorted order purely so the
+--   logged diagnostics are reproducible; the RESULT is order-independent
+--   by construction.
+--
+--   Only @.yaml@ is considered, matching the extension every other
+--   content directory is loaded with.
+loadTutorialDir ∷ LoggerState → FilePath → IO (Maybe TutorialTree)
+loadTutorialDir logger dir = do
+  exists ← doesDirectoryExist dir
+  if not exists
+    then missing "does not exist"
+    else do
+      entries ← listDirectory dir
+      let files = sort [ dir ⊘ f | f ← entries, takeExtension f ≡ ".yaml" ]
+      if null files
+        then missing "contains no .yaml files"
+        else do
+          results ← traverse (loadTutorialYaml logger) files
+          -- Each Nothing has already been logged by name.
+          if any isNothing results
+            then return Nothing
+            else case catMaybes results of
+              [tree] → return (Just tree)
+              trees  → do
+                logError logger CatAsset $ "Expected exactly one tutorial"
+                  <> " tree in " <> T.pack dir <> ", found "
+                  <> T.pack (show (length trees)) <> " ("
+                  <> T.intercalate ", " (map T.pack files)
+                  <> "); this slice supports one active tree, so remove"
+                  <> " all but one"
+                return Nothing
+  where
+    missing why = do
+      logError logger CatAsset $ "Tutorial directory " <> T.pack dir
+        <> " " <> why <> "; expected exactly one tutorial tree '"
+        <> activeTutorialTreeId <> "'"
+      return Nothing
 
 -- | Parse and validate one tutorial YAML file. Returns 'Nothing' with
 --   an actionable logged ERROR — naming the file and the offending

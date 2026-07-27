@@ -27,15 +27,16 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Yaml as Yaml
 import qualified HsLua as Lua
 import Control.Exception (bracket_)
-import Data.IORef (writeIORef)
-import System.Directory (getTemporaryDirectory, removeFile)
+import Data.IORef (readIORef, writeIORef)
+import System.Directory
+  (getTemporaryDirectory, createDirectoryIfMissing, removePathForcibly)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability, toCoreCapability)
 import Engine.Core.Capability.ContentRegistries
   (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Asset.YamlTutorials
 import Engine.Scripting.Lua.API.Tutorial
-  (loadTutorialYamlFn, getTutorialTreeFn)
+  (loadTutorialDirFn, getTutorialTreeFn)
 import Tutorial.Types
 
 -- | The shipped tree, as the engine loads it.
@@ -324,42 +325,27 @@ spec = describe "Tutorial definitions" $ do
                 ⧺ obj "shared" "full" 1 [] ))
                 `shouldBe` Left (TutorialMultipleParents "shared" ["a", "b"])
 
-    describe "the registry never holds a partial tree" $ do
-        it "starts empty and stays empty when validation fails" $ do
+        it "the registry never holds a partial tree" $ do
             activeTutorialTree emptyTutorialRegistry `shouldBe` Nothing
-            tutorialLoadFailed emptyTutorialRegistry `shouldBe` False
             -- A failed validation yields no tree at all, so there is
             -- nothing a caller could publish half of.
             validateText (docWith "first_session"
                 (obj "root" "full" 1 [refs "children" ["ghost"]]))
                 `shouldSatisfy` isLeft
-
-        it "a failed load drops an already-published tree" $ do
-            tree ← loadShippedTree
-            let published = publishTutorialTree tree emptyTutorialRegistry
-            activeTutorialTree published `shouldSatisfy` isJust
-            let afterFailure = failTutorialLoad published
-            activeTutorialTree afterFailure `shouldBe` Nothing
-            tutorialLoadFailed afterFailure `shouldBe` True
-
-        it "a later valid file cannot republish after a failure" $ do
-            -- Directory read order must not decide whether the session
-            -- has a tutorial: once anything under data/tutorials/ has
-            -- failed, nothing publishes.
-            tree ← loadShippedTree
-            let afterFailure = failTutorialLoad emptyTutorialRegistry
-                republished  = publishTutorialTree tree afterFailure
-            activeTutorialTree republished `shouldBe` Nothing
-            tutorialLoadFailed republished `shouldBe` True
   where
     isLeft (Left _) = True
     isLeft _        = False
 
--- | The read-only Lua exposure (requirement 6), driven through the real
---   @content-registries@ projection of the live engine: load the
---   shipped file with the real loader verb, then read it back with the
---   real query verb and check the hierarchy and order survive
---   marshalling.
+-- | The read-only Lua exposure (requirement 6) plus the directory
+--   contract, driven through the real @content-registries@ projection
+--   of the live engine.
+--
+--   The loader verb is a DIRECTORY verb, so this is where "exactly one
+--   tree" is actually testable: presence (a missing or yaml-less
+--   directory), uniqueness (two files that both validate), and
+--   all-or-nothing (one good file beside one bad one) all fail the
+--   whole load and leave @engine.getTutorialTree()@ nil, whatever
+--   order the OS lists the directory in.
 luaSpec ∷ SpecWith EngineEnv
 luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
     it "engine.getTutorialTree() reports the hierarchy in display order" $
@@ -371,10 +357,7 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
         writeIORef (crTutorialRegistryRef regs) emptyTutorialRegistry
         result ← Lua.run $ do
             Lua.openlibs
-            Lua.pushstring (TE.encodeUtf8 (T.pack firstSessionPath))
-            _ ← loadTutorialYamlFn core regs
-            loaded ← Lua.tointeger (-1)
-            Lua.pop 1
+            loaded ← loadDir core regs shippedTutorialDir
             _ ← getTutorialTreeFn regs
             treeIsTable ← Lua.istable (-1)
             tid ← field "id"
@@ -420,37 +403,53 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
         subCount `shouldBe` 2
         sub1 `shouldBe` Just "Prepare water"
         sub2 `shouldBe` Just "Prepare food"
+        writeIORef (crTutorialRegistryRef regs) emptyTutorialRegistry
 
-    it "a failed load leaves engine.getTutorialTree() nil" $ \env → do
-        let core = toCoreCapability env
-            regs = toContentRegistriesCapability env
+    it "accepts a directory holding exactly one valid tree" $ \env →
+        withTutorialDir "one" [("first_session.yaml", validTutorialYaml)] $
+          \dir → loadAndQuery env dir `shouldReturn` (Just 1, Just "first_session")
+
+    it "rejects a directory with no tutorial files" $ \env →
+        -- A non-YAML file is ignored the same way every other content
+        -- directory ignores one, so this is still "no tree present".
+        withTutorialDir "empty" [("README.md", "not a tutorial\n")] $
+          \dir → loadAndQuery env dir `shouldReturn` (Just 0, Nothing)
+
+    it "rejects a directory that does not exist" $ \env → do
         tmp ← getTemporaryDirectory
-        let badPath = tmp ⊘ "synarchy_957_invalid_tutorial.yaml"
-        bracket_ (writeFile badPath invalidTutorialYaml)
-                 (removeFile badPath) $ do
-            writeIORef (crTutorialRegistryRef regs) emptyTutorialRegistry
-            result ← Lua.run $ do
-                Lua.openlibs
-                okGood    ← loadOne core regs firstSessionPath
-                afterGood ← queryTreeId regs
-                okBad     ← loadOne core regs badPath
-                afterBad  ← queryTreeId regs
-                -- A valid file arriving AFTER the failure must not
-                -- republish: whether the session has a tutorial cannot
-                -- depend on the order data/tutorials/ is read in.
-                okRetry    ← loadOne core regs firstSessionPath
-                afterRetry ← queryTreeId regs
-                return ( okGood, afterGood, okBad, afterBad
-                       , okRetry, afterRetry )
-            let (okGood, afterGood, okBad, afterBad, okRetry, afterRetry) =
-                    result
-            okGood     `shouldBe` Just 1
-            afterGood  `shouldBe` Just "first_session"
-            okBad      `shouldBe` Just 0
-            afterBad   `shouldBe` Nothing
-            okRetry    `shouldBe` Just 0
-            afterRetry `shouldBe` Nothing
-        -- Leave the shared engine's registry as we found it.
+        loadAndQuery env (tmp ⊘ "synarchy_957_absent_tutorials")
+            `shouldReturn` (Just 0, Nothing)
+
+    it "rejects two files that both declare a valid tree" $ \env →
+        -- Without this, the winner would be whichever file the OS
+        -- listed last.
+        withTutorialDir "two"
+            [ ("a_first_session.yaml", validTutorialYaml)
+            , ("b_first_session.yaml", validTutorialYaml) ] $
+          \dir → loadAndQuery env dir `shouldReturn` (Just 0, Nothing)
+
+    it "rejects a valid file sitting beside an invalid one" $ \env →
+        withTutorialDir "mixed"
+            [ ("a_valid.yaml",   validTutorialYaml)
+            , ("b_invalid.yaml", invalidTutorialYaml) ] $
+          \dir → loadAndQuery env dir `shouldReturn` (Just 0, Nothing)
+
+    it "rejects the same pair in the opposite directory order" $ \env →
+        -- The mirror of the case above: the outcome must not depend on
+        -- which file is read first.
+        withTutorialDir "mixed-rev"
+            [ ("a_invalid.yaml", invalidTutorialYaml)
+            , ("b_valid.yaml",   validTutorialYaml) ] $
+          \dir → loadAndQuery env dir `shouldReturn` (Just 0, Nothing)
+
+    it "a failed load leaves no tree from an earlier successful one" $
+      \env → do
+        let regs = toContentRegistriesCapability env
+        _ ← loadAndQuery env shippedTutorialDir
+        before ← readIORef (crTutorialRegistryRef regs)
+        activeTutorialTree before `shouldSatisfy` isJust
+        withTutorialDir "stale" [("broken.yaml", invalidTutorialYaml)] $
+          \dir → loadAndQuery env dir `shouldReturn` (Just 0, Nothing)
         writeIORef (crTutorialRegistryRef regs) emptyTutorialRegistry
   where
     -- Read a string field of the table on top of the stack, leaving the
@@ -462,15 +461,15 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
         Lua.pop 1
         return (TE.decodeUtf8Lenient ⊚ v)
 
-    -- One engine.loadTutorialYaml(path) call, leaving the stack exactly
-    -- as it found it. `loadTutorialYamlFn` reads its argument at the
+    -- One engine.loadTutorialDir(dir) call, leaving the stack exactly
+    -- as it found it. `loadTutorialDirFn` reads its argument at the
     -- ABSOLUTE index 1, so the stack must be restored between calls.
-    loadOne ∷ CoreCapability → ContentRegistriesCapability → FilePath
+    loadDir ∷ CoreCapability → ContentRegistriesCapability → FilePath
             → Lua.LuaE Lua.Exception (Maybe Lua.Integer)
-    loadOne core regs path = do
+    loadDir core regs path = do
         top ← Lua.gettop
         Lua.pushstring (TE.encodeUtf8 (T.pack path))
-        _ ← loadTutorialYamlFn core regs
+        _ ← loadTutorialDirFn core regs
         r ← Lua.tointeger (-1)
         Lua.settop top
         return r
@@ -485,6 +484,48 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
         r ← if isNil then return Nothing else field "id"
         Lua.settop top
         return r
+
+    -- Load one directory and read the result back, both through the
+    -- real Lua verbs.
+    loadAndQuery ∷ EngineEnv → FilePath
+                 → IO (Maybe Lua.Integer, Maybe Text)
+    loadAndQuery env dir = do
+        let core = toCoreCapability env
+            regs = toContentRegistriesCapability env
+        Lua.run $ do
+            Lua.openlibs
+            ok ← loadDir core regs dir
+            tid ← queryTreeId regs
+            return (ok, tid)
+
+-- | The shipped tutorial directory, as boot loads it.
+shippedTutorialDir ∷ FilePath
+shippedTutorialDir = "data/tutorials"
+
+-- | A throwaway tutorial directory holding exactly the given files.
+withTutorialDir ∷ String → [(FilePath, String)] → (FilePath → IO α) → IO α
+withTutorialDir name files act = do
+    tmp ← getTemporaryDirectory
+    let dir = tmp ⊘ ("synarchy_957_tutorials_" <> name)
+    bracket_ (setup dir) (removePathForcibly dir) (act dir)
+  where
+    setup dir = do
+        removePathForcibly dir
+        createDirectoryIfMissing True dir
+        forM_ files $ \(f, contents) → writeFile (dir ⊘ f) contents
+
+-- | A minimal complete tree — enough to validate, small enough to read.
+validTutorialYaml ∷ String
+validTutorialYaml = unlines
+    [ "id: first_session"
+    , "objectives:"
+    , "  - id: root"
+    , "    kind: full"
+    , "    label: l"
+    , "    tooltip: t"
+    , "    evaluator: e"
+    , "    order: 1"
+    ]
 
 -- | Parses as YAML, fails validation (`root` names an objective that
 --   does not exist) — the failure class a stray or half-edited file in

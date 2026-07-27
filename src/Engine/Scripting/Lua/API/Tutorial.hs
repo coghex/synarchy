@@ -7,13 +7,16 @@
 --   'ContentRegistriesCapability' and the logger only through
 --   'CoreCapability', so this module never touches an 'EngineEnv'.
 --
+--   The loader is a DIRECTORY verb rather than the per-file
+--   @engine.loadXYaml@ its siblings use — see 'loadTutorialDirFn'.
+--
 --   The query is the surface requirement 6 names: it hands Lua the
 --   ALREADY-VALIDATED tree in its deterministic display order, so the
 --   later tutorial runtime evaluates the declared keys without
 --   duplicating, mutating, or re-inferring YAML structure. Nothing here
 --   writes tutorial state — this slice has none.
 module Engine.Scripting.Lua.API.Tutorial
-  ( loadTutorialYamlFn
+  ( loadTutorialDirFn
   , getTutorialTreeFn
   ) where
 
@@ -21,64 +24,58 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
   (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
+import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Core.Log.Monad (getLoggerFor)
-import Engine.Asset.YamlTutorials (loadTutorialYaml)
+import Engine.Asset.YamlTutorials (loadTutorialDir)
 import Tutorial.Types
 
--- | engine.loadTutorialYaml(path) — parses, validates, and publishes
---   one tutorial tree file, returning 1 when a tree is published and 0
---   otherwise.
+-- | engine.loadTutorialDir(dir) — loads the WHOLE tutorial directory
+--   and publishes the one tree it must contain, returning 1 on success
+--   and 0 on failure.
 --
---   A file holds one WHOLE tree, so this is all-or-nothing: on any
---   parse or validation failure nothing is published, the registry is
---   left in its explicit empty\/unavailable state — DROPPING any tree
---   a previous call published, and latching so no later call can
---   republish — and 'loadTutorialYaml' has already logged an
---   actionable error naming the file and the offending objective. That
---   latch is what makes the outcome independent of the order
---   @data\/tutorials\/@ happens to be read in: one bad file means the
---   session has no tutorial, whichever position it occupies. Boot
---   never aborts on a bad tutorial file — the game simply comes up
---   without onboarding, loudly.
-loadTutorialYamlFn ∷ CoreCapability → ContentRegistriesCapability
-                   → Lua.LuaE Lua.Exception Lua.NumResults
-loadTutorialYamlFn core regs = do
+--   Deliberately a DIRECTORY verb, not the per-file
+--   @engine.loadXYaml(path)@ every sibling registry uses: this slice
+--   supports exactly one active tree, and neither half of that
+--   contract — that a tree is present, and that there is only one —
+--   can be checked from inside a single file. 'loadTutorialDir'
+--   enforces both and has already logged an actionable error for
+--   whichever failed.
+--
+--   The whole call is the all-or-nothing unit and it writes the
+--   registry exactly ONCE: the validated tree on success, the explicit
+--   empty state on any failure. So a failing load can never leave a
+--   tree an earlier call published, and the answer never depends on
+--   the order the OS lists the directory in. Boot never aborts on a
+--   bad tutorial directory — the game simply comes up without
+--   onboarding, loudly.
+loadTutorialDirFn ∷ CoreCapability → ContentRegistriesCapability
+                  → Lua.LuaE Lua.Exception Lua.NumResults
+loadTutorialDirFn core regs = do
   pathArg ← Lua.tostring 1
   case pathArg of
     Nothing → do
       Lua.pushnumber 0
       return 1
     Just pathBS → do
-      let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
+      let dirPath = T.unpack (TE.decodeUtf8Lenient pathBS)
       count ← Lua.liftIO $ do
         logger ← getLoggerFor core
-        mTree ← loadTutorialYaml logger filePath
+        mTree ← loadTutorialDir logger dirPath
         case mTree of
           Nothing → do
-            atomicModifyIORef' (crTutorialRegistryRef regs) $ \reg →
-              (failTutorialLoad reg, ())
+            writeIORef (crTutorialRegistryRef regs) emptyTutorialRegistry
             return (0 ∷ Int)
           Just tree → do
-            published ← atomicModifyIORef' (crTutorialRegistryRef regs) $
-              \reg → (publishTutorialTree tree reg, not (tutorialLoadFailed reg))
-            if published
-              then do
-                logInfo logger CatAsset $
-                  "loadTutorialYaml: loaded tutorial tree '" <> ttId tree
-                  <> "' from " <> T.pack filePath
-                return 1
-              else do
-                logWarn logger CatAsset $
-                  "loadTutorialYaml: not publishing tutorial tree '"
-                  <> ttId tree <> "' from " <> T.pack filePath
-                  <> " — an earlier tutorial file failed to load, so this"
-                  <> " session has no tutorial"
-                return 0
+            writeIORef (crTutorialRegistryRef regs)
+                       (singleTutorialRegistry tree)
+            logInfo logger CatAsset $
+              "loadTutorialDir: loaded tutorial tree '" <> ttId tree
+              <> "' from " <> T.pack dirPath
+            return 1
       Lua.pushnumber (Lua.Number (fromIntegral count))
       return 1
 

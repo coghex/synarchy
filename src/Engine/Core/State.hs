@@ -374,12 +374,12 @@ data EngineEnv = EngineEnv
     --   structure, presentation text, ordering, and the stable
     --   evaluator keys the Lua tutorial runtime dispatches on; no
     --   progress or completion state lives here. Written only by
-    --   `engine.loadTutorialYaml` and read back read-only through
-    --   `engine.getTutorialTree`. A file that fails to parse or
-    --   validate publishes nothing, drops any tree an earlier file
-    --   published, and latches so nothing publishes for the rest of
-    --   the session — so this is either the fully validated tree or
-    --   explicitly empty, never partial and never order-dependent.
+    --   `engine.loadTutorialDir`, which loads the WHOLE directory in
+    --   one call (that is what makes "exactly one tree" checkable),
+    --   and read back read-only through `engine.getTutorialTree`. That
+    --   one call writes this field exactly once — the validated tree,
+    --   or the explicit empty state on any failure — so it is never
+    --   partial and never depends on directory read order.
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.
