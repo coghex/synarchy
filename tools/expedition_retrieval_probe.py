@@ -102,11 +102,17 @@ SLOT = "expedition_retrieval_probe"
 LOG_A = "/tmp/expedition_retrieval_probe_a.log"
 LOG_B = "/tmp/expedition_retrieval_probe_b.log"
 
-# The ruin's two GUARANTEED fixed-position contents are a radio and a
-# steel canteen (data/locations/ruin_small.yaml); the other two entries
-# are loot-table rolls. The radio is the target: deterministic, and the
-# only shipped item with a provenance-blind consumer that needs no water
-# source to drive (check 5).
+# The retrieval target. The radio is the only shipped item with a
+# provenance-blind consumer that needs no water source to drive
+# (check 5), which is what makes it the target here.
+#
+# It is STAGED by this probe (see stage_target), not scavenged from the
+# ruin's own contents. #921 removed ruin_small's two fixed `kind: item`
+# entries — a ruin now guarantees no specific item, only weighted
+# loot-table rolls, and `radio` is deliberately not in ruin_common
+# (it is spawn-only starting equipment). Nothing about #920 is relaxed
+# by staging it: every check below still runs against a real ground
+# instance lying in a real placed ruin, ~HOME_MIN_DIST tiles from home.
 TARGET_DEF = "radio"
 
 # Home sits this far from the ruin anchor — comfortably outside the
@@ -386,9 +392,31 @@ def check_ai_tick_clean(chk: Checks, log_path: str, label: str) -> None:
 # --------------------------------------------------------------------------
 # Site selection
 # --------------------------------------------------------------------------
+def stage_target(port: int, gx: int, gy: int):
+    """Put the retrieval target on the ground at a chosen ruin's anchor.
+
+    #921: ruin contents are weighted loot-table draws now, so no ruin
+    guarantees a radio — and this probe needs a DETERMINISTIC target
+    (check 5 drives notify_allies' radio branch, which keys on defName).
+    Staging it here keeps that determinism without teaching the ruin to
+    guarantee anything. The ruin's chunk is already loaded by the
+    caller, so the instance lands in the room like any other ground
+    item; everything downstream reads it back through the same
+    item.listGround() surface it always did.
+
+    Returns the staged ground instance, or None if it never appeared."""
+    send(port, f"item.spawnGround('{TARGET_DEF}', {gx}, {gy}, nil, '{PAGE}'); "
+               f"return 'ok'")
+    return poll_until(15.0, lambda: next(
+        (g for g in ground_items(port)
+         if g.get("defName") == TARGET_DEF
+         and abs(g["x"] - gx) <= 3 and abs(g["y"] - gy) <= 3), None))
+
+
 def pick_site(chk: Checks, port: int):
-    """Choose a real placed ruin, its guaranteed radio, and a colony home
-    tile ~HOME_MIN_DIST..HOME_MAX_DIST away across walkable ground.
+    """Choose a real placed ruin, stage the retrieval target in it, and
+    find a colony home tile ~HOME_MIN_DIST..HOME_MAX_DIST away across
+    walkable ground.
 
     Returns (ruin, target_item, home_xy) or None."""
     ruins = poll_until(30.0, lambda: [
@@ -402,16 +430,6 @@ def pick_site(chk: Checks, port: int):
     for ruin in ruins:
         gx, gy = int(ruin["gx"]), int(ruin["gy"])
         load_region(port, int(ruin["cx"]), int(ruin["cy"]))
-        # Contents spawn when the ruin's chunk loads; give the queue a
-        # moment and require the guaranteed radio to actually be there.
-        target = poll_until(30.0, lambda: next(
-            (g for g in ground_items(port)
-             if g.get("defName") == TARGET_DEF
-             and abs(g["x"] - gx) <= 3 and abs(g["y"] - gy) <= 3), None))
-        if not target:
-            print(f"  ruin ({gx},{gy}): no {TARGET_DEF} spawned yet, trying next",
-                  flush=True)
-            continue
         rz = surface_z(port, gx, gy)
         best = None
         for c in ring_candidates(port, gx, gy):
@@ -424,15 +442,25 @@ def pick_site(chk: Checks, port: int):
                 best = (rough, c)
             if rough == 0:
                 break
-        if best:
-            rough, c = best
-            print(f"  site: ruin ({gx},{gy}) z={rz}, {TARGET_DEF} gid={target['id']} "
-                  f"at ({target['x']:.0f},{target['y']:.0f}), home ({c['x']},{c['y']}) "
-                  f"z={c['z']} at {dist((c['x'], c['y']), (gx, gy)):.1f} tiles, "
-                  f"corridor roughness {rough}", flush=True)
-            return ruin, target, (int(c["x"]), int(c["y"]))
-        print(f"  ruin ({gx},{gy}): no walkable home candidate, trying next",
-              flush=True)
+        if not best:
+            print(f"  ruin ({gx},{gy}): no walkable home candidate, trying next",
+                  flush=True)
+            continue
+        rough, c = best
+        # Staged only once this ruin is actually the site — a ruin
+        # rejected for its terrain must not be left holding a stray
+        # radio for a colonist to wander into and confuse check 5.
+        target = stage_target(port, gx, gy)
+        if not target:
+            print(f"  ruin ({gx},{gy}): staged {TARGET_DEF} never appeared, "
+                  f"trying next", flush=True)
+            continue
+        print(f"  site: ruin ({gx},{gy}) z={rz}, staged {TARGET_DEF} "
+              f"gid={target['id']} at ({target['x']:.0f},{target['y']:.0f}), "
+              f"home ({c['x']},{c['y']}) z={c['z']} at "
+              f"{dist((c['x'], c['y']), (gx, gy)):.1f} tiles, "
+              f"corridor roughness {rough}", flush=True)
+        return ruin, target, (int(c["x"]), int(c["y"]))
     chk.ok(False, "a ruin with a walkable colony site at "
                   f"{HOME_MIN_DIST}..{HOME_MAX_DIST} tiles exists")
     return None
@@ -631,7 +659,8 @@ def check_outbound(chk: Checks, port: int, carrier: int, target):
     chk.ok(saw_pickup_action,
            "the carrier acts on the order through the real pickup_ground AI action")
     if not chk.ok(picked is not None,
-                  f"the carrier reaches the ruin and picks the ruin's {TARGET_DEF} up "
+                  f"the carrier reaches the ruin and picks the {TARGET_DEF} lying "
+                  f"in it up "
                   f"({len(samples)} position samples over "
                   f"{dist(start, goal):.1f} tiles)"):
         return None

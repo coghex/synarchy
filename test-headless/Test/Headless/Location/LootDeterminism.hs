@@ -16,7 +16,9 @@
 --   used for every draw — a change to the mixing, to the weighted walk,
 --   or to the table's entries/weights all fail here and all require a
 --   deliberate fixture update, which is what stops the per-location
---   reward mapping #921 balances against from drifting silently.
+--   reward mapping from drifting silently. That matters more since
+--   #921: a ruin's contents are now ONLY these draws, so this table and
+--   this mapping are the whole of what a ruin is worth.
 module Test.Headless.Location.LootDeterminism
     ( spec
     ) where
@@ -43,9 +45,12 @@ toLootTableDef d = LootTableDef
                    | e ← ltydEntries d ]
     }
 
--- | The pinned composition of data/loot_tables/ruin_common.yaml. #921
---   owns this table's contents; when it changes there, this pin AND the
---   vectors below are updated together, deliberately.
+-- | The pinned composition of data/loot_tables/ruin_common.yaml. When
+--   the table changes there, this pin AND the vectors below are updated
+--   together, deliberately. #921 deliberately left it alone: `radio`
+--   and `canteen_steel_2l` stay OUT of it (they are spawn-only starting
+--   equipment), so dropping them from ruin_small removed them from ruin
+--   content entirely rather than moving them into the draw.
 pinnedRuinCommon ∷ LootTableDef
 pinnedRuinCommon = LootTableDef
     { ltdId = "ruin_common"
@@ -59,9 +64,18 @@ pinnedRuinCommon = LootTableDef
         ]
     }
 
--- | The context ruin_small's single @loot_table@ entry rolls under: it
---   is the THIRD entry in that definition's @contents@ list (after the
---   two fixed-position items).
+-- | One roll context, spelled out positionally.
+--
+--   ruin_small's single @loot_table@ entry rolls under entry index 1:
+--   #921 removed the two fixed-position items that used to precede it,
+--   so it is now the FIRST (and only) entry in that definition's
+--   @contents@ list, where it used to be the third. That shift is
+--   intentional and changes which items fresh worlds' ruins select;
+--   worlds saved before the change keep the loot they already spawned,
+--   which rides the persisted one-time content flag (#90) rather than
+--   being re-derived. The ruin_small vectors below pin the new index;
+--   the property blocks further down pass an arbitrary index, since
+--   what they assert holds for any entry.
 ctxAt ∷ Int → Int → Int → Int → LootRollContext
 ctxAt seed inst entry roll = LootRollContext
     { lrcWorldSeed  = seed
@@ -103,16 +117,18 @@ spec = describe "Location loot determinism" $ do
                 `shouldSatisfy` either (const False) (≡ pinnedRuinCommon)
 
     describe "fixed vectors" $ do
-        -- ruin_small's own contract: entry 3, two rolls, per instance.
-        it "pins ruin_common at seed 42, contents entry 3" $ do
-            sequenceFor ruinCommon 42 1 3 2
-                `shouldBe` [Just "rations", Just "steel_hardware"]
-            sequenceFor ruinCommon 42 2 3 2
-                `shouldBe` [Just "shovel_steel", Just "quinoa_sack"]
-            sequenceFor ruinCommon 42 3 3 2
-                `shouldBe` [Just "first_aid_kit", Just "steel_dagger"]
-            sequenceFor ruinCommon 42 4 3 2
-                `shouldBe` [Just "shovel_steel", Just "steel_dagger"]
+        -- ruin_small's own contract: entry 1 (#921 — see 'ctxAt'), two
+        -- rolls, per instance. Nothing else in the definition spawns
+        -- content now, so these ARE a ruin's entire yield.
+        it "pins ruin_common at seed 42, contents entry 1" $ do
+            sequenceFor ruinCommon 42 1 1 2
+                `shouldBe` [Just "shovel_steel", Just "steel_hardware"]
+            sequenceFor ruinCommon 42 2 1 2
+                `shouldBe` [Just "shovel_steel", Just "shovel_steel"]
+            sequenceFor ruinCommon 42 3 1 2
+                `shouldBe` [Just "first_aid_kit", Just "rations"]
+            sequenceFor ruinCommon 42 4 1 2
+                `shouldBe` [Just "steel_hardware", Just "steel_dagger"]
 
         it "pins a second world seed" $
             sequenceFor ruinCommon 1337 2 1 4
