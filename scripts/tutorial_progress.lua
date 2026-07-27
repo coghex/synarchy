@@ -504,8 +504,20 @@ function tutorialProgress.register()
             -- apply() with a pre-load snapshot, which clears them the
             -- same way -- correct for the same reason.)
             tutorialProgress.checked = {}
+            -- Resolve the tree BEFORE reconciling. On a normal load
+            -- nothing has asked this module for anything yet -- init()
+            -- only registers, and the load path reaches apply()
+            -- directly -- so the lazy tree is still unresolved and
+            -- `index` is nil.
+            -- Reconciling against a nil index is a no-op, which would
+            -- silently RETAIN a renamed/removed objective id and let
+            -- the very next save write it straight back out.
+            tutorialProgress.ensureTree()
             -- An id the current tree no longer has is scrubbed here, as
-            -- a diagnostic, not a load failure.
+            -- a diagnostic, not a load failure. With no tree available
+            -- at all this still keeps the ids untouched (see
+            -- reconcile): "I cannot judge these" is not "these are
+            -- wrong", and ensureTree retries on the next call.
             tutorialProgress.reconcile()
         end,
     })

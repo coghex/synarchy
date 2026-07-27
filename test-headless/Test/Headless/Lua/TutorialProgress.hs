@@ -39,7 +39,10 @@ import qualified Data.Text.Encoding as TE
 -- | A minimal @engine@ global: the diagnostics this module and
 --   @save_modules.snapshotAll@ emit are the only things either reaches
 --   outside a real boot. @engine.getTutorialTree@ is deliberately
---   ABSENT — the module must fall back cleanly to its injected tree.
+--   ABSENT here — most cases inject their tree, and the module must
+--   fall back cleanly when the engine offers none. 'lazyTreePrelude'
+--   installs one, to cover the production path where the tree is
+--   resolved lazily through the engine and nothing else.
 engineStub ∷ Text
 engineStub =
     "engine = { logWarn = function(...) end, logInfo = function(...) end }"
@@ -62,10 +65,11 @@ runsOk chunkText = do
 lns ∷ [Text] → Text
 lns = T.intercalate "\n"
 
--- | Load the module, clear it, and give it the fixture tree, plus the
---   small view-model readers every case below shares.
-prelude ∷ Text
-prelude = lns
+-- | The fixture trees, as Lua source. Shared by the injected-tree
+--   prelude below and by 'lazyTreePrelude', which reaches the SAME
+--   tree the way production does — through the engine.
+treeHelpers ∷ Text
+treeHelpers = lns
     [ "local function node(id, kind, order, children, subs)"
     , "    return { id = id, kind = kind, label = id .. ' label',"
     , "             tooltip = id .. ' tooltip', evaluator = id .. '_eval',"
@@ -88,10 +92,12 @@ prelude = lns
     , "function leafTree()"
     , "    return { id = 'first_session', root = node('only', 'full', 1) }"
     , "end"
-    , "local TP = require('scripts.tutorial_progress')"
-    , "TP.reset()"
-    , "TP.setTree(fixtureTree())"
-    , "function rowIds(m)"
+    ]
+
+-- | The view-model readers every case shares.
+viewHelpers ∷ Text
+viewHelpers = lns
+    [ "function rowIds(m)"
     , "    local out = {}"
     , "    for _, r in ipairs(m.rows) do out[#out + 1] = r.id end"
     , "    return table.concat(out, ',')"
@@ -110,12 +116,23 @@ prelude = lns
     , "function ids(list) return table.concat(list, ',') end"
     ]
 
--- | 'prelude' plus a registered save component and the two registry
---   modules the persistence cases drive directly.
-savePrelude ∷ Text
-savePrelude = lns
-    [ prelude
-    , "local saveModules = require('scripts.lib.save_modules')"
+-- | Load the module and INJECT the fixture tree, plus the shared
+--   readers. What most cases want: the tree resolved up front so a case
+--   is about the rules, not about tree resolution.
+prelude ∷ Text
+prelude = lns
+    [ treeHelpers
+    , "local TP = require('scripts.tutorial_progress')"
+    , "TP.reset()"
+    , "TP.setTree(fixtureTree())"
+    , viewHelpers
+    ]
+
+-- | The save-registry helpers, as Lua source. Appended to whichever
+--   prelude a persistence case needs.
+saveHelpers ∷ Text
+saveHelpers = lns
+    [ "local saveModules = require('scripts.lib.save_modules')"
     , "local codec = require('scripts.lib.data_codec')"
     , "assert(TP.register(), 'register() should register the component')"
     -- Find one component by id in a snapshotAll()/prepareLoad() list.
@@ -131,6 +148,25 @@ savePrelude = lns
     , "    return { { id = 'tutorial_progress', version = version or 1,"
     , "               payload = payload } }"
     , "end"
+    ]
+
+-- | 'prelude' plus a registered save component and the two registry
+--   modules the persistence cases drive directly.
+savePrelude ∷ Text
+savePrelude = lns [prelude, saveHelpers]
+
+-- | The production shape: the tree is reachable ONLY through a stubbed
+--   @engine.getTutorialTree@, and nothing resolves it. A real boot looks
+--   exactly like this at the moment a load applies — @init()@ only
+--   registers the component, so no view model has ever been built and
+--   the module's lazy tree is still unresolved.
+lazyTreePrelude ∷ Text
+lazyTreePrelude = lns
+    [ treeHelpers
+    , "engine.getTutorialTree = function() return fixtureTree() end"
+    , "local TP = require('scripts.tutorial_progress')"
+    , saveHelpers
+    , viewHelpers
     ]
 
 -- | One chunk: a prelude followed by the case body. Both halves are
@@ -422,6 +458,49 @@ spec = describe "Tutorial progress" $ do
             -- 'ghost_objective' is gone from the tree; 'prepare_water'
             -- is real but is a SUBOBJECTIVE, so it can never be durable
             -- progress. Both are dropped, the real one is kept.
+            , "assert(ids(TP.completedIds()) == 'place_portal',"
+            , "       ids(TP.completedIds()))"
+            ]
+
+        -- Round-1 review (PR #962): apply() used to reconcile against a
+        -- tree nobody had resolved yet. On a REAL load nothing has asked
+        -- this module for anything -- init() only registers the
+        -- component -- so `index` was still nil, reconcile was a silent
+        -- no-op, and a renamed/removed objective id survived the load
+        -- and got written straight back out by the next save. No
+        -- setTree, no getViewModel anywhere before the load here: that
+        -- absence IS the regression.
+        it "scrubs a dangling id on a load that never resolved the tree \
+           \first, so the next save cannot write it back" $
+            runsOk $ withTP lazyTreePrelude
+            [ "local prep = saveModules.prepareLoad(componentsFor("
+            , "    { completed = { 'ghost_objective', 'place_portal' } }))"
+            , "assert(prep.ok, prep.errors and table.concat(prep.errors, '; '))"
+            , "saveModules.applyAll()"
+            , "assert(ids(TP.completedIds()) == 'place_portal',"
+            , "       ids(TP.completedIds()))"
+            -- The point of the scrub: it must not come back on write.
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, snap.error)"
+            , "local c = componentNamed(snap.components, 'tutorial_progress')"
+            , "assert(ids(codec.decode(c.payload).completed) == 'place_portal',"
+            , "       ids(codec.decode(c.payload).completed))"
+            -- And the tree really did resolve through the engine, so the
+            -- view model works without an injected tree.
+            , "assert(TP.getViewModel().treeId == 'first_session')"
+            ]
+
+        it "keeps an unjudgeable id when NO tree is available at all — \
+           \'cannot judge' is not 'wrong'" $ runsOk $ withTP savePrelude
+            [ "TP.setTree(nil)"
+            , "local prep = saveModules.prepareLoad(componentsFor("
+            , "    { completed = { 'place_portal', 'unknowable' } }))"
+            , "assert(prep.ok, prep.errors and table.concat(prep.errors, '; '))"
+            , "saveModules.applyAll()"
+            , "assert(ids(TP.completedIds()) == 'place_portal,unknowable',"
+            , "       ids(TP.completedIds()))"
+            -- ...and the scrub happens the moment a tree does arrive.
+            , "TP.setTree(fixtureTree())"
             , "assert(ids(TP.completedIds()) == 'place_portal',"
             , "       ids(TP.completedIds()))"
             ]
