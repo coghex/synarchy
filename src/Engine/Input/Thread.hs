@@ -8,9 +8,14 @@
 --       'Engine.Input.Thread.Dispatch' (re-exported here).
 --     * Per-domain dispatch lives in 'Engine.Input.Thread.Keyboard',
 --       'Engine.Input.Thread.Char', 'Engine.Input.Thread.Mouse', and
---       'Engine.Input.Thread.Scroll'.
+--       'Engine.Input.Thread.Scroll'. 'Engine.Input.Thread.Dispatch'
+--       imports their handlers and routes events to them internally;
+--       they are not part of this facade's API.
 --
---   Both are re-exported here so the public API is unchanged.
+--   Only the 'Engine.Input.Thread.Dispatch' entrypoints
+--   ('processInputs' and 'processInput') are re-exported here, so the
+--   externally consumed lifecycle and queue-processing API is
+--   unchanged.
 module Engine.Input.Thread
   ( startInputThread
   , runInputLoop
