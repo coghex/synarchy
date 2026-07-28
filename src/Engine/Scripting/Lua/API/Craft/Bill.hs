@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Craft bills (#329) — standing production orders against a work
 --   station. The bill queue lives per world page (wsCraftBillsRef) and
 --   has no world-thread side effects, so every verb below is one

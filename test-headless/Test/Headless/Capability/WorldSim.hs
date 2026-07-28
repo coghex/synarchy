@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Projection-aliasing coverage for the @world-sim-render-handoff@
 --   world\/sim capability record (issue #893, E5a of the @EngineEnv@
 --   capability split #537) — the direct counterpart of

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Shared low-level primitives for the river-identification pipeline
 --   ("World.Fluid.River.Identify" and its siblings): D4 direction codes,

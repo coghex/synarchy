@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | "Location discovery" (#780): the pure undiscovered→discovered
 --   transition detector 'Location.Discovery.findDiscoveries' — bounds/
 --   margin/faction/page/seam scenarios — plus the persisted discovery

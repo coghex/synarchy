@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Magma.Init
     ( buildVolcanoCtx
     , buildSpatialIndex

@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, UnicodeSyntax #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 module Engine.Scripting.Lua.Debug
     ( getSourceInfo
     , SourceInfo(..)

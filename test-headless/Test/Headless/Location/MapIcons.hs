@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | "Location map icons" (#781): paired undiscovered/discovered
 --   zoom-map annotation textures — the @map_icons@ YAML schema
 --   ('Engine.Asset.YamlLocations'), texture-name resolution

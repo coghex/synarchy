@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Build the zoom cache entries (no per-tile pixel data), split out
 --   of "World.ZoomMap.Cache" (issue #573).
 module World.ZoomMap.Cache.Build

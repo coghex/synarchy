@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Screen-pixel / cursor hit-testing queries: world.getHoverTile,
 --   world.getHoverPos, world.pickTile, world.pickPos.
 module Engine.Scripting.Lua.API.WorldQuery.Pick

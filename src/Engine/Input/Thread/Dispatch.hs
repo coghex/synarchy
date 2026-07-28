@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Input-queue draining and per-event routing (#787): drains
 --   'InputEvent's off the input thread's queue, publishes
 --   'InputState' after each one, and routes each event by kind to its

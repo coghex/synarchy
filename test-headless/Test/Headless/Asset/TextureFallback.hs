@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | 'resolveTexturePath' (#478): a yaml-declared texture path that
 --   resolves to a real file loads unchanged; one that doesn't falls back
 --   to the caller's subset placeholder instead of the missing-file path

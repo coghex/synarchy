@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | World identity (#707): the optional, immutable player-facing
 --   identity of a world page — a non-empty display name plus an
 --   optional English gloss — kept distinct from both the internal

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Generated-language rendering (#710): deterministic profile
 --   generation, concept-root assignment/collision resolution, and
 --   native-name rendering over #709's semantic proper names. Mirrors

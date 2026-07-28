@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure discovery-transition detection (#780): given a page's placed
 --   location instances (#911) and the positions of every unit currently
 --   on that page, decides which locations just transitioned from

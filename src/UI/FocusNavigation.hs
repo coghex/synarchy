@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Keyboard CONTROL focus and Tab/Shift+Tab traversal (#745, Phase B
 --   child B1 of #741) — distinct from the pre-existing TEXT-input
 --   focus ('UI.Manager.Focus.setElementFocus'/'upmGlobalFocus'), which

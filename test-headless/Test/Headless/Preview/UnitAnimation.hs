@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Focused tests for 'Engine.Preview.Unit' (#887, Phase 3 of the
 --   @--preview@ browser epic #427): the pure direction-mirroring table,
 --   the default-selection rule, animation ordering/labeling, numeric

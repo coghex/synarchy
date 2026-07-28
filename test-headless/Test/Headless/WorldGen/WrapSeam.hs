@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Wrap-seam regression tests.
 --
 --   The world is a cylinder along the isometric u-axis (gx − gy);

@@ -1,5 +1,5 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass
-           , DerivingStrategies, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass
+           , DerivingStrategies #-}
 -- | First-class placed-location instance identity and lifecycle (#911,
 --   epic #159 phase 3 / @docs\/expedition_gameplay_loop.md@ step 2).
 --

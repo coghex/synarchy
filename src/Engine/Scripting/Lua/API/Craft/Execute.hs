@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | craft.execute runs one craft against a unit's inventory — verify
 --   inputs + fuel, consume them, produce the outputs. craft.executeAt
 --   is the station-aware variant (#326): same consumption, gated on a

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Render structural pieces (walls / floors / ceilings) as iso-sorted
 --   quads. Closely mirrors "Building.Render": each piece is a full-tile
 --   96×64 sprite drawn at its tile, but with the piece's OWN facemap slot

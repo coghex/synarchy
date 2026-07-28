@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Committed building blueprint footprint (#807). PR #295 kept exactly
 --   one 'CtBuilding' designation at its anchor tile (still true here —
 --   requirement 2), but the render pass only ever drew that one anchor

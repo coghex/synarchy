@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Synthetic input injection for the input.* console verbs (#644) —
 --   the actor-output channel of the UX playtest harness (#641).
 --

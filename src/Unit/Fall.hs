@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Physics-based fall injury model.
 --
 -- A fall is turned into a SET of injuries (not a single scalar outcome):

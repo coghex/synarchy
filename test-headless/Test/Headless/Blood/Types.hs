@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Blood decal model tests (#604): descriptor near-match reuse (and
 --   its hard-gated dimensions), bounded FIFO eviction, and decal
 --   cleanup-on-eviction — the pure transitions in Blood.Types that the

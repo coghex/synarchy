@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The @input-lua-transport@ capability record (epic #537, issue #892
 --   — E4): the eight fields
 --   'docs/engineenv_capability_inventory.md' SS5's @input-lua-transport@

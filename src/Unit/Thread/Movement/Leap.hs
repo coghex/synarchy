@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Leap mechanics: max horizontal distance and vertical strike-height
 --   envelopes derived from jumping skill + stats, the arc timing shared
 --   with "Unit.Thread.Movement.Fall", and starting a leap (a controlled

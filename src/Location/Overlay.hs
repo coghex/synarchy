@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | World-gen location overlay placement pass (#89).
 --
 --   Given the finalised generation params (seed, plates, ocean map)

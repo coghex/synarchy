@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure helpers for resolving sim state → animation name.
 --   The renderer's `pickFrame` does the actual texture lookup; this
 --   module only decides which animation key the renderer should ask for.

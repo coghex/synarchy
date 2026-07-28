@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for scroll-to-zoom calibration (issue #596).
 --
 --   The bug: the old onScroll handler (duplicated in world_view.lua and

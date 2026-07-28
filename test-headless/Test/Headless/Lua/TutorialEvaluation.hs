@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, TypeApplications #-}
+{-# LANGUAGE TypeApplications #-}
 -- | The "Tutorial evaluation" gate (#959, phase 3 of the tutorial epic
 --   #956): @scripts/tutorial_eval.lua@'s bindings from #957's authored
 --   evaluator keys to predicates over live gameplay state, and the

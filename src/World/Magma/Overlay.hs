@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Per-chunk sparse storage for exposed lava and (future) dig-revealed
 --   lava tiles. Lives in its own module — separate from 'World.Magma.Types'
 --   — so 'World.Chunk.Types' can reference the overlay without dragging

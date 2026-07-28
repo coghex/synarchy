@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Discrete-control pointer activation (#745, Phase B child B1 of
 --   #741): the release-fires-not-press contract for ordinary UI
 --   controls (buttons, checkboxes, toggles, tabs, list rows, dropdown

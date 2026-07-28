@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The @faction@ Lua global (#912): the faction PROPERTIES and the
 --   faction RELATION, exposed so unit AI asks the engine's own questions
 --   instead of reimplementing them with string comparisons per script.

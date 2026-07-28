@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Per-chunk indexing for the lake-identification pipeline: buckets
 --   the finalized per-lake tile data into per-'ChunkCoord' bitmasks

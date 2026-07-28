@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Sim.State.Types
     ( SimState(..)
     , SimWorldState(..)

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | "Remote portal warning" (#779): a valid starting-portal placement
 --   whose footprint is more than 'remotePortalThresholdTiles' tiles
 --   from every placed location on the SAME world page (seam-aware,

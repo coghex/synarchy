@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the infection catalogue. engine.loadInfectionYaml loads
 --   data/infections/*.yaml into the InfectionManager (mirrors
 --   engine.loadSubstanceYaml); infection.get / infection.getNames give

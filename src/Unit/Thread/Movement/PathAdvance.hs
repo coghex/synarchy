@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-unit step advance toward the current target/waypoint:
 --   cost-aware greedy stepping with local A* replan, gait selection,
 --   and the top-level per-unit tick (tickUnit) that stitches the timer

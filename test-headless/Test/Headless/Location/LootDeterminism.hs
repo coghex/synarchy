@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | "Location loot determinism" (#948): a placed location's loot-table
 --   selections are a pure function of stable, persisted context — the
 --   world page's generation seed, the location's #911 instance id, the

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Scripting.Lua.API.World.Tools
     ( worldSetToolModeFn
     , worldGetToolModeFn

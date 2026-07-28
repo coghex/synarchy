@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Climate data → (R, G, B) colour mapping for the various
 --   zoom-map overlay modes (temperature, pressure, humidity, etc.).
 module World.Render.Zoom.Climate

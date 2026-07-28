@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Scene.Batch.Sprite
   ( collectVisibleObjects
   , nodeToDrawable

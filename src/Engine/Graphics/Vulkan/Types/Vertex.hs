@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
 import Control.DeepSeq (NFData(..), rwhnf)

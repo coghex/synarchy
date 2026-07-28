@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Blood decal model (#604): the world-scoped data + pure transitions
 --   behind procedural injury blood (see docs/blood_decals.md, the #603
 --   epic's design record). Rendering ("World.Render.BloodQuads"),

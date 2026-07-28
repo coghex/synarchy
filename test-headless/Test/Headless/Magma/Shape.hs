@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for World.Magma.Shape — the per-shape 'pointInShape'
 --   inclusion test for each 'LavaShape' variant. The world wrap
 --   parameter is fixed at 1024 (worldSize 64 × chunkSize 16) for

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Bleeding trails (#882): the MOVING half of ongoing bleeding — a
 --   unit with externally-bleeding wounds leaves a bounded trail of
 --   marks along its travelled path. Companion to "Blood.Impact" (the

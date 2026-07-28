@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Video-config YAML parsing tests (issue #433). The contract under
 --   test: the legacy-@fullscreen@ fallback (taken whenever @window_mode@
 --   is absent) must treat @fullscreen@ itself as *optional* — a @video:@

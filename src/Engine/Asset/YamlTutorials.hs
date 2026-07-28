@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 -- | YAML loader for @data/tutorials/*.yaml@ (#957, phase 1 of the
 --   tutorial epic #956).
 --

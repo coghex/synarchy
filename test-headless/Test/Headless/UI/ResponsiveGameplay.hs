@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, UnicodeSyntax #-}
 -- | #750 gate (Phase C, child C4 of #741): migrating gameplay HUD/
 --   overlay/modal surfaces onto the #748 responsive lifecycle, plus
 --   the new deterministic reserved-region/priority contract

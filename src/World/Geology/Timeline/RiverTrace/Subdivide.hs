@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Geology.Timeline.RiverTrace.Subdivide
     ( subdivideLongGaps
     , splitLongSegment

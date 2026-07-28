@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Render-side item-instance field pushing, shared by the equipped
 --   loadout and accessory-list queries (and, via pushItemInstance,
 --   by Engine.Scripting.Lua.API.Buildings.Materials' ground-item

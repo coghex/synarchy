@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | The end-to-end persistence contract gate (#767, save-overhaul D1 —
 --   the final Phase-4 child of the persistence-overhaul epic, #768).
 --

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-chunk fluid/lava composition: global lake/river/ocean/lava-pool
 --   surface placement, the basalt containment shell around lava, and
 --   the dry "island column" smoother that follows it. Split out of

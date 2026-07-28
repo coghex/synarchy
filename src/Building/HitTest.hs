@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Screen-pixel → BuildingId hit testing.
 --
 -- Mirrors 'Unit.HitTest.hitTestUnitAt' but tests against each

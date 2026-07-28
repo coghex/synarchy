@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Multi-pass Jacobi smoothing used by the coastal pass: contour
 --   flattening that carves the gentle coastal-band gradient out of

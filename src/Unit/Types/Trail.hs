@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Transient per-unit ongoing-bleeding emitter state — BOTH halves:
 --   the moving trail (issue #882, see "Blood.Trail") and the stationary/
 --   collapsed pool (issue #883, see "Blood.Pool"). One accumulator

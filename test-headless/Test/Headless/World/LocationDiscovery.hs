@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | IO-level coverage for "Location discovery" (#780) that
 --   'Test.Headless.Location.Discovery's pure spec can't reach: the
 --   real 'World.Thread.Discovery.tickLocationDiscovery' promoting a

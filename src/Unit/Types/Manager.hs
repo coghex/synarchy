@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Unit identity and the top-level unit registry (`UnitManager`),
 --   split out of "Unit.Types" (#575) — re-exported there so the public
 --   API is unchanged.

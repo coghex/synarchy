@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, UnicodeSyntax #-}
+{-# LANGUAGE FlexibleContexts #-}
 -- | Monadic logging, narrowed to the @core-init@ capability (issue
 --   #889, epic #537): every function here reaches the logger only
 --   through 'CoreCapability', never by dereferencing an 'EngineEnv'

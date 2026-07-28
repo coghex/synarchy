@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the zero-size (minimized window / minimize-restore)
 --   projection guards introduced for issue #118.
 --

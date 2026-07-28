@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | The per-tick wound orchestration entry point and the pure per-unit
 --   wound tick. See "Combat.Wounds" for the overall formula summary.

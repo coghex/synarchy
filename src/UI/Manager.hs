@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | UI page/element manager: umbrella re-export of the 'UI.Manager.*'
 --   submodules (page/element/hierarchy/focus/property/query/text/box
 --   texture operations). Split out of a single large module for

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Slope computation and rendering support, split (issue #567) into
 --   focused submodules under "World.Slope.*":
 --

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Physical + synthetic KEYBOARD dispatch (#787): routes a raw GLFW
 --   key event to shell-text, UI-text, or gameplay handling depending
 --   on focus, and records the F4 (#730) primary keyboard outcome.

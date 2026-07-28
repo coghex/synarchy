@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the cross-chunk fluid seam exchange
 --   ('Sim.Fluid.Active.reconcileSeams', exercised via 'simulateActiveTick').
 --

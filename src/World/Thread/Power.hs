@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-page power-network tick (#360).
 --
 --   Runs beside the world clock ('World.Thread.Time.tickWorldTime'), once

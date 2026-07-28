@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Deterministic English gloss rendering for semantic proper names
 --   (#709). The gloss is one of two renderings of the same 'NameExpr'
 --   — the other being #710's generated-language native name — so this

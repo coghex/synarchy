@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Shared injury physics + vocabulary.
 --
 -- A wound's `woundKind` is the INJURY TYPE — "bruise"/"blunt",

@@ -1,4 +1,4 @@
-{-# LANGUAGE ExplicitForAll, UnicodeSyntax #-}
+{-# LANGUAGE ExplicitForAll #-}
 -- Deliberate orphans: Serialize for Text and strict HashMap — glue
 -- instances for the save path. Safe in practice: every module in the
 -- project imports UPrelude, so no consumer can see a competing instance.

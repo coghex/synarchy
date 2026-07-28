@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Data-driven infection catalogue. An infection DEF describes one
 --   infection a wound can develop (staph, gas gangrene, …); the live
 --   per-wound state is just `Wound.woundInfection` (level) +

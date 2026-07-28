@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | The frozen B1 baseline (issue #759, save-overhaul B1; migrated here by
 --   issue #766, save-overhaul C4): the single required @"session"@
 --   component's wire shape, exactly as it shipped before #760 split

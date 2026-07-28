@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the last-age soil-shedding gate in
 --   'World.Geology.Erosion' (#225). Real mountains shed soil off steep
 --   faces, leaving bare rock high up while the eroded material settles

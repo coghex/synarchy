@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Shared read-only lookup helpers for the WorldQuery API family:
 --   resolving the active world's tile data / gen params, the
 --   currently VISIBLE world (for screen hit-testing), or a named

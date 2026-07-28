@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for the tooltip subsystem. Four entry points:
 --
 --   * 'UI.setTooltip(handle, text)' — attach a plain-text tooltip.

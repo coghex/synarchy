@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Multi-key binding data-model tests (issue #274). The contract under
 --   test: 'KeyBindings' is action → list-of-keys; the YAML parser accepts
 --   both the legacy scalar form (@moveUp: W@) and the new array form

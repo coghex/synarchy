@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-page item-temperature tick (#344).
 --
 --   Runs beside the world clock ('World.Thread.Time.tickWorldTime'), once

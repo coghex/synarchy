@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the tutorial definition tree (#957, phase 1 of the
 --   tutorial epic #956): one loader verb and one READ-ONLY query.
 --

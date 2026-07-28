@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the location-def catalogue (#88/#90).
 --
 --   Narrowed to the @content-registries@ capability (#890, epic #537):

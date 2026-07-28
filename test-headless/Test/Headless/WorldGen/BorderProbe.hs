@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Cross-window pipeline consistency at a chunk seam.
 --
 --   Replays the bordered chunk pipeline stage by stage for two

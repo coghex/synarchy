@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Strike resolution: the hit-roll skill/evasion terms, the active
 --   dodge save, and the joint body-part + wound-kind picker. Split

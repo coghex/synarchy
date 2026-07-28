@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Camera-rotation-aware directional sprite resolution, shared by the
 --   renderer ('Unit.Render') and the click/box hit-tester
 --   ('Unit.HitTest'). Both must resolve the SAME texture for a given

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Locked-tooltip click-swallow contract. The bug under test (#117):
 --   a locked tooltip only swallowed clicks when its style had a textured
 --   background box. 'rebuildVisuals' created the panel geometry element

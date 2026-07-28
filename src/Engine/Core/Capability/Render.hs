@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The @render-gpu-asset@ __main-render__ capability record of the
 --   @EngineEnv@ capability split (epic #537, issue #891 — E3): exactly
 --   the 21 fields 'docs/engineenv_capability_inventory.md' SS5's

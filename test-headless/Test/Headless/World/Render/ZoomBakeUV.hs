@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Regression guard for the zoom map's per-corner longitude gradient
 --   (#483 review follow-up): 'zoomQuadWorldUVs' must recover the TRUE
 --   (u,v) at each of a baked chunk quad's four screen-space RECTANGLE

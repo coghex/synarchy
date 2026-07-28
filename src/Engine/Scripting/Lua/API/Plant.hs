@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua API for the plant-designation tool (issue #335) — the
 --   @plant.*@ namespace, plus @world.getPlantSuitability@. Mirrors the
 --   till-designation API (#333) minus the anchor functions: the plant

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Severing cascade: a destroyed body part takes its attached children
 --   with it. See "Combat.Wounds" for the overall formula summary.

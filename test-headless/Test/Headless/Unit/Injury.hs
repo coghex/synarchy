@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for Unit.Injury — the shared, fully tissue-driven
 --   injury vocabulary that keeps combat and falls speaking the same
 --   language (a broken bone is a "fracture" no matter how it happened;

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Deterministic, non-GPU coverage for the world-thread half of #788's
 --   blood-texture GPU teardown (World.Blood.Teardown): every path that
 --   removes or replaces a world page must hand that page's live blood

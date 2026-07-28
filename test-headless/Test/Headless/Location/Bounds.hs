@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | "Location spatial bounds" (#777): the authoritative footprint every
 --   location definition declares — YAML parsing/rejection, the pure
 --   translate/contain/intersect/expand/distance operations later

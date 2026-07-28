@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Wound infection, necrosis, and immune-response tuning + pure
 --   selection logic. See "Combat.Wounds" for the overall formula

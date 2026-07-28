@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #749 gate (Phase C child C3 of #741): logical / visual /
 --   interactive bounds. A box's overflow expands what it RENDERS on
 --   every side without changing its stored layout, so the pre-#749

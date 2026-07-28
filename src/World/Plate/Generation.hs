@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Deterministic plate generation, split out of "World.Plate" (issue
 --   #560).
 module World.Plate.Generation

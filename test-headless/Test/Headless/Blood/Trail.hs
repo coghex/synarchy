@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Tests for the pure ongoing-bleeding accumulator/mapping math —
 --   BOTH halves, which share one 'Unit.Types.Trail.TrailState':
 --

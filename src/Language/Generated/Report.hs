@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The generated-language report's pure data layer (#710 requirements
 --   17-20): one canonical (label, 'NameExpr') set covering every #709
 --   name form, shared verbatim by @tools/language_report.py@'s

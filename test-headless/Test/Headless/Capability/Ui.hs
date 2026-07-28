@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Projection-aliasing coverage for the @ui-hud-events@ UI\/focus\/HUD
 --   capability record (issue #897, E7a of the @EngineEnv@ capability
 --   split #537).

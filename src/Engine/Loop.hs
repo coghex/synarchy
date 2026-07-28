@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, UnicodeSyntax #-}
+{-# LANGUAGE CPP #-}
 module Engine.Loop
   ( mainLoop
   , mainLoopOffscreen

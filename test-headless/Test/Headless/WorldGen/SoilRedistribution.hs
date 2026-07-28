@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests proving final-age mountain soil shed (#225 / PR #279) is
 --   REDISTRIBUTED to the adjacent lower/gentler receiving terrain instead
 --   of simply deleted (#812). 'World.Geology.Erosion.Math' computes purely

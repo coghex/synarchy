@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Tests for the per-wound INFECTION mechanic in Combat.Wounds.tickOneUnit.
 --   Infection is DETERMINISTIC and gated on cleanliness: an open, un-
 --   disinfected wound accrues `woundInfection` after a grace period; a

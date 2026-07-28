@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #742 gate: the modal-boundary contract (page-level pointer
 --   ownership + the gameplay-blocked predicate). Most of this suite is
 --   pure 'UI.InputOwnership'/'UI.Manager' coverage — the acceptance

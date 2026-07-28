@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Pure tests for Item.Temperature (#344): Newtonian relaxation of a
 --   tracked item temperature toward ambient, mass-scaled time constant,
 --   snap-to-untracked on arrival, and container-contents recursion.

@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 -- | Filesystem discovery + playback resolution for the @--preview
 --   units/\<name\>@ animation viewer (#887, Phase 3 of the browser epic
 --   #427). Companion to 'Engine.Preview.Discovery' (which owns the

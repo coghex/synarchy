@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 module Test.Headless.Save.Barrier (spec) where
 
 import UPrelude
