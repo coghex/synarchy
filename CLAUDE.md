@@ -6,26 +6,6 @@ Deep per-issue history (review-round narratives, verification stories) was trimm
 file on 2026-07-23 — see `docs/history/claude_md_2026-07-23_pretrim.md`, git history, and the
 referenced issues/PRs when you need the full story behind a contract stated here.
 
-## Current Phase: the expedition arc
-
-The project is building the expedition gameplay arc.
-`docs/expedition_gameplay_loop.md` is the authority for what that arc
-contains, and its scope rule gates new discretionary work:
-
-> Every proposed system in this arc must strengthen at least one of these
-> verbs: **prepare, travel, discover, confront, extract, return, invest.**
-> If a feature does not improve one of those verbs, or the colony decisions
-> that support them, it does not belong in the first 30-minute slice.
-
-**Always exempt:** correctness, stability, and data integrity — crashes,
-regressions, data loss, and broken CI gates are in scope regardless of the
-verbs. The rule constrains discretionary *new* work; it is never a reason to
-defer a real bug.
-
-**Expiry:** the rule applies until the arc's end-to-end gate lands — step 9,
-"Gate the full slice", of the loop doc. Once that scenario passes, this
-section comes out and the gate stops applying.
-
 ## Build Commands
 
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
@@ -802,6 +782,44 @@ before touching each area:
   still gives up. Don't restore the from-`issuedAt`/`startedAt` shape —
   it capped ordered retrieval at ~21 tiles and ordered moves at ~42.
   Gate: `expedition_retrieval_probe.py` (manual-only).
+- **The expedition loop (#923)** — the arc's shipped slice is
+  **prepare → travel → discover → extract → return → invest**, run as
+  ONE session by `tools/expedition_loop_probe.py` (manual-only,
+  fixed-seed, ~15 min, two engine boots). `docs/expedition_gameplay_loop.md`
+  remains the design authority; step 9's original combat encounter and
+  guaranteed progression reward are deliberately deferred (#916/#917),
+  so "invest" here means the recovered loot is banked in colony storage
+  and is afterwards ordinary colony stock — not a completed project.
+  Contracts the gate pins, and which new expedition work must not break:
+  the colony comes from a real `acolyte_portal` and its OWN roster
+  (`scripts/building_spawn.lua`), never hand-spawned units; the expected
+  end lifecycle is `discovered` with contents spawned exactly once
+  (nothing in the game drives an instance further — a gate that called
+  `world.setLocationLifecycle` would be asserting its own writes); the
+  extraction target is whichever def the ruin's own loot rolls produced,
+  never a staged item; and every durable identity is re-checked in a
+  FRESH PROCESS — `(page, instance id)` lifecycle, per-unit
+  `knownLocations`, the exact completed objective-ID set, and the
+  recovered item's instance id / definition / mutable properties /
+  storage ownership. The gate also runs an **unprepared control**: a
+  second traveller over the same route under the same orders from the
+  same seeded hunger deficit, differing only in supplies, which must end
+  measurably worse off — so the scenario proves preparation matters
+  rather than proving a walk succeeds. Two scenario conditions make that
+  comparison honest and are applied to BOTH travellers: `find_water` is
+  retired and `forage_max_fraction` is disabled for the session (#94's
+  emergency ladder has its own gate, `foraging_probe.py`). The gated
+  metric is FOOD (stomach fraction), matching what
+  `docs/expedition_survival_calibration.md` measured actually goes live
+  on a trip this length; water is reported as evidence, not gated.
+  **Don't "fix" that by seeding a thirst deficit** — `scripts/salts.lua`
+  derives blood salt concentration as saltFrac/hydrationFrac and
+  `scripts/brain.lua` folds it straight into consciousness, so a unit
+  dehydrated far enough to prefer drinking over its orders is knocked
+  unconscious by the electrolyte imbalance, and scaling the `salt` pool
+  down to compensate just moves the blackout to the first meal's salt
+  bolus (`salts.mealSalt` restores 0.30 of max_salt per feed). Both were
+  observed live while building the gate.
 - **Logging streams** — event log: `engine.getEventLog()`, emit via
   `engine.emitEvent(cat,text)` / `emitEventAt` /
   `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if
