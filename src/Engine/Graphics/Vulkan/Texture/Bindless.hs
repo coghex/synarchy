@@ -1,5 +1,13 @@
--- | Bindless texture system using UPDATE_AFTER_BIND descriptors
--- This enables up to 1 million texture slots on MoltenVK/Metal
+-- | Bindless texture system using UPDATE_AFTER_BIND descriptors.
+--
+--   The texture array this module allocates is sized by 'bcMaxTextures' in
+--   the 'BindlessConfig' passed in — production derives that value from the
+--   device's bindless capability, capped at 16384
+--   ("Engine.Graphics.Vulkan.Texture.System"), not the much larger
+--   update-after-bind sampled-image ceiling
+--   "Engine.Graphics.Vulkan.Capability" queries from the device and caps
+--   further — that figure is UPDATE_AFTER_BIND's device/technique limit,
+--   distinct from what this module actually allocates.
 module Engine.Graphics.Vulkan.Texture.Bindless
   ( -- * Types (re-exported from Types module)
     BindlessTextureSystem(..)
