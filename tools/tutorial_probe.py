@@ -31,9 +31,14 @@ What it proves (issue #922 requirements 2 and 3):
      reveals "Secure water source".
   3. One acolyte DISCOVERING generated water (its own FOV scan) and
      SHARING it over the radio with a second acolyte completes the
-     water-source objective. Both legs are asserted: the finder's
-     memory AND the recipient's, because the share is the notify_allies
-     fan-out and a single-acolyte run would never execute it.
+     water-source objective. Both legs are asserted, because the share
+     is the notify_allies fan-out and a single-acolyte run would never
+     execute it. The share leg is made conclusive rather than
+     circumstantial: the recipient is immobilized in a camp with no
+     water anywhere in its own field of view (asserted against the
+     engine's real `unit.getVisibleTiles`, before and after), and the
+     source it ends up holding must be one of the FINDER's — so it
+     cannot have discovered anything itself.
   4. Carrying >= 2 L of water checks the live water subobjective on its
      own, WITHOUT completing the composite.
   5. Carrying >= 2 L of water AND a ration on the SAME acolyte checks
@@ -416,6 +421,39 @@ def known_water_count(port: int, uid: int) -> int:
         return -1
 
 
+def water_sources(port: int, uid: int) -> set[tuple[int, int]]:
+    """The tile coordinates in this unit's `knownWaterSources` memory."""
+    raw = send(port,
+               f"local ai = require('scripts.unit_ai'); local s = ai.getState({uid}); "
+               f"if not s then return '' end; local out = {{}}; "
+               f"for _, w in ipairs(s.knownWaterSources or {{}}) do "
+               f"out[#out+1] = math.floor(w.x) .. ',' .. math.floor(w.y) end; "
+               f"return table.concat(out, ';')", timeout=15.0)
+    found = set()
+    for pair in raw.split(";"):
+        if "," in pair:
+            x, y = pair.split(",")
+            found.add((int(x), int(y)))
+    return found
+
+
+def sees_water(port: int, uid: int) -> bool:
+    """Whether ANY tile in this unit's own field of view is drinkable water.
+
+    Asked of the engine's real FOV (`unit.getVisibleTiles`, which walks
+    line of sight from `uiGridX/uiGridY` in the unit manager) against the
+    same lake/river test scripts/unit_ai_water.lua's scan uses — not a
+    distance heuristic against `awareRangeTiles`. If this is false, the
+    unit's own scan cannot have produced a single entry in its memory.
+    """
+    raw = send(port,
+               f"for _, t in ipairs(unit.getVisibleTiles({uid}) or {{}}) do "
+               f"local f = world.getFluidAt(t.x, t.y); "
+               f"if f == 'lake' or f == 'river' then return 'yes' end end; "
+               f"return 'no'", timeout=20.0)
+    return raw == "yes"
+
+
 def hud_open(port: int) -> str:
     return send(port,
                 "local h = package.loaded['scripts.tutorial_hud']; "
@@ -506,17 +544,45 @@ def phase_party(port: int, gx: int, gy: int) -> tuple[int, int]:
 def phase_discover_and_share(port: int, finder: int, mate: int,
                              sx: int, sy: int) -> None:
     """The finder walks onto the shore, its FOV scan registers the water,
-    and the radio broadcast hands it to the second acolyte."""
+    and the radio broadcast hands it to the second acolyte.
+
+    The recipient is FROZEN for the whole unpaused window. Without that
+    it keeps its own active `find_water` goal and searches — over a
+    120-second wait it can wander onto water and register a source by
+    itself, which would satisfy "the recipient knows a source" even if
+    the broadcast were completely broken. Freezing pins the published
+    position `unitVisibleTiles` reads (`unit.setPos` is what moves it),
+    so a recipient parked in the water-free camp cannot see, and
+    therefore cannot scan, any water at all. `notify_allies`' radio
+    branch writes straight into the recipient's AI state and applies no
+    range or movement requirement, so the freeze costs the share leg
+    nothing.
+    """
+    blind_before = not sees_water(port, mate)
+    check("the recipient starts with no water anywhere in its own field of view",
+          blind_before)
+
+    send(port, f"unit.setFrozen({mate}, true); return 'ok'", timeout=15.0)
     send(port, f"unit.setPos({finder}, {sx}, {sy}); return 'ok'", timeout=15.0)
     set_paused(port, False)
     found = poll_until(60.0, lambda: known_water_count(port, finder) > 0)
     shared = poll_until(120.0, lambda: known_water_count(port, mate) > 0)
     set_paused(port, True)
+    # Read the recipient's view BEFORE unfreezing, so this reports the
+    # pinned position it actually held for the whole window.
+    blind_after = not sees_water(port, mate)
+    send(port, f"unit.setFrozen({mate}, false); return 'ok'", timeout=15.0)
 
     check("the acolyte on the shore DISCOVERS the generated water source",
           found is not None, f"knownWaterSources={known_water_count(port, finder)}")
+    check("the recipient never saw water itself while immobilized "
+          "(so any source it holds was TOLD to it)", blind_after)
     check("the discovery is SHARED with the second acolyte over the radio",
           shared is not None, f"knownWaterSources={known_water_count(port, mate)}")
+    finder_src, mate_src = water_sources(port, finder), water_sources(port, mate)
+    check("the shared source is the finder's own tile, not a second discovery",
+          bool(mate_src) and mate_src <= finder_src,
+          f"recipient {sorted(mate_src)} not a subset of finder {sorted(finder_src)}")
 
     p = settle(port, lambda s: s.is_completed(OBJ_WATER))
     check("discovering and sharing water completes the water-source objective",
