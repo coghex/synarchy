@@ -351,14 +351,14 @@ function uiManager.onFramebufferResize(width, height)
         if uiManager.moduleReady.testArena then
             testArena.onFramebufferResize(width, height)
         end
-        -- #750: popup/unit_info_v2 already updated their OWN state via
-        -- the engine's automatic broadcast (both loadScript'd with an
-        -- earlier script id than this module, so it already ran before
-        -- this function did) — their geometry-dependent REFLOW runs here
-        -- instead, guaranteed to see hud's just-updated dimensions/
-        -- toolbar rects rather than the stale pre-resize ones.
-        if uiManager.moduleReady.popupsAndLogs then popup.reflow() end
-        unitInfoV2.reflow()
+        -- #750/#960: popup/unit_info_v2/tutorial_hud already updated
+        -- their OWN state via the engine's automatic broadcast (all
+        -- loadScript'd with an earlier script id than this module, so
+        -- they already ran before this function did) — their
+        -- geometry-dependent REFLOW runs here instead, guaranteed to see
+        -- hud's just-updated dimensions/toolbar rects rather than the
+        -- stale pre-resize ones. See ui_manager_resize.lua.
+        uiManager.reflowAfterHudResize()
     end
 
     local currentMenu = uiManager.currentMenu

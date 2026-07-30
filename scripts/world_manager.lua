@@ -126,6 +126,16 @@ function worldManager.createWorld(params)
     -- lazily to keep this module free of module-scope dependencies.
     require("scripts.tutorial_progress").reset()
 
+    -- The checklist's own PRESENTATION state (open/closed + scroll
+    -- offset) lives on a second Lua singleton with the same lifetime
+    -- problem (#960): without this, starting a new game after playing
+    -- one comes up with the previous session's panel already open and
+    -- scrolled. Reached through package.loaded rather than require()
+    -- so generating a world never forces the HUD module to load in a
+    -- profile that has none.
+    local tutorialHud = package.loaded["scripts.tutorial_hud"]
+    if tutorialHud then tutorialHud.resetPresentation() end
+
     -- Send init command with seed and world size
     -- This queues the WorldInit command; the world state will exist
     -- once the world thread processes it.

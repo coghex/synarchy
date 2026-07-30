@@ -214,6 +214,25 @@ local registry = {
     { name = "unit_log",
       hudHide = function() require("scripts.unit_log").hide() end },
 
+    -- Tutorial checklist HUD (#960): its own "overlay" page, so hiding
+    -- hud's pages does not cover it and the checklist would otherwise
+    -- leak over the next menu. The ONLY entry in this registry that is
+    -- deliberately PRESENTATION-only — onHudHidden hides the page and
+    -- touches neither the open flag nor the scroll offset, because
+    -- both must survive a HUD hide/show round trip (the closest
+    -- precedent is info_panel's suppress-rather-than-clear above).
+    -- Idempotent, and deliberately hooked on NOTHING else: the page
+    -- belongs to the always-on gameplay scope (hud.global_page's
+    -- band), so a zoomBand change must leave the checklist visible and
+    -- scrolled where it was, hud.createUI's "resize" sweep never
+    -- touches a page this module owns, and the keepWorld Settings
+    -- "menu" path deliberately leaves the whole HUD up.
+    { name = "tutorial_hud",
+      hudHide = function()
+          local mod = package.loaded["scripts.tutorial_hud"]
+          if mod then mod.onHudHidden() end
+      end },
+
     -- Ground-item selection (#175): per-world cursor state the item
     -- watcher (item_info_panel.update) keeps polling and would use to
     -- repopulate the panel. On a band change the world is still the
