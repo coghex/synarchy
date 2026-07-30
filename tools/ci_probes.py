@@ -237,6 +237,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "farm_ai": (SLOW_WORLDGEN, "needs a real generated world for the till->plant->harvest AI "
                                "loop across 5 distinct tillable sites; slowest registered "
                                "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),
+    "tutorial": (SLOW_WORLDGEN, "needs a real generated world for a natural lake or river "
+                                "to discover and a water-free camp far from it, then runs "
+                                "the radio-share leg on AI arbitration timing and a real "
+                                "save/restart/load across two engine boots; #922 requirement "
+                                "6 also classifies this integration check as recorded manual "
+                                "verification rather than a CI gate"),
 }
 
 # Sentinels (distinct objects so `is` comparisons are unambiguous).

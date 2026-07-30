@@ -3,7 +3,6 @@
 
 module Engine.Graphics.Vulkan.ShaderCode
     ( fontVertexShaderCode
-    , fontFragmentShaderCode
     , fontUIVertexShaderCode
     , fontSDFFragmentShaderCode
     , bindlessVertexShaderCode
@@ -62,26 +61,6 @@ fontVertexShaderCode = [vert|
         fragTexCoord = uv;
         fragColor = glyphColor;
         fragBrightness = ubo.brightness;
-    }
-|]
-
--- | Legacy font fragment shader (non-SDF, kept for compatibility)
-fontFragmentShaderCode ∷ BS.ByteString
-fontFragmentShaderCode = [frag|
-    #version 450
-
-    layout(location = 0) in vec2 fragTexCoord;
-    layout(location = 1) in vec4 fragColor;
-    layout(location = 2) in float fragBrightness;
-
-    layout(set = 1, binding = 0) uniform sampler2D fontAtlas;
-
-    layout(location = 0) out vec4 outColor;
-
-    void main() {
-        float alpha = texture(fontAtlas, fragTexCoord).r;
-        vec3 color = fragColor.rgb * fragBrightness;
-        outColor = vec4(color, fragColor.a * alpha);
     }
 |]
 
