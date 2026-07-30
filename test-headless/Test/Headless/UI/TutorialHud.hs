@@ -115,7 +115,9 @@ bootAt w h treeExpr = luaLines
     , "if " <> treeExpr <> " ~= nil then tp.setTree(" <> treeExpr <> ") end;"
     , "local th = require('scripts.tutorial_hud');"
     , "th.init();"
-    , "th.onFramebufferResize(" <> tshow w <> ", " <> tshow h <> ");"
+    -- reflow(), not onFramebufferResize: the broadcast half only
+    -- records dimensions (see the resize-ordering case below).
+    , "th.reflow(" <> tshow w <> ", " <> tshow h <> ");"
     , "th.update(0);"
     ]
 
@@ -326,7 +328,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local loaded = engine.loadTutorialDir('data/tutorials');"
                 , "local tp = require('scripts.tutorial_progress'); tp.reset();"
                 , "local th = require('scripts.tutorial_hud');"
-                , "th.init(); th.onFramebufferResize(1280, 720); th.setOpen(true);"
+                , "th.init(); th.reflow(1280, 720); th.setOpen(true);"
                 , "local first = th.dump();"
                 , "tp.completeObjective('first_session_place_portal'); th.rebuild();"
                 , "local second = th.dump();"
@@ -559,25 +561,47 @@ spec = aroundAll withSharedFixture $ do
                 [ bootAt 1280 720 "wideTree(60)"
                 , "th.setOpen(true); th.setScrollOffset(4);"
                 , "local before = th.dump();"
-                , "hud.init(1, 2, 1920, 1080); hud.createUI();"
+                -- The REAL order: broadcastToModules fans the resize out
+                -- in script-map order, so this module can be reached
+                -- while hud still holds the PRE-resize toolbar;
+                -- ui_manager rebuilds hud and only then reflows this
+                -- surface.
                 , "th.onFramebufferResize(1920, 1080);"
+                , "local broadcast = th.dump();"
+                , "hud.init(1, 2, 1920, 1080); hud.createUI();"
+                , "th.reflow();"
                 , "local after = th.dump();"
+                -- Clear of the toolbar clusters at their NEW positions,
+                -- which only holds if the rebuild ran after hud's.
+                , "local reserved = require('scripts.ui.reserved_regions');"
+                , "local clear = true;"
+                , "for _, rc in ipairs(hud.getToolbarRects()) do"
+                , "  if reserved.rectsOverlap({x=after.toggle.x, y=after.toggle.y,"
+                , "      w=after.toggle.w, h=after.toggle.h}, rc) then clear = false end end;"
                 , "return { beforeRebuilds = before.rebuildCount,"
+                , "         broadcastRebuilds = broadcast.rebuildCount,"
                 , "         afterRebuilds = after.rebuildCount,"
                 , "         beforeOpen = before.open, afterOpen = after.open,"
                 , "         beforeOffset = before.scrollOffset,"
                 , "         afterOffset = after.scrollOffset,"
+                , "         clearOfToolbars = clear,"
                 , "         movedRight = (after.toggle.x > before.toggle.x) }"
                 ]
             probe ← decodeOr r ∷ IO ResizeProbe
-            -- Requirement 8: ONE rebuild per real resize. The module is
-            -- loadScript'd (so the engine's own broadcast reaches it)
-            -- and deliberately absent from ui_manager_boot.lua's manual
-            -- forward set, which would double-fire it.
+            -- The broadcast half must NOT rebuild: hud.getToolbarRects()
+            -- still describes the pre-resize toolbar at that point, so a
+            -- rebuild there would anchor the toggle against stale bounds.
+            rzBroadcastRebuilds probe `shouldBe` rzBeforeRebuilds probe
+            -- Requirement 8: ONE rebuild per real resize across the whole
+            -- path — the module stays out of ui_manager_boot's manual
+            -- onFramebufferResize forward set (which would double-fire
+            -- it) and takes its single rebuild from the post-hud reflow,
+            -- exactly like popup/unit_info_v2.
             rzAfterRebuilds probe - rzBeforeRebuilds probe `shouldBe` 1
             (rzBeforeOpen probe, rzAfterOpen probe) `shouldBe` (True, True)
             (rzBeforeOffset probe, rzAfterOffset probe) `shouldBe` (4, 4)
             rzMovedRight probe `shouldBe` True
+            rzClearOfToolbars probe `shouldBe` True
 
         it "a scale-only change reaches it exactly once through uiManager.notifyGameplayRescale" $ \(env, ls) → do
             resetFixture env ls
@@ -595,7 +619,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local tp = require('scripts.tutorial_progress');"
                 , "tp.reset(); tp.setTree(wideTree(60));"
                 , "local th = require('scripts.tutorial_hud');"
-                , "th.init(); th.onFramebufferResize(1920, 1080);"
+                , "th.init(); th.reflow(1920, 1080);"
                 , "th.setOpen(true); th.setScrollOffset(6);"
                 , "package.loaded['scripts.world_view'] = stub;"
                 , "package.loaded['scripts.hud'] = hudStub;"
@@ -652,7 +676,7 @@ spec = aroundAll withSharedFixture $ do
                 , "      local w = math.max(responsive.MIN_WIDTH, math.floor(h * 16 / 9));"
                 , "      engine.setUIScale(sc);"
                 , "      hud.init(1, 2, w, h); hud.createUI(); hud.visible = true;"
-                , "      th.init(); th.onFramebufferResize(w, h);"
+                , "      th.init(); th.reflow(w, h);"
                 , "      local closed = th.dump();"
                 , "      th.setOpen(true);"
                 , "      local d = th.dump();"
@@ -700,14 +724,19 @@ spec = aroundAll withSharedFixture $ do
                 , "tp.reset(); tp.setTree(wideTree(60));"
                 , "local th = require('scripts.tutorial_hud');"
                 , "th.init();"
+                -- The last two are DEGENERATE-but-positive sizes: a
+                -- readable-width floor that ignored the framebuffer
+                -- would push the toggle straight off the right edge
+                -- there (review round 1).
                 , "local combos = { {320, 240, 4.0}, {800, 600, 4.0},"
-                , "                 {3840, 2160, 0.25}, {640, 480, 0.5} };"
+                , "                 {3840, 2160, 0.25}, {640, 480, 0.5},"
+                , "                 {12, 9, 1.0}, {1, 1, 4.0} };"
                 , "local ok = true;"
                 , "for _, c in ipairs(combos) do"
                 , "  engine.setUIScale(c[3]);"
                 , "  hud.init(1, 2, c[1], c[2]); hud.createUI();"
                 , "  local good, err = pcall(function()"
-                , "      th.onFramebufferResize(c[1], c[2]); th.setOpen(true);"
+                , "      th.reflow(c[1], c[2]); th.setOpen(true);"
                 , "      local d = th.dump();"
                 , "      assert(d.toggle.w > 0 and d.toggle.h > 0, 'toggle collapsed');"
                 , "      assert(d.toggle.x >= 0 and d.toggle.y >= 0, 'toggle off-screen');"
@@ -715,18 +744,21 @@ spec = aroundAll withSharedFixture $ do
                 , "      assert(d.toggle.y + d.toggle.h <= c[2], 'toggle overflows height');"
                 , "      assert(d.panelW > 0 and d.panelX >= 0, 'panel invalid');"
                 , "      assert(d.capacity >= 0, 'negative capacity');"
+                , "      assert(d.listTop >= 0 and d.listBottom >= d.listTop,"
+                , "             'invalid list viewport');"
                 , "      assert(d.scrollOffset >= 0 and d.scrollOffset <= d.scrollRange,"
                 , "             'offset outside range');"
                 , "      assert(#d.rows <= d.capacity, 'more rows than capacity');"
                 , "      th.setOpen(false); end);"
                 , "  if not good then ok = tostring(err) end end;"
-                -- A 0x0 minimize must not rebuild degenerate geometry.
+                -- A 0x0 minimize must never be adopted as geometry,
+                -- on either half of the resize path.
                 , "local prior = th.dump();"
                 , "th.onFramebufferResize(0, 0);"
+                , "th.reflow(0, 0);"
                 , "local after = th.dump();"
                 , "return { ok = tostring(ok), minimizeIgnored = (after.fbW == prior.fbW"
-                , "         and after.fbH == prior.fbH"
-                , "         and after.rebuildCount == prior.rebuildCount) }"
+                , "         and after.fbH == prior.fbH) }"
                 ]
             probe ← decodeOr r ∷ IO DegradeProbe
             dgOk probe `shouldBe` "true"
@@ -822,15 +854,17 @@ instance FromJSON ClampProbe where
                     <*> o .: "shrunkRows" <*> o .:? "shrunkTop"
 
 data ResizeProbe = ResizeProbe
-    { rzBeforeRebuilds ∷ Int, rzAfterRebuilds ∷ Int
+    { rzBeforeRebuilds ∷ Int, rzBroadcastRebuilds ∷ Int, rzAfterRebuilds ∷ Int
     , rzBeforeOpen ∷ Bool, rzAfterOpen ∷ Bool
-    , rzBeforeOffset ∷ Int, rzAfterOffset ∷ Int, rzMovedRight ∷ Bool }
+    , rzBeforeOffset ∷ Int, rzAfterOffset ∷ Int, rzMovedRight ∷ Bool
+    , rzClearOfToolbars ∷ Bool }
 instance FromJSON ResizeProbe where
     parseJSON = withObject "ResizeProbe" $ \o →
-        ResizeProbe <$> o .: "beforeRebuilds" <*> o .: "afterRebuilds"
+        ResizeProbe <$> o .: "beforeRebuilds" <*> o .: "broadcastRebuilds"
+                     <*> o .: "afterRebuilds"
                      <*> o .: "beforeOpen" <*> o .: "afterOpen"
                      <*> o .: "beforeOffset" <*> o .: "afterOffset"
-                     <*> o .: "movedRight"
+                     <*> o .: "movedRight" <*> o .: "clearOfToolbars"
 
 data RescaleProbe = RescaleProbe
     { rsclBeforeRebuilds ∷ Int, rsclAfterRebuilds ∷ Int

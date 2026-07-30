@@ -54,9 +54,9 @@ tutorialHud.fbH  = tutorialHud.fbH  or 0
 
 -- Requirement 7 introspection: how many times the surface has been
 -- rebuilt from scratch. A real framebuffer resize must bump this by
--- exactly one, which is why this module is loadScript'd (and therefore
--- reached by the engine's `onFramebufferResize` broadcast) and must
--- NOT also be added to ui_manager_boot.lua's manual forward set.
+-- exactly ONE across the whole two-step path below -- the engine
+-- broadcast records the new size, and the single rebuild happens in
+-- the post-hud `reflow()`.
 tutorialHud.rebuildCount = tutorialHud.rebuildCount or 0
 
 -- Live element bookkeeping (handles are invalid after a rebuild).
@@ -153,11 +153,20 @@ local function computeLayout(fbW, fbH, rowCount)
             sideClusters[#sideClusters + 1] = rc
         end
     end
+    --
+    -- The readable-width floor is itself capped to the framebuffer: a
+    -- flat `math.max(20, ...)` would defeat the framebuffer cap on any
+    -- positive width under 20px and push the toggle straight off the
+    -- right edge (panelX/toggleX clamp to 0, so the extra width has
+    -- nowhere to go) -- an INVALID out-of-envelope geometry rather
+    -- than a degraded one.
+    local minWidth = math.max(1, math.min(20, fbW))
     local panelW = math.min(s.panelW, fbW,
         reservedRegions.maxRightAnchoredWidth(0, fbH, sideClusters, fbW))
-    panelW = math.max(20, panelW)
+    panelW = math.max(minWidth, panelW)
 
-    local toggleW = math.max(20, math.min(s.toggleW, panelW))
+    local toggleW = math.max(math.min(minWidth, panelW),
+                              math.min(s.toggleW, panelW))
     local panelX  = math.max(0, fbW - panelW - margin)
     local toggleX = math.max(0, fbW - toggleW - margin)
 
@@ -175,7 +184,10 @@ local function computeLayout(fbW, fbH, rowCount)
     local toggleY = math.max(0, math.min(bottom - toggleH,
                                           math.max(0, fbH - toggleH)))
 
-    local listBottom = toggleY - gap
+    -- Clamped at 0 so a framebuffer too short to hold the toggle plus a
+    -- margin reports an empty viewport at the top edge rather than a
+    -- negative one.
+    local listBottom = math.max(0, toggleY - gap)
     local maxListH   = math.max(0, listBottom - margin)
     local capacity   = math.max(0, math.floor(maxListH / rowH))
     local visible    = math.min(rowCount, capacity)
@@ -472,14 +484,36 @@ function tutorialHud.onUIScroll(elemHandle, _dx, dy)
     return tutorialHud.setScrollOffset(tutorialHud.scrollOffset + step)
 end
 
--- The ONE real-resize path: the engine's own broadcast to every
--- loadScript'd module. Exactly one rebuild per resize -- this module is
--- deliberately absent from ui_manager_boot.lua's manual forward set,
--- which would double-fire it.
+-- The engine's own broadcast to every loadScript'd module. It records
+-- the new dimensions and DELIBERATELY DOES NOT REBUILD.
+--
+-- broadcastToModules fans out in script-map order, so this module can
+-- (and does) receive the resize BEFORE ui_manager forwards it to
+-- scripts/hud.lua -- and this surface anchors against
+-- hud.getToolbarRects(), which until that forward still describes the
+-- toolbar at the OLD framebuffer size. Rebuilding here would lay the
+-- toggle out against stale toolbar bounds and could leave it sitting
+-- on top of the newly positioned map toggle. The rebuild happens in
+-- reflow() below instead, which ui_manager runs after hud has been
+-- rebuilt at the new size -- exactly the split popup.lua and
+-- unit_info_v2.lua already use (scripts/ui_manager_boot.lua), and the
+-- reason this module still must NOT join that file's manual
+-- onFramebufferResize forward set, which would double-fire it.
 function tutorialHud.onFramebufferResize(width, height)
     if (width or 0) <= 0 or (height or 0) <= 0 then return end
     tutorialHud.fbW = width
     tutorialHud.fbH = height
+end
+
+-- The geometry-dependent half of a resize, run once hud's toolbar
+-- clusters exist at the new size. Also the scale-only entry point
+-- (uiManager.notifyGameplayRescale), which has no engine broadcast to
+-- pair with and so passes the dimensions itself.
+function tutorialHud.reflow(width, height)
+    if (width or 0) > 0 and (height or 0) > 0 then
+        tutorialHud.fbW = width
+        tutorialHud.fbH = height
+    end
     tutorialHud.rebuild()
 end
 
