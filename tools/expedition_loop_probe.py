@@ -50,9 +50,10 @@ WHY A CONTROL RUN
 -----------------
 "The party walked there and back" is not evidence that preparation
 matters; it is evidence that walking works. So the scenario runs TWO
-travellers side by side, from the same colony, over the same route,
-under the same commands, sampled at the same two observation points —
-differing ONLY in what they carried out of the colony:
+travellers side by side, from the same colony, ordered to the SAME
+destination tile in the same paused window, sampled at the same two
+observation points — differing ONLY in what they carried out of the
+colony:
 
   prepared   its spawn kit (a full 2 L canteen, rations) plus rations
              transferred off the technomule
@@ -101,10 +102,22 @@ are genuinely the only variable:
     here it would measure how generous the ground cover happens to be
     beside one particular ruin, not what preparation is worth.
 
-The control's degradation is a MEASUREMENT, not a scripted death: it is
-sampled at the same elapsed point in the same journey, and reported with
-both travellers' absolute numbers so the delta can be read rather than
-trusted.
+The control travels to the prepared traveller's exact target tile under
+a plain move order and is given NO retrieval target of its own. That is
+deliberate: handing it the ruin's second loot roll would make the loot
+TABLE part of the experiment, because a ruin can roll food (ruin
+instance 3 on the default seed rolls `rations`) and a control that eats
+what it finds destroys the very measurement it exists to provide. The
+control is a control for the JOURNEY, not for extraction, which #920's
+probe already gates.
+
+The control's degradation is a MEASUREMENT, not a scripted death, and
+the gate does not infer the mechanism from the number: the travel loop
+watches each traveller's chosen ACTION and asserts that the provisioned
+one really entered `eat_from_inventory` while the control never did. So
+the delta is attributed to eating, not to the two acolytes' separately
+rolled body masses — which is also why both metrics are fractions of
+each unit's OWN maximum rather than absolute litres or kcal.
 
 WHAT IS DELIBERATELY NOT DONE
 -----------------------------
@@ -164,6 +177,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 
 from probelib import (boot, quit_engine, send, send_json, poll_until,
                       capture_request_id, wait_save_complete,
@@ -260,6 +274,12 @@ class Checks:
 
     def ok(self, cond: bool, label: str) -> bool:
         cond = bool(cond)
+        # Recording against a stage counts as reaching it, so a failure
+        # attributed here reports as FAIL rather than NOT REACHED — which
+        # matters for an operational failure raised before its own
+        # enter().
+        if self.stage not in self.reached:
+            self.reached.append(self.stage)
         slot = self.by_stage[self.stage]
         slot[0 if cond else 1] += 1
         print(f"  [{'PASS' if cond else 'FAIL'}][{self.stage}] {label}", flush=True)
@@ -288,21 +308,25 @@ class Checks:
 
     def report(self) -> None:
         print("\n--- stage summary ---", flush=True)
-        broken = []
+        broken, failing = [], []
         for stage in STAGES:
             passed, failed = self.by_stage[stage]
-            if stage not in self.reached:
-                status = "NOT REACHED"
-                broken.append(stage)
-            elif failed:
+            if failed:
                 status = f"FAIL ({failed} of {passed + failed} checks)"
+                broken.append(stage)
+                failing.append(stage)
+            elif stage not in self.reached:
+                status = "NOT REACHED"
                 broken.append(stage)
             else:
                 status = f"pass ({passed} checks)"
             print(f"  {stage:<9} {status}", flush=True)
         if broken:
+            # Name the first stage that actually FAILED a check; a stage
+            # that was never reached is a consequence, not the cause.
+            culprit = failing[0] if failing else broken[0]
             print(f"\n--- FAIL: the expedition loop broke at stage "
-                  f"'{broken[0]}' (stages affected: {', '.join(broken)}) ---",
+                  f"'{culprit}' (stages affected: {', '.join(broken)}) ---",
                   flush=True)
         else:
             print("\n--- PASS: the first expedition runs end to end "
@@ -508,6 +532,7 @@ def vitals(port: int, uid: int) -> dict:
     return {
         "hydration": stat_fraction(port, uid, "hydration", "max_hydration"),
         "stomach": stat_fraction(port, uid, "hunger", "max_hunger"),
+        "load": load_fraction(port, uid),
         "pose": pose(port, uid),
     }
 
@@ -516,7 +541,7 @@ def fmt_vitals(v: dict) -> str:
     def pct(x):
         return "n/a" if x is None else f"{x * 100:.0f}%"
     return (f"hydration {pct(v['hydration'])}, stomach {pct(v['stomach'])}, "
-            f"pose {v['pose']}")
+            f"load {pct(v.get('load'))} of capacity, pose {v['pose']}")
 
 
 def known_locations(port: int, uid: int) -> set[str]:
@@ -931,6 +956,50 @@ def provision(chk: Checks, port: int, mule: int, traveller: int) -> bool:
                   f"({after[0]:.2f} L of water, {after[1]} rations)")
 
 
+#: Personal tools an acolyte spawns with, in the order a departing
+#: traveller sheds them. Deliberately the reverse of what the expedition
+#: needs, and the same order `data/units/acolyte.yaml`'s own
+#: `drop_priority` uses for its spawn-time shed.
+SHEDDABLE = ("pick_steel", "axe_steel", "shovel_steel")
+
+
+def load_fraction(port: int, uid: int):
+    """Carried weight as a fraction of this unit's carrying capacity."""
+    carried = _as_float(send(port, f"return unit.getCarryingWeight({uid})"))
+    cap = _as_float(send(port, f"return unit.getStat({uid},'carrying_capacity')"))
+    if carried is None or not cap or cap <= 0:
+        return None
+    return carried / cap
+
+
+def shed_to_capacity(port: int, uid: int) -> int:
+    """Shed personal tools until the traveller is inside its carrying
+    capacity. Returns how many items were shed.
+
+    This is what a player does before an expedition, and skipping it is
+    a real flake rather than a nicety: `docs/expedition_survival_calibration.md`
+    observation E1 recorded a small acolyte walking a whole route at
+    121% of capacity, where the encumbrance penalty roughly halved its
+    speed and pinned its stamina at ~2/8.5. A traveller that slow makes
+    no new closest approach inside `pickup_timeout`, so the stall timer
+    correctly retires its order and it reverts to `wander` — observed
+    here as an outbound leg that covered 15 tiles in 420 s and never
+    reached the ruin. Applied to BOTH travellers, so encumbrance is not
+    a second variable alongside supplies."""
+    shed = 0
+    for defname in SHEDDABLE:
+        frac = load_fraction(port, uid)
+        if frac is None or frac <= 1.0:
+            break
+        # `unit.removeItem` reports success truthily; compare against the
+        # falsy spellings rather than assuming a boolean.
+        got = send(port, f"return tostring(unit.removeItem({uid},'{defname}'))"
+                   ).strip().strip('"')
+        if got not in ("nil", "false", ""):
+            shed += 1
+    return shed
+
+
 def strip_supplies(port: int, uid: int) -> None:
     """The control's ONLY difference: drain every water container and
     remove every ration. The (empty) canteen is left in place so the two
@@ -1151,8 +1220,24 @@ def main() -> int:
             # Deterministic role assignment by uid order: the portal
             # spawns its roster in a fixed sequence, so these are stable.
             scout, prepared, control = acolytes[0], acolytes[1], acolytes[2]
+            # The remaining acolytes are the never-went-there control for
+            # the per-unit KNOWLEDGE layer (#915), so they are held at the
+            # colony (`unit.setFrozen`, the same immobilisation
+            # tools/tutorial_probe.py uses to make its share leg
+            # conclusive). Without it the premise is not guaranteed: an
+            # idle colonist wanders, and one that drifts into the ruin's
+            # halo has genuinely learned the location — which would read
+            # as the experiential layer leaking when in fact the unit
+            # went there. Clearly-separated fixture setup: they take no
+            # part in the supplies comparison.
+            stay_home = [u for u in acolytes
+                         if u not in (scout, prepared, control)]
+            for uid in stay_home:
+                send(port, f"unit.setFrozen({uid}, true); return 'ok'",
+                     timeout=15.0)
             print(f"  scout {scout}, prepared traveller {prepared}, "
-                  f"unprepared control {control}, technomule {mule}", flush=True)
+                  f"unprepared control {control}, technomule {mule}, "
+                  f"held at the colony {stay_home}", flush=True)
 
             storage_bid = build_storage(chk, port, home[0], home[1])
             if storage_bid < 0:
@@ -1167,7 +1252,6 @@ def main() -> int:
             if len(loot) < 2:
                 return 2
             target = choose_target(port, loot)
-            spare_loot = [g for g in loot if g["id"] != target["id"]]
             fingerprint.update(loot=sorted(g["defName"] for g in loot),
                                target=target["defName"],
                                target_gid=int(target["id"]))
@@ -1188,6 +1272,17 @@ def main() -> int:
                    f"the control party leaves with NOTHING to drink or eat "
                    f"({c_water:.2f} L, {c_rations} rations) — the single "
                    f"difference between the two travellers")
+            shed = {u: shed_to_capacity(port, u) for u in (prepared, control)}
+            loads = {u: load_fraction(port, u) for u in (prepared, control)}
+            chk.ok(all((loads[u] or 9.9) <= 1.0 for u in (prepared, control)),
+                   f"both travellers set out INSIDE their carrying capacity — "
+                   f"an over-encumbered acolyte walks at a fraction of comfort "
+                   f"speed and its order stall-times-out, which would be a "
+                   f"second variable beside supplies (prepared "
+                   f"{(loads[prepared] or -1) * 100:.0f}% of capacity after "
+                   f"shedding {shed[prepared]} tool(s), control "
+                   f"{(loads[control] or -1) * 100:.0f}% after "
+                   f"{shed[control]})")
 
             completed, checked = poll_until(
                 45.0, lambda: (lambda p: p if EXPECTED_COMPLETED <= p[0] else None)(
@@ -1227,13 +1322,25 @@ def main() -> int:
             already = {it["instanceId"] for it in inventory(port, prepared)
                        if it.get("defName") == target["defName"]}
             before_events = len(event_log(port))
+            # SAME destination tile for both. The control gets a plain
+            # move order and no retrieval target of its own — see the
+            # module docstring: giving it the ruin's other loot roll
+            # would put the loot table inside the experiment, since a
+            # ruin can roll food and a control that eats what it finds
+            # destroys the measurement.
+            tx, ty = int(target["x"]), int(target["y"])
             acc_p = send(port, f"return require('scripts.unit_ai').commandPickup("
                                f"{prepared},{int(target['id'])})")
-            acc_c = send(port, f"return require('scripts.unit_ai').commandPickup("
-                               f"{control},{int(spare_loot[0]['id'])})")
-            chk.ok(acc_p.strip() == "true" and acc_c.strip() == "true",
-                   f"both travellers accept the identical retrieval order shape "
-                   f"(prepared {acc_p!r}, control {acc_c!r})")
+            send(port, f"require('scripts.unit_ai').commandMove({control},"
+                       f"{tx},{ty}); return 'ok'")
+            acc_c = send(port, f"local s=require('scripts.unit_ai').getState("
+                               f"{control}); local t=s and s.commandedTask; "
+                               f"return t and (math.floor(t.x)..','..math.floor(t.y)) "
+                               f"or 'none'")
+            chk.ok(acc_p.strip() == "true" and acc_c.strip() == f"{tx},{ty}",
+                   f"both travellers leave under a pending player order to the "
+                   f"SAME tile ({tx},{ty}) — prepared retrieval accepted "
+                   f"{acc_p!r}, control commandedTask {acc_c!r}")
             send(port, "engine.setPaused(false); return 'ok'")
 
             box = halo_box(ruin)
@@ -1241,6 +1348,11 @@ def main() -> int:
             c_samples: list = []
             saw_pickup = False
             arrived_at: dict[int, float] = {}
+            # Watch each traveller's CHOSEN ACTION, so the control-stage
+            # delta can be attributed to a mechanism that was observed
+            # running rather than inferred from the number it left
+            # behind.
+            ate: dict[int, bool] = {prepared: False, control: False}
             start = time.time()
             deadline = start + 420.0
             while time.time() < deadline:
@@ -1250,6 +1362,8 @@ def main() -> int:
                         samples.append(p)
                         if uid not in arrived_at and in_halo(p, box):
                             arrived_at[uid] = time.time() - start
+                    if current_action(port, uid) == "eat_from_inventory":
+                        ate[uid] = True
                 if current_action(port, prepared) == "pickup_ground":
                     saw_pickup = True
                 if prepared in arrived_at:
@@ -1303,11 +1417,34 @@ def main() -> int:
             chk.ok(bool(knew),
                    f"the traveller that walked there personally KNOWS the location "
                    f"({key} in {sorted(known_locations(port, prepared))})")
-            far = [u for u in acolytes if u not in (prepared, control, scout)]
-            chk.ok(all(key not in known_locations(port, u) for u in far),
-                   f"the colonists who stayed home learned nothing — per-unit "
+            # The premise is asserted, not assumed: each held colonist
+            # must genuinely still be outside the halo, and its position
+            # and memory are both reported so a failure says which.
+            home_state = []
+            outside = []
+            for u in stay_home:
+                p = unit_pos(port, u)
+                known = known_locations(port, u)
+                inside = bool(p) and in_halo(p, box)
+                home_state.append(f"uid {u} at {p} "
+                                  f"({'INSIDE' if inside else 'outside'} the halo) "
+                                  f"knows {sorted(known) or 'nothing'}")
+                if not inside:
+                    outside.append((u, known))
+            chk.ok(bool(outside),
+                   f"precondition: at least one colonist is still outside the "
+                   f"ruin's halo to test the knowledge layer against "
+                   f"({'; '.join(home_state) or 'none held'})")
+            chk.ok(bool(outside) and all(key not in k for _u, k in outside),
+                   f"the colonists who never went learned nothing — per-unit "
                    f"knowledge is experiential, not broadcast "
-                   f"(checked uids {far})")
+                   f"({'; '.join(home_state)})")
+            # The hold has served its purpose; release it so the session
+            # that gets saved and reloaded below is an ordinary one and
+            # the persistence stages are not testing a frozen colony.
+            for uid in stay_home:
+                send(port, f"unit.setFrozen({uid}, false); return 'ok'",
+                     timeout=15.0)
 
             # -------------------------------------------------- extract
             chk.enter("extract", "recover the ruin's own loot-table output")
@@ -1400,6 +1537,14 @@ def main() -> int:
                    f"{num(dc['stomach']):.3f}) — the packs are the only "
                    f"difference between them")
             s_delta = num(ap_["stomach"]) - num(ac["stomach"])
+            # The MECHANISM, observed while it ran — not inferred from
+            # the numbers below, which two differently-massed acolytes
+            # could in principle reach by different routes.
+            chk.ok(ate[prepared] and not ate[control],
+                   f"the delta comes from EATING, watched live: the provisioned "
+                   f"traveller entered eat_from_inventory and the control never "
+                   f"did (prepared ate={ate[prepared]}, control "
+                   f"ate={ate[control]})")
             chk.ok(num(ap_["stomach"]) > num(dp["stomach"])
                    and num(ac["stomach"]) <= num(dc["stomach"]),
                    f"only the traveller carrying food ate: prepared "
@@ -1506,7 +1651,18 @@ def main() -> int:
         finally:
             quit_engine(port, proc)
     except SetupError as exc:
-        chk.ok(False, f"setup: {exc}")
+        chk.ok(False, f"the scenario could not reach the state it tests: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        # An operational failure — a dead engine, a socket timeout, a
+        # malformed console response — is a real probe failure and must
+        # name its stage like any other. Left to propagate it would exit
+        # non-zero with a traceback but NO recorded failing check, and
+        # the summary below would then print PASS over the top of it.
+        # BaseException (KeyboardInterrupt, SystemExit) is deliberately
+        # not caught: those are the operator, not the run.
+        chk.ok(False, f"unexpected {type(exc).__name__} while running stage "
+                      f"'{chk.stage}': {exc}")
+        traceback.print_exc()
     finally:
         if args.keep_root:
             print(f"kept resource root: {base}", flush=True)
