@@ -32,11 +32,13 @@ own:
             traveller provisioned off the technomule through the normal
             inventory-transfer surface; the shipped first_session
             objective set at its expected value
-  travel    both travellers walk the same route under real move/pickup
-            orders (no teleport), and the ruin is DISCOVERED by
-            proximity — lifecycle, player event, and per-unit knowledge
-  extract   the ruin's own seed-stable loot-table output is picked up
-            through the real pickup_ground action
+  travel    both travellers walk ONE identical move leg to the ruin (no
+            teleport) and are measured together inside its halo, and the
+            ruin is DISCOVERED by proximity — lifecycle, player event,
+            and per-unit knowledge
+  extract   the retrieval order is issued at the ruin and the ruin's own
+            seed-stable loot-table output is picked up through the real
+            pickup_ground action
   return    the carrier walks home and deposits into colony storage from
             an adjacent tile
   save      the session is captured through the real save barrier
@@ -102,14 +104,31 @@ are genuinely the only variable:
     here it would measure how generous the ground cover happens to be
     beside one particular ruin, not what preparation is worth.
 
-The control travels to the prepared traveller's exact target tile under
-a plain move order and is given NO retrieval target of its own. That is
-deliberate: handing it the ruin's second loot roll would make the loot
-TABLE part of the experiment, because a ruin can roll food (ruin
-instance 3 on the default seed rolls `rations`) and a control that eats
-what it finds destroys the very measurement it exists to provide. The
-control is a control for the JOURNEY, not for extraction, which #920's
-probe already gates.
+The two travellers share ONE leg: the same verb (`commandMove`), to the
+same tile (the ruin's anchor), issued in the same paused window, and the
+measurement is taken when BOTH are inside the discovery halo — asserted,
+not assumed, so neither is sampled part-way through a leg the other has
+finished. The prepared traveller's retrieval order is issued only
+AFTERWARDS, in the extract stage.
+
+Both of those are load-bearing. `commandMove` walks at
+`movement_speed.ordered` while `pickup_ground` walks at `comfort`, and
+ordered is comfort * 1.15 — so ordering one traveller to fetch and the
+other merely to walk would bury a 15% speed difference inside a
+comparison that is supposed to isolate supplies. And the control is
+given NO retrieval target of its own: handing it the ruin's second loot
+roll would make the loot TABLE part of the experiment, because a ruin
+can roll food (instance 3 on the default seed rolls `rations`) and a
+control that eats what it finds destroys the very measurement it exists
+to provide. The control is a control for the JOURNEY; extraction is
+#920's probe's job.
+
+Encumbrance is levelled too: both travellers are shed to inside their
+carrying capacity before departure. `docs/expedition_survival_calibration.md`
+observation E1 recorded a small acolyte walking a whole route at 121% of
+capacity at roughly half speed, and a traveller that slow makes no new
+closest approach inside `pickup_timeout`, so its order is correctly
+retired and it never arrives at all.
 
 The control's degradation is a MEASUREMENT, not a scripted death, and
 the gate does not infer the mechanism from the number: the travel loop
@@ -1322,31 +1341,42 @@ def main() -> int:
             already = {it["instanceId"] for it in inventory(port, prepared)
                        if it.get("defName") == target["defName"]}
             before_events = len(event_log(port))
-            # SAME destination tile for both. The control gets a plain
-            # move order and no retrieval target of its own — see the
-            # module docstring: giving it the ruin's other loot roll
-            # would put the loot table inside the experiment, since a
-            # ruin can roll food and a control that eats what it finds
-            # destroys the measurement.
-            tx, ty = int(target["x"]), int(target["y"])
-            acc_p = send(port, f"return require('scripts.unit_ai').commandPickup("
-                               f"{prepared},{int(target['id'])})")
-            send(port, f"require('scripts.unit_ai').commandMove({control},"
-                       f"{tx},{ty}); return 'ok'")
-            acc_c = send(port, f"local s=require('scripts.unit_ai').getState("
-                               f"{control}); local t=s and s.commandedTask; "
-                               f"return t and (math.floor(t.x)..','..math.floor(t.y)) "
-                               f"or 'none'")
-            chk.ok(acc_p.strip() == "true" and acc_c.strip() == f"{tx},{ty}",
-                   f"both travellers leave under a pending player order to the "
-                   f"SAME tile ({tx},{ty}) — prepared retrieval accepted "
-                   f"{acc_p!r}, control commandedTask {acc_c!r}")
+            # ONE identical leg for both: the same verb, to the same
+            # tile, issued in the same paused window.
+            #
+            # The verb has to match, not just the destination.
+            # `commandMove` walks at `movement_speed.ordered` while
+            # `pickup_ground` walks at `comfort`, and ordered is
+            # comfort * 1.15 — so ordering one traveller to fetch and
+            # the other to walk would put a 15% speed difference inside
+            # the comparison. The prepared traveller's retrieval order
+            # is therefore issued LATER, in the extract stage, once the
+            # control measurement has already been taken.
+            #
+            # The control is given no retrieval target at all: handing
+            # it the ruin's other loot roll would put the loot TABLE
+            # inside the experiment, since a ruin can roll food and a
+            # control that eats what it finds destroys the measurement.
+            tx, ty = int(ruin["gx"]), int(ruin["gy"])
+            for uid in (prepared, control):
+                send(port, f"require('scripts.unit_ai').commandMove({uid},"
+                           f"{tx},{ty}); return 'ok'")
+            tasks = {}
+            for uid in (prepared, control):
+                tasks[uid] = send(
+                    port, f"local s=require('scripts.unit_ai').getState({uid}); "
+                          f"local t=s and s.commandedTask; "
+                          f"return t and (math.floor(t.x)..','..math.floor(t.y)) "
+                          f"or 'none'").strip().strip('"')
+            chk.ok(all(tasks[u] == f"{tx},{ty}" for u in (prepared, control)),
+                   f"both travellers leave under the IDENTICAL pending move "
+                   f"order to the same tile ({tx},{ty}) — prepared "
+                   f"{tasks[prepared]!r}, control {tasks[control]!r}")
             send(port, "engine.setPaused(false); return 'ok'")
 
             box = halo_box(ruin)
             p_samples: list = []
             c_samples: list = []
-            saw_pickup = False
             arrived_at: dict[int, float] = {}
             # Watch each traveller's CHOSEN ACTION, so the control-stage
             # delta can be attributed to a mechanism that was observed
@@ -1354,7 +1384,7 @@ def main() -> int:
             # behind.
             ate: dict[int, bool] = {prepared: False, control: False}
             start = time.time()
-            deadline = start + 420.0
+            deadline = start + 480.0
             while time.time() < deadline:
                 for uid, samples in ((prepared, p_samples), (control, c_samples)):
                     p = unit_pos(port, uid)
@@ -1364,32 +1394,33 @@ def main() -> int:
                             arrived_at[uid] = time.time() - start
                     if current_action(port, uid) == "eat_from_inventory":
                         ate[uid] = True
-                if current_action(port, prepared) == "pickup_ground":
-                    saw_pickup = True
-                if prepared in arrived_at:
+                # The shared observation point is BOTH travellers inside
+                # the halo, so neither is measured part-way through a
+                # leg the other has finished.
+                if prepared in arrived_at and control in arrived_at:
                     break
                 time.sleep(1.0)
 
-            chk.ok(prepared in arrived_at,
-                   f"the prepared traveller reaches the ruin's discovery halo "
-                   f"{box} (at {unit_pos(port, prepared)} after "
-                   f"{arrived_at.get(prepared, -1):.0f}s, action "
-                   f"{current_action(port, prepared)}, "
-                   f"{fmt_vitals(vitals(port, prepared))})")
-            assert_real_travel(chk, p_samples, ruin_xy,
-                               "the prepared traveller's outbound leg",
-                               min_samples=10, min_closed=10.0)
-            # The control's window ENDS when the prepared traveller
-            # arrives, and body mass spreads acolyte walking speed by a
-            # factor of ~1.5 (docs/expedition_survival_calibration.md),
-            # so its bar is the lower one: what is being asserted here is
-            # that it really walked the same route, not that it kept up.
-            assert_real_travel(chk, c_samples, ruin_xy,
-                               "the control traveller's outbound leg",
-                               min_samples=10, min_closed=5.0)
+            here = {u: unit_pos(port, u) for u in (prepared, control)}
+            chk.ok(prepared in arrived_at and control in arrived_at,
+                   f"BOTH travellers reach the same observation point — inside "
+                   f"the ruin's discovery halo {box} — so the control is "
+                   f"measured where the prepared one is, not part-way behind "
+                   f"it (prepared at {here[prepared]} after "
+                   f"{arrived_at.get(prepared, -1):.0f}s, control at "
+                   f"{here[control]} after {arrived_at.get(control, -1):.0f}s)")
+            for uid, samples, label in ((prepared, p_samples, "prepared"),
+                                        (control, c_samples, "control")):
+                assert_real_travel(chk, samples, ruin_xy,
+                                   f"the {label} traveller's outbound leg",
+                                   min_samples=10, min_closed=10.0)
+            print(f"  observation point: prepared {dist(here[prepared], ruin_xy):.1f} "
+                  f"tiles from the ruin anchor, control "
+                  f"{dist(here[control], ruin_xy):.1f} tiles", flush=True)
 
-            # -- the control observation point: same route, same elapsed
-            #    time, same commands, only the packs differ.
+            # -- the control observation point: one identical leg, the
+            #    same destination, both inside the halo, only the packs
+            #    differ.
             arrive = {u: vitals(port, u) for u in (prepared, control)}
             print(f"  arrival    prepared {prepared}: "
                   f"{fmt_vitals(arrive[prepared])}", flush=True)
@@ -1448,14 +1479,31 @@ def main() -> int:
 
             # -------------------------------------------------- extract
             chk.enter("extract", "recover the ruin's own loot-table output")
-            # `pickup_ground` is what DRIVES the approach, not just the
-            # final grab, so the travel loop above has already seen it if
-            # the order is being acted on at all.
-            chk.ok(saw_pickup or current_action(port, prepared) == "pickup_ground",
-                   "the carrier acts on the order through the real pickup_ground "
-                   "AI action")
-            picked = poll_until(180.0, lambda: find_instance_by_def(
-                inventory(port, prepared), target["defName"], already), interval=1.0)
+            # Issued only now, so the shared travel leg above was the
+            # same verb at the same speed for both travellers. The
+            # carrier is already standing in the ruin's halo; this is
+            # the "Pick up" the player clicks once the party has
+            # arrived.
+            acc_p = send(port, f"return require('scripts.unit_ai').commandPickup("
+                               f"{prepared},{int(target['id'])})")
+            chk.ok(acc_p.strip() == "true",
+                   f"the retrieval order is accepted at the ruin "
+                   f"(commandPickup -> {acc_p!r})")
+            saw_pickup = False
+            picked = None
+            deadline = time.time() + 180.0
+            while time.time() < deadline:
+                if current_action(port, prepared) == "pickup_ground":
+                    saw_pickup = True
+                picked = find_instance_by_def(inventory(port, prepared),
+                                              target["defName"], already)
+                if picked:
+                    break
+                time.sleep(1.0)
+            chk.ok(saw_pickup,
+                   f"the carrier acts on the order through the real "
+                   f"pickup_ground AI action (last action "
+                   f"{current_action(port, prepared)})")
             if not chk.ok(picked is not None,
                           f"the carrier picks up the {target['defName']} the ruin "
                           f"itself rolled (action "
