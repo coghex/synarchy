@@ -61,7 +61,7 @@ colony:
              transferred off the technomule
   control    the same acolyte def, canteen drained and rations removed
 
-Both set out with the SAME deficit — stomach at 0.10 of each unit's own
+Both set out with the SAME deficit — stomach at 0.20 of each unit's own
 max, seeded inside one PAUSED window so neither AI can react to it
 before both orders are issued. The prepared traveller then eats en route
 through the ordinary AI (`eat_from_inventory`'s utility outranks both a
@@ -104,12 +104,34 @@ are genuinely the only variable:
     here it would measure how generous the ground cover happens to be
     beside one particular ruin, not what preparation is worth.
 
-The two travellers share ONE leg: the same verb (`commandMove`), to the
-same tile (the ruin's anchor), issued in the same paused window, and the
-measurement is taken when BOTH are inside the discovery halo — asserted,
-not assumed, so neither is sampled part-way through a leg the other has
-finished. The prepared traveller's retrieval order is issued only
-AFTERWARDS, in the extract stage.
+The two travellers share ONE leg, end to end. They are first MUSTERED to the same
+distance from the ruin and pinned there, because a shared destination is
+not a shared journey — hunger drains with time on the road, so departing
+from 36.4 and 31.5 tiles out, as an early run of this probe did, is a
+~16% difference in leg length sitting inside the measurement. Pinning
+each traveller as it crosses the band (rather than waiting for both to
+be near the tile at once) is what makes the muster terminate at all: a
+completed move order does not hold position, so the first arrival
+wanders off while the second is still walking. They then travel under the same verb (`commandMove`), to
+the same tile (the ruin's anchor), ordered in the same paused window.
+The measurement is taken when BOTH are inside the discovery halo IN THE
+SAME SAMPLE — not "each has been there at some point", because a unit
+whose move task has completed reverts to wander and can drift back out
+while the other is still walking. The prepared traveller's retrieval
+order is issued only AFTERWARDS, in the extract stage.
+
+What CANNOT also be equalised is elapsed time, and that is a deliberate
+choice rather than an oversight. Acolyte walking speed varies with body
+mass by roughly 1.5x (`docs/expedition_survival_calibration.md`), so
+two travellers covering the same distance necessarily take different
+amounts of it; equalising place and equalising time are mutually
+exclusive. Place is the one that is fixed, because it is the one the
+scenario is about — "the party got to the ruin" — and because the
+residual is neutralised twice over: both metrics are fractions of each
+unit's OWN maximum, and the delta's cause is asserted as an observed
+`eat_from_inventory` action rather than inferred from its size. Time on
+the road only changes how far the control's stomach falls; it cannot
+make the prepared traveller's RISE.
 
 Both of those are load-bearing. `commandMove` walks at
 `movement_speed.ordered` while `pickup_ground` walks at `comfort`, and
@@ -241,11 +263,26 @@ MAX_STEP_TILES = 4.0
 
 #: The shared departure deficit, as a fraction of each traveller's own
 #: max_hunger, applied identically to BOTH travellers while PAUSED.
-#: 0.10 sits below `eat_max_fraction` (0.25), so eat_from_inventory is
-#: live from the first step; its utility is (1 - 0.10) * eat_weight 10.0
-#: = 9.0, above both follow_command (7.0) and pickup (7.5), which is the
+#: 0.20 sits below `eat_max_fraction` (0.25), so eat_from_inventory is
+#: live from the first step; its utility is (1 - 0.20) * eat_weight 10.0
+#: = 8.0, above both follow_command (7.0) and pickup (7.5), which is the
 #: documented #306 ladder — a hungry unit interrupts its orders to eat.
-DEPART_STOMACH_FRAC = 0.10
+#: Not lower: the control cannot eat at all, and starting it at 0.10 ran
+#: its stomach to empty well before the observation point and left it
+#: collapsing on arrival. An empty control is a valid outcome, but one
+#: that collapses MID-leg never reaches the shared observation point at
+#: all, which would make the gate flaky rather than strict.
+DEPART_STOMACH_FRAC = 0.20
+
+#: How closely the two travellers' distances to the ruin must agree at
+#: departure. Hunger drains with time on the road, so unequal origins
+#: would be a second variable beside supplies: an early run departed
+#: from 36.4 and 31.5 tiles out, a ~5-tile (16%) spread on a ~30-tile
+#: leg. 2.0 tiles is under 7% of the journey, and it is guaranteed by
+#: construction rather than hoped for — each traveller is PINNED the
+#: moment it crosses the half-width band around the staging distance
+#: (see muster_travellers), so the two can differ by at most this much.
+MAX_START_SPREAD = 2.0
 
 #: The predetermined adverse delta the control must show at the shared
 #: arrival observation point. `eatExecute` feeds until the stomach is
@@ -1033,6 +1070,50 @@ def strip_supplies(port: int, uid: int) -> None:
          timeout=20.0)
 
 
+def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 300.0):
+    """Bring both travellers to the same distance from the ruin and PIN
+    them there, so the paired legs are the same length.
+
+    Each unit is ordered to the staging tile and frozen the moment its
+    distance to the ruin anchor falls inside a half-`MAX_START_SPREAD`
+    band around the staging distance — whichever side it approaches
+    from. Pinning is what makes this work at all: a completed move order
+    does not hold position (`docs/expedition_survival_calibration.md`
+    observation E3 watched a unit drift 10.7 tiles back out of camp), so
+    waiting for both to be near the tile SIMULTANEOUSLY can simply never
+    come true — the first arrival wanders off while the second is still
+    walking. Observed: a run where both ended 40+ tiles out, 3.4 tiles
+    apart, after a 300 s wait.
+
+    Returns the pinned uid -> position map (frozen units), or None."""
+    target = dist(staging, ruin_xy)
+    band = MAX_START_SPREAD / 2.0
+    for uid in uids:
+        send(port, f"require('scripts.unit_ai').commandMove({uid},"
+                   f"{staging[0]},{staging[1]}); return 'ok'")
+    pinned: dict[int, tuple] = {}
+    deadline = time.time() + seconds
+    while time.time() < deadline and len(pinned) < len(uids):
+        for uid in uids:
+            if uid in pinned:
+                continue
+            p = unit_pos(port, uid)
+            if p and abs(dist(p, ruin_xy) - target) <= band:
+                send(port, f"unit.setFrozen({uid}, true); return 'ok'")
+                pinned[uid] = p
+        time.sleep(0.5)
+    if len(pinned) < len(uids):
+        for uid in pinned:
+            send(port, f"unit.setFrozen({uid}, false); return 'ok'")
+        return None
+    return pinned
+
+
+def unpin_travellers(port: int, uids) -> None:
+    for uid in uids:
+        send(port, f"unit.setFrozen({uid}, false); return 'ok'")
+
+
 def seed_departure_deficit(port: int, uids) -> bool:
     """The shared, symmetric fixture: both travellers set out equally
     hungry, as a fraction of their OWN max_hunger (body mass varies
@@ -1319,16 +1400,47 @@ def main() -> int:
             # --------------------------------------------------- travel
             chk.enter("travel", "both travellers walk the same route; "
                                 "the ruin is discovered by proximity")
+            # Muster both travellers at a common departure point first.
+            # A shared DESTINATION is not a shared journey: hunger drains
+            # with time on the road, so two travellers setting out from
+            # different distances would be running different-length legs
+            # (36.4 vs 31.5 tiles, in an earlier run of this probe) and
+            # the difference would land in the measured delta alongside
+            # supplies.
+            staged = muster_travellers(port, (prepared, control),
+                                       deposit_spot, ruin_xy)
+            at_start = staged or {u: unit_pos(port, u)
+                                  for u in (prepared, control)}
+            spread = (abs(dist(at_start[prepared], ruin_xy)
+                          - dist(at_start[control], ruin_xy))
+                      if all(at_start.values()) else -1.0)
+            if not chk.ok(staged is not None and spread <= MAX_START_SPREAD,
+                          f"both travellers depart from the same distance to the "
+                          f"ruin — so they run the same-length leg, not just the "
+                          f"same destination (prepared "
+                          f"{dist(at_start[prepared], ruin_xy):.1f} tiles out, "
+                          f"control {dist(at_start[control], ruin_xy):.1f}; "
+                          f"spread {spread:.2f} tiles, bar {MAX_START_SPREAD})"):
+                unpin_travellers(port, (prepared, control))
+                return 2
+
             # Seed the shared deficit and issue both orders inside ONE
             # paused window, so the two travellers genuinely leave from
-            # the same state and under the same command.
+            # the same state and under the same command. Released from
+            # the muster pin here, while still paused, so nothing moves
+            # between the release and the order.
             send(port, "engine.setPaused(true); return 'ok'")
+            unpin_travellers(port, (prepared, control))
             seeded = seed_departure_deficit(port, (prepared, control))
             depart = {u: vitals(port, u) for u in (prepared, control)}
             print(f"  departure  prepared {prepared}: "
-                  f"{fmt_vitals(depart[prepared])}", flush=True)
+                  f"{fmt_vitals(depart[prepared])}, "
+                  f"{dist(at_start[prepared], ruin_xy):.1f} tiles to go",
+                  flush=True)
             print(f"  departure  control  {control}: "
-                  f"{fmt_vitals(depart[control])}", flush=True)
+                  f"{fmt_vitals(depart[control])}, "
+                  f"{dist(at_start[control], ruin_xy):.1f} tiles to go",
+                  flush=True)
             if not chk.ok(seeded and all(
                     depart[u]["pose"] not in ("collapsed", "dead")
                     for u in (prepared, control)),
@@ -1385,43 +1497,61 @@ def main() -> int:
             ate: dict[int, bool] = {prepared: False, control: False}
             start = time.time()
             deadline = start + 480.0
+            together = None
+            arrive = None
             while time.time() < deadline:
+                live = {}
                 for uid, samples in ((prepared, p_samples), (control, c_samples)):
                     p = unit_pos(port, uid)
+                    live[uid] = p
                     if p:
                         samples.append(p)
                         if uid not in arrived_at and in_halo(p, box):
                             arrived_at[uid] = time.time() - start
                     if current_action(port, uid) == "eat_from_inventory":
                         ate[uid] = True
-                # The shared observation point is BOTH travellers inside
-                # the halo, so neither is measured part-way through a
-                # leg the other has finished.
-                if prepared in arrived_at and control in arrived_at:
+                # The shared observation point is both travellers inside
+                # the halo IN THE SAME SAMPLE — not "each has been there
+                # at some point". A unit whose move task has completed
+                # reverts to wander and can drift back out while the
+                # other is still walking, and latching first-entry would
+                # score that as a shared observation point.
+                if all(live[u] and in_halo(live[u], box)
+                       for u in (prepared, control)):
+                    together = live
+                    arrive = {u: vitals(port, u) for u in (prepared, control)}
                     break
                 time.sleep(1.0)
 
             here = {u: unit_pos(port, u) for u in (prepared, control)}
-            chk.ok(prepared in arrived_at and control in arrived_at,
-                   f"BOTH travellers reach the same observation point — inside "
-                   f"the ruin's discovery halo {box} — so the control is "
-                   f"measured where the prepared one is, not part-way behind "
-                   f"it (prepared at {here[prepared]} after "
-                   f"{arrived_at.get(prepared, -1):.0f}s, control at "
-                   f"{here[control]} after {arrived_at.get(control, -1):.0f}s)")
+            still_in = all(here[u] and in_halo(here[u], box)
+                           for u in (prepared, control))
+            chk.ok(together is not None and still_in,
+                   f"BOTH travellers are inside the ruin's discovery halo {box} "
+                   f"IN THE SAME SAMPLE, and still are when the metrics are "
+                   f"read — so the control is measured where the prepared one "
+                   f"is, not part-way behind it or after drifting back out "
+                   f"(at the shared sample {together}; at read time "
+                   f"{here}, both inside={still_in}; first entered after "
+                   f"{arrived_at.get(prepared, -1):.0f}s / "
+                   f"{arrived_at.get(control, -1):.0f}s)")
+            if arrive is None:
+                arrive = {u: vitals(port, u) for u in (prepared, control)}
             for uid, samples, label in ((prepared, p_samples, "prepared"),
                                         (control, c_samples, "control")):
                 assert_real_travel(chk, samples, ruin_xy,
                                    f"the {label} traveller's outbound leg",
                                    min_samples=10, min_closed=10.0)
-            print(f"  observation point: prepared {dist(here[prepared], ruin_xy):.1f} "
-                  f"tiles from the ruin anchor, control "
-                  f"{dist(here[control], ruin_xy):.1f} tiles", flush=True)
+            if together:
+                print(f"  observation point (one shared sample): prepared "
+                      f"{dist(together[prepared], ruin_xy):.1f} tiles from the "
+                      f"ruin anchor, control "
+                      f"{dist(together[control], ruin_xy):.1f} tiles", flush=True)
 
-            # -- the control observation point: one identical leg, the
-            #    same destination, both inside the halo, only the packs
-            #    differ.
-            arrive = {u: vitals(port, u) for u in (prepared, control)}
+            # -- the control observation point: one identical leg from a
+            #    common departure point, both inside the halo in the same
+            #    sample, only the packs differ. `arrive` was captured at
+            #    that sample and is deliberately NOT re-read here.
             print(f"  arrival    prepared {prepared}: "
                   f"{fmt_vitals(arrive[prepared])}", flush=True)
             print(f"  arrival    control  {control}: "
