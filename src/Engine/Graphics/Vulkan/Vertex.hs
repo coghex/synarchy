@@ -4,7 +4,6 @@ module Engine.Graphics.Vulkan.Vertex
     , getVertexAttributeDescriptions
     ) where
 
-import UPrelude
 import qualified Data.Vector as V
 import Vulkan.Core10
 import Vulkan.Zero
