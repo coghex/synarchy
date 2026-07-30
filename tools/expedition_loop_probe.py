@@ -104,13 +104,16 @@ are genuinely the only variable:
     here it would measure how generous the ground cover happens to be
     beside one particular ruin, not what preparation is worth.
 
-The two travellers share ONE leg, end to end. They are first MUSTERED to the same
-distance from the ruin and pinned there, because a shared destination is
-not a shared journey — hunger drains with time on the road, so departing
-from 36.4 and 31.5 tiles out, as an early run of this probe did, is a
-~16% difference in leg length sitting inside the measurement. Pinning
-each traveller as it crosses the band (rather than waiting for both to
-be near the tile at once) is what makes the muster terminate at all: a
+The two travellers share ONE leg, end to end. They are first MUSTERED to one staging
+tile and pinned there, because a shared destination is not a shared
+journey — hunger drains with time on the road, so departing from 36.4
+and 31.5 tiles out, as an early run of this probe did, is a ~16%
+difference in leg length sitting inside the measurement. A shared
+DISTANCE is not enough either: a radial band is satisfied anywhere on a
+circle, so the muster gathers them at a place, and the departure check
+asserts how far apart they stand as well as how far each has to walk.
+Pinning each traveller on arrival (rather than waiting for both to be
+near the tile at once) is what makes the muster terminate at all: a
 completed move order does not hold position, so the first arrival
 wanders off while the second is still walking. They then travel under the same verb (`commandMove`), to
 the same tile (the ruin's anchor), ordered in the same paused window.
@@ -153,12 +156,19 @@ closest approach inside `pickup_timeout`, so its order is correctly
 retired and it never arrives at all.
 
 The control's degradation is a MEASUREMENT, not a scripted death, and
-the gate does not infer the mechanism from the number: the travel loop
-watches each traveller's chosen ACTION and asserts that the provisioned
-one really entered `eat_from_inventory` while the control never did. So
-the delta is attributed to eating, not to the two acolytes' separately
-rolled body masses — which is also why both metrics are fractions of
-each unit's OWN maximum rather than absolute litres or kcal.
+the gate does not infer the mechanism from the number: it counts what
+was CONSUMED. The provisioned traveller must arrive with fewer rations
+than it left with, and the control must have had none to eat and eaten
+none. Consumption rather than a caught `eat_from_inventory` action,
+because `eatExecute` finishes a whole meal inside one AI tick — at a
+~1 s poll, catching the action is a coin flip (a run whose stomach
+demonstrably went 0.20 -> 0.82 recorded the action as unseen), whereas
+`unit.feed` removes a discrete ration outright and the pack still shows
+it minutes later. The action sighting is reported alongside, as
+corroboration. So the delta is attributed to eating, not to the two
+acolytes' separately rolled body masses — which is also why both
+metrics are fractions of each unit's OWN maximum rather than absolute
+litres or kcal.
 
 WHAT IS DELIBERATELY NOT DONE
 -----------------------------
@@ -274,14 +284,19 @@ MAX_STEP_TILES = 4.0
 #: all, which would make the gate flaky rather than strict.
 DEPART_STOMACH_FRAC = 0.20
 
-#: How closely the two travellers' distances to the ruin must agree at
-#: departure. Hunger drains with time on the road, so unequal origins
-#: would be a second variable beside supplies: an early run departed
-#: from 36.4 and 31.5 tiles out, a ~5-tile (16%) spread on a ~30-tile
-#: leg. 2.0 tiles is under 7% of the journey, and it is guaranteed by
-#: construction rather than hoped for — each traveller is PINNED the
-#: moment it crosses the half-width band around the staging distance
-#: (see muster_travellers), so the two can differ by at most this much.
+#: The departure-origin contract. Hunger drains with time on the road,
+#: so an unequal origin — in distance OR in bearing, since route shape
+#: is also time — would be a second variable beside supplies. An early
+#: run departed from 36.4 and 31.5 tiles out: a ~5-tile (16%) spread on
+#: a ~30-tile leg.
+#:
+#: Both travellers are pinned within STAGING_RADIUS of ONE staging tile
+#: (see muster_travellers), which bounds all three quantities the caller
+#: then asserts: how far apart they stand, how far each has to walk, and
+#: — because both are within a couple of tiles of a point ~32 tiles from
+#: the ruin — their bearing to it, to within a few degrees.
+STAGING_RADIUS = 2.0
+MAX_START_SEPARATION = 3.0
 MAX_START_SPREAD = 2.0
 
 #: The predetermined adverse delta the control must show at the shared
@@ -477,6 +492,18 @@ def _as_float(raw):
 
 def dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def bearing_gap(a, b, target) -> float:
+    """Angle between the two bearings from `a` and `b` to `target`, in
+    degrees, wrapped into [0, 180].
+
+    The wrap is the point: a raw difference of two atan2 results runs
+    over the +/-pi branch cut, which reports two travellers standing
+    three tiles apart as 354.6 degrees rather than 5.4."""
+    d = (math.atan2(target[1] - a[1], target[0] - a[0])
+         - math.atan2(target[1] - b[1], target[0] - b[0]))
+    return abs(math.degrees(math.atan2(math.sin(d), math.cos(d))))
 
 
 def surface_z(port: int, gx: int, gy: int):
@@ -1071,23 +1098,33 @@ def strip_supplies(port: int, uid: int) -> None:
 
 
 def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 300.0):
-    """Bring both travellers to the same distance from the ruin and PIN
-    them there, so the paired legs are the same length.
+    """Gather both travellers at ONE staging position and PIN them there,
+    so the paired legs share an origin and therefore a route — not merely
+    a length.
 
-    Each unit is ordered to the staging tile and frozen the moment its
-    distance to the ruin anchor falls inside a half-`MAX_START_SPREAD`
-    band around the staging distance — whichever side it approaches
-    from. Pinning is what makes this work at all: a completed move order
-    does not hold position (`docs/expedition_survival_calibration.md`
-    observation E3 watched a unit drift 10.7 tiles back out of camp), so
-    waiting for both to be near the tile SIMULTANEOUSLY can simply never
-    come true — the first arrival wanders off while the second is still
-    walking. Observed: a run where both ended 40+ tiles out, 3.4 tiles
-    apart, after a 300 s wait.
+    Each unit is ordered to the staging tile and frozen the moment it
+    comes within `STAGING_RADIUS` of that TILE. Pinning on arrival, rather
+    than waiting for both to be near it at once, is what makes the muster
+    terminate at all: a completed move order does not hold position
+    (`docs/expedition_survival_calibration.md` observation E3 watched a
+    unit drift 10.7 tiles back out of camp), so the first arrival wanders
+    off while the second is still walking. Observed: a run where both
+    ended 40+ tiles out and 3.4 tiles apart after a 300 s wait.
+
+    Pinning on proximity to the TILE rather than on radial distance to
+    the ruin matters too. A distance band is satisfied anywhere on a
+    circle, so two travellers could be pinned on opposite bearings —
+    equal-length legs over different ground, and route shape is time on
+    the road, which is hunger. The caller asserts the resulting
+    separation and distance spread; both are bounded by construction
+    here.
+
+    The first unit to arrive is frozen ON the tile and the second stops
+    beside it (units do not share a tile), which is why the radius is a
+    couple of tiles rather than the move order's own 0.6-tile arrival
+    threshold.
 
     Returns the pinned uid -> position map (frozen units), or None."""
-    target = dist(staging, ruin_xy)
-    band = MAX_START_SPREAD / 2.0
     for uid in uids:
         send(port, f"require('scripts.unit_ai').commandMove({uid},"
                    f"{staging[0]},{staging[1]}); return 'ok'")
@@ -1098,7 +1135,7 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 300.0)
             if uid in pinned:
                 continue
             p = unit_pos(port, uid)
-            if p and abs(dist(p, ruin_xy) - target) <= band:
+            if p and dist(p, staging) <= STAGING_RADIUS:
                 send(port, f"unit.setFrozen({uid}, true); return 'ok'")
                 pinned[uid] = p
         time.sleep(0.5)
@@ -1411,16 +1448,33 @@ def main() -> int:
                                        deposit_spot, ruin_xy)
             at_start = staged or {u: unit_pos(port, u)
                                   for u in (prepared, control)}
-            spread = (abs(dist(at_start[prepared], ruin_xy)
-                          - dist(at_start[control], ruin_xy))
-                      if all(at_start.values()) else -1.0)
-            if not chk.ok(staged is not None and spread <= MAX_START_SPREAD,
-                          f"both travellers depart from the same distance to the "
-                          f"ruin — so they run the same-length leg, not just the "
-                          f"same destination (prepared "
-                          f"{dist(at_start[prepared], ruin_xy):.1f} tiles out, "
-                          f"control {dist(at_start[control], ruin_xy):.1f}; "
-                          f"spread {spread:.2f} tiles, bar {MAX_START_SPREAD})"):
+            if all(at_start.values()):
+                sep = dist(at_start[prepared], at_start[control])
+                spread = abs(dist(at_start[prepared], ruin_xy)
+                             - dist(at_start[control], ruin_xy))
+                bearing = bearing_gap(at_start[prepared], at_start[control],
+                                      ruin_xy)
+            else:
+                sep = spread = bearing = -1.0
+            # Distance alone is not a shared route: a radial band is
+            # satisfied anywhere on a circle, so two travellers could set
+            # out the same distance from the ruin on opposite bearings
+            # and walk quite different ground. Separation is what pins
+            # the route; the spread and bearing are reported alongside it
+            # because they are what the separation is FOR.
+            if not chk.ok(staged is not None
+                          and 0 <= sep <= MAX_START_SEPARATION
+                          and spread <= MAX_START_SPREAD,
+                          f"both travellers depart from the SAME PLACE, not just "
+                          f"the same distance — so they walk one route, and "
+                          f"route shape is time on the road, which is hunger "
+                          f"(prepared at {at_start[prepared]}, control at "
+                          f"{at_start[control]}; {sep:.2f} tiles apart, bar "
+                          f"{MAX_START_SEPARATION}; "
+                          f"{dist(at_start[prepared], ruin_xy):.1f} vs "
+                          f"{dist(at_start[control], ruin_xy):.1f} tiles out, "
+                          f"spread {spread:.2f}, bar {MAX_START_SPREAD}; "
+                          f"bearings to the ruin {bearing:.1f} deg apart)"):
                 unpin_travellers(port, (prepared, control))
                 return 2
 
@@ -1433,6 +1487,12 @@ def main() -> int:
             unpin_travellers(port, (prepared, control))
             seeded = seed_departure_deficit(port, (prepared, control))
             depart = {u: vitals(port, u) for u in (prepared, control)}
+            # Rations in the pack at departure. Consumption is the
+            # DURABLE record that a meal happened: `unit.feed` removes a
+            # discrete ration outright, so a count that has gone down
+            # cannot be missed by a sampling loop the way the
+            # `eat_from_inventory` action itself can.
+            depart_food = {u: carried(port, u)[1] for u in (prepared, control)}
             print(f"  departure  prepared {prepared}: "
                   f"{fmt_vitals(depart[prepared])}, "
                   f"{dist(at_start[prepared], ruin_xy):.1f} tiles to go",
@@ -1499,6 +1559,7 @@ def main() -> int:
             deadline = start + 480.0
             together = None
             arrive = None
+            arrive_food = None
             while time.time() < deadline:
                 live = {}
                 for uid, samples in ((prepared, p_samples), (control, c_samples)):
@@ -1508,7 +1569,13 @@ def main() -> int:
                         samples.append(p)
                         if uid not in arrived_at and in_halo(p, box):
                             arrived_at[uid] = time.time() - start
-                    if current_action(port, uid) == "eat_from_inventory":
+                    # Corroboration only — see `depart_food`. A meal is
+                    # over in a tick or two and this poll runs about once
+                    # a second, so catching the action is luck; catching
+                    # the missing ration is not.
+                    if (current_action(port, uid) == "eat_from_inventory"
+                            or send(port, f"return unit.getActivity({uid})")
+                            == "eating"):
                         ate[uid] = True
                 # The shared observation point is both travellers inside
                 # the halo IN THE SAME SAMPLE — not "each has been there
@@ -1520,6 +1587,8 @@ def main() -> int:
                        for u in (prepared, control)):
                     together = live
                     arrive = {u: vitals(port, u) for u in (prepared, control)}
+                    arrive_food = {u: carried(port, u)[1]
+                                   for u in (prepared, control)}
                     break
                 time.sleep(1.0)
 
@@ -1537,6 +1606,9 @@ def main() -> int:
                    f"{arrived_at.get(control, -1):.0f}s)")
             if arrive is None:
                 arrive = {u: vitals(port, u) for u in (prepared, control)}
+            if arrive_food is None:
+                arrive_food = {u: carried(port, u)[1]
+                               for u in (prepared, control)}
             for uid, samples, label in ((prepared, p_samples, "prepared"),
                                         (control, c_samples, "control")):
                 assert_real_travel(chk, samples, ruin_xy,
@@ -1715,14 +1787,28 @@ def main() -> int:
                    f"{num(dc['stomach']):.3f}) — the packs are the only "
                    f"difference between them")
             s_delta = num(ap_["stomach"]) - num(ac["stomach"])
-            # The MECHANISM, observed while it ran — not inferred from
-            # the numbers below, which two differently-massed acolytes
-            # could in principle reach by different routes.
-            chk.ok(ate[prepared] and not ate[control],
-                   f"the delta comes from EATING, watched live: the provisioned "
-                   f"traveller entered eat_from_inventory and the control never "
-                   f"did (prepared ate={ate[prepared]}, control "
-                   f"ate={ate[control]})")
+            # The MECHANISM, evidenced by what it CONSUMED — not inferred
+            # from the numbers below, which two differently-massed
+            # acolytes could in principle reach by other means.
+            #
+            # Rations eaten, rather than the eat_from_inventory action
+            # being caught in the act: `eatExecute` finishes a whole meal
+            # inside one AI tick, so at a ~1s poll the action is a
+            # coin-flip to observe (a run where the stomach demonstrably
+            # went 0.20 -> 0.82 recorded ate=False). `unit.feed` removes
+            # a discrete ration outright, so the pack is a durable
+            # record. The action sighting is still reported, as
+            # corroboration.
+            eaten = depart_food[prepared] - arrive_food[prepared]
+            chk.ok(eaten > 0
+                   and depart_food[control] == 0 and arrive_food[control] == 0,
+                   f"the delta comes from EATING: the provisioned traveller "
+                   f"consumed {eaten} ration(s) en route "
+                   f"({depart_food[prepared]} -> {arrive_food[prepared]}) while "
+                   f"the control had none to consume and consumed nothing "
+                   f"({depart_food[control]} -> {arrive_food[control]}); "
+                   f"eat_from_inventory/eating also seen live: "
+                   f"prepared={ate[prepared]}, control={ate[control]}")
             chk.ok(num(ap_["stomach"]) > num(dp["stomach"])
                    and num(ac["stomach"]) <= num(dc["stomach"]),
                    f"only the traveller carrying food ate: prepared "

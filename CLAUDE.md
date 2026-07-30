@@ -803,8 +803,8 @@ before touching each area:
   recovered item's instance id / definition / mutable properties /
   storage ownership. The gate also runs an **unprepared control**: a
   second traveller sharing ONE identical leg with the first — mustered
-  to the same distance from the ruin and pinned there, then same verb,
-  same destination, same paused window, same seeded hunger deficit —
+  to a single staging tile and pinned there, then same verb, same
+  destination, same paused window, same seeded hunger deficit —
   measured once BOTH are
   inside the ruin's halo, differing only in supplies, and which must end
   measurably worse off. That is what makes the scenario prove
@@ -821,11 +821,13 @@ before touching each area:
   VERB matches, since `commandMove` walks at `movement_speed.ordered` =
   comfort × 1.15 while `pickup_ground` walks at comfort (so the
   retrieval order is issued only after the measurement); the ORIGINS are
-  equalised, because a shared destination is not a shared journey and
-  hunger drains with time on the road (by PINNING each traveller as it
-  crosses the band — a completed move order does not hold position, E3,
-  so waiting for both to be near a tile at once can never come true);
-  and the observation point is both
+  equalised as a PLACE and not merely a distance, because hunger drains
+  with time on the road and route shape is time — a radial band is
+  satisfied anywhere on a circle, so the check asserts separation as
+  well as distance spread, and each traveller is PINNED on arrival at
+  the staging tile (a completed move order does not hold position, E3,
+  so waiting for both to be near it at once can never come true); and
+  the observation point is both
   travellers inside the halo IN THE SAME SAMPLE, since a unit that
   finishes its move reverts to wander and can drift back out while the
   other is still walking. The eating itself is
