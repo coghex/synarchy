@@ -222,6 +222,11 @@ PROBES = [
      "thought event stream, state-of-mind-biased selection, thought-log data path (#351)"),
     ("till", "till_probe.py",
      "till-designation layer + till AI end to end, plantable contract (#333)"),
+    ("tutorial", "tutorial_probe.py",
+     "first-session tutorial integration gate: the shipped first_session "
+     "branch driven end to end from real gameplay state (portal, discovered "
+     "and radio-shared water, stepwise supplies), monotonic full-objective "
+     "latching, and a fresh-process save/load round trip (#922)"),
     ("tutorial_hud", "tutorial_hud_probe.py",
      "GPU offscreen visual check: tutorial checklist HUD open/closed panel, "
      "transparent overlay over terrain, long-list wheel scrolling, and real "

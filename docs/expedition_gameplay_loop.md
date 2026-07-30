@@ -241,9 +241,41 @@ Display names are a placeholder derived from each definition's `label`.
 Wiring them to the language/naming system (#708) is deliberately separate
 work.
 
+**Step 8 (the first-session objective) — tutorial epic #956.** The objective
+panel shipped as a reusable, data-authored *tutorial* system rather than a
+bespoke checklist. `data/tutorials/first_session.yaml` owns the stable ids,
+labels, tooltips, objective kinds, display order and tree relationships
+(#957); `scripts/tutorial_progress.lua` owns what the player has done with
+that tree and persists it as the optional `lua.tutorial_progress` save
+component (#958); `scripts/tutorial_eval.lua` binds each authored evaluator
+key to a predicate over durable gameplay state (#959); and
+`scripts/tutorial_hud.lua` draws the transparent, scrollable right-side list
+behind its HUD toggle (#960). #922 gated the four together.
+
+Two completion semantics, and the difference is the point: a **full**
+objective latches permanently once its predicate is true — later destruction,
+consumption or transfer never unticks it — while a **subobjective** is a live
+component requirement that checks and unchecks as the game state changes and
+is recomputed from scratch every session. Only the durable latches are saved.
+
+The delivered branch is deliberately narrow: one global `first_session` tree
+per save, covering preparation only.
+
+```text
+Place portal
+  -> Secure water source
+    -> Prepare an expedition
+         - Prepare water
+         - Prepare food
+```
+
+The panel measures the arc, it does not gate it. Nothing in it blocks
+placement, discovery or travel, and evaluation ignores whether a row is
+currently visible.
+
 Steps 4 onward (a combat encounter, a transformational reward, retrieval and
-return, survival tuning, the first-session objective panel, and the full
-end-to-end slice gate) remain future work.
+return, survival tuning, and the full end-to-end slice gate) remain future
+work.
 
 ## Implementation order
 
@@ -339,19 +371,38 @@ not block the first slice.
 
 ### 8. Present the first-session objective
 
-A temporary objective panel can teach and measure the intended sequence:
+**Delivered** as the data-authored tutorial foundation described under
+"Implementation status" above (epic #956, gated by #922). The shipped
+`first_session` tree teaches and measures the preparation half of the
+sequence:
 
 ```text
-Establish a foothold
-✓ Deploy the acolyte portal
-✓ Locate fresh water
-✓ Prepare an expedition
-□ Investigate the nearby location
-□ Recover its key resource
-□ Return the resource to the colony
+Place portal
+  -> Secure water source
+    -> Prepare an expedition
+         - Prepare water
+         - Prepare food
 ```
 
-This is onboarding scaffolding, not necessarily the final mission system.
+The investigate / recover / return rows this step originally sketched are
+deliberately absent from that first branch, because each would need durable
+state the model cannot yet answer from. A recovered item carries no record of
+where it came from — `ItemInstance` has a stable identity but no source
+location, and `GroundItem` stores only the item and its coordinates — so
+"recover ITS key resource" has nothing to bind to. "Return it to the colony"
+has no canonical runtime destination either; `tools/expedition_retrieval_probe.py`
+chooses its own home coordinates and cargo building. An objective whose
+predicate cannot be answered from durable state is a row that never ticks, so
+those rows wait on the encounter (step 4), reward (step 5) and retrieval
+(step 6) work that would define them.
+
+They are future *branches of the same tree*, not a second onboarding system:
+adding one is authoring YAML plus binding an evaluator key, not new
+architecture. Shelter and beds, completed/future-objective filters, a
+graphical progression tree, and objective rewards are deferred on the same
+terms.
+
+This is onboarding scaffolding, not a quest or mission framework.
 
 ### 9. Gate the full slice
 
