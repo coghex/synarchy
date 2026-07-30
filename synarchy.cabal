@@ -1075,6 +1075,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.PopupPlacement
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay
+                   Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.ClickCorrelation

@@ -196,6 +196,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                            "screenshot diffing (#807) — no GPU on the CI runner"),
     "portal_ghost": (NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
                                 "rendered tint via real screenshots — no GPU on the CI runner (#778)"),
+    "tutorial_hud": (NEEDS_GPU, "offscreen boot: verifies the tutorial checklist "
+                                "HUD's rendered overlay, real toggle clicks, wheel "
+                                "scrolling and click-through via screenshots — no "
+                                "GPU on the CI runner (#960)"),
     "location_embark": (NEEDS_GPU, "offscreen boot: real embark-to-discovery session "
                                    "through zoom-map icons, portal ghost/remote-modal "
                                    "flow, and real-input-driven unit movement — no GPU "

@@ -17,6 +17,28 @@ local unitInfoV2 = require("scripts.unit_info_v2")
 local debugOverlay = require("scripts.debug")
 local testArena = require("scripts.test_arena")
 
+-- The post-hud REFLOW set of the REAL-resize path, called from
+-- ui_manager_boot.lua's onFramebufferResize once hud has been rebuilt at
+-- the new size (#960 extracted it from there, both to keep that file
+-- under its tools/lua_module_budget.py cap and because the set now has
+-- three members sharing one ordering contract).
+--
+-- Every member here is engine.loadScript'd, so the engine's own
+-- broadcast already delivered onFramebufferResize to it — but each
+-- reads geometry hud owns (framebuffer-derived bounds,
+-- hud.getToolbarRects()), which is still the PRE-resize toolbar at
+-- broadcast time. Their single geometry rebuild therefore belongs here,
+-- after hud's, and they must stay OUT of ui_manager_boot's manual
+-- onFramebufferResize forward set, which would double-fire them.
+function uiManager.reflowAfterHudResize()
+    if uiManager.moduleReady.popupsAndLogs then popup.reflow() end
+    unitInfoV2.reflow()
+    -- Reached through package.loaded so a boot profile without the
+    -- gameplay scripts never forces this one to load.
+    local tutorialHud = package.loaded["scripts.tutorial_hud"]
+    if tutorialHud then tutorialHud.reflow() end
+end
+
 -- A UI-scale-only Settings Apply/Save/Back (same framebuffer size, new
 -- engine.getUIScale()) never reached gameplay — responsive.notifyResize
 -- only fans out to the six C2-registered menu screens, and shell.lua
@@ -57,4 +79,13 @@ function uiManager.notifyGameplayRescale(width, height)
     -- hud.onFramebufferResize above has already run.
     unitInfoV2.reflow()
     debugOverlay.onFramebufferResize(width, height)
+    -- Tutorial checklist HUD (#960): reflow(), not onFramebufferResize
+    -- — the latter only records dimensions (see tutorial_hud.lua). Like
+    -- unitInfoV2.reflow above it must come AFTER hud.onFramebufferResize
+    -- so the checklist anchors against the rebuilt toolbar geometry
+    -- rather than the stale pre-rescale rects, and a scale-only change
+    -- has no engine broadcast to pair with, so it passes the dimensions
+    -- itself.
+    local tutorialHud = package.loaded["scripts.tutorial_hud"]
+    if tutorialHud then tutorialHud.reflow(width, height) end
 end

@@ -20,6 +20,7 @@ local locationStamperScriptId = nil
 local pauseScriptId = nil
 local tutorialProgressScriptId = nil
 local tutorialEvalScriptId = nil
+local tutorialHudScriptId = nil
 local buildingInfoPanelScriptId = nil
 local itemInfoPanelScriptId = nil
 local cargoInventoryPanelScriptId = nil
@@ -152,6 +153,16 @@ function M.load()
     -- inventory, so there is nothing to gain from a faster cadence.
     tutorialEvalScriptId = engine.loadScript(
         "scripts/tutorial_eval.lua", 1.0)
+
+    -- Tutorial checklist HUD (#960): the only surface that renders the
+    -- progress module's view model. loadScript'd rather than require'd
+    -- so the engine broadcasts it needs all reach it directly —
+    -- onFramebufferResize (its ONE real-resize path), onUIScroll, its
+    -- toggle's own click callback, and onSaveLoaded. 0.2s tick: the
+    -- panel only repaints when the model's active rows change, and
+    -- evaluation above already runs at 1s.
+    tutorialHudScriptId = engine.loadScript(
+        "scripts/tutorial_hud.lua", 0.2)
 
     -- Building info watcher: mirrors unit_info_panel. Polls
     -- building.getSelected each tick and pushes a building schema
@@ -301,6 +312,9 @@ function M.shutdown()
     end
     if tutorialEvalScriptId then
         engine.killScript(tutorialEvalScriptId)
+    end
+    if tutorialHudScriptId then
+        engine.killScript(tutorialHudScriptId)
     end
     if buildingInfoPanelScriptId then
         engine.killScript(buildingInfoPanelScriptId)
