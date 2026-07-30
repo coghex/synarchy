@@ -84,7 +84,6 @@ defaultEngineState = EngineState
     , swapchainInfo          = Nothing
     , msaaColorImage         = Nothing
     , renderFinishedSems     = V.empty
-    , vertexBuffer           = Nothing
     , uniformBuffers         = Nothing
     , bindlessPipeline       = Nothing
     , bindlessUIPipeline     = Nothing

@@ -53,7 +53,6 @@ import Engine.Graphics.Vulkan.Texture.DefaultFaceMap (createDefaultFaceMap
                                                      , DefaultFaceMap(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
-import Engine.Graphics.Vulkan.Vertex
 import Engine.Loop.Frame (computeAmbientLight, activeWorldCircumferenceTiles)
 import Engine.Scene.Manager (createScene, setActiveScene)
 import Vulkan.Core10
@@ -198,11 +197,6 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   let updatedManager = descManager { dmActiveSets = descSets }
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just updatedManager } }
-  
-  (vBuffer, vBufferMemory) ← createVertexBuffer device physicalDevice
-                               (graphicsQueue queues) cmdPool
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      vertexBuffer = Just (vBuffer, vBufferMemory) } }
   
   let texSystemConfig = TextureSystemConfig
         { tscMaxTextures   = 16384

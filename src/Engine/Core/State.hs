@@ -474,7 +474,7 @@ data GraphicsState = GraphicsState
     --   per-image semaphore (image count ≠ frames in flight).
     --   (Re)created with the swapchain; destroyed via vulkanCleanup.
   , swapchainInfo      ∷ Maybe SwapchainInfo
-  , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)  , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   -- textureSystem + defaultFaceMapSlot moved to EngineEnv
   -- (textureSystemRef / defaultFaceMapSlotRef): worker threads read
