@@ -288,6 +288,64 @@ spec = aroundAll withSharedFixture $ do
             cwAfterOffset probe `shouldBe` 0
             cwRestored probe `shouldBe` True
 
+        it "picks up hud's font and box textures once they exist, without waiting for the model to change" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ treeHelpers
+                -- The REAL boot order: scripts/init_loader.lua
+                -- loadScript's this module well BEFORE ui_manager, and
+                -- hud.init (which supplies hud.menuFont/hud.boxTexSet)
+                -- is gated further still on fontsReady. So the first
+                -- build legitimately has no assets at all.
+                , "local tp = require('scripts.tutorial_progress');"
+                , "tp.reset(); tp.setTree(shippedShape());"
+                , "local th = require('scripts.tutorial_hud');"
+                , "th.init(); th.reflow(1280, 720); th.setOpen(true);"
+                , "local early = th.dump();"
+                -- ui_manager boots hud and shows it. The tutorial model
+                -- is deliberately NOT touched from here on: the surface
+                -- must repaint off asset readiness alone.
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1, 2, 1280, 720); hud.createUI(); hud.visible = true;"
+                , "th.update(0);"
+                , "local ready = th.dump();"
+                -- A second tick must NOT rebuild again (nothing changed).
+                , "th.update(0);"
+                , "local settled = th.dump();"
+                , "return { earlyAssets = early.assetsReady,"
+                , "         earlyRows = #early.rows,"
+                , "         earlyToggleLabel = (early.toggle.label ~= nil),"
+                , "         earlyRowText = (early.rows[1] ~= nil"
+                , "             and early.rows[1].textHandle ~= nil),"
+                , "         earlyRebuilds = early.rebuildCount,"
+                , "         readyAssets = ready.assetsReady,"
+                , "         readyRows = #ready.rows,"
+                , "         readyToggleLabel = (ready.toggle.label ~= nil),"
+                , "         readyRowText = (ready.rows[1] ~= nil"
+                , "             and ready.rows[1].textHandle ~= nil),"
+                , "         readyRebuilds = ready.rebuildCount,"
+                , "         settledRebuilds = settled.rebuildCount,"
+                , "         openKept = ready.open }"
+                ]
+            probe ← decodeOr r ∷ IO AssetProbe
+            -- Before hud.init: rows exist as real (hit-testable,
+            -- scroll-capturing) elements, but nothing is drawable.
+            apEarlyAssets probe `shouldBe` False
+            apEarlyRows probe `shouldSatisfy` (> 0)
+            apEarlyToggleLabel probe `shouldBe` False
+            apEarlyRowText probe `shouldBe` False
+            -- One tick after hud.init, with the model untouched, the
+            -- surface has rebuilt itself with real text and a real box.
+            apReadyAssets probe `shouldBe` True
+            apReadyRows probe `shouldBe` apEarlyRows probe
+            apReadyToggleLabel probe `shouldBe` True
+            apReadyRowText probe `shouldBe` True
+            apReadyRebuilds probe - apEarlyRebuilds probe `shouldBe` 1
+            -- ...and then settles: asset readiness is part of the
+            -- signature, not a per-tick rebuild trigger.
+            apSettledRebuilds probe `shouldBe` apReadyRebuilds probe
+            apOpenKept probe `shouldBe` True
+
         it "a HUD hide/show round trip preserves open state and scroll offset" $ \(env, ls) → do
             resetFixture env ls
             r ← evalOk ls $ luaLines
@@ -776,6 +834,22 @@ instance FromJSON ToggleProbe where
                      <*> o .: "reclosedRows" <*> o .: "reclosedOpen"
                      <*> o .: "sameX" <*> o .: "sameY"
                      <*> o .: "sameW" <*> o .: "sameH"
+
+data AssetProbe = AssetProbe
+    { apEarlyAssets ∷ Bool, apEarlyRows ∷ Int, apEarlyToggleLabel ∷ Bool
+    , apEarlyRowText ∷ Bool, apEarlyRebuilds ∷ Int
+    , apReadyAssets ∷ Bool, apReadyRows ∷ Int, apReadyToggleLabel ∷ Bool
+    , apReadyRowText ∷ Bool, apReadyRebuilds ∷ Int
+    , apSettledRebuilds ∷ Int, apOpenKept ∷ Bool }
+instance FromJSON AssetProbe where
+    parseJSON = withObject "AssetProbe" $ \o →
+        AssetProbe <$> o .: "earlyAssets" <*> o .: "earlyRows"
+                    <*> o .: "earlyToggleLabel" <*> o .: "earlyRowText"
+                    <*> o .: "earlyRebuilds"
+                    <*> o .: "readyAssets" <*> o .: "readyRows"
+                    <*> o .: "readyToggleLabel" <*> o .: "readyRowText"
+                    <*> o .: "readyRebuilds" <*> o .: "settledRebuilds"
+                    <*> o .: "openKept"
 
 data ResetProbe = ResetProbe
     { rsBeforeOpen ∷ Bool, rsBeforeOffset ∷ Int

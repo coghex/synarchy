@@ -184,6 +184,14 @@ def collapsed_phase(port: int, w: int, h: int, shots: str) -> dict:
     check("no rows rendered while collapsed", len(d.get("rows") or []) == 0)
     check("the toggle exists anyway (persistent HUD button)",
           bool(d.get("toggle", {}).get("handle")))
+    # This module is loadScript'd long before ui_manager runs hud.init,
+    # so its FIRST build has neither font nor box textures. By the time
+    # the HUD is up it must have rebuilt itself with both, without
+    # needing the tutorial model to change.
+    check("the live surface has picked up hud's font + box textures",
+          d.get("assetsReady") is True, str(d.get("assetsReady")))
+    check("the toggle is drawn, not an invisible hit box",
+          bool(d.get("toggle", {}).get("label")), str(d.get("toggle")))
     t = d.get("toggle", {})
     check("toggle is fully in frame",
           bool(t) and t["x"] >= 0 and t["y"] >= 0

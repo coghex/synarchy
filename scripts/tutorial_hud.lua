@@ -65,6 +65,8 @@ tutorialHud._rows       = tutorialHud._rows       or {}
 tutorialHud._toggle     = tutorialHud._toggle     or nil
 tutorialHud._hudVisible = tutorialHud._hudVisible or false
 tutorialHud._sig        = tutorialHud._sig        or nil
+tutorialHud._toggleLabel  = tutorialHud._toggleLabel  or nil
+tutorialHud._assetsReady  = tutorialHud._assetsReady  or false
 
 local TOGGLE_CALLBACK = "onTutorialHudToggle"
 
@@ -246,10 +248,33 @@ local function markerFor(row)
     return row.completed and "[x]" or "[ ]"
 end
 
+-- The shared font and 9-slice box textures this surface draws with.
+-- Both are owned by scripts/hud.lua and only exist once ui_manager has
+-- run hud.init -- which happens well AFTER this module is
+-- engine.loadScript'd (scripts/init_loader.lua loads it at ~line 164,
+-- ui_manager at ~line 246, and hud.init is further gated on fontsReady,
+-- i.e. a real GPU font atlas). So the very first rebuild legitimately
+-- has neither, and produces an unlabelled, textureless toggle and no
+-- row text.
+local function hudAssets()
+    local hudMod = hudModule()
+    if hudMod == nil then return nil, nil end
+    return hudMod.menuFont, hudMod.boxTexSet
+end
+
 local function contentSignature(rows)
+    local font, boxTex = hudAssets()
     local parts = { tostring(tutorialHud.open), tostring(tutorialHud.scrollOffset),
                     tostring(tutorialHud.fbW), tostring(tutorialHud.fbH),
-                    tostring(scale.get()) }
+                    tostring(scale.get()),
+                    -- ASSET READINESS is part of what was rendered, not
+                    -- just of what it looked like: without it, a session
+                    -- whose objectives happen not to change after boot
+                    -- would keep the asset-less first build forever --
+                    -- an invisible toggle over an invisible checklist.
+                    -- Folding the handles in here makes the update tick
+                    -- rebuild the moment hud.init supplies them.
+                    tostring(font), tostring(boxTex) }
     for _, row in ipairs(rows) do
         parts[#parts + 1] = tostring(row.id) .. markerFor(row)
     end
@@ -264,9 +289,10 @@ local function destroyElements()
     for _, h in ipairs(tutorialHud._els) do
         UI.deleteElement(h)
     end
-    tutorialHud._els    = {}
-    tutorialHud._rows   = {}
-    tutorialHud._toggle = nil
+    tutorialHud._els         = {}
+    tutorialHud._rows        = {}
+    tutorialHud._toggle      = nil
+    tutorialHud._toggleLabel = nil
 end
 
 local function track(handle)
@@ -288,8 +314,8 @@ end
 -- exactly one place where geometry and content can disagree, and none.
 function tutorialHud.rebuild()
     if not tutorialHud.page then return false end
-    local hudMod = hudModule()
-    local font   = hudMod and hudMod.menuFont or nil
+    local font, boxTex = hudAssets()
+    tutorialHud._assetsReady = (font ~= nil) and (boxTex ~= nil)
     destroyElements()
     tutorialHud.rebuildCount = tutorialHud.rebuildCount + 1
 
@@ -318,9 +344,9 @@ function tutorialHud.rebuild()
     -- over it still reaches gameplay.
     local t = lay.toggle
     local toggleH
-    if hudMod and hudMod.boxTexSet then
+    if boxTex then
         toggleH = UI.newBox("tutorial_hud_toggle", t.w, t.h,
-            hudMod.boxTexSet, math.max(1, math.floor(lay.fontSize / 2)),
+            boxTex, math.max(1, math.floor(lay.fontSize / 2)),
             1.0, 1.0, 1.0, 1.0, 0, tutorialHud.page)
     else
         toggleH = UI.newElement("tutorial_hud_toggle", t.w, t.h, tutorialHud.page)
@@ -345,6 +371,7 @@ function tutorialHud.rebuild()
                     t.y + math.floor((t.h + lay.fontSize) / 2))
                 UI.setZIndex(capH, 11)
                 track(capH)
+                tutorialHud._toggleLabel = capH
             end
         end
     end
@@ -606,6 +633,7 @@ function tutorialHud.dump()
             checked   = row.checked,
             marker    = row.marker,
             handle    = row.handle,
+            textHandle = row.textHandle,
             x = row.x, y = row.y, w = row.w, h = row.h,
             pointerBlocking = row.handle and UI.isPointerBlocking(row.handle) or false,
             scrollCapture   = row.handle and UI.isScrollCapturing(row.handle) or false,
@@ -627,10 +655,16 @@ function tutorialHud.dump()
         scrollRange  = tutorialHud._maxOffset or 0,
         capacity     = lay.capacity,
         rebuildCount = tutorialHud.rebuildCount,
+        -- Whether hud's shared font AND box textures existed at build
+        -- time. False means this build predates hud.init and is
+        -- deliberately unlabelled/textureless; the update tick rebuilds
+        -- as soon as they arrive (see contentSignature).
+        assetsReady  = tutorialHud._assetsReady == true,
         toggle       = {
             x = lay.toggle.x, y = lay.toggle.y,
             w = lay.toggle.w, h = lay.toggle.h,
             handle = tutorialHud._toggle,
+            label  = tutorialHud._toggleLabel,
         },
         panelX  = lay.panelX,
         panelW  = lay.panelW,
