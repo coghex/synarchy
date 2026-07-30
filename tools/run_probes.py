@@ -222,6 +222,10 @@ PROBES = [
      "thought event stream, state-of-mind-biased selection, thought-log data path (#351)"),
     ("till", "till_probe.py",
      "till-designation layer + till AI end to end, plantable contract (#333)"),
+    ("tutorial_hud", "tutorial_hud_probe.py",
+     "GPU offscreen visual check: tutorial checklist HUD open/closed panel, "
+     "transparent overlay over terrain, long-list wheel scrolling, and real "
+     "clicks passing through its rows to gameplay (#960)"),
     ("transactional_load", "transactional_load_probe.py",
      "whole-session load transaction: mutual exclusion, complete replacement "
      "(not merge), missing-def rejection leaves the old session intact, "

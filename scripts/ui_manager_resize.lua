@@ -57,4 +57,14 @@ function uiManager.notifyGameplayRescale(width, height)
     -- hud.onFramebufferResize above has already run.
     unitInfoV2.reflow()
     debugOverlay.onFramebufferResize(width, height)
+    -- Tutorial checklist HUD (#960): loadScript'd, so a REAL resize
+    -- reaches it through the engine's own broadcast and it is
+    -- deliberately absent from ui_manager_boot.lua's manual forward
+    -- set. A scale-only change has no such broadcast, so — like every
+    -- other gameplay surface above — it needs this direct call, and it
+    -- has to come AFTER hud.onFramebufferResize so the checklist reads
+    -- the rebuilt toolbar geometry it anchors against, not the stale
+    -- pre-rescale rects (the same ordering unitInfoV2.reflow relies on).
+    local tutorialHud = package.loaded["scripts.tutorial_hud"]
+    if tutorialHud then tutorialHud.onFramebufferResize(width, height) end
 end

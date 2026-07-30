@@ -1,0 +1,869 @@
+{-# LANGUAGE OverloadedStrings, UnicodeSyntax #-}
+-- | The "Tutorial HUD" gate (#960, phase 3 of the tutorial epic #956):
+--   @scripts/tutorial_hud.lua@, the one surface that renders #958's
+--   tutorial view model.
+--
+--   Same headless technique (and the same constraint) as
+--   'Test.Headless.UI.ResponsiveGameplay': the full ui_manager boot
+--   never reaches gameplay UI headless (it gates on fontsReady, which
+--   needs a GPU font atlas), so this suite boots @scripts/hud.lua@
+--   directly with synthetic texture/font handles and then boots the
+--   tutorial HUD on top of it. @engine.getTextWidth@ measures 0 in that
+--   fixture, so every assertion here is geometry- or count-based and
+--   the module under test derives row height and scroll range from the
+--   UI scale rather than from measured text.
+--
+--   The tutorial TREE arrives two ways on purpose: injected through
+--   @tutorialProgress.setTree@ (the same injection point #958's own
+--   gate uses, for the shapes a hand-authored tree can produce), and
+--   loaded for real from @data/tutorials@ through
+--   @engine.loadTutorialDir@ so the shipped YAML's labels and tooltips
+--   are proven to reach the screen. The shared headless engine does not
+--   populate the tutorial registry on its own, and this suite puts it
+--   back empty afterwards, exactly as 'Test.Headless.Tutorial.Definitions'
+--   does.
+--
+--   Run just this gate: @cabal test synarchy-test-headless
+--   --test-options='--match "Tutorial HUD"'@.
+module Test.Headless.UI.TutorialHud (spec) where
+
+import UPrelude
+import Test.Hspec
+import Data.Aeson (FromJSON(..), decode, withObject, (.:), (.:?))
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Lazy as BL
+import Data.IORef (newIORef, writeIORef, atomicModifyIORef')
+import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Thread (ThreadControl(..))
+import Engine.Graphics.Config (vcUIScale)
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness (withHeadlessEngine)
+import Tutorial.Types (emptyTutorialRegistry)
+import UI.Types (emptyUIPageManager)
+
+-- | Join Lua statements with a single space (mirrors ResponsiveMenus /
+--   ResponsiveGameplay — a missing space before a continuation
+--   backslash silently glues two tokens together).
+luaLines ∷ [Text] → Text
+luaLines = T.intercalate " "
+
+-- * Fixture — one booted engine + one Lua VM for the whole module,
+--   reset before every case (the ResponsiveGameplay contract).
+
+withSharedFixture ∷ ((EngineEnv, LuaBackendState) → IO ()) → IO ()
+withSharedFixture action = withHeadlessEngine $ \env → do
+    ls ← newBareLuaBackend env
+    action (env, ls)
+
+resetFixture ∷ EngineEnv → LuaBackendState → IO ()
+resetFixture env ls = do
+    writeIORef (uiManagerRef env) emptyUIPageManager
+    atomicModifyIORef' (videoConfigRef env) $ \c → (c { vcUIScale = 1.0 }, ())
+    -- The tutorial registry is shared engine state that only
+    -- 'Test.Headless.Tutorial.Definitions' and this suite ever touch,
+    -- and both put it back empty rather than trusting the other to.
+    writeIORef (tutorialRegistryRef env) emptyTutorialRegistry
+    cleared ← evalOk ls
+        "for k, _ in pairs(package.loaded) do package.loaded[k] = nil end; return true"
+    cleared `shouldBe` "true"
+
+-- * Lua fixtures
+
+-- | Tree constructors, plus the shipped @first_session@ SHAPE
+--   (place_portal -> secure_water -> prepare_expedition{water, food})
+--   written as the table @engine.getTutorialTree()@ hands Lua.
+treeHelpers ∷ Text
+treeHelpers = luaLines
+    [ "local function node(id, kind, order, children, subs)"
+    , "    return { id = id, kind = kind, label = id .. ' label',"
+    , "             tooltip = id .. ' tooltip', evaluator = id .. '_eval',"
+    , "             order = order, children = children or {},"
+    , "             subobjectives = subs or {} } end;"
+    , "local function shippedShape()"
+    , "    local water = node('prepare_water', 'subobjective', 1);"
+    , "    local food  = node('prepare_food',  'subobjective', 2);"
+    , "    local exp   = node('prepare_expedition', 'composite', 1, {}, {water, food});"
+    , "    local sec   = node('secure_water', 'full', 1, {exp});"
+    , "    local root  = node('place_portal', 'full', 1, {sec});"
+    , "    return { id = 'first_session', root = root } end;"
+    -- A composite root with `n` subobjectives — n+1 active rows, the
+    -- cheapest way to overflow any viewport for the scrolling cases.
+    , "local function wideTree(n)"
+    , "    local subs = {};"
+    , "    for i = 1, n do"
+    , "        subs[i] = node(string.format('sub_%03d', i), 'subobjective', i) end;"
+    , "    return { id = 'first_session',"
+    , "             root = node('root', 'composite', 1, {}, subs) } end;"
+    ]
+
+-- | Boot hud + the tutorial HUD at a given framebuffer size, with a
+--   tree already injected. @hud.init@'s synthetic handles are the same
+--   ones ResponsiveGameplay uses (box textures 1, font 2).
+bootAt ∷ Int → Int → Text → Text
+bootAt w h treeExpr = luaLines
+    [ treeHelpers
+    , "local hud = require('scripts.hud');"
+    , "hud.init(1, 2, " <> tshow w <> ", " <> tshow h <> ");"
+    , "hud.createUI();"
+    , "hud.visible = true;"
+    , "local tp = require('scripts.tutorial_progress');"
+    , "tp.reset();"
+    , "if " <> treeExpr <> " ~= nil then tp.setTree(" <> treeExpr <> ") end;"
+    , "local th = require('scripts.tutorial_hud');"
+    , "th.init();"
+    , "th.onFramebufferResize(" <> tshow w <> ", " <> tshow h <> ");"
+    , "th.update(0);"
+    ]
+
+tshow ∷ Int → Text
+tshow = T.pack ∘ show
+
+-- | @wideTree@'s zero-padded subobjective id for index @n@ (row @n+1@,
+--   since row 1 is the composite root).
+subId ∷ Int → Text
+subId n = "sub_" <> T.justifyRight 3 '0' (tshow n)
+
+-- * Decoded probe shapes
+
+data StateProbe = StateProbe
+    { spOpen ∷ Bool, spVisible ∷ Bool, spRowCount ∷ Int
+    , spScrollOffset ∷ Int, spScrollRange ∷ Int, spRebuilds ∷ Int
+    , spToggleX ∷ Double, spToggleY ∷ Double
+    , spToggleW ∷ Double, spToggleH ∷ Double
+    , spRowIds ∷ Text } deriving (Show, Eq)
+instance FromJSON StateProbe where
+    parseJSON = withObject "StateProbe" $ \o →
+        StateProbe <$> o .: "open" <*> o .: "visible" <*> o .: "rowCount"
+                    <*> o .: "scrollOffset" <*> o .: "scrollRange"
+                    <*> o .: "rebuilds"
+                    <*> o .: "tx" <*> o .: "ty" <*> o .: "tw" <*> o .: "th"
+                    <*> o .: "rowIds"
+
+data RowProbe = RowProbe
+    { rpId ∷ Text, rpKind ∷ Text, rpLabel ∷ Text, rpTooltip ∷ Text
+    , rpMarker ∷ Text
+    , rpCompleted ∷ Maybe Bool, rpChecked ∷ Maybe Bool
+    , rpBlocks ∷ Bool, rpCaptures ∷ Bool, rpOnClick ∷ Maybe Text
+    , rpDepth ∷ Int } deriving (Show, Eq)
+instance FromJSON RowProbe where
+    parseJSON = withObject "RowProbe" $ \o →
+        RowProbe <$> o .: "id" <*> o .: "kind" <*> o .: "label"
+                  <*> o .: "tooltip" <*> o .: "marker"
+                  <*> o .:? "completed" <*> o .:? "checked"
+                  <*> o .: "blocks" <*> o .: "captures" <*> o .:? "onClick"
+                  <*> o .: "depth"
+
+data BandProbe = BandProbe
+    { bpW ∷ Int, bpH ∷ Int, bpScale ∷ Double
+    , bpToggleInFrame ∷ Bool, bpToggleClearOfToolbars ∷ Bool
+    , bpPanelInFrame ∷ Bool, bpListInFrame ∷ Bool
+    , bpCapacity ∷ Int, bpRangeOk ∷ Bool
+    , bpToggleStable ∷ Bool } deriving (Show, Eq)
+instance FromJSON BandProbe where
+    parseJSON = withObject "BandProbe" $ \o →
+        BandProbe <$> o .: "w" <*> o .: "h" <*> o .: "scale"
+                   <*> o .: "toggleInFrame" <*> o .: "toggleClear"
+                   <*> o .: "panelInFrame" <*> o .: "listInFrame"
+                   <*> o .: "capacity" <*> o .: "rangeOk"
+                   <*> o .: "toggleStable"
+
+-- | Compact state readout used by most cases.
+stateProbeLua ∷ Text
+stateProbeLua = luaLines
+    [ "local d = th.dump();"
+    , "return { open = d.open, visible = d.visible, rowCount = #d.rows,"
+    , "         scrollOffset = d.scrollOffset, scrollRange = d.scrollRange,"
+    , "         rebuilds = d.rebuildCount, tx = d.toggle.x, ty = d.toggle.y,"
+    , "         tw = d.toggle.w, th = d.toggle.h,"
+    -- Joined, not an array: an EMPTY Lua table serialises as a JSON
+    -- object, and "no rows at all" is exactly what several cases here
+    -- need to assert.
+    , "         rowIds = table.concat(d.rowIds, ',') }"
+    ]
+
+decodeOr ∷ FromJSON a ⇒ Text → IO a
+decodeOr t = case decode (BL.fromStrict (TE.encodeUtf8 t)) of
+    Just v  → pure v
+    Nothing → do
+        expectationFailure ("failed to decode: " ⧺ T.unpack t)
+        fail "unreachable"
+
+spec ∷ Spec
+spec = aroundAll withSharedFixture $ do
+
+    describe "presentation lifecycle (#960 requirements 2/5)" $ do
+        it "starts collapsed at a fresh boot, with the toggle already present" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()", stateProbeLua ]
+            st ← decodeOr r
+            spOpen st `shouldBe` False
+            spVisible st `shouldBe` False
+            spRowCount st `shouldBe` 0
+            spScrollOffset st `shouldBe` 0
+            -- The toggle is a persistent HUD button: it exists (and has
+            -- real extent) even while the list is collapsed.
+            spToggleW st `shouldSatisfy` (> 0)
+            spToggleH st `shouldSatisfy` (> 0)
+            spToggleX st `shouldSatisfy` (≥ 0)
+            spToggleY st `shouldSatisfy` (≥ 0)
+            spRowIds st `shouldBe` ""
+            -- Nothing to scroll while collapsed, and init() built the
+            -- surface exactly once before this suite's own resize.
+            spScrollRange st `shouldBe` 0
+            spRebuilds st `shouldSatisfy` (> 0)
+
+        it "the toggle opens and closes the list, and its bounds are identical in both states" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "local closed = th.dump();"
+                -- Click the real element the way the engine does: the
+                -- broadcast hands the module its own callback name.
+                , "th.onTutorialHudToggle(closed.toggle.handle);"
+                , "local opened = th.dump();"
+                , "th.onTutorialHudToggle(opened.toggle.handle);"
+                , "local reclosed = th.dump();"
+                , "return { openedRows = #opened.rows, openedOpen = opened.open,"
+                , "         reclosedRows = #reclosed.rows, reclosedOpen = reclosed.open,"
+                , "         sameX = (closed.toggle.x == opened.toggle.x),"
+                , "         sameY = (closed.toggle.y == opened.toggle.y),"
+                , "         sameW = (closed.toggle.w == opened.toggle.w),"
+                , "         sameH = (closed.toggle.h == opened.toggle.h) }"
+                ]
+            probe ← decodeOr r ∷ IO ToggleProbe
+            tpOpenedOpen probe `shouldBe` True
+            tpOpenedRows probe `shouldBe` 1     -- only the root is active
+            tpReclosedOpen probe `shouldBe` False
+            tpReclosedRows probe `shouldBe` 0
+            (tpSameX probe, tpSameY probe) `shouldBe` (True, True)
+            (tpSameW probe, tpSameH probe) `shouldBe` (True, True)
+
+        it "a save load collapses the panel and drops the scroll offset, without touching progress" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "wideTree(60)"
+                , "th.setOpen(true); th.setScrollOffset(5);"
+                , "tp.completeObjective('root');"
+                , "local before = th.dump();"
+                -- The engine broadcast every load trigger reaches.
+                , "th.onSaveLoaded({}, {});"
+                , "local after = th.dump();"
+                , "return { beforeOpen = before.open, beforeOffset = before.scrollOffset,"
+                , "         afterOpen = after.open, afterOffset = after.scrollOffset,"
+                , "         progressKept = tp.isCompleted('root') }"
+                ]
+            probe ← decodeOr r ∷ IO ResetProbe
+            (rsBeforeOpen probe, rsBeforeOffset probe) `shouldBe` (True, 5)
+            (rsAfterOpen probe, rsAfterOffset probe) `shouldBe` (False, 0)
+            -- Presentation only: #958 still owns the durable latch.
+            rsProgressKept probe `shouldBe` True
+
+        it "generating a new world mid-process resets the panel (worldManager.createWorld's funnel)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "wideTree(60)"
+                , "th.setOpen(true); th.setScrollOffset(4);"
+                , "local worldManager = require('scripts.world_manager');"
+                -- createWorld resets tutorial state BEFORE it queues
+                -- the WorldInit command; stubbing world.init keeps this
+                -- case from starting a real generation in the shared
+                -- engine, and the original is restored either way.
+                , "local realInit = world.init;"
+                , "world.init = function() error('stubbed', 0) end;"
+                , "pcall(worldManager.createWorld, { worldId = 'tutorial_hud_spec' });"
+                , "world.init = realInit;"
+                , "local after = th.dump();"
+                , "return { afterOpen = after.open, afterOffset = after.scrollOffset,"
+                , "         restored = (world.init == realInit) }"
+                ]
+            probe ← decodeOr r ∷ IO CreateWorldProbe
+            cwAfterOpen probe `shouldBe` False
+            cwAfterOffset probe `shouldBe` 0
+            cwRestored probe `shouldBe` True
+
+        it "a HUD hide/show round trip preserves open state and scroll offset" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "wideTree(60)"
+                , "th.setOpen(true); th.setScrollOffset(3);"
+                , "local shown = UI.isPageVisible(th.page);"
+                -- hud.hide() sets hud.visible = false and then runs the
+                -- teardown sweep this module registers in.
+                , "hud.visible = false;"
+                , "require('scripts.ui.view_teardown').run('hudHide');"
+                , "local hidden = th.dump();"
+                , "local pageHidden = UI.isPageVisible(th.page);"
+                , "hud.visible = true; th.update(0);"
+                , "local back = th.dump();"
+                , "return { shown = shown, pageHidden = pageHidden,"
+                , "         hiddenOpen = hidden.open, hiddenOffset = hidden.scrollOffset,"
+                , "         backOpen = back.open, backOffset = back.scrollOffset,"
+                , "         backRows = #back.rows,"
+                , "         pageShown = UI.isPageVisible(th.page) }"
+                ]
+            probe ← decodeOr r ∷ IO HudCycleProbe
+            hcShown probe `shouldBe` True
+            hcPageHidden probe `shouldBe` False
+            -- Presentation-only teardown: the LOGICAL state survives.
+            (hcHiddenOpen probe, hcHiddenOffset probe) `shouldBe` (True, 3)
+            (hcBackOpen probe, hcBackOffset probe) `shouldBe` (True, 3)
+            hcBackRows probe `shouldSatisfy` (> 0)
+            hcPageShown probe `shouldBe` True
+
+    describe "rendering the #958 view model (requirements 1/3/4)" $ do
+        it "renders the shipped YAML tree's own labels and tooltips, revealing rows as objectives latch" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ treeHelpers
+                , "local hud = require('scripts.hud');"
+                , "hud.init(1, 2, 1280, 720); hud.createUI(); hud.visible = true;"
+                -- The REAL registry, loaded from the shipped directory.
+                , "local loaded = engine.loadTutorialDir('data/tutorials');"
+                , "local tp = require('scripts.tutorial_progress'); tp.reset();"
+                , "local th = require('scripts.tutorial_hud');"
+                , "th.init(); th.onFramebufferResize(1280, 720); th.setOpen(true);"
+                , "local first = th.dump();"
+                , "tp.completeObjective('first_session_place_portal'); th.rebuild();"
+                , "local second = th.dump();"
+                , "tp.completeObjective('first_session_secure_water'); th.rebuild();"
+                , "local third = th.dump();"
+                , "return { loaded = (loaded ~= false),"
+                , "         firstIds = table.concat(first.rowIds, ','),"
+                , "         secondIds = table.concat(second.rowIds, ','),"
+                , "         thirdIds = table.concat(third.rowIds, ','),"
+                , "         firstLabel = first.rows[1].label,"
+                , "         firstTooltip = first.rows[1].tooltip,"
+                , "         treeId = (engine.getTutorialTree() or {}).id }"
+                ]
+            probe ← decodeOr r ∷ IO YamlProbe
+            ypLoaded probe `shouldBe` True
+            ypTreeId probe `shouldBe` Just "first_session"
+            ypFirstIds probe `shouldBe` "first_session_place_portal"
+            -- Labels/tooltips come straight from data/tutorials/first_session.yaml.
+            ypFirstLabel probe `shouldBe` "Place portal"
+            ypFirstTooltip probe `shouldBe`
+                "Deploy the acolyte portal to anchor your colony to this world."
+            -- Completing the root REVEALS its child and keeps the root
+            -- itself active (its subtree is not done yet).
+            ypSecondIds probe `shouldBe`
+                "first_session_place_portal,first_session_secure_water"
+            -- Completing that child in turn hides the now-finished root
+            -- (#958's active-view rule) and reveals the composite with
+            -- its live subobjectives. Order is the model's own pre-order
+            -- display walk — never re-sorted here.
+            ypThirdIds probe `shouldBe` T.intercalate ","
+                [ "first_session_secure_water"
+                , "first_session_prepare_expedition"
+                , "first_session_prepare_water", "first_session_prepare_food" ]
+            -- Leave the shared registry as this suite found it.
+            writeIORef (tutorialRegistryRef env) emptyTutorialRegistry
+
+        it "keeps latched completion and live subobjective checks distinct, and never renders inactive rows" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "tp.completeObjective('place_portal');"
+                , "tp.completeObjective('secure_water');"
+                , "tp.setSubobjectiveChecked('prepare_water', true);"
+                , "th.setOpen(true);"
+                , "local d = th.dump();"
+                , "local out = {};"
+                , "for i, row in ipairs(d.rows) do"
+                , "    out[i] = { id = row.id, kind = row.kind, label = row.label,"
+                , "               tooltip = row.tooltip, marker = row.marker,"
+                , "               completed = row.completed, checked = row.checked,"
+                , "               blocks = row.pointerBlocking,"
+                , "               captures = row.scrollCapture,"
+                , "               onClick = UI.getElementOnClick(row.handle),"
+                , "               depth = row.depth } end;"
+                , "return out"
+                ]
+            rows ← decodeOr r ∷ IO [RowProbe]
+            -- 'place_portal' latched AND its only child latched, so it
+            -- has left the active view entirely — retained history is
+            -- reported by the model with active = false and must never
+            -- be rendered here.
+            map rpId rows `shouldBe`
+                [ "secure_water", "prepare_expedition"
+                , "prepare_water", "prepare_food" ]
+            let byId i = case [x | x ← rows, rpId x ≡ i] of
+                            (x:_) → x
+                            []    → error ("no row " ⧺ T.unpack i)
+            -- A latched FULL objective reports `completed` and only
+            -- `completed`; a live SUBOBJECTIVE reports `checked` and
+            -- only `checked`. Collapsing the two is the bug #958 exists
+            -- to prevent, so the split is asserted on both sides.
+            rpCompleted (byId "secure_water") `shouldBe` Just True
+            rpChecked (byId "secure_water") `shouldBe` Nothing
+            rpMarker (byId "secure_water") `shouldBe` "[x]"
+            rpKind (byId "secure_water") `shouldBe` "full"
+            rpKind (byId "prepare_water") `shouldBe` "subobjective"
+            rpCompleted (byId "prepare_expedition") `shouldBe` Just False
+            rpMarker (byId "prepare_expedition") `shouldBe` "[ ]"
+            rpChecked (byId "prepare_water") `shouldBe` Just True
+            rpCompleted (byId "prepare_water") `shouldBe` Nothing
+            rpMarker (byId "prepare_water") `shouldBe` "(x)"
+            rpChecked (byId "prepare_food") `shouldBe` Just False
+            rpMarker (byId "prepare_food") `shouldBe` "( )"
+            -- Depth drives indentation only; the model's order stands.
+            map rpDepth rows `shouldBe` [1, 2, 3, 3]
+            -- Requirement 4: display-only rows.
+            forM_ rows $ \row → do
+                rpBlocks row `shouldBe` False
+                rpOnClick row `shouldBe` Nothing
+                rpCaptures row `shouldBe` True
+                rpTooltip row `shouldSatisfy` (not ∘ T.null)
+                rpLabel row `shouldSatisfy` (not ∘ T.null)
+
+        it "drops a row from the active view when its whole subtree is satisfied" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "tp.completeObjective('place_portal');"
+                , "tp.completeObjective('secure_water');"
+                , "tp.completeObjective('prepare_expedition');"
+                , "tp.setSubobjectiveChecked('prepare_water', true);"
+                , "tp.setSubobjectiveChecked('prepare_food', true);"
+                , "th.setOpen(true);"
+                , "local done = th.dump();"
+                -- Reversible: unchecking a subobjective brings the
+                -- composite (and its chain) straight back.
+                , "tp.setSubobjectiveChecked('prepare_food', false); th.rebuild();"
+                , "local reopened = th.dump();"
+                , "return { doneIds = table.concat(done.rowIds, ','),"
+                , "         reopenedIds = table.concat(reopened.rowIds, ',') }"
+                ]
+            probe ← decodeOr r ∷ IO ReverseProbe
+            rvDoneIds probe `shouldBe` ""
+            -- Only the composite chain comes back: the two full
+            -- objectives above it stay finished, since an unchecked
+            -- subobjective does not un-complete anything durable.
+            rvReopenedIds probe `shouldBe` T.intercalate ","
+                [ "prepare_expedition", "prepare_water", "prepare_food" ]
+
+    describe "scoped wheel capture and scrolling (requirements 4/7)" $ do
+        it "captures the wheel only over the visible list — never on the toggle, never off it" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "wideTree(60)"
+                , "th.setOpen(true);"
+                , "local d = th.dump();"
+                -- A control that is not part of the list: hud's own
+                -- toolbar exists on a different page entirely.
+                , "local foreign = UI.newElement('tutorial_hud_spec_foreign', 10, 10, th.page);"
+                -- Every handle below is invalidated by the first
+                -- scroll (which rebuilds), so the policy flags are read
+                -- up front rather than in the returned table.
+                , "local toggleCaptures = UI.isScrollCapturing(d.toggle.handle);"
+                , "local rowCaptures = UI.isScrollCapturing(d.rows[1].handle);"
+                , "local handledForeign = th.onUIScroll(foreign, 0, -1);"
+                , "local offsetAfterForeign = th.dump().scrollOffset;"
+                , "local handledToggle = th.onUIScroll(d.toggle.handle, 0, -1);"
+                , "local handledRow = th.onUIScroll(d.rows[1].handle, 0, -1);"
+                , "local afterRow = th.dump();"
+                , "th.setOpen(false);"
+                , "local closedDump = th.dump();"
+                , "return { toggleCaptures = toggleCaptures,"
+                , "         rowCaptures = rowCaptures,"
+                , "         handledForeign = handledForeign,"
+                , "         offsetAfterForeign = offsetAfterForeign,"
+                , "         handledToggle = handledToggle,"
+                , "         handledRow = handledRow,"
+                , "         offsetAfterRow = afterRow.scrollOffset,"
+                , "         closedRows = #closedDump.rows }"
+                ]
+            probe ← decodeOr r ∷ IO WheelProbe
+            wpToggleCaptures probe `shouldBe` False
+            wpRowCaptures probe `shouldBe` True
+            wpHandledForeign probe `shouldBe` False
+            wpOffsetAfterForeign probe `shouldBe` 0
+            wpHandledToggle probe `shouldBe` False
+            wpHandledRow probe `shouldBe` True
+            wpOffsetAfterRow probe `shouldBe` 1
+            -- Collapsed: no row elements at all, so nothing on this
+            -- surface can capture the wheel away from gameplay.
+            wpClosedRows probe `shouldBe` 0
+
+        it "scrolls a list longer than the viewport, clamping at both ends" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "wideTree(60)"
+                , "th.setOpen(true);"
+                , "local d = th.dump();"
+                , "local top = d.rowIds[1];"
+                , "th.setScrollOffset(1);"
+                , "local oneDown = th.dump();"
+                , "th.setScrollOffset(10000);"
+                , "local clampedDown = th.dump();"
+                , "th.setScrollOffset(-5);"
+                , "local clampedUp = th.dump();"
+                , "return { activeCount = d.activeCount, capacity = d.capacity,"
+                , "         range = d.scrollRange, top = top,"
+                , "         oneDownTop = oneDown.rowIds[1],"
+                , "         oneDownCount = #oneDown.rows,"
+                , "         maxOffset = clampedDown.scrollOffset,"
+                , "         maxTop = clampedDown.rowIds[1],"
+                , "         maxLast = clampedDown.rowIds[#clampedDown.rowIds],"
+                , "         minOffset = clampedUp.scrollOffset }"
+                ]
+            probe ← decodeOr r ∷ IO ScrollProbe
+            -- 60 subobjectives + the composite root.
+            scActiveCount probe `shouldBe` 61
+            scCapacity probe `shouldSatisfy` (\c → c > 0 ∧ c < 61)
+            scRange probe `shouldBe` (61 - scCapacity probe)
+            scTop probe `shouldBe` "root"
+            scOneDownTop probe `shouldBe` "sub_001"
+            scOneDownCount probe `shouldBe` scCapacity probe
+            scMaxOffset probe `shouldBe` scRange probe
+            -- Scrolled to the end: the last model row is on screen, and
+            -- the window starts exactly `range` rows in (row 1 is the
+            -- composite root, so row n+1 is sub_n).
+            scMaxLast probe `shouldBe` "sub_060"
+            scMaxTop probe `shouldBe` subId (scRange probe)
+            scMinOffset probe `shouldBe` 0
+
+        it "re-clamps a preserved offset when live content shrinks under it" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "wideTree(60)"
+                , "th.setOpen(true);"
+                , "local d = th.dump();"
+                , "th.setScrollOffset(d.scrollRange);"
+                , "local deep = th.dump();"
+                -- Subobjective checks are live and reversible, so the
+                -- active row set genuinely shrinks during play.
+                , "tp.setTree(wideTree(3)); th.rebuild();"
+                , "local shrunk = th.dump();"
+                , "return { deepOffset = deep.scrollOffset, deepRange = deep.scrollRange,"
+                , "         shrunkOffset = shrunk.scrollOffset,"
+                , "         shrunkRange = shrunk.scrollRange,"
+                , "         shrunkRows = #shrunk.rows, shrunkTop = shrunk.rowIds[1] }"
+                ]
+            probe ← decodeOr r ∷ IO ClampProbe
+            clDeepOffset probe `shouldSatisfy` (> 0)
+            clDeepRange probe `shouldBe` clDeepOffset probe
+            clShrunkRange probe `shouldBe` 0
+            clShrunkOffset probe `shouldBe` 0
+            clShrunkRows probe `shouldBe` 4
+            clShrunkTop probe `shouldBe` Just "root"
+
+    describe "the gameplay-surface resize lifecycle (requirements 5/6/8)" $ do
+        it "a real framebuffer resize rebuilds exactly once and preserves open state and offset" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "wideTree(60)"
+                , "th.setOpen(true); th.setScrollOffset(4);"
+                , "local before = th.dump();"
+                , "hud.init(1, 2, 1920, 1080); hud.createUI();"
+                , "th.onFramebufferResize(1920, 1080);"
+                , "local after = th.dump();"
+                , "return { beforeRebuilds = before.rebuildCount,"
+                , "         afterRebuilds = after.rebuildCount,"
+                , "         beforeOpen = before.open, afterOpen = after.open,"
+                , "         beforeOffset = before.scrollOffset,"
+                , "         afterOffset = after.scrollOffset,"
+                , "         movedRight = (after.toggle.x > before.toggle.x) }"
+                ]
+            probe ← decodeOr r ∷ IO ResizeProbe
+            -- Requirement 8: ONE rebuild per real resize. The module is
+            -- loadScript'd (so the engine's own broadcast reaches it)
+            -- and deliberately absent from ui_manager_boot.lua's manual
+            -- forward set, which would double-fire it.
+            rzAfterRebuilds probe - rzBeforeRebuilds probe `shouldBe` 1
+            (rzBeforeOpen probe, rzAfterOpen probe) `shouldBe` (True, True)
+            (rzBeforeOffset probe, rzAfterOffset probe) `shouldBe` (4, 4)
+            rzMovedRight probe `shouldBe` True
+
+        it "a scale-only change reaches it exactly once through uiManager.notifyGameplayRescale" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ treeHelpers
+                -- Everything except the module under test is stubbed,
+                -- the same technique UI.ResponsiveGameplay uses for
+                -- this fan-out; the hud stub keeps the fields the
+                -- tutorial HUD reads off it.
+                , "local stub = { onFramebufferResize = function() end,"
+                , "               reflow = function() end };"
+                , "local hudStub = { onFramebufferResize = function() end,"
+                , "                  visible = true, menuFont = 2, boxTexSet = 1,"
+                , "                  getToolbarRects = function() return {} end };"
+                , "local tp = require('scripts.tutorial_progress');"
+                , "tp.reset(); tp.setTree(wideTree(60));"
+                , "local th = require('scripts.tutorial_hud');"
+                , "th.init(); th.onFramebufferResize(1920, 1080);"
+                , "th.setOpen(true); th.setScrollOffset(6);"
+                , "package.loaded['scripts.world_view'] = stub;"
+                , "package.loaded['scripts.hud'] = hudStub;"
+                , "package.loaded['scripts.ui.context_menu'] = stub;"
+                , "package.loaded['scripts.build_tool_remote_warning'] = stub;"
+                , "package.loaded['scripts.popup'] = stub;"
+                , "package.loaded['scripts.event_log'] = stub;"
+                , "package.loaded['scripts.combat_log'] = stub;"
+                , "package.loaded['scripts.injury_log_panel'] = stub;"
+                , "package.loaded['scripts.unit_log'] = stub;"
+                , "package.loaded['scripts.unit_info_v2'] = stub;"
+                , "package.loaded['scripts.debug'] = stub;"
+                , "package.loaded['scripts.test_arena'] = stub;"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "uiManager.moduleReady.worldView = true;"
+                , "uiManager.moduleReady.hud = true;"
+                , "uiManager.moduleReady.buildToolRemoteWarning = true;"
+                , "uiManager.moduleReady.popupsAndLogs = true;"
+                , "uiManager.moduleReady.testArena = true;"
+                , "local before = th.dump();"
+                , "engine.setUIScale(2.0);"
+                , "uiManager.notifyGameplayRescale(1920, 1080);"
+                , "local after = th.dump();"
+                , "return { beforeRebuilds = before.rebuildCount,"
+                , "         afterRebuilds = after.rebuildCount,"
+                , "         beforeOpen = before.open, afterOpen = after.open,"
+                , "         beforeOffset = before.scrollOffset,"
+                , "         afterOffset = after.scrollOffset,"
+                , "         grewRows = (after.rowH > before.rowH) }"
+                ]
+            probe ← decodeOr r ∷ IO RescaleProbe
+            rsclAfterRebuilds probe - rsclBeforeRebuilds probe `shouldBe` 1
+            (rsclBeforeOpen probe, rsclAfterOpen probe) `shouldBe` (True, True)
+            (rsclBeforeOffset probe, rsclAfterOffset probe) `shouldBe` (6, 6)
+            -- The new scale really did reach the layout.
+            rsclGrewRows probe `shouldBe` True
+
+        it "keeps reachable right-anchored geometry and a scrollable list across every supported band" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ treeHelpers
+                , "local responsive = require('scripts.ui.responsive');"
+                , "local reserved = require('scripts.ui.reserved_regions');"
+                , "local hud = require('scripts.hud');"
+                , "local tp = require('scripts.tutorial_progress');"
+                , "tp.reset(); tp.setTree(wideTree(60));"
+                , "local th = require('scripts.tutorial_hud');"
+                , "local out = {};"
+                -- Derived from responsive.lua's own bands table (never
+                -- hand-copied), at both scale bounds of each band.
+                , "for _, band in ipairs(responsive.bands) do"
+                , "  for _, h in ipairs({ band.minH, band.maxH }) do"
+                , "    for _, sc in ipairs({ band.minScale, band.maxScale }) do"
+                , "      local w = math.max(responsive.MIN_WIDTH, math.floor(h * 16 / 9));"
+                , "      engine.setUIScale(sc);"
+                , "      hud.init(1, 2, w, h); hud.createUI(); hud.visible = true;"
+                , "      th.init(); th.onFramebufferResize(w, h);"
+                , "      local closed = th.dump();"
+                , "      th.setOpen(true);"
+                , "      local d = th.dump();"
+                , "      local t = d.toggle;"
+                , "      local clear = true;"
+                , "      for _, rc in ipairs(hud.getToolbarRects()) do"
+                , "        if reserved.rectsOverlap({x=t.x,y=t.y,w=t.w,h=t.h}, rc) then"
+                , "          clear = false end end;"
+                , "      out[#out + 1] = {"
+                , "        w = w, h = h, scale = sc,"
+                , "        toggleInFrame = (t.x >= 0 and t.y >= 0"
+                , "            and (t.x + t.w) <= w and (t.y + t.h) <= h),"
+                , "        toggleClear = clear,"
+                , "        panelInFrame = (d.panelX >= 0 and (d.panelX + d.panelW) <= w),"
+                , "        listInFrame = (d.listTop >= 0 and d.listBottom <= h"
+                , "            and d.listTop <= d.listBottom),"
+                , "        capacity = d.capacity,"
+                , "        rangeOk = (d.scrollRange == math.max(0, d.activeCount - d.capacity)),"
+                , "        toggleStable = (closed.toggle.x == t.x and closed.toggle.y == t.y"
+                , "            and closed.toggle.w == t.w and closed.toggle.h == t.h) };"
+                , "      th.setOpen(false);"
+                , "    end end end;"
+                , "return out"
+                ]
+            rows ← decodeOr r ∷ IO [BandProbe]
+            -- 4 bands x 2 heights x 2 scales.
+            length rows `shouldBe` 16
+            forM_ rows $ \row → do
+                let ctx = " at " ⧺ show (bpW row) ⧺ "x" ⧺ show (bpH row)
+                            ⧺ " @" ⧺ show (bpScale row)
+                (show (bpToggleInFrame row) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+                (show (bpToggleClearOfToolbars row) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+                (show (bpPanelInFrame row) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+                (show (bpListInFrame row) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+                (show (bpRangeOk row) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+                (show (bpToggleStable row) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+                (show (bpCapacity row > 0) ⧺ ctx) `shouldBe` ("True" ⧺ ctx)
+
+        it "degrades safely (no crash, no invalid geometry) outside the supported envelope" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ treeHelpers
+                , "local hud = require('scripts.hud');"
+                , "local tp = require('scripts.tutorial_progress');"
+                , "tp.reset(); tp.setTree(wideTree(60));"
+                , "local th = require('scripts.tutorial_hud');"
+                , "th.init();"
+                , "local combos = { {320, 240, 4.0}, {800, 600, 4.0},"
+                , "                 {3840, 2160, 0.25}, {640, 480, 0.5} };"
+                , "local ok = true;"
+                , "for _, c in ipairs(combos) do"
+                , "  engine.setUIScale(c[3]);"
+                , "  hud.init(1, 2, c[1], c[2]); hud.createUI();"
+                , "  local good, err = pcall(function()"
+                , "      th.onFramebufferResize(c[1], c[2]); th.setOpen(true);"
+                , "      local d = th.dump();"
+                , "      assert(d.toggle.w > 0 and d.toggle.h > 0, 'toggle collapsed');"
+                , "      assert(d.toggle.x >= 0 and d.toggle.y >= 0, 'toggle off-screen');"
+                , "      assert(d.toggle.x + d.toggle.w <= c[1], 'toggle overflows width');"
+                , "      assert(d.toggle.y + d.toggle.h <= c[2], 'toggle overflows height');"
+                , "      assert(d.panelW > 0 and d.panelX >= 0, 'panel invalid');"
+                , "      assert(d.capacity >= 0, 'negative capacity');"
+                , "      assert(d.scrollOffset >= 0 and d.scrollOffset <= d.scrollRange,"
+                , "             'offset outside range');"
+                , "      assert(#d.rows <= d.capacity, 'more rows than capacity');"
+                , "      th.setOpen(false); end);"
+                , "  if not good then ok = tostring(err) end end;"
+                -- A 0x0 minimize must not rebuild degenerate geometry.
+                , "local prior = th.dump();"
+                , "th.onFramebufferResize(0, 0);"
+                , "local after = th.dump();"
+                , "return { ok = tostring(ok), minimizeIgnored = (after.fbW == prior.fbW"
+                , "         and after.fbH == prior.fbH"
+                , "         and after.rebuildCount == prior.rebuildCount) }"
+                ]
+            probe ← decodeOr r ∷ IO DegradeProbe
+            dgOk probe `shouldBe` "true"
+            dgMinimizeIgnored probe `shouldBe` True
+
+-- * Remaining decoded probe shapes
+
+data ToggleProbe = ToggleProbe
+    { tpOpenedRows ∷ Int, tpOpenedOpen ∷ Bool
+    , tpReclosedRows ∷ Int, tpReclosedOpen ∷ Bool
+    , tpSameX ∷ Bool, tpSameY ∷ Bool, tpSameW ∷ Bool, tpSameH ∷ Bool }
+instance FromJSON ToggleProbe where
+    parseJSON = withObject "ToggleProbe" $ \o →
+        ToggleProbe <$> o .: "openedRows" <*> o .: "openedOpen"
+                     <*> o .: "reclosedRows" <*> o .: "reclosedOpen"
+                     <*> o .: "sameX" <*> o .: "sameY"
+                     <*> o .: "sameW" <*> o .: "sameH"
+
+data ResetProbe = ResetProbe
+    { rsBeforeOpen ∷ Bool, rsBeforeOffset ∷ Int
+    , rsAfterOpen ∷ Bool, rsAfterOffset ∷ Int, rsProgressKept ∷ Bool }
+instance FromJSON ResetProbe where
+    parseJSON = withObject "ResetProbe" $ \o →
+        ResetProbe <$> o .: "beforeOpen" <*> o .: "beforeOffset"
+                    <*> o .: "afterOpen" <*> o .: "afterOffset"
+                    <*> o .: "progressKept"
+
+data CreateWorldProbe = CreateWorldProbe
+    { cwAfterOpen ∷ Bool, cwAfterOffset ∷ Int, cwRestored ∷ Bool }
+instance FromJSON CreateWorldProbe where
+    parseJSON = withObject "CreateWorldProbe" $ \o →
+        CreateWorldProbe <$> o .: "afterOpen" <*> o .: "afterOffset"
+                          <*> o .: "restored"
+
+data HudCycleProbe = HudCycleProbe
+    { hcShown ∷ Bool, hcPageHidden ∷ Bool
+    , hcHiddenOpen ∷ Bool, hcHiddenOffset ∷ Int
+    , hcBackOpen ∷ Bool, hcBackOffset ∷ Int, hcBackRows ∷ Int
+    , hcPageShown ∷ Bool }
+instance FromJSON HudCycleProbe where
+    parseJSON = withObject "HudCycleProbe" $ \o →
+        HudCycleProbe <$> o .: "shown" <*> o .: "pageHidden"
+                       <*> o .: "hiddenOpen" <*> o .: "hiddenOffset"
+                       <*> o .: "backOpen" <*> o .: "backOffset"
+                       <*> o .: "backRows" <*> o .: "pageShown"
+
+data YamlProbe = YamlProbe
+    { ypLoaded ∷ Bool, ypFirstIds ∷ Text, ypSecondIds ∷ Text
+    , ypThirdIds ∷ Text, ypFirstLabel ∷ Text, ypFirstTooltip ∷ Text
+    , ypTreeId ∷ Maybe Text }
+instance FromJSON YamlProbe where
+    parseJSON = withObject "YamlProbe" $ \o →
+        YamlProbe <$> o .: "loaded" <*> o .: "firstIds" <*> o .: "secondIds"
+                   <*> o .: "thirdIds" <*> o .: "firstLabel"
+                   <*> o .: "firstTooltip" <*> o .:? "treeId"
+
+data ReverseProbe = ReverseProbe { rvDoneIds ∷ Text, rvReopenedIds ∷ Text }
+instance FromJSON ReverseProbe where
+    parseJSON = withObject "ReverseProbe" $ \o →
+        ReverseProbe <$> o .: "doneIds" <*> o .: "reopenedIds"
+
+data WheelProbe = WheelProbe
+    { wpToggleCaptures ∷ Bool, wpRowCaptures ∷ Bool
+    , wpHandledForeign ∷ Bool, wpOffsetAfterForeign ∷ Int
+    , wpHandledToggle ∷ Bool, wpHandledRow ∷ Bool
+    , wpOffsetAfterRow ∷ Int, wpClosedRows ∷ Int }
+instance FromJSON WheelProbe where
+    parseJSON = withObject "WheelProbe" $ \o →
+        WheelProbe <$> o .: "toggleCaptures" <*> o .: "rowCaptures"
+                    <*> o .: "handledForeign" <*> o .: "offsetAfterForeign"
+                    <*> o .: "handledToggle" <*> o .: "handledRow"
+                    <*> o .: "offsetAfterRow" <*> o .: "closedRows"
+
+data ScrollProbe = ScrollProbe
+    { scActiveCount ∷ Int, scCapacity ∷ Int, scRange ∷ Int
+    , scTop ∷ Text, scOneDownTop ∷ Text, scOneDownCount ∷ Int
+    , scMaxOffset ∷ Int, scMaxTop ∷ Text, scMaxLast ∷ Text
+    , scMinOffset ∷ Int }
+instance FromJSON ScrollProbe where
+    parseJSON = withObject "ScrollProbe" $ \o →
+        ScrollProbe <$> o .: "activeCount" <*> o .: "capacity" <*> o .: "range"
+                     <*> o .: "top" <*> o .: "oneDownTop" <*> o .: "oneDownCount"
+                     <*> o .: "maxOffset" <*> o .: "maxTop" <*> o .: "maxLast"
+                     <*> o .: "minOffset"
+
+data ClampProbe = ClampProbe
+    { clDeepOffset ∷ Int, clDeepRange ∷ Int, clShrunkOffset ∷ Int
+    , clShrunkRange ∷ Int, clShrunkRows ∷ Int, clShrunkTop ∷ Maybe Text }
+instance FromJSON ClampProbe where
+    parseJSON = withObject "ClampProbe" $ \o →
+        ClampProbe <$> o .: "deepOffset" <*> o .: "deepRange"
+                    <*> o .: "shrunkOffset" <*> o .: "shrunkRange"
+                    <*> o .: "shrunkRows" <*> o .:? "shrunkTop"
+
+data ResizeProbe = ResizeProbe
+    { rzBeforeRebuilds ∷ Int, rzAfterRebuilds ∷ Int
+    , rzBeforeOpen ∷ Bool, rzAfterOpen ∷ Bool
+    , rzBeforeOffset ∷ Int, rzAfterOffset ∷ Int, rzMovedRight ∷ Bool }
+instance FromJSON ResizeProbe where
+    parseJSON = withObject "ResizeProbe" $ \o →
+        ResizeProbe <$> o .: "beforeRebuilds" <*> o .: "afterRebuilds"
+                     <*> o .: "beforeOpen" <*> o .: "afterOpen"
+                     <*> o .: "beforeOffset" <*> o .: "afterOffset"
+                     <*> o .: "movedRight"
+
+data RescaleProbe = RescaleProbe
+    { rsclBeforeRebuilds ∷ Int, rsclAfterRebuilds ∷ Int
+    , rsclBeforeOpen ∷ Bool, rsclAfterOpen ∷ Bool
+    , rsclBeforeOffset ∷ Int, rsclAfterOffset ∷ Int, rsclGrewRows ∷ Bool }
+instance FromJSON RescaleProbe where
+    parseJSON = withObject "RescaleProbe" $ \o →
+        RescaleProbe <$> o .: "beforeRebuilds" <*> o .: "afterRebuilds"
+                      <*> o .: "beforeOpen" <*> o .: "afterOpen"
+                      <*> o .: "beforeOffset" <*> o .: "afterOffset"
+                      <*> o .: "grewRows"
+
+data DegradeProbe = DegradeProbe { dgOk ∷ Text, dgMinimizeIgnored ∷ Bool }
+instance FromJSON DegradeProbe where
+    parseJSON = withObject "DegradeProbe" $ \o →
+        DegradeProbe <$> o .: "ok" <*> o .: "minimizeIgnored"
+
+-- * Lua backend + eval helpers (mirrors Test.Headless.UI.ResponsiveGameplay)
+
+newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
+newBareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                (assetPoolRef env) (nextObjectIdRef env)
+                                (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls
+
+isLuaError ∷ Text → Bool
+isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t
+
+evalOk ∷ LuaBackendState → Text → IO Text
+evalOk ls code = do
+    t ← executeDebugLua (lbsLuaState ls) code
+    when (isLuaError t) $ expectationFailure ("Lua error: " ⧺ T.unpack t)
+    pure t
