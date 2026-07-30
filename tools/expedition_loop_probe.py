@@ -1700,14 +1700,26 @@ def main() -> int:
             quit_engine(port, proc)
     except SetupError as exc:
         chk.ok(False, f"the scenario could not reach the state it tests: {exc}")
+    except SystemExit as exc:
+        # `probelib.boot` reports an engine that died before READY, or
+        # never printed it, by calling sys.exit() with a message — and
+        # SystemExit derives from BaseException, NOT Exception, so the
+        # clause below does not see it. Left uncaught it would unwind
+        # straight through the finally, which prints the stage summary
+        # first: a stage entered but not yet asserted in (engine B's
+        # `load`, most obviously) would be reported as passing on the
+        # way out. Recorded here for the same reason, and with the same
+        # shape, as any other operational failure.
+        chk.ok(False, f"the engine could not be started, or died, during stage "
+                      f"'{chk.stage}' (SystemExit: {exc.code})")
     except Exception as exc:  # noqa: BLE001
         # An operational failure — a dead engine, a socket timeout, a
         # malformed console response — is a real probe failure and must
         # name its stage like any other. Left to propagate it would exit
         # non-zero with a traceback but NO recorded failing check, and
         # the summary below would then print PASS over the top of it.
-        # BaseException (KeyboardInterrupt, SystemExit) is deliberately
-        # not caught: those are the operator, not the run.
+        # KeyboardInterrupt is deliberately still allowed to propagate:
+        # that one really is the operator, not the run.
         chk.ok(False, f"unexpected {type(exc).__name__} while running stage "
                       f"'{chk.stage}': {exc}")
         traceback.print_exc()
