@@ -15,7 +15,6 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , defaultBindlessConfig
     -- * Creation/Destruction
   , createBindlessTextureSystem
-  , destroyBindlessTextureSystem
     -- * Texture Management
   , registerTexture
   , registerPinnedTexture
@@ -437,13 +436,3 @@ getTextureSlotIndex texHandle system =
   case Map.lookup texHandle (btsHandleMap system) of
     Just bindlessHandle → fromBindlessHandle bindlessHandle
     Nothing → 0
-
--- | Clean up the bindless texture system. The shared sampler is
---   released back to the cache (destroyed only if this held the last
---   reference); descriptor pool + layout are destroyed directly.
-destroyBindlessTextureSystem ∷ Device → BindlessTextureSystem → EngineM ε σ ()
-destroyBindlessTextureSystem dev system = do
-  env ← ask
-  liftIO $ releaseSampler dev (rcSamplerCacheRef (toRenderCapability env)) (btsTextureKind system)
-  destroyDescriptorPool dev (btsDescriptorPool system) Nothing
-  destroyDescriptorSetLayout dev (btsDescriptorLayout system) Nothing
