@@ -111,7 +111,9 @@ instance Show Font where
          <> ", fAtlasId = " <> show (fAtlasId f)
          <> ", fGlyphMap = <" <> show (Map.size (fGlyphMap f)) <> " glyphs>"
          <> ", fRefCount = " <> show (fRefCount f)
-         <> ", fCleanup = " <> if isJust (fCleanup f) then "<present>" else "<absent> }"
+         <> ", fCleanup = "
+         <> (if isJust (fCleanup f) then "<present>" else "<absent>")
+         <> " }"
         
 data ShaderStageInfo = ShaderStageInfo
   { ssiStage       ∷ ShaderStageFlags
