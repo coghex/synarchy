@@ -32,6 +32,11 @@ This drives the full integration headless and checks #89 end to end:
      tile (page-targeted writes + reads + idempotency guard). Checked with
      an arena as the active world that is given a room at (8,8); the hidden
      page must still stamp there, at its own terrain z, not the arena's.
+  9. Placement matrix (#997): every world in a small, explicit
+     (seed, size, plates) matrix gets at least one ruin_small. Phases 1-8
+     all run on ONE tuple (seed 42 / size 64 / 3 plates), which is not
+     the configuration players generate from — the GUI defaults to size
+     128 with 10 plates. This phase samples that space too.
 
 The location stamper is auto-loaded at boot by scripts/init.lua, exactly
 as in the real game, so this only registers the location defs by hand
@@ -39,7 +44,7 @@ as in the real game, so this only registers the location defs by hand
 
 Usage:
   python3 tools/location_overlay_probe.py
-  python3 tools/location_overlay_probe.py --seed 7 --size 64 --port 9189
+  python3 tools/location_overlay_probe.py --seed 7 --size 64 --plates 3 --port 9189
 
 Exit code 0 = all checks passed.
 """
@@ -83,6 +88,29 @@ def placed_ready(port: int, tries: int = 30) -> list[dict]:
         last = placed(port)
         if last:
             return last
+        time.sleep(0.5)
+    return last
+
+
+def placed_on_page(port: int, page: str, tries: int = 20) -> list[dict]:
+    """A specific page's placed-location list, without showing the page.
+
+    The overlay lives in that page's gen params, so this works for a
+    world that was generated and left hidden. Polls because world.init
+    is asynchronous — an empty read right after waitForInit can mean
+    "gen params not published yet" rather than "no locations".
+    """
+    last: list[dict] = []
+    for _ in range(tries):
+        raw = send(port, f"return world.listPlacedLocations('{page}')", timeout=30).strip()
+        if raw and raw not in ("nil", "{}", "[]"):
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = []
+            if isinstance(data, list) and data:
+                return data
+            last = data if isinstance(data, list) else []
         time.sleep(0.5)
     return last
 
@@ -166,6 +194,26 @@ DENSE_BODY = (
 )
 
 
+# A THIN ruin_small: the shipped id and builder, but max_count 1. Used in
+# phase 2 so the load's content validation finds the definition registered
+# while a recompute against it still could not reproduce the saved
+# placement set (see the phase-2 comment).
+THIN_YAML = "/tmp/loc_overlay_probe_thin.yaml"
+THIN_BODY = (
+    "locations:\n"
+    "  - id: ruin_small\n"
+    "    label: Small Ruin\n"
+    "    type: ruin\n"
+    "    builder: room_small\n"
+    "    anchor: [flat]\n"
+    "    max_count: 1\n"
+    "    min_spacing: 5\n"
+    "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+    "    discovery_margin: 6\n"
+    "    contents: []\n"
+)
+
+
 def has_loc_on(port: int, cx: int, cy: int, page: str | None = None, tries: int = 20) -> bool:
     """Whether the overlay places a location on chunk (cx,cy). With `page`
     it reads that page's overlay (so a hidden, non-active world works);
@@ -189,9 +237,31 @@ def has_loc_on(port: int, cx: int, cy: int, page: str | None = None, tries: int 
     return False
 
 
-def gen_world(port: int, page: str, seed: int, size: int) -> None:
-    send(port, f"world.init('{page}', {seed}, {size}, 3); return 'ok'")
-    send(port, "return world.waitForInit(240)", timeout=250)
+# ---- Phase 9 placement matrix (#997) -------------------------------------
+#
+# Kept deliberately small: this probe is classified slow / worldgen-heavy
+# and manual-only (tools/ci_probes.py), and phases 1-5 already spend five
+# engine boots. The matrix runs in ONE extra boot, generates at most
+# MAX_MATRIX_ENTRIES worlds, and skips the save/load, centre-chunk and
+# hidden-page phases entirely — those assume seed 42's particular
+# geography and prove things placement does not.
+#
+# The exhaustive frequency measurement is NOT here: it is the one-off
+# tools/location_placement_sweep.py (21 distinct worlds), recorded in
+# docs/location_placement_sweep.md.
+MAX_MATRIX_ENTRIES = 4
+PLACEMENT_MATRIX = [
+    # (seed, size, plates, why)
+    (42, 64, 3, "the tuple phases 1-8 use — pinned here too, explicitly 3 plates"),
+    (0, 128, 10, "GUI default size + plate count"),
+    (1, 128, 10, "GUI default size + plate count, second seed"),
+    (2, 64, 10, "smallest GUI size at the default plate count"),
+]
+
+
+def gen_world(port: int, page: str, seed: int, size: int, plates: int = 3) -> None:
+    send(port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
+    send(port, "return world.waitForInit(600)", timeout=620)
     send(port, f"world.show('{page}'); return 'ok'")
     # world.show queues a command processed by the world thread; load the
     # centre region and wait so the page is the active one before we read
@@ -205,6 +275,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
+    ap.add_argument("--plates", type=int, default=3,
+                    help="tectonic plate count for phases 1-8 (the GUI "
+                         "default is 10; this probe's fixed-geography "
+                         "phases are calibrated for 3)")
     ap.add_argument("--port", type=int, default=9189)
     args = ap.parse_args()
 
@@ -220,7 +294,7 @@ def main() -> int:
         # The stamper is auto-loaded at boot by scripts/init.lua (as in the
         # real game), so we only have to register the location defs here.
 
-        gen_world(args.port, "wa", args.seed, args.size)
+        gen_world(args.port, "wa", args.seed, args.size, args.plates)
         la = placed_ready(args.port)
         print(f"world A (seed {args.seed}): {len(la)} placed location(s)")
         for e in la:
@@ -267,7 +341,7 @@ def main() -> int:
             failures.append(f"only {n}/{len(ruins)} ruin(s) stamped in-session")
 
         # Determinism: a second independent generation with the same seed.
-        gen_world(args.port, "wb", args.seed, args.size)
+        gen_world(args.port, "wb", args.seed, args.size, args.plates)
         lb = placed_ready(args.port)
         if key(la) == key(lb) and la:
             print("PASS: same seed -> identical overlay (A == B)")
@@ -280,8 +354,23 @@ def main() -> int:
     #      materializes them after a fresh restart + load (the reviewer's
     #      option 2: chunk-load after a save consults the persisted overlay
     #      and stamps any not-yet-materialized entry). ----
+    with open(THIN_YAML, "w") as fh:
+        fh.write(THIN_BODY)
+
     proc = boot(args.port, log=LOG)
     try:
+        # This phase used to load with NO location YAML registered at all,
+        # and argued from that that the overlay it read back could not be
+        # a recompute. The load transaction's content-validation stage
+        # (#763/#911) now REFUSES a save whose overlay names an
+        # unregistered definition, so that setup aborts the load outright
+        # — the probe has been failing here on master.
+        #
+        # Register a THIN ruin_small instead: same id (so validation is
+        # satisfied) but max_count 1. The saved world placed 6, and a
+        # recompute against this registry could only ever place 1, so
+        # reading 6 back still proves the overlay came from the save.
+        send(args.port, f"engine.loadLocationYaml('{THIN_YAML}'); return 'ok'")
         send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
         # Issue #763: the saved page ("wa", its own id verbatim -- no more
         # main_world remap) doesn't exist live until the transaction
@@ -292,12 +381,10 @@ def main() -> int:
         send(args.port, "world.show('wa'); return 'ok'")
         time.sleep(1.0)
 
-        # Overlay persisted: no location YAML loaded yet, so this CANNOT be a
-        # recompute (computeLocationOverlay short-circuits with no defs) — it
-        # came from the save.
         lc = placed_ready(args.port)
-        if key(lc) == key(la) and lc:
-            print(f"PASS: overlay survived save/load ({len(lc)} placements, no YAML reload)")
+        if key(lc) == key(la) and lc and len(lc) > 1:
+            print(f"PASS: overlay survived save/load ({len(lc)} placements, "
+                  f"more than a recompute against max_count 1 could produce)")
         else:
             failures.append(f"overlay lost/changed across save-load: before={key(la)} after={key(lc)}")
 
@@ -332,7 +419,7 @@ def main() -> int:
     proc = boot(args.port, log=LOG)
     try:
         send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
-        gen_world(args.port, "wc", args.seed, args.size)
+        gen_world(args.port, "wc", args.seed, args.size, args.plates)
         if not has_loc_on(args.port, 0, 0):
             failures.append(f"seed {args.seed}: no location on centre chunk (0,0) — cannot test Init hook")
         elif wait_floor(args.port, 8, 8):
@@ -352,7 +439,7 @@ def main() -> int:
     saved_centre = False
     try:
         send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
-        gen_world(args.port, "wd", args.seed, args.size)
+        gen_world(args.port, "wd", args.seed, args.size, args.plates)
         if not has_loc_on(args.port, 0, 0):
             failures.append(f"seed {args.seed}: no location on centre chunk (0,0) — cannot test Save hook")
         elif not wait_floor(args.port, 8, 8):
@@ -413,7 +500,7 @@ def main() -> int:
                 failures.append("phase 5 setup: could not place a floor on the active arena")
             else:
                 # Generate a second world but DO NOT show it — arena stays active.
-                send(args.port, f"world.init('sw', {args.seed}, {args.size}, 3); return 'ok'")
+                send(args.port, f"world.init('sw', {args.seed}, {args.size}, {args.plates}); return 'ok'")
                 send(args.port, "return world.waitForInit(240)", timeout=250)
                 active = "?"
                 for _ in range(10):
@@ -440,6 +527,32 @@ def main() -> int:
                               f"terrain {swz}+1; arena floor z={fz_ar})")
                 else:
                     failures.append("hidden page suppressed by active-world geometry at same tile (multiworld)")
+    finally:
+        quit_engine(args.port, proc)
+
+    # ---- Phase 9: placement matrix (#997). Placement only — one boot,
+    #      one page per tuple, generated but never shown (the overlay
+    #      lives in gen params, so listPlacedLocations takes the page id
+    #      directly). Every world here must get at least one ruin_small:
+    #      after #997 an empty list can only mean the world has no land
+    #      at all, and none of these tuples is a waterworld. ----
+    assert len(PLACEMENT_MATRIX) <= MAX_MATRIX_ENTRIES
+    proc = boot(args.port, log=LOG)
+    try:
+        send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
+        for i, (seed, size, plates, why) in enumerate(PLACEMENT_MATRIX):
+            page = f"m{i}"
+            send(args.port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
+            send(args.port, "return world.waitForInit(900)", timeout=920)
+            entries = placed_on_page(args.port, page)
+            ruins = [e for e in entries if e["id"] == "ruin_small"]
+            label = f"seed {seed} / size {size} / {plates} plates"
+            if ruins:
+                print(f"PASS: {label}: {len(ruins)} ruin_small ({why})")
+            else:
+                failures.append(
+                    f"{label}: ZERO ruin_small placed — the #997 guarantee "
+                    f"did not fire (or the world has no land at all)")
     finally:
         quit_engine(args.port, proc)
 
