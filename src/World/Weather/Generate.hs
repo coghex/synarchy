@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Weather.Generate
     ( -- * Final climate refinement (see haddock below re: the misleading name)
       initEarlyClimate

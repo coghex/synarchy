@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Sealed sub-sea basin breaching: connects large, deep basins that
 --   the coastal erosion pass leaves sealed behind the shoreline ridge

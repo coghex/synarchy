@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The bridge from 'SessionSnapshot' to the legacy positional
 --   'SaveData'/'WorldPageSave' shape (#758, requirement 12). Originally
 --   (#759, B1) this was also the ON-DISK wire format; since #760 (B2)

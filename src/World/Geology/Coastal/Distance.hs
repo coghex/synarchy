@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | BFS distance-from-sea field used to bound the coastal pass and
 --   its contour smoothing to a band of tiles near the shoreline.

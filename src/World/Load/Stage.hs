@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Whole-session LOAD staging (issue #763, save-overhaul C2): rebuild
 --   every saved page into a fresh 'World.State.Types.WorldState' (zoom

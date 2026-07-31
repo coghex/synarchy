@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The immutable, validated in-memory capture of an entire game
 --   session at one coordinated "Engine.Save.Barrier" boundary (#758,
 --   save-overhaul A3). This is deliberately NOT 'World.Save.Types'

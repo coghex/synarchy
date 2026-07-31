@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Slope.Recompute
     ( slopeRecomputeAffected
     , recomputeNeighborSlopes

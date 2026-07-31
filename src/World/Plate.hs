@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Tectonic plate generation, queries, and elevation, split (issue
 --   #560) into focused submodules under "World.Plate.*":
 --

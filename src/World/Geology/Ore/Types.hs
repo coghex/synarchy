@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Ore-sheet deposit types.
 --
 --   An ore sheet is a sedimentary deposit laid down during one

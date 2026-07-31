@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, GeneralizedNewtypeDeriving, DerivingStrategies, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, GeneralizedNewtypeDeriving, DerivingStrategies, DeriveGeneric, DeriveAnyClass #-}
 module World.Page.Types
     ( WorldPageId(..)
     , WorldIdentity(..)

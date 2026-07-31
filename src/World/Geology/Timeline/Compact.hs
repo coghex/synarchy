@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | River-event compaction: the post-timeline pass that collapses
 --   every active river's scattered per-Age
 --   @HydroEvent (RiverFeature _)@ entries down to one, carrying its

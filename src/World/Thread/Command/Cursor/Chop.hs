@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Chop designation tool (#97). Mirrors the mine/construct designation
 --   tools' anchor→rectangle commit, but the commit filters to FLORA:
 --   only tiles holding a currently-harvestable species carrying the

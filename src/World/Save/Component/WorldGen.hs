@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Frozen worldgen-parameter DTOs (issue #760, save-overhaul B2 — review
 --   round 6). The @"world-pages"@ component embeds a page's
 --   'WorldGenParams', a mutable runtime record whose nested worldgen

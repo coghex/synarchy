@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Hydrology.Event
     ( applyHydroFeature
     , applyHydroEvolution

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Deterministic hashing and coherent noise used by the coastal
 --   pass — the per-tile erosion-roll hash and the shoreline-edge

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Global river identification, run once at world init alongside
 --   'World.Fluid.Lake.Identify.identifyWorldLakes'.

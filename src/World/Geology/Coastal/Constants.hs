@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Shared distance-band knobs for the coastal pass. Split out of
 --   "World.Geology.Coastal" so 'World.Geology.Coastal.RiverMouth' and

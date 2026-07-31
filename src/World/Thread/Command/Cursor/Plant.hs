@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Plant designation tool (#335). Single-tile, no anchor: the planting
 --   screen already scopes the player to one tile before a crop is
 --   chosen, so there is no pending rectangle to preview (unlike

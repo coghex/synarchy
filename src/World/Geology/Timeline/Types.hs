@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Compatibility entry point for the geology timeline's types. The
 --   actual declarations live in the focused submodules below; this
 --   module re-exports their full surface so existing call sites keep

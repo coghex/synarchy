@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | View-frustum culling and wrap-around helpers for zoom-level rendering.
 module World.Render.Zoom.ViewBounds
     ( ZoomViewBounds(..)

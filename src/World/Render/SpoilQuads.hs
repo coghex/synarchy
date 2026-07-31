@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-frame quads for spoil piles (World.Spoil) — the gravel
 --   mounds digging deposits at tile vertices.
 --

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Structure-piece edit handlers (set/clear one piece, clear every
 --   piece in the world). Split out of "World.Thread.Command.Edit"

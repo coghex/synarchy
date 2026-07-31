@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Zoom-level cursor interaction: hover highlight, selection overlay,
 --   and pixel-to-chunk-origin conversion.
 module World.Render.Zoom.Cursor
