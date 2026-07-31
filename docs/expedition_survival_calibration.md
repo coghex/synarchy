@@ -267,15 +267,23 @@ thresholds.
 
 ## Tunables changed
 
-**None.** Project-owner decision, 2026-07-25, taken after review of every
-observation recorded above: land the calibration record with zero balance
-changes and file the mechanic-level findings as focused follow-ups instead.
+**None as of the 2026-07-25 session recorded above.** Project-owner decision,
+2026-07-25, taken after review of every observation recorded above: land the
+calibration record with zero balance changes and file the mechanic-level
+findings as focused follow-ups instead.
 
-No gameplay constant was changed as a result of these observations. The
+No gameplay constant was changed as a result of THOSE observations. The
 water and food questions showed no survival pressure to relieve on this route,
-and the injury question's dominant terms sit outside this issue's scope (see
-below). Every candidate was therefore left at its shipped value, and the
-follow-up work is filed instead of guessed at.
+and the injury question's dominant terms sat outside that session's scope
+(see below). Every candidate was therefore left at its shipped value, and the
+follow-up work was filed instead of guessed at.
+
+**This is superseded for `Unit/Fall.hs` by #998**, filed as exactly that
+follow-up: `energyToSeverity` WAS subsequently changed (`0.040` → `0.006`),
+with owner approval already granted via the approved #998 issue — see
+"Fall-trauma calibration (#998)" below for the full record. The table row
+below is corrected accordingly; every other tunable in this section remains
+unchanged.
 
 For the record, the named tunables inspected while reading the observations
 above, and left unchanged:
@@ -285,7 +293,7 @@ above, and left unchanged:
 | `drain_constant_frac` (hydration) | `scripts/unit_resource_config.lua` | `0.01 / 42` per s | Colony-wide: it governs every unit's hydration everywhere, not travel. Raising it to create route pressure would change colony-side survival, which #919 requirement 4 places out of scope. |
 | `drink_min_thirst`, `drink_weight`, `drink_hydration_per_litre` | `scripts/unit_ai_tunables.lua` | 0.2, 15.0, 11.0 | Never reached — no unit drank. Nothing observed argues for a change, and `drink_hydration_per_litre` is colony-side shared. |
 | `eat_max_fraction`, `eat_weight` | `scripts/unit_ai_tunables.lua` | 0.25, 10.0 | E4's waste comes from `eatExecute`'s feed-to-99 % loop and 250 kcal discrete rations, not from the entry threshold; moving the threshold would not stop a meal from emptying the pack. |
-| `energyToSeverity`, `metresPerZ`, `tissueFailureDensity`, `softBoneEquivMm` | `src/Unit/Fall.hs` | 0.040, 1.5, per-tissue, 18.0 | Would move fracture counts, but the 2-z fall's lethality is dominated by 21 bruises pinned at `bruiseCap`, which these do not remove. Needs the owner decision below. |
+| `energyToSeverity`, `metresPerZ`, `tissueFailureDensity`, `softBoneEquivMm` | `src/Unit/Fall.hs` | 0.040, 1.5, per-tissue, 18.0 | Left unchanged in THIS 2026-07-25 session pending an owner decision. **Correction (#998 issue review):** the claim below this row previously made — that no value of `energyToSeverity` can affect the capped bruises — is FALSE: `capInjurySeverity` caps AFTER the multiply and `injuryFloor = 0.1` drops sub-floor injuries entirely, so lowering the fall-local multiplier does reduce both bruise severity and bruise COUNT. `energyToSeverity` was subsequently retuned to `0.006` by #998 (see "Fall-trauma calibration (#998)" below); `metresPerZ`/`tissueFailureDensity`/`softBoneEquivMm` were left at their shipped values. |
 | `kindBleedFactor "blunt"`, `bleedScale` | `src/Combat/Wounds/*.hs` | 0.2, 1.2 | The actual dominant term in E-injury lethality — but wound-severity/bleed tuning is #916's territory, which #919 lists as out of scope. |
 
 ## Open follow-ups
@@ -296,12 +304,203 @@ follow-up):
 
 1. **Fall trauma vs. treatment throughput.** 33 wounds and 0.865 L/s from the
    shallowest possible fall, against one dressed wound per treatment action, is
-   a mechanic gap, not a constant that can be nudged: no value of
-   `energyToSeverity` removes bruises already pinned at `bruiseCap`.
-2. **`Unit/Fall.hs` behavior vs. its documented calibration.** The module
+   a mechanic gap, not a constant that can be nudged. **Correction (#998):**
+   the original phrasing here — "no value of `energyToSeverity` removes
+   bruises already pinned at `bruiseCap`" — was false (see the corrected
+   tunables-table row above); #998's fix substantially reduces both the wound
+   count and the aggregate bleed at 2-z (see below), though treatment
+   throughput itself (one dressed wound per `treatBleeding` call) is untouched
+   and remains open if a future calibration re-inflates wound counts.
+2. **`Unit/Fall.hs` behavior vs. its documented calibration.** ~~The module
    targets "first ankle/leg fracture around 5–6-z" and delivers twelve
-   fractures at 2-z.
+   fractures at 2-z.~~ **Resolved by #998** — see "Fall-trauma calibration
+   (#998)" below for the restored contract and the measured record across all
+   three calibration profiles.
 3. **E3's completed-order drift** — whether a unit that finishes a commanded
    move should hold position instead of resuming wander.
 4. **E2's technomule spawn-capacity comparison** against the unmodified base
    capacity.
+5. **Autonomous wander ledge avoidance.** E5 recorded the scout already
+   collapsed with a fall's worth of wounds before ever receiving a commanded
+   descent — it walked off a ridge under ordinary ambient wander
+   (`scripts/unit_ai_needs.lua`'s unconstrained nearby-tile pick). #998
+   repairs the fall-TRAUMA model only (what a fall does to the body); it
+   deliberately does not touch wander, pathfinding, or route selection, so an
+   acolyte can still choose to walk off a ledge. No companion issue number is
+   recorded in this document as of #998; file one (or link an existing one)
+   before treating this as tracked elsewhere.
+
+## Fall-trauma calibration (#998)
+
+Scenario 2 above measured ONE specific spawned scout (~104.7 kg, presumably
+constitution/toughness near 1.0) taking a 2-z fall and recorded 33 wounds,
+0.865 L/s aggregate initial bleed, and a projected ~9 s exsanguination — far
+beyond `src/Unit/Fall.hs`'s own documented target ("bruised + knocked down at
+2–4-z; first ankle/leg fracture around 5–6-z"). #998 repairs the fall-trauma
+model only; autonomous ledge avoidance is follow-up 5 above, not this issue.
+
+### Method
+
+Random spawn stats make "a starting acolyte" ambiguous, so #998 fixes THREE
+deterministic profiles — the exact clamp endpoints of
+`data/units/acolyte.yaml`'s `rollStat` ranges for height/bulk/toughness — and
+tests each independently rather than assuming the frail profile is the
+"vulnerable" one:
+
+| profile | height | bulk | toughness | body mass (22·h²·b) | blood volume (mass×0.075) |
+|---|---:|---:|---:|---:|---:|
+| frail   | 1.3 | 0.5 | 0.8 | 18.59 kg | 1.39 L |
+| average | 1.8 | 1.0 | 1.0 | 71.28 kg | 5.35 L |
+| extreme | 2.3 | 1.5 | 1.2 | 174.57 kg | 13.09 L |
+
+Constitution is pinned at 1.0 for all three (it also scales aggregate bleed
+via `Combat.Wounds.Bleed`'s clamped-constitution divisor, and acolyte
+constitution otherwise rolls 0.5–1.5). Every fall wound is measured with the
+same initial state the engine actually stamps
+(`src/Unit/Thread/Movement.hs`): `woundBandage = 1.0`, `woundClot = 0.0`,
+`woundHeal = 0.0` — untreated, unclotted. "Aggregate initial bleed" is
+`Combat.Wounds.Bleed.bleedRateFor` over that wound set; "exsanguination"
+is blood volume ÷ that rate, the same naive (no clotting, no treatment)
+projection the original ~9 s figure used. Body parts come from the shipped
+YAML through `Engine.Asset.YamlUnits.unitYamlBodyPartToBodyPart` — the same
+conversion the Lua unit loader uses — never a hand-transcribed fixture; see
+`test-headless/Test/Headless/Unit/Fall.hs`.
+
+**Vitality is heart-only and it is unreachable at 2-z.** The shipped acolyte
+flags only `heart` (torso, depth 0.50) as `vital: true`; a 2-z fall's reach is
+`0.30 + 0.05×2 = 0.40`, so the heart cannot be hit regardless of tuning.
+Worse: the torso's deterministic (RNG-free) weighted organ pick was measured
+to land on `lungs`/`intestines` at every tested drop height from 2-z through
+40-z — the heart is never the selected organ AT ANY HEIGHT on this body
+topology, a fact about `Unit.Injury.allocateSubparts`'s fixed hash-based
+picks and the acolyte's per-organ `area_weight`s, not about severity tuning.
+A fall therefore cannot trigger the vital-injury death rule on the shipped
+acolyte at all. "No vital injury" is consequently NOT a meaningful pass/fail
+signal for this contract; the operative measurements below are wound
+count/kind, aggregate bleed relative to blood volume, and knockdown.
+
+### What changed in `src/Unit/Fall.hs`
+
+- `energyToSeverity`: `0.040` → `0.006`, retuned against the shipped topology
+  so the documented average acolyte's fracture ladder holds (below).
+- `ensureBone`: previously injected a synthetic 18 mm bone layer into ANY
+  part lacking a literal `"bone"` material — including the neck's cartilage
+  windpipe and the torso's boneless organs (liver, stomach, intestines) and
+  boneless carotid artery, none of which are extremities and none of which
+  should be able to "fracture". Every current extremity (hands, feet, limbs)
+  already carries a real bone layer in `data/units/acolyte.yaml`, so the
+  synthetic layer was firing ONLY on anatomically boneless soft tissue,
+  double-counting those parts' wounds. Broadened to skip when the part has
+  ANY structural/organic tissue (bone, cartilage, organ, nerve, artery), not
+  just bone.
+- `partInjuries`: previously emitted ONE wound per tissue LAYER, so a single
+  strike to a limb (skin + fat + muscle, all "flesh" → all "blunt") produced
+  THREE separate capped bruises instead of one. Now groups by injury KIND
+  first (summing the grouped layers' failure-energy, i.e. their combined
+  resistance, before dividing the load) — mirroring how
+  `Combat.Resolution.Damage`'s `distOf` already groups a weapon strike's
+  per-layer deposits by kind. This was the dominant driver of the
+  33-wound/0.865 L/s pathology: not fracture severity, but redundant
+  same-kind wound multiplicity from one impact to one part.
+
+`kindBleedFactor` and `bleedScale` (`src/Combat/Wounds/*.hs`) were NOT
+touched — shared combat constants, #916's territory per #998's own scope.
+No `data/units/*.yaml` body data was touched.
+
+### Before / after record — 2-z fall, all three profiles
+
+- Revision (before): `7eb534979efd8c9a72ae5352f4ea30743f40de10` (`master`, the
+  commit #998 branched from — unmodified `Unit.Fall`).
+- Revision (after): `1a693228367979ab1ddbe77f76ab4a3e84bf7825` (#998's
+  fall-model commit on this PR branch).
+
+All figures below use the real acolyte topology through
+`unitYamlBodyPartToBodyPart` for both revisions — the "before" numbers are
+NOT the original Scenario-2 run (a different, randomly-rolled unit); they are
+the SAME three deterministic profiles measured against the pre-#998
+`Unit.Fall`, so the two columns isolate exactly what the code change did.
+Every fall in this table is knocked down (`fallStunFor`'s ≥1.0 s stun floor
+applies unconditionally to any triggered fall, unaffected by this change) and
+lands in `standing`→`collapsed` (the movement thread's own knockdown pose,
+not a death state) — none of the six measurements is dead, unconscious (blood
+below `unconsciousFraction` of max), or carries a vital-part injury.
+"Exsanguination" is the naive projection (blood ÷ aggregate bleed rate,
+assuming no clotting/treatment — the same derivation the original ~9 s figure
+used), not an observed death.
+
+**Frail (height 1.3, bulk 0.5, toughness 0.8 → 18.59 kg, 1.39 L blood)**
+
+| | wound count | wounds (part: kind severity) | worst severity | aggregate bleed | exsanguination (naive) | terminal state |
+|---|---:|---|---:|---:|---:|---|
+| before | 24 | l_bicep: blunt 0.40, 0.38, 0.10; l_sole: blunt 0.40, 0.40; l_thigh: blunt 0.40, 0.40, 0.34; l_thumb: blunt 0.40, 0.40, 0.40; r_bicep: blunt 0.40, 0.38, 0.10; r_palm: blunt 0.40, 0.40; r_sole: blunt 0.40, 0.40; r_thigh: blunt 0.40, 0.40, 0.34; skull: blunt 0.40; sternum: blunt 0.40; windpipe: blunt 0.20 | 0.40 | 0.955 L/s | 1.46 s | knocked down, collapsed; bruised only, no fracture |
+| **after** | **3** | **l_thumb: blunt 0.12; skull: blunt 0.10; sternum: blunt 0.10** | **0.12** | **0.0105 L/s** | **133 s** | **knocked down, collapsed; bruised only, no fracture** |
+
+**Average (height 1.8, bulk 1.0, toughness 1.0 → 71.28 kg, 5.35 L blood) — the documented baseline**
+
+| | wound count | wounds (part: kind severity) | worst severity | aggregate bleed | exsanguination (naive) | terminal state |
+|---|---:|---|---:|---:|---:|---|
+| before | 32 (24 blunt, 8 fracture) | l_bicep: blunt 0.40, 0.40, 0.32; l_sole: blunt 0.40, 0.40, fracture 0.29; l_thigh: blunt 0.40, 0.40, 0.40, fracture 0.11; l_thumb: blunt 0.40, 0.40, 0.40, fracture 0.27; r_bicep: blunt 0.40, 0.40, 0.32; r_palm: blunt 0.40, 0.40, fracture 0.17; r_sole: blunt 0.40, 0.40, fracture 0.29; r_thigh: blunt 0.40, 0.40, 0.40, fracture 0.11; skull: blunt 0.40; sternum: blunt 0.40, fracture 0.13; windpipe: blunt 0.40, fracture 0.16 | 0.40 | 1.097 L/s | 4.87 s | knocked down, collapsed; bruised **and fractured** (8 fractures) |
+| **after** | **8 (8 blunt, 0 fracture)** | **l_sole: blunt 0.26; l_thigh: blunt 0.11; l_thumb: blunt 0.38; r_palm: blunt 0.16; r_sole: blunt 0.26; r_thigh: blunt 0.11; skull: blunt 0.31; sternum: blunt 0.31** | **0.38** | **0.146 L/s** | **36.7 s** | **knocked down, collapsed; bruised only, no fracture — matches `Unit.Fall`'s documented 2–4-z target** |
+
+**Extreme (height 2.3, bulk 1.5, toughness 1.2 → 174.57 kg, 13.09 L blood)**
+
+| | wound count | wounds (part: kind severity) | worst severity | aggregate bleed | exsanguination (naive) | terminal state |
+|---|---:|---|---:|---:|---:|---|
+| before | 33 (24 blunt, 9 fracture) | l_bicep: blunt 0.40 ×3; l_sole: blunt 0.40 ×2, fracture 0.58; l_thigh: blunt 0.40 ×2, fracture 0.22; l_thumb: blunt 0.40 ×3, fracture 0.56; r_bicep: blunt 0.40 ×3; r_palm: blunt 0.40 ×2, fracture 0.35; r_sole: blunt 0.40 ×2, fracture 0.58; r_thigh: blunt 0.40 ×2, fracture 0.22; skull: blunt 0.40, fracture 0.20; sternum: blunt 0.40, fracture 0.26; windpipe: blunt 0.40, fracture 0.33 | 0.58 | 1.201 L/s | 10.9 s | knocked down, collapsed; bruised **and fractured** (9 fractures) |
+| **after** | **9 (9 blunt, 0 fracture)** | **l_sole: blunt 0.40; l_thigh: blunt 0.22; l_thumb: blunt 0.40; r_palm: blunt 0.32; r_sole: blunt 0.40; r_thigh: blunt 0.22; skull: blunt 0.40; sternum: blunt 0.40; windpipe: blunt 0.19** | **0.40** | **0.287 L/s** | **45.7 s** | **knocked down, collapsed; bruised only, no fracture (extreme's own first fracture is 3-z, one z-level deeper than this 2-z measurement)** |
+
+None of the six measurements ever produces a vital injury, an immediate
+death, or the pre-#998 pathological wound count.
+
+### Fracture ladder (independently measured per profile)
+
+The average profile now matches `Unit.Fall`'s own documented target (first
+fracture around 5–6-z); the extreme and frail profiles are independently
+measured and diverge from it in the physically expected direction — mass
+drives impact energy (`E = mass·g·h`), so the heavier/tougher extreme profile
+fractures earlier and the much-lighter frail profile fractures far later,
+despite its lower toughness stat:
+
+| profile | first fracture | first concussion |
+|---|---|---|
+| frail (18.59 kg) | 15-z | not observed through 40-z |
+| average (71.28 kg) | 5-z | 22-z |
+| extreme (174.57 kg) | 3-z | 12-z |
+
+The frail profile is the **permitted exception** #998 allows ("may die at
+2-z if physiologically justified, deterministic, and explicitly documented")
+— but on this shipped topology it measures as the SAFEST profile at 2-z, not
+the most vulnerable: its far lower body mass reduces impact energy more than
+its lower toughness costs it. No profile actually exercises the death
+exception at 2-z; this corrects the naive "frail = vulnerable" framing.
+
+### Follow-up: `tools/gameplay_scenarios.py --test first-aid` re-run
+
+Per #919/#998's governance rule, this is an observational record, not a
+pass/fail verdict. Run twice post-fix (`python3 tools/gameplay_scenarios.py
+--test first-aid --port 9926/9927`); both exited 0. Acolyte spawn stats are
+randomly rolled each run (not one of the three fixed calibration profiles
+above), so the two runs are independent real-world samples of the fixed
+model rather than a repeat of the same input.
+
+**Run 1** — scout "Yara Calvert", blood 10.14 L (~135 kg-scale unit, well
+into the extreme end of the spawn range): the 2-z fall produced **9 wounds,
+all blunt** — skull 0.40 (dressed after treatment), windpipe 0.20, sternum
+0.40, l_thumb 0.40, r_palm 0.34, l_thigh 0.23, r_thigh 0.23, l_sole 0.40,
+r_sole 0.40 — **zero fractures**, versus the original recorded run's 12
+fractures on a smaller (~104.7 kg) unit. Aggregate bleed 0.271 L/s (was
+0.865 L/s), pain 4.49, pose `collapsed`, knocked down. `unit.treatBleeding`
+dressed the skull wound as before (one dressing per call, unchanged — the
+treatment-throughput mechanic itself is not in #998's scope). The scout
+remained collapsed for the ~7 s observed, bleeding out only ~0.76 L of its
+10.14 L pool in that window — a materially slower decline than the original
+run's ~55 % blood loss over a similar interval.
+
+**Run 2** — a lighter-scale spawn: the scout ended the run `standing`
+(not collapsed) by the final checkpoint, consistent with the now much lower
+aggregate bleed no longer forcing an extended collapse.
+
+Both runs corroborate the deterministic-profile record above: the fix
+measurably reduces both wound count and bleed rate for a real (randomly
+rolled, not hand-picked) spawn, without any change to treatment throughput,
+wound dressing, ambient wander, pathfinding, or movement route selection.
