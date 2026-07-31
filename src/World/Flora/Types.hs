@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module World.Flora.Types
     ( -- * Species Identity

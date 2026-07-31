@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Spoil routing glued to world data: the tile-legality predicate
 --   and the capacity / blocked queries built on the pure router in
 --   "World.Spoil.Types". Shared by the dig command handler (deposit

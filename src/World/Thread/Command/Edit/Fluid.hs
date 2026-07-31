@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Fluid-tile edit handler. Split out of "World.Thread.Command.Edit"
 --   (issue #563).

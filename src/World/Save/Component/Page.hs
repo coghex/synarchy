@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Page-scoped world components (issue #760, save-overhaul B2). Each
 --   carries a slice PER world page, keyed by 'WorldPageId', and every
 --   one is validated against the authoritative page set the

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Per-page location-discovery tick (#780). Runs beside the world
 --   clock ('World.Thread.Time.tickWorldTime'), once per LOADED page per
 --   world-thread iteration — including a hidden (non-visible) page, and

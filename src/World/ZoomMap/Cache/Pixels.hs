@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-chunk RGBA pixel generation, split out of
 --   "World.ZoomMap.Cache" (issue #573).
 module World.ZoomMap.Cache.Pixels

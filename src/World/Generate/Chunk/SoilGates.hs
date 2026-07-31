@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Post-classification soil reality checks (wetland/salt-flat
 --   demotion) and the fluid-aware water table used to gate them.
 --   Split out of 'World.Generate.Chunk' (#549) — a pure move, no

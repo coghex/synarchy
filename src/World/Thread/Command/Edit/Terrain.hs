@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Terrain-column edit handlers (add/delete a Z-level, walkable-ramp
 --   slope, arbitrary single-cell writes). Split out of

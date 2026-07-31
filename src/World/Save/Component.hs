@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The authoritative save-component registry and cross-component
 --   assembly (issue #760, save-overhaul B2). This is the ONE place that
 --   knows the complete set of Haskell-owned gameplay components, their

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | River-component tracing for the river-identification pipeline:
 --   extends primary (above-threshold) flow into full chains, clamps

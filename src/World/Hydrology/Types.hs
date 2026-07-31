@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- Deliberate orphans: Serialize/Hashable for boxed Vector, used by the
 -- save path. Every consumer imports this module (directly or via
 -- World.Types), so the instances are coherent in practice.

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The pure, side-effect-free tagged-envelope codec (issue #759,
 --   save-overhaul B1): encode a set of (id, version, required, bytes)
 --   component specs into one framed, checksummed 'BS.ByteString', and

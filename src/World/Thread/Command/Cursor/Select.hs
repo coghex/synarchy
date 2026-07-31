@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Raw cursor hover/select/texture state (zoom cursor + world cursor)
 --   and direct tile-by-coordinate selection. Split out of
 --   "World.Thread.Command.Cursor" (issue #564).

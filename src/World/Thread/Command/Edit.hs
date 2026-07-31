@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Live world-edit command handlers, split (issue #563) into focused
 --   submodules under "World.Thread.Command.Edit.*":
 --

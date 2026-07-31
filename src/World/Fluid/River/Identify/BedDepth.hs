@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Channel-bed depth model (#223) and the final per-tile carve delta
 --   for the river-identification pipeline. Ordinary reaches keep a

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Per-tile flow accumulation for the river-identification pipeline:
 --   climate → precip/evap units, the lake-id reverse index, per-lake

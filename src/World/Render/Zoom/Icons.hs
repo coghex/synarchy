@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Zoom-map location discovery-state icon annotations (#781): a
 --   dedicated dynamic overlay, entirely separate from
 --   'World.Render.Zoom.Quads.makeMapQuads' so switching 'ZoomMapMode'
