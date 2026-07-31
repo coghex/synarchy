@@ -543,10 +543,20 @@ def main() -> int:
         for i, (seed, size, plates, why) in enumerate(PLACEMENT_MATRIX):
             page = f"m{i}"
             send(args.port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
-            send(args.port, "return world.waitForInit(900)", timeout=920)
+            # waitForInit reports where generation GOT TO, timeout or not, so
+            # check the phase before reading placements — otherwise a timed-out
+            # w128 generation reads as empty and gets misreported below as the
+            # guarantee failing to fire. `local phase = ...` keeps the first of
+            # its four return values; 3 == done.
+            label = f"seed {seed} / size {size} / {plates} plates"
+            phase = send(args.port, "local phase = world.waitForInit(900); return phase",
+                         timeout=920).strip()
+            if phase != "3":
+                failures.append(f"{label}: generation did not finish "
+                                f"(waitForInit phase {phase or '<no reply>'}, 3 = done)")
+                continue
             entries = placed_on_page(args.port, page)
             ruins = [e for e in entries if e["id"] == "ruin_small"]
-            label = f"seed {seed} / size {size} / {plates} plates"
             if ruins:
                 print(f"PASS: {label}: {len(ruins)} ruin_small ({why})")
             else:

@@ -88,6 +88,10 @@ def dirty() -> bool:
         return False
 
 
+class SweepError(RuntimeError):
+    """A run that cannot be counted — never silently folded into the sample."""
+
+
 def run_one(port: int, seed: int, size: int, plates: int) -> dict:
     """Generate one world in a fresh engine and count its placements.
 
@@ -103,8 +107,22 @@ def run_one(port: int, seed: int, size: int, plates: int) -> dict:
         send(port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
         budget = INIT_TIMEOUT[size]
         t0 = time.time()
-        send(port, f"return world.waitForInit({budget})", timeout=budget + 30)
+        # world.waitForInit returns the CURRENT progress whether or not it
+        # actually reached LoadDone -- on timeout it just stops polling and
+        # reports where generation got to. Silently discarding that would
+        # let an unfinished (or never-started) generation be queried as
+        # empty and recorded as a genuine zero-placement world, which is
+        # precisely the measurement this tool exists to make. `local phase
+        # = ...` keeps the first of its four return values; 3 == done.
+        phase = send(port, f"local phase = world.waitForInit({budget}); return phase",
+                     timeout=budget + 30).strip()
         elapsed = time.time() - t0
+        if phase != "3":
+            raise SweepError(
+                f"generation did not finish: world.waitForInit returned phase "
+                f"{phase or '<no reply>'} after {budget}s (3 = done). A placement "
+                f"count from this run would be meaningless, so the sweep stops "
+                f"rather than record it.")
         raw = send(port, f"return world.listPlacedLocations('{page}')", timeout=30).strip()
         try:
             entries = json.loads(raw) if raw not in ("", "nil", "{}", "[]") else []
@@ -163,7 +181,7 @@ def main() -> int:
               f"plates {t['plates']} ... ", end="", flush=True)
         try:
             r = run_one(args.port, t["seed"], t["size"], t["plates"])
-        except SystemExit as exc:
+        except (SystemExit, SweepError) as exc:
             print(f"FAILED ({exc})")
             record["runs"].append({**t, "error": str(exc)})
             with open(args.json or "/tmp/location_placement_sweep.json", "w") as fh:
