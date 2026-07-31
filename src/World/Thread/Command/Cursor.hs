@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Cursor and designation-tool command handlers, split (issue #564)
 --   into focused submodules under "World.Thread.Command.Cursor.*":
 --

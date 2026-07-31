@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Flow-routed sedimentary ore deposition.
 --
 --   Runs once per geological Age (from 'World.Geology.Timeline.buildAge'),

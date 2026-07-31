@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Boundary elevation profiles (convergent/divergent/transform) and
 --   the continental-shelf smoothing pass, split out of "World.Plate"
 --   (issue #560).

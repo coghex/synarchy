@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 
 -- | First-class rivers identified by a global flow-accumulation pass
 --   at world init (see "World.Fluid.River.Identify").

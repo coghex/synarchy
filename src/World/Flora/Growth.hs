@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Derived flora growth state (#332).
 --
 --   Flora placement is deterministic (chunks evict and regenerate to

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Interactive flora harvest state (#94).
 --
 --   Harvested tiles live in a WORLD-LEVEL sparse map, not in the chunk's

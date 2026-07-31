@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | River-mouth proximity helpers for the coastal pass — pre-filtering
 --   the world's river mouths down to the handful near a given chunk,

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Chunk-summary classification helpers, split out of
 --   "World.ZoomMap.Cache" (issue #573): picking a chunk's majority
 --   surface material, and its climate-derived vegetation density

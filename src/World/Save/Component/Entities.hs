@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Entity + entity-adjacent page-scoped components (issue #760,
 --   save-overhaul B2). All page-scoped, all validated against the
 --   @"world-pages"@ authority (requirement 8):

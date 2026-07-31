@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-column tile-data construction: fuses stratigraphy (via
 --   'World.Generate.Strata') with basalt-cap/lava-shell material
 --   overrides into the final 'ColumnTiles' for every tile in a chunk.

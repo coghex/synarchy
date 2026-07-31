@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Slope.FaceMaps
     ( -- * Slope → Face Map Index Mapping
       slopeToFaceMapIndex

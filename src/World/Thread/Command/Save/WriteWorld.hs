@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | The save path: capture every live world page into an immutable,
 --   validated 'SessionSnapshot' (#758), fully ENCODE it while the

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Per-tile coastal material selection: the beach-sand depth
 --   profile and the hashed material rolls for beaches, wetlands,

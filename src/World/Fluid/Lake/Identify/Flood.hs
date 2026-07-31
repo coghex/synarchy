@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | The priority-flood stage of the lake-identification pipeline:
 --   a bucket-queue variant of the classic priority-flood watershed

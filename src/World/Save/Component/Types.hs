@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The component-persistence machinery (issue #760, save-overhaul B2):
 --   the per-component codec contract, the type-erased registry entry,
 --   the structured error every decode/migrate/validate phase reports,

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Applying mine-dig state to loaded chunks.
 --
 --   A partially-dug tile's corner pattern maps onto the slope-id edge

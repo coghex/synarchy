@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Mine designation tool. Split out of
 --   "World.Thread.Command.Cursor" (issue #564).
 module World.Thread.Command.Cursor.Mine

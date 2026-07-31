@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Background layer rendering (always-visible terrain beneath the zoom map).
 module World.Render.Zoom.Background
     ( generateBackgroundQuads

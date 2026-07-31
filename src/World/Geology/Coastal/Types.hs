@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 
 -- | Global coastal-erosion table — the output of
 --   'World.Geology.Coastal.identifyCoastalErosion', which runs ONCE at

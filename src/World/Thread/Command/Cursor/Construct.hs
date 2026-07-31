@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Construction designation tool (#95). Mirrors the mine designation
 --   tool: an anchor→rectangle commit that stores per-tile designations
 --   (build target + status + progress) in wsConstructDesignationsRef.
