@@ -30,6 +30,13 @@ Checks:
      target can never reach a window either. A KNOWN unit is
      deliberately NOT booted here (that would open a real GLFW window,
      which is why tools/preview_probe.py stays manual-only/needs-gpu).
+  8. Mode-specific flags (CH-58, #1012): a flag from app/Main.hs's
+     incompatibleFlagTable given to a boot mode that doesn't honour it
+     (e.g. --seed with --headless, --port with --dump, --seeds with
+     --dump) exits 1 before any engine/window/server starts, naming
+     both the flag and the selected mode in stderr — one case per row
+     of the table, including the distinct --plates/--ages spellings and
+     the --language-report/--seeds pairing.
 
 Usage:
   python3 tools/preview_cli_probe.py
@@ -186,6 +193,39 @@ def check_unit_targets() -> bool:
     return all(results)
 
 
+# (argv beyond the incompatible flag itself, the rejected flag, the
+# selected boot mode) — one row per app/Main.hs's incompatibleFlagTable
+# entry (CH-58, #1012). Every case rejects pre-boot, so none of these
+# ever bind a port or touch the GPU.
+INCOMPATIBLE_FLAG_CASES = [
+    (["--headless", "--seed", "42"], "--seed", "headless"),
+    (["--headless", "--worldSize", "64"], "--worldSize", "headless"),
+    (["--headless", "--plates", "3"], "--plates", "headless"),
+    (["--headless", "--ages", "3"], "--ages", "headless"),
+    (["--headless", "--region", "0,0,1,1"], "--region", "headless"),
+    (["--headless", "--size", "100x100"], "--size", "headless"),
+    (["--dump", "--port", "9099"], "--port", "dump"),
+    (["--dump", "--arena"], "--arena", "dump"),
+    (["--dump", "--seeds", "0:1"], "--seeds", "dump"),
+    (["--language-report", "--seed", "42"], "--seed", "language-report"),
+]
+
+
+def check_incompatible_flags() -> bool:
+    print("8. mode-specific flags rejected in modes that ignore them "
+          "(CH-58): exit 1, pre-boot")
+    results = []
+    for extra_args, flag, mode in INCOMPATIBLE_FLAG_CASES:
+        r = run_cli(*extra_args, timeout=15.0)
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and flag in r.stderr
+              and mode in r.stderr)
+        results.append(check(f"incompatible: {flag} given to {mode} mode", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+    return all(results)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     # Every registered probe accepts --port (#723) so tools/run_probes.py
@@ -206,6 +246,7 @@ def main() -> int:
     results.append(check_path_containment())
     results.append(check_directory_as_item())
     results.append(check_unit_targets())
+    results.append(check_incompatible_flags())
 
     passed = all(results)
     print(f"\n  {'PASS' if passed else 'FAIL'}: --preview CLI contract"
