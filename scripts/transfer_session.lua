@@ -10,7 +10,12 @@
 -- commits to a transfer, well before an item is chosen. It is
 -- TRANSIENT by design (never registered as a save_modules component,
 -- matching A1): 'M.init' registers a reset hook so a stale session
--- pointing at a dead receiver can never survive a world load.
+-- pointing at a dead receiver can never survive a LOAD. A reset hook
+-- only fires from saveModules.applyAll(), never from an ordinary
+-- "Exit to Menu" -> world.destroyAll() -> fresh world.init() -- that
+-- path clears M.active explicitly in scripts/pause_menu.lua's
+-- onExitToMenu, the same place build_tool/mine_tool clear their own
+-- transient armed state for the identical reason.
 --
 -- Reusable on purpose (requirement 8): 'M.create' is the ONE place a
 -- session gets built. scripts/init_context_menu.lua's "Transfer"
@@ -22,21 +27,20 @@ package.loaded["scripts.transfer_session"] = M
 
 local nextSessionId = 1
 
--- A1's reason/operation vocabulary (Unit.Transfer.transferReasonId /
--- transferOperationId), read from unit.transferContract() rather than
--- assumed — #1014 review round: "name the failure using A1's reason
--- ids ... obtained from unit.transferContract() rather than new
--- strings". These three are creation-time failures; 'became_stale' is
--- the vocabulary's OWN name for a request that passed at create time
--- and broke before commit, which is C2's concern, not B1's.
-local REASON_SOURCE_MISSING      = "source_missing"
-local REASON_RECEIVER_MISSING    = "receiver_missing"
-local REASON_RECEIVER_INELIGIBLE = "receiver_ineligible"
-
-local OPERATION_BY_KIND = {
-    building = "unit_to_building_storage",
-    unit     = "unit_to_unit_inventory",
-}
+-- A1's reason vocabulary (Unit.Transfer.transferReasonId), read from
+-- unit.transferContract() rather than assumed — #1014 review round:
+-- "name the failure using A1's reason ids ... obtained from
+-- unit.transferContract() rather than new strings". These three are
+-- creation-time failures; 'became_stale' is the vocabulary's OWN name
+-- for a request that passed at create time and broke before commit,
+-- which is C2's concern, not B1's. 'contract_unavailable' is NOT part
+-- of A1's vocabulary — it names a distinct B1-internal failure class
+-- (the live contract itself came back malformed), never a transfer
+-- policy refusal.
+local REASON_SOURCE_MISSING       = "source_missing"
+local REASON_RECEIVER_MISSING     = "receiver_missing"
+local REASON_RECEIVER_INELIGIBLE  = "receiver_ineligible"
+local REASON_CONTRACT_UNAVAILABLE = "contract_unavailable"
 
 local function containsValue(list, v)
     for _, x in ipairs(list or {}) do
@@ -45,15 +49,18 @@ local function containsValue(list, v)
     return false
 end
 
--- One-time drift check: every reason/operation id this module names
--- must actually appear in the live A1 contract. A silent mismatch here
--- would mean the failure/session strings this module hands to
--- C1/C2/C3 (and the player-visible warning text) no longer match what
+-- One-time drift check: every reason id this module names must
+-- actually appear in the live A1 contract. A silent mismatch here
+-- would mean the failure strings this module hands to C1/C2/C3 (and
+-- the player-visible warning text) no longer match what
 -- 'unit.checkTransfer'/'unit.commitTransfer' actually report.
+-- Operation/state identity is handled separately (see
+-- 'resolveContractIdentity' below) — resolved fresh from the live
+-- contract on every 'M.create' call, with its own hard-fail path,
+-- rather than checked once here.
 local function checkVocabulary()
     local c = unit.transferContract()
     local reasons = (c and c.reasons) or {}
-    local operations = (c and c.operations) or {}
     for _, id in ipairs({ REASON_SOURCE_MISSING, REASON_RECEIVER_MISSING,
                            REASON_RECEIVER_INELIGIBLE }) do
         if not containsValue(reasons, id) then
@@ -62,13 +69,31 @@ local function checkVocabulary()
                 .. "from Unit.Transfer's vocabulary")
         end
     end
-    for _, id in pairs(OPERATION_BY_KIND) do
-        if not containsValue(operations, id) then
-            engine.logWarn("transfer_session: operation id '" .. id
-                .. "' missing from unit.transferContract() -- drifted "
-                .. "from Unit.Transfer's vocabulary")
-        end
-    end
+end
+
+-- The A1 operation id for `kind`, and this session's initial
+-- ('queued') state id — RESOLVED from the live unit.transferContract()
+-- every call, never a hardcoded string table (#1014 review round 1: a
+-- local OPERATION_BY_KIND/"queued" literal could silently diverge from
+-- Unit.Transfer.transferOperationId/transferStateId with nothing
+-- catching it). Positional, because the contract is three FLAT arrays
+-- with no per-kind tagging of its own: Unit.Transfer.
+-- allTransferOperations is literally [ToBuildingStorage,
+-- ToUnitInventory] and allTransferStateIds starts with TransferQueued,
+-- so operations[1]/states[1] are exactly the values
+-- transferOperationId/transferStateId would produce for those
+-- constructors — read live here rather than assumed. Returns (nil,
+-- nil) if the live contract doesn't have what's needed, which
+-- 'M.create' treats as a hard failure rather than falling back to a
+-- guessed string.
+local function resolveContractIdentity(kind)
+    local c = unit.transferContract()
+    local ops = c and c.operations
+    local states = c and c.states
+    if not (ops and states and states[1]) then return nil, nil end
+    if kind == "building" then return ops[1], states[1] end
+    if kind == "unit"     then return ops[2], states[1] end
+    return nil, nil
 end
 
 function M.init(scriptId)
@@ -128,8 +153,14 @@ function M.create(sourceUid, kind, receiverId)
         return nil, REASON_RECEIVER_INELIGIBLE
     end
 
+    local operation, state = resolveContractIdentity(kind)
+    if not (operation and state) then
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: internal contract error", sourceUid)
+        return nil, REASON_CONTRACT_UNAVAILABLE
+    end
+
     local srcInfo = unit.getInfo(sourceUid)
-    local operation = OPERATION_BY_KIND[kind]
 
     local id = nextSessionId
     nextSessionId = nextSessionId + 1
@@ -152,11 +183,12 @@ function M.create(sourceUid, kind, receiverId)
                                  gridY = info.gridY },
         -- The A1 contract identity (#1014 review): the operation this
         -- session will eventually request, plus this session's OWN
-        -- lifecycle state -- 'queued' from A1's vocabulary, meaning
-        -- "the player has committed to this transfer", NOT a real A1
+        -- lifecycle state -- A1's OWN first vocabulary value (resolved
+        -- above, not a hardcoded "queued" literal), meaning "the
+        -- player has committed to this transfer", NOT a real A1
         -- QueuedTransfer (see module header). C2/C3 own advancing it
         -- past here.
-        contract            = { operation = operation, state = "queued" },
+        contract            = { operation = operation, state = state },
     }
     return M.active
 end

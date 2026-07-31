@@ -207,6 +207,42 @@ spec = describe "Transfer context menu" $ do
             after ← evalDebug ls "return require('scripts.transfer_session').get()"
             after `shouldBe` "null"
 
+        it "the operation/state identity is resolved from the live contract, not a hardcoded string (#1014 review round 1)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (receiverInfoStub "building" 509 True "Cargo Hold")
+            r ← evalDebug ls
+                "local s = require('scripts.transfer_session').create(7, 'building', 509); return s"
+            sess ← decodeOr r
+            spContractOperation sess `shouldBe` "unit_to_building_storage"
+            spContractState sess `shouldBe` "queued"
+
+        it "an unavailable live contract fails session creation cleanly, no session" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (receiverInfoStub "building" 510 True "Cargo Hold")
+            -- Simulate a malformed/unavailable contract -- resolveContractIdentity
+            -- must refuse to fall back to a guessed operation/state string.
+            run ls "unit.transferContract = function() return nil end;"
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session').create(7, 'building', 510); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "Exit to Menu clears a pending session (#1014 review round 1: the save-load reset hook alone misses this path)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (receiverInfoStub "building" 511 True "Cargo Hold")
+            _ ← evalDebug ls
+                "require('scripts.transfer_session').create(7, 'building', 511); return 'ok'"
+            before ← evalDebug ls "return require('scripts.transfer_session').get()"
+            before `shouldNotBe` "null"
+            exitR ← evalDebug ls "require('scripts.pause_menu').onExitToMenu(); return 'ok'"
+            exitR `shouldNotSatisfy` isLuaError
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
 -- * Real-Lua-backend helper (mirrors
 --   Test.Headless.World.SelectTileZ.newBareLuaBackend / Test.Headless.
 --   UI.InputOwnership's copy of the same recipe): a real Lua backend
