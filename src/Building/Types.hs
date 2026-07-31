@@ -11,6 +11,7 @@ module Building.Types
     , currentActivity
     , materialsSatisfied
     , footprintDist
+    , footprintDistAt
     , footprintTiles
     , buildingsOnPage
     , buildingsOnPages
@@ -246,11 +247,19 @@ footprintTiles ax ay w h =
 --   diagonals) — the "close enough to work here" test shared by
 --   building.findStation and craft.executeAt (#326).
 footprintDist ∷ BuildingInstance → (Int, Int) → Int
-footprintDist inst (ux, uy) =
-    let ax = biAnchorX inst
-        ay = biAnchorY inst
-        bx = ax + biTileW inst - 1
-        by = ay + biTileH inst - 1
+footprintDist inst =
+    footprintDistAt (biAnchorX inst, biAnchorY inst)
+                    (biTileW inst, biTileH inst)
+
+-- | 'footprintDist' over a bare anchor + tile size, for callers that
+--   hold a projection of a building rather than the instance itself
+--   (Unit.Transfer's receiver view). Splitting it out keeps ONE
+--   footprint-distance implementation — a second copy could drift from
+--   the measure craft.executeAt and the Store menu already use.
+footprintDistAt ∷ (Int, Int) → (Int, Int) → (Int, Int) → Int
+footprintDistAt (ax, ay) (w, h) (ux, uy) =
+    let bx = ax + w - 1
+        by = ay + h - 1
         dx = maximum [ax - ux, 0, ux - bx]
         dy = maximum [ay - uy, 0, uy - by]
     in max dx dy
