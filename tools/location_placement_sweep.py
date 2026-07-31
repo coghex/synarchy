@@ -92,6 +92,32 @@ class SweepError(RuntimeError):
     """A run that cannot be counted — never silently folded into the sample."""
 
 
+def parse_placements(raw: str) -> list[dict]:
+    """The placed-location list, or SweepError.
+
+    An empty overlay comes back as the empty Lua table `{}`. That is a
+    LEGITIMATE zero-placement sample — the exact thing this tool
+    measures — so it has to stay distinguishable from a query that
+    failed. Everything else must parse as a JSON array: the debug
+    console reports a Lua failure as plain `error: ...` text rather than
+    raising, so mapping an unreadable reply to `[]` would file a broken
+    read as a genuine zero and overstate the measured defect rate.
+    """
+    if raw in ("{}", "[]"):
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SweepError(
+            f"could not read the placed-location list ({exc}); reply was {raw!r}"
+        ) from exc
+    if not isinstance(data, list):
+        raise SweepError(
+            f"placed-location query returned a {type(data).__name__}, not a list; "
+            f"reply was {raw!r}")
+    return data
+
+
 def run_one(port: int, seed: int, size: int, plates: int) -> dict:
     """Generate one world in a fresh engine and count its placements.
 
@@ -123,13 +149,8 @@ def run_one(port: int, seed: int, size: int, plates: int) -> dict:
                 f"{phase or '<no reply>'} after {budget}s (3 = done). A placement "
                 f"count from this run would be meaningless, so the sweep stops "
                 f"rather than record it.")
-        raw = send(port, f"return world.listPlacedLocations('{page}')", timeout=30).strip()
-        try:
-            entries = json.loads(raw) if raw not in ("", "nil", "{}", "[]") else []
-        except json.JSONDecodeError:
-            entries = []
-        if not isinstance(entries, list):
-            entries = []
+        entries = parse_placements(
+            send(port, f"return world.listPlacedLocations('{page}')", timeout=30).strip())
         ruins = [e for e in entries if e.get("id") == "ruin_small"]
         return {
             "placed": len(entries),
