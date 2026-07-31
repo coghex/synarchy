@@ -1,5 +1,4 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE QuasiQuotes, UnicodeSyntax #-}
 
 module Engine.Graphics.Vulkan.ShaderCode
     ( fontVertexShaderCode

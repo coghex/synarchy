@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 module Engine.Scripting.Lua.API.PlayerEvent
     ( emitEventFn
     , emitEventAtFn

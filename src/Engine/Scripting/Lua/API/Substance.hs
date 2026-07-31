@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the worked-material substance catalogue.
 --
 --   Narrowed to the @content-registries@ capability (#890, epic #537):

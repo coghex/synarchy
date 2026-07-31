@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 module Engine.PlayerEvent.Emit
     ( -- * Re-exports of the data types
       module Engine.PlayerEvent

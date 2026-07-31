@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Diagnostic / coordination state for a whole-session LOAD transaction
 --   (issue #763, save-overhaul C2) — the load-side counterpart to

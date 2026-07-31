@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Fluid-surface queries: world.getFluidAt, world.getSurfaceAt (the
 --   combined terrain+fluid query), world.getAreaFluid.
 module Engine.Scripting.Lua.API.WorldQuery.Fluid

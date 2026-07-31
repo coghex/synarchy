@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards, UnicodeSyntax #-}
 module Engine.Core.Log
   ( -- * Logger initialization
     LogConfig(..)

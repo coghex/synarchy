@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for the keybinding system. Exposes 'keyBindingsRef' to
 --   Lua so the Input settings UI can read and edit bindings.
 --

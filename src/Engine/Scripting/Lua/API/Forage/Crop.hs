@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Groundcover crop-plot planting verb (#334). See
 --   Engine.Scripting.Lua.API.Forage.Query for the read-only
 --   world.getCropPlotAt counterpart and .Harvest for reaping one.

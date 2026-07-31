@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Chunk-level queries and loading: world.getChunkInfo,
 --   world.loadChunksInRegion, world.waitForChunks.
 module Engine.Scripting.Lua.API.WorldQuery.Chunk

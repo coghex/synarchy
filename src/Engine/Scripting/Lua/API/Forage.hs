@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level interactive-flora Lua API module (#94): re-exports every
 --   Lua-facing function from the sub-modules so existing call-sites
 --   keep working. Forage.Query is the read-only surface (getFloraAt,

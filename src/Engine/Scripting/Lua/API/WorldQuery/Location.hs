@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Placed-location queries: world.listPlacedLocations,
 --   world.getLocationInstance, world.hasSpawnedLocationContents,
 --   world.hasStampedLocation.

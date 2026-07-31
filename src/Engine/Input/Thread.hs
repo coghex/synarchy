@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Input thread: owns the OS thread lifecycle and the per-tick
 --   drain/sleep loop. #787 split the event-processing/dispatch logic
 --   this facade used to own inline out into sibling modules so this

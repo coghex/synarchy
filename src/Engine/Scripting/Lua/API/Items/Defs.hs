@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Item definition catalogue: loading item YAML (registering sprites
 --   and defs into the ItemManager) and listing the loaded defs.
 --   Split from Engine.Scripting.Lua.API.Items (#577) — ground-item

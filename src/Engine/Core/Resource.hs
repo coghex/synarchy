@@ -1,4 +1,4 @@
-{-# LANGUAGE StrictData, UnicodeSyntax #-}
+{-# LANGUAGE StrictData #-}
 
 module Engine.Core.Resource
   ( allocResource

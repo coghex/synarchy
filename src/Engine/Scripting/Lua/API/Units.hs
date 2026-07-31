@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level unit API module. Re-exports the original public surface
 --   from the sub-modules so existing call-sites keep working: Yaml is
 --   unit-def loading, Spawn is lifecycle/position/pose, Survival is

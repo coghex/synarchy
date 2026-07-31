@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Scene.Batch.Text
   ( collectTextBatches
   , groupByFontAndLayer

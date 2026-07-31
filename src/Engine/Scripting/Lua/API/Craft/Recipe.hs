@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the crafting recipe catalogue (#325).
 --   engine.loadRecipeYaml loads data/recipes/*.yaml into the
 --   RecipeManager (mirrors engine.loadInfectionYaml); craft.get /

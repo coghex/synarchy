@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, UnicodeSyntax #-}
+{-# LANGUAGE CPP #-}
 module Engine.Core.Defaults where
 
 import UPrelude

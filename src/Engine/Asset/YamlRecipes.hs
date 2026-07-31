@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 -- | YAML loader for data/recipes/*.yaml. Mirrors Engine.Asset.YamlInfection.
 --   The on-disk schema is documented in data/recipes/basic.yaml.
 --   `repair_axis` (#301) marks a recipe as a REPAIR flow (data/recipes/

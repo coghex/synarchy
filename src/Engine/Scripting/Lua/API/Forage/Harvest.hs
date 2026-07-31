@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Forage harvest verb (#94/#332/#334): picks the tile's harvestable
 --   instance (wild flora or a planted crop plot), rolls and spawns its
 --   yield as ground items, and starts the regrowth timer / clears the

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Scripting.Lua.API.Buildings.Query
     ( buildingGetStartingBuildingsFn
     , buildingGetInfoFn

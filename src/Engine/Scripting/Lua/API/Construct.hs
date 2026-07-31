@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua API for the construction-designation tool (issue #95) — the
 --   @construction.*@ namespace. Mirrors the mine-designation API on
 --   @world.*@: the tool drives setAnchor / clearAnchor / designate, the

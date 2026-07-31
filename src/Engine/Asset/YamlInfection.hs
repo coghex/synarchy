@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 -- | YAML loader for data/infections/*.yaml. Mirrors Engine.Asset.YamlSubstance.
 --   The on-disk schema is documented in data/infections/bacteria.yaml.
 module Engine.Asset.YamlInfection
