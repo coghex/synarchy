@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The __worker-visible__ render view of the @render-gpu-asset@
 --   capability (epic #537, issue #891 — E3): the strictly narrower
 --   companion to "Engine.Core.Capability.Render", for production code

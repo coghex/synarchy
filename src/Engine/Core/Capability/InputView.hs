@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The __worker-visible__ input view of the @input-lua-transport@
 --   capability (epic #537, issue #892 — E4): the strictly narrower
 --   companion to "Engine.Core.Capability.Input", for production code

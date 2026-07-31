@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Climate/ambient-temperature/sun-angle queries: world.getClimateAt,
 --   world.getAmbientAt, world.getSunAngleAt.
 module Engine.Scripting.Lua.API.WorldQuery.Climate

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level equipment API module (#67/#478). Re-exports every
 --   Lua-facing function from the sub-modules so existing call-sites
 --   keep working: Equipment.Class is the class catalogue

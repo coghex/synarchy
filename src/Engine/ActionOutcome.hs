@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | The F4 (#646) action-outcome oracle tap: what actually happened to a
 --   player-initiated action, independent of whether anything user-facing

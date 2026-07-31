@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE ScopedTypeVariables, UnicodeSyntax #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Engine.Graphics.Vulkan.Instance
   ( createVulkanInstance
   , destroyVulkanInstance

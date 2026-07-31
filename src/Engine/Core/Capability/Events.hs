@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The event\/notification\/popup half of the @ui-hud-events@
 --   capability (epic #537, issue #898 — E7b): exactly the four fields
 --   'docs/engineenv_capability_inventory.md' SS7.7 splits off from the

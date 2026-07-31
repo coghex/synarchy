@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the repair policy layer (#301): the station/axis
 --   model on top of the `unit.repairItem` primitive (#300). Repair
 --   flows are ordinary RecipeDef entries (data/recipes/repair.yaml)

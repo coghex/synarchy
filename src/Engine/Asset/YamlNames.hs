@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 -- | Loads a unit name pool from YAML. A pool is two flat lists — given
 --   names and (optional) family names — referenced from a unit def's
 --   `name_pool:` key. At spawn the engine draws one of each to form a

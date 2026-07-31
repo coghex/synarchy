@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 module Engine.PlayerEvent
     ( PlayerEvent(..)
     , CategoryCfg(..)

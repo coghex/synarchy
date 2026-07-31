@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Accessory equip/unequip. Unlike slot equipment (Equipment.Slot),
 --   accessories are an ordered list (uiAccessories) rather than a
 --   named-slot map, and their buffs are folded into/out of the unit's

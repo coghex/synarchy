@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Ground items — items lying in the world (see Item.Ground): spawn,
 --   list, remove, temperature tracking, and pickup into a unit's
 --   inventory. Split from Engine.Scripting.Lua.API.Items (#577) — item

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Offscreen render target (#650): the swapchain's stand-in when
 --   rendering with no window. One plain color image per frame in
 --   flight, created with COLOR_ATTACHMENT (the render pass draws into

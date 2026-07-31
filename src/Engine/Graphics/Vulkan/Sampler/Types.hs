@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DataKinds #-}
+{-# LANGUAGE Strict, DataKinds #-}
 
 -- | Sampler-cache types + pure config (no 'EngineM' — so 'Engine.Core.State'
 --   can hold a 'SamplerCache' without an import cycle). The refcounted

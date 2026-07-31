@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Shared read-only helpers for the Forage API family (#94/#332):
 --   resolving the flora instances on a tile and the world's growth
 --   clock. Depended on by every Forage.* submodule that needs to look

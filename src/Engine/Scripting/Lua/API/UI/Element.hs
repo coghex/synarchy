@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for creating UI elements: generic elements, boxes,
 --   text labels, sprites, and box-texture registration.
 module Engine.Scripting.Lua.API.UI.Element

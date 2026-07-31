@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Read-only Forage query surface (#94/#332/#334): report flora
 --   state on a tile, search for the nearest harvestable flora, and
 --   look up planted crop-plot / food-item data. No world mutation —

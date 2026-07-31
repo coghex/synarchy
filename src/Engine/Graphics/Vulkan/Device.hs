@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables, UnicodeSyntax #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Engine.Graphics.Vulkan.Device
   ( -- * Types
     QueueFamilyIndices(..)
