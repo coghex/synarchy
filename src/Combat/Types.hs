@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 
 -- | Combat command + event types.
 --

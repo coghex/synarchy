@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for Unit.Anim — the (pose, activity) → anim-name resolver.
 module Test.Headless.Unit.Anim (spec) where
 

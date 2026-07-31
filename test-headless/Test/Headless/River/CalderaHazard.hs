@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'World.Hydrology.Simulation.calderaHazardsFor' /
 --   'isCalderaHazardAt' — the caldera/supervolcano hazard footprint
 --   that 'World.Hydrology.Simulation.Flow.walkToDivide' consults so

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Test.Headless.WorldGen.Parity (spec) where
 
 -- | Parity test for the two terrain-application paths.

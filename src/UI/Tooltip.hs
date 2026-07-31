@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Tooltip runtime. Hovers over UI elements whose 'ueTooltip' is set;
 --   after a dwell delay, a transient page on 'LayerTooltip' renders the
 --   content as a box + text + sprite row that follows the cursor.

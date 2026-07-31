@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Texture PALETTE — the save-level translation between stable texture PATHS
 --   and compact integer ids. Structure edits (and any future per-chunk object
 --   that references a texture) store a `paletteId :: Int`, NOT the path string

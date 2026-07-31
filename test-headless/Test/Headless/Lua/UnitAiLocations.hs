@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, TypeApplications #-}
+{-# LANGUAGE TypeApplications #-}
 -- | The "unit location knowledge" gate (#915): @scripts/
 --   unit_ai_locations.lua@'s per-unit location memory — identity dedup,
 --   page-scoped nearest lookup, targeted forget, empty-state, the

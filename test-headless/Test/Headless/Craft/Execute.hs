@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Recipe catalogue + craft execution tests (#325): the YAML schema
 --   (required fields, defaults, fuel/knowledge options) and the pure
 --   all-or-nothing consumption core that craft.execute wraps. The

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | The "persistence reference integrity" gate (issue #764,
 --   save-overhaul C3): typed persistent references
 --   ("World.Save.Reference") and the shared save/load integrity graph

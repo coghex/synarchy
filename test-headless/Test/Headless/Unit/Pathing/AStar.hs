@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Tests for Unit.Pathing.AStar.
 --   Uses synthetic WorldTileData fixtures: a single chunk at the
 --   origin with handcrafted per-tile terrain and fluid.

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #743 gate: the element-level input-policy contract — independent
 --   click-action, pointer-blocking, and scroll-capture on a 'UIElement'
 --   (A2 of #741, building on A1's #742 page-level modal boundary). Most

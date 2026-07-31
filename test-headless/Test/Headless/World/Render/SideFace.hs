@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'World.Render.SideDecoQuads.waterSideFaceQuads' — the
 --   water side-face (waterfall / water-cliff) generator.
 --

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Power-node registry (#358): the data + pure transitions behind the
 --   placeable solar panel / battery. A node is a small record riding a
 --   placed 'Building.Types.BuildingId' — the building manager stays the

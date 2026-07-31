@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Item temperature: Newtonian cooling toward the tile's ambient (#344).
 --
 --   An item's effective temperature is its tile's ambient air temperature

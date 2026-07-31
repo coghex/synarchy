@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Blood pooling (#883): the STATIONARY half of ongoing bleeding — a
 --   unit that is bleeding externally but not covering ground (standing,
 --   shuffling in place, or collapsed) grows a LOCAL pool instead of

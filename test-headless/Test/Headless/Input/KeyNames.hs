@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Key-name vocabulary tests. The contract under test: 'keyToText'
 --   is the canonical name set (what Lua's onKeyDown/onKeyUp report),
 --   and every name it can produce must round-trip through 'textToKey'

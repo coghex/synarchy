@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Profile signatures (#710 requirement 19 amendment): a deterministic
 --   digest over exactly the style-bearing fields a profile is built
 --   from — consonant/vowel inventories, syllable shapes, root-length

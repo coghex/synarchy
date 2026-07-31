@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-unit line-of-sight. A unit's visible tile set is the
 -- intersection of:
 --   * a circular radius (perception × 'awareRangeTiles' tiles),

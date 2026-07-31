@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Power-node registry tests (#358): the pure add/remove/lookup/prune
 --   transitions in Power.Types that the power.* verbs wrap, plus the
 --   save-format roundtrip (nodes persist in WorldPageSave, v73). The

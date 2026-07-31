@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Window-mode transition / windowed-geometry cache tests (issue #907).
 --
 --   The regression: 'Engine.Scripting.Lua.Message.Video.handleSetWindowMode'

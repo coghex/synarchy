@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Procedural blood texture pixel generation (#606): turns a
 --   'BloodTextureDescriptor' into RGBA8 pixel data.
 --

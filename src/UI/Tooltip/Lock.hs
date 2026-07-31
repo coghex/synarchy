@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Tooltip lock API: freezing the active tooltip in place and
 --   querying its locked bounds (used to swallow clicks inside a
 --   pinned tooltip panel).

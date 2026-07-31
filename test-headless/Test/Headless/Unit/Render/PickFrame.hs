@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for Unit.Render.pickFrame. Constructs synthetic UnitDef
 --   and UnitInstance values; verifies the frame index math and the
 --   T-pose fallback chain.

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Location.Overlay.Types
     ( LocationOverlay
     , emptyLocationOverlay

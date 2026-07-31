@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | The generic "save envelope" codec gate (issue #759, save-overhaul
 --   B1): the tagged, checksummed component container that replaced the
 --   flat positional save format. No engine, no IO — every test here is

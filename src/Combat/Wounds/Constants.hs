@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Foundational per-tick wound tuning constants shared across the
 --   "Combat.Wounds" submodules — bleed scaling, wound cleanup /

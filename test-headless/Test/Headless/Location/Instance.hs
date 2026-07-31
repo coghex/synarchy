@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | "Location instance identity" (#911): the pure allocator, lifecycle,
 --   and pre-#911 chunk-set → instance migration that
 --   'Location.Instance' owns, plus the @world-pages@ v1→v2 component

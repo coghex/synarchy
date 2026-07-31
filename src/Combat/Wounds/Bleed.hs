@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Per-kind bleed-rate tuning and the current-bleed-rate query used by
 --   the info panel. See "Combat.Wounds" for the overall formula summary.

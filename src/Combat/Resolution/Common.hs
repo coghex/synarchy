@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Small unit-stat accessors and derived queries shared across the
 --   "Combat.Resolution" submodules — pain, stamina, body-part lookup,

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Pure spatial-bounds arithmetic for location definitions (#777): an
 --   inclusive, axis-aligned tile box, either relative to a location's
 --   anchor tile (as authored in a definition's YAML @bounds:@ block) or

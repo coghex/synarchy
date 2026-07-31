@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | The atomic save-publication storage transaction gate (issue #762,
 --   persistence-overhaul C1): "World.Save.Storage"'s write-validate-
 --   publish-rotate transaction ('publishGeneration') and load-source

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Regression coverage for the render/headless consumers' load-publication
 --   boundary.  A whole-session load replaces the live UI/scene generation,
 --   so Lua-to-engine work queued by the old generation must be discarded

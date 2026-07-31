@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Tooltip visual construction: creating and tearing down the
 --   'UIPageManager' elements (box, title, separator, hint lines,
 --   sprites) that back a shown tooltip, and per-frame repositioning /

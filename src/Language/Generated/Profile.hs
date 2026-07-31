@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Deterministic profile generation (#710 requirements 1-3, 12, 14):
 --   given a version and a language seed, derive a whole naming style —
 --   consonant/vowel inventories, syllable shapes, root-length

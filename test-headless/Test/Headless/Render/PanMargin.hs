@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the pan-margin quad-cache invalidation (#447).
 --   The contract under test: 'cameraChanged' allows exactly the camera
 --   travel whose coverage 'expandViewBounds' + 'quadCacheMargins'

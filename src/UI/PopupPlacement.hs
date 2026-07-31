@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Shared viewport-aware floating-placement contract (#747, Phase C
 --   child C1 of #741) — one framebuffer-coordinate placement algorithm
 --   for every trigger-anchored popup (dropdown option lists, context

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure placement validation for buildings. Given the world tile
 --   data + a def's footprint + an anchor (gx, gy), return whether the
 --   placement is valid, plus a reason string when it isn't.

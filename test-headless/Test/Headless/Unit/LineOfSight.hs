@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Multi-world page-ownership regression for Unit.LineOfSight (#797).
 --
 --   Before the fix, unitVisibleTiles / unitAwareness / losBlockedBetween

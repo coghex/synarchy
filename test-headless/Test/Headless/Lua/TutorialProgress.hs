@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, TypeApplications #-}
+{-# LANGUAGE TypeApplications #-}
 -- | The "Tutorial progress" gate (#958, phase 2 of the tutorial epic
 --   #956): @scripts/tutorial_progress.lua@'s two-lifetime progress
 --   state — the durable, monotonic completed-full-objective set and the

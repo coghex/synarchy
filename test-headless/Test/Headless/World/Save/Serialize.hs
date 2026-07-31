@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Tests for the orphan @Serialize Text@ instance in UPrelude — the
 --   #437 hardening that replaced an impure 'T.decodeUtf8' with
 --   'T.decodeUtf8'' so a corrupted/truncated save with invalid UTF-8

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Power-grid connectivity + energy balance (#360): the core sim on top
 --   of #358's placed nodes and #359's wire tiles. A "network" is a
 --   connected component of wire tiles (4-dir cardinal adjacency, matching

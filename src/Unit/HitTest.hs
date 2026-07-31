@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Screen-pixel → UnitId hit testing.
 --
 -- Given mouse coordinates in framebuffer pixels, find which (if any)

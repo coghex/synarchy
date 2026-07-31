@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Pose
     ( handleUnitCollapseCommand
     , handleUnitCrawlCommand

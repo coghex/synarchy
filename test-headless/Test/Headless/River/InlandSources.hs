@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Real-engine coverage for issue #811 — Tiny(32)/Small(64) worlds
 --   must no longer bypass the inland-origin river-source extension
 --   (issue #221) wholesale merely because of their size, and the

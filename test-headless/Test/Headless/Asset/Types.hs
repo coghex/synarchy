@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Pure regression tests for the hand-written 'Show' instance on
 --   'Engine.Asset.Types.Font' (#951). The record carries a
 --   @Maybe (IO ())@ cleanup action, so the instance is written by hand

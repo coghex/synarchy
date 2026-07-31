@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Tests for Unit.Thread.Command.injurySpeedMult (#393): which parts
 --   count as "leg" (bpAffectsLocomotion) or "torso" (bpAffectsBalance)
 --   is DATA-DRIVEN off the unit's own body-part list, not a hardcoded

@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | The "Tutorial definitions" gate (issue #957, phase 1 of the
 --   tutorial epic #956).
 --

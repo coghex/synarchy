@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #745 gate (Phase B child B1 of #741): keyboard CONTROL focus and
 --   Tab/Shift+Tab traversal — distinct from the pre-existing text-
 --   input focus. Most of this suite is pure 'UI.FocusNavigation'

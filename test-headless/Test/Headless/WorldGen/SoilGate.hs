@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the post-classification soil gates in
 --   'World.Generate.Chunk' (`surfaceDemotion` and friends). The climate
 --   classifier paints soils with no physical context; these gates demote

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Combat resolution: hit-roll → body-part pick → damage → wound →
 --   death check. Called from `Combat.Thread.handleCommand` when a

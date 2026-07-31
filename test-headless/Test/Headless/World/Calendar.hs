@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Calendar / annual-cycle selection tests.
 --
 --   Regression guard for the day-of-month-aliased-as-day-of-year bug:

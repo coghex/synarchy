@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Shared movement primitives used across the climb / fall / leap
 --   submodules: the per-unit movement stats snapshot, plus the small
 --   set of pure constants and helpers more than one of those submodules

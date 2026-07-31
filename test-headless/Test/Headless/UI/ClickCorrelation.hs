@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #783 gate: the F3 click-correlation contract. Two halves:
 --
 --   1. A pure proof that 'UI.Manager.Query.elementPaintKey' —

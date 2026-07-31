@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Loadable tunables for the unit pathing cost function.
 --
 -- These used to be hard-coded constants in `Unit.Pathing.Cost`

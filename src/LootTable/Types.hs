@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 module LootTable.Types
     ( LootTableEntry(..)
     , LootTableDef(..)

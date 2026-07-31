@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #747 gate: opt-in rectangular descendant clipping (Phase C child
 --   C1 of #741). Most of this suite is pure "UI.Clipping"/
 --   "UI.Manager.Query" coverage — the acceptance explicitly wants the

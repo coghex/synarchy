@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Every placed location's absolute bounds box, read straight off the
 --   page's placed-location instance table (#911) — the values each
 --   instance stored when it was placed, so a definition edited later

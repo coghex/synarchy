@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Pure tests for the immutable session-snapshot model (#758,
 --   save-overhaul A3): 'World.Save.Snapshot' (capture + validation)
 --   and 'World.Save.Snapshot.Adapter' (the temporary bridge to the

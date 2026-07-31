@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Procedural blood texture generation tests (#606): determinism,
 --   distinctness across descriptor fields, transparent background, and
 --   bounded size — the pure contract 'Blood.Texture.generateBloodTexture'

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Central unit-domain types. #575 split this file's declarations out
 --   into sibling modules so this stays a thin re-export facade with an
 --   unchanged public API:

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Impact blood wound-kind/severity mapping tests (#607): the pure
 --   decision behind "does a fresh wound draw blood, and how much" —
 --   Blood.Impact.impactBloodForWound. No engine boot needed.

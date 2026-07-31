@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the combat damage model (Combat.Resolution):
 --   the Tier 3 swing kinematics, weapon penetrating power, the tissue
 --   woundFactor table, and the layered-penetration target model.

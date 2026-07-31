@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tooltip layout math: section-gap constants, hint-text line
 --   splitting, vertical section stacking, and box-size / text-width
 --   measurement. No 'UIPageManager' element mutation lives here — see

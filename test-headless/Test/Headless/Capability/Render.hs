@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Projection-aliasing coverage for the @render-gpu-asset@ capability
 --   records (issue #891, E3 of the @EngineEnv@ capability split #537).
 --

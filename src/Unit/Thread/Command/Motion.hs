@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Motion
     ( handleUnitMoveToCommand
     , handleUnitJumpCommand

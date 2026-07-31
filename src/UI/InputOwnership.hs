@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Page-level pointer ownership (#742): the modal-boundary contract.
 --
 --   A visible 'upInputExclusive' page establishes a boundary — pointer

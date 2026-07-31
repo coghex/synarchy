@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Combat body/weapon records, split out of "Unit.Types" (#575) —
 --   re-exported there so the public API is unchanged.
 module Unit.Types.Combat

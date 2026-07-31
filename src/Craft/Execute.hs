@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Pure inventory side of craft execution (#325): verify a recipe's
 --   demands against an inventory and consume them all-or-nothing. Kept
 --   free of EngineEnv so the headless suite can exercise it directly;

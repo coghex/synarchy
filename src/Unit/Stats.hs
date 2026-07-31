@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure stat-rolling primitives.
 --
 -- 'rollStat' draws from a truncated normal distribution with mean

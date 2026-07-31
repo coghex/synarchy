@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 module Test.Headless.Load.Status (spec) where
 
 import UPrelude

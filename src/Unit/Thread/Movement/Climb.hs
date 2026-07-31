@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Climb mechanics: wall-climb + pullup Z/xy interpolation, per-unit
 --   climb speed from stats, slip-chance rolls that can convert an
 --   in-progress climb into a fall, climbing-skill XP drain, and

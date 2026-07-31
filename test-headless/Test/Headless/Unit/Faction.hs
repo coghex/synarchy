@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | The "Unit faction model" gate (#912): the typed faction's wire tags,
 --   its PROPERTIES (player-owned / player-commandable /
 --   unrestricted-combat), the total symmetric ally-neutral-hostile

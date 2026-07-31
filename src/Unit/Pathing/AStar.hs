@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Bounded local A* on the tile grid.
 --
 -- Triggered by `Unit.Thread.Movement` when greedy stepping is blocked

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Power-network connectivity + energy balance tests (#360), plus
 --   #361's requires_power consumer folding and #590's combineConsumers
 --   union. No engine/Lua needed — the connectivity + brownout math
