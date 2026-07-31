@@ -41,10 +41,16 @@ from probelib import quit_engine, boot, send, send_json
 LOG = "/tmp/movement_probe_engine.log"
 
 
-def bootstrap(port: int, with_resources: bool = False) -> None:
+def bootstrap(port: int, with_resources: bool = False,
+              neutralize_ai: bool = True) -> None:
     """Load defs + AI scripts + the movement_arena module (no loading screen
     headless). With `with_resources`, also load the stat + resource ticks so
-    stamina drains/regens (needed for --mode stamina)."""
+    stamina drains/regens (needed for --mode stamina / pacing). With
+    `neutralize_ai` (default True), replace unit_ai's update with a no-op —
+    'move'/'stamina' mode exercise the movement/resource ENGINE in isolation
+    from AI wander. --mode pacing needs the opposite: unit_ai's own tick is
+    exactly what's under test (#999's follow_command adaptive pacing), so it
+    passes False and leaves the real AI running."""
     loaders = [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
         ("data/items/*.yaml",      "engine.loadItemYaml"),
@@ -70,15 +76,16 @@ def bootstrap(port: int, with_resources: bool = False) -> None:
         send(port,
              "pcall(function() require('scripts.unit_resources').update = "
              "function() end end); return 'res-off'")
-    # unit_ai is auto-loaded at engine boot and its update() tick wanders
-    # every unit headless — which fights the moveTo command under test. We
-    # want to exercise the movement ENGINE in isolation, so neutralise the
-    # AI tick (replace update with a no-op in the singleton module table the
-    # engine's loadScript driver calls each frame). pcall in case the module
-    # layout ever changes.
-    send(port,
-         "pcall(function() require('scripts.unit_ai').update = function() end end); "
-         "return 'ai-off'")
+    if neutralize_ai:
+        # unit_ai is auto-loaded at engine boot and its update() tick wanders
+        # every unit headless — which fights the moveTo command under test. We
+        # want to exercise the movement ENGINE in isolation, so neutralise the
+        # AI tick (replace update with a no-op in the singleton module table the
+        # engine's loadScript driver calls each frame). pcall in case the module
+        # layout ever changes.
+        send(port,
+             "pcall(function() require('scripts.unit_ai').update = function() end end); "
+             "return 'ai-off'")
     # Make the arena module available (require caches it in package.loaded).
     send(port, "require('scripts.movement_arena'); return 'ok'")
 
@@ -191,6 +198,7 @@ def check_ramp_climb(course, samples, reached, moved, poses, acts):
 
 VALIDATORS = {
     "flat": check_flat,
+    "endurance_flat": check_flat,
     "corner_trap": check_corner_trap,
     "cliff": check_cliff,
     "cliff1": check_cliff,
@@ -309,11 +317,185 @@ def run_stamina_mode(port: int, args) -> int:
     return 0 if all_ok else 1
 
 
+def pace_sample(port: int, uid: int):
+    """One --mode pacing sample: {x, sp (moveSpeed), stam, act, pose}, or
+    None if the unit is gone."""
+    lua = (
+        f"local i=unit.getInfo({uid}); if not i then return 'DEAD' end; "
+        f"return {{x=i.gridX, sp=i.moveSpeed, "
+        f"stam=unit.getStat({uid},'stamina'), "
+        f"act=unit.getActivity({uid}), pose=unit.getPose({uid})}}"
+    )
+    return send_json(port, lua)
+
+
+def collapse_transitions(trail) -> int:
+    """Count transitions INTO the collapsed pose (not sample count, since
+    one collapse spans several samples)."""
+    count, prev = 0, None
+    for s in trail:
+        pose = s.get("pose")
+        if pose == "collapsed" and prev != "collapsed":
+            count += 1
+        prev = pose
+    return count
+
+
+def run_pacing_mode(port: int, args) -> int:
+    """Deterministic regression for #999: a sustained follow_command move
+    must downshift toward a sustainable pace instead of collapsing, driven
+    through the REAL unitAi.commandMove path — unlike --mode stamina, which
+    calls unit.moveTo directly and so never exercises follow_command's
+    pacing (the bug lives entirely in that AI layer, not the raw movement/
+    stamina model --mode stamina already covers).
+
+    Two scenarios, each a fresh unit with pinned stats and full stamina:
+      * endurance_flat: a long flat walk that drains a baseline acolyte
+        from full stamina through the collapse threshold at a flat,
+        unadapted `ordered` pace (the pre-#999 shape) but must complete
+        standing under the fix, with a visible push -> downshift -> recover
+        -> re-accelerate shape in the speed/stamina trace.
+      * ramp_climb: genuinely adverse (sustained uphill, #375) travel that
+        may still legitimately dip into collapse once, but must finish
+        alive and must not cycle collapse/resume repeatedly.
+    """
+    bootstrap(port, with_resources=True, neutralize_ai=False)
+
+    def run_course(course_name: str, secs: int):
+        course = send_json(port,
+            f"return require('scripts.movement_arena').buildCourse('{course_name}')")
+        if not isinstance(course, dict):
+            print(f"FAIL: could not build course '{course_name}'", file=sys.stderr)
+            return None
+        if not wait_world_ready(port):
+            print("FAIL: arena world never became queryable", file=sys.stderr)
+            return None
+        sx, sy = course["sx"] + 0.5, course["sy"] + 0.5
+        gx, gy = course["gx"] + 0.5, course["gy"] + 0.5
+        uid = int(float(send(port,
+            f"return unit.spawn('{args.unit}', {sx}, {sy})")))
+        # Pin stats so comfort/ordered/meander are deterministic, and force
+        # full starting stamina explicitly (#999 review) rather than
+        # relying on the resource tick's first-read seed. carrying_capacity
+        # is pinned huge so the acolyte's randomized starting inventory/
+        # equipment weight can't randomize encumbranceMultiplier (and so
+        # the comfort/ordered speeds, and the whole trace) run to run.
+        send(port, f"unit.setStat({uid}, 'endurance', 1.0); return 'ok'")
+        send(port, f"unit.setStat({uid}, 'agility', 1.0); return 'ok'")
+        send(port, f"unit.setStat({uid}, 'carrying_capacity', 9999); return 'ok'")
+        time.sleep(0.3)
+        # Full stamina AND full hydration/hunger/calories: this course runs
+        # for well over a minute of real (sim) time, and unit_ai_needs'
+        # drink/eat/refill candidates all outrank follow_command (7.0) once
+        # thirst/hunger cross their thresholds. Leaving those to drain from
+        # a random spawn roll would let a survival action hijack the AI's
+        # currentAction mid-course — a real, but entirely unrelated, source
+        # of a differently-paced walk in a DIFFERENT direction that has
+        # nothing to do with #999's stamina pacing.
+        stats_ = "require('scripts.unit_stats')"
+        for stat, max_stat in (("stamina", "max_stamina"),
+                                ("hydration", "max_hydration"),
+                                ("hunger", "max_hunger"),
+                                ("calories", "max_calories")):
+            send(port, f"unit.setStat({uid}, '{stat}', "
+                       f"{stats_}.get({uid}, '{max_stat}')); return 'ok'")
+        meander = speed_of(port, "meander", uid)
+        send(port,
+             f"return require('scripts.unit_ai').commandMove({uid}, {gx}, {gy})")
+        trail = []
+        for _ in range(int(secs)):
+            time.sleep(1.0)
+            s = pace_sample(port, uid)
+            if not isinstance(s, dict):
+                break
+            trail.append(s)
+        print(f"\n[{course_name}] {len(trail)} samples over ~{secs:.0f}s, "
+              f"meander={meander:.3f}")
+        for i, s in enumerate(trail, 1):
+            print(f"    t={i}  x={s.get('x', -1):.2f}  speed={s.get('sp', -1):.3f}  "
+                  f"stamina={s.get('stam', -1):.2f}  {s.get('act')}/{s.get('pose')}")
+        return {"gx": gx, "gy": gy, "trail": trail, "meander": meander}
+
+    checks = []
+
+    # --- endurance_flat: the headline regression ---------------------------
+    flat = run_course("endurance_flat", secs=110)
+    if flat is not None:
+        trail = flat["trail"]
+        gx = flat["gx"]
+        never_died = bool(trail) and all(s.get("act") != "DEAD" for s in trail)
+        # Restrict the pacing-SHAPE checks to the commanded leg (up to first
+        # arrival) — afterward follow_command clears and ambient wander
+        # takes over (and can drift the unit right back past the goal
+        # tile), which is a different regime this issue doesn't govern.
+        # "reached" must be evaluated the SAME way: the goal was reached if
+        # the unit was EVER within tolerance, not whether the FINAL sample
+        # (which may be long past arrival, mid-wander) happens to be close.
+        arrival_i = next((i for i, s in enumerate(trail)
+                          if abs(s.get("x", -1e9) - gx) < 1.2), None)
+        reached = arrival_i is not None
+        enroute = trail[:arrival_i + 1] if reached else trail
+        never_collapsed = collapse_transitions(enroute) == 0
+        speeds = [s["sp"] for s in enroute if s.get("act") == "walking"]
+        peak = max(speeds) if speeds else 0.0
+        initial_above_meander = bool(speeds) and speeds[0] > flat["meander"] * 1.2
+        first_dip_i = next((i for i, sp in enumerate(speeds) if sp < peak * 0.85),
+                            None)
+        downshifted = first_dip_i is not None
+        # Re-acceleration must show up SOMEWHERE after the first downshift —
+        # not necessarily in the very last sample, which can legitimately
+        # still be mid-recover if arrival happens to land there (the goal
+        # tile doesn't know or care which pacing phase it interrupts).
+        reaccelerated = downshifted and any(
+            sp > peak * 0.9 for sp in speeds[first_dip_i + 1:])
+        stam_series = [s["stam"] for s in enroute]
+        trough_i = stam_series.index(min(stam_series)) if stam_series else 0
+        stamina_recovered = any(
+            stam_series[j] > stam_series[trough_i] + 0.5
+            for j in range(trough_i, len(stam_series)))
+
+        checks += [
+            ("endurance_flat: unit reached the goal", reached),
+            ("endurance_flat: never died", never_died),
+            ("endurance_flat: never collapsed en route", never_collapsed),
+            ("endurance_flat: initial pace above meander", initial_above_meander),
+            ("endurance_flat: a stamina-triggered downshift occurred", downshifted),
+            ("endurance_flat: stamina increased after the downshift", stamina_recovered),
+            ("endurance_flat: re-accelerated back toward the peak pace", reaccelerated),
+        ]
+    else:
+        checks.append(("endurance_flat: course ran", False))
+
+    # --- ramp_climb: genuinely adverse travel must not cycle ---------------
+    ramp = run_course("ramp_climb", secs=70)
+    if ramp is not None:
+        trail = ramp["trail"]
+        alive = bool(trail) and all(s.get("pose") != "dead" for s in trail)
+        cycles = collapse_transitions(trail)
+        checks += [
+            ("ramp_climb: completed alive", alive),
+            ("ramp_climb: no repeated collapse/resume cycling (<=1 collapse)",
+             cycles <= 1),
+        ]
+    else:
+        checks.append(("ramp_climb: course ran", False))
+
+    print("\n--- checks ---")
+    all_ok = True
+    for label, ok in checks:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
+        all_ok = all_ok and ok
+    return 0 if all_ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--mode", default="move", choices=["move", "stamina"],
+    ap.add_argument("--mode", default="move",
+                    choices=["move", "stamina", "pacing"],
                     help="'move' = course-based pathing/gait; "
-                         "'stamina' = comfort/sprint stamina model")
+                         "'stamina' = comfort/sprint stamina model; "
+                         "'pacing' = #999 follow_command adaptive-pacing "
+                         "regression (real unitAi.commandMove path)")
     ap.add_argument("--course", default="corner_trap")
     ap.add_argument("--unit", default="acolyte")
     ap.add_argument("--speed", type=float, default=None,
@@ -334,6 +516,8 @@ def main() -> int:
     try:
         if args.mode == "stamina":
             return run_stamina_mode(args.port, args)
+        if args.mode == "pacing":
+            return run_pacing_mode(args.port, args)
 
         bootstrap(args.port)
 
