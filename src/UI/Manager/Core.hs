@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Internal state-mutation helpers shared by the 'UI.Manager' submodules.
 --   Not part of the public API re-exported by 'UI.Manager'.
 module UI.Manager.Core

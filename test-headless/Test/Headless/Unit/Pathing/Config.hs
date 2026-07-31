@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Tests for Unit.Pathing.Config YAML decoding.
 --   The subtle bit is the per-key optional merge: a partial document
 --   must override only the keys it names and keep defaults for the

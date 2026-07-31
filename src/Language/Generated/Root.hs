@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Deterministic concept-root derivation (#710 requirements 7, 8, 9,
 --   16). Every concept gets a native root built from syllables of the
 --   profile's own consonant/vowel inventory and shapes — a pure

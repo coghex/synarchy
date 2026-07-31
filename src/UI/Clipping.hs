@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Opt-in rectangular descendant clipping (#747, Phase C child C1 of
 --   #741). A container opts in via 'UI.Types.ueClipChildren'; the
 --   EFFECTIVE clip a given element is subject to is the intersection

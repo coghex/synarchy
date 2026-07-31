@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Tests for World.Save.Serialize.sanitizeSaveName — the validator
 --   that gates user-supplied save names before they reach the
 --   filesystem. The function is pure, so these tests are independent

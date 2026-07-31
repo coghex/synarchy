@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | The Tier 3 real-units damage model: weapon/natural-attack facet
 --   resolution, swing kinematics, penetration, and the per-layer

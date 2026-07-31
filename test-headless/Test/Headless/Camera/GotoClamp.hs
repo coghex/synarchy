@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the camera.gotoTile glacier clamp (issue #297).
 --
 --   The bug: @camera.gotoTile@ teleported the camera by writing camPosition

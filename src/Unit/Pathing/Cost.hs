@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Tile-step cost function for unit pathing.
 --
 -- The pathing system is "continuous omnidirectional movement on a grid

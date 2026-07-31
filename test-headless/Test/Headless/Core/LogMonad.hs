@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Regression coverage for issue #889's capability-record split:
 --   'Engine.Core.Log.Monad's @*M@ wrappers now call through an extra
 --   internal @*For@ layer before reaching 'Engine.Core.Log.logMessage'.

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | STRICT parity between the zoom-map terrain path and the detail
 --   chunk path.
 --

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #814 gate: scripts/ui/slider.lua must expose ONE authoritative
 --   @slider.findByElementHandle@ that recognizes all four assembly
 --   handles (left cap, track, knob, right cap) and resolves each to the

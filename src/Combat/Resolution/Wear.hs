@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Post-swing resource costs: weapon/armour wear from a landed hit,
 --   and the attacker's stamina + stance drain from the swing itself.

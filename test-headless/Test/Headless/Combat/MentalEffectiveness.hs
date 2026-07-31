@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | #353: the canonical mental-effectiveness contract — a single
 --   derived 0.75..1.10 multiplier ('Combat.Resolution.Common.
 --   mentalEffectiveness') shared by combat hit/active-dodge

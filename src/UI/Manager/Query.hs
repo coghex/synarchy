@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module UI.Manager.Query
   ( getElementAbsolutePosition
   , isEffectivelyVisible

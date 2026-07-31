@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for Unit.Pathing.Cost.
 --   We don't need the engine; we construct a synthetic WorldTileData
 --   with handcrafted terrain and fluid maps and exercise stepCost

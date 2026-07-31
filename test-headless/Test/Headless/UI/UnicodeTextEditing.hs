@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, UnicodeSyntax #-}
 -- | #746: the Lua editable-widget side of UI.TextBuffer's Unicode contract.
 -- These tests use the real headless UI and text-input APIs plus the production
 -- Lua widget modules. The only stubs are GPU asset loading and scrollbar

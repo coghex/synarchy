@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Projection-aliasing coverage for the @input-lua-transport@
 --   capability records (issue #892, E4 of the @EngineEnv@ capability
 --   split #537) — the direct counterpart of

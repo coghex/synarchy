@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | The "save migrations" gate (issue #766, save-overhaul C4): proves
 --   "World.Save.Compat.SessionV90"'s frozen DTO tree decodes REAL,
 --   historical B1 envelope bytes — not merely this test's own encoder

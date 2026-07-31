@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Regression for #813: a zoom-map (chunk) selection binds to the
 --   clicked chunk at click time instead of re-resolving from shared
 --   hover state at render time.

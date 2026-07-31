@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Unit contracts for the #223 bed-depth work: the inland rift
 --   field ('World.Plate.riftFieldMemo'), the river channel bed model
 --   ('World.Fluid.River.Identify.computeBedDepth'), and the graben

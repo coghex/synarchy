@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Pure tests for the item-buff YAML schema (#392): the `percent`
 --   field parses (fractional, matching the unit-level modifiers
 --   block), `amount` became optional so a buff can declare either or

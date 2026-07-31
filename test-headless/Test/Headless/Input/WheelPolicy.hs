@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #744 gate (Phase A, child A3 of #741): the unified wheel-routing
 --   contract. An ordinary wheel event and a Shift-held one now share
 --   ONE pipeline — framebuffer-coordinate conversion, the

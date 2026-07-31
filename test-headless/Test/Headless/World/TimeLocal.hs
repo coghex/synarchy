@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Pure tests for 'localSunAngle' (#483): longitude-local solar time.
 --   Pins the properties the rendering/gameplay hookup depends on —
 --   seam continuity, noon at the meridian, monotonic phase along u,

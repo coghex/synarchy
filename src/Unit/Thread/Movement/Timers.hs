@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Timed pose/activity expirations: the Drinking/Eating/Picking/get-up
 --   auto-return-to-Idle checks, and the generic TransitioningTo commit
 --   (incl. the climb/fall/leap landing routing and post-transition

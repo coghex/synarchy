@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | "Portal location exclusion" (#778): a `bdIsStarting` building's
 --   footprint must not intersect any placed location's absolute
 --   bounds (#777) on the same world page; ordinary construction is

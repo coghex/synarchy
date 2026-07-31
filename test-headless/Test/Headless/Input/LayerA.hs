@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | F4 (#730) Layer A regression coverage for the non-click input
 --   families: keyboard, text (char aggregation), and scroll/z-slice
 --   routing. Drives the REAL 'Engine.Input.Thread.processInputs'

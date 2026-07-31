@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Native-name rendering (#710 requirements 10, 11, 13): turn a #709
 --   'NameExpr' into one orthographic native word under a generated
 --   'Profile' and its assigned concept roots. Pure and total given a

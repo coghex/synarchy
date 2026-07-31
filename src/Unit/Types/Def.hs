@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | The unit template (`UnitDef`) and its small building-block value
 --   types, split out of "Unit.Types" (#575) — re-exported there so the
 --   public API is unchanged.

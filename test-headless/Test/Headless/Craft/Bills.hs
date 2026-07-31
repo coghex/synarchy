@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Craft-bill backend tests (#329): the pure queue/claim/progress
 --   transitions in Craft.Bills that the craft.* bill verbs wrap, plus
 --   the save-format roundtrip (bills persist in WorldPageSave, v70;

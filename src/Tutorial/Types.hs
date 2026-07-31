@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
+{-# LANGUAGE Strict, DeriveGeneric #-}
 -- | The validated in-memory form of a tutorial definition tree (#957,
 --   phase 1 of the tutorial epic #956).
 --

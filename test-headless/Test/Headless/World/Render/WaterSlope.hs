@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'World.Render.WaterSlope.waterSlopeAt' — the slope
 --   helper feeding rendered River/Lake quads (issue #816).
 --

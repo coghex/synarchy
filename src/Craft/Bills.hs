@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Craft-bill queue (#329): the data + pure transitions behind the
 --   crafting production loop. A bill is a standing order against one
 --   work station — "run this recipe N times" (or forever) — that the

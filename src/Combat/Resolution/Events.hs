@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Combat event construction + the engine's event ring / unit-kill
 --   plumbing. Split (issue #550) out of "Combat.Resolution"; see that

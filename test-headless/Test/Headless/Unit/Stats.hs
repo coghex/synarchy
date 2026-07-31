@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Tests for Unit.Stats.rollStat. We avoid a 1000-sample statistical
 --   check because under this codebase's build config it tripped over
 --   some -O1 / Strict interaction that produced spurious values; the

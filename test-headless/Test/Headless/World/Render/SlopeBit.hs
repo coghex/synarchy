@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'World.Slope.slopeBit' (the per-side slope decision)
 --   and 'World.Slope.wrapChunkCoordU' (the seam wrap used by the
 --   cross-chunk slope recompute).

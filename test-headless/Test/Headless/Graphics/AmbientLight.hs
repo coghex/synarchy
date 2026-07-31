@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | 'computeAmbientLight' periodicity (#483 review follow-up). The
 --   bindless world vertex/fragment shaders now interpolate an
 --   UNWRAPPED longitude-local sun angle across a quad (no fract()

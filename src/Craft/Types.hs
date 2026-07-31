@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Data-driven crafting recipe catalogue (#325). A recipe DEF describes
 --   one craft: what station kind it runs at, what it consumes (inputs +
 --   optional fuel), how much work it takes, and what it produces. Loaded

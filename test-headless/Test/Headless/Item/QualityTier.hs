@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Pure tests for the quality→label tier resolution (#345): the
 --   default band table's boundaries, an item def's own
 --   `quality_tiers:` override taking precedence, and the YAML schema

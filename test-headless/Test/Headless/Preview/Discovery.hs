@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Pure(ish) tests for 'Engine.Preview.Discovery' (#886, Phase 2 of the
 --   @--preview@ texture browser epic #427): recursive discovery,
 --   category-relative labeling, deterministic ordering, non-texture

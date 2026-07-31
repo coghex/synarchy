@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | Config load/save contract tests (#638): the local-runtime-vs-
 --   versioned-default resolution in 'Engine.Core.Init.resolveConfigPath'
 --   (config/video.local.yaml + config/keybinds.local.yaml fall back to

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Unit contract for 'breachSealedBasins' (#220): sealed deep
 --   sub-sea basins near the shore get a narrow lower-only channel to
 --   the open ocean; shallow or small ponds are left alone; glacier

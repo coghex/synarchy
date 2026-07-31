@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the sprite-batch builders 'mergeQuadsToBatch' and
 --   'createBatch' — the vertex-expansion contract behind #445's
 --   boxed→storable 'rbVertices' switch. Guards that quads land in

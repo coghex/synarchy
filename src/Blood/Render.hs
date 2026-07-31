@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure world-decal render-record derivation (#606): turns a
 --   'BloodDecal' plus the current game time into the data a world-space
 --   quad needs — resolved texture reference, world placement, and an

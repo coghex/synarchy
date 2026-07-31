@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-tick movement for units.
 --
 -- Continuous motion in ℝ². Each tick:

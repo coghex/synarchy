@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #747 gate: the shared viewport-aware floating-placement contract
 --   (Phase C child C1 of #741) — "UI.PopupPlacement" is pure (no
 --   Vulkan/window/Lua engine), so placement is fully Hspec-testable in

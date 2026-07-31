@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Tuning constants for the Tier 3 combat damage model — swing
 --   kinematics, tissue-capacity normalisation, weapon wear, and the

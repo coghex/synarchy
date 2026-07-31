@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Semantic proper names (#709): the language-independent middle layer
 --   of the world-naming arc (#708). A proper name is a structured
 --   'NameExpr' over stable 'ConceptId's — never an English source

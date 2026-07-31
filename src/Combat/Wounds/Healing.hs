@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Wound-healing rate tuning and calorie-store gating. See
 --   "Combat.Wounds" for the overall formula summary.

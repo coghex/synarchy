@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Projection-aliasing coverage for the @units-buildings-combat@
 --   building capability record (issue #896, E6b of the @EngineEnv@
 --   capability split #537) — the direct counterpart of

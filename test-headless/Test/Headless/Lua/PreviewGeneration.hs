@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | The 'LuaWorldPreviewReady' delivery-time generation gate (round 11
 --   review, issue #763): staleness for a world-preview GPU upload can
 --   NOT be decided at upload-completion time

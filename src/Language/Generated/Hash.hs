@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Deterministic, integer-only hashing for the generated-language
 --   layer (#710). Mirrors the stateless fmix64-style avalanche mixer
 --   already used across worldgen (e.g. 'World.Plate.Hash.hashCoord',

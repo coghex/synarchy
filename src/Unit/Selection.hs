@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Selection helpers on top of UnitManager. Selection state lives in
 --   `UnitManager.umSelected` so the renderer and the info panel read from
 --   the same atomic snapshot. All mutations go through atomicModifyIORef'.

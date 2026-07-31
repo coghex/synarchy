@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Tooltip dwell/hover state machine and the engine-facing per-frame
 --   tick. Owns the show/hide transitions (which drive
 --   "UI.Tooltip.Render"'s visual build/teardown) but not the visuals

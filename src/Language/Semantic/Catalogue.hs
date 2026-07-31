@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Loading + validation of the versioned English concept catalogue
 --   (#709). The production catalogue lives at 'conceptCataloguePath';
 --   it is authored as a YAML LIST of entries (not a map — YAML maps

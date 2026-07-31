@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, UnicodeSyntax #-}
 -- | Player-facing Create World controls (#706). These source-level
 --   contracts keep the Lua UI's declarations explicit without booting a
 --   graphical engine, while the generation assertions protect the hidden

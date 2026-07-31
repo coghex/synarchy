@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, TypeApplications #-}
+{-# LANGUAGE TypeApplications #-}
 -- | The "Lua faction model" gate (#912): the @faction@ global as unit AI
 --   actually sees it, plus the one AI consumer whose meaning changed —
 --   @unitAi.groupEffectivenessVs@.

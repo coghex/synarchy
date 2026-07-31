@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Flora growth runtime tests (#332).
 --
 --   The growth runtime is DERIVED state: the world date advances

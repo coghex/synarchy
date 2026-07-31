@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The building command drain. Narrowed to the @units-buildings-combat@
 --   building half (#896, epic #537): it takes 'BuildingCapability' plus
 --   the two strictly narrower values it needs (the shared logger and

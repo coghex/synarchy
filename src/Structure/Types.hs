@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Structural pieces — walls, floors, ceilings — placed in the world by
 --   the "structures" debug builder. A first, in-memory store (no save
 --   support yet); the data model for the RCT-style edge-wall feature.

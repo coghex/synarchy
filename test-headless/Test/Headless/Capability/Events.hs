@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Projection-aliasing coverage for the @ui-hud-events@
 --   event\/notification\/popup capability record (issue #898, E7b of
 --   the @EngineEnv@ capability split #537).

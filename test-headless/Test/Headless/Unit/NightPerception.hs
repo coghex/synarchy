@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'nightPerceptionFactor' (#315): the day/night
 --   multiplier on combat awareness. Asserts the ramp is smooth, peaks
 --   at noon, troughs (but never zeroes) at midnight, and is symmetric

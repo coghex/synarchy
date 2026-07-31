@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'World.River.Graph.classifyMouth' — the river-mouth
 --   sink classifier. We don't need the engine: we hand-build a lake
 --   lookup map and exercise the ocean / lake / inland branches directly,

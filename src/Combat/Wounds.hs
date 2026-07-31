@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Per-tick wound subsystem. Runs at ~10 Hz from the combat thread
 --   (the combat thread itself runs at 60 Hz but only ticks wounds on
 --   every 6th iteration — finer resolution buys nothing visible to

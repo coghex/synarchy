@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, UnicodeSyntax #-}
 -- | The "Tutorial HUD" gate (#960, phase 3 of the tutorial epic #956):
 --   @scripts/tutorial_hud.lua@, the one surface that renders #958's
 --   tutorial view model.

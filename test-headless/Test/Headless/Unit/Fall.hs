@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Calibration + behaviour tests for Unit.Fall — the physics that turns
 --   a drop into a DISTRIBUTION of injuries (bruise + fracture +
 --   concussion …) with no RNG. Deterministic, so it doubles as the

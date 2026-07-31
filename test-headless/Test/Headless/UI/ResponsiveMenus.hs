@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, UnicodeSyntax #-}
 -- | #748 gate (Phase C, child C2 of #741): the supported responsive
 --   envelope (scripts/ui/responsive.lua's band table), the shared
 --   framebuffer/UI-scale notification contract it provides, and the

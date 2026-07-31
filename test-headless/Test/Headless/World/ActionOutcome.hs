@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | F4 (#646): the action-outcome oracle tap records a designation's
 --   requested/applied/dropped counts and reason even though
 --   'handleWorldDesignateTillCommand' itself is fire-and-forget (no

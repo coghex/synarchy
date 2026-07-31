@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Final climate refinement (#785): the completed timeline's evolved
 --   CO2 / solar forcing must drive the FINAL regional climate grid,
 --   not a hardcoded baseline (1.0 CO2 / 0.0 offset / 1.0 solar) with

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #745 gate (Phase B child B1 of #741): the discrete-control
 --   release-activation contract. Most of this suite is pure
 --   'UI.ControlActivation' coverage — the acceptance (and the issue's

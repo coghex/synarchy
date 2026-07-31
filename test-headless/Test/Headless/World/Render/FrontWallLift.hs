@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for 'World.Render.Quads.structureFrontWallClear' — the
 --   #418 flora/vegetation lift over structure front walls.
 --

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | A spawned unit instance (`UnitInstance`), split out of "Unit.Types"
 --   (#575) — re-exported there so the public API is unchanged.
 module Unit.Types.Instance

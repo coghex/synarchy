@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | The "save components" gate (issue #760, save-overhaul B2): the
 --   Haskell-owned persistence component split that replaced B1's single
 --   transitional @"session"@ payload. Pure — no engine, no IO. Every

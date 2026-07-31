@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Fall physics: Z-interpolation during a Standing→Falling transition
 --   (gravity-accelerated descent, or — when usJumpApex is set — a
 --   leap's up-then-down arc via "Unit.Thread.Movement.Leap"), fall

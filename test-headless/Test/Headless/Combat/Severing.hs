@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Tests for the severing cascade (Combat.Wounds.propagateSevering):
 --   a destroyed (pulverised / cut-through) part takes its attached
 --   children with it — a shattered arm severs the hand.

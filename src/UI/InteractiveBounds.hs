@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Logical / visual / interactive bounds for a 'UI.Types.UIElement'
 --   (#749, Phase C child C3 of #741, on top of element policy #743,
 --   release activation #745, and clipping #747).

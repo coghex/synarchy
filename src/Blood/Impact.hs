@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Impact blood (#607): the one-shot mark a FRESH wound creates on
 --   landing — not the ongoing bleeding-trail system ("Blood.Trail",
 --   #882), which handles a moving unit's continued external bleeding.

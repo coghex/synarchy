@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | The 'LuaSaveLoaded' stale-debug-command gate (round 10 review,
 --   issue #763): the debug-console TCP server keeps accepting commands
 --   onto 'lbsDebugQueue' regardless of the save barrier's capture-lock

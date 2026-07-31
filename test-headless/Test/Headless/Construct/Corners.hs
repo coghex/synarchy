@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Corner-progress derivation for the construction display (#96).
 --   The contract under test: 'constructCorners' maps a designation's
 --   scalar build progress onto the same 4-corner state mining's

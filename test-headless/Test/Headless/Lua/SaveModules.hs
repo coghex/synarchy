@@ -1,4 +1,4 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables, TypeApplications #-}
+{-# LANGUAGE ScopedTypeVariables, TypeApplications #-}
 -- | The "Lua persistence components" gate (issue #761, save-overhaul
 --   B3): a standalone Lua VM (no engine, no world/unit threads, no
 --   HsLua-side marshalling of the registry's internals) exercising

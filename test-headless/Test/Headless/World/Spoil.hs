@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure tests for the spoil-pile deposit router (World.Spoil.Types).
 --   The router takes a tile-legality predicate as a closure, so we can
 --   exercise it with no world state.

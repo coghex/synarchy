@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | engine.setPaused's load-in-flight gate (round 15 review, issue
 --   #763): staging runs BEFORE the save barrier's capture lock is ever
 --   entered, and the Lua thread's own tick loop keeps servicing

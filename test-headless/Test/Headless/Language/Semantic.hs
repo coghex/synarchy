@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Semantic proper names (#709): the pure meaning layer of the
 --   world-naming arc (#708) — structured 'NameExpr's over stable
 --   concept ids, the versioned English concept catalogue, and the

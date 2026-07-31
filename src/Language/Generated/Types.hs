@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Generated-language profiles (#710): the native-rendering layer of
 --   the world-naming arc (#708), built on top of #709's language-
 --   independent semantic meanings. A 'Profile' is a small, deterministic

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | HUD cursor-info message contract (#128).
 --
 --   The shared HUD info panel carries four tabs. Basic/Advanced are

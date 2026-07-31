@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Regression for #367: a tile selection honours an explicit z.
 --
 --   The Info-tool left-click resolves the tile under the cursor at the
