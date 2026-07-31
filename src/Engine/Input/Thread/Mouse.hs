@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Physical MOUSE-BUTTON dispatch (#787): click/right-click/
 --   middle-click routing (tooltip lock, UI hit-testing via
 --   'UI.InputOwnership.routePointer', modal-boundary blocking),

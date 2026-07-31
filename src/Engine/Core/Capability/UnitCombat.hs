@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The units-and-combat half of the @units-buildings-combat@
 --   capability (epic #537, issue #895 — E6a): the ten fields
 --   'docs/engineenv_capability_inventory.md' §7.5 identifies as the

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | The in-process coordination state for a save snapshot.  It deliberately
 -- knows nothing about engine queues: an owner acknowledges only after it has

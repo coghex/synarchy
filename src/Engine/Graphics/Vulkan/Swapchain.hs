@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedLists, UnicodeSyntax #-}
+{-# LANGUAGE OverloadedLists #-}
 module Engine.Graphics.Vulkan.Swapchain
   ( createVulkanSwapchain
   , createSwapchainImageViews

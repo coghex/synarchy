@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The first capability record of the @EngineEnv@ capability split
 --   (epic #537, issue #889): @core-init@ — the four fields
 --   'docs/engineenv_capability_inventory.md' SS5's @core-init@ table

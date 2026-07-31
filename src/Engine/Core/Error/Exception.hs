@@ -1,5 +1,4 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE UnicodeSyntax #-}
 module Engine.Core.Error.Exception
   ( -- * Types
     EngineException(..)

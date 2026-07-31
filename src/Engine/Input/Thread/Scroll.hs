@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Wheel/scroll dispatch (#787, unified #744/A3): an ordinary wheel
 --   event and a Shift-held one now share ONE routing pipeline —
 --   framebuffer-coordinate conversion, the degenerate-viewport guard,

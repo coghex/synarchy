@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level item API module (#577). Re-exports every Lua-facing
 --   function from the sub-modules so existing call-sites keep working:
 --   Items.Defs is the item def catalogue (item.loadYaml, item.listDefs),

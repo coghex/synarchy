@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DataKinds, UnicodeSyntax #-}
+{-# LANGUAGE DataKinds #-}
 module Engine.Graphics.Vulkan.Init
   ( initializeVulkan
   , initializeVulkanOffscreen

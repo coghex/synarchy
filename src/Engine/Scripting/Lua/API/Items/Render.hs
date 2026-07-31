@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Ground-item render-facing queries: window-space hit testing, the
 --   world-view ground-item selection (white outline + info panel), and
 --   a headless-safe debug dump of the actual ground-item render pass.

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE UnicodeSyntax #-}
 module Engine.Core.Log.Types
   ( -- * Levels & categories
     LogLevel(..)

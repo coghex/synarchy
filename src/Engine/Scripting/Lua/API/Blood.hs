@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Debug/headless Lua surface for the blood decal model (#604) and its
 --   procedural texture generation + world-render records (#606): spawn
 --   a decal with explicit parameters, inspect the decal list and the

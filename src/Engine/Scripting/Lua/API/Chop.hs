@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua API for the chop-designation tool (issue #97) — the @chop.*@
 --   namespace. Mirrors the construction-designation API (#95): the tool
 --   drives setAnchor / clearAnchor / designate, the chop AI

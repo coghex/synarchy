@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level world-query API module (#557). Re-exports every
 --   Lua-facing function from the sub-modules so existing call-sites
 --   keep working: WorldQuery.Terrain is per-tile terrain/slope/veg

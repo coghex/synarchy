@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for the element tree: adding/removing elements
 --   to pages and parents, hit-testing, and hover-target lookup.
 module Engine.Scripting.Lua.API.UI.Hierarchy

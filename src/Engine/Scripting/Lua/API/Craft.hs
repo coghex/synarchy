@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level crafting API module (#325/#326/#329). Re-exports every
 --   Lua-facing function from the sub-modules so existing call-sites
 --   keep working: Craft.Recipe is the read-only catalogue

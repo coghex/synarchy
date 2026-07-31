@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Slot-based equip/unequip (#67 exact-instance targeting). Moves an
 --   inventory item into/out of a unit's equipment-class slots,
 --   validating the slot's accepted kind. Accessory equip/unequip

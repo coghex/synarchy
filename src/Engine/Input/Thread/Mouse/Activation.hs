@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | #745: release-time resolution of a discrete control's deferred
 --   pointer activation — split out of 'Engine.Input.Thread.Mouse' to
 --   keep that module under its line budget (mirrors the existing

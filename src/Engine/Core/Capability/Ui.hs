@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The UI\/focus\/HUD half of the @ui-hud-events@ capability (epic
 --   #537, issue #897 — E7a): exactly the four fields
 --   'docs/engineenv_capability_inventory.md' SS7.7 splits off from the

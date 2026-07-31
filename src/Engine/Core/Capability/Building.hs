@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The buildings half of the @units-buildings-combat@ capability
 --   (epic #537, issue #896 — E6b): the three fields
 --   'docs/engineenv_capability_inventory.md' §7.5 held back from E6a

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for the shared #747 floating-placement contract
 --   ("UI.PopupPlacement") — one framebuffer-coordinate placement
 --   algorithm for dropdown option lists and context menu roots/

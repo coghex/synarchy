@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for the per-element text buffer: enabling text input,
 --   reading/writing content, and cursor movement / editing. Cursor positions
 --   crossing this API are zero-based Unicode code-point offsets, never Lua
