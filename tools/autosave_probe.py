@@ -2,9 +2,10 @@
 """Headless autosave probe (#913).
 
 Gates the interval autosave feature end to end in ONE engine boot on an
-isolated resource root, against a real `world.init` page (never an
-arena -- a save containing an arena page hangs the world thread on load,
-known issue #365).
+isolated resource root. The world is entered through the REAL gameplay
+path (`uiManager.showMenu("world_view")`), which builds and shows an
+ordinary generated page -- never an arena, since a save containing an
+arena page hangs the world thread on load (known issue #365).
 
 What it proves, in order:
 
@@ -21,10 +22,11 @@ What it proves, in order:
      tags the autosave row.
   4. A PAUSED WORLD STAYS PAUSED. An autosave that began from a paused
      world leaves it paused and zero-scaled.
-  5. THE PLAYER WINS. A pause/resume transition during the request
-     suppresses restoration even though the final pause BOOLEAN equals
-     the pre-save one -- the discriminator is the time scale, which stays
-     zeroed instead of being handed back.
+  5. THE PLAYER WINS. A NET-ZERO pause/resume pair during the request --
+     the player's last intent being the same boolean the save started
+     from, so a value comparison would see nothing -- still suppresses
+     restoration: the world stays paused and zero-scaled instead of being
+     handed back, against phase 2's untouched control.
   6. A FAILED AUTOSAVE STAYS PAUSED. An accepted autosave whose storage
      write fails leaves the engine paused and the visible world
      zero-scaled, and `engine.getSaveStatus()` exposes the rendered
@@ -55,7 +57,6 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import time
@@ -66,10 +67,20 @@ from probelib import boot, send, send_json, quit_engine, poll_until  # noqa: E40
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG = "/tmp/autosave_probe_engine.log"
 
-PAGE = "autosave_probe"
+# The probe drives the REAL gameplay entry path
+# (uiManager.showMenu("world_view") -> worldView.show), which creates and
+# shows its own `main_world` page. Its generation parameters are shrunk
+# first so this stays a ~30-second worldgen rather than the 128-tile
+# default. Deliberately a real world.init page, never an arena: a save
+# containing an arena page hangs the world thread on load (#365).
 WORLD_SIZE = 32
 WORLD_SEED = 42
 PLATES = 3
+
+# Resolved from world.getActiveWorldId() once the view is up -- every
+# page-scoped query below must address the page the pause/save paths
+# actually operate on (the VISIBLE one), not a name this probe assumed.
+PAGE = ""
 
 
 class Checks:
@@ -139,7 +150,12 @@ def force_deadline(port: int) -> None:
     """Make the NEXT scheduler tick treat the interval as elapsed. The
     scheduler's own eligibility gate, rotation, and request path all still
     run exactly as they would on a real deadline -- only the waiting is
-    skipped, which is what keeps this probe minutes rather than hours."""
+    skipped, which is what keeps this probe minutes rather than hours.
+
+    Waits for the scheduler's world epoch to be established first: the
+    tick that first sees a gameplay world starts a fresh interval, which
+    would otherwise overwrite the deadline this just forced."""
+    poll_until(30, lambda: dump(port).get("scheduledWorld") is not None)
     send(port, "local a = require('scripts.autosave'); "
                "a.nextDueAt = a.now() - 1; return 'ok'")
 
@@ -163,6 +179,10 @@ def paused(port: int) -> bool:
 
 def time_scale(port: int) -> float:
     return float(send(port, f"return world.getTimeScale('{PAGE}')"))
+
+
+def set_time_scale(port: int, scale: float) -> None:
+    send(port, f"world.setTimeScale('{PAGE}', {scale}); return 'ok'")
 
 
 def event_log_text(port: int) -> str:
@@ -191,18 +211,31 @@ def main() -> int:
         proc = boot(args.port, log=LOG, args=["--resource-root", root],
                     ready_timeout=180)
 
-        send(args.port, f"world.init('{PAGE}', {WORLD_SEED}, {WORLD_SIZE}, "
-                        f"{PLATES}); return 'ok'")
-        chk.ok(send(args.port, "return tostring(world.waitForInit(300))") == "true",
-               "world generated")
-        send(args.port, f"world.show('{PAGE}'); return 'ok'")
-        # The eligibility predicate the issue names. The full ui_manager
-        # boot never runs headless (it gates on a GPU font atlas), but
-        # showMenu still sets the authoritative currentMenu that
-        # isGameplayView() reads -- the same approach
-        # tools/action_outcome_layer_a_check.py already uses.
+        # The eligibility predicate the issue names is
+        # uiManager.isGameplayView(), so the world must be entered the way
+        # a player enters one -- showMenu("world_view") -> worldView.show,
+        # which CREATES AND SHOWS its own page. A world.init of a separate
+        # page would leave that page invisible, and every pause/save/
+        # restore path operates on the VISIBLE page, so the probe would
+        # then be measuring a page nothing under test ever touches.
+        # worldParams shrinks the world worldView would otherwise build at
+        # its 128/10 default. The full ui_manager boot never runs headless
+        # (it gates on a GPU font atlas), but showMenu still sets the
+        # authoritative currentMenu isGameplayView() reads -- the same
+        # approach tools/action_outcome_layer_a_check.py already uses.
+        global PAGE
         send(args.port,
+             "local wv = require('scripts.world_view'); "
+             f"wv.worldParams = {{seed = {WORLD_SEED}, "
+             f"worldSize = {WORLD_SIZE}, plateCount = {PLATES}}}; "
              "require('scripts.ui_manager').showMenu('world_view'); return 'ok'")
+        send(args.port, "return tostring(world.waitForInit(300))", timeout=320.0)
+        chk.ok(poll_until(60, lambda: send(
+                   args.port, "return tostring(world.getActiveWorldId())")
+                   not in ("nil", "")) or False,
+               "the gameplay world became active")
+        PAGE = send(args.port, "return world.getActiveWorldId()")
+        print(f"   active page: {PAGE}")
         chk.ok(send(args.port,
                     "return tostring(require('scripts.ui_manager').isGameplayView())")
                == "true", "engine is in a gameplay view")
@@ -229,7 +262,7 @@ def main() -> int:
         print("2. a real one-minute interval fires and restores the exact scale")
         reconfigure(args.port, enabled=True, interval=1, depth=3)
         send(args.port, "engine.setPaused(false); return 'ok'")
-        send(args.port, f"world.setTimeScale('{PAGE}', 7); return 'ok'")
+        set_time_scale(args.port, 7)
         chk.ok(poll_until(10, lambda: abs(time_scale(args.port) - 7.0) < 1e-6)
                or False, "fast-forward time scale 7 established")
         chk.ok(not paused(args.port), "world is unpaused before the interval")
@@ -298,7 +331,7 @@ def main() -> int:
         # ---------------------------------------------------------
         print("5. a pause transition during the request suppresses restoration")
         send(args.port, "engine.setPaused(false); return 'ok'")
-        send(args.port, f"world.setTimeScale('{PAGE}', 5); return 'ok'")
+        set_time_scale(args.port, 5)
         chk.ok(poll_until(10, lambda: abs(time_scale(args.port) - 5.0) < 1e-6)
                or False, "pre-save scale 5 established")
         chk.ok(not paused(args.port), "pre-save pause boolean is FALSE")
@@ -309,6 +342,12 @@ def main() -> int:
         # is still ahead of it. The returned flag reports whether the
         # transaction really was still in flight -- a probe that toggled
         # AFTER it finished would prove nothing.
+        #
+        # The toggles are a NET-ZERO pair: the player's LAST pause intent
+        # (false) is the same boolean the save started from, so an
+        # implementation that merely compared booleans would see nothing
+        # to stop it and would hand the world back. Only a generation
+        # notices two transitions that cancel out.
         still_running = send(
             args.port,
             "local a = require('scripts.autosave'); "
@@ -322,10 +361,12 @@ def main() -> int:
         chk.ok(dump(args.port)["stats"]["attempts"] == before + 1,
                "the autosave request was made")
         chk.ok(save_settled(args.port), "the autosave transaction settled")
-        chk.ok(not paused(args.port),
-               "final pause boolean equals the pre-save one (FALSE)")
+        # The control for this pair is phase 2, whose identical but
+        # untouched autosave ended UNPAUSED at its exact prior scale.
+        chk.ok(paused(args.port),
+               "restoration was suppressed: the save's own pause still stands")
         chk.ok(abs(time_scale(args.port)) < 1e-6,
-               "restoration was suppressed: the scale was NOT handed back",
+               "and the prior time scale was NOT handed back",
                str(time_scale(args.port)))
 
         # ---------------------------------------------------------
@@ -335,7 +376,7 @@ def main() -> int:
         for name in autosave_slots(root):
             shutil.rmtree(os.path.join(saves_dir, name))
         send(args.port, "engine.setPaused(false); return 'ok'")
-        send(args.port, f"world.setTimeScale('{PAGE}', 5); return 'ok'")
+        set_time_scale(args.port, 5)
         poll_until(10, lambda: abs(time_scale(args.port) - 5.0) < 1e-6)
         # A read-only saves/ makes publishGeneration fail at
         # PhaseDirectoryCreate. Rotation itself is a no-op here (no slot
@@ -399,7 +440,7 @@ def main() -> int:
              "engine.setNotificationOverrides({save_load = {pause = true}}); "
              "return 'ok'")
         send(args.port, "engine.setPaused(false); return 'ok'")
-        send(args.port, f"world.setTimeScale('{PAGE}', 5); return 'ok'")
+        set_time_scale(args.port, 5)
         poll_until(10, lambda: abs(time_scale(args.port) - 5.0) < 1e-6)
         before = dump(args.port)["stats"]["attempts"]
         force_deadline(args.port)

@@ -6,8 +6,9 @@
 --
 --   - @"metadata"@ — a small, required component carrying exactly
 --     'SaveMetadata' (name/seed/size/plates/timestamp/worldName/
---     worldGloss), so 'World.Save.Serialize.listSaves' can display every
---     save WITHOUT decoding the gameplay payload (requirement 12).
+--     worldGloss, plus #913's autosave\/manual classification), so
+--     'World.Save.Serialize.listSaves' can display every save WITHOUT
+--     decoding the gameplay payload (requirement 12).
 --   - the full Haskell-owned gameplay component set
 --     ("World.Save.Component.saveComponentRegistry") — @"core-session"@,
 --     @"texture-palette"@, @"world-pages"@, @"world-edits"@,
@@ -122,7 +123,8 @@ metadataComponentVersion = 2
 --   dropping a historical decoder here is exactly the "support for that
 --   historical version was removed" drift that audit exists to catch.
 metadataComponentInputVersions ∷ [Word32]
-metadataComponentInputVersions = [legacyMetadataComponentVersion, 2]
+metadataComponentInputVersions =
+    [legacyMetadataComponentVersion, metadataComponentVersion]
 
 -- | The @"metadata"@ schema version the FROZEN legacy envelope shapes
 --   (B1's @{metadata, session}@ and B2's pre-#761 set) always carry.

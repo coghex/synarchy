@@ -19,6 +19,7 @@ import Numeric (readHex)
 
 import qualified Data.HashSet as HS
 import World.Save.Envelope
+import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Envelope.Codec (encodeEnvelope, decodeEnvelope, deManifest)
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), EnvelopeManifest(..)
@@ -198,6 +199,23 @@ minimalFrozenSaveMetadataV90 = SaveMetadataV90
     , sm90WorldSize = wgpWorldSize defaultGP, sm90PlateCount = wgpPlateCount defaultGP
     , sm90Timestamp = "2026-07-16T00:00:00.000000Z"
     , sm90WorldName = Nothing, sm90WorldGloss = Nothing }
+
+-- | And the SAME values again as the frozen v1 @"metadata"@ component
+--   payload (#913). A hand-built B1 envelope must carry METADATA v1 as
+--   well as its v90 session: a real B1 file was written while the
+--   metadata component was still at v1, and the B1 recognizer pins that
+--   historical version deliberately
+--   ('World.Save.Envelope.legacyMetadataComponentVersion'), so a
+--   metadata bump can never stop this build recognizing its own frozen
+--   baseline. Decoding it must yield 'minimalSaveMetadataV90' exactly —
+--   including @smAutosave = False@, the documented "legacy saves are
+--   manual saves" answer 'migrateSaveMetadataV1' supplies.
+minimalSaveMetadataV1 ∷ SaveMetadataV1
+minimalSaveMetadataV1 = SaveMetadataV1
+    { sm1Name = "b1-hand-built", sm1Seed = wgpSeed defaultGP
+    , sm1WorldSize = wgpWorldSize defaultGP, sm1PlateCount = wgpPlateCount defaultGP
+    , sm1Timestamp = "2026-07-16T00:00:00.000000Z"
+    , sm1WorldName = Nothing, sm1WorldGloss = Nothing }
 
 -- | A minimal, otherwise-valid frozen v90 'SaveDataV90' (issue #766,
 --   save-overhaul C4) — the exact shape a real #759-era @"session"@
@@ -1060,8 +1078,8 @@ spec = do
            \build rather than being rejected as unknown" $ do
             let b1Meta = minimalSaveMetadataV90
                 b1Specs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode b1Meta)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1)
                     , (ComponentId "session", 90, True
                       , S.encode minimalSaveDataV90) ]
                 bytes = case encodeEnvelope defaultEnvelopeLimits

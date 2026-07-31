@@ -30,7 +30,6 @@ import World.Types
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
-import World.Save.Types (AutosaveRequest(..))
 import World.Save.Integrity
     (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
     , IntegrityReport(..), buildKnownEntities, LuaRefEdge(..)
