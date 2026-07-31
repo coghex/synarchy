@@ -17,6 +17,7 @@ module Engine.Asset.YamlUnits
     , defaultUnitYamlBody
     , defaultUnitYamlNaturalResistance
     , loadUnitYaml
+    , unitYamlBodyPartToBodyPart
     ) where
 
 import UPrelude
@@ -26,6 +27,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Unit.Types.Combat (BodyPart(..))
 
 -- | One named animation as loaded from YAML. Per-direction frame paths;
 --   directions accept short ("S","SW") or long ("south","south-east").
@@ -220,6 +222,33 @@ instance FromJSON UnitYamlBodyPart where
         ⊛ v .:? "depth"               .!= 0.0
         ⊛ v .:? "affects_locomotion"  .!= False
         ⊛ v .:? "affects_balance"     .!= False
+
+-- | Convert one YAML-declared body part into the runtime `BodyPart` both
+--   the Lua unit loader and headless physiology tests consume. The SOLE
+--   conversion path — a hand-transcribed part list would silently drift
+--   from the shipped data, so anything that needs the real acolyte
+--   topology (fall calibration, combat tests) must go through this
+--   function rather than re-deriving it.
+unitYamlBodyPartToBodyPart ∷ UnitYamlBodyPart → BodyPart
+unitYamlBodyPartToBodyPart p = BodyPart
+    { bpId              = uybpId p
+    , bpName            = maybe (uybpId p) id (uybpName p)
+    , bpParent          = uybpParent p
+    , bpVital           = uybpVital p
+    , bpAreaWeight      = uybpAreaWeight p
+    , bpTacticalValue   = uybpTacticalValue p
+    , bpBleedFactor     = uybpBleedFactor p
+    , bpHeightLow       = uybpHeightLow p
+    , bpHeightHigh      = uybpHeightHigh p
+    , bpLayers          =
+        [ ( maybe (uylMaterial l) id (uylName l)
+          , uylMaterial l, uylThickness l )
+        | l ← uybpLayers p ]
+    , bpTargetable      = uybpTargetable p
+    , bpDepth           = uybpDepth p
+    , bpAffectsLocomotion = uybpAffectsLocomotion p
+    , bpAffectsBalance     = uybpAffectsBalance p
+    }
 
 -- | Natural (innate) weapon block — claws/fangs/fists. Optional on
 --   the unit YAML. When present, Combat.Resolution falls back to
