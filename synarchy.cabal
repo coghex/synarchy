@@ -886,7 +886,8 @@ executable synarchy
     import: warnings, lang, build-policy
     -- .hs or .lhs file containing the Main module.
     main-is: Main.hs
-    other-modules: App.Cli
+    other-modules: App.Boot
+                 , App.Cli
                  , App.Exception
                  , App.Graphical
                  , App.Offscreen

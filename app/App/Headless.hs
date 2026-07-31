@@ -6,14 +6,11 @@ module App.Headless
   ) where
 
 import UPrelude
-import Control.Exception (displayException)
 import Data.IORef (readIORef, writeIORef)
-import System.Exit (exitFailure)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Types (EngineConfig(..), BootProfile(..))
-import Engine.Core.Thread (shutdownThread)
+import Engine.Core.Types (BootProfile(..))
 import Engine.Core.Log (LogCategory(..), shutdownLogger)
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Loop.Headless (headlessLoop)
@@ -23,6 +20,8 @@ import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
+import App.Boot (BootWorkers(..), FatalStream(..), bootConfig
+                , handleBootResult, shutdownBootWorkers)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine in headless mode (no window, no GPU)
@@ -32,16 +31,7 @@ runHeadless ∷ BootProfile → Maybe Int → IO ()
 runHeadless bootProfile mPort = do
   EngineInitResult env ← initializeEngineHeadless
 
-  let env' = case mPort of
-        Just p  → env
-            { engineConfig = (engineConfig env)
-                { ecDebugPort = p
-                , ecBootProfile = bootProfile
-                } }
-        Nothing → env
-            { engineConfig = (engineConfig env)
-                { ecBootProfile = bootProfile
-                } }
+  let env' = bootConfig bootProfile mPort env
 
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
@@ -49,33 +39,27 @@ runHeadless bootProfile mPort = do
   simThreadState   ← startSimThread env'
   combatThreadState ← startCombatThread env'
 
+  -- Headless starts no input thread — the debug console lives inside
+  -- the Lua thread.
+  let workers = BootWorkers
+        { bwCombat = Just combatThreadState
+        , bwSim    = Just simThreadState
+        , bwUnit   = Just unitThreadState
+        , bwWorld  = Just worldThreadState
+        , bwInput  = Nothing
+        , bwLua    = Just luaThreadState
+        }
+
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
         logInfoM CatSystem "Starting engine (headless)..."
         headlessLoop
         logInfoM CatSystem "Headless engine shutting down..."
-        liftIO $ shutdownThread combatThreadState
-        liftIO $ shutdownThread simThreadState
-        liftIO $ shutdownThread unitThreadState
-        liftIO $ shutdownThread worldThreadState
-        liftIO $ shutdownThread luaThreadState
+        liftIO $ shutdownBootWorkers workers
         logger ← liftIO $ readIORef $ loggerRef env'
         liftIO $ shutdownLogger logger
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
         logDebugM CatSystem "Headless engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  case result of
-    Left err → do
-        putStrLn $ displayException err
-        shutdownThread combatThreadState
-        shutdownThread simThreadState
-        shutdownThread unitThreadState
-        shutdownThread worldThreadState
-        shutdownThread luaThreadState
-        -- Flush buffered log lines — the error context is exactly
-        -- what we must not lose — then exit with a failure code.
-        logger ← readIORef (loggerRef env')
-        shutdownLogger logger
-        exitFailure
-    Right _ → pure ()
+  handleBootResult FatalToStdout env' workers result

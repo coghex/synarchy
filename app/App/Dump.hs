@@ -5,11 +5,9 @@ module App.Dump
   ) where
 
 import UPrelude
-import Control.Exception (displayException)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Data.List (intercalate, sortBy)
 import Data.Ord (comparing)
@@ -27,8 +25,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngineHeadlessWith, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Types (EngineConfig(..))
-import Engine.Core.Thread (shutdownThread)
+import Engine.Core.Types (BootProfile(..))
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
                                    , SystemError(..), mkErrorContext
                                    , throwEngineException)
@@ -46,6 +43,8 @@ import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
 import App.Cli (DumpLayers(..))
+import App.Boot (BootWorkers(..), FatalStream(..), bootConfig
+                , handleBootResult, shutdownBootWorkers)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine in dump mode: generate world, load chunks, dump tile
@@ -64,13 +63,25 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   -- JSON on stdout.
   EngineInitResult env ← initializeEngineHeadlessWith (LogToHandle stderr)
 
-  let env' = env { engineConfig = (engineConfig env) { ecDebugPort = 0 } }
+  -- Port 0 is dump's own contract, not a CLI default: it tells
+  -- startDebugServer to open no TCP listener at all.
+  let env' = bootConfig BootNormal (Just 0) env
 
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'
   combatThreadState ← startCombatThread env'
+
+  -- Dump, like headless, starts no input thread.
+  let workers = BootWorkers
+        { bwCombat = Just combatThreadState
+        , bwSim    = Just simThreadState
+        , bwUnit   = Just unitThreadState
+        , bwWorld  = Just worldThreadState
+        , bwInput  = Nothing
+        , bwLua    = Just luaThreadState
+        }
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -200,32 +211,15 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                 [] → hPutStrLn stderr "dump: no world data"
 
         liftIO $ writeIORef (lifecycleRef env') CleaningUp
-        liftIO $ shutdownThread combatThreadState
-        liftIO $ shutdownThread simThreadState
-        liftIO $ shutdownThread unitThreadState
-        liftIO $ shutdownThread worldThreadState
-        liftIO $ shutdownThread luaThreadState
+        liftIO $ shutdownBootWorkers workers
         logger ← liftIO $ readIORef $ loggerRef env'
         liftIO $ shutdownLogger logger
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
 
+  -- FatalToStderr so a failed dump never pollutes the JSON stdout
+  -- channel with success-shaped output.
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  case result of
-    Left err → do
-        -- Errors go to stderr so a failed dump never pollutes the JSON
-        -- stdout channel with success-shaped output.
-        hPutStrLn stderr $ displayException err
-        shutdownThread combatThreadState
-        shutdownThread simThreadState
-        shutdownThread unitThreadState
-        shutdownThread worldThreadState
-        shutdownThread luaThreadState
-        -- Flush buffered log lines — the error context is exactly
-        -- what we must not lose — then exit with a failure code.
-        logger ← readIORef (loggerRef env')
-        shutdownLogger logger
-        exitFailure
-    Right _ → pure ()
+  handleBootResult FatalToStderr env' workers result
 
 -- | Poll until world generation is done. The argument is a timeout in
 --   /seconds/; internally we poll every 250ms (4 iterations per second).
