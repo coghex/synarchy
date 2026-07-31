@@ -17,7 +17,17 @@ import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import System.Random
 import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.InputView
+    (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
@@ -53,7 +63,9 @@ handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → Maybe WorldIdentity → IO ()
 handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
                        identity = do
-    let (worldSize, placeCount) =
+    let worldSim = toWorldSimCapability env
+        handoff  = toRenderHandoffCapability env
+        (worldSize, placeCount) =
             normalizeWorldGenInputs rawWorldSize rawPlaceCount
     when (worldSize ≠ rawWorldSize ∨ placeCount ≠ rawPlaceCount) $ do
         let msg = "Normalized worldgen inputs: worldSize "
@@ -87,11 +99,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- WorldState; reclaim that old page's blood-texture GPU resources
     -- (#788) before it drops out of wmWorlds below. No-op the common case
     -- where no page yet exists under this id.
-    do preMgr ← readIORef (worldManagerRef env)
-       enqueueBloodDisposalForPage (bloodDisposeQueue env) preMgr pageId
+    do preMgr ← readIORef (wsWorldManagerRef worldSim)
+       enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
 
     -- register early so lua can read the loading phase
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
@@ -111,12 +123,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- it can validate a save's material references.
     sendGenLog env "Loading material registry from data/materials..."
     populatedReg ← loadPopulatedMaterialRegistry logger "data/materials"
-    writeIORef (materialRegistryRef env) populatedReg
+    writeIORef (wsMaterialRegistryRef worldSim) populatedReg
 
     -- Step 1: Timeline (now co-evolves climate)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
     sendGenLog env "Building geological timeline..."
-    worldGenCfg0 ← readIORef (worldGenConfigRef env)
+    worldGenCfg0 ← readIORef (wsWorldGenConfigRef worldSim)
     let erosionIntensity = wgcErosionIntensity worldGenCfg0
         volcanicActivity = wgcVolcanicActivity worldGenCfg0
         lavaPoolDepth    = wgcLavaPoolDepth worldGenCfg0
@@ -132,7 +144,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
     _ ← evaluate (force borderedCache)
-    registry ← readIORef (materialRegistryRef env)
+    registry ← readIORef (wsMaterialRegistryRef worldSim)
     let !_ = registry `seq` ()  -- ensure registry is read before logging timeline info
     let plateLines = formatPlatesSummary seed worldSize placeCount registry
     forM_ plateLines $ \line → do
@@ -166,7 +178,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         logInfo logger CatWorld line
         sendGenLog env line
 
-    floraCat ← readIORef (floraCatalogRef env)
+    floraCat ← readIORef (wsFloraCatalogRef worldSim)
     logInfo logger CatWorld $ "Flora catalog snapshot: "
         <> T.pack (show (HM.size (fcSpecies floraCat))) <> " species, "
         <> T.pack (show (HM.size (fcWorldGen floraCat))) <> " worldgen entries"
@@ -191,7 +203,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- ocean + lake/river data (locations keep clear of water, #414).
     -- Empty (and skipped) when no defs are loaded — the common
     -- headless-dump path stays byte-identical and zero-cost.
-    locRegistry ← readIORef (locationDefsRef env)
+    locRegistry ← readIORef (crLocationDefsRef (toContentRegistriesCapability env))
     let locDefs = allLocations locRegistry
         overlay = computeLocationOverlay seed worldSize plates oceanMap oceanDist
                     (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
@@ -228,7 +240,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- Round 9 review (issue #763): pair the atlas with the EXACT
     -- WorldState it belongs to (this init's own page), mirroring
     -- World.Load.Publish's identical fix -- see EngineEnv.zoomAtlasDataRef.
-    writeIORef (zoomAtlasDataRef env) $
+    writeIORef (rhZoomAtlasDataRef handoff) $
         Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas, [worldState])
     -- Store atlas metadata (chunksPerRow) for UV computation during baking
     writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
@@ -245,9 +257,9 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     _ ← evaluate (force preview)
     -- Round 10 review: stamp with a fresh generation (see
     -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
-    previewGen ← atomicModifyIORef' (worldPreviewGenerationRef env)
+    previewGen ← atomicModifyIORef' (rhWorldPreviewGenerationRef handoff)
                     (\g → (g + 1, g + 1))
-    writeIORef (worldPreviewRef env) $
+    writeIORef (rhWorldPreviewRef handoff) $
         Just (piWidth preview, piHeight preview, piData preview, previewGen)
     sendGenLog env "World preview ready."
     
@@ -258,7 +270,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env $ "Generating initial chunks ("
         <> T.pack (show totalInitialChunks) <> ")..."
     
-    catalog ← readIORef (floraCatalogRef env)
+    catalog ← readIORef (wsFloraCatalogRef worldSim)
     let centerCoord = ChunkCoord 0 0
         (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
@@ -305,7 +317,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
                                                 worldSize 0 0
         startZSlice = surfaceElev + surfaceHeadroom
-    atomicModifyIORef' (cameraRef env) $ \cam →
+    atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
         (cam { camZSlice = startZSlice, camZTracking = True }, ())
     
     sendGenLog env $ "World initialized: "
@@ -318,6 +330,8 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
 handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldInitArenaCommand env logger pageId = do
+    let worldSim = toWorldSimCapability env
+        handoff  = toRenderHandoffCapability env
     logInfo logger CatWorld $ "Initializing test arena: " <> unWorldPageId pageId
 
     worldState ← emptyWorldState
@@ -325,11 +339,11 @@ handleWorldInitArenaCommand env logger pageId = do
 
     -- Replacing an existing page id orphans its old WorldState; reclaim
     -- its blood-texture GPU resources (#788) before it drops out below.
-    do preMgr ← readIORef (worldManagerRef env)
-       enqueueBloodDisposalForPage (bloodDisposeQueue env) preMgr pageId
+    do preMgr ← readIORef (wsWorldManagerRef worldSim)
+       enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
 
     -- Register early so textures sent after this command are routed correctly
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
@@ -361,7 +375,7 @@ handleWorldInitArenaCommand env logger pageId = do
     writeIORef (wsLoadPhaseRef worldState) LoadDone
 
     -- Set camera z-slice to just above the surface
-    atomicModifyIORef' (cameraRef env) $ \cam →
+    atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
         (cam { camZSlice = arenaZ + surfaceHeadroom
              , camZTracking = True
              , camPosition = (0, 0)
@@ -378,11 +392,11 @@ handleWorldInitArenaDoneCommand env logger pageId = do
     logInfo logger CatWorld $ "Arena textures ready, showing: " <> unWorldPageId pageId
     
     -- Now safe to make visible — all texture commands have been processed
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
         if pageId `elem` wmVisible mgr
         then (mgr, ())
         else (mgr { wmVisible = pageId : wmVisible mgr }, ())
     
     -- Broadcast to Lua that the arena is ready to display
-    let lteq = luaQueue env
+    let lteq = ivLuaQueue (toInputViewCapability env)
     Q.writeQueue lteq (LuaArenaReady (unWorldPageId pageId))
