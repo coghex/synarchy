@@ -59,7 +59,17 @@ colony:
 
   prepared   its spawn kit (a full 2 L canteen, rations) plus rations
              transferred off the technomule
-  control    the same acolyte def, canteen drained and rations removed
+  control    the same acolyte def, the same full canteen, no rations
+
+The canteen stays full on BOTH, and that is the tighter experiment
+rather than the softer one. A dry canteen puts `refill_canteen`'s
+urgency ramp at its 7.5 peak, above `follow_command`'s 7.0, so an
+unwatered traveller correctly abandons its orders and walks to the
+nearest known water — which the scout's radio broadcast has already
+told the whole colony about. Observed: a control that left the muster
+and was found 10.7 tiles off-route beside the lake. That is a
+difference in BEHAVIOUR, not in the supply being measured, so water is
+held equal and food is the single variable.
 
 Both set out with the SAME deficit — stomach at 0.20 of each unit's own
 max, seeded inside one PAUSED window so neither AI can react to it
@@ -88,8 +98,9 @@ first meal's salt bolus knocks it out instead (both observed while
 building this probe). That is a real interaction and arguably worth its
 own issue, but "measure it" is not the same as "manufacture it", and
 tuning survival constants here is explicitly out of scope. Water is
-therefore REPORTED as evidence at both observation points (litres
-carried, hydration fraction) and not gated.
+therefore held EQUAL between the two travellers and reported as evidence
+at both observation points (litres carried, hydration fraction) rather
+than gated.
 
 Two scenario conditions are applied to BOTH travellers so that supplies
 are genuinely the only variable:
@@ -105,17 +116,23 @@ are genuinely the only variable:
     beside one particular ruin, not what preparation is worth.
 
 The two travellers share ONE leg, end to end. They are first MUSTERED to one staging
-tile and pinned there, because a shared destination is not a shared
-journey — hunger drains with time on the road, so departing from 36.4
-and 31.5 tiles out, as an early run of this probe did, is a ~16%
+tile and held there BY THE PAUSE, because a shared destination is not a
+shared journey — hunger drains with time on the road, so departing from
+36.4 and 31.5 tiles out, as an early run of this probe did, is a ~16%
 difference in leg length sitting inside the measurement. A shared
 DISTANCE is not enough either: a radial band is satisfied anywhere on a
 circle, so the muster gathers them at a place, and the departure check
 asserts how far apart they stand as well as how far each has to walk.
-Pinning each traveller on arrival (rather than waiting for both to be
-near the tile at once) is what makes the muster terminate at all: a
-completed move order does not hold position, so the first arrival
-wanders off while the second is still walking. They then travel under the same verb (`commandMove`), to
+
+The hold is `engine.setPaused` and not `unit.setFrozen`, which is the
+trap here: `uiFrozen` only makes the unit thread's `publishToRender`
+skip the sim-derived update (`src/Unit/Thread.hs`), so a "frozen" unit
+keeps walking under the simulation while `unit.getInfo` keeps reporting
+where it was when the flag went up. A muster built on that reads stale
+coordinates and then releases two travellers from wherever the sim has
+actually carried them. The departure positions here are re-read and
+re-checked with the simulation stopped, and everything up to the paired
+orders happens inside that same paused window. They then travel under the same verb (`commandMove`), to
 the same tile (the ruin's anchor), ordered in the same paused window.
 The measurement is taken when BOTH are inside the discovery halo IN THE
 SAME SAMPLE — not "each has been there at some point", because a unit
@@ -290,11 +307,12 @@ DEPART_STOMACH_FRAC = 0.20
 #: run departed from 36.4 and 31.5 tiles out: a ~5-tile (16%) spread on
 #: a ~30-tile leg.
 #:
-#: Both travellers are pinned within STAGING_RADIUS of ONE staging tile
-#: (see muster_travellers), which bounds all three quantities the caller
-#: then asserts: how far apart they stand, how far each has to walk, and
-#: — because both are within a couple of tiles of a point ~32 tiles from
-#: the ruin — their bearing to it, to within a few degrees.
+#: Both travellers are gathered within STAGING_RADIUS of ONE staging
+#: tile and verified there with the simulation stopped (see
+#: muster_travellers), which bounds all three quantities: how far apart
+#: they stand, how far each has to walk, and — because both are within a
+#: couple of tiles of a point ~32 tiles from the ruin — their bearing to
+#: it, to within a few degrees.
 STAGING_RADIUS = 2.0
 MAX_START_SEPARATION = 3.0
 MAX_START_SPREAD = 2.0
@@ -1055,9 +1073,19 @@ def load_fraction(port: int, uid: int):
     return carried / cap
 
 
-def shed_to_capacity(port: int, uid: int) -> int:
+def shed_to_capacity(port: int, uid: int, headroom: float = 0.0) -> int:
     """Shed personal tools until the traveller is inside its carrying
-    capacity. Returns how many items were shed.
+    capacity WITH `headroom` kg to spare. Returns how many items were
+    shed.
+
+    The headroom is the extraction target's own weight, and it is not
+    optional: `unitAi.commandPickup` refuses at command time when
+    `getCarryingWeight + the instance's weight` exceeds capacity (#920),
+    so a carrier that merely fits itself can still be turned away at the
+    ruin. Observed: a traveller that departed at 91% of capacity had its
+    retrieval order refused outright on arrival — the loop's own
+    capacity contract working exactly as #920 specifies, against a
+    fixture that had not left room for the loot.
 
     This is what a player does before an expedition, and skipping it is
     a real flake rather than a nicety: `docs/expedition_survival_calibration.md`
@@ -1071,8 +1099,12 @@ def shed_to_capacity(port: int, uid: int) -> int:
     a second variable alongside supplies."""
     shed = 0
     for defname in SHEDDABLE:
-        frac = load_fraction(port, uid)
-        if frac is None or frac <= 1.0:
+        carried_kg = _as_float(send(port, f"return unit.getCarryingWeight({uid})"))
+        cap = _as_float(send(port, f"return unit.getStat({uid},"
+                                   f"'carrying_capacity')"))
+        if carried_kg is None or not cap or cap <= 0:
+            break
+        if carried_kg + headroom <= cap:
             break
         # `unit.removeItem` reports success truthily; compare against the
         # falsy spellings rather than assuming a boolean.
@@ -1083,72 +1115,92 @@ def shed_to_capacity(port: int, uid: int) -> int:
     return shed
 
 
-def strip_supplies(port: int, uid: int) -> None:
-    """The control's ONLY difference: drain every water container and
-    remove every ration. The (empty) canteen is left in place so the two
-    travellers differ in what the containers HOLD, not in what they are
-    carrying — same items, same encumbrance shape."""
-    send(port,
-         f"for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
-         f"if it.holds=='water' and (tonumber(it.currentFill) or 0)>0 then "
-         f"unit.modifyItemFillById({uid}, it.instanceId, "
-         f"-(tonumber(it.currentFill))) end end; "
-         f"while unit.removeItem({uid},'{RATIONS_DEF}') do end; return 'ok'",
-         timeout=20.0)
+def strip_rations(port: int, uid: int) -> None:
+    """The control's ONLY difference: every ration removed. Its canteen
+    is deliberately left FULL.
+
+    Emptying the canteen too would look like a stronger control and is
+    actually a second variable. A dry canteen puts `refill_canteen`'s
+    quadratic urgency ramp at its 7.5 peak, above `follow_command`'s
+    7.0, so an unwatered traveller correctly abandons its orders and
+    walks to the nearest known water — and the scout's `notify_allies`
+    radio broadcast has already told the whole colony where that is.
+    Observed exactly that: a control that left the muster and was found
+    10.7 tiles off-route beside the lake, 43.6 tiles from the ruin.
+    That is the game working, but it is a difference in BEHAVIOUR rather
+    than in supplies, and the gated metric is food.
+
+    Leaving both canteens full is therefore the tighter experiment, not
+    the softer one: the single difference between the two travellers is
+    the thing being measured."""
+    send(port, f"while unit.removeItem({uid},'{RATIONS_DEF}') do end; "
+               f"return 'ok'", timeout=20.0)
 
 
-def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 300.0):
-    """Gather both travellers at ONE staging position and PIN them there,
-    so the paired legs share an origin and therefore a route — not merely
-    a length.
+def origin_ok(pos, uids, staging, ruin_xy):
+    """(ok, separation, distance-spread, bearing-gap) for a candidate
+    departure pair. The shared origin is a PLACE, so separation is the
+    binding term: a radial distance band is satisfied anywhere on a
+    circle, and two travellers on opposite bearings score a spread of
+    0.0 while standing 64 tiles apart."""
+    a, b = uids
+    if not (pos.get(a) and pos.get(b)):
+        return False, -1.0, -1.0, -1.0
+    sep = dist(pos[a], pos[b])
+    spread = abs(dist(pos[a], ruin_xy) - dist(pos[b], ruin_xy))
+    gap = bearing_gap(pos[a], pos[b], ruin_xy)
+    ok = (sep <= MAX_START_SEPARATION and spread <= MAX_START_SPREAD
+          and all(dist(pos[u], staging) <= STAGING_RADIUS for u in uids))
+    return ok, sep, spread, gap
 
-    Each unit is ordered to the staging tile and frozen the moment it
-    comes within `STAGING_RADIUS` of that TILE. Pinning on arrival, rather
-    than waiting for both to be near it at once, is what makes the muster
-    terminate at all: a completed move order does not hold position
+
+def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0):
+    """Gather both travellers at ONE staging position and HOLD them there
+    with the pause, so the paired legs share an origin — and therefore a
+    route, not merely a length.
+
+    Returns (positions, sep, spread, gap) with the session left PAUSED on
+    success, or (None, ...) with it left running.
+
+    The hold is `engine.setPaused`, and it has to be. `unit.setFrozen`
+    looks like the obvious tool and is the wrong one: `uiFrozen` only
+    makes the unit thread's `publishToRender` skip the sim-derived
+    update (`src/Unit/Thread.hs`), so the AI and the simulation keep
+    moving the unit while `unit.getInfo` keeps reporting the position it
+    had when the flag went up. Mustering on those coordinates reads
+    stale numbers and then releases two travellers from wherever the sim
+    has actually carried them. Pausing stops the simulation itself,
+    which is what "hold still" has to mean here.
+
+    A completed move order does not hold position either
     (`docs/expedition_survival_calibration.md` observation E3 watched a
-    unit drift 10.7 tiles back out of camp), so the first arrival wanders
-    off while the second is still walking. Observed: a run where both
-    ended 40+ tiles out and 3.4 tiles apart after a 300 s wait.
-
-    Pinning on proximity to the TILE rather than on radial distance to
-    the ruin matters too. A distance band is satisfied anywhere on a
-    circle, so two travellers could be pinned on opposite bearings —
-    equal-length legs over different ground, and route shape is time on
-    the road, which is hunger. The caller asserts the resulting
-    separation and distance spread; both are bounded by construction
-    here.
-
-    The first unit to arrive is frozen ON the tile and the second stops
-    beside it (units do not share a tile), which is why the radius is a
-    couple of tiles rather than the move order's own 0.6-tile arrival
-    threshold.
-
-    Returns the pinned uid -> position map (frozen units), or None."""
+    unit drift 10.7 tiles back out of camp), so the first arrival
+    wanders while the second is still walking and a naive
+    both-near-the-tile poll can simply never come true — observed: both
+    units 40+ tiles out and 3.4 tiles apart after a 300 s wait. Hence
+    the shape below: poll for a sample that satisfies the origin
+    contract, pause the instant it appears, then RE-READ and re-check on
+    the now-stable positions. A sample that goes stale in the round trip
+    between the two just unpauses and keeps looking."""
     for uid in uids:
         send(port, f"require('scripts.unit_ai').commandMove({uid},"
                    f"{staging[0]},{staging[1]}); return 'ok'")
-    pinned: dict[int, tuple] = {}
     deadline = time.time() + seconds
-    while time.time() < deadline and len(pinned) < len(uids):
-        for uid in uids:
-            if uid in pinned:
-                continue
-            p = unit_pos(port, uid)
-            if p and dist(p, staging) <= STAGING_RADIUS:
-                send(port, f"unit.setFrozen({uid}, true); return 'ok'")
-                pinned[uid] = p
+    while time.time() < deadline:
+        live = {u: unit_pos(port, u) for u in uids}
+        if origin_ok(live, uids, staging, ruin_xy)[0]:
+            send(port, "engine.setPaused(true); return 'ok'")
+            # Re-read while the simulation is stopped: these are the
+            # positions the measured leg actually starts from.
+            held = {u: unit_pos(port, u) for u in uids}
+            ok, sep, spread, gap = origin_ok(held, uids, staging, ruin_xy)
+            if ok:
+                return held, sep, spread, gap
+            send(port, "engine.setPaused(false); return 'ok'")
         time.sleep(0.5)
-    if len(pinned) < len(uids):
-        for uid in pinned:
-            send(port, f"unit.setFrozen({uid}, false); return 'ok'")
-        return None
-    return pinned
-
-
-def unpin_travellers(port: int, uids) -> None:
-    for uid in uids:
-        send(port, f"unit.setFrozen({uid}, false); return 'ok'")
+    live = {u: unit_pos(port, u) for u in uids}
+    _ok, sep, spread, gap = origin_ok(live, uids, staging, ruin_xy)
+    return None, sep, spread, gap
 
 
 def seed_departure_deficit(port: int, uids) -> bool:
@@ -1358,23 +1410,21 @@ def main() -> int:
             # spawns its roster in a fixed sequence, so these are stable.
             scout, prepared, control = acolytes[0], acolytes[1], acolytes[2]
             # The remaining acolytes are the never-went-there control for
-            # the per-unit KNOWLEDGE layer (#915), so they are held at the
-            # colony (`unit.setFrozen`, the same immobilisation
-            # tools/tutorial_probe.py uses to make its share leg
-            # conclusive). Without it the premise is not guaranteed: an
-            # idle colonist wanders, and one that drifts into the ruin's
-            # halo has genuinely learned the location — which would read
-            # as the experiential layer leaking when in fact the unit
-            # went there. Clearly-separated fixture setup: they take no
-            # part in the supplies comparison.
+            # the per-unit KNOWLEDGE layer (#915). They are NOT held:
+            # `unit.setFrozen` freezes only the render publish, so a
+            # "held" colonist keeps walking under the sim while reporting
+            # the position it had when the flag went up — the check would
+            # be reading a stale coordinate. Instead the assertion below
+            # is made eligibility-based: a colonist qualifies only if it
+            # was never observed inside the halo during the leg and is
+            # outside it when the check runs. A colonist that genuinely
+            # wanders to the ruin has genuinely learned it, and is
+            # excluded rather than counted as a leak.
             stay_home = [u for u in acolytes
                          if u not in (scout, prepared, control)]
-            for uid in stay_home:
-                send(port, f"unit.setFrozen({uid}, true); return 'ok'",
-                     timeout=15.0)
             print(f"  scout {scout}, prepared traveller {prepared}, "
                   f"unprepared control {control}, technomule {mule}, "
-                  f"held at the colony {stay_home}", flush=True)
+                  f"stay-at-home colonists {stay_home}", flush=True)
 
             storage_bid = build_storage(chk, port, home[0], home[1])
             if storage_bid < 0:
@@ -1403,23 +1453,40 @@ def main() -> int:
                 return 2
             if not provision(chk, port, mule, prepared):
                 return 2
-            strip_supplies(port, control)
+            strip_rations(port, control)
             c_water, c_rations = carried(port, control)
-            chk.ok(c_water == 0.0 and c_rations == 0,
-                   f"the control party leaves with NOTHING to drink or eat "
-                   f"({c_water:.2f} L, {c_rations} rations) — the single "
-                   f"difference between the two travellers")
-            shed = {u: shed_to_capacity(port, u) for u in (prepared, control)}
-            loads = {u: load_fraction(port, u) for u in (prepared, control)}
-            chk.ok(all((loads[u] or 9.9) <= 1.0 for u in (prepared, control)),
-                   f"both travellers set out INSIDE their carrying capacity — "
-                   f"an over-encumbered acolyte walks at a fraction of comfort "
-                   f"speed and its order stall-times-out, which would be a "
-                   f"second variable beside supplies (prepared "
-                   f"{(loads[prepared] or -1) * 100:.0f}% of capacity after "
-                   f"shedding {shed[prepared]} tool(s), control "
-                   f"{(loads[control] or -1) * 100:.0f}% after "
-                   f"{shed[control]})")
+            p_water, p_rations = carried(port, prepared)
+            chk.ok(c_rations == 0 and p_rations > 0
+                   and abs(c_water - p_water) < 0.01,
+                   f"the control party leaves with NO FOOD and the SAME water "
+                   f"as the prepared one — food is the single difference "
+                   f"between the two travellers (prepared {p_water:.2f} L / "
+                   f"{p_rations} rations, control {c_water:.2f} L / "
+                   f"{c_rations} rations)")
+            # Headroom for the loot: commandPickup refuses at command
+            # time when the instance would not fit (#920), so a carrier
+            # that merely fits ITSELF is turned away at the ruin.
+            headroom = float(target.get("weight") or 0.0)
+            shed = {u: shed_to_capacity(port, u, headroom)
+                    for u in (prepared, control)}
+            room = {}
+            for u in (prepared, control):
+                carried_kg = _as_float(send(
+                    port, f"return unit.getCarryingWeight({u})")) or 0.0
+                cap = _as_float(send(
+                    port, f"return unit.getStat({u},'carrying_capacity')")) or 0.0
+                room[u] = (carried_kg, cap)
+            chk.ok(all(room[u][0] + headroom <= room[u][1]
+                       for u in (prepared, control)),
+                   f"both travellers set out INSIDE their carrying capacity with "
+                   f"room for the {target['defName']} ({headroom:.2f} kg) — an "
+                   f"over-encumbered acolyte walks at a fraction of comfort "
+                   f"speed and has its orders stall-timed-out, and one with no "
+                   f"headroom has its retrieval order refused outright (prepared "
+                   f"{room[prepared][0]:.1f}+{headroom:.2f} of "
+                   f"{room[prepared][1]:.1f} kg after shedding {shed[prepared]} "
+                   f"tool(s), control {room[control][0]:.1f}+{headroom:.2f} of "
+                   f"{room[control][1]:.1f} kg after {shed[control]})")
 
             completed, checked = poll_until(
                 45.0, lambda: (lambda p: p if EXPECTED_COMPLETED <= p[0] else None)(
@@ -1444,27 +1511,15 @@ def main() -> int:
             # (36.4 vs 31.5 tiles, in an earlier run of this probe) and
             # the difference would land in the measured delta alongside
             # supplies.
-            staged = muster_travellers(port, (prepared, control),
-                                       deposit_spot, ruin_xy)
+            # Leaves the session PAUSED on success, holding the verified
+            # departure positions still: everything from here to the
+            # paired orders happens inside that one window, so nothing
+            # moves between the check and the departure.
+            staged, sep, spread, bearing = muster_travellers(
+                port, (prepared, control), deposit_spot, ruin_xy)
             at_start = staged or {u: unit_pos(port, u)
                                   for u in (prepared, control)}
-            if all(at_start.values()):
-                sep = dist(at_start[prepared], at_start[control])
-                spread = abs(dist(at_start[prepared], ruin_xy)
-                             - dist(at_start[control], ruin_xy))
-                bearing = bearing_gap(at_start[prepared], at_start[control],
-                                      ruin_xy)
-            else:
-                sep = spread = bearing = -1.0
-            # Distance alone is not a shared route: a radial band is
-            # satisfied anywhere on a circle, so two travellers could set
-            # out the same distance from the ruin on opposite bearings
-            # and walk quite different ground. Separation is what pins
-            # the route; the spread and bearing are reported alongside it
-            # because they are what the separation is FOR.
-            if not chk.ok(staged is not None
-                          and 0 <= sep <= MAX_START_SEPARATION
-                          and spread <= MAX_START_SPREAD,
+            if not chk.ok(staged is not None,
                           f"both travellers depart from the SAME PLACE, not just "
                           f"the same distance — so they walk one route, and "
                           f"route shape is time on the road, which is hunger "
@@ -1474,17 +1529,15 @@ def main() -> int:
                           f"{dist(at_start[prepared], ruin_xy):.1f} vs "
                           f"{dist(at_start[control], ruin_xy):.1f} tiles out, "
                           f"spread {spread:.2f}, bar {MAX_START_SPREAD}; "
-                          f"bearings to the ruin {bearing:.1f} deg apart)"):
-                unpin_travellers(port, (prepared, control))
+                          f"bearings to the ruin {bearing:.1f} deg apart; "
+                          f"verified with the simulation stopped)"):
+                send(port, "engine.setPaused(false); return 'ok'")
                 return 2
 
-            # Seed the shared deficit and issue both orders inside ONE
-            # paused window, so the two travellers genuinely leave from
-            # the same state and under the same command. Released from
-            # the muster pin here, while still paused, so nothing moves
-            # between the release and the order.
-            send(port, "engine.setPaused(true); return 'ok'")
-            unpin_travellers(port, (prepared, control))
+            # Already paused by the muster. Seed the shared deficit and
+            # issue both orders inside that same window, so the two
+            # travellers genuinely leave from the same place, in the same
+            # state, under the same command.
             seeded = seed_departure_deficit(port, (prepared, control))
             depart = {u: vitals(port, u) for u in (prepared, control)}
             # Rations in the pack at departure. Consumption is the
@@ -1512,7 +1565,6 @@ def main() -> int:
 
             already = {it["instanceId"] for it in inventory(port, prepared)
                        if it.get("defName") == target["defName"]}
-            before_events = len(event_log(port))
             # ONE identical leg for both: the same verb, to the same
             # tile, issued in the same paused window.
             #
@@ -1555,6 +1607,10 @@ def main() -> int:
             # running rather than inferred from the number it left
             # behind.
             ate: dict[int, bool] = {prepared: False, control: False}
+            # Any stay-at-home colonist seen inside the halo during the
+            # leg has been there, and is therefore not evidence about
+            # units that have NOT been there.
+            visited_halo: set[int] = set()
             start = time.time()
             deadline = start + 480.0
             together = None
@@ -1577,6 +1633,10 @@ def main() -> int:
                             or send(port, f"return unit.getActivity({uid})")
                             == "eating"):
                         ate[uid] = True
+                for uid in stay_home:
+                    q = unit_pos(port, uid)
+                    if q and in_halo(q, box):
+                        visited_halo.add(uid)
                 # The shared observation point is both travellers inside
                 # the halo IN THE SAME SAMPLE — not "each has been there
                 # at some point". A unit whose move task has completed
@@ -1637,8 +1697,19 @@ def main() -> int:
             chk.ok(inst is not None,
                    f"approaching the ruin promotes its instance to 'discovered' "
                    f"({(instance_by_id(port, PAGE, ruin_id) or {}).get('lifecycle')!r})")
+            # The WHOLE log, deliberately not a slice from a mark taken
+            # before departure. `Engine.PlayerEvent.Emit.pushBounded`
+            # keeps a bounded ring buffer and drops the oldest rows past
+            # `eventStoreCap`, so an index captured earlier does not
+            # survive a busy session: once the buffer saturates, the
+            # slice silently skips real entries, and if the mark is past
+            # the new length it yields nothing at all (observed — a run
+            # whose lifecycle had demonstrably reached `discovered`
+            # reported no event). Scanning the whole log is also exactly
+            # as strict: the promotion is one-way, so an instance can
+            # emit its discovery event only once per session.
             label = (ruin.get("name") or "").strip()
-            hits = [e for e in event_log(port)[before_events:]
+            hits = [e for e in event_log(port)
                     if e.get("category") == "location_discovery"
                     and label and label in (e.get("text") or "")]
             chk.ok(len(hits) == 1,
@@ -1654,30 +1725,26 @@ def main() -> int:
             # must genuinely still be outside the halo, and its position
             # and memory are both reported so a failure says which.
             home_state = []
-            outside = []
+            never_went = []
             for u in stay_home:
                 p = unit_pos(port, u)
                 known = known_locations(port, u)
                 inside = bool(p) and in_halo(p, box)
-                home_state.append(f"uid {u} at {p} "
-                                  f"({'INSIDE' if inside else 'outside'} the halo) "
-                                  f"knows {sorted(known) or 'nothing'}")
-                if not inside:
-                    outside.append((u, known))
-            chk.ok(bool(outside),
-                   f"precondition: at least one colonist is still outside the "
-                   f"ruin's halo to test the knowledge layer against "
-                   f"({'; '.join(home_state) or 'none held'})")
-            chk.ok(bool(outside) and all(key not in k for _u, k in outside),
+                been = u in visited_halo or inside
+                home_state.append(
+                    f"uid {u} at {p} "
+                    f"({'HAS BEEN in' if been else 'never entered'} the halo) "
+                    f"knows {sorted(known) or 'nothing'}")
+                if not been:
+                    never_went.append((u, known))
+            chk.ok(bool(never_went),
+                   f"precondition: at least one colonist never entered the "
+                   f"ruin's halo, so there is something to test the knowledge "
+                   f"layer against ({'; '.join(home_state) or 'none'})")
+            chk.ok(bool(never_went) and all(key not in k for _u, k in never_went),
                    f"the colonists who never went learned nothing — per-unit "
                    f"knowledge is experiential, not broadcast "
                    f"({'; '.join(home_state)})")
-            # The hold has served its purpose; release it so the session
-            # that gets saved and reloaded below is an ordinary one and
-            # the persistence stages are not testing a frozen colony.
-            for uid in stay_home:
-                send(port, f"unit.setFrozen({uid}, false); return 'ok'",
-                     timeout=15.0)
 
             # -------------------------------------------------- extract
             chk.enter("extract", "recover the ruin's own loot-table output")

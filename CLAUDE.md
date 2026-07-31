@@ -803,10 +803,14 @@ before touching each area:
   recovered item's instance id / definition / mutable properties /
   storage ownership. The gate also runs an **unprepared control**: a
   second traveller sharing ONE identical leg with the first — mustered
-  to a single staging tile and pinned there, then same verb, same
-  destination, same paused window, same seeded hunger deficit —
+  to a single staging tile and held there by the PAUSE, then same verb,
+  same destination, same paused window, same seeded hunger deficit —
   measured once BOTH are
-  inside the ruin's halo, differing only in supplies, and which must end
+  inside the ruin's halo, differing only in FOOD (the canteen is left
+  full on both: a dry one puts `refill_canteen` at its 7.5 peak, above
+  `follow_command`, and the control then abandons the leg to walk to
+  the water the scout radioed about — a behavioural difference, not the
+  supply being measured), and which must end
   measurably worse off. That is what makes the scenario prove
   preparation matters rather than prove a walk succeeds. Six conditions
   keep the comparison honest, and weakening any one of them quietly
@@ -824,10 +828,14 @@ before touching each area:
   equalised as a PLACE and not merely a distance, because hunger drains
   with time on the road and route shape is time — a radial band is
   satisfied anywhere on a circle, so the check asserts separation as
-  well as distance spread, and each traveller is PINNED on arrival at
-  the staging tile (a completed move order does not hold position, E3,
-  so waiting for both to be near it at once can never come true); and
-  the observation point is both
+  well as distance spread, verified with the SIMULATION STOPPED (a
+  completed move order does not hold position, E3, and
+  **`unit.setFrozen` is not a hold at all**: `uiFrozen` only makes
+  `publishToRender` skip the sim-derived update, so a "frozen" unit
+  keeps walking while `unit.getInfo` reports where it was when the flag
+  went up — use `engine.setPaused` when you need a unit to actually
+  stay put, and re-read positions after pausing); and the observation
+  point is both
   travellers inside the halo IN THE SAME SAMPLE, since a unit that
   finishes its move reverts to wander and can drift back out while the
   other is still walking. The eating itself is
