@@ -101,8 +101,8 @@ saveMagic = 0x53595241
 --   marker, bumped by hand whenever either record's layout changes. It
 --   does not govern on-disk save compatibility: each envelope component
 --   carries its own version and migrations for that
---   ("World.Save.Envelope", "docs/persistence_contract.md"). Full v1-v91
---   history: "docs/history/savedata_version_changelog.md".
+--   ("World.Save.Envelope", "docs/persistence_contract.md"). Per-bump
+--   history up to v91: "docs/history/savedata_version_changelog.md".
 currentSaveVersion ∷ Int
 currentSaveVersion = 91
 

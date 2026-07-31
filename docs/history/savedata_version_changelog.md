@@ -2,9 +2,18 @@
 
 This is the per-version changelog that used to live as a comment attached to
 `currentSaveVersion` in `src/World/Save/Types.hs` (moved out by issue #984).
-It recorded every bump of that one `Int`, from v1 through v91, tracking
-whatever changed `SaveData`/`WorldPageSave`'s serialized shape or otherwise
-forced a whole-file save-version rejection.
+It tracked bumps of that one `Int` — which reached 91 — recording whatever
+changed `SaveData`/`WorldPageSave`'s serialized shape or otherwise forced a
+whole-file save-version rejection.
+
+The record is sparse, not a complete v1-v91 ledger. There is no v1 entry —
+the comment starts at v2 — and these version numbers between v2 and v91
+were never documented with their own header either: v14, v16-v21, v28-v32,
+v38-v47, v51, v53, v56. (v38 is a special case: its header text was lost
+before this move, but an orphaned fragment of its body survives and is
+preserved verbatim below, unattributed, where the source had it.) This
+file preserves exactly what the source comment recorded, without inventing
+entries to fill the gaps.
 
 The scheme this changelog describes no longer governs save compatibility.
 The persistence overhaul (#756-#768) replaced whole-file version rejection
@@ -25,15 +34,18 @@ few gaps for undocumented bumps) as a trailing right-hand-side comment that
 got a new entry prepended each time. The two sections below mirror that same
 split rather than force one unified order.
 
-One correction from issue #984's review is applied here: the trailing
-block's `v62` entry had its header text overwritten by a later commit
-(`9dc960c17`) while the body underneath it was left over from the previous
-`v61` entry (from `97beb0f37`), producing one merged entry mislabeled `v62`
-that actually described `v61`'s change, misattributed to issue #386 instead
-of `v61`'s real #386 (correct) — and v62's own real issue, #385, went missing
-from this block entirely (its accurate text had, separately, been appended
-to the leading block instead — see that section's last entry, below). Both
-versions are restored as distinct, correctly attributed entries in the
+One correction from issue #984's review is applied here. The two versions
+and their correct issues are: **v61** is `UnitSimState`'s vestigial
+`usFallImpact` removal, issue **#386** (commit `97beb0f37`); **v62** is the
+`rpMeanderSeed`/`rscMeanderSeed` removal, issue **#385** (commit
+`9dc960c17`). The source comment had these merged and misattributed: commit
+`9dc960c17` overwrote the trailing block's `v61` header with a `v62` header
+but left v61's original body text underneath it untouched, producing one
+entry labeled `v62` whose body actually described v61's change (and so
+carried v61's #386, mislabeled as v62's issue). v62's own accurate text —
+correctly citing #385 — had, separately, been appended to the leading block
+instead of the trailing one (see that section's last entry, below). Both
+versions are restored here as distinct, correctly attributed entries in the
 trailing block, in their proper chronological position; nothing else was
 reordered or reworded beyond that.
 

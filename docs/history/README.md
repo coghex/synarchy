@@ -36,9 +36,10 @@ the live code and the agent memory notes instead.
   cross-chunk border-recomputation angle it identifies is tracked as its
   own follow-up (#500).
 
-- **`savedata_version_changelog.md`** — the v1-v91 per-bump changelog
-  archived out of `currentSaveVersion`'s comment in
-  `src/World/Save/Types.hs` (2026-07-30, issue #984). SUPERSEDED as a
+- **`savedata_version_changelog.md`** — the sparse per-bump changelog (v2
+  through v91, with documented gaps) archived out of `currentSaveVersion`'s
+  comment in `src/World/Save/Types.hs` (2026-07-30, issue #984). SUPERSEDED
+  as a
   compatibility contract: it records the whole-file save-version scheme
   that governed rejection before the persistence overhaul (#756-#768); v90
   in the file is that overhaul's own switch to per-component versioning
