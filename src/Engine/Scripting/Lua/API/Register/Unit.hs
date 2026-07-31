@@ -4,6 +4,10 @@ module Engine.Scripting.Lua.API.Register.Unit
 
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Units
+-- The #1000 transfer contract is imported directly rather than through
+-- the Units facade: that facade's export list is deliberately frozen at
+-- the pre-split surface (see its header).
+import Engine.Scripting.Lua.API.Units.Transfer
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -62,6 +66,9 @@ registerUnitAPI env = do
   registerLuaFunction "depositToCargo"     (unitDepositToCargoFn env)
   registerLuaFunction "withdrawFromCargo"  (unitWithdrawFromCargoFn env)
   registerLuaFunction "getCarryingWeight"  (unitGetCarryingWeightFn env)
+  registerLuaFunction "checkTransfer"      (unitCheckTransferFn env)
+  registerLuaFunction "commitTransfer"     (unitCommitTransferFn env)
+  registerLuaFunction "transferContract"   (unitTransferContractFn env)
   registerLuaFunction "transitionTo" (unitTransitionToFn env)
   registerLuaFunction "getPose"      (unitGetPoseFn env)
   registerLuaFunction "getFaction"   (unitGetFactionFn env)
