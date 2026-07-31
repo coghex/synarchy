@@ -28,6 +28,17 @@
 --   the same reason: this module can not show it is an autosave, and
 --   "unverifiable" must fail towards keeping the player's bytes.
 --
+--   A save NAME can also be occupied by a pre-#762 LEGACY FLAT FILE
+--   (@saves\/autosave-3.synworld@), which 'World.Save.Serialize.listSaves'
+--   lists and 'World.Save.Serialize.loadWorld' loads under exactly that
+--   slot name. Autosaves are only ever published as slot DIRECTORIES, so
+--   a flat file at one of these names is never ours; worse, publishing a
+--   directory beside it would SHADOW it outright, since @loadWorld@
+--   prefers the directory and the flat save would become unreachable by
+--   its own name while still sitting on disk. Any legacy flat file in
+--   range is therefore a collision too — the rotation refuses rather
+--   than quietly making a player's save unloadable.
+--
 --   == What rotation deliberately leaves alone
 --
 --   Only indices @1..depth@ are ever touched. Generations ABOVE the
@@ -66,11 +77,13 @@ import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Control.Exception (IOException, try)
 import System.Directory
-    (doesDirectoryExist, removeDirectoryRecursive, renameDirectory)
+    ( doesDirectoryExist, doesFileExist, removeDirectoryRecursive
+    , renameDirectory )
 import System.FilePath ((</>))
 import Engine.Core.Log (LoggerState, LogCategory(..), logInfo)
 import Engine.Save.Config (rotationDepthMin, rotationDepthMax)
-import World.Save.Serialize (listSaves, savesDirectory, SaveListing(..))
+import World.Save.Serialize
+    (listSaves, savesDirectory, saveExtension, SaveListing(..))
 import World.Save.Types (SaveMetadata(..))
 import qualified World.Save.Storage as Storage
 
@@ -90,7 +103,11 @@ data SlotState = SlotState
     { ssIndex     ∷ !Int
     , ssName      ∷ !Text
     , ssDir       ∷ !FilePath
-    , ssExists    ∷ !Bool
+    , ssDirExists ∷ !Bool
+      -- ^ The modern slot-directory form — the only shape rotation can
+      --   actually rename or remove.
+    , ssLegacyFileExists ∷ !Bool
+      -- ^ The pre-#762 flat-file form occupying the SAME slot name.
     , ssClassified ∷ !(Maybe Bool)
       -- ^ 'Just' its durable autosave flag when the slot listed at all;
       --   'Nothing' when it exists on disk but could not be listed.
@@ -112,11 +129,14 @@ rotateAutosaveSlots logger luaKnownNames requestedDepth = do
     slots ← forM [1 .. depth] $ \i → do
         let name = autosaveSlotName i
             dir  = savesDirectory </> T.unpack name
-        exists ← doesDirectoryExist dir
+            flat = savesDirectory </> T.unpack name <> saveExtension
+        dirExists  ← doesDirectoryExist dir
+        flatExists ← doesFileExist flat
         pure SlotState { ssIndex      = i
                        , ssName       = name
                        , ssDir        = dir
-                       , ssExists     = exists
+                       , ssDirExists  = dirExists
+                       , ssLegacyFileExists = flatExists
                        , ssClassified = HM.lookup name classified
                        }
     -- Check EVERY slot in range before mutating any of them: a manual
@@ -125,7 +145,7 @@ rotateAutosaveSlots logger luaKnownNames requestedDepth = do
     case catMaybes (map ownershipProblem slots) of
         (reason : _) → pure (Left reason)
         [] → do
-            linkSafety ← mapM slotLinkSafety (filter ssExists slots)
+            linkSafety ← mapM slotLinkSafety (filter ssDirExists slots)
             case [ r | Left r ← linkSafety ] of
                 (reason : _) → pure (Left reason)
                 [] → performRotation logger depth slots
@@ -133,7 +153,14 @@ rotateAutosaveSlots logger luaKnownNames requestedDepth = do
 -- | Why this slot blocks the rotation, if it does.
 ownershipProblem ∷ SlotState → Maybe Text
 ownershipProblem s
-    | not (ssExists s) = Nothing
+    | ssLegacyFileExists s = Just $
+        "autosave rotation refused: a legacy flat save file '"
+        <> ssName s <> T.pack saveExtension
+        <> "' already occupies that save name -- publishing an autosave \
+           \there would shadow it (a slot directory is loaded in \
+           \preference to a flat file, so it could no longer be loaded \
+           \by name). Rename or remove it to let autosave use that name."
+    | not (ssDirExists s) = Nothing
     | otherwise = case ssClassified s of
         Just True  → Nothing
         Just False → Just $
@@ -166,7 +193,7 @@ performRotation logger depth slots = do
     result ← try $ do
         -- The generation that has aged out of the configured depth.
         forM_ (slotAt depth) $ \oldest →
-            when (ssExists oldest) $ do
+            when (ssDirExists oldest) $ do
                 logInfo logger CatWorld $
                     "Autosave rotation: discarding oldest generation '"
                     <> ssName oldest <> "'"
@@ -174,7 +201,7 @@ performRotation logger depth slots = do
         -- Descending, so each destination is free before it is used.
         forM_ [depth - 1, depth - 2 .. 1] $ \i →
             case (slotAt i, slotAt (i + 1)) of
-                (Just from, Just to) | ssExists from →
+                (Just from, Just to) | ssDirExists from →
                     renameDirectory (ssDir from) (ssDir to)
                 _ → pure ()
     pure $ case result ∷ Either IOException () of

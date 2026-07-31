@@ -21,7 +21,7 @@ import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Control.Exception (SomeException, evaluate, try)
+import Control.Exception (SomeException, evaluate, finally, try)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
@@ -336,18 +336,33 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                                 luaKnownNames luaRequiredNames
                                     case result of
                                       Right warnings →
-                                        do
-                                            completeTransaction env
+                                        -- #913: the transaction stays
+                                        -- NON-TERMINAL until every piece of
+                                        -- session state this save is going to
+                                        -- touch has been touched. Completing it
+                                        -- first would drop the save/load
+                                        -- mutual exclusion while the autosave
+                                        -- restore below still has pause and
+                                        -- time scale left to write: a
+                                        -- Lua-thread engine.loadSave accepted
+                                        -- in that window pauses synchronously
+                                        -- at acceptance, and this restore would
+                                        -- then unpause or retime a session
+                                        -- mid-load. 'finally' rather than a
+                                        -- plain reorder so an exception in the
+                                        -- restore or the event emission can
+                                        -- never leave the barrier wedged open
+                                        -- (the disk write already succeeded, so
+                                        -- success is still the honest outcome).
+                                        (do
                                             forM_ warnings $ \w →
                                                 logWarn logger CatWorld $
                                                     "World saved with a cleanup \
                                                     \warning: " <> w
                                             logInfo logger CatWorld $
                                                 "World saved successfully: " <> saveName
-                                            -- #913: an autosave hands the
-                                            -- player back the world they were
-                                            -- playing -- BEFORE the success
-                                            -- event below, which a
+                                            -- The restore runs BEFORE the
+                                            -- success event, which a
                                             -- pause-configured notification
                                             -- category may itself pause on
                                             -- (Engine.PlayerEvent.Emit writes
@@ -361,7 +376,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                             emitEvent env "save_load" "World.Save" $
                                                 "Game saved: " <> saveName
                                             when restored $
-                                                healEventImposedPause env visibleId
+                                                healEventImposedPause env visibleId)
+                                          `finally` completeTransaction env
                                       Left err →
                                         do
                                             failTransaction env err

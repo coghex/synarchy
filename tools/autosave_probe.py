@@ -38,7 +38,9 @@ What it proves, in order:
      paused (and zero-scaled).
   9. MANUAL SAVES ARE NEVER OVERWRITTEN. A pre-existing MANUAL save
      sitting on an `autosave-<n>` name fails the attempt with a
-     `save_load` failure, overwrites nothing, and rotates nothing.
+     `save_load` failure, overwrites nothing, and rotates nothing --
+     both as a modern slot directory AND as a pre-#762 legacy flat file,
+     which a published directory would otherwise silently shadow.
  10. ROTATION IS ORDERED AND OWNED. Repeated autosaves keep `autosave-1`
      newest, and only classified-autosave slots are ever replaced.
  11. RETENTION. Reducing `rotation_depth` and disabling autosave both
@@ -488,11 +490,43 @@ def main() -> int:
                "nothing was partially rotated",
                f"{before_slots} -> {autosave_slots(root)}")
 
+        # A pre-#762 LEGACY FLAT save at the same name is the other way
+        # that name can be occupied. It is never an autosave (autosaves
+        # are only ever published as slot directories), and publishing a
+        # directory beside it would SHADOW it -- loadWorld prefers the
+        # directory, so the flat save would become unloadable by its own
+        # name while still sitting on disk.
+        shutil.rmtree(os.path.join(saves_dir, "autosave-2"))
+        legacy_flat = os.path.join(saves_dir, "autosave-2.synworld")
+        shutil.copyfile(os.path.join(saves_dir, "manual_slot", "world.synworld"),
+                        legacy_flat)
+        legacy_bytes = os.path.getsize(legacy_flat)
+        rows = listing(args.port)
+        chk.ok(rows.get("autosave-2", {}).get("autosave") is False,
+               "the legacy flat file lists under the reserved name, as manual",
+               json.dumps(rows.get("autosave-2")))
+        before = dump(args.port)
+        before_slots = autosave_slots(root)
+        force_deadline(args.port)
+        chk.ok(poll_until(30, lambda: dump(args.port)["stats"]["failures"]
+                          > before["stats"]["failures"]) or False,
+               "a legacy flat save on a reserved name also blocks the attempt")
+        chk.ok(dump(args.port)["stats"]["attempts"] == before["stats"]["attempts"],
+               "no save request was made")
+        chk.ok(os.path.isfile(legacy_flat)
+               and os.path.getsize(legacy_flat) == legacy_bytes,
+               "the legacy flat save is left exactly as it was")
+        chk.ok(not os.path.isdir(os.path.join(saves_dir, "autosave-2")),
+               "no slot directory was published beside it to shadow it")
+        chk.ok(autosave_slots(root) == before_slots,
+               "nothing was partially rotated",
+               f"{before_slots} -> {autosave_slots(root)}")
+        os.remove(legacy_flat)
+
         # ---------------------------------------------------------
         # 10. Normal rotation: autosave-1 stays newest, owned slots only.
         # ---------------------------------------------------------
         print("10. rotation keeps autosave-1 newest and replaces only owned slots")
-        shutil.rmtree(os.path.join(saves_dir, "autosave-2"))
         for i in range(3):
             before = dump(args.port)["stats"]["attempts"]
             force_deadline(args.port)
