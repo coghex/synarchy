@@ -53,7 +53,8 @@ def = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = []
+    , udTransferReceiver = False }
 
 -- A unit carrying exactly the given wounds, with plenty of blood so a
 -- bleed can't kill it mid-test (we're testing infection, not death).

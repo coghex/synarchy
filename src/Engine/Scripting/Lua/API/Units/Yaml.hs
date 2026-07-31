@@ -237,6 +237,7 @@ loadUnitYamlFn env backendState = do
                             , udNaturalResistance = natRes
                             , udNaturalWeapon    = natWeapon
                             , udModifiers        = defMods
+                            , udTransferReceiver = uydTransferReceiver def
                             }
                     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())

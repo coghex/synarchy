@@ -168,4 +168,11 @@ data UnitDef = UnitDef
       --   `uiModifiers` at spawn — the species' innate buffs
       --   (technomule: carrying_capacity +50% "cybernetic
       --   enhancements"). Show in tooltips like any other modifier.
+    , udTransferReceiver ∷ !Bool
+      -- ^ May a player-managed transfer (#1000) put items INTO this
+      --   unit's inventory? False by default: an acolyte or a wolf is
+      --   not a container. The technomule sets it. Data-driven on
+      --   purpose — the AI's historical `defName == "technomule"`
+      --   comparisons cannot express a second pack animal, and
+      --   'Unit.Transfer' refuses to hardcode one.
     } deriving (Show, Eq)
