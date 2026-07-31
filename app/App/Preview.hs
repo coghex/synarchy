@@ -9,16 +9,13 @@ module App.Preview
   ) where
 
 import UPrelude
-import Control.Exception (displayException)
 import Data.IORef (readIORef)
-import System.Exit (exitFailure)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
-import Engine.Core.Types (EngineConfig(..), BootProfile(..), PreviewBrowse)
-import Engine.Core.Thread (shutdownThread)
-import Engine.Core.Log (LogCategory(..), shutdownLogger)
+import Engine.Core.Types (PreviewBrowse)
+import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Graphics.Vulkan.Init (initializeVulkan)
 import Engine.Graphics.Window.Types (Window(..))
@@ -28,6 +25,8 @@ import Engine.Input.Thread (startInputThread)
 import Engine.Loop (mainLoop)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Thread (startLuaThread)
+import App.Boot (BootWorkers(..), FatalStream(..), previewBootConfig
+                , handleBootResult)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
@@ -41,17 +40,21 @@ runPreview ∷ (Text, Maybe Text) → Maybe PreviewBrowse → Maybe Int → IO (
 runPreview target mBrowse mPort = do
   EngineInitResult env ← initializeEngine
 
-  let baseConfig = engineConfig env
-      env' = env
-        { engineConfig = baseConfig
-            { ecDebugPort = fromMaybe (ecDebugPort baseConfig) mPort
-            , ecBootProfile = BootPreview
-            , ecPreviewTarget = Just target
-            , ecPreviewBrowse = mBrowse
-            } }
+  let env' = previewBootConfig target mBrowse mPort env
 
   inputThreadState ← startInputThread env'
   luaThreadState   ← startLuaThread env'
+
+  -- Preview's whole point is the trimmed topology: no world, unit, sim
+  -- or combat thread ever starts.
+  let workers = BootWorkers
+        { bwCombat = Nothing
+        , bwSim    = Nothing
+        , bwUnit   = Nothing
+        , bwWorld  = Nothing
+        , bwInput  = Just inputThreadState
+        , bwLua    = Just luaThreadState
+        }
 
   videoConfig ← readIORef (videoConfigRef env')
 
@@ -73,14 +76,4 @@ runPreview target mBrowse mPort = do
         logDebugM CatSystem "Preview engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  case result of
-    Left err → do
-        putStrLn $ displayException err
-        shutdownThread inputThreadState
-        shutdownThread luaThreadState
-        -- Flush buffered log lines — the error context is exactly
-        -- what we must not lose — then exit with a failure code.
-        logger ← readIORef (loggerRef env')
-        shutdownLogger logger
-        exitFailure
-    Right _ → pure ()
+  handleBootResult FatalToStdout env' workers result

@@ -11,16 +11,14 @@ module App.Offscreen
   ) where
 
 import UPrelude
-import Control.Exception (displayException)
 import Data.IORef (readIORef, writeIORef)
-import System.Exit (exitFailure)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Types (EngineConfig(..), BootProfile(..))
+import Engine.Core.Types (BootProfile(..))
 import Engine.Core.Thread (shutdownThread)
-import Engine.Core.Log (LogCategory(..), shutdownLogger)
+import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Graphics.Vulkan.Init (initializeVulkanOffscreen)
@@ -33,6 +31,7 @@ import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
+import App.Boot (BootWorkers(..), FatalStream(..), bootConfig, handleBootResult)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine offscreen: GPU on, window off. The render size
@@ -44,16 +43,7 @@ runOffscreen ∷ BootProfile → Maybe Int → Maybe (Int, Int) → IO ()
 runOffscreen bootProfile mPort mSize = do
   EngineInitResult env ← initializeEngine
 
-  let env' = case mPort of
-        Just p  → env
-            { engineConfig = (engineConfig env)
-                { ecDebugPort = p
-                , ecBootProfile = bootProfile
-                } }
-        Nothing → env
-            { engineConfig = (engineConfig env)
-                { ecBootProfile = bootProfile
-                } }
+  let env' = bootConfig bootProfile mPort env
 
   inputThreadState ← startInputThread env'
   luaThreadState   ← startLuaThread env'
@@ -61,6 +51,15 @@ runOffscreen bootProfile mPort mSize = do
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'
   combatThreadState ← startCombatThread env'
+
+  let workers = BootWorkers
+        { bwCombat = Just combatThreadState
+        , bwSim    = Just simThreadState
+        , bwUnit   = Just unitThreadState
+        , bwWorld  = Just worldThreadState
+        , bwInput  = Just inputThreadState
+        , bwLua    = Just luaThreadState
+        }
 
   videoConfig ← readIORef (videoConfigRef env')
   let (w, h) = fromMaybe (vcWidth videoConfig, vcHeight videoConfig) mSize
@@ -89,18 +88,4 @@ runOffscreen bootProfile mPort mSize = do
         logDebugM CatSystem "Offscreen engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  case result of
-    Left err → do
-        putStrLn $ displayException err
-        shutdownThread combatThreadState
-        shutdownThread simThreadState
-        shutdownThread unitThreadState
-        shutdownThread inputThreadState
-        shutdownThread worldThreadState
-        shutdownThread luaThreadState
-        -- Flush buffered log lines — the error context is exactly
-        -- what we must not lose — then exit with a failure code.
-        logger ← readIORef (loggerRef env')
-        shutdownLogger logger
-        exitFailure
-    Right _ → pure ()
+  handleBootResult FatalToStdout env' workers result
