@@ -348,6 +348,7 @@ library
                      Engine.Load.Status
                      Engine.Preview.Discovery
                      Engine.Preview.Unit
+                     Engine.Preview.Building
                      Engine.Core.Types
                      Engine.Core.Log
                      Engine.Core.Log.Types
@@ -1023,6 +1024,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.Types
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
+                   Test.Headless.Preview.Building
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope

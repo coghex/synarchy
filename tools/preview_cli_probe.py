@@ -30,7 +30,15 @@ Checks:
      target can never reach a window either. A KNOWN unit is
      deliberately NOT booted here (that would open a real GLFW window,
      which is why tools/preview_probe.py stays manual-only/needs-gpu).
-  8. Mode-specific flags (CH-58, #1012): a flag from app/Main.hs's
+  8. --preview <flora|buildings|structures>/<item> (#888): the same
+     pre-boot rejections for the remaining grouped categories — an
+     unknown item, a name carrying path structure, absolute/".."/"."
+     traversal shapes, a symlinked item directory, and a FILE where a
+     browsable item directory was expected (assets/textures/flora holds
+     unknown_flora.png beside its real species folders). Valid targets
+     are deliberately NOT booted here (that would open a real GLFW
+     window — see tools/preview_probe.py).
+  9. Mode-specific flags (CH-58, #1012): a flag from app/Main.hs's
      incompatibleFlagTable given to a boot mode that doesn't honour it
      (e.g. --seed with --headless, --port with --dump, --seeds with
      --dump) exits 1 before any engine/window/server starts, naming
@@ -193,6 +201,68 @@ def check_unit_targets() -> bool:
     return all(results)
 
 
+def check_grouped_item_targets() -> bool:
+    """#888: every --preview <flora|buildings|structures>/<item>
+    rejection, pre-boot.
+
+    The expected substrings come straight from
+    Engine.Preview.Discovery.itemDirErrorMessage — the ONE containment
+    rule every grouped category now shares (units restates the same
+    outcomes in its own vocabulary, checked above) — so a wording change
+    there without one here is exactly the drift this catches.
+    """
+    print("8. flora/buildings/structures item pre-boot rejections (#888): "
+          "unknown / unsafe / not-a-directory")
+    results = []
+    structure_msg = "must be a single directory name"
+    for label, target, expect in [
+        ("unknown flora", "flora/nosuch", "no such item"),
+        ("unknown building", "buildings/nosuch", "no such item"),
+        ("unknown structure", "structures/nosuch", "no such item"),
+        ("flora name with path structure", "flora/scots_pine/matured.png",
+         structure_msg),
+        ("building name with path structure", "buildings/acolyte_portal/idle",
+         structure_msg),
+        ("structures absolute path", "structures//etc", structure_msg),
+        ("buildings leading .. traversal", "buildings/../../etc", structure_msg),
+        ("flora bare dot", "flora/.", structure_msg),
+        ("flora bare dot-dot", "flora/..", structure_msg),
+        # A REAL file sitting beside the real item directories: every
+        # grouped category root ships an unknown_<category>.png fallback
+        # texture, which must not browse as if it were an item folder.
+        ("flora file where a directory is required", "flora/unknown_flora.png",
+         "is a file, not a browsable item directory"),
+    ]:
+        r = run_cli("--preview", target)
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and expect in r.stderr)
+        results.append(check(f"grouped item: {label}", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+
+    # A symlinked item directory: refused unconditionally, because
+    # doesDirectoryExist follows links and browsing one would load
+    # another tree's textures (breaking trimmed loading). Created and
+    # removed here so the repo tree is never left dirty.
+    link = os.path.join("assets", "textures", "flora", "_cli_probe_link_888")
+    created = False
+    try:
+        if not os.path.exists(link) and not os.path.islink(link):
+            os.symlink("scots_pine", link)
+            created = True
+        r = run_cli("--preview", "flora/_cli_probe_link_888")
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and "must not be a symlink" in r.stderr)
+        results.append(check("grouped item: symlinked item directory", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+    finally:
+        if created:
+            os.unlink(link)
+
+    return all(results)
+
+
 # (argv beyond the incompatible flag itself, the rejected flag, the
 # selected boot mode) — one row per app/Main.hs's incompatibleFlagTable
 # entry (CH-58, #1012). Every case rejects pre-boot, so none of these
@@ -212,7 +282,7 @@ INCOMPATIBLE_FLAG_CASES = [
 
 
 def check_incompatible_flags() -> bool:
-    print("8. mode-specific flags rejected in modes that ignore them "
+    print("9. mode-specific flags rejected in modes that ignore them "
           "(CH-58): exit 1, pre-boot")
     results = []
     for extra_args, flag, mode in INCOMPATIBLE_FLAG_CASES:
@@ -246,6 +316,7 @@ def main() -> int:
     results.append(check_path_containment())
     results.append(check_directory_as_item())
     results.append(check_unit_targets())
+    results.append(check_grouped_item_targets())
     results.append(check_incompatible_flags())
 
     passed = all(results)
