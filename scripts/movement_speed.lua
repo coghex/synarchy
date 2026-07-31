@@ -99,6 +99,30 @@ function M.ordered(uid)
     return math.min(M.comfort(uid) * 1.15, M.sprint(uid) * 0.95)
 end
 
+-- Uphill exertion (#375). The engine reports the signed slope grade the
+-- unit is walking (getInfo.moveGrade: 1.0 = straight up a ramp's fall
+-- line, negative = downhill). Climbing multiplies the EFFECTIVE EFFORT
+-- the speed-drain model (unit_resource_tick.lua) reads in place of raw
+-- speed: effort = speed × (1 + K·grade), so holding a commanded pace up
+-- a full grade burns like moving (1+K)× faster. Shared here, not
+-- private to the drain tick, because a speed SELECTOR needs the same
+-- formula in reverse (#999's adaptive-pacing recovery pace): a fixed
+-- fraction of comfort as a raw speed only actually undercuts comfort on
+-- flat ground — on a graded slope its effective effort can exceed
+-- comfort again, so recover mode would keep draining instead of
+-- recovering on a sustained climb. Downhill/flat leave both directions
+-- of the formula untouched (grade ≤ 0 clamps to 0).
+local UPHILL_EXERTION_PER_GRADE = 0.5
+M.UPHILL_EXERTION_PER_GRADE = UPHILL_EXERTION_PER_GRADE
+
+-- The raw speed whose EFFECTIVE effort (per the formula above) equals
+-- `targetEffort` on the given grade — the inverse of the drain tick's
+-- effort calculation. At grade 0 this is just `targetEffort` itself.
+function M.speedForEffort(targetEffort, grade)
+    local g = math.max(0, grade or 0)
+    return targetEffort / (1 + UPHILL_EXERTION_PER_GRADE * g)
+end
+
 -- Meander: the slow amble of a unit with NO goal (ambient wander). Well
 -- below comfort, so the unit also recovers stamina while drifting. A low
 -- fraction of max_speed — NOT agility-scaled, because ambling is leisurely

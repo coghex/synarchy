@@ -1747,6 +1747,18 @@ def main() -> int:
                   f"{fmt_vitals(arrive[prepared])}", flush=True)
             print(f"  arrival    control  {control}: "
                   f"{fmt_vitals(arrive[control])}", flush=True)
+            # #999: both travellers arriving collapsed used to be silently
+            # tolerated here — the pose was recorded above but only ever
+            # printed, so the location/travel checks below could still
+            # pass around it. A traveller should reach the ruin's halo on
+            # its feet; a real ordinary leg collapsing is exactly the
+            # run/faint/run bug this gate now has to catch.
+            chk.ok(all(arrive[u]["pose"] not in ("collapsed", "dead")
+                       for u in (prepared, control)),
+                   f"both travellers are standing at the arrival snapshot, "
+                   f"not collapsed/dead from the ordinary leg (prepared "
+                   f"{arrive[prepared]['pose']!r}, control "
+                   f"{arrive[control]['pose']!r})")
 
             # -- discovery: lifecycle, player event, per-unit knowledge
             inst = poll_until(60.0, lambda: (

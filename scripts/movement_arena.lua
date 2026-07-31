@@ -114,6 +114,20 @@ M.courses.flat = function()
              note = "straight flat walk, no obstacles" }
 end
 
+-- Endurance flat (#999). A straight, obstacle-free walk long enough that
+-- an uninterrupted commanded move at the `ordered` speed regime (comfort
+-- x1.15, a small sustained stamina deficit) drains a baseline acolyte
+-- from full stamina down through the collapse threshold before arrival —
+-- the exact shape of the run/faint/run/faint bug. Long enough to also
+-- show at least one full downshift + recovery + re-acceleration cycle
+-- under the stamina-adaptive pacing fix. Companion to `flat` (too short
+-- to ever drain meaningfully) — same geometry, just much longer.
+M.courses.endurance_flat = function()
+    return { name = "endurance_flat", sx = -3, sy = 0, gx = 44, gy = 0,
+             note = "long straight flat walk (47 tiles); long enough to " ..
+                    "collapse a baseline acolyte at a flat `ordered` pace" }
+end
+
 -- Corner trap (symptom #2). An ocean wall straddles the straight line
 -- from start to goal, so the unit must round one end of the wall. Rounding
 -- the corner forces a diagonal step whose axis-neighbour is ocean — the

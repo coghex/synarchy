@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.Units.Spawn
   , unitDestroyFn
   , unitSetPosFn
   , unitMoveToFn
+  , unitSetMoveSpeedFn
   , unitJumpFn
   , unitStopFn
   , unitCollapseFn
@@ -250,6 +251,29 @@ unitMoveToFn env = do
                             _                   → 2.0
             Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                 UnitMoveTo uid tx ty speed
+            Lua.pushboolean True
+            return 1
+
+-- | unit.setMoveSpeed(uid, speed) — retarget the speed of an ALREADY
+--   in-flight move (see UnitSetMoveSpeed) without resetting its
+--   destination or computed local path. A no-op (still returns true —
+--   the command enqueues regardless) if the unit isn't currently moving.
+unitSetMoveSpeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetMoveSpeedFn env = do
+    idArg    ← Lua.tointeger 1
+    speedArg ← Lua.tonumber 2
+
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+                speed = case speedArg of
+                            Just (Lua.Number v) → realToFrac v
+                            _                   → 0.0
+            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
+                UnitSetMoveSpeed uid speed
             Lua.pushboolean True
             return 1
 

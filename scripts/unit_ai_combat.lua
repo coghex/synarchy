@@ -6,6 +6,10 @@
 -- Swing mechanics (anim, lunge, cooldown math consumers) live in
 -- unit_ai_combat_attack.lua, which requires this file for the attack-
 -- mode helpers (staminaPct/chooseAttackMode/computeAttackCooldown).
+-- follow_command's adaptive-pacing internals (#999) live in
+-- unit_ai_pace.lua (split out to stay under the 500-line budget);
+-- staminaPct is re-exported from there so this file's own public
+-- surface (and unit_ai_combat_attack.lua's require of it) don't change.
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -15,6 +19,8 @@ local markGoalAccomplished = core.markGoalAccomplished
 local ensureState         = core.ensureState
 
 local mv = require("scripts.movement_speed")
+local pace = require("scripts.unit_ai_pace")
+local staminaPct = pace.staminaPct
 
 local M = {}
 
@@ -45,12 +51,23 @@ local function followCommandUtility(uid, s, params)
     return FOLLOW_COMMAND_UTILITY
 end
 
+-- Adaptive pacing (#999): a sustained follow_command move downshifts to
+-- a below-comfort recovery pace once stamina runs low, instead of
+-- holding `ordered`'s small deficit until collapse. Mechanics
+-- (hysteresis thresholds, grade-aware recovery, the per-tick
+-- feedback loop) live in unit_ai_pace.lua; this action just picks the
+-- initial pace on command start and delegates the continuous feedback.
 local function followCommandExecute(uid, s, params)
     local task = s.commandedTask
     if not task then return end
-    -- Player-ordered move: a slight sustainable push above comfort
-    -- (ordered regime), unless the command specified an explicit speed.
-    unit.moveTo(uid, task.x, task.y, task.speed or mv.ordered(uid))
+    if task.speed then
+        -- Explicit-speed command: respect it as-is, no adaptive pacing.
+        task.paceMode = nil
+        unit.moveTo(uid, task.x, task.y, task.speed)
+        return
+    end
+    task.paceMode = pace.initialPaceMode(uid)
+    unit.moveTo(uid, task.x, task.y, pace.paceSpeed(uid, task.paceMode))
 end
 
 
@@ -321,20 +338,6 @@ end
 -- A wound on the weapon arm at severity ≥ 0.5 makes heavy unusable —
 -- you can't put the body in to a swing if the arm holding the weapon
 -- is torn up.
--- Stamina pct, robust to species that haven't been wired into
--- unit_resources.lua yet. A unit with no stamina stat at all is
--- treated as healthy (100%) — combat assumes "stamina works" so
--- the absence of config doesn't permanently lock the unit into
--- quick-mode. The unit_resources tick handles the drain regardless.
-local function staminaPct(uid)
-    local s  = unit.getStat(uid, "stamina")
-    local ms = require("scripts.unit_stats").get(uid, "max_stamina")
-    if s and ms and ms > 0 then
-        return math.max(0, math.min(1, s / ms))
-    end
-    return 1.0
-end
-
 local function chooseAttackMode(uid)
     local pct = staminaPct(uid)
     if pct < 0.5 then return "quick" end
@@ -394,6 +397,7 @@ end
 
 M.followCommandUtility   = followCommandUtility
 M.followCommandExecute   = followCommandExecute
+M.followCommandPaceTick  = pace.followCommandPaceTick
 M.retreatUtility         = retreatUtility
 M.retreatExecute         = retreatExecute
 M.engageUtility          = engageUtility

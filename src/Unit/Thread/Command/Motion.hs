@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Motion
     ( handleUnitMoveToCommand
+    , handleUnitSetMoveSpeedCommand
     , handleUnitJumpCommand
     , handleUnitStopCommand
     ) where
@@ -68,6 +69,36 @@ handleUnitMoveToCommand env utsRef uid tx ty speed = do
                                  , usState     = activity
                                  , usLocalPath = []
                                  }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+-- | Retarget the speed of an ALREADY in-flight move, leaving
+--   `usTarget`'s x/y, `usLocalPath`, and `usState` untouched — unlike
+--   'handleUnitMoveToCommand', which always wipes `usLocalPath` to
+--   force a fresh greedy/replan cycle. A caller re-running `moveTo`
+--   every tick just to nudge the commanded speed stalls pathing (the
+--   unit keeps losing its computed route); this command exists so
+--   continuous feedback (#999's stamina-adaptive pacing) can retarget
+--   speed every tick without that cost. No-op if the unit has no
+--   in-flight target (nothing to retarget) — never creates one.
+handleUnitSetMoveSpeedCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
+                              → Float → IO ()
+handleUnitSetMoveSpeedCommand env utsRef uid speed = do
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    let effSpeed = case HM.lookup uid (umInstances um) of
+            Nothing   → speed
+            Just inst →
+                let bodyParts = case HM.lookup (uiDefName inst) (umDefs um) of
+                        Just d  → udBodyParts d
+                        Nothing → []
+                in speed * injurySpeedMult bodyParts inst
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss → case usTarget ss of
+                Nothing → (uts, ())
+                Just mt →
+                    let ss' = ss { usTarget = Just (mt { mtSpeed = effSpeed }) }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 handleUnitJumpCommand ∷ EngineEnv → IORef UnitThreadState → UnitId

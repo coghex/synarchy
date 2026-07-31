@@ -26,6 +26,7 @@ import Unit.Thread.Command.Lifecycle
     )
 import Unit.Thread.Command.Motion
     ( handleUnitMoveToCommand
+    , handleUnitSetMoveSpeedCommand
     , handleUnitJumpCommand
     , handleUnitStopCommand
     )
@@ -62,6 +63,8 @@ handleUnitCommand env utsRef (UnitReGround gx gy)
   = handleUnitReGroundCommand env utsRef gx gy
 handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed)
   = handleUnitMoveToCommand env utsRef uid tx ty speed
+handleUnitCommand env utsRef (UnitSetMoveSpeed uid speed)
+  = handleUnitSetMoveSpeedCommand env utsRef uid speed
 handleUnitCommand env utsRef (UnitJump uid tgx tgy)
   = handleUnitJumpCommand env utsRef uid tgx tgy
 handleUnitCommand _env utsRef (UnitStop uid)
