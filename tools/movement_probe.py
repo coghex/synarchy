@@ -467,12 +467,22 @@ def run_pacing_mode(port: int, args) -> int:
         checks.append(("endurance_flat: course ran", False))
 
     # --- ramp_climb: genuinely adverse travel must not cycle ---------------
-    ramp = run_course("ramp_climb", secs=70)
+    # Grade-aware recovery (#999 round 1) is deliberately slower on a full
+    # grade than the old flat 0.75x-comfort recover pace, so this needs a
+    # bit more real time than before to actually summit.
+    ramp = run_course("ramp_climb", secs=95)
     if ramp is not None:
         trail = ramp["trail"]
+        gx = ramp["gx"]
+        # "Completed alive" is only meaningful once arrival is REQUIRED
+        # too — otherwise a unit that stalls or times out short of the
+        # summit (never collapsing because it never got far enough to)
+        # would trivially pass both of the checks below.
+        reached = any(abs(s.get("x", -1e9) - gx) < 1.2 for s in trail)
         alive = bool(trail) and all(s.get("pose") != "dead" for s in trail)
         cycles = collapse_transitions(trail)
         checks += [
+            ("ramp_climb: reached the summit", reached),
             ("ramp_climb: completed alive", alive),
             ("ramp_climb: no repeated collapse/resume cycling (<=1 collapse)",
              cycles <= 1),

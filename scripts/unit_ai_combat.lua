@@ -6,6 +6,10 @@
 -- Swing mechanics (anim, lunge, cooldown math consumers) live in
 -- unit_ai_combat_attack.lua, which requires this file for the attack-
 -- mode helpers (staminaPct/chooseAttackMode/computeAttackCooldown).
+-- follow_command's adaptive-pacing internals (#999) live in
+-- unit_ai_pace.lua (split out to stay under the 500-line budget);
+-- staminaPct is re-exported from there so this file's own public
+-- surface (and unit_ai_combat_attack.lua's require of it) don't change.
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -15,25 +19,10 @@ local markGoalAccomplished = core.markGoalAccomplished
 local ensureState         = core.ensureState
 
 local mv = require("scripts.movement_speed")
+local pace = require("scripts.unit_ai_pace")
+local staminaPct = pace.staminaPct
 
 local M = {}
-
--- Stamina pct, robust to species that haven't been wired into
--- unit_resources.lua yet. A unit with no stamina stat at all is
--- treated as healthy (100%) — combat assumes "stamina works" so
--- the absence of config doesn't permanently lock the unit into
--- quick-mode. The unit_resources tick handles the drain regardless.
--- Shared with follow_command's adaptive pacing below (#999) for the
--- same reason: a technomule or a freshly-spawned acolyte with no live
--- stamina pair yet must still get ordered-pace movement, not an error.
-local function staminaPct(uid)
-    local s  = unit.getStat(uid, "stamina")
-    local ms = require("scripts.unit_stats").get(uid, "max_stamina")
-    if s and ms and ms > 0 then
-        return math.max(0, math.min(1, s / ms))
-    end
-    return 1.0
-end
 
 -----------------------------------------------------------
 -- Action: follow_command
@@ -62,48 +51,12 @@ local function followCommandUtility(uid, s, params)
     return FOLLOW_COMMAND_UTILITY
 end
 
--- Sustained-travel adaptive pacing (#999). `ordered` (comfort×1.15) is
--- a small, deliberate stamina DEFICIT — sustainable only briefly, not
--- indefinitely — so a long uninterrupted follow_command move used to
--- hold it until the unit collapsed, then resume it again on revival:
--- run, faint, run, faint. Requirement: stamina must feed back into the
--- commanded pace without ever reissuing unit.moveTo mid-walk (that
--- resets usLocalPath and stalls pathing, #999 review) — so this uses
--- unit.setMoveSpeed, which retargets an in-flight move's speed only.
---
--- Two-state hysteresis (push/recover) rather than a continuously
--- recomputed speed: a smoothly-varying speed would still cross the
--- walk/run gait threshold back and forth as stamina hovers near a
--- boundary. Different down/up thresholds (0.55 down, 0.8 up) give a
--- comfortable margin so the switch doesn't chatter and each phase
--- holds long enough to matter:
---   * PACE_DOWNSHIFT_FRAC sits well above collapse_threshold (0.1),
---     so a healthy unit backs off long before it would ever collapse.
---   * It also sits just above stamina's revive_threshold (0.5), so a
---     unit that just woke from a collapse (~0.5) resumes in "recover"
---     rather than immediately lurching back to a draining push.
---   * PACE_RECOVER_FRAC is strictly below 1.0× comfort (comfort itself
---     is the stamina-neutral speed by construction, see
---     scripts/movement_speed.lua) so a recovering unit's stamina
---     actually climbs instead of merely not-falling — while still
---     comfortably faster than ambient meander.
-local PACE_DOWNSHIFT_FRAC = 0.55
-local PACE_RESUME_FRAC    = 0.8
-local PACE_RECOVER_FRAC   = 0.75
-
--- The initial pace for a fresh (or just-resumed) commandedTask: push
--- unless the unit is already below the downshift line, so a unit
--- commanded while already tired doesn't lurch to full ordered speed
--- for one tick only to downshift again immediately.
-local function initialPaceMode(uid)
-    return (staminaPct(uid) < PACE_DOWNSHIFT_FRAC) and "recover" or "push"
-end
-
-local function paceSpeed(uid, mode)
-    if mode == "recover" then return mv.comfort(uid) * PACE_RECOVER_FRAC end
-    return mv.ordered(uid)
-end
-
+-- Adaptive pacing (#999): a sustained follow_command move downshifts to
+-- a below-comfort recovery pace once stamina runs low, instead of
+-- holding `ordered`'s small deficit until collapse. Mechanics
+-- (hysteresis thresholds, grade-aware recovery, the per-tick
+-- feedback loop) live in unit_ai_pace.lua; this action just picks the
+-- initial pace on command start and delegates the continuous feedback.
 local function followCommandExecute(uid, s, params)
     local task = s.commandedTask
     if not task then return end
@@ -113,34 +66,8 @@ local function followCommandExecute(uid, s, params)
         unit.moveTo(uid, task.x, task.y, task.speed)
         return
     end
-    task.paceMode = initialPaceMode(uid)
-    unit.moveTo(uid, task.x, task.y, paceSpeed(uid, task.paceMode))
-end
-
--- Per-tick pacing feedback for an ACTIVE follow_command move. Called
--- unconditionally every AI tick (unit_ai.lua's tickOne, alongside
--- core.maintainTask) rather than through the switch/idle execute gate,
--- since that gate deliberately only re-runs an action's execute on a
--- switch or an idle re-decision — exactly the reissue this must avoid.
--- Only ever calls unit.setMoveSpeed, never unit.moveTo, so the unit's
--- in-flight local path is never disturbed.
-local function followCommandPaceTick(uid, s)
-    if s.currentAction ~= "follow_command" then return end
-    local task = s.commandedTask
-    if not task or task.speed then return end
-
-    local pct  = staminaPct(uid)
-    local mode = task.paceMode or "push"
-    if mode == "push" and pct < PACE_DOWNSHIFT_FRAC then
-        mode = "recover"
-    elseif mode == "recover" and pct > PACE_RESUME_FRAC then
-        mode = "push"
-    end
-
-    if mode ~= task.paceMode then
-        task.paceMode = mode
-        unit.setMoveSpeed(uid, paceSpeed(uid, mode))
-    end
+    task.paceMode = pace.initialPaceMode(uid)
+    unit.moveTo(uid, task.x, task.y, pace.paceSpeed(uid, task.paceMode))
 end
 
 
@@ -470,7 +397,7 @@ end
 
 M.followCommandUtility   = followCommandUtility
 M.followCommandExecute   = followCommandExecute
-M.followCommandPaceTick  = followCommandPaceTick
+M.followCommandPaceTick  = pace.followCommandPaceTick
 M.retreatUtility         = retreatUtility
 M.retreatExecute         = retreatExecute
 M.engageUtility          = engageUtility
