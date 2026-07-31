@@ -224,6 +224,19 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
     "crop": (SLOW_WORLDGEN, "needs a real generated world for natural row-crop placement + "
                             "groundcover planting, plus a save/load round-trip"),
+    "expedition_loop": (SLOW_WORLDGEN, "the arc's whole first expedition in one "
+                        "session: a real worldSize-64 generation, a scan for a "
+                        "ruin with a walkable colony site and nearby water, the "
+                        "portal's own six-unit spawn roster, two travellers "
+                        "walking ~30 tiles each way in real time, and a real "
+                        "save/restart/load across two engine boots (~15 min). It "
+                        "also leans on AI arbitration timing (drink_from_canteen "
+                        "and eat_from_inventory outranking a move order, "
+                        "pickup_ground, follow_command), so it is manual-only on "
+                        "both counts — the same grounds as expedition_retrieval "
+                        "below, and #923's own scenario contract classifies this "
+                        "as recorded manual verification rather than a CI gate "
+                        "(#923)"),
     "expedition_retrieval": (SLOW_WORLDGEN, "needs a real generated world for a placed "
                              "ruin_small and a walkable colony site tens of tiles from it, "
                              "then walks both legs in real time across two engine boots "

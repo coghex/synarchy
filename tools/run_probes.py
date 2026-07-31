@@ -105,6 +105,13 @@ PROBES = [
      "row-crop natural placement + groundcover world.plantCropAt into a CropPlot, growth/harvest/save-load (#334)"),
     ("disarm", "disarm_probe.py",
      "disabled-hand auto-drop must re-fire (#193)"),
+    ("expedition_loop", "expedition_loop_probe.py",
+     "the first expedition end to end — the arc's final integrated gate: "
+     "colony from a real portal roster, water secured by a real FOV scan, "
+     "provisioning off the technomule, a two-traveller journey whose "
+     "unprepared control is measurably worse off, discovery by proximity, "
+     "extraction of the ruin's own loot roll, return and deposit, and a "
+     "fresh-process reload verifying every durable identity (#923)"),
     ("expedition_retrieval", "expedition_retrieval_probe.py",
      "player-driven remote retrieval end to end: command-time capacity refusal, "
      "travel/pickup/carrier identity, survival interruption, save-restart-load "

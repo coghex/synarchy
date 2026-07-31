@@ -90,6 +90,14 @@ ruin should contain a guaranteed progression reward, for example:
 Random loot can surround this reward, but should not replace it. The recovered
 item must visibly increase what the colony can do.
 
+**Status:** this is still the intent, and it is still unbuilt. #921 removed the
+fixed `kind: item` entries from `data/locations/ruin_small.yaml`, so a ruin
+currently guarantees no specific item at all — its contents are weighted
+loot-table draws, seed-stable per instance but not authored. The guaranteed
+reward returns with #917, which also supplies the "visibly increase what the
+colony can do" half; until then the shipped slice ends at *recovered, banked
+and usable*, which is what the step-9 gate asserts.
+
 The first-session milestone might be:
 
 > Settlement established — the recovered radio is operational. Two distant
@@ -273,9 +281,30 @@ The panel measures the arc, it does not gate it. Nothing in it blocks
 placement, discovery or travel, and evaluation ignores whether a row is
 currently visible.
 
-Steps 4 onward (a combat encounter, a transformational reward, retrieval and
-return, survival tuning, and the full end-to-end slice gate) remain future
-work.
+**Steps 6, 7 and 9 — retrieval, survival tuning, and the full slice gate.**
+
+- **Step 6 (retrieval and return) — #920.** Direct RTS retrieval only: order
+  pickup, see whether the item fits, identify its carrier, walk home, deposit.
+  No caravan interface was added. Gate: `tools/expedition_retrieval_probe.py`.
+- **Step 7 (survival tuning) — #925 and #919, epic #918.** Recorded in
+  `docs/expedition_survival_calibration.md` as an observation log; the
+  project-owner decision was to land the calibration with **zero** balance
+  changes and file the mechanic-level findings as follow-ups instead. The
+  `expedition` and `first-aid` scenarios in `tools/gameplay_scenarios.py` are
+  diagnostic utilities, deliberately outside CI and the probe registry, and
+  their exit status never carries a balance verdict.
+- **Step 9 (the full slice gate) — #923.** `tools/expedition_loop_probe.py`
+  runs the whole loop as one session, described under "9. Gate the full slice"
+  below.
+
+**Steps 4 and 5 remain future work, and are deliberate deferrals rather than
+oversights.** #916 (one hostile occupant and the first combat encounter) is
+blocked on unit art; #917 (a transformational reward) has nothing to reveal or
+gate yet, because the location-intelligence system a recovered radio core would
+feed does not exist. Together they would add the **confront** verb and turn
+**invest** from "the loot is banked and usable" into "the loot changed what the
+colony can do". Everything else in the first-30-minutes sequence is
+implemented.
 
 ## Implementation order
 
@@ -406,19 +435,42 @@ This is onboarding scaffolding, not a quest or mission framework.
 
 ### 9. Gate the full slice
 
-Add an end-to-end scenario proving:
+**Delivered** as `tools/expedition_loop_probe.py` (#923) — one fixed-seed
+scenario, run unattended across two engine boots, proving the loop this arc
+actually ships:
 
 ```text
-spawn colony
-→ equip party
-→ reach and discover location
-→ defeat or survive its encounter
-→ collect progression item
-→ return
-→ complete colony project
-→ save/reload
-→ location and milestone states remain correct
+spawn colony from a real portal roster
+→ secure water, provision the party off the technomule
+→ travel and discover the location by proximity
+→ SURVIVE the journey (the encounter is deferred — #916)
+→ extract the ruin's own loot-table output (no guaranteed reward — #917)
+→ return and deposit into colony storage
+→ save / reload in a fresh process
+→ location, per-unit knowledge, objective and inventory state remain correct
 ```
+
+Two substitutions from the sketch above, both forced by the deferrals and
+neither hidden: "defeat or survive its encounter" is **survive the journey**,
+and "collect progression item → complete colony project" is **extract real loot
+→ bank it as usable colony stock**. What replaces the encounter as the arc's
+risk is survival, so the scenario runs a second, **unprepared control party**
+over the same route under the same orders from the same starting deficits,
+differing only in what it carried out of the colony. The control must end
+measurably worse off in named physiological metrics — otherwise the gate would
+be proving that walking works, not that preparation matters.
+
+The probe reports eight independent stages (`setup`, `prepare`, `travel`,
+`extract`, `return`, `save`, `load`, `control`) so a failure names which part
+of the loop broke, and prints a fingerprint of its selected ruin, loot and
+sites so two consecutive runs can be compared for identity. It is manual-only
+by classification in `tools/ci_probes.py`: a real worldSize-64 generation plus
+two travellers walking ~30 tiles each way is too slow for a blocking per-PR
+gate, and it leans on AI arbitration timing.
+
+When #916 and #917 land, this scenario is where their verbs join the loop:
+the encounter belongs between travel and extract, and the progression project
+turns the existing deposit assertion into a capability change.
 
 ## Deferred systems
 
