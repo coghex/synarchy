@@ -134,10 +134,15 @@ actually carried them. The departure positions here are re-read and
 re-checked with the simulation stopped, and everything up to the paired
 orders happens inside that same paused window. They then travel under the same verb (`commandMove`), to
 the same tile (the ruin's anchor), ordered in the same paused window.
-The measurement is taken when BOTH are inside the discovery halo IN THE
-SAME SAMPLE — not "each has been there at some point", because a unit
-whose move task has completed reverts to wander and can drift back out
-while the other is still walking. The prepared traveller's retrieval
+The measurement is taken when BOTH are inside the discovery halo in ONE
+COHERENT SNAPSHOT — not "each has been there at some point", because a
+unit whose move task has completed reverts to wander and can drift back
+out while the other is still walking; and not two `unit.getInfo` calls
+either, because those are two round trips with the simulation running
+in between, so a pair that was never inside together can satisfy them.
+The candidate is a single paired read, and it is then revalidated with
+the simulation STOPPED, with the control's metrics taken inside that
+same stopped window. The prepared traveller's retrieval
 order is issued only AFTERWARDS, in the extract stage.
 
 What CANNOT also be equalised is elapsed time, and that is a deliberate
@@ -547,6 +552,31 @@ def unit_pos(port: int, uid: int):
     if isinstance(r, dict) and "x" in r:
         return float(r["x"]), float(r["y"])
     return None
+
+
+def paired_positions(port: int, a: int, b: int) -> dict:
+    """Both travellers' positions in ONE console round trip.
+
+    Two `unit_pos` calls are two round trips with the simulation running
+    in between, so a condition evaluated over them combines coordinates
+    from different moments — "both inside the halo" could pass for a
+    pair that was never inside it together. One request reads both from
+    the same unit-manager state instead."""
+    lua = (f"local function f(u) local i=unit.getInfo(u); "
+           f"return i and (i.gridX..','..i.gridY) or 'nil' end; "
+           f"return f({a})..';'..f({b})")
+    raw = send(port, lua).strip().strip('"')
+    out: dict = {a: None, b: None}
+    parts = raw.split(";")
+    for uid, part in zip((a, b), parts):
+        if "," not in part:
+            continue
+        try:
+            x, y = part.split(",")
+            out[uid] = (float(x), float(y))
+        except ValueError:
+            continue
+    return out
 
 
 def current_action(port: int, uid: int) -> str:
@@ -1176,18 +1206,35 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
     (`docs/expedition_survival_calibration.md` observation E3 watched a
     unit drift 10.7 tiles back out of camp), so the first arrival
     wanders while the second is still walking and a naive
-    both-near-the-tile poll can simply never come true — observed: both
-    units 40+ tiles out and 3.4 tiles apart after a 300 s wait. Hence
-    the shape below: poll for a sample that satisfies the origin
-    contract, pause the instant it appears, then RE-READ and re-check on
-    the now-stable positions. A sample that goes stale in the round trip
-    between the two just unpauses and keeps looking."""
+    both-near-the-tile poll can simply never come true — observed twice,
+    once with both units 40+ tiles out and 3.4 tiles apart after a 300 s
+    wait, and once with the muster expiring on a pair 10.0 tiles apart.
+    Hence the shape below: re-order anyone who has stopped following and
+    drifted outside the radius (convergence is driven, not awaited),
+    poll for a sample satisfying the origin contract, pause the instant
+    it appears, then RE-READ and re-check on the now-stable positions. A
+    sample that goes stale in the round trip between the two just
+    unpauses and keeps looking."""
     for uid in uids:
         send(port, f"require('scripts.unit_ai').commandMove({uid},"
                    f"{staging[0]},{staging[1]}); return 'ok'")
     deadline = time.time() + seconds
     while time.time() < deadline:
-        live = {u: unit_pos(port, u) for u in uids}
+        live = paired_positions(port, uids[0], uids[1])
+        # Convergence has to be ACTIVE, not awaited. A unit whose move
+        # order has completed reverts to wander and drifts, so simply
+        # polling for a moment when both happen to be at the tile is a
+        # coincidence hunt that can time out — observed: a muster that
+        # expired with the two 10.0 tiles apart, one of them 9.4 tiles
+        # further from the ruin than the other. Re-order anyone who has
+        # stopped following and is outside the radius; that is also
+        # exactly what a player does when a colonist wanders off.
+        for uid in uids:
+            p = live.get(uid)
+            if (p is None or dist(p, staging) > STAGING_RADIUS) \
+                    and current_action(port, uid) != "follow_command":
+                send(port, f"require('scripts.unit_ai').commandMove({uid},"
+                           f"{staging[0]},{staging[1]}); return 'ok'")
         if origin_ok(live, uids, staging, ruin_xy)[0]:
             send(port, "engine.setPaused(true); return 'ok'")
             # Re-read while the simulation is stopped: these are the
@@ -1617,10 +1664,11 @@ def main() -> int:
             arrive = None
             arrive_food = None
             while time.time() < deadline:
-                live = {}
+                # ONE round trip for both, so the simultaneity test below
+                # is over coordinates from a single read.
+                live = paired_positions(port, prepared, control)
                 for uid, samples in ((prepared, p_samples), (control, c_samples)):
-                    p = unit_pos(port, uid)
-                    live[uid] = p
+                    p = live[uid]
                     if p:
                         samples.append(p)
                         if uid not in arrived_at and in_halo(p, box):
@@ -1645,23 +1693,34 @@ def main() -> int:
                 # score that as a shared observation point.
                 if all(live[u] and in_halo(live[u], box)
                        for u in (prepared, control)):
-                    together = live
-                    arrive = {u: vitals(port, u) for u in (prepared, control)}
-                    arrive_food = {u: carried(port, u)[1]
-                                   for u in (prepared, control)}
-                    break
+                    # A candidate. STOP the simulation and revalidate,
+                    # so the snapshot the control is scored from is
+                    # coherent rather than merely closely-spaced: the
+                    # metrics below are several console round trips, and
+                    # a running sim would let the pair drift apart
+                    # between them.
+                    send(port, "engine.setPaused(true); return 'ok'")
+                    held = paired_positions(port, prepared, control)
+                    if all(held[u] and in_halo(held[u], box)
+                           for u in (prepared, control)):
+                        together = held
+                        arrive = {u: vitals(port, u)
+                                  for u in (prepared, control)}
+                        arrive_food = {u: carried(port, u)[1]
+                                       for u in (prepared, control)}
+                        send(port, "engine.setPaused(false); return 'ok'")
+                        break
+                    send(port, "engine.setPaused(false); return 'ok'")
                 time.sleep(1.0)
 
-            here = {u: unit_pos(port, u) for u in (prepared, control)}
-            still_in = all(here[u] and in_halo(here[u], box)
-                           for u in (prepared, control))
-            chk.ok(together is not None and still_in,
+            chk.ok(together is not None,
                    f"BOTH travellers are inside the ruin's discovery halo {box} "
-                   f"IN THE SAME SAMPLE, and still are when the metrics are "
-                   f"read — so the control is measured where the prepared one "
-                   f"is, not part-way behind it or after drifting back out "
-                   f"(at the shared sample {together}; at read time "
-                   f"{here}, both inside={still_in}; first entered after "
+                   f"in ONE COHERENT SNAPSHOT — a single paired read, "
+                   f"revalidated with the simulation STOPPED, and the control's "
+                   f"metrics taken from that same stopped window — so it is "
+                   f"measured where the prepared one is, not part-way behind it "
+                   f"and not from two positions sampled moments apart "
+                   f"(snapshot {together}; first entered after "
                    f"{arrived_at.get(prepared, -1):.0f}s / "
                    f"{arrived_at.get(control, -1):.0f}s)")
             if arrive is None:

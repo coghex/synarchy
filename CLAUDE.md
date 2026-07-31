@@ -836,7 +836,10 @@ before touching each area:
   went up — use `engine.setPaused` when you need a unit to actually
   stay put, and re-read positions after pausing); and the observation
   point is both
-  travellers inside the halo IN THE SAME SAMPLE, since a unit that
+  travellers inside the halo in ONE COHERENT SNAPSHOT — a single paired
+  read revalidated with the simulation STOPPED, since two separate
+  `unit.getInfo` round trips let the sim run in between and a pair that
+  was never inside together can satisfy them, and since a unit that
   finishes its move reverts to wander and can drift back out while the
   other is still walking. The eating itself is
   watched live as a real `eat_from_inventory` action, so the delta is
