@@ -87,6 +87,15 @@ outline, and your acolytes haul materials to it and put it up.
 Workshops (the workbench, the furnace, and their kin) take standing
 crafting orders once built.
 
+Anything you carry home needs somewhere to go, so build a **cargo
+hold** before you expect to keep salvage. Only a built cargo hold
+accepts deposits — the technomule hauls your starting supplies out of
+the portal but nothing can be put back into it. To store something by
+hand, select the acolyte carrying it, right-click the item in its
+inventory while it stands next to the cargo hold, and choose to store
+it; acolytes also shelve spare materials there on their own, and will
+spend them on whatever you are building next.
+
 ## Keeping the colony alive
 
 Acolytes see to their own needs when the means exist — they drink from
