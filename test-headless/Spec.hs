@@ -140,6 +140,7 @@ import qualified Test.Headless.Capability.Events as CapabilityEvents
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
 import qualified Test.Headless.Capability.RenderHandoff as CapabilityRenderHandoff
+import qualified Test.Headless.Capability.SaveLoad as CapabilitySaveLoad
 import qualified Test.Headless.Capability.Ui as CapabilityUi
 import qualified Test.Headless.Capability.UnitCombat as CapabilityUnitCombat
 import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
@@ -187,6 +188,7 @@ main = hspec $ do
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
         describe "Capability.RenderHandoff projections" CapabilityRenderHandoff.spec
+        describe "Capability.SaveLoad projections" CapabilitySaveLoad.spec
         describe "Capability.Ui projections" CapabilityUi.spec
         describe "Capability.UnitCombat projections" CapabilityUnitCombat.spec
         describe "Capability.WorldSim projections" CapabilityWorldSim.spec
