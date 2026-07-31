@@ -376,6 +376,29 @@ a clear error). The chdir means relative OUTPUT paths (`saves/`, config
 saves) also land under the resource root. Gate:
 `tools/resource_root_probe.py` (manual-only).
 
+### CLI flags per boot mode
+
+`app/Main.hs` selects exactly one of six boot modes from argv, in this
+precedence when more than one selector is present:
+`--language-report` > `--dump` > `--preview` > `--offscreen` >
+`--headless` > graphical (the default, no selector needed). Every
+ancillary flag below is honoured only by the mode(s) listed — passing it
+to any other mode exits 1 before any engine, window, or server starts,
+naming both the flag and the selected mode (CH-58). `--resource-root
+<path>` (or `SYNARCHY_ROOT`) is the one global flag: it applies to and
+is validated before every mode.
+
+| Flag | Honoured by |
+|---|---|
+| `--seed`, `--worldSize`, `--plates` (alias `--ages`), `--region` | `--dump` |
+| `--size` | `--offscreen` |
+| `--seeds` | `--language-report` |
+| `--arena` | `--headless`, `--offscreen`, graphical |
+| `--port` | `--headless`, `--offscreen`, `--preview`, graphical |
+
+The rejection table lives in `app/Main.hs`'s `incompatibleFlagTable`;
+`tools/preview_cli_probe.py` is the no-boot gate covering it.
+
 ## Headless Mode & Debug Console
 
 Headless mode: no GPU, no window, no focus stealing — for automated
