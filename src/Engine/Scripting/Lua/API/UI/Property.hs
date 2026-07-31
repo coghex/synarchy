@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for reading and writing element properties:
 --   position, size, visibility, clickability, colour, z-index,
 --   text content, and texture assignment.

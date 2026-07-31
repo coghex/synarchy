@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 module Engine.Graphics.Camera
     ( Camera2D(..)
     , CameraFacing(..)

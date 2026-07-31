@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Graphics.Font.Draw
     ( createFontPipeline
     , createFontUIPipeline

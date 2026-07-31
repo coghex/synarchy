@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE UnicodeSyntax #-}
 module Engine.Core.Log.Env
   ( parseLogLevel
   , loadCategoryLevelsFromEnv

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua API for the till-designation tool (issue #333) — the @till.*@
 --   namespace. Mirrors the chop-designation API (#97): the tool drives
 --   setAnchor / clearAnchor / designate, the till AI

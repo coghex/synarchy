@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level UI API module.  Re-exports every Lua-facing function
 --   from the sub-modules so existing call-sites keep working.
 module Engine.Scripting.Lua.API.UI

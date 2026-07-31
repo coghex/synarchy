@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 
 -- | Lua surface for the F4 (#646) action-outcome oracle tap.
 --

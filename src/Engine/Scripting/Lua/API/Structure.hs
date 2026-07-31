@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua API for the structures debug builder (walls / floors / ceilings).
 --   Textures + facemaps are loaded Lua-side via engine.loadTexture (which
 --   returns the raw TextureHandle int); their handles are passed straight

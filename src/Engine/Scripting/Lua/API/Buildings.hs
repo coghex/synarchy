@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Top-level building API module. Re-exports every Lua-facing
 --   function from the sub-modules so existing call-sites keep
 --   working: Buildings.Yaml loads building YAML defs

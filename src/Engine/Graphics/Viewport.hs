@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Zero-size (minimized window / minimize-restore) guards for the
 --   screen→world projection math shared across the render, pick, and
 --   hit-test paths.

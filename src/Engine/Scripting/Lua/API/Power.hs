@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Lua surface for the power-node registry (#358) and its connectivity
 --   + energy balance (#360). power.placeNode pops a solar_panel/
 --   high_voltage_battery item out of a unit's inventory and turns it

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-tile terrain/slope/vegetation surface queries: world.getTerrainAt,
 --   world.getSlopeAt, world.getVegAt, world.isPlantable.
 module Engine.Scripting.Lua.API.WorldQuery.Terrain

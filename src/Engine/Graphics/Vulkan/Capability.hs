@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Capability
   ( BindlessSupport(..)
   , TextureSystemCapability(..)

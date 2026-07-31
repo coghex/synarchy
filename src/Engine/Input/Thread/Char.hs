@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Physical + synthetic CHARACTER dispatch (#787): routes a raw
 --   'InputCharEvent' to shell-text or UI-text input, plus the F4
 --   (#730) char-aggregate batching that collapses a run of characters

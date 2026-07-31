@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The @content-registries@ capability record of the @EngineEnv@
 --   capability split (epic #537, issue #890 — E2, the first real
 --   consumer migration after #889's E1 convention): the eight

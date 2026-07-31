@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for page lifecycle: creation, deletion, show/hide.
 module Engine.Scripting.Lua.API.UI.Page
   ( uiNewPageFn

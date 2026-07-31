@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Deduplicated, refcounted Vulkan sampler operations.
 --

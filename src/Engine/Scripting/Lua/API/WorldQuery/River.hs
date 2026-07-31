@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | River-network query: world.getRivers.
 module Engine.Scripting.Lua.API.WorldQuery.River
     ( worldGetRiversFn

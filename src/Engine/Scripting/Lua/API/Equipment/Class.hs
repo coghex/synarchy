@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Equipment class catalogue (#478 silhouette fallback).
 --   engine.loadEquipmentYaml parses data/equipment/*.yaml, loads each
 --   class's silhouette texture, and registers the classes into the

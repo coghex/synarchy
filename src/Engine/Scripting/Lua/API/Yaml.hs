@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Generic YAML → Lua table loader. `engine.loadYaml(path)` decodes a YAML
 --   file into a Lua value: objects → string-keyed tables, arrays → 1-indexed
 --   tables, scalars → string / number / bool / nil. Returns nil on a parse or

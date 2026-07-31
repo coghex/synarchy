@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Lua bindings for keyboard/input focus management.
 module Engine.Scripting.Lua.API.UI.Focus
   ( uiSetFocusFn

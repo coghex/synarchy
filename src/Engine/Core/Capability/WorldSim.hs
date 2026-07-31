@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | The world\/sim\/time half of the @world-sim-render-handoff@
 --   capability (epic #537, issue #893 — E5a): the nine fields
 --   'docs/engineenv_capability_inventory.md' §7.4 identifies as the
