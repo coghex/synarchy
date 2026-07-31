@@ -6,26 +6,6 @@ Deep per-issue history (review-round narratives, verification stories) was trimm
 file on 2026-07-23 — see `docs/history/claude_md_2026-07-23_pretrim.md`, git history, and the
 referenced issues/PRs when you need the full story behind a contract stated here.
 
-## Current Phase: the expedition arc
-
-The project is building the expedition gameplay arc.
-`docs/expedition_gameplay_loop.md` is the authority for what that arc
-contains, and its scope rule gates new discretionary work:
-
-> Every proposed system in this arc must strengthen at least one of these
-> verbs: **prepare, travel, discover, confront, extract, return, invest.**
-> If a feature does not improve one of those verbs, or the colony decisions
-> that support them, it does not belong in the first 30-minute slice.
-
-**Always exempt:** correctness, stability, and data integrity — crashes,
-regressions, data loss, and broken CI gates are in scope regardless of the
-verbs. The rule constrains discretionary *new* work; it is never a reason to
-defer a real bug.
-
-**Expiry:** the rule applies until the arc's end-to-end gate lands — step 9,
-"Gate the full slice", of the loop doc. Once that scenario passes, this
-section comes out and the gate stops applying.
-
 ## Build Commands
 
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
@@ -802,6 +782,80 @@ before touching each area:
   still gives up. Don't restore the from-`issuedAt`/`startedAt` shape —
   it capped ordered retrieval at ~21 tiles and ordered moves at ~42.
   Gate: `expedition_retrieval_probe.py` (manual-only).
+- **The expedition loop (#923)** — the arc's shipped slice is
+  **prepare → travel → discover → extract → return → invest**, run as
+  ONE session by `tools/expedition_loop_probe.py` (manual-only,
+  fixed-seed, ~15 min, two engine boots). `docs/expedition_gameplay_loop.md`
+  remains the design authority; step 9's original combat encounter and
+  guaranteed progression reward are deliberately deferred (#916/#917),
+  so "invest" here means the recovered loot is banked in colony storage
+  and is afterwards ordinary colony stock — not a completed project.
+  Contracts the gate pins, and which new expedition work must not break:
+  the colony comes from a real `acolyte_portal` and its OWN roster
+  (`scripts/building_spawn.lua`), never hand-spawned units; the expected
+  end lifecycle is `discovered` with contents spawned exactly once
+  (nothing in the game drives an instance further — a gate that called
+  `world.setLocationLifecycle` would be asserting its own writes); the
+  extraction target is whichever def the ruin's own loot rolls produced,
+  never a staged item; and every durable identity is re-checked in a
+  FRESH PROCESS — `(page, instance id)` lifecycle, per-unit
+  `knownLocations`, the exact completed objective-ID set, and the
+  recovered item's instance id / definition / mutable properties /
+  storage ownership. The gate also runs an **unprepared control**: a
+  second traveller sharing ONE identical leg with the first — mustered
+  to a single staging tile and held there by the PAUSE, then same verb,
+  same destination, same paused window, same seeded hunger deficit —
+  measured once BOTH are
+  inside the ruin's halo, differing only in FOOD (the canteen is left
+  full on both: a dry one puts `refill_canteen` at its 7.5 peak, above
+  `follow_command`, and the control then abandons the leg to walk to
+  the water the scout radioed about — a behavioural difference, not the
+  supply being measured), and which must end
+  measurably worse off. That is what makes the scenario prove
+  preparation matters rather than prove a walk succeeds. Six conditions
+  keep the comparison honest, and weakening any one of them quietly
+  turns the control into theatre: `find_water` is retired and
+  `forage_max_fraction` disabled for the session (#94's emergency ladder
+  has its own gate, `foraging_probe.py`); BOTH travellers are shed to
+  inside their carrying capacity first (an over-encumbered acolyte
+  crawls, its order stall-times-out and it never arrives —
+  `docs/expedition_survival_calibration.md` E1); the control is given NO
+  retrieval target of its own, because a ruin can roll food and a
+  control that eats what it finds destroys the measurement; the travel
+  VERB matches, since `commandMove` walks at `movement_speed.ordered` =
+  comfort × 1.15 while `pickup_ground` walks at comfort (so the
+  retrieval order is issued only after the measurement); the ORIGINS are
+  equalised as a PLACE and not merely a distance, because hunger drains
+  with time on the road and route shape is time — a radial band is
+  satisfied anywhere on a circle, so the check asserts separation as
+  well as distance spread, verified with the SIMULATION STOPPED (a
+  completed move order does not hold position, E3, and
+  **`unit.setFrozen` is not a hold at all**: `uiFrozen` only makes
+  `publishToRender` skip the sim-derived update, so a "frozen" unit
+  keeps walking while `unit.getInfo` reports where it was when the flag
+  went up — use `engine.setPaused` when you need a unit to actually
+  stay put, and re-read positions after pausing); and the observation
+  point is both
+  travellers inside the halo in ONE COHERENT SNAPSHOT — a single paired
+  read revalidated with the simulation STOPPED, since two separate
+  `unit.getInfo` round trips let the sim run in between and a pair that
+  was never inside together can satisfy them, and since a unit that
+  finishes its move reverts to wander and can drift back out while the
+  other is still walking. The eating itself is
+  watched live as a real `eat_from_inventory` action, so the delta is
+  attributed to a mechanism rather than inferred from a number two
+  differently-massed acolytes could reach by other routes. The gated
+  metric is FOOD (stomach fraction), matching what
+  `docs/expedition_survival_calibration.md` measured actually goes live
+  on a trip this length; water is reported as evidence, not gated.
+  **Don't "fix" that by seeding a thirst deficit** — `scripts/salts.lua`
+  derives blood salt concentration as saltFrac/hydrationFrac and
+  `scripts/brain.lua` folds it straight into consciousness, so a unit
+  dehydrated far enough to prefer drinking over its orders is knocked
+  unconscious by the electrolyte imbalance, and scaling the `salt` pool
+  down to compensate just moves the blackout to the first meal's salt
+  bolus (`salts.mealSalt` restores 0.30 of max_salt per feed). Both were
+  observed live while building the gate.
 - **Logging streams** — event log: `engine.getEventLog()`, emit via
   `engine.emitEvent(cat,text)` / `emitEventAt` /
   `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if
