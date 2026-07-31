@@ -115,6 +115,23 @@ python3 tools/action_outcome_coverage.py
 python3 tools/action_outcome_coverage.py --self-test
 ```
 
+### `location_placement_sweep.py`
+One-off MEASUREMENT tool (#997), not a gate: generates a fixed set of 21
+DISTINCT worlds at the GUI/default configuration (10 plates, unchanged
+`config/world_gen_default.yaml`) and counts how many place zero
+locations. Each world gets its own engine process, so any single run is
+reproducible on its own from the printed tuple. The recorded result
+lives in `docs/location_placement_sweep.md`; the standing placement
+gates are the `Location overlay (#89)` hspec group and
+`location_overlay_probe.py`'s phase-9 matrix, which stay small
+deliberately. Re-run this only when you want a fresh frequency number.
+
+```bash
+python3 tools/location_placement_sweep.py
+python3 tools/location_placement_sweep.py --only 64 --json /tmp/sweep.json
+python3 tools/location_placement_sweep.py --single --seed 7 --size 128
+```
+
 ### Workflow
 
 Before committing a change:

@@ -41,7 +41,8 @@ import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import Location.Types (allLocations)
 import Location.Instance (buildLocationInstances)
-import Location.Overlay (computeLocationOverlay)
+import Location.Overlay ( computeLocationPlacement, LocationPlacement(..)
+                        , PlacementOutcome(..) )
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap (buildZoomCacheWithPixels)
@@ -205,8 +206,9 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- headless-dump path stays byte-identical and zero-cost.
     locRegistry ← readIORef (crLocationDefsRef (toContentRegistriesCapability env))
     let locDefs = allLocations locRegistry
-        overlay = computeLocationOverlay seed worldSize plates oceanMap oceanDist
-                    (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
+        placement = computeLocationPlacement seed worldSize plates oceanMap oceanDist
+                      (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
+        overlay = lpOverlay placement
         params = params0
             { wgpLocationOverlay   = overlay
             -- Instance ids (#911) are allocated HERE, at placement time,
@@ -217,6 +219,22 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             }
     _ ← evaluate (force (wgpLocationOverlay params))
     _ ← evaluate (force (wgpLocationInstances params))
+    -- #997: a world with no locations at all makes the expedition arc
+    -- unplayable on that save, so the two interesting outcomes are
+    -- reported rather than passing silently. NoLand is the explicit
+    -- no-location result — Create World surfaces it to the player from
+    -- the (necessarily) empty placed-location list at LoadDone.
+    case lpOutcome placement of
+        PlacedGuaranteed → do
+            let msg = "Strict location placement found no suitable chunk; \
+                      \placed one guaranteed location (#997)."
+            logWarn logger CatWorld msg
+            sendGenLog env msg
+        NoLand → do
+            let msg = "World contains no land — no locations placed (#997)."
+            logWarn logger CatWorld msg
+            sendGenLog env msg
+        _ → pure ()
 
     writeIORef (wsGenParamsRef worldState) (Just params)
     

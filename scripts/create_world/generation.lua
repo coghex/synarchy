@@ -147,6 +147,19 @@ end
 -- Poll (called every frame while RUNNING)
 -----------------------------------------------------------
 
+-- #997: how many locations the world just generated actually got.
+-- Returns nil when the answer is not knowable (the query failed, or the
+-- page id is not recorded yet) so the caller can stay silent rather
+-- than guess. The overlay lives in the page's gen params, so this reads
+-- correctly before the world is ever shown.
+local function placedLocationCount()
+    local page = worldManager.currentWorld
+    if not page then return nil end
+    local ok, list = pcall(world.listPlacedLocations, page)
+    if not ok or type(list) ~= "table" then return nil end
+    return #list
+end
+
 function generation.poll(menu, dt, logPanel, onDone)
     if menu.genState ~= generation.RUNNING then
         return menu.genState
@@ -163,6 +176,24 @@ function generation.poll(menu, dt, logPanel, onDone)
         logPanel.setStatus(menu, "World generated! (" .. elapsed .. "s)")
         logPanel.addLine(menu, "Generation complete.")
         engine.logInfo("World generation complete in " .. elapsed .. "s")
+
+        -- #997: placement now guarantees at least one location in any
+        -- generated world that contains land, so an empty list here can
+        -- only mean a world with no land at all. That world has no ruin
+        -- to travel to, discover, extract from or return with, which
+        -- leaves the expedition arc unplayable on the save -- report it
+        -- instead of reporting a clean success. Generation itself still
+        -- completed, so the normal completion controls (Regenerate /
+        -- Continue) are built as usual below and Regenerate stays the
+        -- obvious next step.
+        if placedLocationCount() == 0 then
+            local msg = "This world has no land, so it has no locations "
+                .. "-- Regenerate with a different seed or size."
+            logPanel.setStatus(menu, "World generated, but it has no locations.")
+            logPanel.addLine(menu, msg)
+            engine.logWarn(msg)
+        end
+
         if onDone then onDone() end
         return generation.DONE
     else
