@@ -27,10 +27,11 @@ What it proves, in order:
      from, so a value comparison would see nothing -- still suppresses
      restoration: the world stays paused and zero-scaled instead of being
      handed back, against phase 2's untouched control.
-  6. A FAILED AUTOSAVE STAYS PAUSED. An accepted autosave whose storage
-     write fails leaves the engine paused and the visible world
-     zero-scaled, and `engine.getSaveStatus()` exposes the rendered
-     failure outcome carrying its `StoragePhase`.
+  6. A FAILED AUTOSAVE STAYS PAUSED, AND SAYS SO. An accepted autosave
+     whose storage write fails leaves the engine paused and the visible
+     world zero-scaled, reports through `save_load`, and exposes the
+     rendered failure outcome carrying its `StoragePhase` via
+     `engine.getSaveStatus()`.
   7. SKIPS ARE SILENT. A deadline reached outside a gameplay view creates
      no save request and no failure event.
   8. A PAUSE-CONFIGURED save_load EVENT WINS. With the `save_load`
@@ -387,6 +388,7 @@ def main() -> int:
         os.chmod(saves_dir, stat.S_IRUSR | stat.S_IXUSR)
         try:
             before = dump(args.port)["stats"]["attempts"]
+            before_log = event_log_text(args.port)
             force_deadline(args.port)
             chk.ok(wait_for_attempts(args.port, before + 1, 30.0),
                    "the failing autosave was still ACCEPTED as a request")
@@ -401,6 +403,14 @@ def main() -> int:
             chk.ok(abs(time_scale(args.port)) < 1e-6,
                    "a failed autosave leaves the world zero-scaled",
                    str(time_scale(args.port)))
+            # Every terminal failure of an ACCEPTED save reports through
+            # save_load, not just the ones the scheduler catches
+            # synchronously -- the player is sitting paused because of
+            # this save and must be told why.
+            new_events = event_log_text(args.port)[len(before_log):]
+            chk.ok("Autosave failed" in new_events,
+                   "the failure reaches the save_load notification category",
+                   new_events.strip()[:200])
         finally:
             os.chmod(saves_dir, stat.S_IRWXU)
 

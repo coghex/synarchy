@@ -58,6 +58,9 @@ handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                         luaRefs mAutosave = do
+    -- Only the WORDING of a failure report depends on this; every other
+    -- autosave-specific behaviour reads 'mAutosave' itself.
+    let isAutosave = isJust mAutosave
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
     -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
@@ -78,7 +81,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             do
                 let err = "World not found for save: " <> unWorldPageId primaryId
                 logWarn logger CatWorld err
-                failTransaction env err
+                failTransaction env isAutosave err
         Just primaryWs → do
             -- Auto-pause BEFORE reading state so the snapshot
             -- captures pause = True (DF convention — saved worlds
@@ -107,7 +110,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                     do
                         let err = "Cannot save: visible world has no gen params"
                         logWarn logger CatWorld err
-                        failTransaction env err
+                        failTransaction env isAutosave err
                 Just _ → do
                     -- Every page must be snapshotable.  Omitting an
                     -- in-progress page makes a superficially successful save
@@ -191,7 +194,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                     case sequence maybePages of
                       Left err → do
                         logWarn logger CatWorld err
-                        failTransaction env err
+                        failTransaction env isAutosave err
                       Right pages → do
                         let liveCamera = LiveCameraSnapshot
                                 { lcsOwnerPage = visibleId
@@ -235,7 +238,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 msg = "session snapshot failed validation: "
                                     <> T.intercalate "; " (capped ⧺ trailer)
                             logWarn logger CatWorld msg
-                            failTransaction env msg
+                            failTransaction env isAutosave msg
                           Right snap → case capIntegrityErrors
                                               (sessionIntegrityErrors snap) of
                             report | not (null (irErrors report)) → do
@@ -243,7 +246,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                         \validation: " <> T.intercalate "; "
                                         (renderIntegrityReport report)
                               logWarn logger CatWorld msg
-                              failTransaction env msg
+                              failTransaction env isAutosave msg
                             _ → do
                                 -- Issue #764 (save-overhaul C3): cross-validate
                                 -- every Lua-declared reference (gathered on the
@@ -312,7 +315,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     let msg = "session snapshot failed to encode: "
                                             <> T.pack (show e)
                                     logWarn logger CatWorld msg
-                                    failTransaction env msg
+                                    failTransaction env isAutosave msg
                                   Right encoded → do
                                     -- Every state owner may resume as soon as the
                                     -- snapshot is fully captured, validated, AND
@@ -380,11 +383,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                           `finally` completeTransaction env
                                       Left err →
                                         do
-                                            failTransaction env err
+                                            failTransaction env isAutosave err
                                             logError logger CatWorld $
                                                 "Failed to save world: " <> err
-                                            emitEvent env "save_load" "World.Save" $
-                                                "Save failed: " <> err
 
 -- | #913: hand an AUTOSAVE's pre-request pause state and visible-world
 --   time scale back to the player, once the transaction has actually
@@ -460,10 +461,29 @@ completeTransaction env = do
     current ← readSaveStatus (saveBarrierRef env)
     forM_ current $ \s → finishSave (saveBarrierRef env) (ssRequestId s)
 
-failTransaction ∷ EngineEnv → Text → IO ()
-failTransaction env err = do
+-- | Fail the transaction AND tell the player, in one place.
+--
+--   Every branch below this point is a TERMINAL failure of an ALREADY
+--   ACCEPTED save: acceptance has paused the game, and (#913) an
+--   autosave leaves it paused as the deliberate safety ratchet. A
+--   failure that only logged would strand the player paused with no
+--   explanation and no save — for an autosave, one they never asked for
+--   at that moment and would have no reason to be looking for. Reporting
+--   lives HERE rather than at each call site so a future failure branch
+--   physically cannot forget it (only the storage-write branch used to
+--   report, and every earlier one — page not found, missing gen params,
+--   an unsnapshotable page, snapshot/integrity validation, encode — did
+--   not).
+--
+--   @isAutosave@ only picks the wording: an unexplained \"Save failed\"
+--   for a save the player never initiated reads as a bug report about
+--   something they did.
+failTransaction ∷ EngineEnv → Bool → Text → IO ()
+failTransaction env isAutosave err = do
     current ← readSaveStatus (saveBarrierRef env)
     forM_ current $ \s → failSave (saveBarrierRef env) (ssRequestId s) err
+    emitEvent env "save_load" "World.Save" $
+        (if isAutosave then "Autosave failed: " else "Save failed: ") <> err
 
 -- | The simulation owns the live fluid map and publishes it back to the
 -- world thread.  Preserve the settled state of every loaded chunk as trailing
