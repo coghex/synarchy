@@ -34,7 +34,11 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldPage, activeWorldState)
+import Engine.Core.State (EngineEnv, activeWorldPage, activeWorldState)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, lookupPath, TexPalette(..))
@@ -51,7 +55,7 @@ import World.Command.Types (WorldCommand(..))
 --   whichever page happens to be active when its chunk loaded.
 resolveStructurePage ∷ EngineEnv → Maybe Text → IO (Maybe (WorldPageId, WorldState))
 resolveStructurePage env (Just pid) = do
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     pure $ (\ws → (WorldPageId pid, ws)) <$> lookup (WorldPageId pid) (wmWorlds mgr)
 resolveStructurePage env Nothing = activeWorldPage env
 
@@ -86,6 +90,7 @@ structurePlaceFn env = do
                         gxi     = fromIntegral gx
                         gyi     = fromIntegral gy
                         slotTag = fromIntegral (fromEnum slot) ∷ Word8
+                        handoff = toRenderHandoffCapability env
                     placed ← Lua.liftIO $
                         -- The per-chunk overlay (lcStructures), reached via the
                         -- WeSetStructure edit, is the SINGLE source of truth that
@@ -94,16 +99,16 @@ structurePlaceFn env = do
                         -- nothing — there is no separate in-memory debug store.
                         case (texPathA, facePathA) of
                             (Just tp, Just fp) → do
-                                texId  ← atomicModifyIORef' (texPaletteRef env) $ \pal →
+                                texId  ← atomicModifyIORef' (rhTexPaletteRef handoff) $ \pal →
                                     let (i, pal') = internPath (TE.decodeUtf8Lenient tp) pal
                                     in (pal', i)
-                                faceId ← atomicModifyIORef' (texPaletteRef env) $ \pal →
+                                faceId ← atomicModifyIORef' (rhTexPaletteRef handoff) $ \pal →
                                     let (i, pal') = internPath (TE.decodeUtf8Lenient fp) pal
                                     in (pal', i)
                                 -- record paletteId → handle so the renderer can
                                 -- resolve this piece immediately (the handle is
                                 -- already loaded — passed in by the builder)
-                                atomicModifyIORef' (texPaletteHandlesRef env) $ \m →
+                                atomicModifyIORef' (rhTexPaletteHandlesRef handoff) $ \m →
                                     ( HM.insert texId  (TextureHandle (fromIntegral tex))
                                     $ HM.insert faceId (TextureHandle (fromIntegral face)) m
                                     , () )
@@ -132,7 +137,7 @@ structurePlaceFn env = do
                                                     ( HM.insert (gxi, gyi, slotTag)
                                                                 (StructurePieceData texId faceId z) st
                                                     , () )
-                                                Q.writeQueue (worldQueue env)
+                                                Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                                                     (WorldSetStructure pageId gxi gyi
                                                                        slotTag texId faceId z)
                                                 pure True
@@ -167,7 +172,7 @@ structureClearFn env = do
                                 -- re-query doesn't surface the just-cleared piece
                                 atomicModifyIORef' (wsStructureStageRef ws) $ \st →
                                     (HM.delete (gxi, gyi, slotTag) st, ())
-                                Q.writeQueue (worldQueue env)
+                                Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                                     (WorldClearStructure pageId gxi gyi slotTag)
                                 pure True
                             Nothing → pure False
@@ -185,7 +190,8 @@ structureClearAllFn env = do
         case mActive of
             Just (pageId, ws) → do
                 writeIORef (wsStructureStageRef ws) emptyChunkStructures
-                Q.writeQueue (worldQueue env) (WorldClearAllStructures pageId)
+                Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
+                    (WorldClearAllStructures pageId)
             Nothing → pure ()
     return 0
 
@@ -226,7 +232,7 @@ structureLoadedCountFn env = do
 --   (debug probe for save/restore of the palette).
 structurePaletteCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structurePaletteCountFn env = do
-    pal ← Lua.liftIO $ readIORef (texPaletteRef env)
+    pal ← Lua.liftIO $ readIORef (rhTexPaletteRef (toRenderHandoffCapability env))
     Lua.pushinteger (fromIntegral (HM.size (tpPathToId pal)))
     return 1
 
@@ -236,8 +242,9 @@ structurePaletteCountFn env = do
 --   each path and feeds it back via setPaletteHandle. Empty once all resolved.
 structureUnresolvedPaletteIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureUnresolvedPaletteIdsFn env = do
-    pal     ← Lua.liftIO $ readIORef (texPaletteRef env)
-    handles ← Lua.liftIO $ readIORef (texPaletteHandlesRef env)
+    let handoff = toRenderHandoffCapability env
+    pal     ← Lua.liftIO $ readIORef (rhTexPaletteRef handoff)
+    handles ← Lua.liftIO $ readIORef (rhTexPaletteHandlesRef handoff)
     let unresolved = [ (i, p) | (i, p) ← HM.toList (tpIdToPath pal)
                               , not (HM.member i handles) ]
     Lua.newtable
@@ -258,7 +265,7 @@ structureSetPaletteHandleFn env = do
     hA  ← Lua.tointeger 2
     case (idA, hA) of
         (Just i, Just h) → Lua.liftIO $
-            atomicModifyIORef' (texPaletteHandlesRef env) $ \m →
+            atomicModifyIORef' (rhTexPaletteHandlesRef (toRenderHandoffCapability env)) $ \m →
                 (HM.insert (fromIntegral i) (TextureHandle (fromIntegral h)) m, ())
         _ → pure ()
     return 0
@@ -328,7 +335,8 @@ structureGetAtFn env = do
                     case mSpd of
                         Nothing → Lua.pushnil >> return 1
                         Just spd → do
-                            pal ← Lua.liftIO $ readIORef (texPaletteRef env)
+                            pal ← Lua.liftIO $ readIORef
+                                    (rhTexPaletteRef (toRenderHandoffCapability env))
                             Lua.newtable
                             Lua.pushinteger (fromIntegral (spdGridZ spd))
                             Lua.setfield (-2) "z"

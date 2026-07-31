@@ -490,18 +490,19 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # took the two live handles explicitly, so it merely narrowed its
     # bare import to the `EngineLifecycle` type.
     "input-lua-transport": frozenset(),
-    # Shrunk from 54 to 4 by issue #893 (E5a): every module whose
-    # `EngineEnv` use was covered by the nine world/sim fields now
-    # reaches them through Engine.Core.Capability.WorldSim. The four
-    # below still need one or more of the SEVEN coupled render-handoff
-    # fields (worldPreviewRef, worldPreviewGenerationRef,
+    # Emptied by issues #893 (E5a) and #894 (E5b): E5a shrank this row
+    # 54 -> 4 by moving every module whose `EngineEnv` use was covered by
+    # the nine world/sim fields onto Engine.Core.Capability.WorldSim, and
+    # E5b moved the last four (Engine.Scripting.Lua.API.Structure,
+    # World.Thread, World.Thread.Command.Basic, World.Thread.Command.Init)
+    # onto Engine.Core.Capability.RenderHandoff for the SEVEN coupled
+    # render-handoff fields (worldPreviewRef, worldPreviewGenerationRef,
     # zoomAtlasDataRef, worldQuadsRef, bloodDisposeQueue, texPaletteRef,
-    # texPaletteHandlesRef), which #894 (E5b) migrates once the render
-    # capability boundary is composed with this one -- see SS7.4.
-    "world-sim-render-handoff": frozenset({
-        "Engine.Scripting.Lua.API.Structure", "World.Thread",
-        "World.Thread.Command.Basic", "World.Thread.Command.Init",
-    }),
+    # texPaletteHandlesRef), composed with the already-landed WorldSim/
+    # RenderView/ContentRegistries/InputView/UnitCombat/Building/Core
+    # records plus the one narrow `saveBarrierRef` accessor World.Thread
+    # keeps until #899 -- see SS7.4.
+    "world-sim-render-handoff": frozenset(),
     # Emptied by issues #895 (E6a) and #896 (E6b): E6a moved the ten
     # unit/combat fields onto Engine.Core.Capability.UnitCombat (49 -> 14,
     # or -- for World.Thread.Command.Edit.Dig -- onto the explicit narrow
