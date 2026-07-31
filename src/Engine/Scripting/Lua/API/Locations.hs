@@ -125,6 +125,7 @@ loadLocationYamlFn core regs env backendState = do
 --       anchor   = { tag, … },
 --       bounds   = { min_x, min_y, max_x, max_y },  -- relative to anchor (#777)
 --       discovery_margin = number,
+--       max_count = number, min_spacing = number,   -- placement knobs (#997)
 --       contents = { { kind, id, count, rolls,
 --                      position = {x,y} | nil,
 --                      faction  = string | nil }, … } }
@@ -132,6 +133,11 @@ loadLocationYamlFn core regs env backendState = do
 --   value) when absent, so `entry.position` reads as nil either way.
 --   `bounds` / `discovery_margin` are always present — every def loads
 --   with a required, validated spatial contract (#777).
+--   `max_count` is reported RAW, exactly as authored: a value of 0 (or
+--   below) is an explicit "do not place", and it is the only thing that
+--   lets a caller tell an empty placed-location list caused by an
+--   authored no-placement content set apart from one caused by a world
+--   with no land — the distinction Create World reports on (#997).
 --   The Lua `locations` module wraps this as locations.listDefs().
 locationListDefsFn ∷ ContentRegistriesCapability
                    → Lua.LuaE Lua.Exception Lua.NumResults
@@ -161,6 +167,11 @@ locationListDefsFn regs = do
         Lua.setfield (-2) "bounds"
         Lua.pushinteger (fromIntegral (ldDiscoveryMargin d))
         Lua.setfield (-2) "discovery_margin"
+        -- placement knobs (#997), raw as authored
+        Lua.pushinteger (fromIntegral (ldMaxCount d))
+        Lua.setfield (-2) "max_count"
+        Lua.pushinteger (fromIntegral (ldMinSpacing d))
+        Lua.setfield (-2) "min_spacing"
         -- anchor: array of tag strings
         Lua.newtable
         forM_ (zip [1..] (ldAnchor d)) $ \(j, tag) → do

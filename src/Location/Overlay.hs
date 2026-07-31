@@ -24,8 +24,17 @@
 --     * /Deterministic./ Candidate ordering is a pure hash of
 --       (seed, location id, chunk) — same seed always yields the same
 --       overlay. Spacing is enforced greedily in that hashed order.
+--
+--     * /Guaranteed placement (#997)./ The strict pass above can reject
+--       every land chunk, leaving a world with no locations at all —
+--       which makes the expedition arc unplayable on that save. When
+--       that happens (and only then) a single fallback placement is
+--       chosen deterministically; see 'guaranteedEntry'.
 module Location.Overlay
     ( computeLocationOverlay
+    , computeLocationPlacement
+    , LocationPlacement(..)
+    , PlacementOutcome(..)
     , ChunkMetrics(..)
     , chunkMetricsAt
     ) where
@@ -82,6 +91,37 @@ chunkMetricsAt seed plates worldSize oceanDist coord =
          , cmOceanDist  = oceanDistAt oceanDist coord
          }
 
+-- | Why the placement pass produced the overlay it did (#997). The
+--   overlay alone cannot say: an empty one has four distinct causes and
+--   only one of them ("this world has no land") is a legitimate
+--   no-location world the player should be told about.
+data PlacementOutcome
+    = PlacedStrict
+      -- ^ The strict pass placed at least one location. The overlay is
+      --   exactly what it has always been; the guarantee never ran.
+    | PlacedGuaranteed
+      -- ^ The strict pass rejected every land chunk, so the guarantee
+      --   placed exactly one location ('guaranteedEntry').
+    | NoPlaceableDefinitions
+      -- ^ Nothing to place: no definitions registered (the common
+      --   headless-dump path) or every registered definition is
+      --   authored @max_count: 0@. The guarantee deliberately does NOT
+      --   fire here — an authored "do not place" is not a generation
+      --   failure, and a def-less world must keep yielding an empty
+      --   overlay or the tracked world-gen baselines shift.
+    | NoLand
+      -- ^ The world holds no land chunk at all, so no placement of any
+      --   kind is possible. The explicit no-location result: callers
+      --   surface this rather than reporting a successful generation.
+    deriving (Show, Eq)
+
+-- | The placement pass's full result: the overlay plus why it looks the
+--   way it does.
+data LocationPlacement = LocationPlacement
+    { lpOverlay ∷ !LocationOverlay
+    , lpOutcome ∷ !PlacementOutcome
+    } deriving (Show, Eq)
+
 -- | Elevation percentile cut-offs derived from the world's land chunks.
 data Cuts = Cuts
     { flatCut     ∷ !Int  -- ^ elev-range at/below this reads as "flat"
@@ -93,6 +133,9 @@ data Cuts = Cuts
 -- | Place every location def into the world. Returns the sparse
 --   chunk→id overlay. Empty when no defs are registered (the common
 --   headless-dump path), which also short-circuits the per-chunk scan.
+--
+--   The overlay-only view of 'computeLocationPlacement', kept because
+--   most callers only ever want the map.
 computeLocationOverlay
     ∷ Word64          -- ^ world seed
     → Int             -- ^ world size in chunks
@@ -103,10 +146,77 @@ computeLocationOverlay
     → WorldRivers     -- ^ per-chunk rivers
     → [LocationDef]   -- ^ registered location defs
     → LocationOverlay
-computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers defs
-    | null defs = emptyLocationOverlay
-    | otherwise = fst (foldl' placeDef (emptyLocationOverlay, HS.empty) defsSorted)
+computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers =
+    lpOverlay
+    . computeLocationPlacement seed worldSize plates oceanMap oceanDist lakes rivers
+
+-- | The placement pass proper: the overlay plus the outcome that
+--   explains it (#997).
+computeLocationPlacement
+    ∷ Word64          -- ^ world seed
+    → Int             -- ^ world size in chunks
+    → [TectonicPlate] -- ^ pre-generated plates
+    → OceanMap        -- ^ submerged-chunk set
+    → OceanDistMap    -- ^ distance-from-ocean per chunk
+    → WorldLakes      -- ^ per-chunk lakes
+    → WorldRivers     -- ^ per-chunk rivers
+    → [LocationDef]   -- ^ registered location defs
+    → LocationPlacement
+computeLocationPlacement seed worldSize plates oceanMap oceanDist lakes rivers defs
+    | null placeable   = LocationPlacement emptyLocationOverlay NoPlaceableDefinitions
+    | null landMetrics = LocationPlacement emptyLocationOverlay NoLand
+    | otherwise        = settle (fst (foldl' placeDef (emptyLocationOverlay, HS.empty)
+                                             placeable))
   where
+    -- Definitions that are actually allowed to place. A def authored
+    -- @max_count: 0@ is an explicit "do not place" — it contributes
+    -- nothing to the strict pass (which clamps the same way below) and
+    -- must never be resurrected by the guarantee.
+    placeable = filter ((> 0) . ldMaxCount) defsSorted
+
+    -- A function, not a value binding: this module is {-# LANGUAGE
+    -- Strict #-}, so a `where` value would be forced on every path,
+    -- including the no-definitions short-circuit above that the
+    -- headless-dump path relies on staying cheap.
+    settle ∷ LocationOverlay → LocationPlacement
+    settle strict
+        | not (HM.null strict) = LocationPlacement strict PlacedStrict
+        | otherwise = case guaranteedEntry placeable of
+            Just (coord, lid) →
+                LocationPlacement (HM.singleton coord lid) PlacedGuaranteed
+            -- Unreachable: `placeable` and `landMetrics` are both
+            -- non-empty here, and the guarantee filters neither away.
+            Nothing → LocationPlacement emptyLocationOverlay NoLand
+
+    -- The #997 guarantee. Reached only when the strict pass placed
+    -- NOTHING, so it can never perturb a world that already has
+    -- locations. It must violate something — an empty strict result
+    -- means no land chunk satisfied @anchorOk ∧ (wantsWater ∨
+    -- dryEnough)@ — so the contract is stated as what still holds:
+    --
+    --   * the chunk comes from 'landMetrics' (never ocean, glacier,
+    --     beyond-glacier, or below sea level) and is therefore already
+    --     canonical under 'wrapChunkCoordU', so it stamps normally;
+    --   * the id is a registered definition's, taken from the head of
+    --     the canonical 'defsSorted' order;
+    --   * the choice is a pure function of the generation tuple.
+    --
+    -- What it may violate is the definition's anchor tags and the #414
+    -- 'dryEnough' proximity filter — but only as far as it has to: a
+    -- dry chunk is preferred whenever one exists, and the tie-break is
+    -- the SAME seeded 'scoreFor' hash the strict pass orders by, not a
+    -- second ranking policy.
+    guaranteedEntry ∷ [LocationDef] → Maybe (ChunkCoord, Text)
+    guaranteedEntry []        = Nothing
+    guaranteedEntry (def : _) =
+        let lid    = ldId def
+            coords = map fst landMetrics
+            dry    = filter dryEnough coords
+            pool   = if null dry then coords else dry
+        in case sortOn (scoreFor lid) pool of
+            coord : _ → Just (coord, lid)
+            []        → Nothing
+
     half = worldSize `div` 2
     -- One candidate per PHYSICAL chunk. The raw square grid double-covers
     -- the seam neighbourhood (a near-seam chunk appears at its canonical

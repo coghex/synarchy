@@ -147,6 +147,33 @@ end
 -- Poll (called every frame while RUNNING)
 -----------------------------------------------------------
 
+-- #997: how many locations the world just generated actually got.
+-- Returns nil when the answer is not knowable (the query failed, or the
+-- page id is not recorded yet) so the caller can stay silent rather
+-- than guess. The overlay lives in the page's gen params, so this reads
+-- correctly before the world is ever shown.
+local function placedLocationCount()
+    local page = worldManager.currentWorld
+    if not page then return nil end
+    local ok, list = pcall(world.listPlacedLocations, page)
+    if not ok or type(list) ~= "table" then return nil end
+    return #list
+end
+
+-- #997: is any registered location definition actually allowed to
+-- place? Mirrors Location.Overlay's own `placeable` filter exactly
+-- (max_count > 0) -- a definition authored max_count 0 is an explicit
+-- "do not place", not a generation failure. Returns nil when the answer
+-- is not knowable, so the caller can stay silent rather than guess.
+local function anyPlaceableLocationDef()
+    local ok, defs = pcall(engine.listLocationDefs)
+    if not ok or type(defs) ~= "table" then return nil end
+    for _, d in ipairs(defs) do
+        if (tonumber(d.max_count) or 0) > 0 then return true end
+    end
+    return false
+end
+
 function generation.poll(menu, dt, logPanel, onDone)
     if menu.genState ~= generation.RUNNING then
         return menu.genState
@@ -163,6 +190,32 @@ function generation.poll(menu, dt, logPanel, onDone)
         logPanel.setStatus(menu, "World generated! (" .. elapsed .. "s)")
         logPanel.addLine(menu, "Generation complete.")
         engine.logInfo("World generation complete in " .. elapsed .. "s")
+
+        -- #997: once generation succeeds, computeLocationPlacement can
+        -- return an empty overlay for exactly two reasons -- the world
+        -- has no land (NoLand), or nothing was placeable to begin with
+        -- (NoPlaceableDefinitions). The guarantee rules out every other
+        -- case: a world with land AND a placeable definition always gets
+        -- at least one location. So "empty list AND some definition is
+        -- placeable" is an unambiguous no-land signal, while an empty
+        -- list with nothing placeable is a content set that has no
+        -- locations to place -- not a world worth telling the player to
+        -- regenerate.
+        --
+        -- A no-land world has no ruin to travel to, discover, extract
+        -- from or return with, which leaves the expedition arc
+        -- unplayable on the save. Generation itself still completed, so
+        -- the normal completion controls (Regenerate / Continue) are
+        -- built as usual below and Regenerate stays the obvious next
+        -- step.
+        if placedLocationCount() == 0 and anyPlaceableLocationDef() then
+            local msg = "This world has no land, so it has no locations "
+                .. "-- Regenerate with a different seed or size."
+            logPanel.setStatus(menu, "World generated, but it has no locations.")
+            logPanel.addLine(menu, msg)
+            engine.logWarn(msg)
+        end
+
         if onDone then onDone() end
         return generation.DONE
     else

@@ -8,7 +8,7 @@ module Test.Headless.WorldGen (spec) where
 
 import UPrelude
 import Test.Hspec
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, sortOn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as Cereal
@@ -31,10 +31,12 @@ import World.Fluid.River.Types (riversInChunk)
 import Location.Types
     (LocationDef(..), emptyLocationRegistry, registerLocation)
 import Location.Instance
-    (LocationInstance(..), buildLocationInstances, instancesToList)
-import Location.Bounds (RelBounds(..))
+    ( LocationInstance(..), LocationLifecycle(..)
+    , buildLocationInstances, instancesToList )
+import Location.Bounds (RelBounds(..), translateBounds)
 import Location.Overlay
-    ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..) )
+    ( computeLocationOverlay, computeLocationPlacement, LocationPlacement(..)
+    , PlacementOutcome(..), chunkMetricsAt, ChunkMetrics(..) )
 import Test.Headless.Location.Bounds (decodeDef, rejectedNaming, isRight')
 -- chunkSeamChebyshev comes in via World.Types (World.Chunk.Types, #423)
 
@@ -146,7 +148,18 @@ spec = do
                 , ldMapIcons = Nothing }
             flatDef = mkDef "flat_test"     ["flat"]
             mtnDef  = mkDef "mountain_test" ["mountain"]
+            -- A chunk's anchor tile — mirrors Location.Instance's
+            -- 'locationAnchorTile', spelled out here so the expectation
+            -- is independent of the code under test.
+            chunkCentre (ChunkCoord cx cy) =
+                ( cx * chunkSize + chunkSize `div` 2
+                , cy * chunkSize + chunkSize `div` 2 )
             overlayFor p defs = computeLocationOverlay
+                (wgpSeed p) (wgpWorldSize p) (wgpPlates p)
+                (wgpOceanMap p) (wgpOceanDist p)
+                (gtWorldLakes (wgpGeoTimeline p)) (gtWorldRivers (wgpGeoTimeline p))
+                defs
+            placementFor p defs = computeLocationPlacement
                 (wgpSeed p) (wgpWorldSize p) (wgpPlates p)
                 (wgpOceanMap p) (wgpOceanDist p)
                 (gtWorldLakes (wgpGeoTimeline p)) (gtWorldRivers (wgpGeoTimeline p))
@@ -196,6 +209,13 @@ spec = do
                                  ∧ V.null (riversInChunk rivers cc))
                           [ ChunkCoord (cx + dx) (cy + dy)
                           | dx ← [-1, 0, 1], dy ← [-1, 0, 1] ]
+            -- Scoped to the STRICT pass on purpose (#997): the #414
+            -- filter is what the guarantee is allowed to violate, so
+            -- asserting dryness over every overlay key would become
+            -- self-contradictory the moment the guarantee fires. Pinning
+            -- the outcome first keeps this a statement about the strict
+            -- pass — and fails loudly if this world ever stops placing.
+            lpOutcome (placementFor p [flatDef, mtnDef]) `shouldBe` PlacedStrict
             HM.keys (overlayFor p [flatDef, mtnDef]) `shouldSatisfy` all dry
 
         it "respects anchor tags — mountain picks higher ground than flat" $ \env → do
@@ -281,6 +301,169 @@ spec = do
                                , i < j ] $ \(a, b) →
                     chunkSeamChebyshev ws a b
                         `shouldSatisfy` (≥ ldMinSpacing def)
+
+        -- #997: the strict pass can reject EVERY land chunk, leaving a
+        -- generated world with no locations at all and the expedition
+        -- arc unplayable on that save. These run on synthetic tables at
+        -- worldSize 8 (the pattern the #422 seam spec above uses) so
+        -- they stay in the always-blocking tier without a real w128 /
+        -- w256 generation; the large-tuple end of the matrix lives in
+        -- tools/location_overlay_probe.py.
+        describe "guaranteed placement (#997)" $ do
+            let gws      = 8
+                gseed    = 3 ∷ Word64
+                gplates  = generatePlates gseed gws 3
+                noLakes  = gtWorldLakes  emptyTimeline
+                noRivers = gtWorldRivers emptyTimeline
+                gcoords  = [ ChunkCoord cx cy
+                           | cx ← [-(gws `div` 2) .. gws `div` 2 - 1]
+                           , cy ← [-(gws `div` 2) .. gws `div` 2 - 1] ]
+                -- Every chunk one hop from the ocean, so the #414
+                -- dryEnough filter rejects the whole world — the exact
+                -- filter-exhaustion route that produces the reported
+                -- zero-placement world.
+                allWet   = HM.fromList [ (c, 1 ∷ Int) | c ← gcoords ]
+                -- No ocean anywhere: `oceanDistAt` defaults to maxBound
+                -- for a missing key, so every land chunk reads as dry.
+                allDry   = HM.empty ∷ HM.HashMap ChunkCoord Int
+                placeWith oceanMap oceanDist defs =
+                    computeLocationPlacement gseed gws gplates
+                        oceanMap oceanDist noLakes noRivers defs
+                wetPlacement = placeWith HS.empty allWet [flatDef]
+                -- The land oracle: with every chunk dry and an
+                -- anchor-free, densely-placing def, the STRICT pass
+                -- itself enumerates the world's land chunks.
+                denseDef = (mkDef "dense_test" [])
+                    { ldMaxCount = 100000, ldMinSpacing = 1 }
+                landChunks = HM.keys (lpOverlay (placeWith HS.empty allDry [denseDef]))
+
+            it "the fixture really is a zero-placement world for the strict pass" $ \_env → do
+                -- Guards the rest of the group: `PlacedGuaranteed` can
+                -- only be reached from an empty strict result, so this
+                -- pins the reproducer itself, and `landChunks` proves
+                -- the world is not merely landless.
+                landChunks `shouldSatisfy` (not . null)
+                lpOutcome wetPlacement `shouldBe` PlacedGuaranteed
+
+            it "guarantees a location in a land world the strict pass rejects" $ \_env →
+                -- The pre-change assertion: `computeLocationOverlay` on
+                -- this fixture returned an EMPTY overlay before #997.
+                HM.size (lpOverlay wetPlacement) `shouldBe` 1
+
+            it "is deterministic — two evaluations of the fixture agree" $ \_env → do
+                let again = placeWith HS.empty allWet [flatDef]
+                lpOverlay again `shouldBe` lpOverlay wetPlacement
+                lpOutcome again `shouldBe` lpOutcome wetPlacement
+                -- and again from independently regenerated plates, the
+                -- same way the strict determinism spec above re-derives.
+                let plates2 = generatePlates gseed gws 3
+                    third = computeLocationPlacement gseed gws plates2
+                                HS.empty allWet noLakes noRivers [flatDef]
+                lpOverlay third `shouldBe` lpOverlay wetPlacement
+
+            it "places on real, canonical land — never ocean or an alias coord" $ \_env → do
+                let placed = HM.keys (lpOverlay wetPlacement)
+                placed `shouldSatisfy` all (`elem` landChunks)
+                forM_ placed $ \c → wrapChunkCoordU gws c `shouldBe` c
+
+            it "names a registered definition, and only the first in id order" $ \_env → do
+                -- `defsSorted` is `sortOn ldId`, so "aaa_test" wins over
+                -- "flat_test" regardless of the argument order.
+                let firstDef = mkDef "aaa_test" ["flat"]
+                    ov = lpOverlay (placeWith HS.empty allWet [flatDef, firstDef])
+                HM.elems ov `shouldBe` ["aaa_test"]
+
+            it "prefers a dry chunk over the score order when one exists" $ \_env → do
+                -- The world stays wet except for ONE land chunk given a
+                -- real ocean distance. That chunk is the world's lowest
+                -- ground, so a [mountain] def still can't anchor there
+                -- and the strict pass still rejects everything — the
+                -- guarantee has to break the anchor either way. Which
+                -- chunk it breaks it ON is the point: the dry one, not
+                -- the one the score order alone would reach.
+                let mtnOnly = mkDef "mtn_only" ["mountain"]
+                    med c = cmMedianElev (chunkMetricsAt gseed gplates gws allDry c)
+                    wetOnly = placeWith HS.empty allWet [mtnOnly]
+                    scorePick = HM.keys (lpOverlay wetOnly)
+                    -- Excluding the pure-score pick, so the assertion
+                    -- can only pass if dryness outranked the score.
+                    lowFirst = filter (\c → [c] ≠ scorePick) (sortOn med landChunks)
+                lpOutcome wetOnly `shouldBe` PlacedGuaranteed
+                case lowFirst of
+                    [] → expectationFailure "fixture has no alternative land chunk"
+                    dryOne : _ → do
+                        let res = placeWith HS.empty
+                                    (HM.insert dryOne 5 allWet) [mtnOnly]
+                        lpOutcome res `shouldBe` PlacedGuaranteed
+                        HM.keys (lpOverlay res) `shouldBe` [dryOne]
+
+            it "does not fire when no definitions are registered" $ \_env → do
+                -- Load-bearing for the tracked world-gen baselines: the
+                -- headless dump path registers no location YAML, so a
+                -- def-less world must still produce an empty overlay.
+                let res = placeWith HS.empty allWet []
+                lpOverlay res `shouldBe` HM.empty
+                lpOutcome res `shouldBe` NoPlaceableDefinitions
+
+            it "does not resurrect a definition authored max_count 0" $ \_env → do
+                -- An authored "do not place" is not a generation failure.
+                let res = placeWith HS.empty allWet [flatDef { ldMaxCount = 0 }]
+                lpOverlay res `shouldBe` HM.empty
+                lpOutcome res `shouldBe` NoPlaceableDefinitions
+
+            it "reports an explicit no-location result for a landless world" $ \_env → do
+                -- Every chunk submerged: no placement of any kind is
+                -- possible, and that is what the caller is told.
+                let allOcean = HS.fromList gcoords
+                    res = placeWith allOcean allDry [flatDef]
+                lpOverlay res `shouldBe` HM.empty
+                lpOutcome res `shouldBe` NoLand
+
+            it "leaves a successful strict pass exactly as it was" $ \env → do
+                ws ← sharedWorld env 42 64 3
+                Just p ← getWorldGenParams ws
+                let res = placementFor p [flatDef, mtnDef]
+                lpOutcome res `shouldBe` PlacedStrict
+                -- More than the single entry the guarantee would add,
+                -- and byte-identical to the overlay-only entry point.
+                HM.size (lpOverlay res) `shouldSatisfy` (> 1)
+                lpOverlay res `shouldBe` overlayFor p [flatDef, mtnDef]
+
+            it "builds a complete instance at the guaranteed chunk" $ \_env → do
+                -- The guaranteed entry is an ordinary overlay entry: it
+                -- flows through the SAME `buildLocationInstances` every
+                -- strict placement does, so it acquires an id, an
+                -- anchor, resolved bounds, a discovery margin and save
+                -- coverage with no parallel construction path.
+                let registry = registerLocation flatDef emptyLocationRegistry
+                    insts = instancesToList
+                                (buildLocationInstances registry (lpOverlay wetPlacement))
+                case insts of
+                    [i] → do
+                        liDefId i `shouldBe` "flat_test"
+                        [liChunk i] `shouldBe` HM.keys (lpOverlay wetPlacement)
+                        liAnchor i `shouldBe` chunkCentre (liChunk i)
+                        liBounds i `shouldBe` translateBounds (liAnchor i) (ldBounds flatDef)
+                        liDiscoveryMargin i `shouldBe` ldDiscoveryMargin flatDef
+                        liDisplayName i `shouldBe` ldLabel flatDef
+                        liLifecycle i `shouldBe` LifecycleUnknown
+                        liContentsSpawned i `shouldBe` False
+                    _ → expectationFailure
+                            ("expected exactly one instance, got " <> show (length insts))
+
+            it "constructs a valid-looking location at a requested chunk coordinate" $ \_env → do
+                -- Requirement 3's direct construction check, independent
+                -- of any generated world: hand an arbitrary chunk to the
+                -- same constructor the placement pass uses.
+                let coord = ChunkCoord 5 (-3)
+                    registry = registerLocation flatDef emptyLocationRegistry
+                    insts = instancesToList
+                                (buildLocationInstances registry
+                                    (HM.singleton coord ("flat_test" ∷ Text)))
+                map liChunk insts `shouldBe` [coord]
+                map liAnchor insts `shouldBe` [chunkCentre coord]
+                map liBounds insts
+                    `shouldBe` [translateBounds (chunkCentre coord) (ldBounds flatDef)]
 
         -- #801: an unsupported or misspelled anchor tag must not silently
         -- impose no constraint. Validation lives at the YAML load layer
