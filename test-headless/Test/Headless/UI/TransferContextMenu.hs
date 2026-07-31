@@ -230,6 +230,23 @@ spec = describe "Transfer context menu" $ do
             after ← evalDebug ls "return require('scripts.transfer_session').get()"
             after `shouldBe` "null"
 
+        it "a reason id missing from the live contract is reported as contract_unavailable, not the unverified string (#1014 review round 2)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            -- No unit.transferReceiverInfo stub for id 512 -> M.create's
+            -- receiver-missing branch fires, and would normally report
+            -- resolveReason("receiver_missing"). Simulate a contract
+            -- that has DRIFTED and no longer advertises that reason id.
+            run ls (T.concat
+                [ "unit.transferContract = function() return { "
+                , "reasons = {'source_missing'}, "
+                , "operations = {'unit_to_building_storage','unit_to_unit_inventory'}, "
+                , "states = {'queued'} } end;"
+                ])
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session').create(7, 'building', 512); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+
         it "Exit to Menu clears a pending session (#1014 review round 1: the save-load reset hook alone misses this path)" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua

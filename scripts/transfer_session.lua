@@ -27,16 +27,20 @@ package.loaded["scripts.transfer_session"] = M
 
 local nextSessionId = 1
 
--- A1's reason vocabulary (Unit.Transfer.transferReasonId), read from
--- unit.transferContract() rather than assumed — #1014 review round:
--- "name the failure using A1's reason ids ... obtained from
--- unit.transferContract() rather than new strings". These three are
--- creation-time failures; 'became_stale' is the vocabulary's OWN name
--- for a request that passed at create time and broke before commit,
--- which is C2's concern, not B1's. 'contract_unavailable' is NOT part
--- of A1's vocabulary — it names a distinct B1-internal failure class
--- (the live contract itself came back malformed), never a transfer
--- policy refusal.
+-- A1's reason vocabulary (Unit.Transfer.transferReasonId). These three
+-- literals name WHICH of B1's own creation-time failure branches fired
+-- (there is no other way to ask the contract "give me the id meaning
+-- source-missing" — 'reasons' is one flat, unordered array covering
+-- all eleven A1 reasons, so a caller has to know which string it
+-- means); 'resolveReason' below is what verifies each one against the
+-- LIVE contract before ever handing it back, so B1 never reports an id
+-- unit.checkTransfer/commitTransfer wouldn't also recognise (#1014
+-- review round 2). 'became_stale' is the vocabulary's OWN name for a
+-- request that passed at create time and broke before commit, which
+-- is C2's concern, not B1's. 'contract_unavailable' is NOT part of
+-- A1's vocabulary — it names a distinct B1-internal failure class (the
+-- live contract itself came back malformed/missing what B1 needs),
+-- never a transfer policy refusal.
 local REASON_SOURCE_MISSING       = "source_missing"
 local REASON_RECEIVER_MISSING     = "receiver_missing"
 local REASON_RECEIVER_INELIGIBLE  = "receiver_ineligible"
@@ -49,21 +53,29 @@ local function containsValue(list, v)
     return false
 end
 
--- One-time drift check: every reason id this module names must
--- actually appear in the live A1 contract. A silent mismatch here
--- would mean the failure strings this module hands to C1/C2/C3 (and
--- the player-visible warning text) no longer match what
--- 'unit.checkTransfer'/'unit.commitTransfer' actually report.
--- Operation/state identity is handled separately (see
--- 'resolveContractIdentity' below) — resolved fresh from the live
--- contract on every 'M.create' call, with its own hard-fail path,
--- rather than checked once here.
-local function checkVocabulary()
+-- Confirm `id` is actually one of the live contract's own reason ids
+-- before ever returning it — refuses to hand back a string the
+-- contract doesn't advertise (same "never assume, always confirm
+-- live" discipline as 'resolveContractIdentity' below). Returns nil on
+-- drift/unavailability; every 'M.create' call site below then reports
+-- REASON_CONTRACT_UNAVAILABLE instead of the unverified id.
+local function resolveReason(id)
     local c = unit.transferContract()
-    local reasons = (c and c.reasons) or {}
+    local reasons = c and c.reasons
+    if reasons and containsValue(reasons, id) then return id end
+    return nil
+end
+
+-- One-time boot-time warning (developer-facing log noise, not a
+-- gameplay gate — 'resolveReason'/'resolveContractIdentity' are what
+-- actually enforce this on every real call) that every id this module
+-- names is present in the live A1 contract, so drift is visible in the
+-- log the moment the engine starts rather than only the first time a
+-- player happens to hit an affected branch.
+local function checkVocabulary()
     for _, id in ipairs({ REASON_SOURCE_MISSING, REASON_RECEIVER_MISSING,
                            REASON_RECEIVER_INELIGIBLE }) do
-        if not containsValue(reasons, id) then
+        if not resolveReason(id) then
             engine.logWarn("transfer_session: reason id '" .. id
                 .. "' missing from unit.transferContract() -- drifted "
                 .. "from Unit.Transfer's vocabulary")
@@ -137,20 +149,20 @@ end
 function M.create(sourceUid, kind, receiverId)
     if not sourceUid or not unit.exists(sourceUid) then
         engine.emitEvent("unit_warning", "Cannot transfer: source unit not found")
-        return nil, REASON_SOURCE_MISSING
+        return nil, resolveReason(REASON_SOURCE_MISSING) or REASON_CONTRACT_UNAVAILABLE
     end
 
     local info = unit.transferReceiverInfo(kind, receiverId)
     if not info then
         engine.emitEventForUnit("unit_warning",
             "Cannot transfer: target no longer exists", sourceUid)
-        return nil, REASON_RECEIVER_MISSING
+        return nil, resolveReason(REASON_RECEIVER_MISSING) or REASON_CONTRACT_UNAVAILABLE
     end
     if not info.eligible then
         local name = (info.displayName ~= "" and info.displayName) or "Target"
         engine.emitEventForUnit("unit_warning",
             "Cannot transfer: " .. name .. " cannot receive items", sourceUid)
-        return nil, REASON_RECEIVER_INELIGIBLE
+        return nil, resolveReason(REASON_RECEIVER_INELIGIBLE) or REASON_CONTRACT_UNAVAILABLE
     end
 
     local operation, state = resolveContractIdentity(kind)
