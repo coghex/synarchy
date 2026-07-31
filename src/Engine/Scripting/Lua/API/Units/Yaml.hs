@@ -21,7 +21,7 @@ import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
-import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..), UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlBodyPart(..), UnitYamlLayer(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml)
+import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..), UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml, unitYamlBodyPartToBodyPart)
 import Engine.Asset.YamlNames (loadNamePool)
 import System.FilePath (takeDirectory, (</>), (<.>))
 import Unit.Types
@@ -168,25 +168,7 @@ loadUnitYamlFn env backendState = do
                             , _ ← [1 .. max 1 (uyieCount e)]
                             ]
                         bodyParts =
-                            [ BodyPart
-                                { bpId              = uybpId p
-                                , bpName            = maybe (uybpId p) id (uybpName p)
-                                , bpParent          = uybpParent p
-                                , bpVital           = uybpVital p
-                                , bpAreaWeight      = uybpAreaWeight p
-                                , bpTacticalValue   = uybpTacticalValue p
-                                , bpBleedFactor     = uybpBleedFactor p
-                                , bpHeightLow       = uybpHeightLow p
-                                , bpHeightHigh      = uybpHeightHigh p
-                                , bpLayers          =
-                                    [ ( maybe (uylMaterial l) id (uylName l)
-                                      , uylMaterial l, uylThickness l )
-                                    | l ← uybpLayers p ]
-                                , bpTargetable      = uybpTargetable p
-                                , bpDepth           = uybpDepth p
-                                , bpAffectsLocomotion = uybpAffectsLocomotion p
-                                , bpAffectsBalance     = uybpAffectsBalance p
-                                }
+                            [ unitYamlBodyPartToBodyPart p
                             | p ← uydBodyParts def
                             ]
                         natRes = NaturalResistance
