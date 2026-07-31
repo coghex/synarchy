@@ -49,7 +49,8 @@ humanoid = UnitDef
         , part "r_foot" (Just "r_leg") False 0.0 []
         ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = []
+    , udTransferReceiver = False }
 
 -- Baseline acolyte: 70 kg, toughness 1.0.
 fall ∷ Int → [FallInjury]

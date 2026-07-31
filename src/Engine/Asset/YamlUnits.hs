@@ -371,6 +371,11 @@ data UnitYamlDef = UnitYamlDef
       --   (technomule: carrying_capacity +50% "cybernetic
       --   enhancements"). Visible in the stat tooltip like any
       --   other modifier.
+    , uydTransferReceiver   ∷ !Bool
+      -- ^ optional: `transfer_receiver: true` marks this unit type as
+      --   an eligible destination for a player-managed item transfer
+      --   (#1000). Defaults to false, so every shipped def that omits
+      --   it keeps decoding unchanged and stays a non-container.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -399,6 +404,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "natural_resistance"  .!= defaultUnitYamlNaturalResistance
         ⊛ v .:? "natural_weapon"
         ⊛ v .:? "modifiers"           .!= []
+        ⊛ v .:? "transfer_receiver"   .!= False
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]
