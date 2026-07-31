@@ -49,7 +49,7 @@ import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save
     (saveListFn, saveWorldFn, saveStatusFn, loadSaveFn, loadStatusFn
     , saveConfigFn, defaultSaveConfigFn, setSaveConfigFn
-    , rotateAutosaveSlotsFn)
+    , prepareAutosaveCycleFn, finalizeAutosaveRotationFn)
 import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
                                             , emitEventForUnitFn
                                             , getEventLogFn
@@ -201,7 +201,9 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "getSaveConfig" (saveConfigFn env)
   registerLuaFunction "getDefaultSaveConfig" (defaultSaveConfigFn env)
   registerLuaFunction "setSaveConfig" (setSaveConfigFn env)
-  registerLuaFunction "rotateAutosaveSlots" (rotateAutosaveSlotsFn env)
+  registerLuaFunction "prepareAutosaveCycle" (prepareAutosaveCycleFn env)
+  registerLuaFunction "finalizeAutosaveRotation"
+      (finalizeAutosaveRotationFn env)
   registerLuaFunction "loadSave"  (loadSaveFn env)
 
   registerLuaFunction "emitEvent"   (emitEventFn env)

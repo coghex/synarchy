@@ -6,7 +6,8 @@ module Engine.Scripting.Lua.API.Save
     , saveConfigFn
     , defaultSaveConfigFn
     , setSaveConfigFn
-    , rotateAutosaveSlotsFn
+    , prepareAutosaveCycleFn
+    , finalizeAutosaveRotationFn
     , loadSaveFn
     , loadStatusFn
     , applyLuaLoad
@@ -30,7 +31,10 @@ import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
 import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
-import World.Save.Autosave (rotateAutosaveSlots)
+import World.Save.Autosave
+    (prepareAutosaveCycle, finalizeAutosaveRotation)
+import Engine.Core.Capability.WorldSim
+    (toWorldSimCapability, withPlayerIntentHeld)
 import Engine.Save.Config
     ( SaveConfig(..), loadSaveConfig, writeSaveConfig, clampSaveConfig
     , defaultSaveConfig, saveConfigDefaultPath, saveConfigLocalPath )
@@ -309,26 +313,12 @@ saveWorldFn env = do
                                         Lua.pushboolean False
                                       Right requestId → do
                                         -- #913: capture what the player was
-                                        -- looking at BEFORE the auto-pause
-                                        -- below overwrites it. This is the
-                                        -- "pre-request" state an autosave
-                                        -- restores on success, and it must be
-                                        -- read here rather than on the Lua
-                                        -- scheduler's side: between a Lua-side
-                                        -- read and this acceptance point the
-                                        -- values could still move, and the
-                                        -- intent generation would then be
-                                        -- snapshotted against the wrong instant.
+                                        -- looking at, then impose the save's
+                                        -- own pause, as ONE step -- see
+                                        -- 'acceptSaveRequest'.
                                         autosaveReq ← Lua.liftIO $
-                                            if not wantAutosave
-                                              then pure Nothing
-                                              else Just ⊚ captureAutosaveRequest
-                                                        env mgr
-                                        Lua.liftIO $ do
-                                            -- The pause is authoritative and
-                                            -- remains set even if the barrier
-                                            -- times out or serialization fails.
-                                            writeIORef (enginePausedRef env) True
+                                            acceptSaveRequest env mgr wantAutosave
+                                        Lua.liftIO $
                                             acknowledgeSave (saveBarrierRef env)
                                                 requestId SaveLua
                                         ready ← Lua.liftIO $ waitForOwners
@@ -393,27 +383,58 @@ saveWorldFn env = do
         _ → Lua.pushboolean False
     return 1
 
--- | Snapshot the pre-request pause state, VISIBLE page's time scale, and
---   player-intent generation an autosave restores from on success (#913).
+-- | Apply the save path's acceptance state, and (for an autosave)
+--   snapshot what it is replacing — as ONE step, under the player-intent
+--   lock (#913).
+--
+--   Two things are settled here:
+--
+--     * The acceptance PAUSE is a pair, not a flag. It sets
+--       'enginePausedRef' AND zeroes the VISIBLE page's clock, because a
+--       paused world whose time-of-day keeps advancing is the
+--       "half-paused world" @scripts\/pause.lua@ documents and heals
+--       elsewhere. "World.Thread.Command.Save.WriteWorld" also zeroes it
+--       during capture, but every failure path BETWEEN acceptance and
+--       that point (an owner-acknowledgement timeout, a required Lua
+--       component failing to snapshot) is terminal and never reaches it —
+--       which left an accepted autosave paused with a live clock, in
+--       violation of its own "a failed autosave stays paused and
+--       zero-scaled" ratchet.
+--     * For an autosave, the pre-request pause\/scale\/generation triple
+--       it restores on success. It has to be read HERE rather than on the
+--       Lua scheduler's side: between a scheduler-side read and this
+--       acceptance point the values could still move, and the generation
+--       would then be snapshotted against the wrong instant.
+--
+--   Holding the intent lock across both makes the snapshot and the
+--   overwrite indivisible: a player pause landing between them can no
+--   longer be captured as "the pre-save state" and handed straight back
+--   on success.
 --
 --   The visible page is resolved exactly the way
 --   "World.Thread.Command.Save.WriteWorld" resolves it — the head of
---   @wmVisible@ that is still a live page — so the scale captured here
---   and the one the save path zeroes are always the same page's. With no
---   visible page there is no clock to restore and the scale is 0; that
+--   @wmVisible@ that is still a live page — so the scale captured here,
+--   the one zeroed here, and the one the world thread zeroes are always
+--   the same page's. With no visible page there is no clock at all; that
 --   case is unreachable through the scheduler (which only fires in a
 --   gameplay view) and is defensive only.
-captureAutosaveRequest ∷ EngineEnv → WorldManager → IO AutosaveRequest
-captureAutosaveRequest env mgr = do
-    prePaused ← readIORef (enginePausedRef env)
-    gen       ← readIORef (playerIntentGenRef env)
-    scale     ← case visiblePageState mgr of
-        Just ws → readIORef (wsTimeScaleRef ws)
-        Nothing → pure 0
-    pure AutosaveRequest { arPrePaused    = prePaused
-                         , arPreTimeScale = scale
-                         , arIntentGen    = gen
-                         }
+acceptSaveRequest
+    ∷ EngineEnv → WorldManager → Bool → IO (Maybe AutosaveRequest)
+acceptSaveRequest env mgr wantAutosave =
+    withPlayerIntentHeld (toWorldSimCapability env) $ \gen → do
+        prePaused ← readIORef (enginePausedRef env)
+        scale ← case visiblePageState mgr of
+            Just ws → readIORef (wsTimeScaleRef ws)
+            Nothing → pure 0
+        -- The pause is authoritative and remains set even if the barrier
+        -- times out or serialization fails.
+        writeIORef (enginePausedRef env) True
+        forM_ (visiblePageState mgr) $ \ws → writeIORef (wsTimeScaleRef ws) 0
+        pure $ if not wantAutosave then Nothing else Just AutosaveRequest
+            { arPrePaused    = prePaused
+            , arPreTimeScale = scale
+            , arIntentGen    = gen
+            }
 
 visiblePageState ∷ WorldManager → Maybe WorldState
 visiblePageState mgr = case wmVisible mgr of
@@ -514,17 +535,37 @@ optIntegerField idx key = do
     Lua.pop 1
     pure (fromIntegral ⊚ v)
 
--- | engine.rotateAutosaveSlots(depth) → true | false, reason
+-- | engine.prepareAutosaveCycle(depth) → true | false, reason
 --
---   Shift the reserved @autosave-\<n\>@ family down one place so the
---   caller can publish a fresh generation into @autosave-1@ (see
---   "World.Save.Autosave" for the ownership rules). Separate from
---   @engine.saveWorld@ on purpose: a refusal here — a manual save
---   squatting on one of the family's names — must be reportable as an
---   autosave FAILURE with nothing rotated and no save transaction ever
---   begun.
-rotateAutosaveSlotsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-rotateAutosaveSlotsFn env = do
+--   Verify that a new autosave cycle may proceed over the reserved
+--   @autosave-\<n\>@ family (see "World.Save.Autosave" for the ownership
+--   rules), and rotate in any generation a previous cycle published but
+--   never finished rotating. Separate from @engine.saveWorld@ on
+--   purpose: a refusal — a manual save squatting on one of the family's
+--   names — must be reportable as an autosave FAILURE with nothing
+--   touched and no save transaction ever begun.
+prepareAutosaveCycleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+prepareAutosaveCycleFn env = autosaveSlotVerb env prepareAutosaveCycle
+
+-- | engine.finalizeAutosaveRotation(depth) → true | false, reason
+--
+--   Rotate the generation just published to
+--   'World.Save.Autosave.autosaveIncomingSlotName' into @autosave-1@,
+--   ageing the rest of the family down. Called by the scheduler ONLY
+--   after that publish reached a successful terminal outcome, so a
+--   failed autosave can never have discarded or renumbered anything.
+finalizeAutosaveRotationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+finalizeAutosaveRotationFn env = autosaveSlotVerb env finalizeAutosaveRotation
+
+-- | Shared shape of the two slot verbs above: read the depth argument,
+--   supply the live Lua component registry's ids (so a save carrying a
+--   required @lua.*@ component this build knows about still LISTS, and
+--   therefore still classifies), and report @true@ or @false, reason@.
+autosaveSlotVerb
+    ∷ EngineEnv
+    → (LoggerState → HS.HashSet Text → Int → IO (Either Text ()))
+    → Lua.LuaE Lua.Exception Lua.NumResults
+autosaveSlotVerb env action = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
     depthArg ← Lua.tointeger 1
     descriptorsOrErr ← describeLuaComponents logger
@@ -532,7 +573,7 @@ rotateAutosaveSlotsFn env = do
             Right ds → HS.fromList [ name | (name, _, _) ← ds ]
             Left _   → HS.empty
         depth = maybe (scRotationDepth defaultSaveConfig) fromIntegral depthArg
-    result ← Lua.liftIO $ rotateAutosaveSlots logger luaKnownNames depth
+    result ← Lua.liftIO $ action logger luaKnownNames depth
     case result of
         Right () → do
             Lua.pushboolean True

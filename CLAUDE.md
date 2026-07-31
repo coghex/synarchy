@@ -897,12 +897,22 @@ before touching each area:
   `autosave-<n>` family, `autosave-1` newest; ownership is the durable
   `smAutosave` metadata flag (`"metadata"` component v2, v1 payloads
   migrate to manual via `World.Save.Compat.MetadataV1`), NEVER the
-  name — a manual save squatting on one of those names fails the
-  attempt through `save_load` with nothing rotated. A SUCCESSFUL
+  name — a manual save (directory OR pre-#762 flat file) squatting on
+  one of those names fails the attempt through `save_load` with nothing
+  rotated. PUBLISH FIRST, ROTATE SECOND: every autosave is written to
+  the reserved `autosave-incoming` staging slot and the family only
+  ages down once that transaction reports success, so a failed
+  autosave can never have discarded or renumbered a generation; a
+  staged generation left by a crash is rotated in by the next cycle. A SUCCESSFUL
   autosave restores the pre-request pause + visible time scale, but
-  only if `playerIntentGenRef` still matches: any `engine.setPaused` /
+  only if `playerIntentGenRef` still matches — an `MVar` that doubles
+  as the mutex, so the comparison and the writes are one critical
+  section with those verbs: any `engine.setPaused` /
   `world.setTimeScale` during the window means the player wins. A
-  FAILED one stays paused and zero-scaled (the existing ratchet), and
+  FAILED one stays paused and zero-scaled (the existing ratchet — the
+  acceptance step zeroes the visible clock too, so a failure BEFORE the
+  world thread's own capture can't leave a half-paused world), every
+  terminal failure of an accepted save reports through `save_load`, and
   the success event's own pause (if the category is configured for it)
   is authoritative over the restore. Gate: `autosave_probe.py`
   (manual-only).

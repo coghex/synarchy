@@ -42,8 +42,10 @@ What it proves, in order:
      `save_load` failure, overwrites nothing, and rotates nothing --
      both as a modern slot directory AND as a pre-#762 legacy flat file,
      which a published directory would otherwise silently shadow.
- 10. ROTATION IS ORDERED AND OWNED. Repeated autosaves keep `autosave-1`
-     newest, and only classified-autosave slots are ever replaced.
+ 10. ROTATION IS ORDERED AND OWNED, AND ONLY EVER FOLLOWS A REAL
+     PUBLISH. Repeated autosaves keep `autosave-1` newest, only
+     classified-autosave slots are ever replaced, and a failed write
+     against a FULL family discards and renumbers nothing.
  11. RETENTION. Reducing `rotation_depth` and disabling autosave both
      RETAIN existing higher-numbered generations untouched.
 
@@ -58,6 +60,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -131,7 +134,17 @@ def slot_dirs(root: str) -> list[str]:
 
 
 def autosave_slots(root: str) -> list[str]:
-    return sorted(n for n in slot_dirs(root) if n.startswith("autosave-"))
+    """The NUMBERED family only, in index order. The staging slot the
+    publish-then-rotate cycle writes through is deliberately excluded:
+    it is transient, and a check that counted it would pass or fail on
+    timing rather than on the rotation's real outcome."""
+    numbered = [(int(n.split("-")[1]), n) for n in slot_dirs(root)
+                if re.fullmatch(r"autosave-\d+", n)]
+    return [n for _, n in sorted(numbered)]
+
+
+def staged_slot_exists(root: str) -> bool:
+    return os.path.isdir(os.path.join(root, "saves", "autosave-incoming"))
 
 
 def dump(port: int) -> dict:
@@ -168,11 +181,20 @@ def wait_for_attempts(port: int, target: int, seconds: float) -> bool:
                       lambda: dump(port)["stats"]["attempts"] >= target) or False
 
 
-def save_settled(port: int, seconds: float = 90.0) -> bool:
-    """Wait until no save transaction is in flight (outcome present)."""
+def save_settled(port: int, seconds: float = 120.0) -> bool:
+    """Wait until the transaction is terminal AND the scheduler has
+    finished the cycle it belongs to.
+
+    An autosave publishes to a staging slot and only rotates the family
+    once that transaction reports success, on a later scheduler tick --
+    so the barrier going terminal is NOT the point at which the slots on
+    disk are final. A manual save has no pending cycle and satisfies the
+    second condition immediately."""
     def done():
         st = send_json(port, "return engine.getSaveStatus()")
-        return bool(st) and st.get("outcome") is not None
+        if not st or st.get("outcome") is None:
+            return False
+        return dump(port).get("pending") is None
     return poll_until(seconds, done) or False
 
 
@@ -376,8 +398,8 @@ def main() -> int:
         # 6. An accepted autosave that FAILS stays paused + zero-scaled.
         # ---------------------------------------------------------
         print("6. an accepted autosave that fails keeps the safety ratchet")
-        for name in autosave_slots(root):
-            shutil.rmtree(os.path.join(saves_dir, name))
+        survivors_before = {n: listing(args.port)[n]["timestamp"]
+                            for n in autosave_slots(root)}
         send(args.port, "engine.setPaused(false); return 'ok'")
         set_time_scale(args.port, 5)
         poll_until(10, lambda: abs(time_scale(args.port) - 5.0) < 1e-6)
@@ -411,6 +433,16 @@ def main() -> int:
             chk.ok("Autosave failed" in new_events,
                    "the failure reaches the save_load notification category",
                    new_events.strip()[:200])
+            # Publish-then-rotate: a save that never published must not
+            # have aged, renumbered, or discarded anything.
+            rows = listing(args.port)
+            chk.ok({n: rows[n]["timestamp"] for n in autosave_slots(root)}
+                   == survivors_before,
+                   "every existing generation survives the failed autosave "
+                   "byte-for-byte",
+                   f"{survivors_before} -> {autosave_slots(root)}")
+            chk.ok(not staged_slot_exists(root),
+                   "no staged generation is left behind by the failed publish")
         finally:
             os.chmod(saves_dir, stat.S_IRWXU)
 
@@ -556,6 +588,28 @@ def main() -> int:
                "autosave-1 is newest and higher numbers are older", str(stamps))
         chk.ok("manual_slot" in slot_dirs(root),
                "the unrelated manual save is untouched by rotation")
+
+        # The reviewer's case for publish-then-rotate: a FULL family plus
+        # a failed write. Nothing may age, renumber, or disappear.
+        full_before = {n: rows[n]["timestamp"] for n in autosave_slots(root)}
+        os.chmod(saves_dir, stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            before = dump(args.port)["stats"]["failures"]
+            force_deadline(args.port)
+            chk.ok(poll_until(60, lambda: dump(args.port)["stats"]["failures"]
+                              > before) or False,
+                   "the autosave against a full family failed as induced")
+            chk.ok(save_settled(args.port), "the failed cycle settled")
+        finally:
+            os.chmod(saves_dir, stat.S_IRWXU)
+        rows = listing(args.port)
+        chk.ok({n: rows[n]["timestamp"] for n in autosave_slots(root)}
+               == full_before,
+               "a failed write leaves the FULL rotation family untouched -- "
+               "nothing discarded, nothing renumbered",
+               f"{full_before} -> {autosave_slots(root)}")
+        chk.ok(not staged_slot_exists(root),
+               "and no staged generation is left behind")
 
         # ---------------------------------------------------------
         # 11. Retention on depth reduction and on disable.

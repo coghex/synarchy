@@ -4,20 +4,39 @@
 --
 --   Autosaves live in the durable slot family @autosave-\<n\>@, where
 --   @autosave-1@ is always the NEWEST generation and higher numbers are
---   progressively older, up to the configured rotation depth. Keeping
---   that ordering true is what this module does: before each autosave
---   the whole family shifts down one place, the generation that falls
---   off the configured depth is dropped, and the fresh save is then
---   published into the now-free @autosave-1@.
+--   progressively older, up to the configured rotation depth.
+--
+--   == Publish first, rotate second
+--
+--   Keeping that ordering true means freeing @autosave-1@, which means
+--   shifting the whole family down, which means the generation that
+--   falls off the end has to go. Doing that BEFORE the new save is
+--   written would make every failed autosave destructive: a save that
+--   never published would already have discarded the oldest generation
+--   and renumbered the rest, with nothing to roll back to.
+--
+--   So the cycle is inverted. Each autosave publishes to the reserved
+--   staging slot 'autosaveIncomingSlotName' — an ordinary slot, written
+--   by the ordinary transaction, with its own atomic publication and
+--   recovery generation. Only once that has actually succeeded does
+--   'finalizeAutosaveRotation' discard the oldest generation, shift the
+--   rest down, and rename the staged one into @autosave-1@. A rejected
+--   request, a failed encode, a failed disk write: none of them touch a
+--   single existing generation.
+--
+--   A staged generation left behind by a crash between those two steps
+--   is not lost either — 'prepareAutosaveCycle' rotates it in before
+--   starting a new cycle, so the interrupted save still lands rather
+--   than being overwritten.
 --
 --   == Manual saves are never overwritten
 --
 --   @autosave-3@ is a perfectly legal name to type into the manual save
 --   box, so the family name alone proves nothing about ownership. Every
---   slot the rotation is about to touch is therefore checked against the
+--   slot a cycle is about to touch is therefore checked against the
 --   durable 'World.Save.Types.smAutosave' classification FIRST, and a
---   single non-autosave in range aborts the whole attempt before any
---   directory is renamed or removed. That is deliberately
+--   single non-autosave in range aborts the whole attempt before
+--   anything is written, renamed, or removed. That is deliberately
 --   all-or-nothing: falling through to a different slot would scatter
 --   generations, and rotating "as far as possible" would leave the
 --   family half-shifted with no way to describe what @autosave-2@ now
@@ -36,8 +55,8 @@
 --   directory beside it would SHADOW it outright, since @loadWorld@
 --   prefers the directory and the flat save would become unreachable by
 --   its own name while still sitting on disk. Any legacy flat file in
---   range is therefore a collision too — the rotation refuses rather
---   than quietly making a player's save unloadable.
+--   range is therefore a collision too — the cycle refuses rather than
+--   quietly making a player's save unloadable.
 --
 --   == What rotation deliberately leaves alone
 --
@@ -57,18 +76,20 @@
 --   A slot's IDENTITY is its directory name — that is what
 --   'World.Save.Serialize.listSaves' reports, what @engine.loadSave@
 --   addresses, and what 'World.Save.Storage.publishGeneration' writes
---   into. A rotated generation's own embedded
---   'World.Save.Types.smName' still records the name it was WRITTEN
---   under (always @autosave-1@, since that is the only slot autosaves
---   are ever published to), so after a shift it no longer echoes its
+--   into. A generation's own embedded 'World.Save.Types.smName' still
+--   records the name it was WRITTEN under (always
+--   'autosaveIncomingSlotName', the only slot autosaves are ever
+--   published to), so after the rename it no longer echoes its
 --   directory. Nothing resolves a save through that field — rewriting it
 --   would mean re-encoding and re-publishing every generation on every
---   rotation, trading a cosmetic mismatch for real I/O and a fresh
+--   rotation, trading a cosmetic mismatch for real I\/O and a fresh
 --   corruption window on bytes that are already durable.
 module World.Save.Autosave
     ( autosaveSlotPrefix
     , autosaveSlotName
-    , rotateAutosaveSlots
+    , autosaveIncomingSlotName
+    , prepareAutosaveCycle
+    , finalizeAutosaveRotation
     ) where
 
 import UPrelude
@@ -98,10 +119,16 @@ autosaveSlotPrefix = "autosave-"
 autosaveSlotName ∷ Int → Text
 autosaveSlotName n = autosaveSlotPrefix <> T.pack (show n)
 
--- | One slot's pre-rotation facts.
+-- | The staging slot every autosave is PUBLISHED to, before the family
+--   is rotated and it becomes @autosave-1@. Inside the reserved prefix
+--   (so it reads as one of ours) but not of the @autosave-\<n\>@ shape,
+--   so it can never collide with a numbered generation.
+autosaveIncomingSlotName ∷ Text
+autosaveIncomingSlotName = autosaveSlotPrefix <> "incoming"
+
+-- | One slot's pre-cycle facts.
 data SlotState = SlotState
-    { ssIndex     ∷ !Int
-    , ssName      ∷ !Text
+    { ssName      ∷ !Text
     , ssDir       ∷ !FilePath
     , ssDirExists ∷ !Bool
       -- ^ The modern slot-directory form — the only shape rotation can
@@ -113,49 +140,43 @@ data SlotState = SlotState
       --   'Nothing' when it exists on disk but could not be listed.
     }
 
--- | Shift @autosave-1..depth@ down one place, dropping whatever fell off
---   the end, so the caller can publish a fresh generation into
---   @autosave-1@. Returns 'Left' with a player-facing reason — which the
---   caller reports as an autosave FAILURE through @save_load@ — without
---   having touched anything, unless the failure was an I\/O error partway
---   through the renames themselves.
-rotateAutosaveSlots
-    ∷ LoggerState → HS.HashSet Text → Int → IO (Either Text ())
-rotateAutosaveSlots logger luaKnownNames requestedDepth = do
-    let depth = max rotationDepthMin (min rotationDepthMax requestedDepth)
+clampDepth ∷ Int → Int
+clampDepth d = max rotationDepthMin (min rotationDepthMax d)
+
+-- | Every slot a cycle at this depth may touch: the numbered family plus
+--   the staging slot.
+cycleSlotNames ∷ Int → [Text]
+cycleSlotNames depth =
+    map autosaveSlotName [1 .. depth] ⧺ [autosaveIncomingSlotName]
+
+readSlotStates ∷ LoggerState → HS.HashSet Text → [Text] → IO [SlotState]
+readSlotStates logger luaKnownNames names = do
     listings ← listSaves logger luaKnownNames
     let classified = HM.fromList
             [ (slName l, smAutosave (slMetadata l)) | l ← listings ]
-    slots ← forM [1 .. depth] $ \i → do
-        let name = autosaveSlotName i
-            dir  = savesDirectory </> T.unpack name
+    forM names $ \name → do
+        let dir  = savesDirectory </> T.unpack name
             flat = savesDirectory </> T.unpack name <> saveExtension
         dirExists  ← doesDirectoryExist dir
         flatExists ← doesFileExist flat
-        pure SlotState { ssIndex      = i
-                       , ssName       = name
+        pure SlotState { ssName       = name
                        , ssDir        = dir
                        , ssDirExists  = dirExists
                        , ssLegacyFileExists = flatExists
                        , ssClassified = HM.lookup name classified
                        }
-    -- Check EVERY slot in range before mutating any of them: a manual
-    -- save at autosave-3 must stop the shift that would have overwritten
-    -- it, not be discovered after autosave-1 has already moved.
-    case catMaybes (map ownershipProblem slots) of
-        (reason : _) → pure (Left reason)
-        [] → do
-            linkSafety ← mapM slotLinkSafety (filter ssDirExists slots)
-            case [ r | Left r ← linkSafety ] of
-                (reason : _) → pure (Left reason)
-                [] → performRotation logger depth slots
 
--- | Why this slot blocks the rotation, if it does.
+-- | Check EVERY slot in range before anything mutates: a manual save at
+--   @autosave-3@ must stop the cycle that would have overwritten it, not
+--   be discovered after @autosave-1@ has already moved.
+firstProblem ∷ [SlotState] → Maybe Text
+firstProblem slots = listToMaybe (catMaybes (map ownershipProblem slots))
+
+-- | Why this slot blocks the cycle, if it does.
 ownershipProblem ∷ SlotState → Maybe Text
 ownershipProblem s
     | ssLegacyFileExists s = Just $
-        "autosave rotation refused: a legacy flat save file '"
-        <> ssName s <> T.pack saveExtension
+        "a legacy flat save file '" <> ssName s <> T.pack saveExtension
         <> "' already occupies that save name -- publishing an autosave \
            \there would shadow it (a slot directory is loaded in \
            \preference to a flat file, so it could no longer be loaded \
@@ -164,32 +185,88 @@ ownershipProblem s
     | otherwise = case ssClassified s of
         Just True  → Nothing
         Just False → Just $
-            "autosave rotation refused: save slot '" <> ssName s
+            "save slot '" <> ssName s
             <> "' is a MANUAL save, not an autosave -- rotating would \
                \overwrite it. Rename or delete it to let autosave use \
                \that name again."
         Nothing → Just $
-            "autosave rotation refused: save slot '" <> ssName s
+            "save slot '" <> ssName s
             <> "' exists but could not be read, so it cannot be shown to \
                \be an autosave -- refusing to rotate over it."
 
--- | The same containment rule every other save path applies: never
---   write through a symlinked slot directory.
-slotLinkSafety ∷ SlotState → IO (Either Text ())
-slotLinkSafety s = do
-    safety ← Storage.rejectSymlinkedSlotDir (ssDir s)
-    pure $ case safety of
-        Left reason → Left ("autosave rotation refused: save slot '"
-                            <> ssName s <> "': " <> reason)
-        Right ()    → Right ()
+-- | The same containment rule every other save path applies: never write
+--   through a symlinked slot directory.
+linkSafetyProblem ∷ [SlotState] → IO (Maybe Text)
+linkSafetyProblem slots = do
+    results ← forM (filter ssDirExists slots) $ \s → do
+        safety ← Storage.rejectSymlinkedSlotDir (ssDir s)
+        pure $ case safety of
+            Left reason → Just ("save slot '" <> ssName s <> "': " <> reason)
+            Right ()    → Nothing
+    pure (listToMaybe (catMaybes results))
 
--- | Drop the oldest owned generation, then shift the rest down. Runs
---   only after every check above has passed.
+-- | Verify that a new autosave cycle may proceed, and clear the way for
+--   it. Nothing here writes a generation: the CALLER publishes to
+--   'autosaveIncomingSlotName' next, and calls
+--   'finalizeAutosaveRotation' only once that has succeeded.
+--
+--   A staged generation already sitting in the incoming slot is a
+--   completed publish whose rotation never ran (a crash or kill in
+--   between). It is rotated in first, so an interrupted autosave still
+--   lands instead of being overwritten by the next one.
+prepareAutosaveCycle
+    ∷ LoggerState → HS.HashSet Text → Int → IO (Either Text ())
+prepareAutosaveCycle logger luaKnownNames requestedDepth = do
+    let depth = clampDepth requestedDepth
+    slots ← readSlotStates logger luaKnownNames (cycleSlotNames depth)
+    problem ← cycleProblem slots
+    case problem of
+        Just reason → pure (Left ("autosave refused: " <> reason))
+        Nothing
+            | any stagedGeneration slots → do
+                logInfo logger CatWorld
+                    "Autosave: a previously published generation was never \
+                    \rotated in -- doing that first"
+                finalizeAutosaveRotation logger luaKnownNames depth
+            | otherwise → pure (Right ())
+  where
+    stagedGeneration s =
+        ssName s ≡ autosaveIncomingSlotName ∧ ssDirExists s
+
+-- | Ownership first, then containment — both across the WHOLE cycle
+--   range, before any of it is touched.
+cycleProblem ∷ [SlotState] → IO (Maybe Text)
+cycleProblem slots = case firstProblem slots of
+    Just reason → pure (Just reason)
+    Nothing     → linkSafetyProblem slots
+
+-- | Rotate the just-published staging generation into @autosave-1@:
+--   discard the oldest owned generation, shift the rest down, rename the
+--   staged one in. Called ONLY after the publish to
+--   'autosaveIncomingSlotName' actually succeeded.
+finalizeAutosaveRotation
+    ∷ LoggerState → HS.HashSet Text → Int → IO (Either Text ())
+finalizeAutosaveRotation logger luaKnownNames requestedDepth = do
+    let depth = clampDepth requestedDepth
+    slots ← readSlotStates logger luaKnownNames (cycleSlotNames depth)
+    let byName = HM.fromList [ (ssName s, s) | s ← slots ]
+        slotAt i = HM.lookup (autosaveSlotName i) byName
+        incoming = HM.lookup autosaveIncomingSlotName byName
+    problem ← cycleProblem slots
+    case problem of
+        Just reason → pure (Left ("autosave rotation refused: " <> reason))
+        Nothing → case incoming of
+            Just inc | ssDirExists inc → performRotation logger depth slotAt inc
+            _ → pure (Left "autosave rotation refused: nothing was \
+                           \published to rotate in")
+
+-- | Drop the oldest owned generation, shift the rest down, then move the
+--   staged generation into @autosave-1@. Runs only after every check
+--   above has passed AND a real generation is durably on disk.
 performRotation
-    ∷ LoggerState → Int → [SlotState] → IO (Either Text ())
-performRotation logger depth slots = do
-    let byIndex = HM.fromList [ (ssIndex s, s) | s ← slots ]
-        slotAt i = HM.lookup i byIndex
+    ∷ LoggerState → Int → (Int → Maybe SlotState) → SlotState
+    → IO (Either Text ())
+performRotation logger depth slotAt incoming = do
     result ← try $ do
         -- The generation that has aged out of the configured depth.
         forM_ (slotAt depth) $ \oldest →
@@ -204,6 +281,8 @@ performRotation logger depth slots = do
                 (Just from, Just to) | ssDirExists from →
                     renameDirectory (ssDir from) (ssDir to)
                 _ → pure ()
+        forM_ (slotAt 1) $ \newest →
+            renameDirectory (ssDir incoming) (ssDir newest)
     pure $ case result ∷ Either IOException () of
-        Left e  → Left ("autosave rotation failed: " <> T.pack (show e))
+        Left e   → Left ("autosave rotation failed: " <> T.pack (show e))
         Right () → Right ()

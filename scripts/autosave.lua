@@ -1,10 +1,10 @@
 -- Autosave scheduler (#913)
 --
--- Owns the interval clock, the eligibility gate, and the rotate-then-save
--- sequence. Everything durable lives in the engine: the config
--- (config/save_default.yaml overlaid with config/save.local.yaml), the
--- autosave/manual classification stored in each save's metadata, and the
--- reserved autosave-<n> slot rotation. This module is the timing and
+-- Owns the interval clock, the eligibility gate, and the
+-- publish-then-rotate cycle. Everything durable lives in the engine: the
+-- config (config/save_default.yaml overlaid with config/save.local.yaml),
+-- the autosave/manual classification stored in each save's metadata, and
+-- the reserved autosave-<n> slot rotation. This module is the timing and
 -- policy layer on top of those.
 --
 -- The clock is WALL time (os.time()), never accumulated tick dt: an
@@ -50,6 +50,11 @@ autosave.stats = autosave.stats or {
     failures = 0,   -- deadlines that reported an autosave failure
 }
 autosave.lastResult = autosave.lastResult or nil
+
+-- The in-flight cycle's {id, depth}, set once its save is requested and
+-- cleared once that transaction reaches a terminal outcome (and, on
+-- success, its rotation has run). nil when no cycle is in flight.
+autosave.pending = autosave.pending or nil
 
 -----------------------------------------------------------
 -- Clock
@@ -134,6 +139,7 @@ end
 function autosave.eligible()
     if not world.getActiveWorldId() then return false, "no world" end
     if not inGameplayView() then return false, "menu" end
+    if autosave.pending then return false, "rotation pending" end
     if transactionRunning(engine.getSaveStatus()) then
         return false, "save in progress"
     end
@@ -147,23 +153,35 @@ end
 -- The attempt itself
 -----------------------------------------------------------
 
--- Rotate first, then publish into the freed autosave-1. The rotation is
--- the step that can find a MANUAL save squatting on one of the reserved
--- names; that is a real autosave FAILURE (reported through save_load),
--- unlike the silent skips above, because the player asked for autosaves
--- and is not getting them until they move that save.
+-- PUBLISH FIRST, ROTATE SECOND. The new generation goes to the reserved
+-- staging slot; only once the engine reports that transaction actually
+-- SUCCEEDED does the family rotate and the staged generation become
+-- autosave-1 (autosave.resolvePending below). Rotating first would make
+-- every failed autosave destructive -- it would already have discarded
+-- the oldest generation and renumbered the rest, with nothing to roll
+-- back to.
+--
+-- The prepare step is what can find a MANUAL save squatting on one of
+-- the reserved names. That is a real autosave FAILURE (reported through
+-- save_load), unlike the silent skips above, because the player asked
+-- for autosaves and is not getting them until they move that save.
+local INCOMING_SLOT = "autosave-incoming"
+
+local function reportFailure(reason)
+    autosave.stats.failures = autosave.stats.failures + 1
+    autosave.lastResult = "failed: " .. tostring(reason)
+    engine.emitEvent("save_load", "Autosave failed: " .. tostring(reason))
+end
+
 function autosave.performSave(pageId)
     local depth = autosave.config and autosave.config.rotationDepth or 3
-    local rotated, reason = engine.rotateAutosaveSlots(depth)
-    if not rotated then
-        autosave.stats.failures = autosave.stats.failures + 1
-        autosave.lastResult = "failed: " .. tostring(reason or "rotation refused")
-        engine.emitEvent("save_load",
-            "Autosave failed: " .. tostring(reason or "slot rotation refused"))
+    local prepared, reason = engine.prepareAutosaveCycle(depth)
+    if not prepared then
+        reportFailure(reason or "autosave slots are not available")
         return false
     end
 
-    local requested = engine.saveWorld(pageId, "autosave-1", { autosave = true })
+    local requested = engine.saveWorld(pageId, INCOMING_SLOT, { autosave = true })
     if not requested then
         -- A synchronous rejection never started a save transaction, so
         -- it is not an autosave failure and gets no failure event (the
@@ -173,9 +191,44 @@ function autosave.performSave(pageId)
         autosave.lastResult = "rejected"
         return false
     end
+    -- Remember WHICH transaction is ours: the barrier reports one
+    -- request at a time, and resolving against "whatever is current"
+    -- would let an unrelated later save decide this cycle's outcome.
+    local status = engine.getSaveStatus()
+    autosave.pending = { id = status and status.id, depth = depth }
     autosave.stats.attempts = autosave.stats.attempts + 1
     autosave.lastResult = "requested"
     return true
+end
+
+-- Finish (or abandon) the cycle started by the last performSave, once
+-- its transaction reaches a terminal outcome. A FAILED transaction needs
+-- no cleanup at all: nothing outside the staging slot was ever touched,
+-- and the engine has already reported the failure through save_load.
+function autosave.resolvePending()
+    local pending = autosave.pending
+    if not pending then return end
+    local status = engine.getSaveStatus()
+    if not status or status.id ~= pending.id then
+        -- Our transaction is no longer the one the barrier is reporting
+        -- on; nothing left to decide from.
+        autosave.pending = nil
+        return
+    end
+    if status.outcome == nil then return end   -- still running
+
+    autosave.pending = nil
+    if status.outcome ~= "SaveSucceeded" then
+        autosave.stats.failures = autosave.stats.failures + 1
+        autosave.lastResult = "failed"
+        return
+    end
+    local rotated, reason = engine.finalizeAutosaveRotation(pending.depth)
+    if not rotated then
+        reportFailure(reason or "rotation refused")
+        return
+    end
+    autosave.lastResult = "saved"
 end
 
 -----------------------------------------------------------
@@ -184,6 +237,11 @@ end
 
 function autosave.update(dt)
     if not autosave.config then return end
+
+    -- Always first: a cycle whose save has landed still needs its
+    -- rotation, even if autosave has since been disabled or the player
+    -- has walked into a menu.
+    autosave.resolvePending()
 
     -- Epoch: a fresh interval begins when a world first becomes the
     -- active visible gameplay world, and again for any DIFFERENT one.
@@ -257,6 +315,11 @@ end
 function autosave.onSaveLoaded(survUnitIds, survBuildingIds)
     autosave.scheduledWorld = nil
     autosave.nextDueAt = nil
+    -- A load replaces the session, and its own transaction has long
+    -- since displaced ours in the save barrier -- there is nothing left
+    -- to resolve our cycle against. Any generation still staged is
+    -- rotated in by the next prepare step instead.
+    autosave.pending = nil
 end
 
 -----------------------------------------------------------
@@ -273,6 +336,7 @@ function autosave.dump()
         now            = now,
         eligible       = (autosave.eligible()) and true or false,
         lastResult     = autosave.lastResult,
+        pending        = autosave.pending,
         stats          = autosave.stats,
     }
 end

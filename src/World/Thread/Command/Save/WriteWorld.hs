@@ -24,6 +24,8 @@ import qualified Data.Vector as V
 import Control.Exception (SomeException, evaluate, finally, try)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (toWorldSimCapability, restoreIfPlayerIdle)
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
@@ -412,27 +414,29 @@ restoreAfterAutosave
     ∷ EngineEnv → LoggerState → Maybe WorldPageId → Maybe AutosaveRequest
     → IO Bool
 restoreAfterAutosave _ _ _ Nothing = pure False
-restoreAfterAutosave env logger visibleId (Just ar) = do
-    gen ← readIORef (playerIntentGenRef env)
-    if gen ≢ arIntentGen ar
-      then do
-        logInfo logger CatWorld
-            "Autosave finished, but the player changed pause or time scale \
-            \while it ran -- leaving their choice in place"
-        pure False
-      else if arPrePaused ar
-        then pure False
-        else do
-            -- Scale first, then the flag: the world thread is the only
-            -- reader of both (tickWorldTime runs on it), but writing the
-            -- flag last means there is never even a momentary
-            -- "unpaused at scale 0" reading of the pair.
+restoreAfterAutosave env logger visibleId (Just ar)
+    | arPrePaused ar = pure False
+    | otherwise = do
+        -- The comparison and the writes are ONE critical section, under
+        -- the same lock every player pause/time-scale transition takes.
+        -- Read-then-write would leave a window in which the Lua thread
+        -- applies a pause, sees a bump land, and has it overwritten here
+        -- anyway by a value that was already stale when it was read.
+        restored ← restoreIfPlayerIdle (toWorldSimCapability env)
+                                       (arIntentGen ar) $ do
+            -- Scale first, then the flag: writing the flag last means
+            -- there is never even a momentary "unpaused at scale 0"
+            -- reading of the pair.
             forM_ visibleId $ \vid → do
                 mgr ← readIORef (worldManagerRef env)
                 forM_ (lookup vid (wmWorlds mgr)) $ \ws →
                     writeIORef (wsTimeScaleRef ws) (arPreTimeScale ar)
             writeIORef (enginePausedRef env) False
-            pure True
+        unless restored $
+            logInfo logger CatWorld
+                "Autosave finished, but the player changed pause or time \
+                \scale while it ran -- leaving their choice in place"
+        pure restored
 
 -- | The @save_load@ success event may be configured to pause the game
 --   ('Engine.PlayerEvent.Emit' writes 'enginePausedRef' directly). That

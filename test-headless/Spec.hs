@@ -120,7 +120,7 @@ import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
-import qualified Test.Headless.Save.AutosaveFeedback as AutosaveFeedback
+import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
@@ -207,7 +207,7 @@ main = hspec $ do
     -- both of which would be noise (and, for the log, a source of
     -- cross-talk) inside the shared-worlds engine above.
     aroundAll withHeadlessEngine $
-        describe "autosave failure feedback (#913)" AutosaveFeedback.spec
+        describe "autosave engine guards (#913)" AutosaveGuards.spec
     -- Own engine (not the shared-worlds one above): needs a real
     -- pixel hit-test against loaded tile data (renderWorldCursorQuads),
     -- so it generates its own cheap private w8 page rather than sharing

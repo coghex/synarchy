@@ -20,6 +20,7 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON)
 import Data.Proxy (Proxy(..))
+import Control.Concurrent.MVar (newMVar)
 import Control.Concurrent.STM (newTVarIO)
 import Control.Exception (SomeException, try, displayException)
 import qualified System.Random as Random
@@ -235,7 +236,7 @@ initializeEngineWith logBackend = do
   enginePausedRef ← newIORef False
   -- #913: starts at 0 and only ever counts UP; an autosave compares a
   -- snapshot of it, never its absolute value.
-  playerIntentGenRef ← newIORef (0 ∷ Word64)
+  playerIntentGenRef ← newMVar (0 ∷ Word64)
   gameTimeRef     ← newIORef (0 ∷ Double)
   saveBarrierRef  ← newSaveBarrier
   inputThreadActiveRef ← newIORef False

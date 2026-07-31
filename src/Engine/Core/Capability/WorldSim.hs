@@ -48,11 +48,14 @@
 module Engine.Core.Capability.WorldSim
   ( WorldSimCapability(..)
   , toWorldSimCapability
-  , bumpPlayerIntent
+  , withPlayerIntent
+  , withPlayerIntentHeld
+  , restoreIfPlayerIdle
   ) where
 
 import UPrelude
-import Data.IORef (IORef, atomicModifyIORef')
+import Control.Concurrent.MVar (MVar, modifyMVar, withMVar)
+import Data.IORef (IORef)
 import Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand)
 import World.Generate.Config (WorldGenConfig)
@@ -116,16 +119,18 @@ data WorldSimCapability = WorldSimCapability
     --   @SimThread@\/@CombatThread@ skip advancing simulated state
     --   while it is true; @MainRender@ keeps rendering and dispatching
     --   input regardless.
-  , wsPlayerIntentGenRef  ∷ IORef Word64
+  , wsPlayerIntentGenRef  ∷ MVar Word64
     -- ^ #913's player-intent generation, sitting here because the two
     --   verbs that bump it are exactly the two clock-authority verbs
     --   this record already owns: @engine.setPaused@ (writing
     --   'wsEnginePausedRef') and @world.setTimeScale@ (queueing onto
     --   'wsWorldQueue'). Bumped by @LuaThread@ only, at the moment the
     --   player expresses the intent; read by @WorldThread@ at the end
-    --   of an autosave transaction. See 'Engine.Core.State's field
-    --   haddock for why engine-internal pause\/scale writes must NOT
-    --   bump it.
+    --   of an autosave transaction. An 'MVar' because it doubles as the
+    --   MUTEX serializing those transitions against that read-then-write
+    --   restore — see 'withPlayerIntent' \/ 'restoreIfPlayerIdle' and
+    --   'Engine.Core.State's field haddock (which also covers why
+    --   engine-internal pause\/scale writes must NOT bump it).
   , wsSimQueue            ∷ Q.Queue SimCommand
     -- ^ Drained by @SimThread@ only; produced by @WorldThread@ (chunk
     --   loading, basic\/sync\/UI commands, and the load publish's stale
@@ -148,11 +153,40 @@ toWorldSimCapability env = WorldSimCapability
   , wsSimQueue            = simQueue env
   }
 
--- | #913: record one player-intent transition. The single place the
---   generation is advanced, so the two verbs that share it (@LuaThread@'s
---   @engine.setPaused@ and @world.setTimeScale@) can never drift into
---   two different notions of "bump". Atomic purely for hygiene — only
---   the Lua thread ever writes it.
-bumpPlayerIntent ∷ WorldSimCapability → IO ()
-bumpPlayerIntent wsc =
-  atomicModifyIORef' (wsPlayerIntentGenRef wsc) $ \g → (g + 1, ())
+-- | Record ONE player-intent transition: apply the caller's own
+--   pause\/time-scale write and advance the generation, as a single
+--   critical section.
+--
+--   The write must happen INSIDE the lock, not merely near it. An
+--   autosave's conditional restore ('restoreIfPlayerIdle') takes the
+--   same lock, so without this the world thread could read a matching
+--   generation, the Lua thread could then apply its pause and bump, and
+--   the world thread would still go on to overwrite the player's pause
+--   with its own stale pre-save value — the exact "the player wins"
+--   guarantee the generation exists to provide.
+--
+--   Only the Lua thread calls this, but the lock is what makes it
+--   correct against the world thread, not against other Lua callers.
+withPlayerIntent ∷ WorldSimCapability → IO α → IO α
+withPlayerIntent wsc act =
+  modifyMVar (wsPlayerIntentGenRef wsc) $ \g → do
+    result ← act
+    pure (g + 1, result)
+
+-- | Run @act@ with the current generation, holding the lock but NOT
+--   advancing it — the shape a save's own acceptance needs: it reads the
+--   state it is about to replace and replaces it in the same breath, and
+--   its own writes are engine-imposed, not player intent.
+withPlayerIntentHeld ∷ WorldSimCapability → (Word64 → IO α) → IO α
+withPlayerIntentHeld wsc = withMVar (wsPlayerIntentGenRef wsc)
+
+-- | Run @act@ only if NO player-intent transition has been recorded
+--   since @expected@, holding the same lock those transitions take —
+--   so one can neither slip in unseen after the comparison nor be lost
+--   to a write that follows it. Reports whether @act@ ran.
+restoreIfPlayerIdle ∷ WorldSimCapability → Word64 → IO () → IO Bool
+restoreIfPlayerIdle wsc expected act =
+  modifyMVar (wsPlayerIntentGenRef wsc) $ \g →
+    if g ≢ expected
+      then pure (g, False)
+      else act ≫ pure (g, True)
