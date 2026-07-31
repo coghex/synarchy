@@ -214,6 +214,12 @@ local function tickOne(uid, defName)
     local s = core.ensureState(uid)
     core.seedInitialGoal(s, defName)
     core.maintainTask(uid, s)
+    -- Stamina-adaptive follow_command pacing (#999): runs unconditionally
+    -- every tick, like maintainTask above, rather than through the
+    -- switch/idle execute gate below — that gate deliberately avoids
+    -- re-running an action mid-walk, which is exactly what continuous
+    -- pacing feedback needs to do (via unit.setMoveSpeed, never moveTo).
+    combat.followCommandPaceTick(uid, s)
 
     -- Delirium (physiological) and mental break (psychological, #352):
     -- a unit in either can't act purposefully — no goals/work/combat,

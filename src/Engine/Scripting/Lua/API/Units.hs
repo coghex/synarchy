@@ -18,6 +18,7 @@ module Engine.Scripting.Lua.API.Units
     , unitDestroyFn
     , unitSetPosFn
     , unitMoveToFn
+    , unitSetMoveSpeedFn
     , unitJumpFn
     , unitStopFn
     , unitGetPosFn

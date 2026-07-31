@@ -25,6 +25,13 @@ data UnitCommand
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)
     | UnitMoveTo !UnitId !Float !Float !Float
         -- ^ unitId, targetX, targetY, speed (tiles per second)
+    | UnitSetMoveSpeed !UnitId !Float
+        -- ^ unitId, speed (tiles per second). Retargets the speed of an
+        --   ALREADY in-flight move without touching its destination or
+        --   local path — a no-op if the unit has no active move target.
+        --   Lets a caller (#999's stamina-adaptive pacing) adjust the
+        --   commanded pace every tick without the path-reset cost a
+        --   repeated UnitMoveTo would incur.
     | UnitJump !UnitId !Int !Int
         -- ^ unitId, target tile (gx, gy). Launches a leap — a gravity arc
         --   to the target tile at the same z — if the gap is within the

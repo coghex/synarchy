@@ -21,6 +21,7 @@ registerUnitAPI env = do
   registerLuaFunction "listDefs"    (unitListDefsFn env)
   registerLuaFunction "listAnimations" (unitListAnimationsFn env)
   registerLuaFunction "moveTo"      (unitMoveToFn env)
+  registerLuaFunction "setMoveSpeed" (unitSetMoveSpeedFn env)
   registerLuaFunction "jump"        (unitJumpFn env)
   registerLuaFunction "stop"        (unitStopFn env)
   registerLuaFunction "select"      (unitSelectFn env)
