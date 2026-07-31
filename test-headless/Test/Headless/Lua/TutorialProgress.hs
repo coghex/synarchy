@@ -382,6 +382,54 @@ spec = describe "Tutorial progress" $ do
             , "assert(TP.getViewModel().rows[1].completed == false)"
             ]
 
+        -- #996: a full/composite branch that latches BEFORE it is ever
+        -- revealed (the shipped acolyte spawn kit satisfies both prepare
+        -- subobjectives immediately, so the composite can latch long
+        -- before secure_water ever completes) must not vanish the
+        -- instant it finally IS revealed. Distinguishing rule: reveal
+        -- ORDER, not durable state alone -- a node revealed while still
+        -- incomplete keeps the ordinary hide-on-completion behavior
+        -- pinned by the tests above; only a node whose first reveal
+        -- finds it already latched gets forced active.
+        it "keeps an already-latched branch observable the first time \
+           \it is revealed, without disturbing the ordinary hide rule \
+           \for its ancestors (#996)" $
+            runsOk $ withTP prelude
+            [ -- Regression step 1: latch the composite and check both
+              -- subobjectives before that branch is ever revealed.
+              "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "TP.setSubobjectiveChecked('prepare_food', true)"
+            , "assert(TP.completeObjective('prepare_expedition') == true)"
+            , "local before = TP.getViewModel()"
+            , "assert(rowById(before, 'prepare_expedition') == nil,"
+            , "       'must not be revealed before its ancestors complete')"
+              -- Regression step 2: complete place_portal, then secure_water.
+            , "TP.completeObjective('place_portal')"
+            , "TP.completeObjective('secure_water')"
+              -- Regression step 3: the checklist stays non-empty and
+              -- exposes the whole prepare branch in authored preorder,
+              -- already complete -- while place_portal/secure_water
+              -- still leave the active view exactly as before (their
+              -- OWN first reveal found them incomplete).
+            , "local m = TP.getViewModel()"
+            , "assert(rowIds(m) == 'place_portal,secure_water,"
+              <> "prepare_expedition,prepare_water,prepare_food', rowIds(m))"
+            , "assert(activeIds(m) == 'prepare_expedition,prepare_water,"
+              <> "prepare_food', activeIds(m))"
+            , "assert(rowById(m, 'prepare_expedition').completed == true)"
+            , "assert(rowById(m, 'prepare_water').checked == true)"
+            , "assert(rowById(m, 'prepare_food').checked == true)"
+              -- Regression step 4: removing the supplies afterwards
+              -- still unchecks the live subobjectives and never touches
+              -- the durable completion -- and, unlike the ordinary case,
+              -- the composite was never hidden to begin with.
+            , "TP.setSubobjectiveChecked('prepare_water', false)"
+            , "m = TP.getViewModel()"
+            , "assert(rowById(m, 'prepare_water').checked == false)"
+            , "assert(rowById(m, 'prepare_expedition').active == true)"
+            , "assert(rowById(m, 'prepare_expedition').completed == true)"
+            ]
+
     -- Round-2 review (PR #962): tutorial progress lives on a Lua
     -- singleton that outlives any one world, and generating a new world
     -- runs no part of the save/load path -- so a new game started after
@@ -605,10 +653,42 @@ spec = describe "Tutorial progress" $ do
             , "saveModules.applyAll()"
             , "assert(ids(TP.completedIds()) =="
             , "       'place_portal,prepare_expedition,secure_water')"
-            -- Everything completed, nothing checked: the whole chain is
-            -- history and the composite is back in the active view
-            -- waiting on its unchecked subobjectives.
+            -- Everything completed, nothing checked yet: with no
+            -- incremental history to replay, #996's reveal-history
+            -- rebuild judges every already-completed id sticky at once
+            -- (requirement 6 asks only for deterministic and non-empty,
+            -- not a replay of a pre-save order nothing kept), so the
+            -- WHOLE chain stays in the active view rather than only the
+            -- composite branch.
             , "local m = TP.getViewModel()"
-            , "assert(activeIds(m) == 'prepare_expedition,prepare_water,"
-              <> "prepare_food', activeIds(m))"
+            , "assert(activeIds(m) == 'place_portal,secure_water,"
+              <> "prepare_expedition,prepare_water,prepare_food', activeIds(m))"
+            ]
+
+        -- #996 requirement 6: the reveal history above must survive the
+        -- NEXT evaluation tick too. tutorial_eval.lua's update always
+        -- re-checks live subobjectives against the current world; if the
+        -- acolyte is still provisioned, that re-check would (without the
+        -- fix) recompute the ordinary hide condition and silently hide
+        -- the chain again, reproducing the exact bug across a load.
+        it "stays observable across a load even once the live \
+           \subobjectives are re-checked true again (#996)" $
+            runsOk $ withTP savePrelude
+            [ "TP.completeObjective('place_portal')"
+            , "TP.completeObjective('secure_water')"
+            , "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "TP.setSubobjectiveChecked('prepare_food', true)"
+            , "TP.completeObjective('prepare_expedition')"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, snap.error)"
+            , "local prep = saveModules.prepareLoad(snap.components)"
+            , "assert(prep.ok, prep.errors and table.concat(prep.errors, '; '))"
+            , "saveModules.applyAll()"
+            -- Simulate the very next evaluation tick observing the same
+            -- live world it was saved from.
+            , "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "TP.setSubobjectiveChecked('prepare_food', true)"
+            , "local m = TP.getViewModel()"
+            , "assert(activeIds(m) == 'place_portal,secure_water,"
+              <> "prepare_expedition,prepare_water,prepare_food', activeIds(m))"
             ]

@@ -568,6 +568,25 @@ spec = describe "Tutorial evaluation" $ do
             , "       'a load must not restore live checks')"
             , "tick()"
             , "expect(true, false, true, true, true)"
+            -- #996: the composite is still unrevealed here (secure_water
+            -- has not completed), so this alone does not yet exercise
+            -- the display bug. Let the SAME acolyte's water discovery
+            -- complete secure_water now -- prepare_expedition's ancestor
+            -- chain completes for the first time here, with the
+            -- composite (and both subobjectives) already latched from
+            -- before the save. A load must not have lost that history:
+            -- the checklist must stay non-empty rather than latching and
+            -- immediately hiding on this very tick.
+            , "setWorld({ portal = true, units = {"
+            , "    [1] = acolyte({ canteen(2.0), rationPack(), rationPack() },"
+            , "                  knowsWater()) } })"
+            , "tick()"
+            , "expect(true, true, true, true, true)"
+            , "local m = TP.getViewModel()"
+            , "assert(rowById(m, PREP) ~= nil and rowById(m, PREP).active == true,"
+            , "       'prepare_expedition must stay observable (#996)')"
+            , "assert(rowById(m, WATER) ~= nil and rowById(m, WATER).active == true)"
+            , "assert(rowById(m, FOOD) ~= nil and rowById(m, FOOD).active == true)"
             ]
 
 -- | The shipped tutorial directory, as boot loads it.

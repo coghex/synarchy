@@ -158,6 +158,12 @@ instance FromJSON RowProbe where
                   <*> o .: "blocks" <*> o .: "captures" <*> o .:? "onClick"
                   <*> o .: "depth"
 
+data ActiveRowsProbe = ActiveRowsProbe
+    { arpRowIds ∷ Text, arpActiveIds ∷ Text } deriving (Show, Eq)
+instance FromJSON ActiveRowsProbe where
+    parseJSON = withObject "ActiveRowsProbe" $ \o →
+        ActiveRowsProbe <$> o .: "rowIds" <*> o .: "activeIds"
+
 data BandProbe = BandProbe
     { bpW ∷ Int, bpH ∷ Int, bpScale ∷ Double
     , bpToggleInFrame ∷ Bool, bpToggleClearOfToolbars ∷ Bool
@@ -504,6 +510,32 @@ spec = aroundAll withSharedFixture $ do
             -- subobjective does not un-complete anything durable.
             rvReopenedIds probe `shouldBe` T.intercalate ","
                 [ "prepare_expedition", "prepare_water", "prepare_food" ]
+
+        -- #996: the composite (and both prepare subobjectives) latches
+        -- BEFORE secure_water ever reveals it — the shipped acolyte spawn
+        -- kit satisfies both prepare subobjectives on its own. The real
+        -- HUD must still show the branch, in authored order, the first
+        -- time it is ever revealed rather than rendering nothing.
+        it "renders an already-latched prepare branch the first time it \
+           \is revealed, instead of an empty checklist" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "tp.setSubobjectiveChecked('prepare_water', true);"
+                , "tp.setSubobjectiveChecked('prepare_food', true);"
+                , "tp.completeObjective('prepare_expedition');"
+                , "tp.completeObjective('place_portal');"
+                , "tp.completeObjective('secure_water');"
+                , "th.setOpen(true); th.rebuild();"
+                , "local d = th.dump();"
+                , "return { rowIds = table.concat(d.rowIds, ','),"
+                , "         activeIds = table.concat(d.activeIds, ',') }"
+                ]
+            probe ← decodeOr r ∷ IO ActiveRowsProbe
+            let want = T.intercalate ","
+                    [ "prepare_expedition", "prepare_water", "prepare_food" ]
+            arpRowIds probe `shouldBe` want
+            arpActiveIds probe `shouldBe` want
 
     describe "scoped wheel capture and scrolling (requirements 4/7)" $ do
         it "captures the wheel only over the visible list — never on the toggle, never off it" $ \(env, ls) → do
