@@ -101,11 +101,7 @@ data PreviewBrowse
   deriving (Eq, Show)
 
 data EngineConfig = EngineConfig
-  { windowWidth     ∷ Int
-  , windowHeight    ∷ Int
-  , enableVSync     ∷ Bool
-  , enableDebug     ∷ Bool
-  , ecHeadless      ∷ Bool
+  { ecHeadless      ∷ Bool
   , ecDebugPort     ∷ Int
   , ecBootProfile   ∷ BootProfile
   -- | (category, item) requested via @--preview category[/item]@.
