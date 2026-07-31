@@ -443,15 +443,19 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
 # docs/engineenv_capability_inventory.md SS6.1's permanent modules -- a
 # hard, checked-in allowlist. `Engine.Core.State` itself (the definer,
 # which imports nothing and so can never appear in a live importer
-# scan) is the 25th permanent module; PERMANENT_IMPORTERS below holds
-# only the 24 modules that actually IMPORT it.
+# scan) is the 24th permanent module; PERMANENT_IMPORTERS below holds
+# only the 23 modules that actually IMPORT it.
 PERMANENT_DEFINER = "Engine.Core.State"
 
 PERMANENT_IMPORTERS = frozenset({
     "Engine.Core.Monad",
     "Engine.Core.Init",
     "Engine.Core.Defaults",
-    "Engine.Loop", "Engine.Loop.Frame", "Engine.Loop.Headless",
+    # `Engine.Loop.Headless` left this list in issue #1022: its whole
+    # body is now one `Engine.Loop.Mode.LoopMode` value, and the shared
+    # driver that reads `lifecycleRef`/`inputQueue`/`saveBarrierRef`
+    # (`Engine.Loop.Mode`) names those three fields in a narrow import.
+    "Engine.Loop", "Engine.Loop.Frame",
     "Engine.Loop.Shutdown", "Engine.Loop.Camera", "Engine.Loop.Timing",
     "Engine.Loop.Resource",
     "app/App/Graphical.hs", "app/App/Offscreen.hs", "app/App/Preview.hs",
