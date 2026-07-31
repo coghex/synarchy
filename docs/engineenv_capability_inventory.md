@@ -373,24 +373,37 @@ dependencies, cross-references, or compatibility-boundary remarks.
 
 ### `world-sim-render-handoff`
 
-This group migrates in two halves (§7.4). Since #893 (E5a) the nine
-**world/sim** fields — `worldManagerRef`, `worldQueue`, `sunAngleRef`,
-`floraCatalogRef`, `materialRegistryRef`, `worldGenConfigRef`,
-`gameTimeRef`, `enginePausedRef`, `simQueue` — are reached through
+This group migrated in two halves (§7.4), both landed. Since #893 (E5a)
+the nine **world/sim** fields — `worldManagerRef`, `worldQueue`,
+`sunAngleRef`, `floraCatalogRef`, `materialRegistryRef`,
+`worldGenConfigRef`, `gameTimeRef`, `enginePausedRef`, `simQueue` — are
+reached through
 `Engine.Core.Capability.WorldSim.WorldSimCapability` rather than an
-`EngineEnv` field, by every reader and writer below EXCEPT the §6.1
-permanent orchestration modules (which keep whole-environment access by
-job description) and the four §6.2 modules deferred to #894. The
-remaining seven — `worldPreviewRef`, `worldPreviewGenerationRef`,
-`zoomAtlasDataRef`, `worldQuadsRef`, `bloodDisposeQueue`,
-`texPaletteRef`, `texPaletteHandlesRef` — are the **coupled
-render-handoff** half: the world thread's staging surface for
-`MainRender` GPU uploads plus the structure-palette translation table,
-still reached as `EngineEnv` fields until #894 (E5b) composes them with
-the render capability boundary. Every per-field contract in the table
-below holds unchanged either way — the record grants no new read or
-write authority, it only removes the ability to reach fields a
-world/sim consumer has no business touching.
+`EngineEnv` field; since #894 (E5b) the remaining seven —
+`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
+`worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
+`texPaletteHandlesRef`, the **coupled render-handoff** half (the world
+thread's staging surface for `MainRender` GPU uploads plus the
+structure-palette translation table) — are reached through
+`Engine.Core.Capability.RenderHandoff.RenderHandoffCapability`. Both
+hold for every reader and writer below EXCEPT the §6.1 permanent
+orchestration modules, which keep whole-environment access by job
+description. Every per-field contract in the table below holds
+unchanged either way — neither record grants any new read or write
+authority, they only remove the ability to reach fields a consumer has
+no business touching, and the render-handoff half in particular changes
+no handoff semantics, upload cadence, staleness policy or disposal
+ordering.
+
+The clearing contract differs per lifecycle within the render-handoff
+half, so the record documents each field's own rather than a blanket
+rule: `worldPreviewRef`/`zoomAtlasDataRef` are single slots consumed to
+`Nothing` by their `MainRender` upload handler and `bloodDisposeQueue`
+is drained by its `MainRender` consumer (`transient-handoff`);
+`worldPreviewGenerationRef` is monotonic and never cleared while
+`worldQuadsRef` stays published until replaced or explicitly cleared by
+a world teardown (`boot-process`); `texPaletteRef`/
+`texPaletteHandlesRef` follow session replacement (`session-replaced`).
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
@@ -493,12 +506,12 @@ field documentation restates the reader/writer/lifecycle facts below.
 ## 6. Full-`EngineEnv` compatibility boundary
 
 **Live since issue #889 (E1, landed); recounted by #890 (E2), #891
-(E3), #893 (E5a), #892 (E4), #895 (E6a), #897 (E7a), #896 (E6b) and
-#898 (E7b).**
-202 files under `src/`/`app/` import `Engine.Core.State` in some form.
-Of those, 31 have genuine unrestricted field-level access:
+(E3), #893 (E5a), #892 (E4), #895 (E6a), #897 (E7a), #896 (E6b), #898
+(E7b) and #894 (E5b).**
+203 files under `src/`/`app/` import `Engine.Core.State` in some form.
+Of those, 27 have genuine unrestricted field-level access:
 `Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 30 files that
+imports nothing) plus 26 files that
 import it either as an explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
@@ -511,11 +524,11 @@ this exact same two-shape definition against `src/`/`app/` on every
 run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 202
+grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 30 have full access, 172 do not:
+# script logic below; 26 have full access, 177 do not:
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
 #        itself plus its 12 `Register.*` submodules; all import the bare
 #        `EngineEnv` TYPE with no constructor access, and two of them
@@ -556,7 +569,7 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 202
 #        opaque `EngineEnv` type to hand to a not-yet-narrowed helper,
 #        and/or for individually named accessors (`luaQueue`,
 #        `loggerRef`, ...) — either of a field whose own capability
-#        (§7.1's `core-init` remainder, #894, #898, #899) has yet to
+#        (§7.1's `core-init` remainder, #899) has yet to
 #        migrate, or of one a landed capability left on a pre-existing
 #        narrow reader. The other 5 of #891's 45
 #        (`Vulkan.Command.Text`, `Vulkan.Texture.Bindless`,
@@ -568,18 +581,37 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 202
 #        half of the `world-sim-render-handoff` projection; bare
 #        `EngineEnv` type plus its nine field accessors, never
 #        `EngineEnv(..)`)
+#   1  × `Engine.Core.Capability.RenderHandoff` (new by #894 — the
+#        coupled render-handoff half of the same projection; bare
+#        `EngineEnv` type plus its seven field accessors, never
+#        `EngineEnv(..)`. One record, not a §3.1-style full/view pair:
+#        none of its seven fields is private to a single thread the way
+#        `engineStateRef` is to `MainRender` — every one is a deliberate
+#        cross-thread handoff)
+#   4  × the #894-narrowed `world-sim-render-handoff` modules — the E5b
+#        remainder `Engine.Scripting.Lua.API.Structure`, `World.Thread`,
+#        `World.Thread.Command.Basic` and `World.Thread.Command.Init`.
+#        All four still import `Engine.Core.State` narrowly: every one
+#        needs at least the bare `EngineEnv` type (they still take an
+#        `EngineEnv` and project from it), `API.Structure` additionally
+#        for the canonical `activeWorldPage`/`activeWorldState` helpers,
+#        and `World.Thread` for the one named `saveBarrierRef` accessor
+#        whose own capability (#899) has yet to migrate
 #   28 × the #893-narrowed `world-sim-render-handoff` modules that still
 #        import `Engine.Core.State` narrowly — for the same three
 #        reasons #891's 41 do: the canonical `activeWorldStateFrom`/
 #        `activeWorldPageFrom`/`resolveActiveWorld` helpers, an opaque
 #        `EngineEnv` type to hand to a not-yet-narrowed helper (e.g.
-#        `World.Thread.Command` → `Command.Basic`/`Command.Init`, the
+#        `World.Thread.Command` → `Command.Basic`/`Command.Init`, both
+#        narrowed by #894 but still taking an `EngineEnv` they project
+#        from; the
 #        designation `Cursor.*` handlers → `Cursor.Common`'s F4
 #        outcome recorders), and/or individually named accessors
 #        (`unitManagerRef`, `unitQueue`, `luaQueue`, `loadStatusRef`,
 #        `actionOutcomeRef`, `hudActivePageRef`, `saveBarrierRef`) —
-#        either of a field whose own capability (#894, #899) has yet
-#        to migrate, or of one a landed capability (#892, #895, #897)
+#        either of a field whose own capability (#899) has yet
+#        to migrate, or of one a landed capability (#892, #894, #895,
+#        #897)
 #        left on a pre-existing narrow reader. The other 22 of #893's
 #        50 now import `Engine.Core.State` not at all and are outside
 #        this accounting.
@@ -671,7 +703,7 @@ once the epic's capability split has landed, versus what merely has
 full access today because nothing narrower exists yet. It is
 deliberately narrow — narrow enough to become the literal allowlist
 for #537's final unrestricted-access audit (per requirement 6) — which
-means some of today's 31 full-access files are **not** listed as
+means some of today's 27 full-access files are **not** listed as
 permanent below; they belong in the temporary section (§6.2), each
 assigned individually (no wildcards, no catch-all) to one of §7's
 bounded follow-up issues.
@@ -697,7 +729,7 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 25 permanent modules (24 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 31 − 25 = 6 full-access
+which imports nothing). The remaining 27 − 25 = 2 full-access
 modules are temporary, enumerated exhaustively in §6.2.
 
 Since issue #889, this permanent allowlist and §6.2's temporary
@@ -708,7 +740,7 @@ live-scanned production importer set ever disagrees with either.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 6 remaining full-access modules is individually
+Every one of the 2 remaining full-access modules is individually
 assigned below to exactly one target capability — **no path-prefix
 globs, no "and similar" language, and no catch-all row**: every name
 in every cell is a literal, complete Haskell module name. The
@@ -766,14 +798,14 @@ directory-name guessing:
 | `core-init` | `Engine.Graphics.Vulkan.Command.Record`, `Engine.Scripting.Lua.API.Log` | §7.1 |
 | `render-gpu-asset` | *(none — migrated by #891 (E3): all 45 former entries now reach their render fields through `Engine.Core.Capability.Render` (the `MainRender`-only 21-field record) or `Engine.Core.Capability.RenderView` (the worker-safe view that never carries `engineStateRef` — 13 fields when #891 landed, 14 since #893 added `fpsRef`), per §3.1; none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.2 |
 | `input-lua-transport` | *(none — migrated by #892 (E4): all 11 former entries now reach their input fields through `Engine.Core.Capability.Input` (the `LuaThread`-only eight-field record) or `Engine.Core.Capability.InputView` (the worker-safe five-field view that carries neither `inputBarrierNextRef` nor `currentKeyDownRef`), per the §3.1 rule §7.3 applies here; `Engine.Input.Callback` needed no record at all — its API already took the two live handles explicitly, so it merely narrowed its bare import to the `EngineLifecycle` type. None of the 11 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.3 |
-| `world-sim-render-handoff` | `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init` — the E5b remainder, named individually per #893's requirement 2 so nothing is silently dropped between the a/b pair. #893 (E5a) removed this row's other 50 entries; each of the four left still dereferences at least one of the seven coupled render-handoff fields §7.4 lists, and #894 (E5b) migrates them. | §7.4 |
+| `world-sim-render-handoff` | *(none — migrated in two halves: #893 (E5a) moved 50 entries onto `Engine.Core.Capability.WorldSim` for the nine world/sim fields, and #894 (E5b) moved the remaining four — `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init`, named individually per #893's requirement 2 so nothing was silently dropped between the a/b pair — onto `Engine.Core.Capability.RenderHandoff` for the seven coupled render-handoff fields, composed with the `WorldSim`/`RenderView`/`ContentRegistries`/`InputView`/`UnitCombat`/`Building`/`Core` records their other reads already had. None of the 54 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.4 |
 | `units-buildings-combat` | *(none — migrated by #895 (E6a) and #896 (E6b) together: E6a's 35 entries reach the ten unit/combat fields through `Engine.Core.Capability.UnitCombat`, and E6b's remaining 14 reach the three building fields through `Engine.Core.Capability.Building` — `Building.Thread.Command` by taking that record plus the logger ref and `WorldSimCapability` as explicit parameters and so dropping its `Engine.Core.State` import entirely, the other 13 by projecting from the `EngineEnv` they still take. None of the 49 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.5 |
 | `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
 | `ui-hud-events` | *(none — migrated in two halves: #897 (E7a) moved 11 UI-dominant entries onto `Engine.Core.Capability.Ui`, and #898 (E7b) moved the two event-dominant ones (`Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.PlayerEvent`) onto `Engine.Core.Capability.Events`. None of the 13 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.7 |
 | `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 0 + 0 + 4 + 0 + 0 + 0 + 0 = 6) match
-31 − 25 exactly — every temporary full-access module is accounted for
+Row counts (2 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 2) match
+27 − 25 exactly — every temporary full-access module is accounted for
 in exactly one row above.
 
 ### 6.3 Test-only exceptions
@@ -993,20 +1025,26 @@ scope, per the issue text).
   handles explicitly), and `Engine.Input.State` is a §6.2
   `units-buildings-combat` module.
 
-### 7.4 `world-sim-render-handoff` — **E5a LANDED (#893); E5b (#894) open**
+### 7.4 `world-sim-render-handoff` — **LANDED (E5a #893 + E5b #894)**
 
 - **Dependencies:** `render-gpu-asset` (the render-handoff fields —
   `worldPreviewRef`/`zoomAtlasDataRef`/`worldQuadsRef` — are read by
   `MainRender`, so this group's record and `render-gpu-asset`'s record
   will need to be importable together at their shared boundary, or
   this group's migration should land after §7.2's), `units-buildings-combat`
-  (`materialRegistryRef` is read by `Unit.Thread.Movement`).
+  (`materialRegistryRef` is read by `Unit.Thread.Movement`). Both were
+  satisfied: §7.2 landed first, so E5b could simply compose
+  `RenderHandoffCapability` with the already-existing
+  `RenderViewCapability` in the two modules that needed both
+  (`World.Thread`, `World.Thread.Command.Init`), and with
+  `UnitCombatCapability`/`BuildingCapability` in
+  `World.Thread.Command.Basic`.
 - **Independent migration:** Partial, exactly as this entry predicted.
   The world/sim side moved on its own in E5a; the render-handoff fields
-  are the coupled part and stay with E5b.
+  were the coupled part and moved in E5b.
 - **Follow-up scope:** Two child issues, as anticipated — E5a (#893)
   for the world/sim/worldgen fields proper, E5b (#894) for the coupled
-  render-handoff set.
+  render-handoff set. Both are now landed; this row is closed.
 
 **What landed in E5a (#893):**
 `Engine.Core.Capability.WorldSim` exports `WorldSimCapability` over
@@ -1035,8 +1073,8 @@ change, no behaviour change.
   (`worldQuadsRef`), `World.Thread.Command.Basic` (`worldQuadsRef`,
   `bloodDisposeQueue`) and `World.Thread.Command.Init`
   (`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
-  `bloodDisposeQueue`). Those four keep their §6.2 entry; together, E5a
-  and E5b clear the row completely.
+  `bloodDisposeQueue`). Those four kept their §6.2 entry until E5b
+  landed; together, E5a and E5b clear the row completely.
 - **Two `Engine.Core.State` helpers added, not moved:**
   `activeWorldPageFrom`/`activeWorldStateFrom` take the live
   `IORef WorldManager` instead of an `EngineEnv`, so a narrowed
@@ -1078,6 +1116,65 @@ change, no behaviour change.
   re-projects inline at most call sites) and explicit
   same-shape-swap checks on `worldQueue`/`simQueue` and
   `enginePausedRef`/`gameTimeRef`.
+
+**What landed in E5b (#894):**
+`Engine.Core.Capability.RenderHandoff` exports `RenderHandoffCapability`
+over exactly the seven coupled render-handoff fields
+(`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
+`worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
+`texPaletteHandlesRef`) plus the total one-way projection
+`toRenderHandoffCapability`, following the same §7.1/#889 convention
+E5a did (same live `IORef`s/`Queue`, never a copy; no import of a
+consumer). It is a pure refactor — no `EngineEnv` field-set change, no
+behaviour change: preview staleness handling, zoom-atlas upload,
+world-quad publication, texture-palette publication and blood-texture
+disposal ordering are all byte-for-byte the same call sequence, reached
+through a projected field instead of an `EngineEnv` one.
+
+- **One record, no §3.1-style view split.** `render-gpu-asset` needed a
+  full/view pair because `engineStateRef` is `MainRender`-private, and
+  `input-lua-transport` needed one because two of its fields are
+  `LuaThread`-private. Nothing here is private to a single thread:
+  every one of the seven is a deliberate cross-thread handoff, which is
+  the whole point of the group, so a second interface would carve a
+  boundary the §5 contracts do not have. `texPaletteHandlesRef` makes
+  that concrete — it has `LuaThread` readers
+  (`structure.unresolvedPaletteIds`) as well as its `WorldThread` use.
+- **Fully narrowed:** all four of this row's remaining §6.2 entries, so
+  the row is now empty and §6.2 is down to 2 modules overall (27 − 25).
+  Each still imports `Engine.Core.State` narrowly for the bare
+  `EngineEnv` type they take and project from — plus, for
+  `Engine.Scripting.Lua.API.Structure`, the canonical
+  `activeWorldPage`/`activeWorldState` helpers, and for `World.Thread`
+  the one named `saveBarrierRef` accessor whose own capability (§7.8,
+  #899) has yet to migrate.
+- **Composed with already-landed records rather than widened.** None of
+  the four needed a field added to `RenderHandoffCapability` or to any
+  other record: their non-handoff reads were already covered, and each
+  module simply projects the records it needs.
+  `World.Thread.Command.Basic` composes `WorldSim` + `RenderHandoff` +
+  `UnitCombat` + `Building`; `World.Thread.Command.Init` composes
+  `WorldSim` + `RenderHandoff` + `RenderView` (`cameraRef`) +
+  `ContentRegistries` (`locationDefsRef`) + `InputView` (`luaQueue`);
+  `World.Thread` composes `WorldSim` + `RenderHandoff` + `RenderView` +
+  `Core` (`loggerRef`/`lifecycleRef`); `Engine.Scripting.Lua.API.Structure`
+  composes `WorldSim` + `RenderHandoff`. `World.Thread` takes
+  `RenderViewCapability`, never `RenderCapability` — it runs on
+  `WorldThread`, so §3.1's boundary (enforced by the same audit) keeps
+  it off `engineStateRef`.
+- **Enforcement:** the §6 ratchet (`TEMPORARY_CEILING`'s
+  `world-sim-render-handoff` set shrunk 4 → 0, checked in both
+  directions against the live scan and against §6.2), plus
+  projection-aliasing coverage in
+  `Test.Headless.Capability.RenderHandoff` — all seven fields asserted
+  to be the same live container as `EngineEnv`'s, plus stability across
+  repeated projection (several call sites re-project inline) and
+  explicit non-swap checks on the two single-slot upload handoffs and
+  on the palette/handle-table pair. The behaviour this refactor must
+  not disturb keeps its own pre-existing gates:
+  `Test.Headless.Lua.PreviewGeneration` for the delivery-time preview
+  staleness policy and `Test.Headless.Blood.Teardown` for live-ref
+  draining, exactly-once cleanup and teardown/FIFO overlap.
 
 ### 7.5 `units-buildings-combat` — **LANDED (E6a #895 + E6b #896)**
 
@@ -1176,8 +1273,9 @@ call sequence over the same containers.
   it — inside that same 500 lines, by compacting its import block — and
   kept `actionOutcomeRef` an explicit narrow value under this section's
   own rule rather than adopting `UnitCombatCapability`.
-  `World.Thread.Command.Basic` picks its record up when #894 migrates
-  it.
+  `World.Thread.Command.Basic` picked its record up when #894 (E5b)
+  migrated it, and now reaches `unitQueue` through
+  `UnitCombatCapability` too.
 - **Cross-capability consumers of OTHER already-landed records:** the
   35 narrowed modules that also read a `content-registries`,
   `render-gpu-asset`, `input-lua-transport` or `world-sim-render-handoff`
@@ -1245,10 +1343,11 @@ same containers.
   `World.Load.Publish`, `World.Thread.Command.Save.WriteWorld`,
   `Engine.Scripting.Lua.API.Save`) are permanent whole-session
   exceptions. `World.Thread.Command.Basic`'s one `buildingQueue` write
-  belongs to the E5b remainder (#894) and was left naming the accessor
+  belonged to the E5b remainder (#894) and was left naming the accessor
   directly under this section's own rule, exactly as E6a left it naming
-  `unitQueue`: touching it would pull #894's scope forward without
-  shrinking any row.
+  `unitQueue`: touching it would have pulled #894's scope forward
+  without shrinking any row. #894 has since narrowed that module, so
+  both writes now go through `BuildingCapability`/`UnitCombatCapability`.
 - **Enforcement:** the §6 ratchet (`TEMPORARY_CEILING`'s
   `units-buildings-combat` set shrunk 14 → 0, checked in both
   directions against the live scan and against §6.2), plus

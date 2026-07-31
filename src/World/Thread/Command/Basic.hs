@@ -7,7 +7,15 @@ module World.Thread.Command.Basic
 
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Scene.Types (emptyLayeredQuads)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
@@ -24,7 +32,7 @@ handleWorldTickCommand _ _ _ = return ()
 handleWorldSetCameraCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Float → Float → IO ()
 handleWorldSetCameraCommand env logger pageId x y = do
-            mgr ← readIORef (worldManagerRef env)
+            mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Just worldState →
                     atomicModifyIORef' (wsCameraRef worldState) $ \_ →
@@ -35,28 +43,30 @@ handleWorldSetCameraCommand env logger pageId x y = do
 
 handleWorldDestroyCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldDestroyCommand env logger pageId = do
+    let worldSim = toWorldSimCapability env
+        handoff  = toRenderHandoffCapability env
     logInfo logger CatWorld $ "Destroying world: " <> unWorldPageId pageId
 
     -- Tear down this world's simulation state too — destroy used to drop
     -- the page from wmWorlds/wmVisible while leaving its sim chunks behind
     -- forever (#61). SimDropWorld discards them (unlike hide, which keeps
     -- them for a later re-show); only this world's sim is touched.
-    Q.writeQueue (simQueue env) (SimDropWorld pageId)
+    Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
 
     -- Reclaim this page's blood-texture GPU resources (#788): hand its
     -- live handle map to the render thread BEFORE the page drops out of
     -- wmWorlds and becomes unreachable to uploadBloodTextures.
-    mgr ← readIORef (worldManagerRef env)
-    enqueueBloodDisposalForPage (bloodDisposeQueue env) mgr pageId
+    mgr ← readIORef (wsWorldManagerRef worldSim)
+    enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
 
     -- Remove from visible list
-    atomicModifyIORef' (worldManagerRef env) $ \mgr' →
+    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr' →
         (mgr' { wmVisible = filter (/= pageId) (wmVisible mgr')
               , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr')
               }, ())
 
     -- Clear world quads so renderer stops drawing the old world
-    writeIORef (worldQuadsRef env) emptyLayeredQuads
+    writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
 
     logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId
 
@@ -69,24 +79,26 @@ handleWorldDestroyCommand env logger pageId = do
 --   the old session linger as orphans into the next game.
 handleWorldDestroyAllCommand ∷ EngineEnv → LoggerState → IO ()
 handleWorldDestroyAllCommand env logger = do
+    let worldSim = toWorldSimCapability env
+        handoff  = toRenderHandoffCapability env
     logInfo logger CatWorld "Destroying all worlds (Exit to Menu)"
-    mgr ← readIORef (worldManagerRef env)
+    mgr ← readIORef (wsWorldManagerRef worldSim)
     -- Drop (not just deactivate) each world's sim state — every world is
     -- being destroyed, so its chunks are gone for good (#58/#61).
     forM_ (map fst (wmWorlds mgr)) $ \pid →
-        Q.writeQueue (simQueue env) (SimDropWorld pid)
+        Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pid)
     -- Reclaim every page's blood-texture GPU resources (#788) before
     -- wmWorlds is cleared out from under uploadBloodTextures.
-    enqueueBloodDisposalAll (bloodDisposeQueue env) mgr
-    atomicModifyIORef' (worldManagerRef env) $ \m →
+    enqueueBloodDisposalAll (rhBloodDisposeQueue handoff) mgr
+    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \m →
         (m { wmWorlds = [], wmVisible = [] }, ())
-    writeIORef (worldQuadsRef env) emptyLayeredQuads
+    writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so
     -- clearing the managers here would race any in-flight spawns and let
     -- them re-insert orphans afterwards. Enqueuing the clears makes them
     -- run in order, AFTER every pending spawn (#58). The wmWorlds clear
     -- above also makes the spawn handlers drop late spawns outright.
-    Q.writeQueue (unitQueue env) UnitClearAll
-    Q.writeQueue (buildingQueue env) BuildingClearAll
+    Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitClearAll
+    Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) BuildingClearAll
     logInfo logger CatWorld "All worlds destroyed"

@@ -14,7 +14,14 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.List (partition)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Render (updateWorldTiles)
@@ -29,7 +36,7 @@ import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 
 startWorldThread ∷ EngineEnv → IO ThreadState
 startWorldThread env = do
-    logger ← readIORef (loggerRef env)
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     stateRef ← newIORef ThreadRunning
     doneVar ← newEmptyMVar
     threadId ← catch
@@ -51,7 +58,7 @@ startWorldThread env = do
 worldLoop ∷ EngineEnv → IORef ThreadControl → IORef Double → IO ()
 worldLoop env stateRef lastTimeRef = do
     control ← readIORef stateRef
-    logger ← readIORef (loggerRef env)
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     case control of
         ThreadStopped → do
             logDebug logger CatWorld "World thread stopping..."
@@ -97,20 +104,20 @@ worldLoop env stateRef lastTimeRef = do
                         pollCursorInfo env
                         acknowledgeCurrent (saveBarrierRef env) SaveWorld
 
-                _camera ← readIORef (cameraRef env)
+                _camera ← readIORef (rvCameraRef (toRenderViewCapability env))
                 allQuads ← updateWorldTiles env
                 -- Plain writeIORef is fine here: the value is an immutable
                 -- LayeredQuads built entirely before the write, so the
                 -- reader (Frame.hs) always sees either the old or the new
                 -- value, never a torn pointer — at worst it draws one
                 -- frame against the previous quads.
-                writeIORef (worldQuadsRef env) allQuads
+                writeIORef (rhWorldQuadsRef (toRenderHandoffCapability env)) allQuads
                 threadDelay 16666
                 pure True
               )
               (\(e ∷ SomeException) → do
                 logError logger CatWorld $ "World thread crashed: " <> T.pack (show e)
-                writeIORef (lifecycleRef env) CleaningUp
+                writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
                 pure False
               )
             when ok $ worldLoop env stateRef lastTimeRef
@@ -118,7 +125,7 @@ worldLoop env stateRef lastTimeRef = do
 -- | Drain all pending commands from the queue
 processAllCommands ∷ EngineEnv → LoggerState → IO ()
 processAllCommands env logger = do
-    mCmd ← Q.tryReadQueue (worldQueue env)
+    mCmd ← Q.tryReadQueue (wsWorldQueue (toWorldSimCapability env))
     case mCmd of
         Just cmd → do
             handleWorldCommand env logger cmd
@@ -151,7 +158,7 @@ processAllCommands env logger = do
 -- the replacement.
 processAuthorizedSave ∷ EngineEnv → LoggerState → IO ()
 processAuthorizedSave env logger = do
-    commands ← Q.flushQueue (worldQueue env)
+    commands ← Q.flushQueue (wsWorldQueue (toWorldSimCapability env))
     let (authorized, deferred) = partitionAuthorized commands
         discarded = length commands - length authorized - length deferred
     when (discarded > 0) $
@@ -159,7 +166,7 @@ processAuthorizedSave env logger = do
             "Load publish discarded " <> T.pack (show discarded)
             <> " stale WorldCommand(s) queued before the whole-session replacement"
     forM_ authorized $ handleWorldCommand env logger
-    forM_ deferred $ Q.writeQueue (worldQueue env)
+    forM_ deferred $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
 
 -- | Pure split of one captureLocked-window batch into (authorized to run
 -- now, preserved for after release) -- see 'processAuthorizedSave' for
