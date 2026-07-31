@@ -375,6 +375,7 @@ library
                      Engine.Scene.Manager
                      Engine.Scene.Render
                      Engine.Loop
+                     Engine.Loop.Mode
                      Engine.Loop.Timing
                      Engine.Loop.Frame
                      Engine.Loop.Camera
@@ -1099,6 +1100,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Core.ConfigState
                    Test.Headless.Core.LogMonad
+                   Test.Headless.Core.LoopStartup
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge

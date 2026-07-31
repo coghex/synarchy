@@ -1,66 +1,38 @@
 module Engine.Loop.Headless
   ( headlessLoop
+  , headlessMode
   ) where
 
 import UPrelude
 import Control.Concurrent (threadDelay)
-import Data.IORef (readIORef, writeIORef)
-import qualified Data.Text as T
-import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
-import Engine.Core.State
-import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
-import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
+import Engine.Loop.Mode (LoopMode(..), runLoopMode, frameBudgetMicros)
 
 -- | Headless main loop: processes messages without rendering. Lua
 --   messages are dispatched through the SAME 'processLuaMessages' as the
 --   graphical loop — GPU operations no-op themselves when headless (via
 --   'whenGraphical'), so there is no separate headless dispatcher to
---   drift out of sync with the graphical one.
---
---   Round 15 rereview (issue #763): this loop is exactly the
---   'luaToEngineQueue' consumer 'Engine.Loop.runGatedByCaptureLock'\'s
---   own haddock already describes for the windowed/offscreen case — a
---   headless boot ('App.Headless') runs THIS loop, not 'mainLoop'/
---   'mainLoopOffscreen', but it drains the SAME queue via the SAME
---   'processLuaMessages', so it needs the SAME 'SaveRender' barrier
---   participation for a headless load's publish to be safe: gate the
---   drain on 'captureLocked', then unconditionally acknowledge —
---   'acknowledgeCurrent' is a no-op whenever the active transaction's
---   owner set doesn't include 'SaveRender' (a plain save), so this is
---   safe every tick regardless of transaction type. Unlike the
---   windowed/offscreen loops, there is no camera work to gate here —
---   headless never ran 'updateCameraPanning'/etc. even before #763.
+--   drift out of sync with the graphical one. For the same reason this
+--   loop is a full 'Engine.Save.Barrier.SaveRender' owner: it drains
+--   the same queue, so a headless load's publish must wait for it too
+--   — see 'Engine.Loop.Mode.runGatedByCaptureLock', which is the one
+--   place that handshake is defined and explained.
 headlessLoop ∷ EngineM ε σ ()
-headlessLoop = do
-    env ← ask
-    lifecycle ← liftIO $ readIORef (lifecycleRef env)
-    case lifecycle of
-        EngineStarting → do
-            logDebugM CatSystem "Headless engine starting..."
-            liftIO $ threadDelay 100000
-            _ ← liftIO $ Q.flushQueue (inputQueue env)
-            liftIO $ writeIORef (lifecycleRef env) EngineRunning
-            headlessLoop
-        EngineRunning → do
-            locked ← liftIO $ captureLocked (saveBarrierRef env)
-            if locked
-                then do
-                    discarded ← liftIO $ discardLuaMessagesForActiveLoad env
-                    when (discarded > 0) $
-                        logWarnM CatLua $ "Load publication discarded "
-                            <> (T.pack (show discarded) <> " stale Lua-to-engine message(s)")
-                else processLuaMessages
-            liftIO $ acknowledgeCurrent (saveBarrierRef env) SaveRender
-            lifecycle' ← liftIO $ readIORef (lifecycleRef env)
-            if lifecycle' ≡ EngineRunning
-                then do
-                    liftIO $ threadDelay 16666
-                    headlessLoop
-                else do
-                    logInfoM CatSystem "Headless engine shutting down..."
-                    liftIO $ writeIORef (lifecycleRef env) CleaningUp
-        CleaningUp → logDebugM CatSystem "Headless engine cleaning up"
-        EngineStopped → logDebugM CatSystem "Headless engine stopped"
+headlessLoop = runLoopMode headlessMode
+
+-- | The headless mode's answers to 'LoopMode'\'s per-mode differences:
+--   no window to pump, no camera to integrate, no frame to draw, and
+--   exit only via @engine.quit@ (i.e. the lifecycle). All it does past
+--   the shared gated drain is pace itself.
+headlessMode ∷ LoopMode ε σ
+headlessMode = LoopMode
+  { lmStartingLog   = "Headless engine starting..."
+  , lmRunningLog    = Nothing
+  , lmShutdownLog   = "Headless engine shutting down..."
+  , lmCleaningUpLog = "Headless engine cleaning up"
+  , lmStoppedLog    = "Headless engine stopped"
+  , lmPollEvents    = pure ()
+  , lmCameraUpdates = pure ()
+  , lmExitRequested = pure False
+  , lmEndOfTick     = liftIO $ threadDelay frameBudgetMicros
+  }

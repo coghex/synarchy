@@ -379,32 +379,20 @@ handleLoadStaged env ls requestId = do
     --
     -- Round 15 review, revised twice: SaveRender is ALWAYS included
     -- (unlike SaveInput above, never conditioned on a thread-active
-    -- flag) — this is the fix for a main-thread loop's camera updates
-    -- and Lua-to-engine message processing racing this publish
-    -- ('World.Load.Publish.publishStagedSession' writes cameraRef and
-    -- friends): a bare 'captureLocked' pre-check in that loop (the
-    -- first attempt at this fix) is only a point-in-time read, not
-    -- real quiescence — the barrier could reach the snapshot boundary
-    -- and publish between the check and the work it gates, since that
-    -- thread wasn't a real SaveOwner at all and nothing waited for it.
-    -- Making it a genuine owner (see 'Engine.Loop.runGatedByCaptureLock')
-    -- means 'waitForOwners' below cannot succeed — and therefore
-    -- 'reachSnapshot'/the publish can't happen — until that thread has
-    -- already acknowledged the end of its OWN last unlocked tick,
-    -- closing the window structurally instead of by timing.
-    --
-    -- The second review round caught that a headless boot ('App.Headless')
-    -- is NOT loop-free the way the first round assumed: it runs no
-    -- 'Engine.Loop.mainLoop'/'mainLoopOffscreen', but it DOES run
-    -- 'Engine.Loop.Headless.headlessLoop', which drains the exact same
-    -- 'luaToEngineQueue' via the same 'processLuaMessages' — so
-    -- excluding SaveRender there left that consumer outside the
-    -- publication boundary entirely, the same race this fix exists to
-    -- close. Every boot mode capable of reaching this function at all
+    -- flag). Every boot mode capable of reaching this function at all
     -- (i.e. running a debug console that can accept 'engine.loadSave')
-    -- runs one of the three loops, and all three now participate as
-    -- SaveRender — '--dump' is the only loop-free mode, and it has no
-    -- debug console/Lua thread to ever call this in the first place.
+    -- runs one of the three main loops, and all three acknowledge
+    -- SaveRender through the single shared handshake in
+    -- 'Engine.Loop.Mode.runGatedByCaptureLock' — headless included: it
+    -- runs no 'Engine.Loop.mainLoop'/'mainLoopOffscreen', but it DOES
+    -- run 'Engine.Loop.Headless.headlessLoop', which drains the exact
+    -- same 'luaToEngineQueue' via the same 'processLuaMessages'.
+    -- '--dump' is the only loop-free mode, and it has no debug
+    -- console/Lua thread to ever call this in the first place. WHY that
+    -- acknowledgement has to be a genuine owner handshake rather than a
+    -- point-in-time 'captureLocked' pre-check is explained once, at
+    -- 'Engine.Loop.Mode.runGatedByCaptureLock'; a plain save omits
+    -- SaveRender ('Engine.Scripting.Lua.API.Save.saveOwnerSet').
     inputActive ← readIORef (inputThreadActiveRef env)
     let baseOwners = Set.fromList
             [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
