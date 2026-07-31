@@ -356,23 +356,23 @@ cancelTransfer q
 --   produce the move. A request that was valid when queued and is not
 --   valid now fails as 'ReasonBecameStale' carrying the precondition
 --   that broke — the create-time check is never trusted at commit
---   time. A request in a state that cannot commit is returned
---   untouched with no move.
+--   time.
+--
+--   ONLY 'TransferReadyToCommit' commits. A still-queued or in-transit
+--   request is returned untouched with no move: 'markReadyToCommit' is
+--   what records that the unit arrived, so allowing a commit before it
+--   would let C2 hand over an item from across the map. Every other
+--   state (completed, cancelled, failed) is likewise inert.
 commitQueued ∷ TransferScene → QueuedTransfer
              → (QueuedTransfer, Maybe TransferCommit)
 commitQueued scene q
-    | not (isPending (qtState q)) = (q, Nothing)
+    | qtState q ≠ TransferReadyToCommit = (q, Nothing)
     | otherwise = case commitTransfer scene (qtRequest q) of
-        Left f  → (q { qtState = TransferFailed (restage f) }, Nothing)
+        -- It passed at request time and reached the receiver, so any
+        -- refusal here is the world having moved underneath it.
+        Left f  → (q { qtState = TransferFailed (staleFailure (tfReason f)) }
+                  , Nothing)
         Right c → (q { qtState = TransferCompleted }, Just c)
-  where
-    -- A request that never passed keeps its own reason; one that DID
-    -- pass and broke since is reported as stale.
-    restage f
-        | qtState q ≡ TransferQueued
-        ∨ qtState q ≡ TransferInTransit
-        ∨ qtState q ≡ TransferReadyToCommit = staleFailure (tfReason f)
-        | otherwise                         = f
 
 isPending ∷ TransferState → Bool
 isPending s = s ≡ TransferQueued

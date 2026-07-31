@@ -504,6 +504,17 @@ spec = describe "Unit transfer contract" $ do
             qtState (cancelTransfer q0) `shouldBe` TransferCancelled
             qtState (cancelTransfer done) `shouldBe` TransferCompleted
 
+        it "will not commit before the unit has arrived" $ do
+            -- Only markReadyToCommit records arrival, so a queued or
+            -- in-transit request is inert: nothing else stops C2 from
+            -- handing an item over from across the map.
+            let item  = mkItem "steel_plate" 41 1.2
+                scene = sceneOf (source [item] []) (cargoHold 200 [])
+                q0    = queueTransfer scene (toHold 41 "steel_plate")
+                q1    = markInTransit q0
+            commitQueued scene q0 `shouldBe` (q0, Nothing)
+            commitQueued scene q1 `shouldBe` (q1, Nothing)
+
         it "will not commit a cancelled request" $ do
             let item  = mkItem "steel_plate" 41 1.2
                 scene = sceneOf (source [item] []) (cargoHold 200 [])
@@ -536,8 +547,8 @@ spec = describe "Unit transfer contract" $ do
             let item     = mkItem "steel_plate" 41 1.2
                 atQueue  = sceneOf (source [item] []) (cargoHold 200 [])
                 atCommit = sceneOf (source [] []) (cargoHold 200 [])
-                q0       = markInTransit
-                             (queueTransfer atQueue (toHold 41 "steel_plate"))
+                q0       = markReadyToCommit (markInTransit
+                             (queueTransfer atQueue (toHold 41 "steel_plate")))
                 (q1, mCommit) = commitQueued atCommit q0
             qtState q1 `shouldBe`
                 TransferFailed (staleFailure ReasonInstanceMissing)
@@ -550,12 +561,39 @@ spec = describe "Unit transfer contract" $ do
                 atCommit = TransferScene { tscSource   = Just src
                                          , tscReceiver = Nothing
                                          , tscWeigh    = weighBare }
-                q0       = markInTransit
-                             (queueTransfer atQueue (toHold 41 "steel_plate"))
+                q0       = markReadyToCommit (markInTransit
+                             (queueTransfer atQueue (toHold 41 "steel_plate")))
                 (q1, mCommit) = commitQueued atCommit q0
             qtState q1 `shouldBe`
                 TransferFailed (staleFailure ReasonReceiverMissing)
             mCommit `shouldBe` Nothing
+
+        it "fails as stale when the source walked out of reach in transit" $ do
+            -- The engine path revalidates the LIVE source page and tile
+            -- inside the commit transaction for exactly this: a unit
+            -- that moved (or was teleported) after the request was
+            -- validated must not still deposit from out of range.
+            let item     = mkItem "steel_plate" 41 1.2
+                atQueue  = sceneOf (source [item] []) (cargoHold 200 [])
+                walked   = (source [item] []) { tsvTile = (40, 40) }
+                atCommit = sceneOf walked (cargoHold 200 [])
+                q0       = markReadyToCommit (markInTransit
+                             (queueTransfer atQueue (toHold 41 "steel_plate")))
+                (q1, mCommit) = commitQueued atCommit q0
+            qtState q1 `shouldBe`
+                TransferFailed (staleFailure ReasonOutOfRange)
+            mCommit `shouldBe` Nothing
+
+        it "fails as stale when the source changed world page in transit" $ do
+            let item     = mkItem "steel_plate" 41 1.2
+                atQueue  = sceneOf (source [item] []) (cargoHold 200 [])
+                moved    = (source [item] []) { tsvPage = otherPage }
+                atCommit = sceneOf moved (cargoHold 200 [])
+                q0       = markReadyToCommit (markInTransit
+                             (queueTransfer atQueue (toHold 41 "steel_plate")))
+                (q1, _)  = commitQueued atCommit q0
+            qtState q1 `shouldBe`
+                TransferFailed (staleFailure ReasonOutOfRange)
 
         it "reports the stale reason distinctly from a request-time one" $ do
             -- Same broken precondition, two stages: the identifier the
@@ -566,8 +604,8 @@ spec = describe "Unit transfer contract" $ do
                 full     = cargoHold 200 [mkItem "ballast" 90 199.9]
                 atQueue  = sceneOf src (cargoHold 200 [])
                 atCommit = sceneOf src full
-                q0       = markInTransit
-                             (queueTransfer atQueue (toHold 41 "steel_plate"))
+                q0       = markReadyToCommit (markInTransit
+                             (queueTransfer atQueue (toHold 41 "steel_plate")))
                 (q1, _)  = commitQueued atCommit q0
             refusal atCommit (toHold 41 "steel_plate")
                 `shouldBe` Just (requestFailure ReasonReceiverFull)

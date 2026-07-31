@@ -39,8 +39,10 @@ import Unit.Stats (effectiveStat)
 import Unit.Transfer
 import Building.Types
     (BuildingId(..), BuildingActivity(..), BuildingDef(..)
-    , BuildingInstance(..), BuildingManager(..), currentActivity)
+    , BuildingInstance(..), BuildingManager(..), currentActivity
+    , footprintDistAt)
 import Item.Types (ItemInstance(..), ItemManager, itemTotalWeight)
+import World.Page.Types (WorldPageId(..))
 import Engine.Scripting.Lua.API.Units.Inventory (insertAt)
 
 -- | Everything read out of the live refs in one pass, so a scene is
@@ -257,15 +259,23 @@ commitToUnit env req toUid = do
 -- | Unit → building storage. The two sides live in different refs, so
 --   this follows the pop-then-push-then-roll-back shape depositToCargo
 --   already uses: validate against a fresh scene, pop under the unit
---   ref re-checking the exact instance is still where the plan said,
---   then push under the building ref re-checking eligibility and
---   capacity one last time. A failed push splices the instance back at
---   its ORIGINAL index.
+--   ref, then push under the building ref. A failed push splices the
+--   instance back at its ORIGINAL index.
+--
+--   EVERY precondition is revalidated inside that transaction, each
+--   against whichever side owns it: the pop re-checks the exact
+--   instance is still at the planned index AND the source's LIVE page
+--   and tile, and the push re-checks the receiver's LIVE eligibility,
+--   capacity and footprint against the tile the source was actually
+--   standing on when the item left its hands. Validating proximity
+--   only from the opening snapshot would let a unit that walked away
+--   (or was teleported) mid-call still deposit from out of range.
 commitToBuilding ∷ EngineEnv → TransferRequest → BuildingId
                  → IO (Either TransferFailure ItemInstance)
 commitToBuilding env req bid = do
     ls ← readLiveState env
-    case commitTransfer (sceneFor ls req) req of
+    let scene = sceneFor ls req
+    case commitTransfer scene req of
         Left f  → pure (Left f)
         Right c → do
             let uid = trSource req
@@ -278,18 +288,24 @@ commitToBuilding env req bid = do
                         (live:_)
                             | ix ≥ 0
                             , iiInstanceId live ≡ iiInstanceId (tcItem c) →
-                                let u' = u { uiInventory =
+                                let tile = ( floor (uiGridX u)
+                                           , floor (uiGridY u) )
+                                    u' = u { uiInventory =
                                                removeIndex ix (uiInventory u) }
-                                in (um { umInstances =
-                                           HM.insert uid u' (umInstances um) }
-                                   , Right live)
+                                in if inReachOf (tscReceiver scene)
+                                                (uiPage u) tile
+                                   then (um { umInstances =
+                                                HM.insert uid u' (umInstances um) }
+                                        , Right (live, uiPage u, tile))
+                                   else (um, Left ReasonOutOfRange)
                         _ → (um, Left ReasonInstanceMissing)
             case popped of
-                Left r     → pure (Left (staleFailure r))
-                Right item → do
+                Left r → pure (Left (staleFailure r))
+                Right (item, srcPage, srcTile) → do
                     stored ← atomicModifyIORef'
                         (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
-                        case storeInto bm bid item (lsItems ls) (lsNow ls) of
+                        case storeInto bm bid item (lsItems ls) (lsNow ls)
+                                       srcPage srcTile of
                             Left r    → (bm, Left r)
                             Right bm' → (bm', Right ())
                     case stored of
@@ -309,18 +325,35 @@ commitToBuilding env req bid = do
                                                      (umInstances um) }, ())
                             pure (Left (staleFailure r))
 
+-- | Is @(page, tile)@ within the contract's reach of this receiver?
+--   Reads the projection the policy itself measured against, so the
+--   two can't disagree about what "adjacent" means.
+inReachOf ∷ Maybe TransferReceiverView → WorldPageId → (Int, Int) → Bool
+inReachOf (Just (BuildingReceiverAt b)) page tile =
+    page ≡ brvPage b ∧ footprintDistAt (brvAnchor b) (brvTileSize b) tile ≤ 1
+inReachOf (Just (UnitReceiverAt u)) page (sx, sy) =
+    let (ux, uy) = urvTile u
+    in page ≡ urvPage u ∧ max (abs (sx - ux)) (abs (sy - uy)) ≤ 1
+inReachOf Nothing _ _ = False
+
 -- | Final receiver-side re-check, run under the building ref: the
--- building still exists, is still Built, still has storage, and the
--- instance still fits.
+--   building still exists, is still Built, still has storage, is still
+--   in reach of where the source was standing when the item left, and
+--   the instance still fits.
 storeInto ∷ BuildingManager → BuildingId → ItemInstance → ItemManager
-          → Double → Either TransferReason BuildingManager
-storeInto bm bid item itemMgr now = do
+          → Double → WorldPageId → (Int, Int)
+          → Either TransferReason BuildingManager
+storeInto bm bid item itemMgr now srcPage srcTile = do
     inst ← maybe (Left ReasonReceiverMissing) Right
                  (HM.lookup bid (bmInstances bm))
     def  ← maybe (Left ReasonReceiverMissing) Right
                  (HM.lookup (biDefName inst) (bmDefs bm))
     unless (currentActivity now inst def ≡ Built ∧ bdStorageCapacity def > 0) $
         Left ReasonReceiverIneligible
+    unless (biPage inst ≡ srcPage
+              ∧ footprintDistAt (biAnchorX inst, biAnchorY inst)
+                                (biTileW inst, biTileH inst) srcTile ≤ 1) $
+        Left ReasonOutOfRange
     let stored = sum (map (itemTotalWeight itemMgr) (biStorage inst))
     unless (stored + itemTotalWeight itemMgr item ≤ bdStorageCapacity def) $
         Left ReasonReceiverFull
