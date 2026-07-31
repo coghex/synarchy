@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
+{-# LANGUAGE Strict #-}
 -- | Sample zoom and vegetation textures to build a color palette
 --   for per-chunk zoom map texture generation.
 module World.ZoomMap.ColorPalette

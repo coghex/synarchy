@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Shared plumbing for live world edits: re-seeding the sim after an
 --   edit lands in a loaded chunk. Split out of "World.Thread.Command.Edit"

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-frame quads + hit-testing for items lying in the world
 --   (Item.Ground).
 --

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Pure replay of `WorldEdit` operations onto a `LoadedChunk`.
 --
 --   Both code paths use this:

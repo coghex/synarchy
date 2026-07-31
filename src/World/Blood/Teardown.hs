@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | World-thread half of #788's blood-texture GPU teardown. When a world
 --   page is removed or replaced (destroy / destroy-all / init / arena /
 --   save-load), its 'wsBloodTextureHandlesRef' — the map of live bindless

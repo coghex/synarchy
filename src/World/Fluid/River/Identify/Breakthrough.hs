@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Coastal breakthrough for the river-identification pipeline:
 --   finds stranded inland river mouths and, for each, Dijkstra's a

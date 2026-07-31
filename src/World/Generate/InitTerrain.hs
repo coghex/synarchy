@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | World-init terrain compute, shared between 'World.Geology.Timeline'
 --   (which uses it to build the world-resolution terrain that the

@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Build the zoom cache at world init time, split (issue #573) into
 --   focused submodules under "World.ZoomMap.Cache.*":
 --

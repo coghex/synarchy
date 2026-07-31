@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Zoom-cache terrain generation: the same bordered-region pipeline
 --   as the detail chunk path (timeline + coastal erosion + seabed +
 --   river/lake carve + magma/lava + island smoothing), skipping strata,

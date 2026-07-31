@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Ocean/coastal proximity helpers for the lake-identification
 --   pipeline: the world-edge ocean BFS that seeds the priority flood

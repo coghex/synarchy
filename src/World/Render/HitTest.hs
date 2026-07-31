@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | Screen-pixel → world-tile hit-test.
 --
 -- This is the single source of truth for unprojecting a screen pixel to

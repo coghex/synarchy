@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The atomic save-publication storage transaction (issue #762,
 --   persistence-overhaul C1). Prior to this module, saving wrote the
 --   already-encoded envelope bytes (issue #759/#760's tagged, checksummed

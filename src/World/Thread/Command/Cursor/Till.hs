@@ -1,5 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- | Till designation tool (#333). Mirrors the mine/construct designation
 --   tools' anchor→rectangle commit: per-z-level like mining (a farmed
 --   field is flat ground), but the commit ALSO filters out tiles that

@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Eon → Era → Period → Epoch → Age timeline loops: the recursive
 --   descent that builds one 'GeoPeriod' per structural tier, bottoming
 --   out at per-Age erosion/hydrology/glacier/ore events. Entry point is

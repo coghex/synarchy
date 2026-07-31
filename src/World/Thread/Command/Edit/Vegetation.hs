@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Vegetation edit handlers: tile ground-cover id (tilling) and
 --   row-crop planting. Split out of "World.Thread.Command.Edit"

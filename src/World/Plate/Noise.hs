@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Wrap-exact value/ridge noise, split out of "World.Plate" (issue
 --   #560). Used for plate-boundary jitter and elevation texture.
 module World.Plate.Noise

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Ties the generic tagged-envelope codec ("World.Save.Envelope.Codec")
 --   to this codebase's concrete save components (issue #760,
 --   save-overhaul B2 — replacing #759 B1's single transitional

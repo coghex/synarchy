@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Thin facade – re-exports the public entry points so that
 --   existing call sites ('World.Render') need no import changes.
 module World.ZoomMap

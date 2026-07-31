@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Longitude-local solar time (#483). The world clock ('World.Thread.Time')
 --   advances one global @sunAngle@, but the world is a cylinder along
 --   u = gx − gy (see 'World.Plate.worldWidthTiles' /

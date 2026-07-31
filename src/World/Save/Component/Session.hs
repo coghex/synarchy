@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Global, once-per-session components (issue #760, save-overhaul B2).
 --   These carry the genuinely session-wide 'SessionSnapshot' fields —
 --   the ones that are NOT scoped to any single world page:

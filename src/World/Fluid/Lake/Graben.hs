@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Graben (rift-lake) bed carving — issue #223.
 --
 --   Lakes are natural-basin fills with no bed model of their own:

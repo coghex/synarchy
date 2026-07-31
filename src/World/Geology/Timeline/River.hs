@@ -1,4 +1,3 @@
-{-# LANGUAGE UnicodeSyntax #-}
 -- | River timeline evolution, split (issue #583) into focused
 --   submodules under "World.Geology.Timeline.River.*":
 --

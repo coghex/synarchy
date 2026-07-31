@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, GeneralizedNewtypeDeriving, DerivingStrategies, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, GeneralizedNewtypeDeriving, DerivingStrategies, DeriveGeneric, DeriveAnyClass #-}
 -- | Wire-level types for the tagged, checksummed save envelope (issue
 --   #759, save-overhaul B1): stable component identifiers, a manifest
 --   of per-component descriptors, the structured errors a malformed or

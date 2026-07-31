@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Deterministic hashing and small interpolation helpers shared across
 --   the "World.Plate.*" split (issue #560). No local dependencies beyond
 --   'UPrelude' — every other Plate submodule builds on this one.
