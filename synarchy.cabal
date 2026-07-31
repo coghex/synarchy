@@ -1085,6 +1085,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.ClickCorrelation
+                   Test.Headless.UI.TransferContextMenu
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal

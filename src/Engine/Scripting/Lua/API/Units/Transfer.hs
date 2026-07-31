@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict #-}
 -- | Lua surface for the player-managed transfer contract (#1000).
---   Three verbs, all routed through the pure policy in
+--   Four verbs, all routed through the pure policy in
 --   "Unit.Transfer" so B1's context menu, C1's paired inventory panel
 --   and C2's walk-then-commit share one eligibility, proximity and
 --   capacity rule instead of three:
@@ -8,6 +8,7 @@
 --   * @unit.checkTransfer@   — create-time validation (no mutation)
 --   * @unit.commitTransfer@  — revalidate and move, atomically
 --   * @unit.transferContract@ — the engine's identifier vocabulary
+--   * @unit.transferReceiverInfo@ — read-only receiver eligibility (#1014)
 --
 --   Deliberately separate from "Engine.Scripting.Lua.API.Units.Cargo":
 --   those verbs stay exactly as they are (no capacity check for
@@ -17,6 +18,7 @@ module Engine.Scripting.Lua.API.Units.Transfer
   ( unitCheckTransferFn
   , unitCommitTransferFn
   , unitTransferContractFn
+  , unitTransferReceiverInfoFn
   )
     where
 
@@ -29,6 +31,7 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
+import Data.Maybe (fromMaybe)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -44,6 +47,7 @@ import Building.Types
 import Item.Types (ItemInstance(..), ItemManager, itemTotalWeight)
 import World.Page.Types (WorldPageId(..))
 import Engine.Scripting.Lua.API.Units.Inventory (insertAt)
+import Engine.Scripting.Lua.API.Units.List (prettifyDefName)
 
 -- | Everything read out of the live refs in one pass, so a scene is
 --   built from a single consistent view rather than five interleaved
@@ -383,3 +387,68 @@ pushArrayField key vals = do
         Lua.pushstring (TE.encodeUtf8 v)
         Lua.rawseti (-2) (fromIntegral (i ∷ Int))
     Lua.setfield (-2) key
+
+-- | @unit.transferReceiverInfo(kind, id)@ → @{ eligible, displayName,
+--   page, gridX, gridY }@ | nil. The B1 (#1014) read-only projection
+--   'planTransfer' itself is missing: reports whether @(kind, id)@ is
+--   an eligible transfer receiver via the SAME 'receiverEligible'
+--   predicate the contract enforces, plus the display name and
+--   location a session record needs. nil when @kind@ isn't
+--   @"building"@/@"unit"@ or the id doesn't resolve to a live
+--   instance — the caller can't tell "ineligible" from "gone" apart
+--   from that, which is deliberate: both mean "don't offer Transfer".
+--
+--   Independent of adjacency and of any chosen item on purpose — B1
+--   needs this to work for a receiver the source unit hasn't reached
+--   yet (requirement 6), and before C1 has picked an item at all.
+unitTransferReceiverInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTransferReceiverInfoFn env = do
+    kindArg ← Lua.tostring 1
+    idArg   ← Lua.tointeger 2
+    case (kindArg, idArg) of
+        (Just kindBS, Just n) → do
+            let kind = TE.decodeUtf8Lenient kindBS
+            ls ← Lua.liftIO $ readLiveState env
+            case kind of
+                "building" → pushReceiverInfo
+                    (buildingReceiver ls (BuildingId (fromIntegral n)))
+                    (buildingDisplayName ls (BuildingId (fromIntegral n)))
+                "unit" → pushReceiverInfo
+                    (unitReceiver ls (UnitId (fromIntegral n)))
+                    (unitDisplayName ls (UnitId (fromIntegral n)))
+                _ → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
+buildingDisplayName ∷ LiveState → BuildingId → Maybe Text
+buildingDisplayName ls bid = do
+    inst ← HM.lookup bid (bmInstances (lsBuildings ls))
+    def  ← HM.lookup (biDefName inst) (bmDefs (lsBuildings ls))
+    pure (bdDisplayName def)
+
+-- | Mirrors 'unitGetInfoFn'\'s own displayName fallback (species
+--   display_name, else the prettified def name) so this and
+--   @unit.getInfo@ can never report two different names for the same
+--   unit.
+unitDisplayName ∷ LiveState → UnitId → Maybe Text
+unitDisplayName ls uid = do
+    inst ← HM.lookup uid (umInstances (lsUnits ls))
+    let mDef = HM.lookup (uiDefName inst) (umDefs (lsUnits ls))
+    pure (fromMaybe (prettifyDefName (uiDefName inst)) (mDef >>= udDisplayName))
+
+pushReceiverInfo ∷ Maybe TransferReceiverView → Maybe Text
+                 → Lua.LuaE Lua.Exception Lua.NumResults
+pushReceiverInfo Nothing _ = Lua.pushnil >> return 1
+pushReceiverInfo (Just view) mName = do
+    Lua.newtable
+    Lua.pushboolean (receiverEligible view)
+    Lua.setfield (-2) "eligible"
+    pushTextField "displayName" (fromMaybe "" mName)
+    let (WorldPageId page, (gx, gy)) = case view of
+            BuildingReceiverAt b → (brvPage b, brvAnchor b)
+            UnitReceiverAt     u → (urvPage u, urvTile u)
+    pushTextField "page" page
+    Lua.pushinteger (fromIntegral gx)
+    Lua.setfield (-2) "gridX"
+    Lua.pushinteger (fromIntegral gy)
+    Lua.setfield (-2) "gridY"
+    return 1

@@ -18,6 +18,7 @@ local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
 local locationStamperScriptId = nil
 local pauseScriptId = nil
+local transferSessionScriptId = nil
 local tutorialProgressScriptId = nil
 local tutorialEvalScriptId = nil
 local tutorialHudScriptId = nil
@@ -135,6 +136,14 @@ function M.load()
     -- snapshot. No per-tick work; loaded so engine broadcasts (none
     -- needed today) and require()s from game scripts share state.
     pauseScriptId = engine.loadScript("scripts/pause.lua", 1.0)
+
+    -- Transfer session (#1014, epic #1013 phase B1): owns the transient
+    -- player-managed-transfer session record right-click "Transfer"
+    -- creates. No per-tick work; loadScript'd (like pause above) so
+    -- init() runs and registers its reset hook before any world can
+    -- load.
+    transferSessionScriptId = engine.loadScript(
+        "scripts/transfer_session.lua", 1.0)
 
     -- Tutorial objective progress (#958): owns the durable completed-
     -- objective set and the live subobjective checks, and registers the
@@ -306,6 +315,9 @@ function M.shutdown()
     end
     if pauseScriptId then
         engine.killScript(pauseScriptId)
+    end
+    if transferSessionScriptId then
+        engine.killScript(transferSessionScriptId)
     end
     if tutorialProgressScriptId then
         engine.killScript(tutorialProgressScriptId)

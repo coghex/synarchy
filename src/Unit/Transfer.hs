@@ -50,6 +50,7 @@ module Unit.Transfer
     , TransferCommit(..)
     , planTransfer
     , commitTransfer
+    , receiverEligible
       -- * Queue transitions
     , queueTransfer
     , markInTransit
