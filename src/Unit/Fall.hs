@@ -12,11 +12,17 @@
 --      times that substance's fracture toughness — scaled by the unit's
 --      toughness stat. Where the delivered load exceeds a part's bone
 --      resistance, that part fractures, with severity ∝ the overload.
---   4. The head's injury is a concussion; everything else is a fracture.
---      Severity is the same continuous 0..~1.6 scale as combat wounds,
---      so a severe-enough injury to a VITAL part (head/neck/torso) is
---      lethal through the normal wound→death rule — a tall fall kills by
---      breaking the body, not by a bespoke height check.
+--   4. Layers of the SAME injury kind on one part (skin + fat + muscle all
+--      bruise as "blunt") are combined into ONE wound, not one per layer
+--      (#998) — a limb's bone gives a fracture, its nerve tissue (the
+--      brain) a concussion, its organ tissue an internal injury. Severity
+--      is the same continuous 0..~1.6 scale as combat wounds, so a
+--      severe-enough injury to a VITAL part is lethal through the normal
+--      wound→death rule — a tall fall kills by breaking the body, not by a
+--      bespoke height check. On the shipped acolyte only the `heart` is
+--      vital (NOT head/neck/torso — see `energyToSeverity`'s docstring
+--      below), and it is never the deterministic organ pick for a fall at
+--      any drop height, so this path is not reachable on that body plan.
 --
 -- Pure + deterministic (no RNG): which leg/arm a fall hits is cosmetic
 -- variety handled by the caller, but WHAT breaks at a given height is
@@ -33,6 +39,7 @@ module Unit.Fall
 
 import UPrelude
 import Data.Maybe (mapMaybe)
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Unit.Types (UnitDef(..), BodyPart(..))
 import Unit.Injury (tissueInjuryKind, injuryFloor, capInjurySeverity
@@ -60,14 +67,27 @@ gravity = 9.81
 
 -- | Global calibration: scales delivered impact energy into the
 --   severity domain. Tuned (with the per-tissue densities below) against
---   headless drop tests so a baseline acolyte (70 kg, toughness 1.0):
---   walks off ≤1-z; is bruised + knocked down at 2–4-z; takes its first
---   ankle/leg fracture around 5–6-z; accumulates leg / hip / concussion
---   damage through ~8–11-z; and suffers a lethal (vital severity ≥1)
---   injury — death-by-injury — only on a very tall fall, after racking
---   up many fractures first.
+--   headless drop tests on the SHIPPED acolyte body topology (#998) so
+--   the documented average acolyte (height 1.8, bulk 1.0, toughness
+--   1.0 ⇒ 71.28 kg) walks off ≤1-z; is bruised + knocked down at 2–4-z
+--   with no fracture; takes its first fracture at 5-z; and accumulates
+--   further fractures + a first concussion by the low-20s z range. A
+--   heavier/tougher unit reaches the same milestones at a shorter drop
+--   (the extreme profile — 2.3/1.5/1.2 ⇒ 174.57 kg — fractures from
+--   3-z); a lighter/frailer one at a taller one (the frail profile —
+--   1.3/0.5/0.8 ⇒ 18.59 kg — from 15-z). See
+--   `docs/expedition_survival_calibration.md`'s fall-calibration section
+--   for the full measured record and
+--   `test-headless/Test/Headless/Unit/Fall.hs` for the regression that
+--   pins it. The shipped acolyte's only vital part (`heart`) is never
+--   the subpart `Unit.Injury.allocateSubparts` picks for the torso at
+--   ANY drop height (a deterministic consequence of its area-weighted
+--   pick landing on other organs first — a body-topology fact, not a
+--   severity-tuning one) — so a fall cannot trigger the vital-injury
+--   death rule on this body plan at all; see the calibration doc rather
+--   than treating that as an oversight to re-engineer around.
 energyToSeverity ∷ Float
-energyToSeverity = 0.040
+energyToSeverity = 0.006
 
 -- | Per-tissue "failure energy" density (∝ energy to injure 1 severity
 --   per mm of that tissue). Higher = harder to injure. Bone resists
@@ -155,9 +175,19 @@ rollFor m =
     in x
 
 -- | The injury distribution a fall inflicts on ONE part: walk its tissue
---   layers, and for each, severity = energy reaching it / that tissue's
---   failure energy (density × thickness × toughness). A blunt fall
---   transmits through the whole stack, so every loaded tissue can injure.
+--   layers and, for each, derive a failure-energy (density × thickness ×
+--   toughness) — how much load THAT layer alone can take before it
+--   registers an injury of its tissue's kind. Layers of the SAME kind
+--   (a limb's skin + fat + muscle all bruise as "blunt") are then
+--   COMBINED into a single wound, by summing their failure-energies
+--   before dividing the load — i.e. the part's total soft-tissue depth
+--   resists as one structure, not three independently-capped bruises
+--   stacked on the same spot. This mirrors how
+--   'Combat.Resolution.Damage' already groups a strike's per-layer
+--   deposits by kind (its @distOf@) — a fall and a blunt weapon strike
+--   producing THREE separate bruise wounds for one impact to one part
+--   was a fall-local wound-count/bleed inflation bug (#998), not a
+--   deliberate design choice.
 partInjuries ∷ Float → Float → Float → BodyPart → [FallInjury]
 partInjuries energy tough expo p =
     let load    = energy * expo * energyToSeverity
@@ -168,25 +198,37 @@ partInjuries energy tough expo p =
         -- thickness that counts (a concussion isn't pulping the whole
         -- 80 mm brain).
         deep t  = t ≡ "organ" ∨ t ≡ "nerve" ∨ t ≡ "artery"
-        injFor (_nm, tissue, thick) = do
+        contrib (_nm, tissue, thick) = do
             k ← tissueInjuryKind tissue "blunt"
             let effThick = if deep tissue
                            then min thick organEffectiveThickMm
                            else max 1.0 thick
                 fe  = tissueFailureDensity tissue * effThick * tough
-                sev = capInjurySeverity k (load / max 0.001 fe)
-            if sev ≥ injuryFloor
+            Just (k, fe)
+        byKind  = Map.fromListWith (+) (mapMaybe contrib layers)
+        injFor (k, feSum) =
+            let sev = capInjurySeverity k (load / max 0.001 feSum)
+            in if sev ≥ injuryFloor
                 then Just FallInjury { fiPart = bpId p, fiKind = k
                                      , fiSeverity = sev }
                 else Nothing
-    in mapMaybe injFor layers
+    in mapMaybe injFor (Map.toList byKind)
 
--- | Guarantee a bone layer so boneless extremities (foot/hand) can still
---   fracture an ankle / wrist. If the part already has bone, leave it.
+-- | Guarantee a bone layer so a part with NO structural or organic tissue
+--   at all (a hypothetical boneless extremity) can still register a
+--   fall-worthy injury. Every extremity the shipped acolyte ships
+--   already carries a real bone layer, so this never fires for it; it
+--   exists for a future creature whose body plan omits one. Checks for
+--   cartilage/organ/nerve/artery too (not just bone) so a part that
+--   already has a real structural or organic tissue — the neck's
+--   cartilage windpipe, the torso's boneless organs (liver, stomach,
+--   intestines), its boneless carotid artery — is never ALSO given a
+--   phantom skeletal fracture on top of its real injury kind (#998: this
+--   previously double-counted those parts' wounds).
 ensureBone ∷ [(Text, Text, Float)] → [(Text, Text, Float)]
 ensureBone ls
-    | any (\(_, m, _) → m ≡ "bone") ls = ls
-    | otherwise                        = ls <> [("bone", "bone", softBoneEquivMm)]
+    | any (\(_, m, _) → m ∈ ["bone", "cartilage", "organ", "nerve", "artery"]) ls = ls
+    | otherwise = ls <> [("bone", "bone", softBoneEquivMm)]
 
 -- | Fraction of the impact energy delivered to a part on a feet-first
 --   landing. Feet and legs take the brunt; the hips/torso and braced
