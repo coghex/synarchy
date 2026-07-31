@@ -50,6 +50,16 @@ What it proves (issue #922 requirements 2 and 3):
      completed full objective, brings the HUD back collapsed, and
      recomputes the live subobjectives from the LOADED world's state
      (both unchecked, because the supplies were removed before saving).
+  8. (#996, a separate boot) An UNSTRIPPED acolyte's default spawn kit
+     latches "Prepare an expedition" and checks both its subobjectives
+     before that branch is ever revealed -- reveal is gated on
+     "Secure water source", which has nothing to do with carried
+     supplies. The moment secure_water_source finally completes (a real
+     FOV discovery, same as check 3 above), the already-latched branch
+     must become observable in the checklist rather than latching and
+     hiding in the same instant -- and removing the supplies afterwards
+     must still uncheck the live subobjectives, keep the branch
+     observable, and never touch the durable completion.
 
 Two deliberate departures from "just play the game", both forced by the
 shipped content and both documented rather than worked around:
@@ -99,6 +109,7 @@ from probelib import (boot, quit_engine, send, poll_until,
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_A = "/tmp/tutorial_probe_engine_a.log"
 LOG_B = "/tmp/tutorial_probe_engine_b.log"
+LOG_C = "/tmp/tutorial_probe_engine_c.log"
 
 PAGE = "tutorial"
 SLOT = "tutorial_probe_slot"
@@ -201,6 +212,14 @@ class Progress:
     @property
     def row_ids(self) -> list[str]:
         return [r["id"] for r in self.rows]
+
+    @property
+    def active_row_ids(self) -> list[str]:
+        """Only the rows in the default checklist view -- `row_ids`
+        alone also retains completed history (#958's `active = false`
+        rows), which is the right thing for "was this ever revealed" but
+        the wrong thing for "what does the checklist show right now"."""
+        return [r["id"] for r in self.rows if r["active"]]
 
     def row(self, rid: str) -> dict | None:
         for r in self.rows:
@@ -700,6 +719,113 @@ def phase_reload(port: int, expected: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------
+# #996: a branch that latches BEFORE it is ever revealed
+#
+# A separate boot and a separate acolyte on purpose: by the time the main
+# flow above reaches "Prepare an expedition", "Secure water source" has
+# already completed, so the composite is always revealed while it is still
+# incomplete there -- exactly the case the module's OWN hide-on-completion
+# rule already covered. Reproducing the bug needs the opposite order: the
+# unstripped spawn kit satisfies both prepare subobjectives (and so latches
+# the composite) before secure_water_source ever completes, since nothing
+# about carrying supplies has anything to do with discovering water.
+# --------------------------------------------------------------------------
+def phase_pre_latched_baseline(port: int) -> None:
+    # tutorial_eval's own tick is what checks the subobjectives and
+    # latches the composite -- it is not pause-gated, but it still needs
+    # at least one tick after the AI state just materialized, so this
+    # settles rather than reading a single snapshot.
+    p = settle(port, lambda s: s.is_completed(OBJ_EXPEDITION))
+    check("the unstripped acolyte's spawn kit checks both prepare "
+          "subobjectives immediately", p.is_checked(SUB_WATER)
+          and p.is_checked(SUB_FOOD), str(p))
+    check("the composite latches before it is ever revealed",
+          p.is_completed(OBJ_EXPEDITION), str(p))
+    check("the composite is not yet observable -- neither the portal nor "
+          "the water objective has completed", OBJ_EXPEDITION not in p.row_ids,
+          str(p.row_ids))
+
+
+def phase_pre_latched_portal(port: int, gx: int, gy: int) -> int:
+    valid = send(port, f"local v = building.canPlaceAt('{PORTAL_DEF}', {gx}, {gy}); "
+                       f"return tostring(v)", timeout=20.0)
+    if valid != "true":
+        raise ProbeError(f"the camp tile ({gx},{gy}) will not take a portal: {valid}")
+    raw = send(port, f"return tostring(building.spawn('{PORTAL_DEF}', {gx}, {gy}))",
+               timeout=20.0)
+    if raw in ("nil", "", "false"):
+        raise ProbeError(f"building.spawn('{PORTAL_DEF}') failed at ({gx},{gy})")
+    bid = int(float(raw))
+    # No roster this time: the probe's own acolyte is the only one whose
+    # supplies matter, and a spawned roster would be provisioned too.
+    send(port, f"return tostring(building.setSpawnRemaining({bid}, 0))", timeout=15.0)
+
+    p = settle(port, lambda s: s.is_completed(OBJ_PORTAL))
+    check("placing the portal completes the portal objective",
+          p.is_completed(OBJ_PORTAL), str(p))
+    check("the already-latched composite still stays hidden behind "
+          "'Secure water source', which has not completed yet",
+          OBJ_EXPEDITION not in p.row_ids and p.is_completed(OBJ_WATER) is False,
+          str(p))
+    return bid
+
+
+def phase_pre_latched_reveal(port: int, uid: int, sx: int, sy: int) -> None:
+    """The acolyte discovers real water -- secure_water_source completes,
+    and the already-latched prepare branch is revealed for the FIRST
+    time. The checklist must stay non-empty (#996's whole point)."""
+    send(port, f"unit.setPos({uid}, {sx}, {sy}); return 'ok'", timeout=15.0)
+    set_paused(port, False)
+    found = poll_until(60.0, lambda: known_water_count(port, uid) > 0)
+    set_paused(port, True)
+    if found is None:
+        raise ProbeError(f"acolyte {uid} never discovered the generated water")
+
+    p = settle(port, lambda s: s.is_completed(OBJ_WATER))
+    check("discovering water completes 'Secure water source'",
+          p.is_completed(OBJ_WATER), str(p))
+    # place_portal/secure_water still leave the default checklist view
+    # (they were revealed while still incomplete, so the ordinary
+    # hide-on-completion rule applies to them unchanged); only the
+    # already-latched prepare branch is the new, sticky exception.
+    check("the already-latched prepare branch is observable in authored "
+          "preorder, not an empty checklist (#996)",
+          p.active_row_ids == [OBJ_EXPEDITION, SUB_WATER, SUB_FOOD],
+          str(p.active_row_ids))
+    check("place_portal and secure_water are retained as completed "
+          "history, not re-shown in the active view",
+          OBJ_PORTAL in p.row_ids and OBJ_WATER in p.row_ids
+          and OBJ_PORTAL not in p.active_row_ids
+          and OBJ_WATER not in p.active_row_ids, str(p))
+    row = p.row(OBJ_EXPEDITION) or {}
+    check("the composite renders active, with its normal completed marker",
+          row.get("active") is True and row.get("completed") is True, str(row))
+    check("both prepare subobjectives render active and checked",
+          p.is_checked(SUB_WATER) and p.is_checked(SUB_FOOD)
+          and (p.row(SUB_WATER) or {}).get("active") is True
+          and (p.row(SUB_FOOD) or {}).get("active") is True, str(p))
+
+
+def phase_pre_latched_reversal(port: int, uid: int) -> None:
+    """Removing the supplies afterwards must still uncheck the live
+    subobjectives, keep the branch observable, and never touch the
+    durable completion (the same reversal contract check 6 already
+    covers, now proven for a branch that started out sticky)."""
+    strip_supplies(port, uid)
+    p = settle(port, lambda s: not s.is_checked(SUB_WATER))
+    check("removing the water unchecks the live water subobjective",
+          p.is_checked(SUB_WATER) is False, str(p))
+    check("removing the ration unchecks the live food subobjective",
+          p.is_checked(SUB_FOOD) is False, str(p))
+    check("the prepare branch stays in the ACTIVE checklist rather than "
+          "vanishing (it never hides once already-latched-sticky)",
+          OBJ_EXPEDITION in p.active_row_ids and SUB_WATER in p.active_row_ids
+          and SUB_FOOD in p.active_row_ids, str(p.active_row_ids))
+    check("the composite's durable completion is untouched",
+          p.is_completed(OBJ_EXPEDITION), str(p))
+
+
+# --------------------------------------------------------------------------
 # Save-slot hygiene
 # --------------------------------------------------------------------------
 def remove_probe_slot() -> None:
@@ -778,6 +904,49 @@ def main() -> int:
     finally:
         quit_engine(args.port, proc)
         remove_probe_slot()
+
+    print(f"== boot 3: a branch that latches before it is ever revealed "
+          f"(#996, port {args.port}) ==")
+    proc = boot(args.port, log=LOG_C, label="tutorial pre-latch engine")
+    try:
+        load_content(args.port)
+        generate_world(args.port, args.seed, args.size)
+        load_scripts(args.port)
+        set_paused(args.port, True)
+
+        wx, wy = find_water_tile(args.port)
+        sx, sy = find_shore_tile(args.port, wx, wy)
+        cx, cy = find_camp_tile(args.port, wx, wy)
+
+        print("== 9. an unstripped acolyte latches the composite before "
+              "it is ever revealed ==")
+        uid = spawn_player_acolyte(args.port, cx + 2, cy)
+        got = poll_until(20.0, lambda: carried(args.port, uid)[1] > 0)
+        if got is None:
+            raise ProbeError(f"acolyte {uid} never materialized its spawn kit")
+        set_paused(args.port, False)
+        got = poll_until(30.0, lambda: known_water_count(args.port, uid) >= 0)
+        set_paused(args.port, True)
+        if got is None:
+            raise ProbeError("the spawned acolyte never received AI state")
+        phase_pre_latched_baseline(args.port)
+
+        print("== 10. placing the portal keeps the branch hidden behind "
+              "'Secure water source' ==")
+        phase_pre_latched_portal(args.port, cx, cy)
+
+        print("== 11. discovering water reveals the branch already "
+              "complete ==")
+        phase_pre_latched_reveal(args.port, uid, sx, sy)
+
+        print("== 12. removing supplies unchecks live subobjectives, "
+              "keeps the branch observable ==")
+        phase_pre_latched_reversal(args.port, uid)
+    except ProbeError as e:
+        print(f"\nPRE-LATCHED-BRANCH LEG FAILED: {e}")
+        failures.append(f"pre-latched branch: {e}")
+    finally:
+        quit_engine(args.port, proc)
 
     print(f"\n({time.time() - started:.0f}s)")
     if failures:

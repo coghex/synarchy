@@ -39,6 +39,12 @@ package.loaded["scripts.tutorial_progress"] = tutorialProgress
 tutorialProgress.completed = tutorialProgress.completed or {}
 -- LIVE, reversible, never persisted: subobjective id -> true.
 tutorialProgress.checked   = tutorialProgress.checked   or {}
+-- PRESENTATION-ONLY, never persisted (#996 requirement 6): whether a
+-- full/composite id's reveal-eligibility has already been judged once
+-- (historySeen), and the answer (stickyActive) -- see recomputeHistory
+-- below for what "judged" means.
+tutorialProgress.historySeen  = tutorialProgress.historySeen  or {}
+tutorialProgress.stickyActive = tutorialProgress.stickyActive or {}
 -- The active tree and its derived index, or nil until one is available.
 -- Both live on the singleton (not as file-locals) so a re-run of this
 -- file via engine.loadScript can't leave a stale tree paired with a
@@ -108,13 +114,81 @@ local function buildIndex(tree)
     return { byId = byId, order = order, rootId = tree.root.id }
 end
 
+-----------------------------------------------------------
+-- Reveal history (#996): a full/composite branch that latches before
+-- it is ever revealed must not vanish the instant it IS revealed.
+-----------------------------------------------------------
+--
+-- historySeen/stickyActive answer one question per full/composite id,
+-- decided exactly once: the first time this id's own structural
+-- reveal-eligibility (its ancestor CHAIN's durable completion -- never
+-- its own hidden/checked state) goes true, was `completed[id]` ALREADY
+-- true? If so the id is stickyActive: computeState's hidden rule below
+-- is overridden to false for it FOREVER, which is what lets it (and, for
+-- a composite, the subobjectives its active state reveals) actually be
+-- seen at least once instead of latching and hiding in the same instant.
+--
+-- This has to be judged at the exact moment identified above, not
+-- whenever a reader happens to call getViewModel: completeObjective is
+-- itself what can make a DIFFERENT id newly reveal-eligible (its own
+-- completion is what a "child" relation reveals), so the judgement is
+-- driven from there, incrementally, walking the whole index every time
+-- since a single completion can cascade through several links of the
+-- chain at once. A node whose ancestor completes while the node itself
+-- is still incomplete is judged NOT sticky right then -- the ordinary,
+-- already-tested hide-on-its-own-later-completion case -- even though
+-- the node may go on to complete later.
+--
+-- The one case with no incremental order to replay is a fresh
+-- setTree()/reset()/load: both tables are presentation state and are
+-- never persisted (requirement 6), so they are rebuilt from scratch
+-- against whatever the durable `completed` set holds at that moment.
+-- A restored session may therefore judge every already-completed id
+-- sticky at once rather than reproducing the exact pre-save sequence --
+-- deterministic and non-empty is what requirement 6 asks for, not a
+-- replay of history nobody kept.
+local function recomputeHistory()
+    local index = tutorialProgress.index
+    if index == nil then return end
+    local structRevealed = {}
+    for _, id in ipairs(index.order) do
+        local entry = index.byId[id]
+        if entry.parent == nil then
+            structRevealed[id] = true
+        elseif entry.relation == "child" then
+            structRevealed[id] = structRevealed[entry.parent] == true
+                and tutorialProgress.completed[entry.parent] == true
+        else
+            -- Subobjectives are leaves with no latch of their own (see
+            -- the module header) -- they never need a history judgement,
+            -- and nothing below ever reads structRevealed for one.
+            structRevealed[id] = false
+        end
+        if isFullKind(entry.node.kind) and structRevealed[id]
+                and not tutorialProgress.historySeen[id] then
+            tutorialProgress.historySeen[id] = true
+            tutorialProgress.stickyActive[id] =
+                tutorialProgress.completed[id] == true
+        end
+    end
+end
+
 -- Adopt `tree` (nil clears), rebuild the index, and reconcile the
 -- durable set against it. This is the injection point the hspec gate
 -- uses in place of a real engine registry.
 function tutorialProgress.setTree(tree)
     tutorialProgress.tree  = tree
     tutorialProgress.index = buildIndex(tree)
+    -- A new tree means a new reveal history -- #996 requirement 6 never
+    -- persists this, so it is always rebuilt fresh against whatever
+    -- `completed` holds right now (empty for a brand-new session; a
+    -- load's already-restored set when the tree resolves lazily during
+    -- one, since ensureTree() runs before apply()'s own explicit
+    -- rebuild below).
+    tutorialProgress.historySeen  = {}
+    tutorialProgress.stickyActive = {}
     tutorialProgress.reconcile()
+    recomputeHistory()
     return tutorialProgress.tree
 end
 
@@ -166,6 +240,11 @@ function tutorialProgress.completeObjective(id)
     end
     if tutorialProgress.completed[id] then return false end
     tutorialProgress.completed[id] = true
+    -- This completion may be exactly what makes a DIFFERENT id (a
+    -- child this one gates) newly reveal-eligible for the first time --
+    -- see recomputeHistory's header for why the judgement has to happen
+    -- here, not lazily whenever a view is next read.
+    recomputeHistory()
     return true
 end
 
@@ -217,6 +296,9 @@ end
 function tutorialProgress.reset()
     tutorialProgress.completed = {}
     tutorialProgress.checked   = {}
+    tutorialProgress.historySeen  = {}
+    tutorialProgress.stickyActive = {}
+    recomputeHistory()
 end
 
 -- Drop every completion whose id is not a full objective in the tree
@@ -287,6 +369,15 @@ end
 -- 3's reversibility, and it costs the player nothing durable --
 -- `completed` still holds the composite, exactly as requirement 2
 -- demands.
+--
+-- One override on top of all of that (#996): a node that was ALREADY
+-- latched the first time it ever became reveal-eligible never gets a
+-- chance to be seen "in progress" at all, so hiding it on the same tick
+-- it first appears would mean the player never sees it. stickyActive
+-- (recomputeHistory, above) marks exactly those ids, and the hide rule
+-- below is suppressed for them permanently -- which, for a composite,
+-- is also what lets its subobjectives (gated on the composite staying
+-- un-hidden) become observable at all.
 
 local function allCompleted(ids)
     for _, id in ipairs(ids) do
@@ -321,9 +412,10 @@ local function computeState()
             revealed[id] = revealed[entry.parent] == true
                 and hidden[entry.parent] ~= true
         end
-        hidden[id] = tutorialProgress.completed[id] == true
+        local rawHidden = tutorialProgress.completed[id] == true
             and allCompleted(entry.children)
             and allChecked(entry.subobjectives)
+        hidden[id] = rawHidden and not tutorialProgress.stickyActive[id]
     end
     return { revealed = revealed, hidden = hidden }
 end
@@ -519,6 +611,18 @@ function tutorialProgress.register()
             -- reconcile): "I cannot judge these" is not "these are
             -- wrong", and ensureTree retries on the next call.
             tutorialProgress.reconcile()
+            -- Requirement 6 (#996): the reveal history is presentation
+            -- state and is never part of this payload, so a load always
+            -- rebuilds it fresh against the just-restored, just-scrubbed
+            -- durable set -- regardless of whether ensureTree() above
+            -- resolved the tree for the first time this call (which
+            -- would already have run this once against the pre-scrub
+            -- set) or found it already cached from an earlier session
+            -- in the same process (which would otherwise leave stale
+            -- history behind).
+            tutorialProgress.historySeen  = {}
+            tutorialProgress.stickyActive = {}
+            recomputeHistory()
         end,
     })
     tutorialProgress._registered = true

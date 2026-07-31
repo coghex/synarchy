@@ -29,6 +29,11 @@ in-game HUD, then:
      module's own callback. The oracle is the engine's own F4
      action-outcome record (`debug.drainActionOutcomes`), which reports
      the route it actually took.
+  6. (#996) A branch that latches — and whose subobjectives check —
+     before it is ever revealed still renders, in authored order with
+     its normal completed marker, instead of an empty checklist. Same
+     `setTree` injection point as check 4, shaped like the real
+     first_session tree so a composite branch exists to latch early.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py.
@@ -316,6 +321,62 @@ def passthrough_phase(port: int, d: dict, w: int, h: int) -> None:
           f"{over_row.get('handler')!r} vs control {control.get('handler')!r}")
 
 
+def inject_shipped_shape(port: int) -> None:
+    """Replace the session tree with the shipped first_session SHAPE
+    (place_portal -> secure_water -> prepare_expedition{water, food}),
+    through #958's own injection point -- same technique as
+    inject_wide_tree, but shaped like the real tree instead of a flat
+    list, so a composite branch exists to latch early."""
+    send(port,
+         "local tp = require('scripts.tutorial_progress'); "
+         "local function node(id, kind, order, children, subs) "
+         "return { id = id, kind = kind, label = id .. ' label', "
+         "tooltip = id .. ' tooltip', evaluator = id .. '_eval', "
+         "order = order, children = children or {}, "
+         "subobjectives = subs or {} } end; "
+         "local water = node('prepare_water', 'subobjective', 1); "
+         "local food  = node('prepare_food', 'subobjective', 2); "
+         "local exp   = node('prepare_expedition', 'composite', 1, {}, "
+         "{water, food}); "
+         "local sec   = node('secure_water', 'full', 1, {exp}); "
+         "local root  = node('place_portal', 'full', 1, {sec}); "
+         "tp.reset(); tp.setTree({ id = 'first_session', root = root }); "
+         "return 'ok'", timeout=15.0)
+
+
+def already_latched_phase(port: int, shots: str) -> None:
+    """#996: latch the composite and check both of its subobjectives
+    BEFORE that branch is ever revealed (the shipped acolyte spawn kit
+    does exactly this before secure_water_source ever completes), then
+    reveal it by completing its ancestors. The real, GPU-rendered
+    checklist must show the branch -- not an empty panel."""
+    inject_shipped_shape(port)
+    send(port,
+         "local tp = require('scripts.tutorial_progress'); "
+         "tp.setSubobjectiveChecked('prepare_water', true); "
+         "tp.setSubobjectiveChecked('prepare_food', true); "
+         "tp.completeObjective('prepare_expedition'); "
+         "tp.completeObjective('place_portal'); "
+         "tp.completeObjective('secure_water'); "
+         "return 'ok'", timeout=15.0)
+    send(port, "require('scripts.tutorial_hud').setOpen(true); return 'ok'",
+         timeout=10.0)
+    d = poll_dump(port, lambda x: len(x.get("rows") or []) > 0) or dump(port)
+    check("the already-latched prepare branch renders in authored order, "
+          "instead of an empty checklist (#996)",
+          d.get("rowIds") == ["prepare_expedition", "prepare_water", "prepare_food"],
+          str(d.get("rowIds")))
+    rows = d.get("rows") or []
+    check("the composite renders its normal completed marker, and both "
+          "subobjectives render checked",
+          len(rows) == 3 and rows[0].get("marker") == "[x]"
+          and rows[1].get("marker") == "(x)" and rows[2].get("marker") == "(x)",
+          str(rows))
+    shot = os.path.join(shots, "already_latched.png")
+    check("the already-latched checklist screenshot answers",
+          screenshot(port, shot))
+
+
 def reclose_phase(port: int, closed_shot: str, shots: str) -> None:
     d = dump(port)
     tx, ty = center_of(d["toggle"])
@@ -376,6 +437,10 @@ def main() -> int:
 
         print("== 6. close again ==")
         reclose_phase(args.port, shot_closed, shots)
+
+        print("== 7. a branch already latched before its first reveal "
+              "renders instead of an empty checklist (#996) ==")
+        already_latched_phase(args.port, shots)
     finally:
         quit_engine(args.port, proc)
 
