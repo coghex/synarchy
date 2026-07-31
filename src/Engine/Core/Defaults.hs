@@ -15,16 +15,8 @@ import Engine.Graphics.Vulkan.Types.Cleanup (emptyCleanup)
 import Engine.Scene.Types
 
 defaultEngineConfig ∷ EngineConfig
-defaultEngineConfig = EngineConfig 
-  { windowWidth  = 800
-  , windowHeight = 600
-  , enableVSync  = True
-#ifdef DEVELOPMENT
-  , enableDebug  = True
-#else
-  , enableDebug  = False
-#endif
-  , ecHeadless   = False
+defaultEngineConfig = EngineConfig
+  { ecHeadless   = False
   , ecDebugPort  = 8008
   , ecBootProfile = BootNormal
   , ecPreviewTarget = Nothing
