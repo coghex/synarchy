@@ -241,10 +241,10 @@ def has_loc_on(port: int, cx: int, cy: int, page: str | None = None, tries: int 
 #
 # Kept deliberately small: this probe is classified slow / worldgen-heavy
 # and manual-only (tools/ci_probes.py), and phases 1-5 already spend five
-# engine boots. The matrix runs in ONE extra boot, generates at most
-# MAX_MATRIX_ENTRIES worlds, and skips the save/load, centre-chunk and
-# hidden-page phases entirely — those assume seed 42's particular
-# geography and prove things placement does not.
+# engine boots. The matrix generates at most MAX_MATRIX_ENTRIES worlds —
+# one per boot, see the phase-9 comment — and skips the save/load,
+# centre-chunk and hidden-page phases entirely, since those assume seed
+# 42's particular geography and prove things placement does not.
 #
 # The exhaustive frequency measurement is NOT here: it is the one-off
 # tools/location_placement_sweep.py (21 distinct worlds), recorded in
@@ -537,25 +537,35 @@ def main() -> int:
     #      after #997 an empty list can only mean the world has no land
     #      at all, and none of these tuples is a waterworld. ----
     assert len(PLACEMENT_MATRIX) <= MAX_MATRIX_ENTRIES
-    proc = boot(args.port, log=LOG)
-    try:
-        send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
-        for i, (seed, size, plates, why) in enumerate(PLACEMENT_MATRIX):
-            page = f"m{i}"
-            send(args.port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
+    for seed, size, plates, why in PLACEMENT_MATRIX:
+        label = f"seed {seed} / size {size} / {plates} plates"
+        # One engine per entry. `world.waitForInit` (like getInitProgress)
+        # waits on the ACTIVE world, which with nothing shown is just the
+        # head of wmWorlds — NOT the page just handed to world.init. Run
+        # several entries in one engine and the second wait can answer for
+        # the first, already-LoadDone world before the queued init has even
+        # registered, returning phase 3 instantly and making a perfectly
+        # normal slow w128 generation read as zero. With exactly one page
+        # per process the query cannot refer to anything else. The extra
+        # boots are seconds against these generations, and each entry is
+        # then independently reproducible from its own command line.
+        proc = boot(args.port, log=LOG)
+        try:
+            send(args.port,
+                 "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
+            send(args.port, f"world.init('mx', {seed}, {size}, {plates}); return 'ok'")
             # waitForInit reports where generation GOT TO, timeout or not, so
             # check the phase before reading placements — otherwise a timed-out
-            # w128 generation reads as empty and gets misreported below as the
+            # generation reads as empty and gets misreported below as the
             # guarantee failing to fire. `local phase = ...` keeps the first of
             # its four return values; 3 == done.
-            label = f"seed {seed} / size {size} / {plates} plates"
             phase = send(args.port, "local phase = world.waitForInit(900); return phase",
                          timeout=920).strip()
             if phase != "3":
                 failures.append(f"{label}: generation did not finish "
                                 f"(waitForInit phase {phase or '<no reply>'}, 3 = done)")
                 continue
-            entries = placed_on_page(args.port, page)
+            entries = placed_on_page(args.port, "mx")
             ruins = [e for e in entries if e["id"] == "ruin_small"]
             if ruins:
                 print(f"PASS: {label}: {len(ruins)} ruin_small ({why})")
@@ -563,8 +573,8 @@ def main() -> int:
                 failures.append(
                     f"{label}: ZERO ruin_small placed — the #997 guarantee "
                     f"did not fire (or the world has no land at all)")
-    finally:
-        quit_engine(args.port, proc)
+        finally:
+            quit_engine(args.port, proc)
 
     print("-" * 56)
     if failures:
