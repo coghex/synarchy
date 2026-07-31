@@ -251,6 +251,15 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (receiverInfoStub "building" 511 True "Cargo Hold")
+            -- world.destroyAll is real and engine-wide: this suite's
+            -- worldgen specs share ONE memoized world across the whole
+            -- surrounding `aroundAll` block (Test.Headless.Harness.
+            -- sharedWorld), so calling the REAL destroyAll here would
+            -- tear that down for every later spec in the same block
+            -- (#1014 review round 3). Stub it -- this test is only
+            -- about the Lua WIRING (does onExitToMenu clear the
+            -- session?), not about exercising a real world teardown.
+            run ls "world.destroyAll = function() end;"
             _ ← evalDebug ls
                 "require('scripts.transfer_session').create(7, 'building', 511); return 'ok'"
             before ← evalDebug ls "return require('scripts.transfer_session').get()"
