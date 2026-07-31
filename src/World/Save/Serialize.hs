@@ -243,7 +243,8 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                 (meta, snap, luaComponents, isMigrated) ←
                     decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
                 let req = SaveRequestMeta { srmSlotName  = smName meta
-                                          , srmTimestamp = smTimestamp meta }
+                                          , srmTimestamp = smTimestamp meta
+                                          , srmAutosave  = smAutosave meta }
                 sd ← checkWorldCount (snapshotToSaveData req snap)
                 pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ]
                      , isMigrated)

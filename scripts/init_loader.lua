@@ -18,6 +18,7 @@ local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
 local locationStamperScriptId = nil
 local pauseScriptId = nil
+local autosaveScriptId = nil
 local tutorialProgressScriptId = nil
 local tutorialEvalScriptId = nil
 local tutorialHudScriptId = nil
@@ -135,6 +136,13 @@ function M.load()
     -- snapshot. No per-tick work; loaded so engine broadcasts (none
     -- needed today) and require()s from game scripts share state.
     pauseScriptId = engine.loadScript("scripts/pause.lua", 1.0)
+
+    -- Autosave scheduler (#913): owns the wall-clock interval, the
+    -- gameplay-view eligibility gate, and the rotate-then-save sequence.
+    -- 1s tick -- the smallest legal interval is a whole minute, so this
+    -- is already an order of magnitude finer than it needs to be, and
+    -- the tick is a handful of comparisons when nothing is due.
+    autosaveScriptId = engine.loadScript("scripts/autosave.lua", 1.0)
 
     -- Tutorial objective progress (#958): owns the durable completed-
     -- objective set and the live subobjective checks, and registers the
@@ -306,6 +314,9 @@ function M.shutdown()
     end
     if pauseScriptId then
         engine.killScript(pauseScriptId)
+    end
+    if autosaveScriptId then
+        engine.killScript(autosaveScriptId)
     end
     if tutorialProgressScriptId then
         engine.killScript(tutorialProgressScriptId)

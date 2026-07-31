@@ -233,6 +233,9 @@ initializeEngineWith logBackend = do
   pathingConfigRef ← newIORef pathingConfig
 
   enginePausedRef ← newIORef False
+  -- #913: starts at 0 and only ever counts UP; an autosave compares a
+  -- snapshot of it, never its absolute value.
+  playerIntentGenRef ← newIORef (0 ∷ Word64)
   gameTimeRef     ← newIORef (0 ∷ Double)
   saveBarrierRef  ← newSaveBarrier
   inputThreadActiveRef ← newIORef False
@@ -331,6 +334,7 @@ initializeEngineWith logBackend = do
         , pathingConfigRef   = pathingConfigRef
         , simQueue          = simQueue
         , enginePausedRef   = enginePausedRef
+        , playerIntentGenRef = playerIntentGenRef
         , gameTimeRef       = gameTimeRef
         , saveBarrierRef    = saveBarrierRef
         , inputThreadActiveRef = inputThreadActiveRef

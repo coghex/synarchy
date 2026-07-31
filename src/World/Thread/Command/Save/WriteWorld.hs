@@ -30,6 +30,7 @@ import World.Types
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
+import World.Save.Types (AutosaveRequest(..))
 import World.Save.Integrity
     (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
     , IntegrityReport(..), buildKnownEntities, LuaRefEdge(..)
@@ -54,9 +55,10 @@ import World.Generate.Coordinates (chunkToGlobal)
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → Text → [(Text, Word32, Bool, BS.ByteString)]
                        → [(Text, Text, Int, Maybe Int, Text, Maybe Text)]
+                       → Maybe AutosaveRequest
                        → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
-                        luaRefs = do
+                        luaRefs mAutosave = do
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
     -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
@@ -286,6 +288,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 let req = SaveRequestMeta
                                         { srmSlotName  = saveName
                                         , srmTimestamp = timestampTxt
+                                        , srmAutosave  = isJust mAutosave
                                         }
                                     meta = snapshotSaveMetadata req snap
                                 -- Force the FULL encoding now, while the capture
@@ -342,8 +345,24 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                                     \warning: " <> w
                                             logInfo logger CatWorld $
                                                 "World saved successfully: " <> saveName
+                                            -- #913: an autosave hands the
+                                            -- player back the world they were
+                                            -- playing -- BEFORE the success
+                                            -- event below, which a
+                                            -- pause-configured notification
+                                            -- category may itself pause on
+                                            -- (Engine.PlayerEvent.Emit writes
+                                            -- enginePausedRef directly). That
+                                            -- ordering is what makes the
+                                            -- event's own result authoritative
+                                            -- rather than something this
+                                            -- restore could undo.
+                                            restored ← restoreAfterAutosave
+                                                env logger visibleId mAutosave
                                             emitEvent env "save_load" "World.Save" $
                                                 "Game saved: " <> saveName
+                                            when restored $
+                                                healEventImposedPause env visibleId
                                       Left err →
                                         do
                                             failTransaction env err
@@ -351,6 +370,68 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                                 "Failed to save world: " <> err
                                             emitEvent env "save_load" "World.Save" $
                                                 "Save failed: " <> err
+
+-- | #913: hand an AUTOSAVE's pre-request pause state and visible-world
+--   time scale back to the player, once the transaction has actually
+--   succeeded. Returns whether anything was restored.
+--
+--   Three ways this deliberately does nothing:
+--
+--     * a MANUAL save ('Nothing') — the save path's pause is the
+--       long-standing DF-style contract and is not this issue's to
+--       change;
+--     * the player touched pause or the time scale during the request
+--       window ('arIntentGen' no longer matches
+--       'playerIntentGenRef') — the player wins outright, including the
+--       double-toggle case where the final BOOLEAN is unchanged, which
+--       is exactly why this compares a generation rather than values;
+--     * the autosave began from an already-PAUSED world — there is
+--       nothing to resume, and resuming would be the autosave changing
+--       gameplay.
+--
+--   A FAILED transaction never reaches here at all, so the existing
+--   one-way "a failed save leaves you paused" safety ratchet is
+--   preserved untouched.
+restoreAfterAutosave
+    ∷ EngineEnv → LoggerState → Maybe WorldPageId → Maybe AutosaveRequest
+    → IO Bool
+restoreAfterAutosave _ _ _ Nothing = pure False
+restoreAfterAutosave env logger visibleId (Just ar) = do
+    gen ← readIORef (playerIntentGenRef env)
+    if gen ≢ arIntentGen ar
+      then do
+        logInfo logger CatWorld
+            "Autosave finished, but the player changed pause or time scale \
+            \while it ran -- leaving their choice in place"
+        pure False
+      else if arPrePaused ar
+        then pure False
+        else do
+            -- Scale first, then the flag: the world thread is the only
+            -- reader of both (tickWorldTime runs on it), but writing the
+            -- flag last means there is never even a momentary
+            -- "unpaused at scale 0" reading of the pair.
+            forM_ visibleId $ \vid → do
+                mgr ← readIORef (worldManagerRef env)
+                forM_ (lookup vid (wmWorlds mgr)) $ \ws →
+                    writeIORef (wsTimeScaleRef ws) (arPreTimeScale ar)
+            writeIORef (enginePausedRef env) False
+            pure True
+
+-- | The @save_load@ success event may be configured to pause the game
+--   ('Engine.PlayerEvent.Emit' writes 'enginePausedRef' directly). That
+--   result is authoritative over the restore that just ran — but the
+--   event never zeroes the world clock, which would leave exactly the
+--   "ticks frozen, world time still advancing" split @scripts\/pause.lua@
+--   documents and heals elsewhere. Re-zero the visible page's scale so a
+--   paused world stays a coherently paused world.
+healEventImposedPause ∷ EngineEnv → Maybe WorldPageId → IO ()
+healEventImposedPause env visibleId = do
+    paused ← readIORef (enginePausedRef env)
+    when paused $ forM_ visibleId $ \vid → do
+        mgr ← readIORef (worldManagerRef env)
+        forM_ (lookup vid (wmWorlds mgr)) $ \ws →
+            writeIORef (wsTimeScaleRef ws) 0
 
 -- | #758: release the barrier so state owners resume WITHOUT declaring
 --   the transaction terminally complete yet — see 'releaseCaptureLock'.

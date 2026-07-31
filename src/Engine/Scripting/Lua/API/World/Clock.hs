@@ -19,7 +19,7 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..))
+    (WorldSimCapability(..), bumpPlayerIntent)
 import Engine.Core.State (activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
@@ -178,6 +178,17 @@ worldSetTimeScaleFn wsc = do
     case (pageIdArg, scaleArg) of
         (Just pageIdBS, Just (Lua.Number s)) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            -- #913: bump at REQUEST time, not when the world thread
+            -- eventually applies the command. During a save the world
+            -- thread is inside the save transaction and cannot drain this
+            -- queue at all, so a handler-side bump would land AFTER the
+            -- autosave already decided whether to restore -- exactly the
+            -- window the generation exists to cover. Every caller of this
+            -- verb is expressing player intent (scripts/pause.lua's
+            -- resume, a speed control, the debug console); the engine's
+            -- own internal clock writes go straight to wsTimeScaleRef and
+            -- never come through here.
+            bumpPlayerIntent wsc
             Q.writeQueue (wsWorldQueue wsc)
                 (WorldSetTimeScale pageId (realToFrac s))
         _ → pure ()

@@ -810,16 +810,25 @@ def test_generate_session_rolls_back_fixture_and_summary_on_validation_failure()
             sca.MANIFEST_PATH = old_manifest_path
 
 
-# The real, checked-in c3-typed-reference-v1-minimal fixture -- a genuine
-# modern-shaped envelope with the SAME component set a real
-# --generate-session run would also produce -- used below to build two
-# envelopes that differ ONLY in their "metadata" component's smTimestamp
-# (simulating what two engine.saveWorld calls at different wall-clock
-# moments actually produce), so normalize_fixture_timestamp's
-# reproducibility guarantee can be exercised against genuine envelope
-# bytes rather than a hand-rolled binary fixture.
-_C3_FIXTURE_PATH = (
-    sca.REPO_ROOT / "test-headless/data/save-compat/c3-typed-reference-v1.bin")
+# A real, checked-in CURRENT-FORMAT fixture -- a genuine modern-shaped
+# envelope with the SAME component set a real --generate-session run
+# would also produce -- used below to build two envelopes that differ
+# ONLY in their "metadata" component's smTimestamp (simulating what two
+# engine.saveWorld calls at different wall-clock moments actually
+# produce), so normalize_fixture_timestamp's reproducibility guarantee
+# can be exercised against genuine envelope bytes rather than a
+# hand-rolled binary fixture.
+#
+# It must track the CURRENT "metadata" schema version, because the setup
+# below decodes that payload as the live SaveMetadata: an older baseline
+# (c3, d1, e1 ...) carries a HISTORICAL metadata shape that only decodes
+# through its frozen compat mirror, which is a different concern from the
+# timestamp reproducibility this test is about. Re-point this at the
+# newest current-format baseline whenever the metadata component's
+# version is bumped again.
+_CURRENT_FORMAT_FIXTURE_PATH = (
+    sca.REPO_ROOT
+    / "test-headless/data/save-compat/f1-autosave-classification.bin")
 
 _MAKE_TIMESTAMP_VARIANTS_GHCI = r"""
 :set -XOverloadedStrings
@@ -871,15 +880,15 @@ def test_normalize_fixture_timestamp_makes_generation_reproducible() -> None:
           "wall-clock smTimestamp converge to byte-identical fixtures after "
           "normalize_fixture_timestamp, proving --generate-session's output no "
           "longer depends on when the command happened to run")
-    if not _C3_FIXTURE_PATH.exists():
-        expect(False, f"expected the tracked fixture to exist at {_C3_FIXTURE_PATH}")
+    if not _CURRENT_FORMAT_FIXTURE_PATH.exists():
+        expect(False, f"expected the tracked fixture to exist at {_CURRENT_FORMAT_FIXTURE_PATH}")
         return
     with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
         tmp = Path(d)
         variant_a = tmp / "variant_a.bin"
         variant_b = tmp / "variant_b.bin"
         setup_script = (_MAKE_TIMESTAMP_VARIANTS_GHCI
-            .replace("__FIXTURE_PATH__", str(_C3_FIXTURE_PATH))
+            .replace("__FIXTURE_PATH__", str(_CURRENT_FORMAT_FIXTURE_PATH))
             .replace("__VARIANT_A_PATH__", str(variant_a))
             .replace("__VARIANT_B_PATH__", str(variant_b)))
         proc = subprocess.run(

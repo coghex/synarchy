@@ -45,6 +45,13 @@ import World.Tool.Types (ToolMode(..))
 data SaveRequestMeta = SaveRequestMeta
     { srmSlotName  ∷ !Text
     , srmTimestamp ∷ !Text
+    , srmAutosave  ∷ !Bool
+      -- ^ #913: whether the interval autosave scheduler asked for this
+      --   save. Request metadata in exactly the same sense as the slot
+      --   name and timestamp — supplied by the caller, never derivable
+      --   from the snapshot (the same session saved manually and
+      --   automatically produces identical gameplay state), and never
+      --   part of any snapshot structural-equivalence comparison.
     } deriving (Show, Eq)
 
 -- | The active page, resolved the same defensively-falls-back-to-any-
@@ -79,6 +86,7 @@ snapshotSaveMetadata req snap = SaveMetadata
     , smTimestamp  = srmTimestamp req
     , smWorldName  = mActive ⌦ (\p → wiName ⊚ pgsIdentity p)
     , smWorldGloss = mActive ⌦ (\p → pgsIdentity p ⌦ wiGloss)
+    , smAutosave   = srmAutosave req
     }
   where mActive = resolvedActivePage snap
 

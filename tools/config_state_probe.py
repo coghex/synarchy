@@ -4,8 +4,8 @@
 Verifies the boundary between versioned config *templates*
 (`config/*_default.yaml`, tracked) and local runtime config *state*
 (`config/video.local.yaml`, `config/keybinds.local.yaml`,
-`config/notifications.local.yaml`, gitignored) that the settings UI's
-Save actions write:
+`config/notifications.local.yaml`, `config/save.local.yaml`, gitignored)
+that the settings UI's Save actions write:
 
   1. `git status` for `config/` + `.gitignore` starts clean.
   2. With no local config files AND no legacy pre-#661 config files
@@ -18,6 +18,13 @@ Save actions write:
      files, not the legacy paths.
   4. None of that dirties git: `git status` for `config/` + `.gitignore`
      is still clean afterward.
+  5. The `save` family (#913) additionally resolves as a KEY-LEVEL
+     OVERLAY rather than "whole local file wins": a sparse
+     `config/save.local.yaml` carrying one key keeps the tracked
+     template's value for every other key, and an out-of-range value
+     resolves to the effective default instead of poisoning the file.
+     It has no legacy pre-#786 path at all (deliberately absent from
+     `migrateLegacyConfig`), so nothing must ever create `config/save.yaml`.
 
 Legacy-file migration itself (the #786 upgrade path) is
 `tools/config_migration_probe.py`'s job, not this one's.
@@ -46,6 +53,7 @@ LOCAL_FILES = [
     "config/video.local.yaml",
     "config/keybinds.local.yaml",
     "config/notifications.local.yaml",
+    "config/save.local.yaml",
 ]
 
 # Pre-#661 paths. Nothing writes to these any more, but a probe run (or
@@ -198,8 +206,58 @@ def main() -> int:
         passed &= check("unit_warning.pause comes from the registry (not the old drifted file)",
                          r == "false", r)
 
-        for p in ("config/video.local.yaml", "config/keybinds.local.yaml"):
+        # #913: the save family's fresh-clone fallback + overlay rules.
+        r = send(args.port,
+                  "local c = engine.getSaveConfig(); "
+                  "return tostring(c.enabled)..'|'..c.intervalMinutes"
+                  "..'|'..c.rotationDepth")
+        want_save = load_yaml("config/save_default.yaml")["save"]
+        want_str = (f"{str(bool(want_save['enabled'])).lower()}"
+                    f"|{want_save['interval_minutes']}"
+                    f"|{want_save['rotation_depth']}")
+        passed &= check("save config == config/save_default.yaml",
+                         r == want_str, f"{r} (want {want_str})")
+        passed &= check("shipped autosave default is OFF",
+                         want_save["enabled"] is False, str(want_save["enabled"]))
+
+        # A SPARSE local file must keep every key it does not mention.
+        with open("config/save.local.yaml", "w") as f:
+            f.write("save:\n  interval_minutes: 25\n")
+        r = send(args.port,
+                  "local c = engine.getSaveConfig(); "
+                  "return tostring(c.enabled)..'|'..c.intervalMinutes"
+                  "..'|'..c.rotationDepth")
+        sparse_want = (f"{str(bool(want_save['enabled'])).lower()}|25"
+                       f"|{want_save['rotation_depth']}")
+        passed &= check("sparse local file overlays ONE key, keeping the rest",
+                         r == sparse_want, f"{r} (want {sparse_want})")
+
+        # An out-of-range value is invalid, so that ONE key resolves to
+        # the effective default -- it must not clamp, and must not take
+        # the other keys down with it.
+        with open("config/save.local.yaml", "w") as f:
+            f.write("save:\n  interval_minutes: 999\n  rotation_depth: 2\n")
+        r = send(args.port,
+                  "local c = engine.getSaveConfig(); "
+                  "return c.intervalMinutes..'|'..c.rotationDepth")
+        invalid_want = f"{want_save['interval_minutes']}|2"
+        passed &= check("out-of-range key falls back to the effective default",
+                         r == invalid_want, f"{r} (want {invalid_want})")
+        os.remove("config/save.local.yaml")
+
+        r = send(args.port,
+                  "local c = engine.getDefaultSaveConfig(); "
+                  "return tostring(c.enabled)..'|'..c.intervalMinutes"
+                  "..'|'..c.rotationDepth")
+        passed &= check("getDefaultSaveConfig reports the tracked template",
+                         r == want_str, f"{r} (want {want_str})")
+
+        for p in ("config/video.local.yaml", "config/keybinds.local.yaml",
+                  "config/save.local.yaml"):
             passed &= check(f"{p} not written just by loading", not os.path.exists(p))
+        passed &= check("no legacy config/save.yaml is ever created "
+                        "(the save family has no pre-#786 path)",
+                        not os.path.exists("config/save.yaml"))
         for p in LEGACY_FILES:
             passed &= check(f"legacy {p} not resurrected by a fresh-clone boot",
                              not os.path.exists(p))
@@ -251,6 +309,43 @@ def main() -> int:
             passed &= check("saved notification override took effect",
                              saved_notif.get("debug", {}).get("log") is True,
                              str(saved_notif.get("debug")))
+
+        r = send(args.port,
+                  "return tostring(engine.setSaveConfig("
+                  "{enabled = true, intervalMinutes = 7, rotationDepth = 4}))")
+        passed &= check("setSaveConfig accepted", r == "true", r)
+        passed &= check("config/save.local.yaml written",
+                         os.path.exists("config/save.local.yaml"))
+        if os.path.exists("config/save.local.yaml"):
+            saved_save = load_yaml("config/save.local.yaml")["save"]
+            passed &= check("saved autosave settings round-trip on disk",
+                             saved_save.get("enabled") is True
+                             and saved_save.get("interval_minutes") == 7
+                             and saved_save.get("rotation_depth") == 4,
+                             str(saved_save))
+        r = send(args.port,
+                  "local c = engine.getSaveConfig(); "
+                  "return tostring(c.enabled)..'|'..c.intervalMinutes"
+                  "..'|'..c.rotationDepth")
+        passed &= check("saved autosave settings round-trip through the API",
+                         r == "true|7|4", r)
+        # A PATCH: omitted keys keep their current effective value.
+        r = send(args.port,
+                  "engine.setSaveConfig({intervalMinutes = 12}); "
+                  "local c = engine.getSaveConfig(); "
+                  "return tostring(c.enabled)..'|'..c.intervalMinutes"
+                  "..'|'..c.rotationDepth")
+        passed &= check("setSaveConfig is a patch, not a full overwrite",
+                         r == "true|12|4", r)
+        # Out-of-range WRITES clamp (unlike reads, which fall back), so
+        # what lands on disk always decodes back to what was asked for.
+        r = send(args.port,
+                  "engine.setSaveConfig({intervalMinutes = 999}); "
+                  "local c = engine.getSaveConfig(); return c.intervalMinutes")
+        passed &= check("setSaveConfig clamps an out-of-range value on write",
+                         r == "60", r)
+        passed &= check("no legacy config/save.yaml created by the save path",
+                        not os.path.exists("config/save.yaml"))
 
         quit_engine(args.port, proc)
         proc = None

@@ -59,6 +59,8 @@ module World.Save.Envelope
     ( currentEnvelopeVersion
     , metadataComponentId
     , metadataComponentVersion
+    , metadataComponentInputVersions
+    , legacyMetadataComponentVersion
     , LuaComponentSpec
     , encodeSessionSnapshot
     , decodeSessionEnvelope
@@ -80,6 +82,8 @@ import qualified Data.Text as T
 import World.Save.Envelope.Types
 import World.Save.Envelope.Codec
 import World.Save.Types (SaveMetadata)
+import World.Save.Compat.MetadataV1
+    (decodeSaveMetadataV1, migrateSaveMetadataV1)
 import World.Save.Snapshot (SessionSnapshot)
 import World.Save.Component
     (componentKnownIds, componentRequiredIds
@@ -101,8 +105,34 @@ currentEnvelopeVersion = 1
 -- | The @"metadata"@ component's own schema version — a small,
 --   independent counter (requirement 3). Bump this, not
 --   'currentEnvelopeVersion', if 'SaveMetadata''s shape ever changes.
+--
+--   v2 (#913) appended 'World.Save.Types.smAutosave'. v1 payloads are
+--   still decoded, through the frozen "World.Save.Compat.MetadataV1"
+--   mirror — see 'metadataComponentInputVersions'.
 metadataComponentVersion ∷ Word32
-metadataComponentVersion = 1
+metadataComponentVersion = 2
+
+-- | Every @"metadata"@ schema version this build can DECODE, newest
+--   last. 'decodeMetadataComponent' accepts exactly these and rejects
+--   anything else before touching a byte of payload.
+--
+--   Kept as its own binding (rather than inlined into the decoder's
+--   guard) because @tools\/save_compat_audit.py@ parses it straight out
+--   of this source to cross-check the tracked compatibility manifest:
+--   dropping a historical decoder here is exactly the "support for that
+--   historical version was removed" drift that audit exists to catch.
+metadataComponentInputVersions ∷ [Word32]
+metadataComponentInputVersions = [legacyMetadataComponentVersion, 2]
+
+-- | The @"metadata"@ schema version the FROZEN legacy envelope shapes
+--   (B1's @{metadata, session}@ and B2's pre-#761 set) always carry.
+--   Those shapes were sealed while metadata was still at v1 and can
+--   never be written again, so their recognition must pin that historical
+--   number rather than follow 'metadataComponentVersion' — a metadata
+--   bump must not make this build stop recognizing its own frozen
+--   baselines.
+legacyMetadataComponentVersion ∷ Word32
+legacyMetadataComponentVersion = 1
 
 -- | One Lua-owned component: its bare (unprefixed) registry id, schema
 --   version, the writer's own required/optional declaration, and its
@@ -338,9 +368,10 @@ decodeLegacyStructureAndMetadata bytes =
                      \not both marked required, as the real frozen B1 \
                      \shape always does -- refusing to migrate rather \
                      \than treat an optional payload as the required one"
-            when (cdVersion metaDesc ≢ metadataComponentVersion) $
+            when (cdVersion metaDesc ≢ legacyMetadataComponentVersion) $
                 Left ("Save format incompatible: expected legacy metadata \
-                      \component v" <> T.pack (show metadataComponentVersion)
+                      \component v"
+                      <> T.pack (show legacyMetadataComponentVersion)
                       <> ", got v" <> T.pack (show (cdVersion metaDesc)))
             when (cdVersion sessionDesc ≢ sessionComponentVersion) $
                 Left ("Save format incompatible: expected legacy session \
@@ -689,7 +720,7 @@ foreignOptionalComponentIds luaKnownNames bytes =
                     HS.member sessionComponentId presentIds
                         ∧ not hasModernComponentBesidesSession
                         ∧ descriptorIsExactlyRequiredAt decoded
-                              metadataComponentId metadataComponentVersion
+                              metadataComponentId legacyMetadataComponentVersion
                         ∧ descriptorIsExactlyRequiredAt decoded
                               sessionComponentId sessionComponentVersion
 
@@ -840,20 +871,32 @@ decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes =
 --   version before touching its bytes. The descriptor/payload "missing"
 --   cases are unreachable — metadata is always in the reader's required
 --   set.
+--
+--   Two versions are accepted ('metadataComponentInputVersions'): the
+--   current one, decoded straight into 'SaveMetadata', and the frozen v1
+--   shape, decoded through "World.Save.Compat.MetadataV1" and migrated.
+--   The version is matched EXACTLY against that list rather than by an
+--   ordering comparison, so a FUTURE version this build has never seen
+--   is still refused outright instead of being fed to a decoder that
+--   would misread it.
 decodeMetadataComponent ∷ DecodedEnvelope → Either Text SaveMetadata
 decodeMetadataComponent decoded = do
     desc ← maybe (Left "metadata component descriptor missing \
                         \(unreachable — already required)") Right
                  (findDescriptor metadataComponentId (deManifest decoded))
-    when (cdVersion desc ≢ metadataComponentVersion) $
+    let version = cdVersion desc
+    when (version `notElem` metadataComponentInputVersions) $
         Left ("Save format incompatible: expected metadata component v"
-              <> T.pack (show metadataComponentVersion) <> ", got v"
-              <> T.pack (show (cdVersion desc)))
+              <> T.intercalate "/"
+                   (map (T.pack . show) metadataComponentInputVersions)
+              <> ", got v" <> T.pack (show version))
     payload ← maybe (Left "metadata component payload missing \
                            \(unreachable — already required)") Right
                     (HM.lookup metadataComponentId (dePayloads decoded))
-    either (Left . (("Failed to decode metadata component: ") <>) . T.pack)
-           Right (S.decode payload)
+    if version ≡ legacyMetadataComponentVersion
+      then migrateSaveMetadataV1 ⊚ decodeSaveMetadataV1 payload
+      else either (Left . (("Failed to decode metadata component: ") <>) . T.pack)
+                  Right (S.decode payload)
 
 findDescriptor ∷ ComponentId → EnvelopeManifest → Maybe ComponentDescriptor
 findDescriptor cid manifest =

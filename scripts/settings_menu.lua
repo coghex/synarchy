@@ -14,6 +14,7 @@ local tabbar         = require("scripts.ui.tabbar")
 local scrollbar      = require("scripts.ui.scrollbar")
 local slider         = require("scripts.ui.slider")
 local data           = require("scripts.settings.data")
+local generalTab       = require("scripts.settings.general_tab")
 local graphicsTab      = require("scripts.settings.graphics_tab")
 local notificationsTab = require("scripts.settings.notifications_tab")
 local inputTab         = require("scripts.settings.input_tab")
@@ -108,6 +109,12 @@ settingsMenu.ownedSliders    = {}
 -- Each entry: { key, name, createFn(params) → rowHandles[] }
 -----------------------------------------------------------
 local tabDefs = {
+    -- #913: General is the FIRST tab, ahead of Graphics -- it owns the
+    -- autosave controls, and settingsMenu.activeTab still defaults to
+    -- "graphics" so opening Settings lands where it always has.
+    { key = "general", name = "General", create = function(p)
+        return generalTab.create(p)
+    end },
     { key = "graphics", name = "Graphics", create = function(p)
         return graphicsTab.create(p)
     end },
@@ -941,9 +948,21 @@ end
 -- other already-initialized screen (main menu, create-world, ...)
 -- picks up the new scale immediately too, not just on its next own
 -- show(). Reuses the current fbW/fbH (only the scale changed).
+-- Every tab that owns editable values contributes to ONE widget-value
+-- table, so data.apply/data.save see the whole page's live state in a
+-- single pass (#913 adds the General tab's autosave rows to what was
+-- previously only the Graphics tab's).
+function settingsMenu.collectWidgetValues()
+    local vals = graphicsTab.getWidgetValues()
+    for k, v in pairs(generalTab.getWidgetValues()) do
+        vals[k] = v
+    end
+    return vals
+end
+
 function settingsMenu.onApply()
     engine.logInfo("Applying settings...")
-    local vals = graphicsTab.getWidgetValues()
+    local vals = settingsMenu.collectWidgetValues()
     local result = data.apply(vals)
     if result.scaleChanged then
         -- notifyResize -> settingsMenu.onFramebufferResize already
@@ -975,7 +994,7 @@ end
 
 function settingsMenu.onSave()
     engine.logInfo("Saving settings...")
-    local vals = graphicsTab.getWidgetValues()
+    local vals = settingsMenu.collectWidgetValues()
     local result = data.save(vals)
     if result.scaleChanged then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
@@ -1008,6 +1027,7 @@ end
 
 function settingsMenu.onTextBoxSubmit(name, value)
     graphicsTab.onTextBoxSubmit(name, value)
+    generalTab.onTextBoxSubmit(name, value)
 end
 
 -----------------------------------------------------------

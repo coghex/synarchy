@@ -1,5 +1,5 @@
 -- | The world\/sim\/time half of the @world-sim-render-handoff@
---   capability (epic #537, issue #893 — E5a): the nine fields
+--   capability (epic #537, issue #893 — E5a): the fields
 --   'docs/engineenv_capability_inventory.md' §7.4 identifies as the
 --   part that "can move on its own", separate from the seven coupled
 --   render-handoff fields E5b (#894) migrates once
@@ -42,16 +42,17 @@
 --
 --   Like the other capability modules, this one imports only the narrow
 --   slice of @Engine.Core.State@ it needs (the bare 'EngineEnv' type
---   plus the nine field accessors) rather than @EngineEnv(..)@ or a
+--   plus its own field accessors) rather than @EngineEnv(..)@ or a
 --   bare import, so it is not itself a full-@EngineEnv@-access consumer
 --   under @tools/engine_env_capability_audit.py@'s ratchet.
 module Engine.Core.Capability.WorldSim
   ( WorldSimCapability(..)
   , toWorldSimCapability
+  , bumpPlayerIntent
   ) where
 
 import UPrelude
-import Data.IORef (IORef)
+import Data.IORef (IORef, atomicModifyIORef')
 import Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand)
 import World.Generate.Config (WorldGenConfig)
@@ -61,14 +62,15 @@ import Engine.Core.State
   ( EngineEnv
   , worldManagerRef, worldQueue, sunAngleRef, floraCatalogRef
   , materialRegistryRef, worldGenConfigRef, gameTimeRef, enginePausedRef
-  , simQueue
+  , playerIntentGenRef, simQueue
   )
 
 -- | The world\/sim\/time slice of @world-sim-render-handoff@: the world
 --   page manager, the world and sim command queues, the derived sun
 --   angle, the flora and material registries, the global worldgen
---   tunables, the game clock, and the global pause flag. See
---   'docs/engineenv_capability_inventory.md' §5
+--   tunables, the game clock, the global pause flag, and (#913) the
+--   player-intent generation that flag and the per-page time scale share.
+--   See 'docs/engineenv_capability_inventory.md' §5
 --   @world-sim-render-handoff@ and §7.4.
 data WorldSimCapability = WorldSimCapability
   { wsWorldManagerRef     ∷ IORef WorldManager
@@ -114,6 +116,16 @@ data WorldSimCapability = WorldSimCapability
     --   @SimThread@\/@CombatThread@ skip advancing simulated state
     --   while it is true; @MainRender@ keeps rendering and dispatching
     --   input regardless.
+  , wsPlayerIntentGenRef  ∷ IORef Word64
+    -- ^ #913's player-intent generation, sitting here because the two
+    --   verbs that bump it are exactly the two clock-authority verbs
+    --   this record already owns: @engine.setPaused@ (writing
+    --   'wsEnginePausedRef') and @world.setTimeScale@ (queueing onto
+    --   'wsWorldQueue'). Bumped by @LuaThread@ only, at the moment the
+    --   player expresses the intent; read by @WorldThread@ at the end
+    --   of an autosave transaction. See 'Engine.Core.State's field
+    --   haddock for why engine-internal pause\/scale writes must NOT
+    --   bump it.
   , wsSimQueue            ∷ Q.Queue SimCommand
     -- ^ Drained by @SimThread@ only; produced by @WorldThread@ (chunk
     --   loading, basic\/sync\/UI commands, and the load publish's stale
@@ -132,5 +144,15 @@ toWorldSimCapability env = WorldSimCapability
   , wsWorldGenConfigRef   = worldGenConfigRef env
   , wsGameTimeRef         = gameTimeRef env
   , wsEnginePausedRef     = enginePausedRef env
+  , wsPlayerIntentGenRef  = playerIntentGenRef env
   , wsSimQueue            = simQueue env
   }
+
+-- | #913: record one player-intent transition. The single place the
+--   generation is advanced, so the two verbs that share it (@LuaThread@'s
+--   @engine.setPaused@ and @world.setTimeScale@) can never drift into
+--   two different notions of "bump". Atomic purely for hygiene — only
+--   the Lua thread ever writes it.
+bumpPlayerIntent ∷ WorldSimCapability → IO ()
+bumpPlayerIntent wsc =
+  atomicModifyIORef' (wsPlayerIntentGenRef wsc) $ \g → (g + 1, ())

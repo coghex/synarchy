@@ -44,7 +44,8 @@ import Numeric (readHex)
 
 import World.Save.Envelope
     ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope, encodeSessionSnapshot
-    , metadataComponentId, metadataComponentVersion, currentEnvelopeVersion
+    , metadataComponentId, metadataComponentVersion
+    , legacyMetadataComponentVersion, currentEnvelopeVersion
     , foreignOptionalComponentIds )
 import World.Save.Envelope.Codec
     (decodeEnvelope, encodeEnvelope, dePayloads, deManifest)
@@ -52,6 +53,7 @@ import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), emComponents, cdId, cdVersion, cdRequired)
 import World.Save.Component.Types (ComponentError(..))
 import World.Save.Compat.SessionV90
+import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
     , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..)
@@ -559,7 +561,7 @@ spec = do
                     , smWorldSize = 64, smPlateCount = 3
                     , smTimestamp = "2026-07-16T00:00:00.000000Z"
                     , smWorldName = Just "Test World"
-                    , smWorldGloss = Just "a fixture world"
+                    , smWorldGloss = Just "a fixture world", smAutosave = False
                     }
 
         it "decodes the real, tracked B1 envelope fixture's session \
@@ -665,8 +667,8 @@ spec = do
            \optional component beyond {metadata, session}, rather than \
            \silently dropping it" $ do
             let extraSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, True
                       , extractSessionPayload fixtureBytes)
                     , (ComponentId "future-thing", 1, False, BS.pack [9, 9, 9])
@@ -685,8 +687,8 @@ spec = do
            \envelope as carrying NO foreign data (session itself is a \
            \recognized, migratable shape, not foreign)" $ do
             let plainSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, True
                       , extractSessionPayload fixtureBytes)
                     ]
@@ -699,8 +701,8 @@ spec = do
         it "the overwrite guard DOES flag a legacy envelope's genuinely \
            \extra optional component as foreign data" $ do
             let extraSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, True
                       , extractSessionPayload fixtureBytes)
                     , (ComponentId "future-thing", 1, False, BS.pack [9, 9, 9])
@@ -740,8 +742,8 @@ spec = do
            \flag is not the real frozen shape, and must not be silently \
            \migrated as if it were" $ do
             let optionalSessionSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, False
                       , extractSessionPayload fixtureBytes)
                     ]
@@ -762,8 +764,8 @@ spec = do
            \discarding whatever the optional session payload actually \
            \was" $ do
             let optionalSessionSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, False
                       , extractSessionPayload fixtureBytes)
                     ]
@@ -783,8 +785,8 @@ spec = do
            \independently reach that same conclusion rather than exempt \
            \\"session\" merely because IT happens to be exact" $ do
             let optionalMetadataSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, False
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, False
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, True
                       , extractSessionPayload fixtureBytes)
                     ]
@@ -809,8 +811,8 @@ spec = do
            \foreign data, not silently exempted just because it always \
            \rides along in the shared known-set the INITIAL decode needs" $ do
             let extraLuaStateSpecs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode minimalSaveMetadataForExtra)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1ForExtra)
                     , (ComponentId "session", sessionComponentVersion, True
                       , extractSessionPayload fixtureBytes)
                     , (ComponentId "lua-state", 1, False, BS.empty)
@@ -1020,7 +1022,21 @@ minimalSaveMetadataForExtra ∷ SaveMetadata
 minimalSaveMetadataForExtra = SaveMetadata
     { smName = "extra-test", smSeed = 42, smWorldSize = 128, smPlateCount = 10
     , smTimestamp = "2026-07-16T00:00:00.000000Z"
-    , smWorldName = Nothing, smWorldGloss = Nothing
+    , smWorldName = Nothing, smWorldGloss = Nothing, smAutosave = False
+    }
+
+-- | The SAME values in the frozen v1 metadata shape (#913). A hand-built
+--   LEGACY envelope must carry v1 metadata, not the current one: a real
+--   B1 file was written while metadata was still at v1, and the B1
+--   recognizer pins that historical version deliberately
+--   ('World.Save.Envelope.legacyMetadataComponentVersion') so a metadata
+--   bump can never stop this build recognizing its own frozen baseline.
+minimalSaveMetadataV1ForExtra ∷ SaveMetadataV1
+minimalSaveMetadataV1ForExtra = SaveMetadataV1
+    { sm1Name = "extra-test", sm1Seed = 42, sm1WorldSize = 128
+    , sm1PlateCount = 10
+    , sm1Timestamp = "2026-07-16T00:00:00.000000Z"
+    , sm1WorldName = Nothing, sm1WorldGloss = Nothing
     }
 
 -- | Byte-for-byte the SAME fixture 'Test.Headless.World.Save.Envelope'

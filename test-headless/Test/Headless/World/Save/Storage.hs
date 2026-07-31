@@ -138,7 +138,7 @@ snapshotWithSeed seed =
 buildEncoded ∷ Word64 → Text → Text → (SaveMetadata, BS.ByteString)
 buildEncoded seed name ts =
     let snap = snapshotWithSeed seed
-        meta = snapshotSaveMetadata (SaveRequestMeta name ts) snap
+        meta = snapshotSaveMetadata (SaveRequestMeta name ts False) snap
     in (meta, encodeSessionSnapshot meta snap [])
 
 -- | A STRUCTURALLY VALID, fully checksummed envelope (every checksum
@@ -154,7 +154,7 @@ buildEncoded seed name ts =
 emptyPagesBytes ∷ BS.ByteString
 emptyPagesBytes =
     let snap = (snapshotWithSeed 1) { snapPages = HM.empty }
-        meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-empty") snap
+        meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-empty" False) snap
     in encodeSessionSnapshot meta snap []
 
 -- | A STRUCTURALLY VALID envelope carrying a genuinely unrecognized

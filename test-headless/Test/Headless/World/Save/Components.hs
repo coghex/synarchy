@@ -185,7 +185,7 @@ minimalSaveMetadataV90 = SaveMetadata
     { smName = "b1-hand-built", smSeed = wgpSeed defaultGP
     , smWorldSize = wgpWorldSize defaultGP, smPlateCount = wgpPlateCount defaultGP
     , smTimestamp = "2026-07-16T00:00:00.000000Z"
-    , smWorldName = Nothing, smWorldGloss = Nothing }
+    , smWorldName = Nothing, smWorldGloss = Nothing, smAutosave = False }
 
 -- | The SAME values as 'minimalSaveMetadataV90', but as the frozen
 --   'SaveMetadataV90' type (round-17 review) -- the "session" payload's
@@ -389,7 +389,7 @@ richSnapshot = case captureSessionSnapshot
 
 richMeta ∷ SaveMetadata
 richMeta = snapshotSaveMetadata
-    (SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts" }) richSnapshot
+    (SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts", srmAutosave = False }) richSnapshot
 
 encodeRich ∷ BS.ByteString
 encodeRich = encodeSessionSnapshot richMeta richSnapshot []
@@ -708,7 +708,7 @@ spec = do
         -- data here.
         it "round-trips a session populating EVERY component's data, \
            \reconstructing the EXACT snapshot" $ do
-            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t") fullSnapshot
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) fullSnapshot
                 bytes = encodeSessionSnapshot meta fullSnapshot []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
@@ -727,7 +727,7 @@ spec = do
             -- component's rcApply runs without error against the decoded
             -- payloads — the structural guarantee that registration and
             -- assembly cannot diverge (rcApply is a mandatory field).
-            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t") fullSnapshot
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) fullSnapshot
                 bytes = encodeSessionSnapshot meta fullSnapshot []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
@@ -817,7 +817,7 @@ spec = do
                     { pgsUnitSimStates = HM.singleton (UnitId 77) minimalSimState }
                 snap = buildSessionSnapshot minimalGlobals [orphanPage]
                 meta = snapshotSaveMetadata
-                         (SaveRequestMeta "s" "t") snap
+                         (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
@@ -829,14 +829,14 @@ spec = do
                         51 }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextBuildingId = 50 } [badPage]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
         it "rejects a missing active-page reference" $ do
             let snap = buildSessionSnapshot
                          minimalGlobals { sgActivePage = page2 } [minimalPage page1]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
@@ -915,7 +915,7 @@ spec = do
                         [ WeSetStructure 1 2 0 5 6 3 ] }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgTexPalette = emptyTexPalette } [badPage]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
@@ -931,7 +931,7 @@ spec = do
                         [ WeSetStructure 1 2 0 5 6 3 ] }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgTexPalette = tp } [goodPage]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)

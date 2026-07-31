@@ -18,6 +18,13 @@ data.tooltipDwellMin = 0
 data.tooltipDwellMax = 1000
 data.tooltipHintDelayMin = 0
 data.tooltipHintDelayMax = 1000
+-- #913 autosave. These MIRROR Engine.Save.Config's validated ranges;
+-- the engine clamps again on write, so a mismatch here can only ever
+-- make the UI stricter than the file format, never looser.
+data.saveIntervalMin = 1
+data.saveIntervalMax = 60
+data.saveDepthMin    = 1
+data.saveDepthMax    = 10
 -- Snapshots of the last saved tooltip values, used by revert().
 -- These (like savedBrightness) capture the saved state because dwell/hint
 -- are live-previewed to the engine, so getTooltipDwellMs()/getTooltipHintDelayMs()
@@ -86,6 +93,156 @@ data.current = {
 }
 
 data.pending = {}
+
+-----------------------------------------------------------
+-- Autosave state (#913)
+--
+-- Deliberately a SEPARATE current/pending pair from the video settings
+-- above: the two families have different engine-side homes (video lives
+-- in videoConfigRef and is live-previewed; autosave lives only in
+-- config/save.local.yaml plus the Lua scheduler's cached copy), and
+-- folding them into one table would make every video Apply rewrite the
+-- save config from whatever stale values happened to be in `pending`.
+-----------------------------------------------------------
+
+data.currentSave = {
+    enabled         = false,
+    intervalMinutes = 10,
+    rotationDepth   = 3,
+}
+
+data.pendingSave = {
+    enabled         = false,
+    intervalMinutes = 10,
+    rotationDepth   = 3,
+}
+
+local function copySaveConfig(src)
+    return {
+        enabled         = src.enabled and true or false,
+        intervalMinutes = src.intervalMinutes,
+        rotationDepth   = src.rotationDepth,
+    }
+end
+
+-- The scheduler is the one live consumer. Resolved lazily so this module
+-- keeps working in a headless/UI-test context where autosave.lua was
+-- never loaded.
+local function notifyScheduler(cfg)
+    local autosave = package.loaded["scripts.autosave"]
+    if autosave and autosave.onConfigChanged then
+        autosave.onConfigChanged(copySaveConfig(cfg))
+    end
+end
+
+function data.resetPendingSave()
+    data.pendingSave = copySaveConfig(data.currentSave)
+end
+
+-- Read the EFFECTIVE config (tracked template overlaid with the local
+-- overrides) back from the engine.
+function data.reloadSave()
+    local cfg = engine.getSaveConfig()
+    if type(cfg) == "table" then
+        data.currentSave = {
+            enabled         = cfg.enabled and true or false,
+            intervalMinutes = cfg.intervalMinutes or 10,
+            rotationDepth   = cfg.rotationDepth or 3,
+        }
+    end
+    data.resetPendingSave()
+end
+
+local function clampInt(n, lo, hi)
+    return math.max(lo, math.min(hi, math.floor(n)))
+end
+
+-- Commit whatever the General tab's widgets currently hold into
+-- data.currentSave and tell the scheduler. Returns true when a value
+-- actually moved, so callers can avoid pointless persistence.
+function data.applySave(widgetValues)
+    widgetValues = widgetValues or {}
+    local before = copySaveConfig(data.currentSave)
+
+    if widgetValues.autosaveEnabled ~= nil then
+        data.pendingSave.enabled = widgetValues.autosaveEnabled and true or false
+    end
+    if type(widgetValues.autosaveIntervalMinutes) == "number" then
+        data.pendingSave.intervalMinutes = clampInt(
+            widgetValues.autosaveIntervalMinutes,
+            data.saveIntervalMin, data.saveIntervalMax)
+    end
+    if type(widgetValues.autosaveRotationDepth) == "number" then
+        data.pendingSave.rotationDepth = clampInt(
+            widgetValues.autosaveRotationDepth,
+            data.saveDepthMin, data.saveDepthMax)
+    end
+
+    data.currentSave = copySaveConfig(data.pendingSave)
+    local changed = before.enabled ~= data.currentSave.enabled
+        or before.intervalMinutes ~= data.currentSave.intervalMinutes
+        or before.rotationDepth ~= data.currentSave.rotationDepth
+    -- Always notify, even when nothing moved: onConfigChanged only
+    -- restarts the interval on a real enable/interval transition, so an
+    -- Apply with unchanged values is inert by design (the issue's
+    -- "applying unrelated settings does not restart the interval").
+    notifyScheduler(data.currentSave)
+    return changed
+end
+
+-- Persist to config/save.local.yaml. Save = apply, then write.
+function data.saveSaveConfig()
+    local ok = engine.setSaveConfig({
+        enabled         = data.currentSave.enabled,
+        intervalMinutes = data.currentSave.intervalMinutes,
+        rotationDepth   = data.currentSave.rotationDepth,
+    })
+    if not ok then
+        engine.logWarn("Could not persist autosave settings")
+    end
+    return ok
+end
+
+-- Back: discard unapplied AND unsaved autosave edits by re-reading what
+-- is actually on disk, then push that to the scheduler.
+function data.revertSave()
+    data.reloadSave()
+    notifyScheduler(data.currentSave)
+end
+
+-- Defaults: the tracked template ALONE, never folded with the player's
+-- own local overrides.
+function data.loadDefaultSaveConfig()
+    local cfg = engine.getDefaultSaveConfig()
+    if type(cfg) == "table" then
+        data.currentSave = {
+            enabled         = cfg.enabled and true or false,
+            intervalMinutes = cfg.intervalMinutes or 10,
+            rotationDepth   = cfg.rotationDepth or 3,
+        }
+    end
+    data.resetPendingSave()
+    notifyScheduler(data.currentSave)
+end
+
+-- Clamp a General-tab textbox submission into its validated range.
+-- Returns the clamped number, or nil when the field is not one of ours
+-- (or the text is not a number at all, in which case the caller leaves
+-- the box alone).
+function data.validateSaveTextBoxSubmit(name, value)
+    local n = tonumber(value)
+    if not n then return nil end
+    if name == "autosave_interval_input" then
+        local clamped = clampInt(n, data.saveIntervalMin, data.saveIntervalMax)
+        data.pendingSave.intervalMinutes = clamped
+        return clamped
+    elseif name == "autosave_depth_input" then
+        local clamped = clampInt(n, data.saveDepthMin, data.saveDepthMax)
+        data.pendingSave.rotationDepth = clamped
+        return clamped
+    end
+    return nil
+end
 
 -----------------------------------------------------------
 -- Load factory defaults from video_default.yaml
@@ -164,6 +321,12 @@ function data.loadDefaults()
     -- Reset pending to match current
     data.resetPending()
 
+    -- #913: the General tab's autosave settings reset to the tracked
+    -- config/save_default.yaml alone (never folded with the player's own
+    -- local overrides) and reach the live scheduler immediately, the
+    -- same way every video setting above is pushed to the engine here.
+    data.loadDefaultSaveConfig()
+
     engine.logInfo("Default settings loaded and applied.")
 end
 
@@ -205,6 +368,7 @@ function data.findTextureFilterIndex(filter)
 end
 
 function data.resetPending()
+    data.resetPendingSave()
     data.pending = {
         width         = data.current.width,
         height        = data.current.height,
@@ -248,6 +412,10 @@ function data.reload()
     data.savedBrightness = data.current.brightness
     data.savedTooltipDwellMs = data.current.tooltipDwellMs
     data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
+    -- #913: the autosave family has its own engine accessor (it lives in
+    -- config/save.local.yaml, not videoConfigRef), so it reloads
+    -- alongside rather than through getVideoConfig above.
+    data.reloadSave()
 end
 
 -----------------------------------------------------------
@@ -384,6 +552,12 @@ function data.apply(widgetValues)
         engine.setResolution(data.current.width, data.current.height)
     end
 
+    -- #913: autosave settings commit here too, so Apply gives them the
+    -- same live-but-unpersisted behaviour every other setting has. The
+    -- scheduler is notified inside; nothing is written to disk until
+    -- data.save below.
+    result.autosaveChanged = data.applySave(widgetValues)
+
     return result
 end
 
@@ -395,6 +569,9 @@ function data.save(widgetValues)
     engine.logInfo("Saving settings...")
     local result = data.apply(widgetValues)
     engine.saveVideoConfig()
+    -- #913: persist the just-applied autosave settings to
+    -- config/save.local.yaml.
+    data.saveSaveConfig()
     -- Refresh revert snapshots so a later revert restores these saved values,
     -- not the pre-save ones.
     data.savedBrightness = data.current.brightness
@@ -460,6 +637,12 @@ function data.revert()
     data.current.textureFilter = savedTextureFilter
     data.current.tooltipDwellMs = savedDwell
     data.current.tooltipHintDelayMs = savedHintDelay
+
+    -- #913: Back must abandon unsaved autosave edits too. Re-reads the
+    -- effective config from disk (the last SAVED state) and re-notifies
+    -- the scheduler, mirroring what the video block above does by
+    -- pushing getVideoConfig's values back to the engine.
+    data.revertSave()
 end
 
 -----------------------------------------------------------

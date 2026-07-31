@@ -130,6 +130,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                                "process restart exercising a tracked "
                                                "legacy-fixture load/publish/resave/"
                                                "reload round trip (#766)"),
+    "autosave": (SCENARIO_HEAVY, "#913: the validated 1-minute minimum for "
+                 "interval_minutes forces multiple >60s wall-clock waits (the "
+                 "default-off dwell and the one real-interval fire alone are "
+                 "~3 minutes), and the player-intent-suppression check depends "
+                 "on racing the post-capture storage-write window -- neither is "
+                 "cheap or stable enough for a blocking per-PR gate"),
     "save_pause": (SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),
     "save_barrier": (SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),
     "save_storage": (SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "

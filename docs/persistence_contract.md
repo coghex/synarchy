@@ -668,7 +668,12 @@ in this PR touches them:
 - Implementing per-component migrations.
 - Changing runtime load publication.
 - Adding autosaves, save slots, cloud storage, a lossy recovery mode, or
-  any save/load UI.
+  any save/load UI. (Interval autosave landed later, in #913, built
+  strictly ON TOP of this contract: it reuses the same barrier, storage
+  publication, component registry, and load path unchanged, and adds
+  only a durable autosave/manual classification in the `metadata`
+  component. Cloud storage and a lossy recovery mode remain out of
+  scope.)
 - Generating placeholder textures or changing renderer asset fallback
   code (§4 only defines the *effect* on load validity).
 - Guaranteeing identical outcomes when two copies of a save are resumed

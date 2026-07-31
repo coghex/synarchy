@@ -3,6 +3,10 @@ module Engine.Scripting.Lua.API.Save
     ( saveListFn
     , saveWorldFn
     , saveStatusFn
+    , saveConfigFn
+    , defaultSaveConfigFn
+    , setSaveConfigFn
+    , rotateAutosaveSlotsFn
     , loadSaveFn
     , loadStatusFn
     , applyLuaLoad
@@ -26,7 +30,12 @@ import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
 import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
+import World.Save.Autosave (rotateAutosaveSlots)
+import Engine.Save.Config
+    ( SaveConfig(..), loadSaveConfig, writeSaveConfig, clampSaveConfig
+    , defaultSaveConfig, saveConfigDefaultPath, saveConfigLocalPath )
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
+                        , AutosaveRequest(..)
                         , missingDefReferences, renderMissingDefRef
                         , missingItemDefReferences, renderMissingItemDefRef
                         , missingRecipeReferences, renderMissingRecipeRef
@@ -60,7 +69,8 @@ import World.Save.Integrity
     ( KnownEntities(..), LuaRefEdge(..), luaReferenceErrors
     , capIntegrityErrors, renderIntegrityReport )
 import World.Types
-    (WorldCommand(..), WorldManager(wmWorlds), WorldState(wsGenParamsRef))
+    ( WorldCommand(..), WorldManager(wmWorlds, wmVisible)
+    , WorldState(wsGenParamsRef, wsTimeScaleRef) )
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
@@ -120,6 +130,15 @@ saveListFn env = do
         when (slRecovered listing) $ do
             Lua.pushboolean True
             Lua.setfield (-2) "recovered"
+        -- #913: the durable autosave/manual classification. Always
+        -- present (never omitted-when-false like `recovered` above) so a
+        -- consumer can distinguish "this build classifies saves" from
+        -- "this row happens to be manual" without a version check --
+        -- the save browser's label and the rotation's manual-collision
+        -- refusal both read it, and a silently missing key would read as
+        -- manual in exactly the case that must never be guessed.
+        Lua.pushboolean (smAutosave meta)
+        Lua.setfield (-2) "autosave"
         Lua.rawseti (-2) i
     return 1
 
@@ -213,6 +232,18 @@ saveWorldFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveWorldFn env = do
     pageIdArg ← Lua.tostring 1
     nameArg   ← Lua.tostring 2
+    -- #913: engine.saveWorld(pageId, name [, {autosave = true}]). An
+    -- options TABLE rather than a bare flag so a later save-request
+    -- option needs no third positional argument; a missing/non-table
+    -- third argument is an ordinary MANUAL save, which is what every
+    -- existing call site already passes.
+    wantAutosave ← do
+        isTable ← Lua.istable 3
+        if not isTable then pure False else do
+            _ ← Lua.getfield 3 "autosave"
+            b ← Lua.toboolean (-1)
+            Lua.pop 1
+            pure b
     case (pageIdArg, nameArg) of
         (Just pageIdBS, Just nameBS) → do
             let saveName = TE.decodeUtf8Lenient nameBS
@@ -277,6 +308,22 @@ saveWorldFn env = do
                                                 "Save failed: " <> err
                                         Lua.pushboolean False
                                       Right requestId → do
+                                        -- #913: capture what the player was
+                                        -- looking at BEFORE the auto-pause
+                                        -- below overwrites it. This is the
+                                        -- "pre-request" state an autosave
+                                        -- restores on success, and it must be
+                                        -- read here rather than on the Lua
+                                        -- scheduler's side: between a Lua-side
+                                        -- read and this acceptance point the
+                                        -- values could still move, and the
+                                        -- intent generation would then be
+                                        -- snapshotted against the wrong instant.
+                                        autosaveReq ← Lua.liftIO $
+                                            if not wantAutosave
+                                              then pure Nothing
+                                              else Just ⊚ captureAutosaveRequest
+                                                        env mgr
                                         Lua.liftIO $ do
                                             -- The pause is authoritative and
                                             -- remains set even if the barrier
@@ -340,10 +387,161 @@ saveWorldFn env = do
                                                 Lua.liftIO $ Q.writeQueue
                                                     (worldQueue env)
                                                     (WorldSave pageId name nowText
-                                                        components luaRefs)
+                                                        components luaRefs
+                                                        autosaveReq)
                                                 Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
+
+-- | Snapshot the pre-request pause state, VISIBLE page's time scale, and
+--   player-intent generation an autosave restores from on success (#913).
+--
+--   The visible page is resolved exactly the way
+--   "World.Thread.Command.Save.WriteWorld" resolves it — the head of
+--   @wmVisible@ that is still a live page — so the scale captured here
+--   and the one the save path zeroes are always the same page's. With no
+--   visible page there is no clock to restore and the scale is 0; that
+--   case is unreachable through the scheduler (which only fires in a
+--   gameplay view) and is defensive only.
+captureAutosaveRequest ∷ EngineEnv → WorldManager → IO AutosaveRequest
+captureAutosaveRequest env mgr = do
+    prePaused ← readIORef (enginePausedRef env)
+    gen       ← readIORef (playerIntentGenRef env)
+    scale     ← case visiblePageState mgr of
+        Just ws → readIORef (wsTimeScaleRef ws)
+        Nothing → pure 0
+    pure AutosaveRequest { arPrePaused    = prePaused
+                         , arPreTimeScale = scale
+                         , arIntentGen    = gen
+                         }
+
+visiblePageState ∷ WorldManager → Maybe WorldState
+visiblePageState mgr = case wmVisible mgr of
+    (vid:_) → lookup vid (wmWorlds mgr)
+    _       → Nothing
+
+-- | engine.getSaveConfig() → {enabled=, intervalMinutes=, rotationDepth=}
+--   The EFFECTIVE autosave configuration: the tracked template overlaid
+--   key by key with the player's local overrides (see
+--   "Engine.Save.Config"). Read from disk on each call rather than
+--   cached in 'EngineEnv': the only consumers are the Lua scheduler
+--   (which caches it itself and refreshes on an explicit settings
+--   change) and the settings screen, so a live ref would add a piece of
+--   engine state with no engine-side reader.
+saveConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+saveConfigFn env = do
+    logger ← Lua.liftIO $ readIORef (loggerRef env)
+    cfg ← Lua.liftIO $
+        loadSaveConfig logger saveConfigDefaultPath saveConfigLocalPath
+    pushSaveConfig cfg
+    pure 1
+
+-- | engine.getDefaultSaveConfig() → the same shape, but from the tracked
+--   template ALONE — what the settings screen's Defaults button resets
+--   to. Deliberately ignores @config\/save.local.yaml@; "defaults" that
+--   folded in the player's own overrides would reset to nothing.
+defaultSaveConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+defaultSaveConfigFn env = do
+    logger ← Lua.liftIO $ readIORef (loggerRef env)
+    cfg ← Lua.liftIO $
+        loadSaveConfig logger saveConfigDefaultPath "config/does-not-exist.yaml"
+    pushSaveConfig cfg
+    pure 1
+
+pushSaveConfig ∷ SaveConfig → Lua.LuaE Lua.Exception ()
+pushSaveConfig cfg = do
+    Lua.newtable
+    Lua.pushboolean (scEnabled cfg)
+    Lua.setfield (-2) "enabled"
+    Lua.pushinteger (fromIntegral (scIntervalMinutes cfg))
+    Lua.setfield (-2) "intervalMinutes"
+    Lua.pushinteger (fromIntegral (scRotationDepth cfg))
+    Lua.setfield (-2) "rotationDepth"
+
+-- | engine.setSaveConfig({enabled=, intervalMinutes=, rotationDepth=})
+--   → bool. Persists to @config\/save.local.yaml@.
+--
+--   The table is a PATCH: any key it omits keeps its current effective
+--   value, so a caller changing one setting can not accidentally rewrite
+--   the other two from stale UI state. Values are clamped into range on
+--   the way out ('clampSaveConfig'), so what lands on disk always
+--   decodes back to exactly what was written.
+setSaveConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+setSaveConfigFn env = do
+    logger ← Lua.liftIO $ readIORef (loggerRef env)
+    isTable ← Lua.istable 1
+    if not isTable
+      then do
+        Lua.liftIO $ logWarn logger CatLua
+            "setSaveConfig: expected a table of settings"
+        Lua.pushboolean False
+        pure 1
+      else do
+        current ← Lua.liftIO $
+            loadSaveConfig logger saveConfigDefaultPath saveConfigLocalPath
+        enabled  ← optBooleanField 1 "enabled"
+        interval ← optIntegerField 1 "intervalMinutes"
+        depth    ← optIntegerField 1 "rotationDepth"
+        let updated = clampSaveConfig current
+                { scEnabled         = fromMaybe (scEnabled current) enabled
+                , scIntervalMinutes =
+                    fromMaybe (scIntervalMinutes current) interval
+                , scRotationDepth   =
+                    fromMaybe (scRotationDepth current) depth
+                }
+        result ← Lua.liftIO $ writeSaveConfig logger saveConfigLocalPath updated
+        case result of
+            Right () → Lua.pushboolean True
+            Left err → do
+                Lua.liftIO $ logWarn logger CatLua $ "setSaveConfig: " <> err
+                Lua.pushboolean False
+        pure 1
+
+optBooleanField ∷ Lua.StackIndex → Lua.Name
+                → Lua.LuaE Lua.Exception (Maybe Bool)
+optBooleanField idx key = do
+    ty ← Lua.getfield idx key
+    v ← if ty ≡ Lua.TypeBoolean then Just ⊚ Lua.toboolean (-1)
+                                else pure Nothing
+    Lua.pop 1
+    pure v
+
+optIntegerField ∷ Lua.StackIndex → Lua.Name
+                → Lua.LuaE Lua.Exception (Maybe Int)
+optIntegerField idx key = do
+    _ ← Lua.getfield idx key
+    v ← Lua.tointeger (-1)
+    Lua.pop 1
+    pure (fromIntegral ⊚ v)
+
+-- | engine.rotateAutosaveSlots(depth) → true | false, reason
+--
+--   Shift the reserved @autosave-\<n\>@ family down one place so the
+--   caller can publish a fresh generation into @autosave-1@ (see
+--   "World.Save.Autosave" for the ownership rules). Separate from
+--   @engine.saveWorld@ on purpose: a refusal here — a manual save
+--   squatting on one of the family's names — must be reportable as an
+--   autosave FAILURE with nothing rotated and no save transaction ever
+--   begun.
+rotateAutosaveSlotsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+rotateAutosaveSlotsFn env = do
+    logger ← Lua.liftIO $ readIORef (loggerRef env)
+    depthArg ← Lua.tointeger 1
+    descriptorsOrErr ← describeLuaComponents logger
+    let luaKnownNames = case descriptorsOrErr of
+            Right ds → HS.fromList [ name | (name, _, _) ← ds ]
+            Left _   → HS.empty
+        depth = maybe (scRotationDepth defaultSaveConfig) fromIntegral depthArg
+    result ← Lua.liftIO $ rotateAutosaveSlots logger luaKnownNames depth
+    case result of
+        Right () → do
+            Lua.pushboolean True
+            pure 1
+        Left err → do
+            Lua.liftIO $ logWarn logger CatWorld err
+            Lua.pushboolean False
+            Lua.pushstring (TE.encodeUtf8 err)
+            pure 2
 
 -- | engine.loadSave(saveName) — issue #763 (save-overhaul C2): request a
 --   whole-session LOAD transaction. Everything this function does runs

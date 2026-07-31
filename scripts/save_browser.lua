@@ -22,6 +22,26 @@ saveBrowser.fbH = 0
 saveBrowser.uiCreated = false
 saveBrowser.showMenuCallback = nil
 
+-- The text ONE listing row renders as. Pure (no UI state, no widgets),
+-- so it is the same function the browser draws with and a headless gate
+-- can call directly -- there is no second, drifting copy of the label
+-- rule.
+--
+-- #913: the "[Autosave]" tag comes from the durable autosave/manual
+-- classification carried in the save's own metadata, NOT from an
+-- "autosave-" name check: a player is free to type that name into the
+-- manual save box, and a row must say what the save actually IS.
+function saveBrowser.rowLabel(save)
+    local text = save.name
+    if save.autosave then
+        text = text .. "  [Autosave]"
+    end
+    if save.timestamp then
+        text = text .. "  -  " .. save.timestamp
+    end
+    return text
+end
+
 -- Owned IDs for cleanup
 saveBrowser.ownedLabels  = {}
 saveBrowser.ownedButtons = {}
@@ -162,12 +182,8 @@ function saveBrowser.createUI()
     -- Build list items
     local listItems = {}
     for i, save in ipairs(saves) do
-        local displayText = save.name
-        if save.timestamp then
-            displayText = displayText .. "  -  " .. save.timestamp
-        end
         table.insert(listItems, {
-            text  = displayText,
+            text  = saveBrowser.rowLabel(save),
             value = save.name,
         })
     end

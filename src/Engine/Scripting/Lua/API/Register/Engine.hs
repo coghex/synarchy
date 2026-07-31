@@ -47,7 +47,9 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save
-    (saveListFn, saveWorldFn, saveStatusFn, loadSaveFn, loadStatusFn)
+    (saveListFn, saveWorldFn, saveStatusFn, loadSaveFn, loadStatusFn
+    , saveConfigFn, defaultSaveConfigFn, setSaveConfigFn
+    , rotateAutosaveSlotsFn)
 import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
                                             , emitEventForUnitFn
                                             , getEventLogFn
@@ -194,6 +196,12 @@ registerEngineAPI lst env backendState = do
 
   registerLuaFunction "listSaves" (saveListFn env)
   registerLuaFunction "saveWorld" (saveWorldFn env)
+  -- #913 autosave: config accessors + the reserved-slot rotation the
+  -- Lua scheduler runs immediately before each autosave request.
+  registerLuaFunction "getSaveConfig" (saveConfigFn env)
+  registerLuaFunction "getDefaultSaveConfig" (defaultSaveConfigFn env)
+  registerLuaFunction "setSaveConfig" (setSaveConfigFn env)
+  registerLuaFunction "rotateAutosaveSlots" (rotateAutosaveSlotsFn env)
   registerLuaFunction "loadSave"  (loadSaveFn env)
 
   registerLuaFunction "emitEvent"   (emitEventFn env)

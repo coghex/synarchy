@@ -302,6 +302,19 @@ data EngineEnv = EngineEnv
     --   input dispatch, command processing, and camera movement keep
     --   running so the player can still interact while paused. Set via
     --   `engine.setPaused` from Lua.
+  , playerIntentGenRef ∷ IORef Word64
+    -- ^ #913: a monotonically increasing PLAYER-INTENT generation, bumped
+    --   by the two Lua verbs through which a player expresses "I want
+    --   the world's clock to run differently" — an applied
+    --   `engine.setPaused` and any `world.setTimeScale` request — and by
+    --   nothing else. The engine's OWN writes to `enginePausedRef` /
+    --   `wsTimeScaleRef` (auto-pause-on-save, load publish, a
+    --   pause-flagged notification) deliberately do NOT bump it.
+    --   An autosave snapshots this alongside the pre-request pause and
+    --   time scale and only restores them if it still matches on
+    --   success, so a player who toggles pause twice during a save's
+    --   request window still wins even though the final BOOLEAN is
+    --   unchanged. Runtime-only, never part of 'SaveData'.
   , gameTimeRef        ∷ IORef Double
   , saveBarrierRef     ∷ SaveBarrier
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic

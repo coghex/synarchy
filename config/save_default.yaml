@@ -1,0 +1,7 @@
+save:
+  # Disabled during iterative development so repeated developer world
+  # restarts do not accumulate saves. Production can enable this one
+  # tracked default without overriding an explicit local opt-out.
+  enabled: false
+  interval_minutes: 10
+  rotation_depth: 3

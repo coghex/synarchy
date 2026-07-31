@@ -4,6 +4,7 @@ module World.Save.Types
     , WorldPageSave(..)
     , activeWorldPage
     , SaveMetadata(..)
+    , AutosaveRequest(..)
     , SaveHeader(..)
     , saveMagic
     , currentSaveVersion
@@ -144,7 +145,50 @@ data SaveMetadata = SaveMetadata
         -- ^ v82 (#707): that identity's optional English gloss. Always
         --   Nothing when smWorldName is Nothing (a gloss cannot exist
         --   without a display name).
+    , smAutosave   ∷ !Bool
+        -- ^ #913: durable autosave\/manual CLASSIFICATION — 'True' only
+        --   for a generation the interval autosave scheduler itself
+        --   requested. Slot OWNERSHIP is decided by this flag, never by
+        --   the @autosave-\<n\>@ name convention, which a player is free
+        --   to type into the manual save box; that is what lets the
+        --   rotation refuse to overwrite a manual save sitting on one of
+        --   its own names. Carried in @"metadata"@ so
+        --   'World.Save.Serialize.listSaves' can report it without
+        --   decoding any gameplay component. Added by @"metadata"@
+        --   component v2; every v1 payload migrates with this 'False'
+        --   ("legacy saves are manual saves") — see
+        --   "World.Save.Compat.MetadataV1".
     } deriving (Show, Eq, Serialize, Generic)
+
+-- | #913: the extra request state an AUTOSAVE carries that a manual
+--   save does not. Its presence on a @WorldSave@ command is what makes
+--   that save an autosave at all: it both sets the durable
+--   'smAutosave' classification and authorizes the one behaviour a
+--   manual save never gets — restoring the player's pre-request pause
+--   state and visible-world time scale once the transaction SUCCEEDS.
+--
+--   Every field is captured by 'Engine.Scripting.Lua.API.Save.saveWorldFn'
+--   at request ACCEPTANCE, before the save path's own auto-pause has run,
+--   so they describe the world the player was actually looking at rather
+--   than the frozen one the save just produced.
+data AutosaveRequest = AutosaveRequest
+    { arPrePaused    ∷ !Bool
+        -- ^ Whether the player was ALREADY paused when the request was
+        --   accepted. If so the save leaves the session paused and
+        --   zero-scaled: there is nothing to restore, and resuming a
+        --   deliberately-paused game would be the autosave changing
+        --   gameplay.
+    , arPreTimeScale ∷ !Float
+        -- ^ The VISIBLE page's exact time scale at acceptance, restored
+        --   verbatim on success — fast-forward values included. 0 when
+        --   no page is visible (nothing to restore).
+    , arIntentGen    ∷ !Word64
+        -- ^ 'Engine.Core.State.playerIntentGenRef' at acceptance. On
+        --   success the restore happens only if the live generation
+        --   still matches: any player pause/resume or time-scale
+        --   request during the window wins outright, even when the
+        --   final boolean happens to equal the pre-save one.
+    } deriving (Show, Eq)
 
 -- | Per-world-page save payload. Everything scoped to a single world
 --   page — terrain gen params, camera, clock, edits, and that page's

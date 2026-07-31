@@ -21,7 +21,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, bumpPlayerIntent)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.RenderView
@@ -95,6 +95,15 @@ setPausedFn env = do
             pure False
         else do
             writeIORef (wsEnginePausedRef (toWorldSimCapability env)) b
+            -- #913: an APPLIED pause/resume is player intent. Bumped
+            -- unconditionally (not only on a value CHANGE) because the
+            -- generation's job is to record that the player asked for
+            -- something during a save's request window — an autosave
+            -- that finds a bumped generation declines to restore its own
+            -- pre-save pause/time-scale, so over-counting is the safe
+            -- direction and under-counting is not. A REJECTED call above
+            -- deliberately doesn't bump: nothing changed for anyone.
+            bumpPlayerIntent (toWorldSimCapability env)
             pure True
   Lua.pushboolean applied
   return 1
