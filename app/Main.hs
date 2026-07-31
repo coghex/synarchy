@@ -5,6 +5,7 @@ import UPrelude
 import System.Environment (setEnv, getArgs)
 import System.Exit (exitSuccess, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr)
+import Data.List (intercalate)
 import qualified Data.Text as T
 import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
@@ -40,6 +41,10 @@ main = do
   -- (#636): scripts/, assets/, data/, config/ are all loaded by
   -- cwd-relative paths from here on.
   applyResourceRoot args
+  -- Reject a mode-specific flag given to a boot mode that ignores it
+  -- (CH-58) before any normalization warning or boot dispatch, so an
+  -- ignored value can never appear to have taken effect.
+  rejectIncompatibleFlags args
   let headless = "--headless" `elem` args
       offscreen = "--offscreen" `elem` args
       bootProfile = if "--arena" `elem` args then BootArena else BootNormal
@@ -62,11 +67,15 @@ main = do
           Nothing → fromMaybe (defaultPlatesFor worldSize) agesLeg
       plateCount = normalizePlateCount rawPlateCount
 
-  when (isJust mDump ∧ worldSize /= rawWorldSize) $
+  -- worldSize/plateCount only ever reach a non-default value in --dump
+  -- mode: rejectIncompatibleFlags above already exits before this point
+  -- for any other mode that was given --worldSize/--plates/--ages, so
+  -- gating these on 'isJust mDump' would be redundant.
+  when (worldSize /= rawWorldSize) $
     hPutStrLn stderr $ "worldSize " ⧺ show rawWorldSize
         ⧺ " normalized to " ⧺ show worldSize
         ⧺ " (minimum/multiple " ⧺ show minimumWorldSize ⧺ ")."
-  when (isJust mDump ∧ plateCount /= rawPlateCount) $
+  when (plateCount /= rawPlateCount) $
     hPutStrLn stderr $ "plateCount " ⧺ show rawPlateCount
         ⧺ " normalized to " ⧺ show plateCount
         ⧺ " (minimum 1)."
@@ -150,3 +159,55 @@ main = do
                                      (parseSize args)
           | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
           | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
+
+-- | The boot mode argv selects, by the SAME precedence as the dispatch
+--   above (language-report, then dump, then preview, then offscreen,
+--   then headless, else graphical) — used only to name the selected mode
+--   in a 'rejectIncompatibleFlags' error.
+selectedBootModeName ∷ [String] → String
+selectedBootModeName args
+    | parseLanguageReport args   = "language-report"
+    | isJust (parseDump args)    = "dump"
+    | isJust (parsePreview args) = "preview"
+    | "--offscreen" `elem` args  = "offscreen"
+    | "--headless" `elem` args   = "headless"
+    | otherwise                  = "graphical"
+
+-- | Every ancillary (non-mode-selecting) flag Main parses, paired with
+--   the boot mode(s) that actually honour it (CH-58) — everything else
+--   silently discards it today. Detected by syntactic occurrence of the
+--   flag token in argv, not by whether the flag's own value parses: a
+--   malformed @--seed nonsense@ given to headless must still be rejected
+--   here rather than quietly vanishing into 'parseArg's @Nothing@.
+incompatibleFlagTable ∷ [(String, [String])]
+incompatibleFlagTable =
+    [ ("--seed",      ["dump"])
+    , ("--worldSize", ["dump"])
+    , ("--plates",    ["dump"])
+    , ("--ages",      ["dump"])
+    , ("--region",    ["dump"])
+    , ("--size",      ["offscreen"])
+    , ("--seeds",     ["language-report"])
+    , ("--arena",     ["headless", "graphical", "offscreen"])
+    , ("--port",      ["headless", "graphical", "offscreen", "preview"])
+    ]
+
+-- | Exit 1 before any normalization warning or boot dispatch if argv
+--   carries a flag from 'incompatibleFlagTable' that the selected boot
+--   mode does not honour (CH-58) — the same pre-boot-rejection shape
+--   this file already uses for a bare/unknown @--preview@ target.
+rejectIncompatibleFlags ∷ [String] → IO ()
+rejectIncompatibleFlags args = case violations of
+    []               → pure ()
+    (flag, honoured) : _ → do
+        hPutStrLn stderr $ flag ⧺ " is not supported in " ⧺ mode
+            ⧺ " mode (only honoured in " ⧺ intercalate ", " honoured ⧺ ")"
+        exitWith (ExitFailure 1)
+  where
+    mode = selectedBootModeName args
+    violations =
+        [ (flag, honoured)
+        | (flag, honoured) ← incompatibleFlagTable
+        , flag `elem` args
+        , mode `notElem` honoured
+        ]
