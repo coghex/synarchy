@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Generate.Config.Types
     ( WorldGenConfig(..)
     , CalendarYaml(..)

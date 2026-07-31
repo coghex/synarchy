@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Helpers around river data for chunk generation and zoom rendering.
 --

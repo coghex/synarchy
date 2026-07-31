@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Tile-level edits the player has made to the procedurally-generated
 --   world. Stored as a per-chunk log so chunks can evict freely and be
 --   regenerated without losing edits — on load, the chunk is built from

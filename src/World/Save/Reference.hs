@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies, GeneralizedNewtypeDeriving #-}
 -- | Canonical typed-persistent-reference vocabulary (issue #764,
 --   save-overhaul C3). Every durable cross-component reference — a
 --   craft bill's station, a power node's host building, a Lua AI

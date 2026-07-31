@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Re-exports the erosion API split across 'World.Geology.Erosion.Math'
 --   (elevation-smoothing math), 'World.Geology.Erosion.Sediment'
 --   (material selection for eroded/deposited tiles), and

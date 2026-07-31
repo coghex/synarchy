@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues

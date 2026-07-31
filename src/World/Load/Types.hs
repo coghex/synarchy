@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | The in-memory shape of a fully-staged, not-yet-published whole
 --   session replacement (issue #763, save-overhaul C2). Built entirely

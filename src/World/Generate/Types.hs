@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- Deliberate orphan: Serialize for HashSet, used by the save path
 -- (wgpLocationStamped rides into world.synworld).
 {-# OPTIONS_GHC -Wno-orphans #-}

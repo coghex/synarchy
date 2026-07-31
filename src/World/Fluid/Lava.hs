@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Thin lava convenience layer. The Magma-overlay system in
 --   "World.Magma" owns lava placement now; this module exists to give
 --   render / zoom-cache / debug callers a single place to ask "does

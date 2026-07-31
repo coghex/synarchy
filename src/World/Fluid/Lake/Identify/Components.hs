@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Connected-component labelling and per-component aggregation for
 --   the lake-identification pipeline: which basin tiles belong

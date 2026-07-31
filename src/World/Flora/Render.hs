@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 module World.Flora.Render
     ( resolveFloraTexture
     , findActiveCycleStage  -- re-exported from World.Flora.Growth for

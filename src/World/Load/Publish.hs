@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Whole-session LOAD publication (issue #763, save-overhaul C2): the
 --   single, atomic replacement of every live gameplay ref with a

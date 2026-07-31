@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Ocean-floor (seabed) generation. Runs ONCE at world init on the
 --   stitched terrain and produces a 'SeabedTable' of per-chunk

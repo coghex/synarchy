@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | The shared save/load integrity graph (issue #764, save-overhaul
 --   C3): one diagnostic vocabulary ('IntegrityError') and one set of
 --   checks, run at BOTH boundaries requirement 7 names —

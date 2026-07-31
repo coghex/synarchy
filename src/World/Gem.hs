@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Seeded gem region field (dig yields, G3).
 --
 --   The world is divided into 'gemRegionSize'-square tile regions.

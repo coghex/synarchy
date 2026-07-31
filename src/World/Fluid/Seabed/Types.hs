@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 
 -- | Global seabed table — the output of
 --   'World.Fluid.Seabed.identifySeabed', which runs ONCE at world init

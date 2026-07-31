@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Generate a texture atlas for the zoom map.
 --   Each chunk contributes a zoomTileSize×zoomTileSize pixel tile to the atlas.
 --   The atlas is a single large RGBA8 image packed in row-major order.

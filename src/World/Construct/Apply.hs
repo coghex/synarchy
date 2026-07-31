@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Applying construction build progress to loaded chunks (#96) — the
 --   mining corner-progress display, reused for building UP instead of
 --   digging down.

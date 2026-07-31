@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Dig-progress edit handler and its spoil-pile bookkeeping (yield
 --   item spawning, full-pile terrain promotion). Split out of

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | Planted groundcover-crop state (#334).
 --
 --   A groundcover crop (wheat, barley, ...) draws as the surface

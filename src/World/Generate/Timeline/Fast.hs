@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Per-tile approximation of the chunk path's timeline application.
 --   Used at world-init time before chunks exist (ocean flood-fill,

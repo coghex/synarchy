@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Blood decal rendering (#606). Two halves that only meet through
 --   'World.State.Types.wsBloodTextureHandlesRef':
 --

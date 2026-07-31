@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 
 -- | Per-chunk indexing for the river-identification pipeline: buckets
 --   the finalized per-tile river data (bitmask, surface z, width,

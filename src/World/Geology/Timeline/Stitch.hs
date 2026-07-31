@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -fprof-auto #-}
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict #-}
 -- | Per-chunk bordered-terrain cache build + stitching into
 --   world-resolution grids. Runs the plate-base → applyTimelineChunk →
 --   applyCoastalErosion → despike pipeline per chunk (stage 1,
