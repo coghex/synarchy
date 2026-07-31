@@ -267,15 +267,23 @@ thresholds.
 
 ## Tunables changed
 
-**None.** Project-owner decision, 2026-07-25, taken after review of every
-observation recorded above: land the calibration record with zero balance
-changes and file the mechanic-level findings as focused follow-ups instead.
+**None as of the 2026-07-25 session recorded above.** Project-owner decision,
+2026-07-25, taken after review of every observation recorded above: land the
+calibration record with zero balance changes and file the mechanic-level
+findings as focused follow-ups instead.
 
-No gameplay constant was changed as a result of these observations. The
+No gameplay constant was changed as a result of THOSE observations. The
 water and food questions showed no survival pressure to relieve on this route,
-and the injury question's dominant terms sit outside this issue's scope (see
-below). Every candidate was therefore left at its shipped value, and the
-follow-up work is filed instead of guessed at.
+and the injury question's dominant terms sat outside that session's scope
+(see below). Every candidate was therefore left at its shipped value, and the
+follow-up work was filed instead of guessed at.
+
+**This is superseded for `Unit/Fall.hs` by #998**, filed as exactly that
+follow-up: `energyToSeverity` WAS subsequently changed (`0.040` → `0.006`),
+with owner approval already granted via the approved #998 issue — see
+"Fall-trauma calibration (#998)" below for the full record. The table row
+below is corrected accordingly; every other tunable in this section remains
+unchanged.
 
 For the record, the named tunables inspected while reading the observations
 above, and left unchanged:
@@ -401,26 +409,48 @@ No `data/units/*.yaml` body data was touched.
 
 ### Before / after record — 2-z fall, all three profiles
 
-Revision (before): `7eb534979efd8c9a72ae5352f4ea30743f40de10` (`master`, the
-commit #998 branched from). All figures below use the real acolyte topology
-through `unitYamlBodyPartToBodyPart` for both columns — the "before" numbers
-are NOT the original Scenario-2 run (a different, randomly-rolled unit); they
-are the SAME three deterministic profiles measured against the pre-#998
-`Unit.Fall`, so the columns isolate exactly what the code change did.
+- Revision (before): `7eb534979efd8c9a72ae5352f4ea30743f40de10` (`master`, the
+  commit #998 branched from — unmodified `Unit.Fall`).
+- Revision (after): `1a693228367979ab1ddbe77f76ab4a3e84bf7825` (#998's
+  fall-model commit on this PR branch).
 
-| profile | | wound count (kind breakdown) | worst severity | aggregate bleed (L/s) | exsanguination | terminal state |
-|---|---|---|---:|---:|---:|---|
-| frail (18.59 kg, 1.39 L) | before | 24 (24 blunt) | 0.40 | 0.955 | 1.46 s | knocked down, bruised only |
-| frail | **after** | **3 (3 blunt)** | **0.123** | **0.0105** | **133 s** | knocked down, bruised only |
-| average (71.28 kg, 5.35 L) | before | 32 (24 blunt, 8 fracture) | 0.40 | 1.097 | 4.87 s | knocked down, bruised **and fractured** |
-| average | **after** | **8 (8 blunt)** | **0.378** | **0.146** | **36.7 s** | knocked down, bruised only — no fracture |
-| extreme (174.57 kg, 13.09 L) | before | 33 (24 blunt, 9 fracture) | 0.584 | 1.201 | 10.9 s | knocked down, bruised **and fractured** |
-| extreme | **after** | **9 (9 blunt)** | **0.40** | **0.287** | **45.7 s** | knocked down, bruised only — no fracture |
+All figures below use the real acolyte topology through
+`unitYamlBodyPartToBodyPart` for both revisions — the "before" numbers are
+NOT the original Scenario-2 run (a different, randomly-rolled unit); they are
+the SAME three deterministic profiles measured against the pre-#998
+`Unit.Fall`, so the two columns isolate exactly what the code change did.
+Every fall in this table is knocked down (`fallStunFor`'s ≥1.0 s stun floor
+applies unconditionally to any triggered fall, unaffected by this change) and
+lands in `standing`→`collapsed` (the movement thread's own knockdown pose,
+not a death state) — none of the six measurements is dead, unconscious (blood
+below `unconsciousFraction` of max), or carries a vital-part injury.
+"Exsanguination" is the naive projection (blood ÷ aggregate bleed rate,
+assuming no clotting/treatment — the same derivation the original ~9 s figure
+used), not an observed death.
 
-None of the three profiles ever produces a vital injury, an immediate death,
-or the pre-#998 pathological wound count. Knockdown is unconditional for any
-triggered fall (`fallStunFor`'s stun floor of 1.0 s applies even with zero
-injuries) and is unaffected by this change.
+**Frail (height 1.3, bulk 0.5, toughness 0.8 → 18.59 kg, 1.39 L blood)**
+
+| | wound count | wounds (part: kind severity) | worst severity | aggregate bleed | exsanguination (naive) | terminal state |
+|---|---:|---|---:|---:|---:|---|
+| before | 24 | l_bicep: blunt 0.40, 0.38, 0.10; l_sole: blunt 0.40, 0.40; l_thigh: blunt 0.40, 0.40, 0.34; l_thumb: blunt 0.40, 0.40, 0.40; r_bicep: blunt 0.40, 0.38, 0.10; r_palm: blunt 0.40, 0.40; r_sole: blunt 0.40, 0.40; r_thigh: blunt 0.40, 0.40, 0.34; skull: blunt 0.40; sternum: blunt 0.40; windpipe: blunt 0.20 | 0.40 | 0.955 L/s | 1.46 s | knocked down, collapsed; bruised only, no fracture |
+| **after** | **3** | **l_thumb: blunt 0.12; skull: blunt 0.10; sternum: blunt 0.10** | **0.12** | **0.0105 L/s** | **133 s** | **knocked down, collapsed; bruised only, no fracture** |
+
+**Average (height 1.8, bulk 1.0, toughness 1.0 → 71.28 kg, 5.35 L blood) — the documented baseline**
+
+| | wound count | wounds (part: kind severity) | worst severity | aggregate bleed | exsanguination (naive) | terminal state |
+|---|---:|---|---:|---:|---:|---|
+| before | 32 (24 blunt, 8 fracture) | l_bicep: blunt 0.40, 0.40, 0.32; l_sole: blunt 0.40, 0.40, fracture 0.29; l_thigh: blunt 0.40, 0.40, 0.40, fracture 0.11; l_thumb: blunt 0.40, 0.40, 0.40, fracture 0.27; r_bicep: blunt 0.40, 0.40, 0.32; r_palm: blunt 0.40, 0.40, fracture 0.17; r_sole: blunt 0.40, 0.40, fracture 0.29; r_thigh: blunt 0.40, 0.40, 0.40, fracture 0.11; skull: blunt 0.40; sternum: blunt 0.40, fracture 0.13; windpipe: blunt 0.40, fracture 0.16 | 0.40 | 1.097 L/s | 4.87 s | knocked down, collapsed; bruised **and fractured** (8 fractures) |
+| **after** | **8 (8 blunt, 0 fracture)** | **l_sole: blunt 0.26; l_thigh: blunt 0.11; l_thumb: blunt 0.38; r_palm: blunt 0.16; r_sole: blunt 0.26; r_thigh: blunt 0.11; skull: blunt 0.31; sternum: blunt 0.31** | **0.38** | **0.146 L/s** | **36.7 s** | **knocked down, collapsed; bruised only, no fracture — matches `Unit.Fall`'s documented 2–4-z target** |
+
+**Extreme (height 2.3, bulk 1.5, toughness 1.2 → 174.57 kg, 13.09 L blood)**
+
+| | wound count | wounds (part: kind severity) | worst severity | aggregate bleed | exsanguination (naive) | terminal state |
+|---|---:|---|---:|---:|---:|---|
+| before | 33 (24 blunt, 9 fracture) | l_bicep: blunt 0.40 ×3; l_sole: blunt 0.40 ×2, fracture 0.58; l_thigh: blunt 0.40 ×2, fracture 0.22; l_thumb: blunt 0.40 ×3, fracture 0.56; r_bicep: blunt 0.40 ×3; r_palm: blunt 0.40 ×2, fracture 0.35; r_sole: blunt 0.40 ×2, fracture 0.58; r_thigh: blunt 0.40 ×2, fracture 0.22; skull: blunt 0.40, fracture 0.20; sternum: blunt 0.40, fracture 0.26; windpipe: blunt 0.40, fracture 0.33 | 0.58 | 1.201 L/s | 10.9 s | knocked down, collapsed; bruised **and fractured** (9 fractures) |
+| **after** | **9 (9 blunt, 0 fracture)** | **l_sole: blunt 0.40; l_thigh: blunt 0.22; l_thumb: blunt 0.40; r_palm: blunt 0.32; r_sole: blunt 0.40; r_thigh: blunt 0.22; skull: blunt 0.40; sternum: blunt 0.40; windpipe: blunt 0.19** | **0.40** | **0.287 L/s** | **45.7 s** | **knocked down, collapsed; bruised only, no fracture (extreme's own first fracture is 3-z, one z-level deeper than this 2-z measurement)** |
+
+None of the six measurements ever produces a vital injury, an immediate
+death, or the pre-#998 pathological wound count.
 
 ### Fracture ladder (independently measured per profile)
 
