@@ -122,20 +122,25 @@ Modules are split into `Base.hs` and `Types.hs` files. Base files have **no loca
 ### Core monad: EngineM
 `Engine.Core.Monad` defines `EngineM ε σ α` — a continuation-passing-style monad transformer with environment (ε via Reader), mutable state (σ via State), IO, error handling, and logging. Most engine code runs in this monad.
 
-`Engine.Core.State`'s `EngineEnv` is one shared record reachable from
-any thread — a state the capability-split epic (#537) is narrowing.
+`Engine.Core.State`'s `EngineEnv` is one shared record (83 fields)
+reachable from any thread. The capability-split epic (#537) that
+narrowed it is **complete** (#889–#899).
 `docs/engineenv_capability_inventory.md` (#876) is the authoritative
 capability/thread/lifecycle ownership inventory for every field — read
 it before adding a field, changing which thread touches one, or
 changing its lifecycle; `tools/engine_env_capability_audit.py` (in CI
 and `make ci`) fails if a classification drifts from the live record.
+**Before adding any state, read its §6.4 post-flip procedure** — it
+leads with the case that resolves most of them: the state doesn't
+belong on `EngineEnv` at all (`WorldState`, a manager, `EngineState`,
+or a local), and needs no new field.
 
-**Capability records (#889, E1 landed):** each capability gets its own
-`Engine.Core.Capability.<Name>` module exporting one `<Name>Capability`
-record (fields sharing the SAME live `IORef`/queue handles `EngineEnv`
-already carries — a projection, never a copy) plus a total
-`to<Name>Capability ∷ EngineEnv → <Name>Capability`. One-way only
-(never reassembled back into an `EngineEnv`); no capability module
+**Capability records (#889–#899, epic complete):** each capability gets
+its own `Engine.Core.Capability.<Name>` module exporting one
+`<Name>Capability` record (fields sharing the SAME live `IORef`/queue
+handles `EngineEnv` already carries — a projection, never a copy) plus
+a total `to<Name>Capability ∷ EngineEnv → <Name>Capability`. One-way
+only (never reassembled back into an `EngineEnv`); no capability module
 imports its own consumers; don't introduce a record before the
 migration issue that actually narrows a real consumer to it. `EngineM`
 stays hard-wired to `MonadReader EngineEnv` (no capability typeclass
@@ -144,15 +149,29 @@ primitives taking the capability explicitly, plus thin `MonadReader
 EngineEnv` wrappers preserving existing call sites (see
 `Engine.Core.Log.Monad`/`Engine.Core.Capability.Core`) — narrowing the
 *module's own field access* is the goal, not rewriting every caller.
-The same audit also enforces a production-only (`src/`+`app/`, `test/`
-exempt) full-access ratchet: importing `Engine.Core.State` with
+There are **eight capability identifiers and thirteen record/view
+types** (§2.1's table): five capabilities are split, four of them by
+§3.1's rule that a thread-private field forces a strictly narrower
+worker-safe view rather than a comment on a wide record.
+
+The same audit enforces a production-only (`src/`+`app/`, `test/`
+exempt) full-access boundary: importing `Engine.Core.State` with
 `EngineEnv(..)` or as a bare import (either shape, regardless of
-`qualified`/`as`/multiline) is unrestricted access, allowed only for
-SS6.1's hard-coded permanent allowlist or SS6.2's checked-in,
-strict/shrink-only temporary ceiling (both mirrored as constants in
-`tools/engine_env_capability_audit.py`) — a module gaining unrestricted
-access fails the audit even if SS6.2 is also edited to document it;
-only growing the checked-in ceiling admits one.
+`qualified`/`as`/multiline) is unrestricted access. Since #899 (E8)
+that is allowed **only** for §6.1's hard-coded permanent allowlist —
+the 24 genuine whole-session orchestration boundaries (the definer and
+constructor, the monad carrier, per-profile boot wire-up, the main
+loop, Lua dispatch, and the save/load transaction). §6.2's temporary
+ceiling is **empty**, and it is shrink-only, so "add the field now,
+narrow it later" no longer exists: a module gaining unrestricted access
+fails the audit even if §6.2 is also edited to document it. The audit
+additionally parses §6.1 itself and requires its documented set to
+equal the checked-in `PERMANENT_DEFINER`/`PERMANENT_IMPORTERS`
+constants, with a real justification on every row — so neither the doc
+nor the constants can admit a permanent importer alone. §6.4(c)/(d)
+govern the two escape hatches (a ninth capability; a new §6.1 module);
+both need explicit maintainer approval and synchronized doc + constant
++ self-test changes.
 
 ### Threading model
 The engine uses multiple worker threads communicating via STM (TVar, queues):

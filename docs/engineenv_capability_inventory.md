@@ -1,14 +1,26 @@
 # EngineEnv Capability Inventory
 
-**Status:** Authoritative, Phase 0 of the `EngineEnv` capability-split
-epic (issue #537). Written 2026-07-23 against `master@7e5360c2`, issue
-#876. This document does not perform any capability split — it
-establishes capability ownership, thread access, lifecycle, and the
-intended migration boundaries so that later, bounded child issues have
-a contract to migrate against. **No runtime or type-boundary change
-lands with this document** (issue #876 requirement 11): `EngineEnv`,
-`EngineM`, and every call site described below are exactly as they were
-at the commit this was written against.
+**Status:** Authoritative. The `EngineEnv` capability split (epic #537)
+is **complete**: every one of §2.1's eight capability identifiers has a
+capability record or view, §6.2's temporary compatibility boundary is
+**empty**, and `tools/engine_env_capability_audit.py` enforces the
+permanent-only §6.1 boundary — the epic's "restrict direct
+`EngineEnv(..)` access to documented initialization/orchestration
+compatibility boundaries" acceptance condition, now machine-enforced.
+
+Originally written 2026-07-23 against `master@7e5360c2` (issue #876) as
+Phase 0 — an inventory of capability ownership, thread access,
+lifecycle, and intended migration boundaries, landing **no** runtime or
+type-boundary change of its own — and then carried forward by each of
+the ten migration children (#889–#899). It remains the authoritative
+ownership inventory: read it before adding a field to `EngineEnv`,
+changing which thread touches one, or changing its lifecycle. §6.4 is
+the procedure to follow when you think you need new state.
+
+**What still is not inventoried here:** the internals of `EngineState`,
+`WorldManager`, `UnitManager`, and `BuildingManager` (see §1's scope
+boundary). The epic deliberately left those for a future, separate
+inventory.
 
 This is a *capability/thread/lifecycle* inventory, not a persistence
 inventory. [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
@@ -27,8 +39,8 @@ needed.
 ## 1. Scope
 
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-(`:67`) with exactly **82 fields** (`engineConfig` at `:68` through
-`popupQueueRef` at `:388`). Every one of the 82 has exactly one row in
+(`:68`) with exactly **83 fields** (`engineConfig` at `:69` through
+`popupQueueRef` at `:405`). Every one of the 83 has exactly one row in
 §5 below, matching the same field set
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
 §1 already enumerates and
@@ -44,7 +56,7 @@ notions of "the live field set."
 **Out of scope**, per the issue's own boundary (see §6/§7 for how this
 is expected to change later, without changing it here):
 
-- `EngineState` (`src/Engine/Core/State.hs:389`, nested under
+- `EngineState` (`src/Engine/Core/State.hs:421`, nested under
   `engineStateRef`) is **not** inventoried field-by-field here. It is a
   single, already-documented invariant (§3) — main-render-thread-private
   — and its own fields (`timingState`/`graphicsState`/`assetConfig`/
@@ -86,6 +98,41 @@ minimum bucket.
 Generic buckets (`misc`, `shared`, `other`, a blank cell, or any
 identifier not in this table) are rejected by the audit — every field
 must resolve to exactly one of the eight above.
+
+**This vocabulary is closed.** The eight identifiers here and the
+`CAPABILITIES` constant in
+[`tools/engine_env_capability_audit.py`](../tools/engine_env_capability_audit.py)
+are the same list, and a field that fits none of them cannot be
+classified at all. Adding a ninth is possible but deliberately hard —
+see §6.4(c).
+
+**Eight identifiers, thirteen record/view types.** The record set is
+finer-grained than the identifier set, because five capabilities are
+deliberately split — four of them by §3.1's pointer-record visibility
+rule (a thread-private field forces a strictly narrower worker-safe
+view, never a documented restriction on a wider record), one by
+consumer coupling:
+
+| Identifier | Record / view type(s) | Landed by |
+|---|---|---|
+| `core-init` | `Engine.Core.Capability.Core` — `CoreCapability` (4 fields) | #889 (E1) |
+| `render-gpu-asset` | `Engine.Core.Capability.Render` — `RenderCapability` (21, `MainRender`-only, carries `engineStateRef`); `Engine.Core.Capability.RenderView` — `RenderViewCapability` (worker-safe, never names `engineStateRef`) | #891 (E3) |
+| `input-lua-transport` | `Engine.Core.Capability.Input` — `InputCapability` (8, `LuaThread`-only); `Engine.Core.Capability.InputView` — `InputViewCapability` (worker-safe, carries neither `inputBarrierNextRef` nor `currentKeyDownRef`) | #892 (E4) |
+| `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` — `WorldSimCapability` (9 world/sim fields); `Engine.Core.Capability.RenderHandoff` — `RenderHandoffCapability` (7 coupled handoff fields) | #893 (E5a) / #894 (E5b) |
+| `units-buildings-combat` | `Engine.Core.Capability.UnitCombat` — `UnitCombatCapability` (10); `Engine.Core.Capability.Building` — `BuildingCapability` (3) | #895 (E6a) / #896 (E6b) |
+| `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (8 registries) | #890 (E2) |
+| `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 UI/focus/HUD fields); `Engine.Core.Capability.Events` — `EventsCapability` (4 event/notification/popup fields) | #897 (E7a) / #898 (E7b) |
+| `save-load-coordination` | `Engine.Core.Capability.SaveLoad` — `SaveLoadCapability` (5 coordination handles) | #899 (E8) |
+
+The `world-sim-render-handoff` split is the one that is not a §3.1
+thread-privacy split: neither half carries a thread-private field, and
+it exists because the seven render-handoff fields' consumers straddle
+this group and `render-gpu-asset` (§7.4). Every record follows E1's
+convention (see `Engine.Core.Capability.Core`'s module header for the
+full statement): one record per module, initials-prefixed fields, one
+total one-way `EngineEnv → XCapability` projection over the identical
+live containers, no import of a consumer, and no record introduced
+ahead of a real narrowed consumer.
 
 ### 2.2 Thread / execution-role identifiers
 
@@ -182,7 +229,7 @@ language joiner.
 `engineStateRef ∷ IORef EngineState` is the one `EngineEnv` field this
 document treats specially, per issue #876 requirement 5.
 
-`EngineState` (`src/Engine/Core/State.hs:389-394`) carries the fully
+`EngineState` (`src/Engine/Core/State.hs:421-426`) carries the fully
 main-render-thread-private mutable state: `TimingState`,
 `GraphicsState` (every Vulkan handle, the GLFW window, the scene
 render pipeline state), `AssetConfig`, and `SceneManager`. Its own
@@ -197,7 +244,7 @@ nested inside some worker-thread-owned record) purely so `EngineM`
 can carry it through the same immutable Reader environment every other
 piece of engine state travels through, instead of needing a second CPS
 parameter (see the field's own doc comment,
-`src/Engine/Core/State.hs:69-74`). **That placement is a carrying
+`src/Engine/Core/State.hs:70-75`). **That placement is a carrying
 mechanism, not an ownership signal**: storing the pointer on
 `EngineEnv` does not make the `EngineState` it points to a
 multi-thread-accessible capability, and this inventory does not
@@ -269,8 +316,8 @@ Two fields that logically belong beside `GraphicsState` — the bindless
 texture system (`textureSystemRef`) and the default face-map slot
 (`defaultFaceMapSlotRef`) — were deliberately moved to `EngineEnv`
 *because* worker threads (the world thread's dynamic blood-texture
-registration, in particular) need to reach them; `GraphicsState`'s own
-doc comment records exactly this (`src/Engine/Core/State.hs:447-449`).
+registration, in particular) need to reach them; `EngineState`'s own
+doc comment records exactly this (`src/Engine/Core/State.hs:415-420`).
 This is the invariant working as intended: state that must cross the
 thread boundary is pulled out to `EngineEnv`, rather than the
 invariant being silently violated in place.
@@ -507,12 +554,13 @@ field documentation restates the reader/writer/lifecycle facts below.
 
 **Live since issue #889 (E1, landed); recounted by #890 (E2), #891
 (E3), #893 (E5a), #892 (E4), #895 (E6a), #897 (E7a), #896 (E6b), #898
-(E7b) and #894 (E5b).**
-203 files under `src/`/`app/` import `Engine.Core.State` in some form.
-Of those, 27 have genuine unrestricted field-level access:
+(E7b), #894 (E5b), and closed out by #899 (E8).**
+205 files under `src/`/`app/` import `Engine.Core.State` in some form.
+Of those, 24 have genuine unrestricted field-level access:
 `Engine.Core.State.hs` itself (which defines `EngineEnv` and therefore
-imports nothing) plus 26 files that
-import it either as an explicit `EngineEnv(..)` (in any combination
+imports nothing) plus **exactly the 23 permanent importers of §6.1** —
+since #899 there are no others. Those 23 import it either as an
+explicit `EngineEnv(..)` (in any combination
 with other names on the same import line) or as a **bare**
 `import Engine.Core.State` with no explicit list at all — Haskell
 grants a bare import full access to everything the target module
@@ -524,11 +572,18 @@ this exact same two-shape definition against `src/`/`app/` on every
 run, verified with:
 
 ```
-grep -rl "import Engine.Core.State" src app | wc -l                    # 203
+grep -rl "import Engine.Core.State" src app | wc -l                    # 205
 # then, per file, whether the import clause is bare or explicitly
 # names EngineEnv(..) vs. a strictly narrower list (EngineEnv with no
 # (..), a single field accessor, or EngineState instead) — see the
-# script logic below; 26 have full access, 177 do not:
+# script logic below; 23 have full access, 182 do not. The bullets
+# below enumerate the narrowing COHORTS issue by issue — which modules
+# each capability migration moved off unrestricted access and what
+# they still import narrowly — not a partition of today's narrow set:
+# a module that never held unrestricted access in the first place was
+# never in a §6.2 cohort and so appears in none of them. The live
+# totals above are the authoritative figures; the audit reports them
+# on every run.
 #   13 × `Engine.Scripting.Lua.API.Register.*` (`Engine.Scripting.Lua.API`
 #        itself plus its 12 `Register.*` submodules; all import the bare
 #        `EngineEnv` TYPE with no constructor access, and two of them
@@ -568,10 +623,10 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 #        `GraphicsState(..)` (the CPS state σ, not `EngineEnv`), for an
 #        opaque `EngineEnv` type to hand to a not-yet-narrowed helper,
 #        and/or for individually named accessors (`luaQueue`,
-#        `loggerRef`, ...) — either of a field whose own capability
-#        (§7.1's `core-init` remainder, #899) has yet to
-#        migrate, or of one a landed capability left on a pre-existing
-#        narrow reader. The other 5 of #891's 45
+#        `loggerRef`, ...) that a landed capability deliberately left
+#        on a pre-existing narrow reader — §7.5's explicit-narrow rule:
+#        a module needing exactly one handle takes exactly that handle,
+#        not a record it will use one field of. The other 5 of #891's 45
 #        (`Vulkan.Command.Text`, `Vulkan.Texture.Bindless`,
 #        `Vulkan.Texture.DefaultFaceMap`, `Scene.Batch.Text` and — since
 #        #897 took its last accessor, `uiManagerRef` — `UI.Render`) now
@@ -595,8 +650,9 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 #        needs at least the bare `EngineEnv` type (they still take an
 #        `EngineEnv` and project from it), `API.Structure` additionally
 #        for the canonical `activeWorldPage`/`activeWorldState` helpers,
-#        and `World.Thread` for the one named `saveBarrierRef` accessor
-#        whose own capability (#899) has yet to migrate
+#        and `World.Thread` for the bare type alone since #899 (E8)
+#        moved its one `saveBarrierRef` accessor onto
+#        `Engine.Core.Capability.SaveLoad`)
 #   28 × the #893-narrowed `world-sim-render-handoff` modules that still
 #        import `Engine.Core.State` narrowly — for the same three
 #        reasons #891's 41 do: the canonical `activeWorldStateFrom`/
@@ -608,11 +664,9 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 #        designation `Cursor.*` handlers → `Cursor.Common`'s F4
 #        outcome recorders), and/or individually named accessors
 #        (`unitManagerRef`, `unitQueue`, `luaQueue`, `loadStatusRef`,
-#        `actionOutcomeRef`, `hudActivePageRef`, `saveBarrierRef`) —
-#        either of a field whose own capability (#899) has yet
-#        to migrate, or of one a landed capability (#892, #894, #895,
-#        #897)
-#        left on a pre-existing narrow reader. The other 22 of #893's
+#        `actionOutcomeRef`, `hudActivePageRef`, `saveBarrierRef`) that
+#        a landed capability (#892, #894, #895, #897, #899)
+#        deliberately left on a pre-existing narrow reader. The other 22 of #893's
 #        50 now import `Engine.Core.State` not at all and are outside
 #        this accounting.
 #   2  × `Engine.Core.Capability.Input` / `.InputView` (new by #892 —
@@ -628,8 +682,8 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 #        which still import `Engine.Core.State` narrowly — every one
 #        needs at least the bare `EngineEnv` type (they still take an
 #        `EngineEnv` and project from it), and several additionally
-#        name accessors of fields whose own capability has yet to
-#        migrate (`loggerRef`, `lifecycleRef`, `saveBarrierRef`) or the
+#        name single accessors a landed capability deliberately left
+#        narrow (`loggerRef`, `lifecycleRef`, `saveBarrierRef`) or the
 #        canonical `activeWorldStateFrom`/`activeWorldPageFrom`/
 #        `freshItemInstanceId` helpers. `World.Thread.Command.Edit.Dig`
 #        is the one that names NO field accessor at all: §7.5's
@@ -659,8 +713,8 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 #        to a helper that still takes one (`Engine.Input.State`,
 #        `Engine.Input.Thread.Mouse`) and/or individually named accessors
 #        (`actionOutcomeRef`, kept a narrow value by #895's own rule,
-#        and `saveBarrierRef`, whose capability (#899) has yet to
-#        migrate) — see §7.3's cross-capability surface. #897 took
+#        and `saveBarrierRef`, kept narrow by the same rule after #899)
+#        — see §7.3's cross-capability surface. #897 took
 #        `focusManagerRef`/`uiManagerRef` off that surface.
 #   1  × `Engine.Core.Capability.Ui` (new by #897 — the UI/focus/HUD
 #        half of the `ui-hud-events` projection; bare `EngineEnv` type
@@ -686,27 +740,36 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 203
 #        CPS state σ, not `EngineEnv`); and `Engine.Input.Thread.Mouse`
 #        for the type plus the one `actionOutcomeRef` accessor §7.5's
 #        explicit-narrow rule keeps it on
+#   1  × `Engine.Core.Capability.SaveLoad` (new by #899 — the
+#        `save-load-coordination` projection module; bare `EngineEnv`
+#        type plus its five field accessors, never `EngineEnv(..)`)
+#   1  × the #899-narrowed `core-init` module that still imports
+#        `Engine.Core.State` narrowly: `Engine.Graphics.Vulkan.Command.Record`,
+#        for `EngineState(..)`/`GraphicsState(..)` (the CPS state σ, not
+#        `EngineEnv`) — its one `engineConfig` read now goes through
+#        `Engine.Core.Capability.Core`. The other of #899's two,
+#        `Engine.Scripting.Lua.API.Log`, imports `Engine.Core.State` not
+#        at all (its four `log*Fn` entry points take `CoreCapability`)
+#        and is outside this accounting
 ```
 
-The remaining 172 files that import `Engine.Core.State` (202 − 30) are
-exactly the ones enumerated above — none of them are consumers this
-document needs to classify: an opaque `EngineEnv` type import, one or
-more individually named field accessors, or an unrelated `EngineState`
-import none grant the unrestricted access this section is about.
+None of the 182 narrowly-importing files is a consumer this section
+needs to classify: an opaque `EngineEnv` type import, one or more
+individually named field accessors, or an unrelated `EngineState`
+import — none grants the unrestricted access this section is about.
 Adding back `Engine.Core.State.hs` itself (the definer, which imports
-nothing and so is outside the 202/30/172 accounting entirely) gives
-the 31 total full-access modules this section classifies.
+nothing and so is outside the 205/23/182 accounting entirely) gives
+the **24** total full-access modules this section classifies — which,
+since #899, is exactly §6.1's permanent set and nothing else.
 
-This section names the intended *end state*: what should still
-legitimately construct, carry, or inspect the **complete** `EngineEnv`
-once the epic's capability split has landed, versus what merely has
-full access today because nothing narrower exists yet. It is
-deliberately narrow — narrow enough to become the literal allowlist
-for #537's final unrestricted-access audit (per requirement 6) — which
-means some of today's 27 full-access files are **not** listed as
-permanent below; they belong in the temporary section (§6.2), each
-assigned individually (no wildcards, no catch-all) to one of §7's
-bounded follow-up issues.
+This section names the *end state*, and since #899 it **is** the end
+state rather than a target: what legitimately constructs, carries, or
+inspects the **complete** `EngineEnv` now that the epic's capability
+split has landed. It was written deliberately narrow — narrow enough
+to become the literal allowlist for #537's final unrestricted-access
+audit (per requirement 6) — and that is exactly what it now is. §6.2,
+which held the modules that had full access only because nothing
+narrower existed yet, is empty; §6.4 governs any future addition here.
 
 ### 6.1 Permanent (production)
 
@@ -729,26 +792,47 @@ is the second, by definition of the section.
 | `World.Thread.Command.Save`, `World.Thread.Command.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`, `Engine.Scripting.Lua.API.Save` | Permanent orchestration infrastructure | A save/load transaction is inherently a whole-session boundary: these five modules are the exact, verified set that actually `import Engine.Core.State (EngineEnv(..))` on the save/load path (`grep -rn 'import Engine.Core.State' src/World/Load src/World/Thread/Command/Save* src/Engine/Scripting/Lua/API/Save.hs`) — they must capture or replace every capability's state atomically in one coordinated step (see the persistence contract's snapshot/publish design). Narrowing this to per-capability records would just reconstruct an env-shaped aggregate one level down — this is a permanent exception, not a temporary one awaiting migration. Everything ELSE under `World.Save.*` (`Snapshot`, `Types`, `Component*`, `Envelope*`, `Serialize`, `Storage`, `Integrity`, `Reference`, `Compat*`) is pure data/codec code that never touches `EngineEnv` at all (`World.Save.Snapshot`'s own doc comment states this explicitly) and is correctly outside this list entirely — not a temporary compatibility boundary either, since it was never given full access in the first place. `Engine.Save.Barrier`/`Engine.Load.Status` are the same: opaque coordination types referenced FROM `EngineEnv` (`saveBarrierRef`/`loadStatusRef`), not consumers of it — neither imports `EngineEnv`. |
 
 That's 24 permanent modules (23 importers + `Engine.Core.State` itself,
-which imports nothing). The remaining 26 − 24 = 2 full-access
-modules are temporary, enumerated exhaustively in §6.2.
+which imports nothing) — and since issue #899 (E8) that is the WHOLE
+full-access set: 24 − 24 = 0 temporary modules remain (§6.2).
 
 Since issue #889, this permanent allowlist and §6.2's temporary
-accounting are also enforced live: `tools/engine_env_capability_audit.py`'s
+accounting are enforced live: `tools/engine_env_capability_audit.py`'s
 checked-in `PERMANENT_IMPORTERS`/`TEMPORARY_CEILING` constants mirror
 this document's §6.1/§6.2 exactly, and the audit fails if the
-live-scanned production importer set ever disagrees with either.
+live-scanned production importer set ever disagrees with either — in
+BOTH directions, so a stale allowlist entry left behind by a migration
+fails too.
+
+Since issue #899 the audit ALSO parses this section's own table
+(`audit_permanent_boundary`, reading the **first column only** — the
+Reason cells above deliberately cite other module names, e.g.
+`World.Save.Snapshot`, `Engine.Save.Barrier`, `Engine.Loop.Mode`, which
+are explicitly NOT allowlist entries) and requires the documented set
+to equal `PERMANENT_DEFINER` + `PERMANENT_IMPORTERS` exactly, with a
+real, non-placeholder Category AND Reason on every row. That closes the
+last gap the ratchet alone left open: growing a live importer together
+with the Python constant used to pass with this document never
+recording why the module is a genuine whole-session boundary.
+Documentation alone does not admit a permanent importer, and neither
+does a constant change with no written justification — both must move
+together, and §6.4(d) governs when that is even permitted.
 
 ### 6.2 Temporary compatibility boundary (production)
 
-Every one of the 2 remaining full-access modules is individually
-assigned below to exactly one target capability — **no path-prefix
-globs, no "and similar" language, and no catch-all row**: every name
-in every cell is a literal, complete Haskell module name. The
-assignment method, applied uniformly and mechanically rather than by
-directory-name guessing:
+**Empty since issue #899 (E8).** Every row below is a historical
+record of what this section assigned and which issue cleared it; no
+production module holds temporary full-`EngineEnv` access any more.
+
+The assignment method each landed migration applied — kept here because
+it is what a future reader needs to understand the roadmap entries in
+§7, and because §6.4's ninth-capability procedure refers to it — was
+applied uniformly and mechanically rather than by directory-name
+guessing. Every name in every cell is a literal, complete Haskell
+module name: **no path-prefix globs, no "and similar" language, and no
+catch-all row**.
 
 1. For each module, scan its source for every occurrence of one of the
-   82 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
+   83 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
    ...`/`atomicModifyIORef' ... env`/`writeIORef ... env` patterns, and
    plain field-name references) and tally which capability group (§5's
    heading structure) each hit belongs to.
@@ -795,18 +879,31 @@ directory-name guessing:
 
 | Target capability | Modules (every current temporary full-`EngineEnv` consumer, individually assigned) | Roadmap entry |
 |---|---|---|
-| `core-init` | `Engine.Graphics.Vulkan.Command.Record`, `Engine.Scripting.Lua.API.Log` | §7.1 |
+| `core-init` | *(none — migrated by #899 (E8): `Engine.Graphics.Vulkan.Command.Record` reads its one `engineConfig` hit through `Engine.Core.Capability.Core` and keeps a narrow `EngineState(..)`/`GraphicsState(..)` import for the CPS state σ (not `EngineEnv`), and `Engine.Scripting.Lua.API.Log`'s four `log*Fn` entry points take `CoreCapability` directly and so no longer import `Engine.Core.State` at all. Neither holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.1 |
 | `render-gpu-asset` | *(none — migrated by #891 (E3): all 45 former entries now reach their render fields through `Engine.Core.Capability.Render` (the `MainRender`-only 21-field record) or `Engine.Core.Capability.RenderView` (the worker-safe view that never carries `engineStateRef` — 13 fields when #891 landed, 14 since #893 added `fpsRef`), per §3.1; none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.2 |
 | `input-lua-transport` | *(none — migrated by #892 (E4): all 11 former entries now reach their input fields through `Engine.Core.Capability.Input` (the `LuaThread`-only eight-field record) or `Engine.Core.Capability.InputView` (the worker-safe five-field view that carries neither `inputBarrierNextRef` nor `currentKeyDownRef`), per the §3.1 rule §7.3 applies here; `Engine.Input.Callback` needed no record at all — its API already took the two live handles explicitly, so it merely narrowed its bare import to the `EngineLifecycle` type. None of the 11 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.3 |
 | `world-sim-render-handoff` | *(none — migrated in two halves: #893 (E5a) moved 50 entries onto `Engine.Core.Capability.WorldSim` for the nine world/sim fields, and #894 (E5b) moved the remaining four — `Engine.Scripting.Lua.API.Structure`, `World.Thread`, `World.Thread.Command.Basic`, `World.Thread.Command.Init`, named individually per #893's requirement 2 so nothing was silently dropped between the a/b pair — onto `Engine.Core.Capability.RenderHandoff` for the seven coupled render-handoff fields, composed with the `WorldSim`/`RenderView`/`ContentRegistries`/`InputView`/`UnitCombat`/`Building`/`Core` records their other reads already had. None of the 54 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.4 |
 | `units-buildings-combat` | *(none — migrated by #895 (E6a) and #896 (E6b) together: E6a's 35 entries reach the ten unit/combat fields through `Engine.Core.Capability.UnitCombat`, and E6b's remaining 14 reach the three building fields through `Engine.Core.Capability.Building` — `Building.Thread.Command` by taking that record plus the logger ref and `WorldSimCapability` as explicit parameters and so dropping its `Engine.Core.State` import entirely, the other 13 by projecting from the `EngineEnv` they still take. None of the 49 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.5 |
-| `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the seven registries through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
+| `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the eight registries (seven when #890 landed; `tutorialRegistryRef` joined them with #957) through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
 | `ui-hud-events` | *(none — migrated in two halves: #897 (E7a) moved 11 UI-dominant entries onto `Engine.Core.Capability.Ui`, and #898 (E7b) moved the two event-dominant ones (`Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.PlayerEvent`) onto `Engine.Core.Capability.Events`. None of the 13 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.7 |
-| `save-load-coordination` | *(none — every module whose dominant field usage is save/load coordination is already a permanent orchestration exception listed in §6.1; `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
+| `save-load-coordination` | *(none — and none ever: every module whose dominant field usage is save/load coordination is a permanent orchestration exception listed in §6.1. #899 (E8) added `Engine.Core.Capability.SaveLoad` for this capability's NON-permanent touchpoints — the per-tick `captureLocked`/`acknowledgeCurrent` sites — and narrowed `World.Thread` onto it. `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
 
-Row counts (2 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 2) match
-26 − 24 exactly — every temporary full-access module is accounted for
-in exactly one row above.
+Row counts (0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 0) match
+24 − 24 exactly — **the temporary boundary is empty**, which is the
+epic's end state (#899, E8). All eight rows are retained deliberately:
+`tools/engine_env_capability_audit.py`'s `TEMPORARY_CEILING` keeps the
+same eight keys mapped to empty sets, and its doc/ceiling cross-check
+iterates the union of both key sets — dropping a row here (or a key
+there) would silently stop cross-checking that capability, and would
+make the end-state self-test's "exactly the eight `CAPABILITIES` keys
+with empty module sets" assertion vacuous.
+
+There is consequently **no legal path left for a production module to
+take unrestricted `EngineEnv` access.** "Add the field now, narrow it
+later" no longer exists: a new full-access module fails the ratchet
+even if this section is also edited to document it, and the ceiling is
+shrink-only, so it cannot be grown back. §6.4 documents what to do
+instead.
 
 ### 6.3 Test-only exceptions
 
@@ -817,20 +914,187 @@ production code, and narrowing test fixture access is not a §7 goal.
 
 | Module(s) | Reason |
 |---|---|
-| `test/Test/Headless/Harness.hs` and every `Test.Headless.*` module built on it | A headless hspec fixture's entire purpose is booting one working engine environment (`initializeEngineHeadless`/`initializeEngineHeadlessWith`) and sharing or inspecting it across many test cases (see `Test.Headless.UI.ResponsiveGameplay`'s `withSharedFixture` for the canonical example) — broad, whole-environment access here is the intended design, not a compatibility gap. |
+| `test-headless/Test/Headless/Harness.hs` and every `Test.Headless.*` module built on it | A headless hspec fixture's entire purpose is booting one working engine environment (`initializeEngineHeadless`/`initializeEngineHeadlessWith`) and sharing or inspecting it across many test cases (see `Test.Headless.UI.ResponsiveGameplay`'s `withSharedFixture` for the canonical example) — broad, whole-environment access here is the intended design, not a compatibility gap. |
 | `tools/*_probe.py` (real-engine turnkey harnesses) | Drive a real booted engine over the debug console; not Haskell code and not subject to an import-level allowlist at all, but listed here for completeness since they routinely exercise every capability of a running engine. |
+
+### 6.4 Post-flip procedure: what to do when you need new state
+
+Since #899 (E8) the boundary is machine-enforced and unforgiving:
+§6.2's temporary ceiling is empty, so "add the field now, narrow it
+later" is not a thing that can be done. This section is what to do
+instead. Work through it in order — (a) resolves the large majority of
+cases, and the later steps get progressively harder on purpose.
+
+#### (a) Most new state does not belong on `EngineEnv` at all
+
+Start here, and expect to stop here. `EngineEnv` is the **one shared
+record reachable from any thread**; that is a cost, not a service.
+State that one subsystem owns belongs with that subsystem:
+
+- **World/gameplay state → `WorldState`** (reached through the active
+  page, `wsGenParamsRef` and friends). It is already per-page,
+  already persisted through the save components, and already
+  session-replaced correctly on load.
+- **Manager-owned state → the manager** (`WorldManager`,
+  `UnitManager`, `BuildingManager`, `ItemManager`, the content
+  registries). `EngineEnv` already carries the pointer; adding a
+  sibling field beside that pointer is almost always the wrong shape.
+- **Render/timing/scene mechanics → `EngineState`** (§3 —
+  main-render-thread-private, and no worker thread may reach it).
+- **Purely local state → a function parameter or a local `IORef`.**
+
+**Worked example (#911, placed-location instance identity).** A placed
+location needed a stable, persisted, per-page identity: an id
+allocated at placement time, its definition id, anchor, resolved
+absolute bounds, discovery margin, display name, one-time
+content-spawn flag, and lifecycle. That is a substantial pile of new
+mutable, persisted, cross-tick state — and it needed **zero** new
+`EngineEnv` fields. The records live in `WorldGenParams` inside
+`WorldState`, reached through `wsGenParamsRef`, alongside the page's
+other generation state. Being page-scoped is what makes the ids
+survive save/load and chunk eviction correctly in the first place; an
+`EngineEnv` field would have had to reinvent per-page scoping by hand.
+Most of what the expedition arc needs has the same shape.
+
+Only continue past (a) if the state genuinely must be shared across
+threads *and* has no owning subsystem to live in.
+
+#### (b) Adding a field to an existing capability
+
+Two audits both gate this, and both run in CI and `make ci`. The
+complete set of requirements:
+
+**`tools/persistence_inventory_audit.py`** —
+[`docs/persistence_state_inventory.md`](persistence_state_inventory.md):
+
+1. A row under the `### EngineEnv` heading (that exact heading — the
+   audit's `ROOT_RECORDS` anchor keys off it).
+2. Exactly one of the five classifications in that audit's
+   `VALID_CLASSIFICATIONS`: **`Persist exactly`**, **`Persist as
+   identity/reference`**, **`Rebuild`**, **`Reset to default`**, or
+   **`Exclude`**. Not a phrase of your own.
+
+**`tools/engine_env_capability_audit.py`** — this document's §5:
+
+3. A capability-inventory row, under the `### <capability>` heading
+   for the capability the field belongs to.
+4. That heading must be one of §2.1's closed eight-identifier set. If
+   none of them fits, you are in case (c), not this one.
+5. Readers and Writers cells in the **strict grammar** the audit
+   enforces: each top-level comma-separated segment is one or more
+   backtick-quoted, slash-joined role names optionally followed by a
+   single trailing `(...)` parenthetical, or the whole cell is
+   `` `None` `` immediately followed by a non-empty parenthetical
+   justification. All explanatory prose goes *inside* that
+   parenthetical — never bare between the role and the paren, never
+   after it closes.
+6. Every role named must be one of §2.2's roles.
+7. A §2.3 lifecycle category: `boot-process`, `boot-shutdown`,
+   `session-replaced`, or `transient-handoff`.
+8. Non-empty Sync, Init, Shutdown, and Notes cells. A bare em-dash
+   (`—`) is accepted in Notes only — it is a legitimate "nothing
+   further to add" there, and nowhere else.
+9. Grounding evidence: at least one backtick-quoted `.hs`/`.lua`
+   source-location citation somewhere in the row.
+10. Whatever else the **live** audit rules require — read the tool, not
+    just this list. The §3/§7.3 boundary checks, for instance, will
+    reject a new field that a thread privately owns being placed on a
+    worker-visible record.
+
+**Adding it to the capability RECORD is a separate decision.** Do that
+only when the capability genuinely owns the field *and* a real
+consumer needs the narrowed view. E1's no-unused-record rule applies
+field-by-field: a record carries what a real consumer already needs,
+not everything the capability could plausibly own. If the field is
+private to one thread, §3.1 requires a strictly narrower worker-safe
+view rather than a comment on a wide record.
+
+#### (c) When none of the eight capabilities fit
+
+A **ninth capability** is permitted only when all three hold:
+
+1. No existing §2.1 capability fits the field's ownership.
+2. The state is legitimately shared through `EngineEnv` — i.e. (a)
+   has been genuinely worked through and rejected.
+3. **The repository maintainer explicitly approves it.**
+
+The bar is intentionally high. Ordinary convenience, legacy coupling,
+"it doesn't fit anywhere else", or a wish for a generic
+`misc`/`shared`/`other` bucket does **not** qualify — the audit
+rejects those identifiers by name precisely so that a field with no
+home has to be argued for rather than filed away.
+
+An approved ninth capability requires these changes **in lockstep**:
+
+- §2.1's identifier table, and the record/view table beside it.
+- `CAPABILITIES` in `tools/engine_env_capability_audit.py`.
+- `tools/test_engine_env_capability_audit.py` — including the
+  end-state case, whose "exactly the eight `CAPABILITIES` keys"
+  assertion is written against the live constant and will need to
+  move with it.
+- `TEMPORARY_CEILING` gains the new key mapped to an **empty**
+  frozenset, and §6.2 gains its matching `*(none — ...)*` row; the
+  ceiling stays empty, and the new capability does not get a
+  grandfathering window.
+- The persistence-inventory row and the capability-inventory row for
+  every field it claims (case (b) above, for each).
+- A new `Engine.Core.Capability.<Name>` module following E1's
+  convention, listed in `synarchy.cabal`'s explicit library module
+  list, with a projection-aliasing hspec module registered in
+  `test-headless/Spec.hs` and the test suite's `other-modules`.
+
+And it must have a **real narrowed consumer** in the same change. No
+unused record is permitted — that rule is what has kept every one of
+the thirteen existing record/view types earning its place.
+
+#### (d) Adding a new module to §6.1
+
+A production module may join the permanent allowlist only
+**exceptionally**, with **explicit repository-maintainer approval**,
+and only when it is a genuine whole-session orchestration boundary:
+one that observes or coordinates the session by design and cannot be
+narrowed without destroying that role. The existing 24 are what that
+looks like — the env's definer and constructor, the engine-monad
+carrier, the boot wire-up per profile, the main loop, the Lua dispatch
+plumbing, and the save/load transaction (§7.8).
+
+Not sufficient, individually or together: convenience; an incomplete
+migration you intend to finish later; a helper you depend on that
+happens to take an opaque `EngineEnv`; or the module being large. If
+narrowing is merely inconvenient, narrow it — that is what the other
+ten children of #537 each did.
+
+An approved addition requires, in lockstep:
+
+- A §6.1 row with a real Category **and** a real Reason — the audit's
+  `audit_permanent_boundary` rejects an empty or placeholder cell, so
+  a name-only row will not pass.
+- The matching `PERMANENT_IMPORTERS` (or `PERMANENT_DEFINER`) update
+  in `tools/engine_env_capability_audit.py`. Neither change admits a
+  module on its own: the constants are checked against the live source
+  in both directions *and* against this section's documented set.
+- Self-test coverage in `tools/test_engine_env_capability_audit.py`,
+  including the end-state case's live-set equality assertion.
+
+The same policy governs any other future permanent exception —
+including a new §3/§7.3-style thread-private field owner.
 
 ## 7. Migration roadmap
 
 For each capability group: which fields it owns (§5's table for that
-group, not repeated here), which module families consume it today
-(§6.2's corresponding row), its dependencies on other capability
-groups, whether it can migrate independently, and the bounded
-follow-up scope a future child issue should have. **This section
-defines future scopes; it does not create those issues** (out of
-scope, per the issue text).
+group, not repeated here), which module families consumed it (§6.2's
+corresponding row), its dependencies on other capability groups,
+whether it could migrate independently, and what actually landed.
 
-### 7.1 `core-init`
+**All eight are now LANDED** (#889–#899). This section is therefore a
+record of the completed roadmap rather than a plan: it is where to
+look for *why* a capability was split the way it was, which is the
+context §6.4 assumes when it sends you to a record or a boundary rule.
+The one genuinely open item it still names is out of the epic's own
+scope by §1: field-by-field inventories of `EngineState`,
+`WorldManager`, `UnitManager`, and `BuildingManager` internals.
+
+### 7.1 `core-init` — **LANDED (#889, E1; completed by #899, E8)**
 
 - **Landed by #889.** `Engine.Core.Capability.Core` introduces
   `CoreCapability` (`ccEngineConfig`, `ccLoggerRef`, `ccLifecycleRef`,
@@ -849,22 +1113,43 @@ scope, per the issue text).
   permanent, whole-`EngineEnv` orchestration function (§6.1) — the
   rest of it still needs graphics/window/thread capabilities.
   `Engine.Core.Init`'s own helpers already took narrower explicit
-  values before this issue and needed no change. §6.2's `core-init` row
-  still names `Engine.Graphics.Vulkan.Command.Record` and
-  `Engine.Scripting.Lua.API.Log` — this issue did not migrate them;
-  they remain live temporary `core-init` consumers for a later child.
+  values before this issue and needed no change. #889 left §6.2's
+  `core-init` row naming two modules it did not migrate:
+  `Engine.Graphics.Vulkan.Command.Record` and
+  `Engine.Scripting.Lua.API.Log`.
+- **Completed by #899 (E8).** Those last two are now narrowed, and the
+  row is empty. Both turned out to be smaller than #889's caution
+  anticipated:
+  - `Engine.Graphics.Vulkan.Command.Record`'s only `EngineEnv` use was
+    one `engineConfig` read (the preview boot profile's clear colour);
+    everything else it touches is the CPS state σ. It now projects
+    `CoreCapability` from `ask` for that one read and keeps a narrow
+    `Engine.Core.State (EngineState(..), GraphicsState(..))` import for
+    the σ — which is not `EngineEnv` access at all (§6's own
+    classification counts an `EngineState`-only import as narrow).
+  - `Engine.Scripting.Lua.API.Log`'s four `log*Fn` entry points read
+    nothing but `loggerRef`, so they now take `CoreCapability`
+    directly. Its sole caller,
+    `Engine.Scripting.Lua.API.Register.Engine`, already had a
+    `toCoreCapability` projection in scope for #890's registry
+    loaders and simply passes it. The module no longer imports
+    `Engine.Core.State` at all — the same end state
+    `Building.Thread.Command` reached under §7.5's explicit-narrow
+    rule.
 - **Dependencies:** None — every other capability group depends on
   this one being available first (the logger and lifecycle flag are
   read from every thread), so this is necessarily the first migration,
   not something that can be deferred.
 - **Independent migration:** Yes, and it went first.
-- **Follow-up scope (remaining):** Narrow
-  `Engine.Graphics.Vulkan.Command.Record`/`Engine.Scripting.Lua.API.Log`
-  to `CoreCapability` where feasible. Given how universally
-  `loggerRef`/`lifecycleRef` are read, most call sites will still need
-  to reach them through a broader carrier for a while yet — this
-  migration was about establishing the record and proving the pattern
-  on one real consumer, not about shrinking every import immediately.
+- **Follow-up scope:** None. #889's caveat — that
+  `loggerRef`/`lifecycleRef` are read so universally most call sites
+  would need a broader carrier for a while yet — held for the ~440
+  `logInfoM`-style call sites, which still reach the logger through
+  `MonadReader EngineEnv` wrappers, exactly as designed. That is the
+  §6.1 carrier boundary working, not a remaining migration: what E1
+  set out to narrow was each module's own *field access*, and no
+  production module outside §6.1 has unrestricted access to these four
+  fields any more.
 
 ### 7.2 `render-gpu-asset` — **LANDED (#891, E3)**
 
@@ -1063,8 +1348,8 @@ change, no behaviour change.
   `EngineEnv` they only hand to a not-yet-narrowed helper
   (`World.Thread.Command` → `Command.Basic`/`Command.Init`; the four
   designation `Cursor.*` handlers → `Cursor.Common`'s F4 outcome
-  recorders, which belong to §7.5), and/or for a named accessor of a
-  field whose own capability has yet to migrate (`unitManagerRef`,
+  recorders, which belong to §7.5), and/or for a named accessor a
+  landed capability deliberately left narrow (`unitManagerRef`,
   `unitQueue`, `luaQueue`, `loadStatusRef`, `actionOutcomeRef`,
   `hudActivePageRef`, `saveBarrierRef`).
 - **Deferred to E5b (#894) — named individually, nothing silently
@@ -1145,9 +1430,9 @@ through a projected field instead of an `EngineEnv` one.
   Each still imports `Engine.Core.State` narrowly for the bare
   `EngineEnv` type they take and project from — plus, for
   `Engine.Scripting.Lua.API.Structure`, the canonical
-  `activeWorldPage`/`activeWorldState` helpers, and for `World.Thread`
-  the one named `saveBarrierRef` accessor whose own capability (§7.8,
-  #899) has yet to migrate.
+  `activeWorldPage`/`activeWorldState` helpers, and — until #899
+  (E8) — for `World.Thread`'s one named `saveBarrierRef` accessor,
+  which now goes through `Engine.Core.Capability.SaveLoad` (§7.8).
 - **Composed with already-landed records rather than widened.** None of
   the four needed a field added to `RenderHandoffCapability` or to any
   other record: their non-handoff reads were already covered, and each
@@ -1213,8 +1498,8 @@ call sequence over the same containers.
 - **Fully narrowed:** 35 of this row's former 49 §6.2 entries. All 35
   still import `Engine.Core.State`, but narrowly: every one needs at
   least the bare `EngineEnv` type (each still takes an `EngineEnv` and
-  projects from it), and several additionally name an accessor of a
-  field whose own capability has yet to migrate (`loggerRef`,
+  projects from it), and several additionally name a single accessor
+  a landed capability deliberately left narrow (`loggerRef`,
   `lifecycleRef`, `saveBarrierRef`) or one of the canonical
   `activeWorldStateFrom`/`activeWorldPageFrom`/`freshItemInstanceId`
   helpers.
@@ -1406,9 +1691,12 @@ same containers.
     `World.Render.Zoom.Quads` and `World.Thread.Discovery` (location
     defs). That is the complete set of engine-side content readers §5
     names.
-- **Follow-up scope:** None — this row is closed. The remaining
-  `EngineEnv` parameters listed above disappear as §7.2/§7.4/§7.5
-  land; nothing further is owed to `content-registries` itself.
+- **Follow-up scope:** None — this row is closed. §7.2/§7.4/§7.5 have
+  since landed; the `EngineEnv` parameters listed above that survive
+  are the ones handed to a §6.1 permanent orchestration boundary or to
+  a helper that composes several capability records, which is the
+  intended end state, not a remaining migration. Nothing further is
+  owed to `content-registries` itself.
 
 ### 7.7 `ui-hud-events` — **FULLY LANDED (E7a #897; E7b #898)**
 
@@ -1570,7 +1858,7 @@ sequence over the same containers.
   `TVar (Seq PlayerEvent)` fields are neither transposed nor aliased
   to each other — a swap the compiler cannot catch.
 
-### 7.8 `save-load-coordination`
+### 7.8 `save-load-coordination` — **LANDED (#899, E8)**
 
 - **Dependencies:** Every other group, transitively — a save/load
   transaction observes the whole session by design (see §6.1's
@@ -1578,13 +1866,56 @@ sequence over the same containers.
   `World.Load.Stage`/`World.Load.Publish`/`Engine.Scripting.Lua.API.Save`).
   This group's own five fields (the *coordination* state: barrier, load
   status, staged-load handoff, last-save-time, the item-instance
-  allocator) are narrower than the transaction machinery itself, but
-  migrating them meaningfully still means threading a
-  `SaveLoadCapability` record through code that, by its own nature (per
-  §6.1), needs to reach everything else too.
-- **Independent migration:** No — this should be the **last** group
-  migrated, once every other capability record exists for the save/load
-  machinery to compose from.
-- **Follow-up scope:** Revisit once §7.1-§7.7 have landed; likely folds
-  into whatever issue finally narrows those four modules' own internal
-  structure, rather than standing alone.
+  allocator) are narrower than the transaction machinery itself.
+- **Independent migration:** No — it went **last**, by design, once
+  every other capability record existed for the save/load machinery to
+  compose from.
+- **What landed:** `Engine.Core.Capability.SaveLoad` exports
+  `SaveLoadCapability` over exactly the five fields of §5's
+  `save-load-coordination` table (`slLoadStatusRef`,
+  `slPendingLoadRef`, `slSaveBarrierRef`, `slLastSaveTimeRef`,
+  `slNextItemInstanceIdRef`) plus its total, one-way
+  `toSaveLoadCapability` projection over the identical live handles.
+  One record, not a §3.1-style full/view pair: none of the five is
+  private to a single thread the way `engineStateRef` is to
+  `MainRender`. The barrier is read AND written by six roles by
+  design, the allocator is explicitly `AnyThread`, and the one field
+  with a single-role contract (`lastSaveTimeRef`, `LuaThread`-only) is
+  a plain monotonic clamp with no privileged pointer behind it —
+  §3.1's rule is about a record handing a thread a way to reach state
+  another thread privately owns, and there is none here.
+
+  The **real consumer**, per E1's no-unused-record rule, is
+  `World.Thread`: #894 (E5b) left it one narrow `saveBarrierRef`
+  accessor as its last direct `Engine.Core.State` field import, and
+  both of its barrier sites (the per-tick `captureLocked` gate and the
+  end-of-tick `acknowledgeCurrent ... SaveWorld`) now go through
+  `slSaveBarrierRef`. Its `Engine.Core.State` import names no
+  `save-load-coordination` accessor at all any more.
+
+  The other non-permanent barrier consumers — `Unit.Thread`,
+  `Combat.Thread`, `Sim.Thread`, `Engine.Input.Thread` and
+  `Engine.Loop.Mode` — keep narrow imports naming `saveBarrierRef` as
+  an individual accessor (each of them uses exactly that one field of
+  this capability, alongside accessors of other capabilities). That is
+  deliberate, and is the narrowest API in each case: §7.5's
+  explicit-narrow rule says a module needing exactly one handle should
+  take exactly that handle, not a five-field record it will use one
+  field of. None of them has unrestricted access, so none is a §6
+  ratchet concern; the record is for consumers that need more than one
+  handle, and is the documented home of the capability.
+- **What deliberately did NOT change:** §6.1's five permanent
+  save/load orchestration modules (`World.Thread.Command.Save`,
+  `.Save.WriteWorld`, `World.Load.Stage`, `World.Load.Publish`,
+  `Engine.Scripting.Lua.API.Save`). A save captures, and a load
+  replaces, every capability's state atomically in one coordinated
+  step; narrowing them would reconstruct an env-shaped aggregate one
+  level down while making the transaction harder to read. They may use
+  `SaveLoadCapability` internally, but they are not migration targets —
+  see §6.1's entry and §6.4(d) for the governing policy. Their internal
+  structure remains out of scope, as it was from the start.
+- **Follow-up scope:** None. This child also performed the epic's end
+  state: §6.2's ceiling is empty, the live unrestricted importer set
+  equals §6.1 exactly, and `audit_permanent_boundary` now pins §6.1's
+  documented set to the checked-in constants so neither can move alone.
+  §6.4 is the procedure that replaces the ceiling.
