@@ -19,10 +19,17 @@
 --   staging slot 'autosaveIncomingSlotName' — an ordinary slot, written
 --   by the ordinary transaction, with its own atomic publication and
 --   recovery generation. Only once that has actually succeeded does
---   'finalizeAutosaveRotation' discard the oldest generation, shift the
---   rest down, and rename the staged one into @autosave-1@. A rejected
---   request, a failed encode, a failed disk write: none of them touch a
---   single existing generation.
+--   'finalizeAutosaveRotation' age the family down and rename the staged
+--   one into @autosave-1@. A rejected request, a failed encode, a failed
+--   disk write: none of them touch a single existing generation.
+--
+--   The rotation itself is ordered the same way, for the same reason:
+--   the aged-out generation is RETIRED by rename into
+--   'autosaveRetiredSlotName' first, and only deleted once every other
+--   move has succeeded. An interruption or a failing rename therefore
+--   leaves a partially shifted family, never a shorter one — every
+--   generation is still on disk, and the next cycle finishes the
+--   discard the interrupted one intended.
 --
 --   A staged generation left behind by a crash between those two steps
 --   is not lost either — 'prepareAutosaveCycle' rotates it in before
@@ -88,6 +95,7 @@ module World.Save.Autosave
     ( autosaveSlotPrefix
     , autosaveSlotName
     , autosaveIncomingSlotName
+    , autosaveRetiredSlotName
     , prepareAutosaveCycle
     , finalizeAutosaveRotation
     ) where
@@ -126,6 +134,12 @@ autosaveSlotName n = autosaveSlotPrefix <> T.pack (show n)
 autosaveIncomingSlotName ∷ Text
 autosaveIncomingSlotName = autosaveSlotPrefix <> "incoming"
 
+-- | Where the generation that has aged out of the configured depth is
+--   moved ASIDE to, so that the only destructive step of a rotation is
+--   its LAST one. Same namespacing argument as the staging slot above.
+autosaveRetiredSlotName ∷ Text
+autosaveRetiredSlotName = autosaveSlotPrefix <> "retired"
+
 -- | One slot's pre-cycle facts.
 data SlotState = SlotState
     { ssName      ∷ !Text
@@ -147,7 +161,8 @@ clampDepth d = max rotationDepthMin (min rotationDepthMax d)
 --   the staging slot.
 cycleSlotNames ∷ Int → [Text]
 cycleSlotNames depth =
-    map autosaveSlotName [1 .. depth] ⧺ [autosaveIncomingSlotName]
+    map autosaveSlotName [1 .. depth]
+        ⧺ [autosaveIncomingSlotName, autosaveRetiredSlotName]
 
 readSlotStates ∷ LoggerState → HS.HashSet Text → [Text] → IO [SlotState]
 readSlotStates logger luaKnownNames names = do
@@ -222,16 +237,44 @@ prepareAutosaveCycle logger luaKnownNames requestedDepth = do
     problem ← cycleProblem slots
     case problem of
         Just reason → pure (Left ("autosave refused: " <> reason))
-        Nothing
-            | any stagedGeneration slots → do
-                logInfo logger CatWorld
-                    "Autosave: a previously published generation was never \
-                    \rotated in -- doing that first"
-                finalizeAutosaveRotation logger luaKnownNames depth
-            | otherwise → pure (Right ())
+        Nothing → do
+            -- A generation still sitting in the RETIRED slot is one a
+            -- previous cycle had already moved out of the family and was
+            -- interrupted before deleting. It has genuinely aged out, so
+            -- discarding it now is that cycle's own intended outcome
+            -- finally completing -- and it has to go before this cycle
+            -- can retire anything into that name.
+            retiredCleared ← clearRetired logger slots
+            case retiredCleared of
+                Left err → pure (Left err)
+                Right () | any stagedGeneration slots → do
+                    logInfo logger CatWorld
+                        "Autosave: a previously published generation was \
+                        \never rotated in -- doing that first"
+                    finalizeAutosaveRotation logger luaKnownNames depth
+                Right () → pure (Right ())
   where
     stagedGeneration s =
         ssName s ≡ autosaveIncomingSlotName ∧ ssDirExists s
+
+-- | Remove a leftover retired generation, if one is present. Always runs
+--   BEFORE a cycle retires anything of its own, since that rename needs
+--   the name free.
+clearRetired ∷ LoggerState → [SlotState] → IO (Either Text ())
+clearRetired logger slots =
+    case [ s | s ← slots
+         , ssName s ≡ autosaveRetiredSlotName, ssDirExists s ] of
+        [] → pure (Right ())
+        (retired : _) → do
+            logInfo logger CatWorld
+                "Autosave: discarding the generation a previous rotation \
+                \had already retired"
+            result ← try (removeDirectoryRecursive (ssDir retired))
+            pure $ case result ∷ Either IOException () of
+                Left e → Left ("autosave refused: could not discard the \
+                               \previously retired generation: "
+                               <> T.pack (show e))
+                Right () → Right ()
 
 -- | Ownership first, then containment — both across the WHOLE cycle
 --   range, before any of it is touched.
@@ -252,37 +295,57 @@ finalizeAutosaveRotation logger luaKnownNames requestedDepth = do
     let byName = HM.fromList [ (ssName s, s) | s ← slots ]
         slotAt i = HM.lookup (autosaveSlotName i) byName
         incoming = HM.lookup autosaveIncomingSlotName byName
+        retired  = HM.lookup autosaveRetiredSlotName byName
     problem ← cycleProblem slots
     case problem of
         Just reason → pure (Left ("autosave rotation refused: " <> reason))
-        Nothing → case incoming of
-            Just inc | ssDirExists inc → performRotation logger depth slotAt inc
-            _ → pure (Left "autosave rotation refused: nothing was \
-                           \published to rotate in")
+        Nothing → do
+            -- The retire rename below needs that name free.
+            retiredCleared ← clearRetired logger slots
+            case (retiredCleared, incoming, retired) of
+                (Left err, _, _) → pure (Left err)
+                (Right (), Just inc, Just ret) | ssDirExists inc →
+                    performRotation logger depth slotAt inc ret
+                _ → pure (Left "autosave rotation refused: nothing was \
+                               \published to rotate in")
 
 -- | Drop the oldest owned generation, shift the rest down, then move the
 --   staged generation into @autosave-1@. Runs only after every check
 --   above has passed AND a real generation is durably on disk.
+--   Deletion is the LAST step, and it only ever removes a generation
+--   that has already been moved out of the family. The aged-out
+--   generation is RETIRED by rename first, so an interrupted or failing
+--   rotation leaves every generation still on disk — a partially shifted
+--   family, but not a shorter one. Deleting first (the obvious order,
+--   since the shift needs the oldest slot free) meant a rename failing
+--   halfway had already destroyed one generation, and left the next
+--   cycle retrying from a family whose contents no longer matched their
+--   indices.
 performRotation
-    ∷ LoggerState → Int → (Int → Maybe SlotState) → SlotState
+    ∷ LoggerState → Int → (Int → Maybe SlotState) → SlotState → SlotState
     → IO (Either Text ())
-performRotation logger depth slotAt incoming = do
+performRotation logger depth slotAt incoming retired = do
     result ← try $ do
-        -- The generation that has aged out of the configured depth.
+        -- 1. Move the aged-out generation ASIDE. Nothing is destroyed.
         forM_ (slotAt depth) $ \oldest →
             when (ssDirExists oldest) $ do
                 logInfo logger CatWorld $
-                    "Autosave rotation: discarding oldest generation '"
+                    "Autosave rotation: retiring oldest generation '"
                     <> ssName oldest <> "'"
-                removeDirectoryRecursive (ssDir oldest)
-        -- Descending, so each destination is free before it is used.
+                renameDirectory (ssDir oldest) (ssDir retired)
+        -- 2. Shift descending, so each destination is free before use.
         forM_ [depth - 1, depth - 2 .. 1] $ \i →
             case (slotAt i, slotAt (i + 1)) of
                 (Just from, Just to) | ssDirExists from →
                     renameDirectory (ssDir from) (ssDir to)
                 _ → pure ()
+        -- 3. The staged generation becomes the newest.
         forM_ (slotAt 1) $ \newest →
             renameDirectory (ssDir incoming) (ssDir newest)
+        -- 4. Only now, with the whole family in its final shape, is the
+        --    retired generation actually gone.
+        stillRetired ← doesDirectoryExist (ssDir retired)
+        when stillRetired $ removeDirectoryRecursive (ssDir retired)
     pure $ case result ∷ Either IOException () of
         Left e   → Left ("autosave rotation failed: " <> T.pack (show e))
         Right () → Right ()

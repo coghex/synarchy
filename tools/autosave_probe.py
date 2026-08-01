@@ -44,8 +44,9 @@ What it proves, in order:
      which a published directory would otherwise silently shadow.
  10. ROTATION IS ORDERED AND OWNED, AND ONLY EVER FOLLOWS A REAL
      PUBLISH. Repeated autosaves keep `autosave-1` newest, only
-     classified-autosave slots are ever replaced, and a failed write
-     against a FULL family discards and renumbers nothing.
+     classified-autosave slots are ever replaced, a failed write against
+     a FULL family discards and renumbers nothing, and a rotation that
+     fails part-way leaves every generation on disk and retries cleanly.
  11. RETENTION. Reducing `rotation_depth` and disabling autosave both
      RETAIN existing higher-numbered generations untouched.
 
@@ -610,6 +611,47 @@ def main() -> int:
                f"{full_before} -> {autosave_slots(root)}")
         chk.ok(not staged_slot_exists(root),
                "and no staged generation is left behind")
+
+        # A rotation that FAILS PART-WAY must not shorten the family
+        # either. Stage a real generation, hold the scheduler off it, then
+        # make the rename impossible: retire-by-rename-then-delete means
+        # the first move fails and NOTHING has been destroyed.
+        rows = listing(args.port)
+        full_before = {n: rows[n]["timestamp"] for n in autosave_slots(root)}
+        send(args.port,
+             "local a = require('scripts.autosave'); "
+             f"a.performSave('{PAGE}'); a.pending = nil; return 'ok'",
+             timeout=30.0)
+        chk.ok(poll_until(90, lambda: staged_slot_exists(root)) or False,
+               "a generation is staged, with its rotation deliberately held")
+        os.chmod(saves_dir, stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            r = send(args.port,
+                     "local ok, reason = engine.finalizeAutosaveRotation(3); "
+                     "return tostring(ok)")
+            chk.ok(r == "false", "the rotation reports its rename failure", r)
+        finally:
+            os.chmod(saves_dir, stat.S_IRWXU)
+        rows = listing(args.port)
+        chk.ok({n: rows[n]["timestamp"] for n in autosave_slots(root)}
+               == full_before,
+               "a FAILED rotation destroys nothing -- the family is intact",
+               f"{full_before} -> {autosave_slots(root)}")
+        chk.ok(staged_slot_exists(root),
+               "and the staged generation is still there to retry from")
+        # Retrying now succeeds, and the family ends up correctly aged.
+        r = send(args.port, "return tostring(engine.finalizeAutosaveRotation(3))")
+        chk.ok(r == "true", "the retry rotates it in", r)
+        rows = listing(args.port)
+        chk.ok(autosave_slots(root) == ["autosave-1", "autosave-2", "autosave-3"],
+               "the family is back to the configured depth",
+               str(autosave_slots(root)))
+        chk.ok(rows["autosave-1"]["timestamp"] > full_before["autosave-1"],
+               "with the retried generation as the newest")
+        chk.ok(not staged_slot_exists(root)
+               and "autosave-retired" not in slot_dirs(root),
+               "and neither staging slot is left behind",
+               str(slot_dirs(root)))
 
         # ---------------------------------------------------------
         # 11. Retention on depth reduction and on disable.

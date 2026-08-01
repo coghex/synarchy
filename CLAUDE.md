@@ -982,7 +982,11 @@ before touching each area:
   the reserved `autosave-incoming` staging slot and the family only
   ages down once that transaction reports success, so a failed
   autosave can never have discarded or renumbered a generation; a
-  staged generation left by a crash is rotated in by the next cycle. A SUCCESSFUL
+  staged generation left by a crash is rotated in by the next cycle. The
+  rotation is ordered the same way — the aged-out generation is RETIRED
+  by rename and only deleted once every other move succeeded — so an
+  interrupted rotation leaves a partially shifted family, never a
+  shorter one. A SUCCESSFUL
   autosave restores the pre-request pause + visible time scale, but
   only if `playerIntentGenRef` still matches — an `MVar` that doubles
   as the mutex, so the comparison and the writes are one critical
