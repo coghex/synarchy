@@ -164,6 +164,39 @@ extractCallSite cs =
       , "logErrorFor", "logErrorSFor"
       ]
 
+-- | Shared entry-construction assembly for the normal and thread logging
+--   paths (CH-8, #944): @write@ selects the backend dispatch
+--   ('writeLogEntry' vs 'writeThreadLogEntry') and @srcLoc@ is computed by
+--   the caller rather than here, so this helper needs no 'HasCallStack'
+--   constraint of its own and 'extractCallSite''s skip list stays
+--   unchanged — there is no new internal frame for it to see.
+logEntryWith ∷ MonadIO m
+             ⇒ (LogBackend → LogEntry → IO ())
+             → Maybe SrcLoc
+             → LoggerState
+             → LogLevel
+             → LogCategory
+             → Text
+             → Map.Map Text Text
+             → m ()
+logEntryWith write srcLoc ls@LoggerState{..} level cat msg fields = liftIO $ do
+  shouldLog ← isEnabled ls cat level
+  when shouldLog $ do
+    now ← Clock.getCurrentTime
+    tid ← myThreadId
+    ctx ← readIORef lsContext
+
+    write lsBackend LogEntry
+      { leLevel = level
+      , leCategory = cat
+      , leMessage = msg
+      , leFields = Map.union fields (lcFields ctx)
+      , leTimestamp = now
+      , leThreadId = tid
+      , leSrcLoc = srcLoc
+      , leContext = lcBreadcrumbs ctx
+      }
+
 logMessage ∷ (HasCallStack, MonadIO m)
            ⇒ LoggerState
            → LogLevel
@@ -171,26 +204,10 @@ logMessage ∷ (HasCallStack, MonadIO m)
            → Text
            → Map.Map Text Text
            → m ()
-logMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
-  shouldLog ← isEnabled ls cat level
-  when shouldLog $ do
-    now ← Clock.getCurrentTime
-    tid ← myThreadId
-    ctx ← readIORef lsContext
-
-    let srcLoc = if lsShowLocation then extractCallSite callStack else Nothing
-        entry = LogEntry
-          { leLevel = level
-          , leCategory = cat
-          , leMessage = msg
-          , leFields = Map.union fields (lcFields ctx)
-          , leTimestamp = now
-          , leThreadId = tid
-          , leSrcLoc = srcLoc
-          , leContext = lcBreadcrumbs ctx
-          }
-
-    writeLogEntry lsBackend entry
+logMessage ls@LoggerState{..} level cat msg fields =
+  logEntryWith writeLogEntry
+    (if lsShowLocation then extractCallSite callStack else Nothing)
+    ls level cat msg fields
 
 logThreadMessage ∷ (HasCallStack, MonadIO m)
                  ⇒ LoggerState
@@ -199,26 +216,10 @@ logThreadMessage ∷ (HasCallStack, MonadIO m)
                  → Text
                  → Map.Map Text Text
                  → m ()
-logThreadMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
-  shouldLog ← isEnabled ls cat level
-  when shouldLog $ do
-    now ← Clock.getCurrentTime
-    tid ← myThreadId
-    ctx ← readIORef lsContext
-
-    let srcLoc = if lsShowLocation then extractCallSite callStack else Nothing
-        entry = LogEntry
-          { leLevel = level
-          , leCategory = cat
-          , leMessage = msg
-          , leFields = Map.union fields (lcFields ctx)
-          , leTimestamp = now
-          , leThreadId = tid
-          , leSrcLoc = srcLoc
-          , leContext = lcBreadcrumbs ctx
-          }
-
-    writeThreadLogEntry lsBackend entry
+logThreadMessage ls@LoggerState{..} level cat msg fields =
+  logEntryWith writeThreadLogEntry
+    (if lsShowLocation then extractCallSite callStack else Nothing)
+    ls level cat msg fields
 
 logDebug ∷ (HasCallStack, MonadIO m)
          ⇒ LoggerState → LogCategory → Text → m ()
