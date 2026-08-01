@@ -45,6 +45,39 @@ FORBIDDEN_TOKENS = frozenset(TOKEN_REPLACEMENTS)
 # unrelated compound operator.
 _SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
 
+# A qualified operator (`B..&.`, `P.>>=`, `Data.Bits..&.`) is written
+# with NO space between the module path and the operator, so the
+# qualifier's separating `.` lands INSIDE the maximal symbol run,
+# making a qualified use exactly one extra leading `.` versus the bare
+# spelling -- true for all five forbidden operators regardless of how
+# many dotted segments the qualifier itself has (each earlier internal
+# separator sits between two identifier segments and never touches the
+# run). `_QUALIFIER_CHARS`/`_VALID_QUALIFIER` confirm a genuine
+# uppercase-led module path sits immediately before the run, so this
+# can't misfire on an unrelated same-shaped run with no real qualifier.
+_QUALIFIER_CHARS = re.compile(r"[A-Za-z0-9_'.]")
+_VALID_QUALIFIER = re.compile(r"^(?:[A-Z][A-Za-z0-9_']*\.)*[A-Z][A-Za-z0-9_']*$")
+
+
+def _qualifier_before(text: str, pos: int) -> str:
+    """The maximal `[A-Za-z0-9_'.]` run immediately before `pos`."""
+    start = pos
+    while start > 0 and _QUALIFIER_CHARS.match(text[start - 1]):
+        start -= 1
+    return text[start:pos]
+
+
+def _matched_token(run: str, text: str, run_start: int) -> str | None:
+    """`run` (one maximal symbol-char lexeme) as a forbidden token,
+    bare or qualified -- or None if it's neither."""
+    if run in FORBIDDEN_TOKENS:
+        return run
+    if run.startswith(".") and run[1:] in FORBIDDEN_TOKENS:
+        if _VALID_QUALIFIER.match(_qualifier_before(text, run_start)):
+            return run[1:]
+    return None
+
+
 # Whole-file exemption: the one place the ASCII forms are the
 # definitions themselves, not usages.
 WHOLE_FILE_EXEMPT = {
@@ -248,8 +281,8 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     violations: list[Violation] = []
     for start, end in _code_runs(scan_text):
         for m in _SYMBOL_RUN.finditer(scan_text, start, end):
-            tok = m.group(0)
-            if tok not in FORBIDDEN_TOKENS:
+            tok = _matched_token(m.group(0), scan_text, m.start())
+            if tok is None:
                 continue
             if (m.start(), m.end()) in exempt_spans:
                 continue

@@ -158,6 +158,55 @@ def test_adjacent_operators_without_whitespace_still_detected():
            f"'==' with no surrounding whitespace is still flagged (got {v})")
 
 
+# ----- Qualified operator forms -------------------------------------------
+# Haskell writes a qualified operator with NO space (`B..&.`, `P.>>=`),
+# so its lexeme is the bare operator with one extra leading `.` from
+# the qualifier separator -- already used legitimately in UPrelude.hs
+# itself (`(B..&.)`, `(P.>>=)`). A production file using a qualified
+# import must be caught exactly like the bare spelling.
+
+_QUALIFIED_PREFIX = {
+    ".&.": "B.", ".|.": "B.", ">>=": "P.", "==": "E.", "/=": "E.",
+}
+
+
+def test_qualified_operator_forms_are_detected():
+    for tok, prefix in _QUALIFIED_PREFIX.items():
+        text = f"go x y = x {prefix}{tok} y\n"
+        v = find_violations(text, ORDINARY_FILE)
+        expect(_tokens(v) == {tok} and len(v) == 1,
+               f"qualified '{prefix}{tok}' is flagged as '{tok}' "
+               f"(got {[str(x) for x in v]})")
+
+
+def test_multi_segment_qualified_operator_is_detected():
+    text = "go x y = x Data.Bits..&. y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {".&."} and len(v) == 1,
+           f"a multi-segment qualifier ('Data.Bits..&.') is still "
+           f"flagged (got {[str(x) for x in v]})")
+
+
+def test_dot_prefixed_run_with_no_real_qualifier_is_not_flagged():
+    # Same shape as a qualified '.&.' (one extra leading dot) but with
+    # nothing that could be a real Haskell module path before it --
+    # must not be misread as a qualified use.
+    text = "go x y = x ..&. y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(v == [], f"a dot-prefixed run with no real module qualifier "
+           f"before it is not flagged (got {v})")
+
+
+def test_lowercase_prefix_is_not_a_valid_qualifier():
+    # Haskell module names always start uppercase -- a lowercase-led
+    # identifier immediately before the same dot-prefixed shape is not
+    # a real qualifier and must not be flagged.
+    text = "go x y = x foo..&. y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(v == [], f"a lowercase-led prefix is not treated as a "
+           f"qualifier (got {v})")
+
+
 # ----- Whole-file exemption (UPrelude.hs) -------------------------------
 
 def test_uprelude_whole_file_is_exempt():
@@ -303,6 +352,10 @@ def main() -> int:
         test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal,
         test_longer_symbol_run_is_not_a_false_positive,
         test_adjacent_operators_without_whitespace_still_detected,
+        test_qualified_operator_forms_are_detected,
+        test_multi_segment_qualified_operator_is_detected,
+        test_dot_prefixed_run_with_no_real_qualifier_is_not_flagged,
+        test_lowercase_prefix_is_not_a_valid_qualifier,
         test_uprelude_whole_file_is_exempt,
         test_glsl_quasiquote_is_exempt_but_surrounding_haskell_is_not,
         test_eq_instance_method_is_exempt_but_other_eq_uses_are_not,
