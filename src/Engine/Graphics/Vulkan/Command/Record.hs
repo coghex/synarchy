@@ -14,7 +14,8 @@ import Data.IORef (newIORef, readIORef, writeIORef, IORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Monad
-import Engine.Core.State
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.State (EngineState(..), GraphicsState(..))
 import Engine.Core.Types (EngineConfig(..), BootProfile(..))
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Types (SwapchainInfo(..), renderedImageLayout)
@@ -44,7 +45,7 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
       ,("layer_count", T.pack $ show $ Map.size layeredBatches)]
     
     state ← gets graphicsState
-    env ← ask
+    core ← toCoreCapability ⊚ ask
 
     renderPass ← maybe (logAndThrowM CatVulkan (ExGraphics RenderPassError)
                                      "Render pass not initialized")
@@ -121,7 +122,7 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
     -- Preview boot (#632) clears to the epic's grey (#828382) instead of
     -- the normal opaque black, so a bare window with no scene content
     -- still reads as "booted", not "still loading".
-    let clearColor = case ecBootProfile (engineConfig env) of
+    let clearColor = case ecBootProfile (ccEngineConfig core) of
             BootPreview → Color ( Float32 0.50980392 0.51372549 0.50980392 1.0 )
             _           → Color ( Float32 0.0 0.0 0.0 1.0 )
         renderPassInfo = zero
