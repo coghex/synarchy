@@ -72,11 +72,15 @@ through `Blood.Trail` or `Blood.Pool`.
 4. If a match exists within the accepted threshold, the new decal
    reuses that texture reference with its own transform, tint, age, and
    world placement.
-5. If no match exists, the system procedurally generates texture data
-   (`Blood.Texture.generateBloodTexture`), and on the next frame
-   `World.Render.BloodQuads.uploadBloodTextures` uploads it, assigns it
-   a stable bindless slot, and the descriptor joins the blood texture
-   FIFO.
+5. If no match exists, the pool synchronously mints a fresh descriptor
+   (assigned a stable `BloodTextureId`) and joins it to the blood
+   texture FIFO right away — no pixel data is generated at this point.
+   On a later frame, `World.Render.BloodQuads.uploadBloodTextures`
+   diffs the FIFO against what's already GPU-resident, generates that
+   descriptor's pixel data (`Blood.Texture.generateBloodTexture`), and
+   uploads it into a bindless slot. That slot is recyclable GPU
+   bookkeeping, kept separate from the stable `BloodTextureId` decals
+   actually reference.
 6. When the FIFO exceeds its configured maximum, the oldest blood
    texture is evicted. Every decal referencing that texture is removed
    at the same time (`removeDecalsForTexture`) so stale placements
@@ -336,21 +340,34 @@ resets independently, through a different path:
 `World.Save.Types.fromUnitSnapshot` always reconstructs a loaded unit
 with `uiTrailState = Nothing`, regardless of what the live unit's
 accumulator held at save time. These are two SEPARATE resets on two
-separate save/load surfaces, not one shared mechanism — note that
+separate save/load surfaces, not one shared mechanism. Note that
 `blood.clear()` only empties the active page's `BloodStore`; it does
-NOT touch any unit's `uiTrailState` (that only resets via the
-save/load reconstruction path above, or via death/destroy — see
-`Test.Headless.Blood.Trail`'s lifecycle coverage).
+NOT touch any unit's `uiTrailState` — that resets independently, via
+several paths that have nothing to do with save/load: the save/load
+reconstruction above, unit death/destroy, and — most often, in normal
+play — the instant a unit's external bleed rate reaches zero for ANY
+reason (clotting, bandaging, healing, or an explicit treatment), which
+`Combat.Wounds.Tick`'s own wound tick clears synchronously, and
+`Unit.Thread.Movement` re-checks defensively (a treatment or a healed-
+out wound can drop external bleed to zero between wound ticks, and
+consuming stale banked volume on that tick would stamp a mark for
+blood that stopped flowing) — see `Test.Headless.Blood.Trail`'s
+lifecycle coverage.
 
-**Why.** Blood marks are cosmetic, self-bounded (they age and
-eventually get FIFO-evicted or torn down with their page within a
-session regardless), and the texture pool is itself
-session-regenerable. Building and maintaining a full save component for
-them — schema, migration, integrity-graph coverage — is a real ongoing
-cost for state whose absence after a reload is unlikely to be missed
-(marks from an old fight are already stale by the time a session is
-reloaded). #884 (persist blood decals as a versioned save component)
-was closed as not planned on this basis.
+**Why.** Blood marks are cosmetic and already capacity-bounded — the
+texture pool and decal store are both hard-capped (see "Runtime
+tuning"), so the worst-case footprint a save component would ever need
+to carry is small and fixed, not unbounded. They are NOT self-expiring,
+though: aging never removes a mark (see "Aging" above), and FIFO
+eviction only fires when NEW activity pushes a store over its cap — an
+isolated old mark with nothing further spawned into that page can sit
+untouched for the rest of the session. Building and maintaining a full
+save component for them — schema, migration, integrity-graph coverage
+— is a real ongoing cost for state that is inherently disposable: every
+mark is regenerable from live gameplay, and a mark from a fight several
+sessions back has no gameplay meaning worth preserving. #884 (persist
+blood decals as a versioned save component) was closed as not planned
+on this basis.
 
 **The reversal path, if this decision is ever revisited.** Both records
 are already persistence-shaped: `BloodTextureDescriptor` and

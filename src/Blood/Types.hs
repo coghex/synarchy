@@ -161,11 +161,9 @@ data BloodTexturePool = BloodTexturePool
     , btpCap      ∷ !Int
     } deriving (Show, Eq, Generic)
 
--- | The #604 default cap. Deliberately small — this issue is the
---   model + debug surface, not final tuning (design doc's suggested
---   split leaves "aging, caps, and cleanup tuning" as its own later
---   issue); a small cap keeps eviction reachable in a short headless
---   probe run.
+-- | The settled compiled production default (see docs/blood_decals.md's
+--   "Runtime tuning" table) — deliberately small, since it also keeps
+--   eviction reachable in a short headless probe run.
 defaultBloodTextureCap ∷ Int
 defaultBloodTextureCap = 24
 
@@ -351,16 +349,15 @@ data BloodDecals = BloodDecals
     , bdlCap    ∷ !Int
     } deriving (Show, Eq, Generic)
 
--- | The #606 default cap on live decals per world page — independent of
---   'defaultBloodTextureCap' (many decals can legitimately share one
---   reused texture, per the near-match design). Without a bound of its
---   own, decals whose requests keep reusing an already-live texture
---   never age out (only texture eviction cascades to decal removal),
---   so repeated same/near-same spawns — a long fight, a filler-heavy
---   probe — could otherwise grow the decal list, and the per-frame
---   render-record scan over it, without bound. Small on purpose, same
---   "not final tuning" caveat as the texture cap (design doc's "Aging,
---   caps, and cleanup tuning" is the later issue for that).
+-- | The settled compiled production default (see docs/blood_decals.md's
+--   "Runtime tuning" table) — independent of 'defaultBloodTextureCap'
+--   (many decals can legitimately share one reused texture, per the
+--   near-match design). Without a bound of its own, decals whose
+--   requests keep reusing an already-live texture never age out (only
+--   texture eviction cascades to decal removal), so repeated same/
+--   near-same spawns — a long fight, a filler-heavy probe — could
+--   otherwise grow the decal list, and the per-frame render-record scan
+--   over it, without bound.
 defaultBloodDecalCap ∷ Int
 defaultBloodDecalCap = 512
 
@@ -417,10 +414,12 @@ lookupDecal did = HM.lookup did . bdlDecals
 allDecals ∷ BloodDecals → [BloodDecal]
 allDecals = sortOn bdeId . HM.elems . bdlDecals
 
--- | Game-seconds for a decal to linearly dry from its initial wetness
---   to fully dry (design doc's "Aging": wet → drying → old/faded).
---   Only a placeholder scale for this issue's derived read — no
---   ticking system exists yet to drive a real aging *render*.
+-- | Seconds of unpaused engine time for a decal to linearly dry from its
+--   initial wetness to fully dry (design doc's "Aging": wet → drying →
+--   old/faded). The settled compiled production default (see
+--   docs/blood_decals.md's "Runtime tuning" table); 'Blood.Render.decalTint'
+--   (#606) is the real aging render this value drives — never a texture
+--   rewrite, just a derived tint/alpha read.
 bloodDryDuration ∷ Double
 bloodDryDuration = 600
 
