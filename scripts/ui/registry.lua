@@ -26,10 +26,11 @@ local tabbar   = require("scripts.ui.tabbar")
 local uiList   = require("scripts.ui.list")
 local label    = require("scripts.ui.label")
 local panel    = require("scripts.ui.panel")
+local contextMenu = require("scripts.ui.context_menu")
 
 local WIDGET_MODULES = {
     button, checkbox, textbox, randbox, dropdown, toggle,
-    slider, tabbar, uiList, label, panel,
+    slider, tabbar, uiList, label, panel, contextMenu,
 }
 
 -- Modules whose dump() records are passive context geometry — labels

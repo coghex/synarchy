@@ -19,6 +19,7 @@ local tileEditorScriptId = nil
 local locationStamperScriptId = nil
 local pauseScriptId = nil
 local autosaveScriptId = nil
+local transferSessionScriptId = nil
 local tutorialProgressScriptId = nil
 local tutorialEvalScriptId = nil
 local tutorialHudScriptId = nil
@@ -138,11 +139,19 @@ function M.load()
     pauseScriptId = engine.loadScript("scripts/pause.lua", 1.0)
 
     -- Autosave scheduler (#913): owns the wall-clock interval, the
-    -- gameplay-view eligibility gate, and the rotate-then-save sequence.
+    -- gameplay-view eligibility gate, and the publish-then-rotate cycle.
     -- 1s tick -- the smallest legal interval is a whole minute, so this
     -- is already an order of magnitude finer than it needs to be, and
     -- the tick is a handful of comparisons when nothing is due.
     autosaveScriptId = engine.loadScript("scripts/autosave.lua", 1.0)
+
+    -- Transfer session (#1014, epic #1013 phase B1): owns the transient
+    -- player-managed-transfer session record right-click "Transfer"
+    -- creates. No per-tick work; loadScript'd (like pause above) so
+    -- init() runs and registers its reset hook before any world can
+    -- load.
+    transferSessionScriptId = engine.loadScript(
+        "scripts/transfer_session.lua", 1.0)
 
     -- Tutorial objective progress (#958): owns the durable completed-
     -- objective set and the live subobjective checks, and registers the
@@ -317,6 +326,9 @@ function M.shutdown()
     end
     if autosaveScriptId then
         engine.killScript(autosaveScriptId)
+    end
+    if transferSessionScriptId then
+        engine.killScript(transferSessionScriptId)
     end
     if tutorialProgressScriptId then
         engine.killScript(tutorialProgressScriptId)

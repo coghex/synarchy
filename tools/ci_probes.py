@@ -210,6 +210,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                    "through zoom-map icons, portal ghost/remote-modal "
                                    "flow, and real-input-driven unit movement — no GPU "
                                    "on the CI runner (#782)"),
+    "transfer_context_menu": (NEEDS_GPU, "offscreen boot: real right-click -> "
+                              "\"Transfer\" context-menu row located via "
+                              "ui.dumpWidgets() against a real Vulkan-rendered "
+                              "menu — no GPU on the CI runner (#1014)"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),

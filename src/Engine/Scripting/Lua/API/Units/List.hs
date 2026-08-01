@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Units.List
   , unknownUnitAnimFrame
   , unitGetFrameTextureFn
   , unitGetPortraitTextureFn
+  , prettifyDefName
   )
     where
 
