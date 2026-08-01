@@ -341,6 +341,7 @@ library
                      Engine.Core.Capability.Render
                      Engine.Core.Capability.RenderHandoff
                      Engine.Core.Capability.RenderView
+                     Engine.Core.Capability.SaveLoad
                      Engine.Core.Capability.Ui
                      Engine.Core.Capability.UnitCombat
                      Engine.Core.Capability.WorldSim
@@ -1124,6 +1125,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Capability.Input
                    Test.Headless.Capability.Render
                    Test.Headless.Capability.RenderHandoff
+                   Test.Headless.Capability.SaveLoad
                    Test.Headless.Capability.Ui
                    Test.Headless.Capability.UnitCombat
                    Test.Headless.Capability.WorldSim
