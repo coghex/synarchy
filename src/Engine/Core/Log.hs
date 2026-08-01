@@ -129,40 +129,32 @@ getEnabledCategories LoggerState{..} = do
   cats ← readIORef lsCategoryLevels
   return $ Map.toList cats
 
--- | Walk the 'CallStack' bottom-up, skipping known logging frames
+-- | The external source location a log entry should be attributed to.
+--
+--   'getCallStack' returns frames most-recent-first, each pairing a
+--   function name with the location that function was CALLED from. The
+--   chain runs unbroken from here out through the logging wrappers to
+--   the first caller without a 'HasCallStack' constraint, so the LAST
+--   frame is the public logging entry point paired with its external
+--   call site — exactly what we want to report.
+--
+--   Internal helpers below that entry point can only ever push newer
+--   (inner) frames, so adding, renaming, removing, or sharing one
+--   cannot change the answer. This deliberately replaces the old list
+--   of internal function-name strings (#945), which had to be kept in
+--   sync by hand and silently misattributed entries whenever it drifted
+--   -- as it did when #889 introduced the @*For@ layer.
+--
+--   The one standing requirement is that every PUBLIC logging entry
+--   point carries 'HasCallStack'; without it the chain starts inside
+--   this module and the outermost frame is an internal one. Nothing
+--   here can check that, so a NEW public logging family must add a case
+--   to the @logging source-location attribution@ describe block in
+--   @test-headless\/Test\/Headless\/Core\/LogMonad.hs@.
 extractCallSite ∷ CallStack → Maybe SrcLoc
-extractCallSite cs =
-  let frames = getCallStack cs
-      reversed = reverse frames
-  in case reversed of
-    [] → Nothing
-    ((_, fallback):_) → case dropWhile isInternalCall reversed of
-      ((_, loc):_) → Just loc
-      _            → Just fallback  -- All internal: use most recent frame
-  where
-    isInternalCall (name, _) = name `elem`
-      [ "logMessage"
-      , "logDebug", "logDebugS"
-      , "logInfo", "logInfoS"
-      , "logWarn", "logWarnS"
-      , "logError", "logErrorS"
-      , "logDebugM", "logDebugSM"
-      , "logInfoM", "logInfoSM"
-      , "logWarnM", "logWarnSM"
-      , "logErrorM", "logErrorSM"
-      , "getLogger"  -- Also skip the logger fetcher
-      -- Engine.Core.Log.Monad's capability-scoped primitives (#889):
-      -- each *M wrapper now calls through one of these before reaching
-      -- the functions above, so they need the same skip treatment --
-      -- otherwise the walk stops one frame too early, at the *For
-      -- call site INSIDE Log.Monad, instead of falling through to the
-      -- real external caller recorded on the *M frame.
-      , "getLoggerFor"
-      , "logDebugFor", "logDebugSFor"
-      , "logInfoFor", "logInfoSFor"
-      , "logWarnFor", "logWarnSFor"
-      , "logErrorFor", "logErrorSFor"
-      ]
+extractCallSite cs = case reverse (getCallStack cs) of
+  ((_, outermost):_) → Just outermost
+  []                 → Nothing
 
 logMessage ∷ (HasCallStack, MonadIO m)
            ⇒ LoggerState
