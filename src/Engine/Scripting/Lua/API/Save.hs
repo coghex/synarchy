@@ -485,8 +485,10 @@ pushSaveConfig cfg = do
 --   The table is a PATCH: any key it omits keeps its current effective
 --   value, so a caller changing one setting can not accidentally rewrite
 --   the other two from stale UI state. Values are clamped into range on
---   the way out ('clampSaveConfig'), so what lands on disk always
---   decodes back to exactly what was written.
+--   the way out ('clampSaveConfig'), so what lands on disk always decodes
+--   back to exactly what was written — and only the keys that actually
+--   differ from the tracked template are recorded there at all (see
+--   'Engine.Save.Config.writeSaveConfig').
 setSaveConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setSaveConfigFn env = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
@@ -510,7 +512,8 @@ setSaveConfigFn env = do
                 , scRotationDepth   =
                     fromMaybe (scRotationDepth current) depth
                 }
-        result ← Lua.liftIO $ writeSaveConfig logger saveConfigLocalPath updated
+        result ← Lua.liftIO $ writeSaveConfig logger saveConfigDefaultPath
+                                             saveConfigLocalPath updated
         case result of
             Right () → Lua.pushboolean True
             Left err → do

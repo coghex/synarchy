@@ -19,7 +19,9 @@ that the settings UI's Save actions write:
   4. None of that dirties git: `git status` for `config/` + `.gitignore`
      is still clean afterward.
   5. The `save` family (#913) additionally resolves as a KEY-LEVEL
-     OVERLAY rather than "whole local file wins": a sparse
+     OVERLAY rather than "whole local file wins", and its local file
+     records only genuine OVERRIDES (a key matching the tracked template
+     is not written; a config matching it in every key removes the file): a sparse
      `config/save.local.yaml` carrying one key keeps the tracked
      template's value for every other key, and an out-of-range value
      resolves to the effective default instead of poisoning the file.
@@ -346,6 +348,32 @@ def main() -> int:
                          r == "60", r)
         passed &= check("no legacy config/save.yaml created by the save path",
                         not os.path.exists("config/save.yaml"))
+
+        # The local file is the player's OVERRIDES, not a full copy. A
+        # value they never chose must not be pinned there, or a future
+        # change to the tracked template could never reach them again.
+        os.remove("config/save.local.yaml")
+        send(args.port, "engine.setSaveConfig({enabled = true}); return 'ok'")
+        if os.path.exists("config/save.local.yaml"):
+            only_override = load_yaml("config/save.local.yaml")["save"]
+            passed &= check("enabling autosave records ONLY that key",
+                             set(only_override) == {"enabled"}
+                             and only_override["enabled"] is True,
+                             str(only_override))
+        r = send(args.port,
+                  "local c = engine.getSaveConfig(); "
+                  "return tostring(c.enabled)..'|'..c.intervalMinutes"
+                  "..'|'..c.rotationDepth")
+        sparse_effective = (f"true|{want_save['interval_minutes']}"
+                            f"|{want_save['rotation_depth']}")
+        passed &= check("the unset keys still resolve from the tracked template",
+                         r == sparse_effective, f"{r} (want {sparse_effective})")
+        # And back to the template in every key: nothing left to override.
+        send(args.port,
+              f"engine.setSaveConfig({{enabled = "
+              f"{str(bool(want_save['enabled'])).lower()}}}); return 'ok'")
+        passed &= check("a config matching the template removes the local file",
+                         not os.path.exists("config/save.local.yaml"))
 
         quit_engine(args.port, proc)
         proc = None

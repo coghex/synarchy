@@ -23,7 +23,10 @@
 --   the layer beneath it (ultimately the constant) and never fails the
 --   whole file the way a strict @.:@ decoder would. Writing, by
 --   contrast, always clamps into range ('clampSaveConfig'), so a value
---   this engine persists is valid by construction.
+--   this engine persists is valid by construction — and writes only the
+--   keys that genuinely DIFFER from the tracked template, so the local
+--   file stays what its name says: the player's overrides, not a full
+--   copy that would pin them against every future template change.
 --
 --   This family is deliberately absent from
 --   'Engine.Core.Init.migrateLegacyConfig': it is new in the #786
@@ -47,10 +50,11 @@ module Engine.Save.Config
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import Data.Aeson (Object, Value(..), FromJSON(..), (.:?), (.=), object)
-import Data.Aeson.Types (Parser, parseMaybe)
+import Data.Aeson
+    (Object, Value(..), FromJSON(..), ToJSON(..), (.:?), (.=), object)
+import Data.Aeson.Types (Pair, Parser, parseMaybe)
 import Control.Exception (SomeException, try)
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, removeFile)
 import Engine.Core.Log (LoggerState, LogCategory(..), logInfo, logWarn)
 
 -- | The effective autosave configuration.
@@ -189,20 +193,69 @@ loadSaveConfig logger defaultPath localPath = do
     localPatch ← readPatch logger localPath
     pure $ applyPatch (applyPatch defaultSaveConfig defPatch) localPatch
 
--- | Persist the player's chosen values to the gitignored local file.
---   Always writes a clamped, COMPLETE @save:@ block — the overlay is
---   about tolerating a sparse file, not about producing one.
-writeSaveConfig ∷ LoggerState → FilePath → SaveConfig → IO (Either Text ())
-writeSaveConfig logger path cfg0 = do
-    let cfg = clampSaveConfig cfg0
-        doc = object
-            [ "save" .= object
-                [ "enabled"          .= scEnabled cfg
-                , "interval_minutes" .= scIntervalMinutes cfg
-                , "rotation_depth"   .= scRotationDepth cfg
-                ]
+-- | Persist the player's chosen values to the gitignored local file —
+--   as OVERRIDES ONLY.
+--
+--   Only the keys that actually differ from what the tracked template
+--   resolves to are written, and a configuration that matches the
+--   template in every key removes the local file outright. Writing the
+--   full block instead would pin a player who merely enabled autosave to
+--   today's interval and depth forever: those values were never their
+--   choice, but a local file always wins, so a later change to the
+--   tracked default could never reach them again.
+--
+--   Values are clamped into range first, so anything this writes decodes
+--   back to exactly what was asked for.
+writeSaveConfig
+    ∷ LoggerState → FilePath → FilePath → SaveConfig → IO (Either Text ())
+writeSaveConfig logger defaultPath localPath desired0 = do
+    -- The baseline a sparse file inherits from: constants overlaid with
+    -- the tracked template, and deliberately NOT the current local file
+    -- (whose whole content is what is being replaced here).
+    baseline ← applyPatch defaultSaveConfig ⊚ readPatch logger defaultPath
+    let desired = clampSaveConfig desired0
+        overrides = catMaybes
+            [ overrideOf "enabled" (scEnabled baseline)
+                (scEnabled desired)
+            , overrideOf "interval_minutes" (scIntervalMinutes baseline)
+                (scIntervalMinutes desired)
+            , overrideOf "rotation_depth" (scRotationDepth baseline)
+                (scRotationDepth desired)
             ]
-    written ← try (Yaml.encodeFile path doc)
+    if null overrides
+      then clearLocalFile logger localPath
+      else writeOverrides logger localPath overrides
+  where
+    overrideOf ∷ ToJSON α ⇒ Text → α → α → Maybe Pair
+    overrideOf key base wanted
+        | encode base ≡ encode wanted = Nothing
+        | otherwise = Just (fromString (T.unpack key) .= wanted)
+      where encode = Yaml.encode ∘ toJSON
+
+-- | Nothing differs from the tracked template any more, so there is no
+--   override left to record. Removing the file (rather than writing an
+--   empty @save:@ block) is what lets a future template change reach
+--   this player.
+clearLocalFile ∷ LoggerState → FilePath → IO (Either Text ())
+clearLocalFile logger path = do
+    exists ← doesFileExist path
+    if not exists then pure (Right ()) else do
+        removed ← try (removeFile path)
+        case removed ∷ Either SomeException () of
+            Left e → do
+                let msg = "could not remove " <> T.pack path <> ": "
+                            <> T.pack (show e)
+                logWarn logger CatInit $ "save config: " <> msg
+                pure (Left msg)
+            Right () → do
+                logInfo logger CatInit $
+                    "Save config matches the tracked defaults; removed "
+                    <> T.pack path
+                pure (Right ())
+
+writeOverrides ∷ LoggerState → FilePath → [Pair] → IO (Either Text ())
+writeOverrides logger path overrides = do
+    written ← try (Yaml.encodeFile path (object ["save" .= object overrides]))
     case written ∷ Either SomeException () of
         Left e → do
             let msg = "could not write " <> T.pack path <> ": "
