@@ -1064,6 +1064,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.LayerA
                    Test.Headless.Input.WheelPolicy
                    Test.Headless.Graphics.VideoConfig
+                   Test.Headless.Graphics.VulkanAppIdentity
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot

@@ -24,15 +24,13 @@ defaultEngineConfig = EngineConfig
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig
-defaultGraphicsConfig = GraphicsConfig 
-  { gcAppName   = T.pack "Vulkan Device Test"
+defaultGraphicsConfig = GraphicsConfig
+  { gcAppName   = T.pack "Synarchy"
 #ifdef DEVELOPMENT
   , gcDebugMode = True
 #else
   , gcDebugMode = False
 #endif
-  , gcWidth     = 800
-  , gcHeight    = 600
   , gcMaxFrames = 2
   }
 
