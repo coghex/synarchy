@@ -17,9 +17,13 @@ module Test.Headless.Blood.Trail (spec) where
 import UPrelude
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Test.Hspec
-import Data.List (sort, nub)
+import Data.List (sort, nub, find)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
+import Control.Exception (finally)
+import System.Directory (removePathForcibly)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
@@ -32,6 +36,11 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
 import World.Save.Types (toUnitSnapshot, fromUnitSnapshot)
+import World.Save.Serialize (loadWorld)
+import World.Load.Stage (stageSession, renderStageError)
+import World.Load.Types (StagedSession(..), StagedPage(..))
+import World.Thread.Command.Save.WriteWorld (handleWorldSaveCommand)
+import World.Thread.Command.Init (handleWorldInitCommand)
 import Infection.Types (emptyInfectionManager)
 import Combat.Wounds (tickOneUnit)
 import qualified System.Random as Random
@@ -39,7 +48,7 @@ import Blood.Trail
 import Blood.Pool
 import Blood.Types
     (BloodStyle(..), FootprintBucket(..), BloodStore(..), BloodDecal(..)
-    , allDecals)
+    , allDecals, emptyBloodStore, defaultBloodTextureCap)
 import Combat.Wounds.Bleed (isExternallyBleedingKind)
 
 spec ∷ Spec
@@ -51,6 +60,7 @@ spec = do
   textureMappingSpec
   pageTargetingSpec
   lifecycleSpec
+  worldPersistenceSpec
   poolArbitrationSpec
   poolCadenceSpec
   poolBoundSpec
@@ -481,6 +491,83 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
         uiBlood surviving' `shouldSatisfy` (> 0)
         (tsClusterLayers <$> uiTrailState surviving') `shouldBe` Just 7
         (tsClusterAnchor <$> uiTrailState surviving') `shouldBe` Just (Just (12.5, 7.25))
+
+-- | Issue #885: blood is transient BY DESIGN — a loaded session starts
+--   with no marks. Unlike 'lifecycleSpec' above (which round-trips only
+--   the Lua-owned 'toUnitSnapshot'/'fromUnitSnapshot' unit slice), this
+--   exercises the REAL disk-backed save/load path
+--   ('World.Thread.Command.Save.WriteWorld.handleWorldSaveCommand' →
+--   'World.Save.Serialize.loadWorld' → 'World.Load.Stage.stageSession')
+--   starting from a session that genuinely has both a live decal AND a
+--   live trail/pool accumulator, proving neither survives — not just
+--   that the save DTOs happen to lack the fields.  Staging only, never
+--   publishing (same reasoning 'Test.Headless.World.Identity' documents:
+--   this module's own 'initEnv' is a PRIVATE engine, so publishing would
+--   be safe here too, but staging alone is already sufficient proof and
+--   keeps the test cheap).
+worldPersistenceSpec ∷ Spec
+worldPersistenceSpec =
+  describe "Blood world-level persistence: transience across a real \
+           \save/load (#885)" $
+    it "a real save/load round trip restores no decals and no trail \
+       \state, even though the live session had both" $ do
+        env ← initEnv
+        logger ← readIORef (loggerRef env)
+        -- A real (cheap, w8) world init — matching the codebase's own
+        -- "private cheap w8 page" convention — rather than a hand-built
+        -- 'WorldState', so staging's chunk regen has real plates/timeline
+        -- to work from instead of 'defaultWorldGenParams' placeholders.
+        handleWorldInitCommand env logger pageA 42 8 3 Nothing
+        mWs ← lookup pageA . wmWorlds ⊚ readIORef (worldManagerRef env)
+        ws ← case mWs of
+            Just ws' → pure ws'
+            Nothing  → expectationFailure "world init did not register the page"
+                        ≫ error "unreachable"
+
+        now ← readIORef (gameTimeRef env)
+        spawnTrailMark (toWorldSimCapability env) pageA 3 3 0 "slash" 0.2 0 0 Nothing now
+
+        let uid = UnitId 1
+            liveTs = emptyTrailState
+                { tsPendingVolume = 0.4, tsClusterAnchor = Just (3, 3)
+                , tsClusterLayers = 2 }
+        writeIORef (unitManagerRef env)
+            (emptyUnitManager { umDefs = HM.singleton "t" minimalDef
+                              , umInstances = HM.singleton uid (minimalInst pageA (Just liveTs))
+                              , umNextId = 2 })
+
+        storeBefore ← readIORef (wsBloodStoreRef ws)
+        length (allDecals (bstDecals storeBefore)) `shouldSatisfy` (> 0)
+
+        let slot = "hspec_blood_transience_885"
+            cleanup = removePathForcibly ("saves/" <> slot)
+        cleanup
+        (`finally` cleanup) $ do
+            handleWorldSaveCommand env logger pageA slot
+                "2026-07-29T00:00:00.000000Z" [] [] Nothing
+            matReg ← readIORef (materialRegistryRef env)
+            loaded ← loadWorld logger slot HS.empty HS.empty
+            case loaded of
+                Left (_, e) → expectationFailure (T.unpack e)
+                Right (sd, _, _) → do
+                    stagedOrErr ← stageSession env logger sd matReg
+                    case stagedOrErr of
+                        Left e → expectationFailure
+                            (T.unpack (renderStageError e))
+                        Right staged → do
+                            case find ((≡ pageA) . spPageId) (ssPages staged) of
+                                Nothing → expectationFailure
+                                    "saved page missing from staged session"
+                                Just sp → do
+                                    store' ← readIORef
+                                        (wsBloodStoreRef (spWorldState sp))
+                                    store' `shouldBe`
+                                        emptyBloodStore defaultBloodTextureCap
+                            case HM.lookup uid (umInstances (ssUnits staged)) of
+                                Nothing → expectationFailure
+                                    "saved unit missing from staged session"
+                                Just inst' →
+                                    uiTrailState inst' `shouldBe` Nothing
 
 -- ----- #883: stationary/collapsed pooling -----
 

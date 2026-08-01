@@ -958,6 +958,29 @@ before touching each area:
   down to compensate just moves the blackout to the first meal's salt
   bolus (`salts.mealSalt` restores 0.30 of max_salt per feed). Both were
   observed live while building the gate.
+- **Testing blood decals headless (#603 epic, #604/#606/#607/#788/#882/#883)**
+  — full architecture record: `docs/blood_decals.md`. Five hspec
+  groups (`test-headless/Test/Headless/Blood/`), each independently
+  targetable via `--match`: `Blood.Types` (texture-pool/decal-store FIFO
+  + matching), `Blood.Texture` (deterministic pixel generation),
+  `Blood.Impact` (wound → one-shot mark mapping), `Blood.Trail`
+  (ongoing-bleeding gating/conservation/partition-invariance math —
+  includes `Blood.Pool` coverage: stationary pooling arbitration,
+  layer bound, placement), and `Blood.Teardown` (GPU-dispose queue
+  plumbing, no device). Turnkey probes: `blood_decal_probe.py`
+  (texture reuse/eviction/render), `blood_impact_probe.py` (wound-to-
+  mark mapping), `bleeding_trail_probe.py` (#882/#883 moving trail +
+  stationary pooling), and the needs-GPU
+  `blood_gpu_lifecycle_probe.py` (#788 upload/dispose against a real
+  device — manual-only). **Transience contract**: blood is transient
+  BY DESIGN — `wsBloodStoreRef` and every unit's
+  `Unit.Types.Trail.TrailState` are deliberately never persisted, and
+  a loaded session always starts with no decals and no active
+  trail/pool accumulators, even one that was saved with plenty of
+  both (closed issue #884 is the specification for reversing this,
+  should it ever be revisited). A test asserting a mark or an
+  accumulator survives a save/load round trip is testing for behavior
+  this engine deliberately does not have.
 - **Logging streams** — event log: `engine.getEventLog()`, emit via
   `engine.emitEvent(cat,text)` / `emitEventAt` /
   `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if

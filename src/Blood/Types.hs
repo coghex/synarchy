@@ -15,10 +15,12 @@
 --   the pool is over its cap, and places a decal, all as one pure
 --   step so a single atomicModifyIORef' covers the whole operation.
 --
---   Deliberately never persisted (issue #604 scope) — mirrors
---   'World.State.Types.wsStructureStageRef': a fresh 'WorldState' gets
---   an empty 'BloodStore' and it dies with the world, no
---   'WorldPageSave' field, no save-version bump.
+--   Deliberately never persisted — blood is transient BY DESIGN (the
+--   epic's settled contract, not a scope placeholder; see
+--   docs/blood_decals.md's "Transience" section and closed issue #884).
+--   Mirrors 'World.State.Types.wsStructureStageRef': a fresh
+--   'WorldState' gets an empty 'BloodStore' and it dies with the world,
+--   no 'WorldPageSave' field, no save-version bump.
 module Blood.Types
     ( BloodStyle(..)
     , SeverityBucket(..)
@@ -277,7 +279,8 @@ newtype BloodDecalId = BloodDecalId { unBloodDecalId ∷ Word32 }
     deriving anyclass (Hashable)
 
 -- | One placed blood mark. Field order isn't load-bearing (no
---   Serialize — never saved, #604 scope).
+--   Serialize — blood is deliberately transient, see the module
+--   haddock and docs/blood_decals.md's "Transience" section).
 data BloodDecal = BloodDecal
     { bdeId         ∷ !BloodDecalId
     , bdeTexture    ∷ !BloodTextureId
@@ -297,9 +300,11 @@ data BloodDecal = BloodDecal
     , bdeScale      ∷ !Float
     , bdeCreatedAt  ∷ !Double
       -- ^ Game time at placement. "Current age" (design doc) is
-      --   derived at read time (now - bdeCreatedAt), not stored — no
-      --   ticking system owns this yet (#604 scope excludes rain/
-      --   fluid interaction and aging renders).
+      --   derived at read time (now - bdeCreatedAt), not stored —
+      --   'Blood.Render.decalTint' (#606) is the aging render this
+      --   value drives; rain/fluid interaction remains deliberately
+      --   deferred (see docs/blood_decals.md's "Deferred: rain and
+      --   fluid integration").
     , bdeInitialWetness ∷ !Float
       -- ^ Wetness at creation, 0..1 (design doc's "current age/
       --   wetness/dryness" — the stored half; a caller can spawn an
