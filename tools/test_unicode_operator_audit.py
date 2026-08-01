@@ -107,6 +107,40 @@ def test_escaped_quote_inside_string_does_not_end_it_early():
            f"literal, so only the real code `>>=` is flagged (got {v})")
 
 
+# ----- Char literals -----------------------------------------------------
+
+def test_char_literal_containing_a_double_quote_does_not_mask_later_code():
+    # A real occurrence (Engine/Scripting/Lua/API/Shell.hs): `'"'` is a
+    # valid char literal for the double-quote character. If its `"`
+    # were mistaken for a string-literal opener, the scanner would
+    # stay "in a string" past it, and the real `==` below would go
+    # undetected until some LATER unrelated `"` happened to close it.
+    text = "quote = '\"'\nequal x y = x == y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {"=="} and len(v) == 1,
+           f"a real '==' after a `'\"'` char literal is still flagged "
+           f"(got {[str(x) for x in v]})")
+    expect(v[0].line == 2, "the flagged occurrence reports line 2")
+
+
+def test_escaped_single_quote_char_literal_does_not_confuse_the_scanner():
+    text = "tick = '\\''\ngo x y = x == y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {"=="} and len(v) == 1,
+           f"a real '==' after an escaped-quote char literal is still "
+           f"flagged (got {[str(x) for x in v]})")
+
+
+def test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal():
+    # Haskell identifiers may end (or contain) `'` -- `x'` is not the
+    # start of a char literal, so this must not throw off detection.
+    text = "go x' y = x' == y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {"=="} and len(v) == 1,
+           f"a trailing prime on an identifier does not mask the real "
+           f"'==' that follows (got {[str(x) for x in v]})")
+
+
 # ----- Exact-token / maximal-munch boundary -----------------------------
 
 def test_longer_symbol_run_is_not_a_false_positive():
@@ -264,6 +298,9 @@ def main() -> int:
         test_nested_block_comment_does_not_trigger_but_real_code_after_does,
         test_string_literal_does_not_trigger,
         test_escaped_quote_inside_string_does_not_end_it_early,
+        test_char_literal_containing_a_double_quote_does_not_mask_later_code,
+        test_escaped_single_quote_char_literal_does_not_confuse_the_scanner,
+        test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal,
         test_longer_symbol_run_is_not_a_false_positive,
         test_adjacent_operators_without_whitespace_still_detected,
         test_uprelude_whole_file_is_exempt,

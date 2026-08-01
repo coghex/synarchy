@@ -115,12 +115,23 @@ def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
+_IDENT_CONTINUE = re.compile(r"[A-Za-z0-9_']")
+# A Haskell char literal, escaped or not (`'x'`, `'\n'`, `'\''`, `'\NUL'`,
+# `'\65'`, `'\x41'`, ...). Matched WHOLE and skipped atomically so a
+# literal double quote inside one -- `'"'`, a real occurrence in this
+# tree (Engine/Scripting/Lua/API/Shell.hs) -- can never be mistaken for
+# the start of a string literal and swallow everything up to some
+# unrelated LATER `"`, along with any real operator in between.
+_CHAR_LITERAL = re.compile(r"'(?:\\(?:[A-Za-z0-9^]+|.)|[^'\\\n])'")
+
+
 def _code_runs(text: str) -> list[tuple[int, int]]:
     """Spans of `text` that are plain Haskell code: outside `--` line
-    comments, nestable `{- -}` block comments, and `"..."` string
-    literals (backslash-escaped; under-skipping an escape's payload
-    never risks the closing quote, since the only escape that could
-    fool detection -- `\\"` -- is still consumed whole)."""
+    comments, nestable `{- -}` block comments, `'x'` char literals, and
+    `"..."` string literals (backslash-escaped; under-skipping an
+    escape's payload never risks the closing quote, since the only
+    escape that could fool detection -- `\\"` -- is still consumed
+    whole)."""
     i, n = 0, len(text)
     runs: list[tuple[int, int]] = []
     run_start: int | None = None
@@ -141,6 +152,17 @@ def _code_runs(text: str) -> list[tuple[int, int]]:
                     run_start = None
                 state, i = "LINE", i + 2
                 continue
+            # A `'` is only a CANDIDATE char-literal start when it can't
+            # be the trailing prime of an identifier (`x'`, `map''`) --
+            # Haskell identifiers may contain `'` anywhere after the
+            # first character.
+            if c == "'" and (i == 0 or not _IDENT_CONTINUE.match(text[i - 1])):
+                m = _CHAR_LITERAL.match(text, i)
+                if m:
+                    if run_start is None:
+                        run_start = i
+                    i = m.end()
+                    continue
             if c == '"':
                 if run_start is not None:
                     runs.append((run_start, i))
