@@ -74,7 +74,7 @@ import World.Types
 --   'Engine.Scripting.Lua.Message.Texture.invalidateAllWorldRenderCaches' — so a
 --   hidden world's decals are already uploaded the moment it becomes
 --   visible instead of popping in a frame late.
-uploadBloodTextures ∷ EngineM ε σ ()
+uploadBloodTextures ∷ EngineM σ ()
 uploadBloodTextures = do
     env ← ask
     gs ← gets graphicsState
@@ -94,7 +94,7 @@ uploadBloodTextures = do
 --   FIFO since last frame, then upload anything new.
 syncWorldBloodTextures ∷ Device → PhysicalDevice → CommandPool → Queue
                        → BindlessTextureSystem → (WorldPageId, WorldState)
-                       → EngineM ε σ BindlessTextureSystem
+                       → EngineM σ BindlessTextureSystem
 syncWorldBloodTextures dev pdev cmdPool queue bindless0 (_pid, ws) = do
     pool  ← bstPool ⊚ liftIO (readIORef (wsBloodStoreRef ws))
     known ← liftIO $ readIORef (wsBloodTextureHandlesRef ws)
@@ -126,7 +126,7 @@ type HandleMap = HM.HashMap BloodTextureId (TextureHandle, IO ())
 --   the bindless slot), and run its own image/view cleanup. Shared by
 --   FIFO 'evictOne' and world-teardown disposal (#788).
 disposeBloodRecord ∷ Device → BindlessTextureSystem → (TextureHandle, IO ())
-                   → EngineM ε σ BindlessTextureSystem
+                   → EngineM σ BindlessTextureSystem
 disposeBloodRecord dev bl (h, cleanup) = do
     bl' ← unregisterTexture dev h bl
     env ← ask
@@ -137,7 +137,7 @@ disposeBloodRecord dev bl (h, cleanup) = do
 
 -- | Drop one FIFO-evicted texture from a live world's handle map.
 evictOne ∷ Device → (BindlessTextureSystem, HandleMap) → BloodTextureId
-        → EngineM ε σ (BindlessTextureSystem, HandleMap)
+        → EngineM σ (BindlessTextureSystem, HandleMap)
 evictOne dev (bl, known) tid = case HM.lookup tid known of
     Nothing      → pure (bl, known)
     Just record  → do
@@ -159,7 +159,7 @@ evictOne dev (bl, known) tid = case HM.lookup tid known of
 --   destroy, for the same in-flight-frame reasoning 'syncWorldBloodTextures'
 --   documents. Safe no-op with no GPU: headless never uploads, so the
 --   drained record set is always empty and the device branch is skipped.
-disposeQueuedBloodTextures ∷ EngineM ε σ ()
+disposeQueuedBloodTextures ∷ EngineM σ ()
 disposeQueuedBloodTextures = do
     env ← ask
     records ← liftIO $ drainBloodDisposalRecords (bloodDisposeQueue env)
@@ -180,7 +180,7 @@ disposeQueuedBloodTextures = do
 
 uploadOne ∷ Device → PhysicalDevice → CommandPool → Queue
          → (BindlessTextureSystem, HandleMap) → BloodTextureDescriptor
-         → EngineM ε σ (BindlessTextureSystem, HandleMap)
+         → EngineM σ (BindlessTextureSystem, HandleMap)
 uploadOne dev pdev cmdPool queue (bl, known) d = do
     let img = generateBloodTexture d
     env ← ask

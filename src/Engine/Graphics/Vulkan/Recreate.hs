@@ -33,7 +33,7 @@ import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 
 -- | Recreate the swapchain and all dependent resources
-recreateSwapchain ∷ Window → EngineM ε σ ()
+recreateSwapchain ∷ Window → EngineM σ ()
 recreateSwapchain window = do
     state ← gets graphicsState
     
@@ -76,7 +76,7 @@ recreateSwapchain window = do
 
 -- | Recreate all swapchain-dependent resources
 recreateAllResources ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR 
-                     → Window → EngineM ε σ ()
+                     → Window → EngineM σ ()
 recreateAllResources pDevice device queues surface window = do
     state ← gets graphicsState
     
@@ -170,37 +170,37 @@ recreateAllResources pDevice device queues surface window = do
     logDebugM CatGraphics "All resources recreated"
 
 -- * State extractors
-getDeviceOrFail ∷ GraphicsState → EngineM ε σ Device
+getDeviceOrFail ∷ GraphicsState → EngineM σ Device
 getDeviceOrFail state = case vulkanDevice state of
     Just d  → pure d
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                  "No device"
 
-getPhysicalDeviceOrFail ∷ GraphicsState → EngineM ε σ PhysicalDevice
+getPhysicalDeviceOrFail ∷ GraphicsState → EngineM σ PhysicalDevice
 getPhysicalDeviceOrFail state = case vulkanPDevice state of
     Just pd → pure pd
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                  "No physical device"
 
-getSurfaceOrFail ∷ GraphicsState → EngineM ε σ SurfaceKHR
+getSurfaceOrFail ∷ GraphicsState → EngineM σ SurfaceKHR
 getSurfaceOrFail state = case vulkanSurface state of
     Just s  → pure s
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                  "No surface"
 
-getQueuesOrFail ∷ GraphicsState → EngineM ε σ DevQueues
+getQueuesOrFail ∷ GraphicsState → EngineM σ DevQueues
 getQueuesOrFail state = case deviceQueues state of
     Just q  → pure q
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                  "No device queues"
 
-getDescriptorManagerOrFail ∷ GraphicsState → EngineM ε σ DescriptorManager
+getDescriptorManagerOrFail ∷ GraphicsState → EngineM σ DescriptorManager
 getDescriptorManagerOrFail state = case descriptorState state of
     Just dm → pure dm
     Nothing → logAndThrowM CatDescriptor (ExGraphics DescriptorError)
                  "No descriptor manager"
 
-getTextureSystemOrFail ∷ EngineM ε σ BindlessTextureSystem
+getTextureSystemOrFail ∷ EngineM σ BindlessTextureSystem
 getTextureSystemOrFail = do
     env ← ask
     mts ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
@@ -209,7 +209,7 @@ getTextureSystemOrFail = do
         Nothing → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
                      "No texture system"
 
-getFontDescriptorLayoutOrFail ∷ GraphicsState → EngineM ε σ DescriptorSetLayout
+getFontDescriptorLayoutOrFail ∷ GraphicsState → EngineM σ DescriptorSetLayout
 getFontDescriptorLayoutOrFail state = case fontDescriptorLayout state of
     Just fdl → pure fdl
     Nothing  → logAndThrowM CatDescriptor (ExGraphics FontError)

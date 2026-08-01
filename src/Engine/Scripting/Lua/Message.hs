@@ -43,7 +43,7 @@ import Engine.Scripting.Lua.Message.WorldTexture ( handleWorldPreview
 import Engine.Scripting.Lua.Types
 import World.Render.BloodQuads (uploadBloodTextures, disposeQueuedBloodTextures)
 
-processLuaMessages ∷ EngineM ε σ ()
+processLuaMessages ∷ EngineM σ ()
 processLuaMessages = do
     env ← ask
     messages ← liftIO $ Q.flushQueue (luaToEngineQueue env)
@@ -96,12 +96,12 @@ discardLuaMessagesForActiveLoad env = do
 --   pure-IORef cases run in both; only GPU operations are gated. (Before
 --   this, a separate 'handleLuaMessageHeadless' duplicated every
 --   scene-graph case and had already drifted from this one.)
-whenGraphical ∷ EngineM ε σ () → EngineM ε σ ()
+whenGraphical ∷ EngineM σ () → EngineM σ ()
 whenGraphical act = do
     env ← ask
     if ecHeadless (engineConfig env) then pure () else act
 
-handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
+handleLuaMessage ∷ LuaToEngineMsg → EngineM σ ()
 handleLuaMessage msg = do
     case msg of
         LuaSetWindowMode mode → whenGraphical $ do

@@ -26,7 +26,7 @@ createTextureSystem ∷ PhysicalDevice
                     → CommandPool
                     → Queue
                     → TextureSystemConfig
-                    → EngineM ε σ BindlessTextureSystem
+                    → EngineM σ BindlessTextureSystem
 createTextureSystem pdev dev cmdPool queue config = do
   support ← liftIO $ queryBindlessSupport pdev
   let capability = determineTextureCapability support (tscReservedSlots config)
@@ -50,7 +50,7 @@ createTextureSystem pdev dev cmdPool queue config = do
 -- Returns the slot index for shader use
 loadTexture ∷ Device → PhysicalDevice → CommandPool → Queue
   → TextureHandle → FilePath → Filter → BindlessTextureSystem
-  → EngineM ε σ (Word32, BindlessTextureSystem)
+  → EngineM σ (Word32, BindlessTextureSystem)
 loadTexture dev pdev cmdPool queue texHandle path _filterMode system = do
     (_vulkanImage, imageView) ←
       createTextureImageView pdev dev cmdPool queue path

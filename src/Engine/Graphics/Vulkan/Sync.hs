@@ -18,7 +18,7 @@ import Engine.Core.State (EngineState(..), GraphicsState(..))
 --   allocResource — so the old set is destroyed (under deviceWaitIdle)
 --   on swapchain recreation and at shutdown instead of accumulating
 --   until program exit.
-createRenderFinishedSemaphores ∷ Vk.Device → Int → EngineM ε σ (V.Vector Vk.Semaphore)
+createRenderFinishedSemaphores ∷ Vk.Device → Int → EngineM σ (V.Vector Vk.Semaphore)
 createRenderFinishedSemaphores device count = do
   let semaphoreInfo = Vk.SemaphoreCreateInfo
         { next = ()

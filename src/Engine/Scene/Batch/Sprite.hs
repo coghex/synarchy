@@ -21,7 +21,7 @@ import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugSM)
 
-collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
+collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do
     let allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes

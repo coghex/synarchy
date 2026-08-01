@@ -19,7 +19,7 @@ import Vulkan.Core10
 import Vulkan.Zero
 
 createVulkanImage ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
-                  → ImageUsageFlags → MemoryPropertyFlags → EngineM ε σ VulkanImage
+                  → ImageUsageFlags → MemoryPropertyFlags → EngineM σ VulkanImage
 createVulkanImage device pDevice (width, height) format tiling usage memProps = do
   let imageInfo = zero
         { imageType = IMAGE_TYPE_2D
@@ -56,7 +56,7 @@ createVulkanImage device pDevice (width, height) format tiling usage memProps = 
 -- | Like 'createVulkanImage' but returns an explicit cleanup action
 createVulkanImage' ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
                    → ImageUsageFlags → MemoryPropertyFlags 
-                   → EngineM ε σ (VulkanImage, IO ())
+                   → EngineM σ (VulkanImage, IO ())
 createVulkanImage' device pDevice (width, height) format tiling usage memProps = do
   let imageInfo = zero
         { imageType = IMAGE_TYPE_2D
@@ -102,7 +102,7 @@ createVulkanImageView ∷ Device
                      → VulkanImage
                      → Format
                      → ImageAspectFlags
-                     → EngineM ε σ ImageView
+                     → EngineM σ ImageView
 createVulkanImageView device (VulkanImage image _) format aspectFlags =
   allocResource (\view → destroyImageView device view Nothing) $
     createImageView device zero
@@ -125,7 +125,7 @@ createVulkanImageView' ∷ Device
                        → VulkanImage
                        → Format
                        → ImageAspectFlags
-                       → EngineM ε σ (ImageView, IO ())
+                       → EngineM σ (ImageView, IO ())
 createVulkanImageView' device (VulkanImage image _) format aspectFlags =
   allocResource'IO (\view → liftIO $ destroyImageView device view Nothing) $
     createImageView device zero
@@ -141,7 +141,7 @@ createVulkanImageView' device (VulkanImage image _) format aspectFlags =
           }
       } Nothing
 
-findMemoryType ∷ PhysicalDevice → Word32 → MemoryPropertyFlags → EngineM ε σ Word32
+findMemoryType ∷ PhysicalDevice → Word32 → MemoryPropertyFlags → EngineM σ Word32
 findMemoryType pdev typeFilter properties = do
   memProps ← getPhysicalDeviceMemoryProperties pdev
   let types = memoryTypes memProps
@@ -159,7 +159,7 @@ findMemoryType pdev typeFilter properties = do
   findType 0
 
 copyBufferToImage ∷ CommandBuffer → Buffer
-  → VulkanImage → Word32 → Word32 → EngineM ε σ ()
+  → VulkanImage → Word32 → Word32 → EngineM σ ()
 copyBufferToImage cmdBuf buffer (VulkanImage image _) width height
   = cmdCopyBufferToImage cmdBuf buffer image
                            IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL $ V.singleton region

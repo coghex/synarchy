@@ -50,7 +50,7 @@ import Vulkan.Zero (zero)
 --   once per world init/load, where the stall is invisible.
 --   unregisterTexture points the slot at the undefined texture and
 --   recycles it.
-disposeTransientTexture ∷ Device → TransientTexture → EngineM ε σ ()
+disposeTransientTexture ∷ Device → TransientTexture → EngineM σ ()
 disposeTransientTexture dev old = do
     env ← ask
     liftIO $ deviceWaitIdle dev
@@ -62,7 +62,7 @@ disposeTransientTexture dev old = do
         Nothing → pure ()
     liftIO $ ttCleanup old
 
-handleWorldPreview ∷ EngineM ε σ ()
+handleWorldPreview ∷ EngineM σ ()
 handleWorldPreview = do
     env ← ask
     mPreview ← liftIO $ atomicModifyIORef' (worldPreviewRef env) $ \v → (Nothing, v)
@@ -184,7 +184,7 @@ handleWorldPreview = do
 --   Called every frame.  When the world thread produces atlas data,
 --   this creates a GPU texture and stores the ZoomAtlasInfo on all
 --   visible world states.
-handleZoomAtlasUpload ∷ EngineM ε σ ()
+handleZoomAtlasUpload ∷ EngineM σ ()
 handleZoomAtlasUpload = do
     env ← ask
     mAtlas ← liftIO $ atomicModifyIORef' (zoomAtlasDataRef env) $ \v → (Nothing, v)

@@ -37,7 +37,7 @@ import UI.Tooltip.Render
 
 -- | Run one frame of the tooltip subsystem. Called from the render
 --   loop after input has been applied and before 'renderUIPages'.
-updateTooltipState ∷ EngineM ε σ ()
+updateTooltipState ∷ EngineM σ ()
 updateTooltipState = do
     env ← ask
     let rv = toRenderViewCapability env

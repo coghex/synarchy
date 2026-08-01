@@ -82,7 +82,7 @@ layoutText atlas desiredSize startX startY screenW screenH text color =
 -- * Instance Buffer Management
 
 -- | Cleanup instance buffers from the previous frame
-cleanupPendingInstanceBuffers ∷ EngineM ε σ ()
+cleanupPendingInstanceBuffers ∷ EngineM σ ()
 cleanupPendingInstanceBuffers = do
     state ← gets graphicsState
     case vulkanDevice state of
@@ -105,7 +105,7 @@ cleanupPendingInstanceBuffers = do
 --   variant shares.
 createFontPipeline ∷ Device → RenderPass → Extent2D
   → DescriptorSetLayout → SampleCountFlagBits
-  → EngineM ε σ (Pipeline, PipelineLayout, DescriptorSetLayout)
+  → EngineM σ (Pipeline, PipelineLayout, DescriptorSetLayout)
 createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
     fontTexLayout ← createFontTextureLayout device
     (pipeline, pipelineLayout) ← createFontPipelineWith
@@ -120,7 +120,7 @@ createFontPipelineWith ∷ BS.ByteString               -- ^ Vertex shader code
                        → Device → RenderPass → Extent2D
                        → DescriptorSetLayout → DescriptorSetLayout
                        → SampleCountFlagBits
-                       → EngineM ε σ (Pipeline, PipelineLayout)
+                       → EngineM σ (Pipeline, PipelineLayout)
 createFontPipelineWith vertShaderCode setCleanup device renderPass swapExtent
                        uniformLayout fontTexLayout sampleCount = do
     let Extent2D w h = swapExtent
@@ -266,7 +266,7 @@ createFontPipelineWith vertShaderCode setCleanup device renderPass swapExtent
 
 -- | Create shared quad buffer for all text rendering
 createFontQuadBuffer ∷ Device → PhysicalDevice → Queue → CommandPool 
-                     → EngineM ε σ (Buffer, DeviceMemory)
+                     → EngineM σ (Buffer, DeviceMemory)
 createFontQuadBuffer device pDevice queue cmdPool = do
     let quadVertices = VS.fromList
             [ 0.0, 0.0, 0.0, 0.0
@@ -301,7 +301,7 @@ createFontQuadBuffer device pDevice queue cmdPool = do
 -- * Font Texture Descriptor Set Layout
 
 -- | Create font-specific texture descriptor set layout (1 sampler)
-createFontTextureLayout ∷ Device → EngineM ε σ DescriptorSetLayout
+createFontTextureLayout ∷ Device → EngineM σ DescriptorSetLayout
 createFontTextureLayout device = do
     let binding = zero
           { binding = 0
@@ -319,7 +319,7 @@ createFontTextureLayout device = do
 -- | Create font UI rendering pipeline (uses UI camera)
 createFontUIPipeline ∷ Device → RenderPass → Extent2D → DescriptorSetLayout
     → DescriptorSetLayout → SampleCountFlagBits
-    → EngineM ε σ (Pipeline, PipelineLayout)
+    → EngineM σ (Pipeline, PipelineLayout)
 createFontUIPipeline =
     createFontPipelineWith fontUIVertexShaderCode (\act c → c { cleanupFontUI = act })
 

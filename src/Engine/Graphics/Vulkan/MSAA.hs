@@ -20,7 +20,7 @@ createMSAAColorImage ∷ PhysicalDevice
                      → Format          -- ^ Swapchain image format
                      → Extent2D        -- ^ Swapchain extent
                      → SampleCountFlagBits
-                     → EngineM ε σ (Image, DeviceMemory, ImageView)
+                     → EngineM σ (Image, DeviceMemory, ImageView)
 createMSAAColorImage pDevice device format extent sampleCount = do
     let Extent2D w h = extent
 
@@ -89,7 +89,7 @@ createMSAAColorImage pDevice device format extent sampleCount = do
 
 -- | Find memory type for MSAA image.
 -- Prefer LAZILY_ALLOCATED (saves bandwidth on tiled GPUs), fall back to DEVICE_LOCAL.
-findMSAAMemoryType ∷ PhysicalDevice → MemoryRequirements → EngineM ε σ Word32
+findMSAAMemoryType ∷ PhysicalDevice → MemoryRequirements → EngineM σ Word32
 findMSAAMemoryType pDevice memReqs = do
     memProps ← getPhysicalDeviceMemoryProperties pDevice
     let typeBits = memoryTypeBits memReqs

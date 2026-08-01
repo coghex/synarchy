@@ -136,7 +136,7 @@ lookupShaderAsset handle pool = do
   return $ Map.lookup handle stateMap
 
 -- | Convenience wrapper that auto-generates a 'TextureHandle' before loading
-loadTextureAtlas ∷ Text → FilePath → Text → EngineM ε σ AssetId
+loadTextureAtlas ∷ Text → FilePath → Text → EngineM σ AssetId
 loadTextureAtlas name path arrayName = do
   poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
@@ -150,7 +150,7 @@ loadTextureAtlasWithHandle ∷ TextureHandle  -- ^ Pre-generated handle
                           → Text            -- ^ Name of the atlas
                           → FilePath        -- ^ Path to the atlas file
                           → Text            -- ^ Array name
-                          → EngineM ε σ AssetId
+                          → EngineM σ AssetId
 loadTextureAtlasWithHandle texHandle name path _arrayName = do
   logDebugSM CatAsset "Asset loading started"
     [("path", T.pack path)
@@ -306,7 +306,7 @@ loadTextureAtlasWithHandle texHandle name path _arrayName = do
 
 -- | Decrement an asset's ref count; if it reaches zero, run its cleanup
 --   action and remove it from the pool
-unloadAsset ∷ AssetId → EngineM' ε ()
+unloadAsset ∷ AssetId → EngineM' ()
 unloadAsset aid = do
   poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
@@ -363,7 +363,7 @@ unloadAsset aid = do
         Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
                     "Attempted to unload non-existent asset"
 
-getTextureAtlas ∷ AssetId → EngineM ε σ TextureAtlas
+getTextureAtlas ∷ AssetId → EngineM σ TextureAtlas
 getTextureAtlas aid = do
   poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
@@ -372,7 +372,7 @@ getTextureAtlas aid = do
                 "Texture atlas not found"
     Just atlas → pure atlas
 
-getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
+getShaderProgram ∷ AssetId → EngineM' ShaderProgram
 getShaderProgram aid = do
   poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
   pool ← liftIO $ readIORef poolRef
@@ -383,7 +383,7 @@ getShaderProgram aid = do
 
 -- | Drain all assets: wait for the device to idle, run every cleanup action,
 --   and reset the pool. Throws if cleanup is already in progress.
-cleanupAssetManager ∷ EngineM' ε ()
+cleanupAssetManager ∷ EngineM' ()
 cleanupAssetManager = do
     logInfoM CatAsset "Asset cleanup phase started"
     state ← gets graphicsState
@@ -412,7 +412,7 @@ cleanupAssetManager = do
     modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
     logInfoM CatAsset "Asset cleanup completed successfully"
 
-cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ε ()
+cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ()
 cleanupResources device _state = do
     poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     pool ← liftIO $ readIORef poolRef

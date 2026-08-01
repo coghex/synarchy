@@ -19,7 +19,7 @@ import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State
-  ( EngineEnv, EngineLifecycle(..), lifecycleRef, inputQueue, loggerRef )
+  ( EngineLifecycle(..), lifecycleRef, inputQueue, loggerRef )
 import Engine.Core.Log
   ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
   , LogCategory(..), LogEntry(..), LogLevel(..)
@@ -41,7 +41,7 @@ spec = describe "shared main-loop startup handshake (#1022)" $
     mapM_ (Q.writeQueue (inputQueue env))
       [InputCharEvent 'a', InputCharEvent 'b', InputCharEvent 'c']
 
-    let action ∷ EngineM' EngineEnv ()
+    let action ∷ EngineM' ()
         action = runStartupHandshake headlessMode env
     _ ← runEngineM action env pure
 

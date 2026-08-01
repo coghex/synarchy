@@ -100,7 +100,7 @@ mergeLayeredTextItems = Map.map mergeInLayer
            ]
 
 -- | Render all visible UI pages
-renderUIPages ∷ EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
+renderUIPages ∷ EngineM σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
     env ← ask
     mgr ← liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
@@ -129,7 +129,7 @@ renderUIPages = do
 
 -- | Render a single page
 renderPage ∷ UIPageManager → FontCache → UIPage
-           → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
+           → EngineM σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderPage mgr fontCache page = do
     let layerId = uiLayerToLayerId (upLayer page) (upZIndex page)
         rootElems = upRootElements page
@@ -144,7 +144,7 @@ renderPage mgr fontCache page = do
 
 renderElement ∷ UIPageManager → FontCache
               → LayerId → ElementHandle
-              → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
+              → EngineM σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderElement mgr fontCache baseLayerId handle = do
     case Map.lookup handle (upmElements mgr) of
         Nothing → pure (V.empty, Map.empty)
@@ -189,7 +189,7 @@ getChildZIndex mgr handle =
 
 renderElementData ∷ UIPageManager → FontCache
                   → LayerId → UIElement → Float → Float → Maybe ClipRect
-                  → EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
+                  → EngineM σ (V.Vector RenderBatch, V.Vector RenderItem)
 renderElementData mgr fontCache layerId elem absX absY clip =
     case ueRenderData elem of
         RenderNone → pure (V.empty, V.empty)
