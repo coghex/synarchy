@@ -1,9 +1,10 @@
 # Procedural Blood Decals
 
-Status: implemented (epic #603, closed). This is the as-built record —
-see git history and the referenced issues (their comment threads carry
-the round-by-round design/review narrative) for how each decision below
-was reached.
+Status: implemented — this is the final documentation/verification gate
+for epic #603 (closed once this PR merges, as a repository-management
+step). This is the as-built record — see git history and the
+referenced issues (their comment threads carry the round-by-round
+design/review narrative) for how each decision below was reached.
 
 Visible blood from injuries, without hand-authored blood texture assets:
 
@@ -93,7 +94,8 @@ independently, on live decal records — see "Runtime tuning" below).
 ## Texture identity and matching
 
 A generated blood texture's descriptor (`BloodTextureDescriptor`)
-records the dimensions used for matching:
+records the dimensions `Blood.Types.requestDistance` compares when
+deciding whether a request can reuse an existing texture:
 
 - style: pool, drops, spatter, streak, smear
 - wound kind that requested it
@@ -101,7 +103,6 @@ records the dimensions used for matching:
 - approximate footprint size
 - directionality/anisotropy bucket
 - edge roughness and droplet density bucket
-- seed or generation lineage
 
 Style and severity bucket are **hard gates** — any difference there
 always mints a new descriptor, regardless of the other dimensions.
@@ -111,6 +112,13 @@ distance, and a request reuses the closest existing descriptor whose
 total cost is ≤ `Blood.Types.matchThreshold` (1) — one near-match bucket
 step away still reuses; two or more, or any wound-kind mismatch on its
 own, mint a new descriptor.
+
+The descriptor also carries a generation seed (`btdSeed`) — but it
+plays NO role in matching (`requestDistance` never reads it). It only
+feeds `Blood.Texture.generateBloodTexture`'s pixel data once a
+descriptor is actually generated/uploaded, which is exactly why two
+descriptors that match on every dimension above reuse ONE texture
+rather than each getting their own seed-varied pixels.
 
 The texture reference used by world decals (`BloodTextureId`) is
 independent from the live bindless GPU slot — the same separation every
@@ -449,4 +457,5 @@ their comment threads; this doc states only the resulting contract.
   "Transience" above).
 - #901 — rain/fluid weathering — **closed, not planned** (see
   "Deferred: rain and fluid integration" above).
-- #885 — this doc; closes epic #603.
+- #885 — this doc; the final gate for epic #603 (closed after this PR
+  merges, as a post-merge repository-management step).
