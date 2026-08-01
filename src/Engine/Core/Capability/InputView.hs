@@ -10,11 +10,13 @@
 --   capability's eight fields @LuaThread@-private:
 --   @inputBarrierNextRef@ (the synthetic-injection barrier-token
 --   allocator) and @currentKeyDownRef@ (the transient @onKeyDown@
---   current-key handoff). E1's convention exports every capability
---   record as @Capability(..)@ — constructor and accessors alike — so
---   a single eight-field record visible to the input thread would hand
---   @InputThread@\/@WorldThread@ code a way to allocate barrier tokens
---   and to inspect (or overwrite) the Lua thread's in-flight key. This
+--   current-key handoff). The capability-record convention
+--   ('docs/engineenv_capability_inventory.md' SS2.1) exports every
+--   capability record as @Capability(..)@ — constructor and accessors
+--   alike — so a single eight-field record visible to the input thread
+--   would hand @InputThread@\/@WorldThread@ code a way to allocate
+--   barrier tokens and to inspect (or overwrite) the Lua thread's
+--   in-flight key. This
 --   record is the resolution, exactly as
 --   "Engine.Core.Capability.RenderView" resolves the same problem for
 --   @engineStateRef@ (SS3.1): it __contains neither field at all__, so

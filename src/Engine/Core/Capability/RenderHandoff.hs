@@ -7,14 +7,10 @@
 --   @MainRender@ GPU uploads, plus the structure-palette translation
 --   table.
 --
---   Follows E1's convention verbatim (see
---   "Engine.Core.Capability.Core" for the full statement of it): one
---   record named @\<Name\>Capability@ with fields prefixed by the
---   record's own initials (here @rh@), one total one-way
---   @to\<Name\>Capability@ projection, every field the exact same live
---   'IORef'\/'Engine.Core.Queue.Queue' 'EngineEnv' already carries
---   (never a copy or a reconstruction), and no import of any consumer
---   of this module.
+--   Follows the capability-record convention
+--   ('docs/engineenv_capability_inventory.md' SS2.1 is its one
+--   authoritative statement, not restated here); this record's own
+--   field prefix is @rh@.
 --
 --   == Producer \/ consumer \/ clearing contracts (§5)
 --
