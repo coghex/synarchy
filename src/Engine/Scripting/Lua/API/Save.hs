@@ -28,7 +28,10 @@ import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.Scripting.Lua.API.Save.Bridge
     ( describeLuaComponents, collectLuaComponents, prepareLuaLoad
     , applyLuaLoad, abortLuaLoad )
+import Engine.Scripting.Lua.API.Save.Config
+    ( pushSaveConfig, optBooleanField, optIntegerField )
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
+import Engine.Scripting.Lua.API.Save.Page (visiblePageState)
 import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
 import World.Material (mergeMaterialRegistry)
@@ -68,7 +71,7 @@ import World.Save.Integrity
     ( LuaRefEdge(..), luaReferenceErrors
     , capIntegrityErrors, renderIntegrityReport )
 import World.Types
-    ( WorldCommand(..), WorldManager(wmWorlds, wmVisible)
+    ( WorldCommand(..), WorldManager(wmWorlds)
     , WorldState(wsGenParamsRef, wsTimeScaleRef) )
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
@@ -431,11 +434,6 @@ acceptSaveRequest env mgr wantAutosave =
             , arIntentGen    = gen
             }
 
-visiblePageState ∷ WorldManager → Maybe WorldState
-visiblePageState mgr = case wmVisible mgr of
-    (vid:_) → lookup vid (wmWorlds mgr)
-    _       → Nothing
-
 -- | engine.getSaveConfig() → {enabled=, intervalMinutes=, rotationDepth=}
 --   The EFFECTIVE autosave configuration: the tracked template overlaid
 --   key by key with the player's local overrides (see
@@ -463,16 +461,6 @@ defaultSaveConfigFn env = do
         loadSaveConfig logger saveConfigDefaultPath "config/does-not-exist.yaml"
     pushSaveConfig cfg
     pure 1
-
-pushSaveConfig ∷ SaveConfig → Lua.LuaE Lua.Exception ()
-pushSaveConfig cfg = do
-    Lua.newtable
-    Lua.pushboolean (scEnabled cfg)
-    Lua.setfield (-2) "enabled"
-    Lua.pushinteger (fromIntegral (scIntervalMinutes cfg))
-    Lua.setfield (-2) "intervalMinutes"
-    Lua.pushinteger (fromIntegral (scRotationDepth cfg))
-    Lua.setfield (-2) "rotationDepth"
 
 -- | engine.setSaveConfig({enabled=, intervalMinutes=, rotationDepth=})
 --   → bool. Persists to @config\/save.local.yaml@.
@@ -515,23 +503,6 @@ setSaveConfigFn env = do
                 Lua.liftIO $ logWarn logger CatLua $ "setSaveConfig: " <> err
                 Lua.pushboolean False
         pure 1
-
-optBooleanField ∷ Lua.StackIndex → Lua.Name
-                → Lua.LuaE Lua.Exception (Maybe Bool)
-optBooleanField idx key = do
-    ty ← Lua.getfield idx key
-    v ← if ty ≡ Lua.TypeBoolean then Just ⊚ Lua.toboolean (-1)
-                                else pure Nothing
-    Lua.pop 1
-    pure v
-
-optIntegerField ∷ Lua.StackIndex → Lua.Name
-                → Lua.LuaE Lua.Exception (Maybe Int)
-optIntegerField idx key = do
-    _ ← Lua.getfield idx key
-    v ← Lua.tointeger (-1)
-    Lua.pop 1
-    pure (fromIntegral ⊚ v)
 
 -- | engine.prepareAutosaveCycle(depth) → true | false, reason
 --

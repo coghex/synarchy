@@ -275,7 +275,9 @@ library
                      Engine.Scripting.Lua.API.Config
                      Engine.Scripting.Lua.API.Save
                      Engine.Scripting.Lua.API.Save.Bridge
+                     Engine.Scripting.Lua.API.Save.Config
                      Engine.Scripting.Lua.API.Save.Integrity
+                     Engine.Scripting.Lua.API.Save.Page
                      Engine.Scripting.Lua.API.PlayerEvent
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
