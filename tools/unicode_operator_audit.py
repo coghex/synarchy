@@ -76,9 +76,20 @@ _GLSL_QUASIQUOTE_SPAN = re.compile(r"\[(?:vert|frag)\|.*?\|\]", re.DOTALL)
 # Capture group 1 is the exempt token itself, so the exemption is the
 # ONE method-name occurrence, not the rest of its line -- a second
 # forbidden operator riding the same line (e.g. inside the method body)
-# still fails.
-_EQ_METHOD_TOKEN = re.compile(r"^\s*\((==)\)\s", re.MULTILINE)
-_MONAD_BIND_METHOD_TOKEN = re.compile(r"^\s*mx\s*(>>=)\s*k\s*=", re.MULTILINE)
+# still fails. Anchored to the EXACT documented instance header, with
+# only indented (i.e. still-inside-that-instance-block) lines allowed
+# between it and the method line, so a differently-named lookalike
+# instance (`instance Eq SomethingElse where`) is never exempt.
+_EQ_METHOD_TOKEN = re.compile(
+    r"^instance\s+Eq\s+EngineException\s+where[ \t]*\n"
+    r"(?:[ \t]+.*\n)*?"
+    r"[ \t]*\((==)\)\s",
+    re.MULTILINE)
+_MONAD_BIND_METHOD_TOKEN = re.compile(
+    r"^instance\s+Monad\s+\(EngineM\s+σ\)\s+where[ \t]*\n"
+    r"(?:[ \t]+.*\n)*?"
+    r"[ \t]*mx\s*(>>=)\s*k\s*=",
+    re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -170,6 +181,23 @@ def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
+def _code_only(text: str) -> str:
+    """`text` with everything OUTSIDE a `_code_runs` span blanked out --
+    used to hunt for a construct (like a GLSL quasiquote's opening/
+    closing marker) without a comment that merely CONTAINS that
+    construct's text being mistaken for the real thing."""
+    code_spans = _code_runs(text)
+    non_code_spans = []
+    prev_end = 0
+    for start, end in code_spans:
+        if start > prev_end:
+            non_code_spans.append((prev_end, start))
+        prev_end = end
+    if prev_end < len(text):
+        non_code_spans.append((prev_end, len(text)))
+    return _mask_spans(text, non_code_spans)
+
+
 def find_violations(text: str, rel_path: str) -> list[Violation]:
     """Every forbidden-operator occurrence in `text` (the source of the
     file at repo-relative `rel_path`) outside a comment, a string
@@ -179,14 +207,21 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
 
     scan_text = text
     if rel_path == GLSL_QUASIQUOTE_FILE:
-        spans = [m.span() for m in _GLSL_QUASIQUOTE_SPAN.finditer(text)]
+        # Locate the quasiquote markers only in genuine code -- a `--`
+        # comment that happens to CONTAIN `[frag|`/`|]`-shaped text must
+        # never be mistaken for a real quasiquote boundary and mask
+        # real Haskell code in between.
+        spans = [m.span() for m in _GLSL_QUASIQUOTE_SPAN.finditer(_code_only(text))]
         scan_text = _mask_spans(text, spans)
 
+    # Same rationale as the GLSL case: hunt for the instance header/
+    # method-head text only in genuine code, so a comment that merely
+    # CONTAINS matching text can never manufacture an exemption.
     exempt_spans: set[tuple[int, int]] = set()
     if rel_path == EQ_INSTANCE_FILE:
-        exempt_spans.update(m.span(1) for m in _EQ_METHOD_TOKEN.finditer(text))
+        exempt_spans.update(m.span(1) for m in _EQ_METHOD_TOKEN.finditer(_code_only(text)))
     if rel_path == MONAD_INSTANCE_FILE:
-        exempt_spans.update(m.span(1) for m in _MONAD_BIND_METHOD_TOKEN.finditer(text))
+        exempt_spans.update(m.span(1) for m in _MONAD_BIND_METHOD_TOKEN.finditer(_code_only(text)))
 
     violations: list[Violation] = []
     for start, end in _code_runs(scan_text):

@@ -156,7 +156,7 @@ def test_glsl_quasiquote_is_exempt_but_surrounding_haskell_is_not():
 
 def test_eq_instance_method_is_exempt_but_other_eq_uses_are_not():
     text = (
-        "instance Eq Foo where\n"
+        "instance Eq EngineException where\n"
         "  (==) a b = fieldA a == fieldA b\n"
         "\n"
         "unrelated x y = x == y\n"
@@ -175,20 +175,74 @@ def test_eq_instance_method_is_exempt_but_other_eq_uses_are_not():
            f"caught (got lines {[x.line for x in v]})")
 
 
+def test_eq_lookalike_instance_is_not_exempt():
+    # Anchored to `instance Eq EngineException` specifically -- a
+    # differently-named instance with the identical method-head shape
+    # must NOT be exempt, or the guard could be defeated by adding an
+    # unrelated Eq instance with a hand-written `(==)`.
+    text = "instance Eq SomethingElse where\n  (==) a b = a == b\n"
+    v = find_violations(text, EQ_INSTANCE_FILE)
+    expect(len(v) == 2 and _tokens(v) == {"=="},
+           f"a lookalike 'instance Eq' is fully flagged, not exempt "
+           f"(got {[str(x) for x in v]})")
+
+
 def test_monad_bind_method_is_exempt_but_other_binds_are_not():
     text = (
-        "instance Monad Foo where\n"
+        "instance Monad (EngineM σ) where\n"
+        "  return = pure\n"
         "  mx >>= k = runFoo mx >>= k\n"
         "\n"
         "unrelated x f = x >>= f\n"
     )
     v = find_violations(text, MONAD_INSTANCE_FILE)
+    # `return = pure` sits between the header and the method line, as
+    # it does in the real Engine.Core.Monad instance -- the exemption
+    # must still find the method line past it.
     expect(_tokens(v) == {">>="},
            f"the method head is exempt but other '>>=' uses still fail "
            f"(got {[str(x) for x in v]})")
-    expect({x.line for x in v} == {2, 4},
+    expect({x.line for x in v} == {3, 5},
            f"both the same-line non-exempt use and the unrelated use are "
            f"caught (got lines {[x.line for x in v]})")
+
+
+def test_monad_lookalike_instance_is_not_exempt():
+    text = "instance Monad Other where\n  mx >>= k = runOther mx >>= k\n"
+    v = find_violations(text, MONAD_INSTANCE_FILE)
+    expect(len(v) == 2 and _tokens(v) == {">>="},
+           f"a lookalike 'instance Monad' is fully flagged, not exempt "
+           f"(got {[str(x) for x in v]})")
+
+
+def test_glsl_marker_text_inside_comments_does_not_manufacture_a_span():
+    # A regression case: `--` comments that merely CONTAIN
+    # `[frag|`/`|]`-shaped text must never be mistaken for a real
+    # quasiquote's boundaries -- that would mask genuine Haskell code
+    # (here, a real `==`) sitting between the two comments.
+    text = (
+        "-- mentions [frag| in prose, not a real quasiquote\n"
+        "otherCode x y = x == y\n"
+        "-- also mentions |] in prose\n"
+    )
+    v = find_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_tokens(v) == {"=="} and len(v) == 1,
+           f"a '==' between two unrelated comments that merely contain "
+           f"quasiquote-shaped text is still flagged, not masked "
+           f"(got {[str(x) for x in v]})")
+    expect(v[0].line == 2, "the flagged occurrence reports the code line")
+
+
+def test_eq_instance_text_inside_a_comment_does_not_manufacture_an_exemption():
+    text = (
+        "-- instance Eq EngineException where\n"
+        "--   (==) a b = a == b\n"
+        "unrelated x y = x == y\n"
+    )
+    v = find_violations(text, EQ_INSTANCE_FILE)
+    expect(_tokens(v) == {"=="} and len(v) == 1,
+           f"instance/method text that only appears inside comments "
+           f"grants no exemption (got {[str(x) for x in v]})")
 
 
 def test_construct_exemptions_do_not_leak_to_other_files():
@@ -215,7 +269,11 @@ def main() -> int:
         test_uprelude_whole_file_is_exempt,
         test_glsl_quasiquote_is_exempt_but_surrounding_haskell_is_not,
         test_eq_instance_method_is_exempt_but_other_eq_uses_are_not,
+        test_eq_lookalike_instance_is_not_exempt,
         test_monad_bind_method_is_exempt_but_other_binds_are_not,
+        test_monad_lookalike_instance_is_not_exempt,
+        test_glsl_marker_text_inside_comments_does_not_manufacture_a_span,
+        test_eq_instance_text_inside_a_comment_does_not_manufacture_an_exemption,
         test_construct_exemptions_do_not_leak_to_other_files,
     ]:
         fn()
