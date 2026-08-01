@@ -11,9 +11,11 @@ import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
 import Engine.Core.Types (BootProfile(..), PreviewBrowse(..))
 import Engine.Preview.Discovery (discoverEntries, resolveFocusedEntry
-                                , focusErrorMessage, textureCategoryRoot)
+                                , focusErrorMessage, textureCategoryRoot
+                                , resolveItemDir, itemDirErrorMessage)
 import Engine.Preview.Unit (buildPreviewUnit, unitFocusErrorMessage
                            , unitsCategoryRoot)
+import Engine.Preview.Building (buildPreviewBuilding)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
@@ -104,31 +106,12 @@ main = do
                   ⧺ " (expected one of: icons, items, ui, world, units, "
                   ⧺ "flora, buildings, structures)"
               exitWith (ExitFailure 1)
-          GroupedPreviewCategory | isNothing mItem → do
-              putStrLn $ "select a specific " ⧺ cat
-                  ⧺ ", e.g. --preview units/acolyte"
-              exitSuccess
-          -- units/<name> (#887, Phase 3): resolve + validate the unit
-          -- BEFORE ever creating a window, exactly like a focused
-          -- simple-category item — an unknown unit, a name with path
-          -- structure, a symlinked directory, and a unit with no
-          -- animations/ tree all reject here.
-          GroupedPreviewCategory | cat ≡ "units", Just unitName ← mItem →
-              buildPreviewUnit unitsCategoryRoot unitName ⌦ \case
-                  Left err → do
-                      hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ unitName
-                          ⧺ ": " ⧺ T.unpack (unitFocusErrorMessage err)
-                      exitWith (ExitFailure 1)
-                  Right unit →
-                      runPreview (T.pack cat, Just (T.pack unitName))
-                                 (Just (PreviewUnitAnims unit))
-                                 (Just (fromMaybe 8008 port))
-          -- The remaining grouped categories (flora, buildings,
-          -- structures): classification is canonical, but their
-          -- browsing implementation is #888 — keep Phase 1's (#632)
-          -- placeholder-label boot, no 'PreviewBrowse'.
-          GroupedPreviewCategory → runPreview (T.pack cat, T.pack ⊚ mItem)
-                                    Nothing (Just (fromMaybe 8008 port))
+          GroupedPreviewCategory → case mItem of
+              Nothing → do
+                  putStrLn $ "select a specific " ⧺ cat
+                      ⧺ ", e.g. --preview units/acolyte"
+                  exitSuccess
+              Just item → runGroupedPreview cat item (fromMaybe 8008 port)
           SimplePreviewCategory → case mItem of
             -- Bare simple category: recursively discover every texture
             -- under its root (#886 Requirement 3) — always succeeds
@@ -159,6 +142,46 @@ main = do
                                      (parseSize args)
           | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
           | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
+
+-- | Dispatch a @--preview \<grouped category\>/\<item\>@ target (#888
+--   completes the set). Every branch resolves and validates the item
+--   BEFORE ever creating a window, exactly like a focused
+--   simple-category item — an unknown item, a name carrying path
+--   structure, a symlinked directory, and a file where a directory was
+--   expected all reject here.
+--
+--   @flora@ and @structures@ item folders are flat sets of static PNGs
+--   — the exact shape #886's simple-category browser already handles —
+--   so they are deliberately ROUTED into it (rooted at the item's own
+--   folder) rather than given viewers of their own (#888 Requirement
+--   2). The @otherwise@ branch is therefore the general grouped-item
+--   rule, not a fallback: a future flat grouped category needs no code
+--   here at all.
+runGroupedPreview ∷ String → String → Int → IO ()
+runGroupedPreview cat item port
+    | cat ≡ "units" =
+        buildPreviewUnit unitsCategoryRoot item ⌦ \case
+            Left err → rejectItem (unitFocusErrorMessage err)
+            Right unit → runPreview target (Just (PreviewUnitAnims unit))
+                                    (Just port)
+    | cat ≡ "buildings" =
+        buildPreviewBuilding (textureCategoryRoot cat) item ⌦ \case
+            Left err → rejectItem (itemDirErrorMessage err)
+            Right building →
+                runPreview target (Just (PreviewBuildingAssets building))
+                           (Just port)
+    | otherwise =
+        resolveItemDir (textureCategoryRoot cat) item ⌦ \case
+            Left err → rejectItem (itemDirErrorMessage err)
+            Right dir → do
+                entries ← discoverEntries dir
+                runPreview target (Just (PreviewList entries)) (Just port)
+  where
+    target = (T.pack cat, Just (T.pack item))
+    rejectItem msg = do
+        hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ item ⧺ ": "
+            ⧺ T.unpack msg
+        exitWith (ExitFailure 1)
 
 -- | The boot mode argv selects, by the SAME precedence as the dispatch
 --   above (language-report, then dump, then preview, then offscreen,

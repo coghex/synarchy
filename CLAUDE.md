@@ -464,7 +464,7 @@ no-op with a warning. Gate: `tools/offscreen_probe.py` (manual-only,
 `needs-gpu`) — locate click targets via the `ui.dumpWidgets` oracle,
 never hardcoded coordinates.
 
-### Preview mode: asset browser (#632 Phase 1, #886 Phase 2, epic #427)
+### Preview mode: asset browser (#632/#886/#887/#888, epic #427)
 
 `--preview <category>[/<item>]` is a fourth, structurally distinct boot
 mode (`App.Preview`, `BootPreview`): a real GLFW window + Vulkan, but no
@@ -483,8 +483,16 @@ aliases:
   `icons`, `items`, `ui`, `world`.
 - **Grouped** (one named entry per item — a bare grouped category prints
   "select a specific ..." and exits without booting; you must give
-  `--preview <category>/<item>`): `units`, `flora`, `buildings`,
-  `structures`.
+  `--preview <category>/<item>`, e.g. `--preview units/acolyte`,
+  `--preview buildings/acolyte_portal`, `--preview flora/scots_pine`,
+  `--preview structures/wire`): `units`, `flora`, `buildings`,
+  `structures`. An item is exactly ONE contained, non-symlinked direct
+  child DIRECTORY of the category root
+  (`Engine.Preview.Discovery.resolveItemDir`, shared by all four): an
+  unknown name, a name with path structure or `.`/`..`/absolute
+  traversal, a symlinked directory, and a FILE where a directory was
+  expected (`flora/unknown_flora.png`) all exit 1 **before a window
+  exists**.
 - `equipment`, `hud`, `facemap`, `utility`, `vegetation` are NOT exposed
   (no top-level `assets/textures/` directory of that name, or — for
   `hud`, which lives under `ui/hud` — folded into `ui`'s recursive
@@ -514,21 +522,28 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
   path, or a path containing `..` (including a symlink escape) all reject
   **before ever creating a window** — same pre-boot exit code convention
   as the unknown-category/missing-target errors below.
-- `flora`/`buildings`/`structures` item forms still only get the Phase 1
-  placeholder-label boot (their real browsing is #888) — this canonical
-  contract only makes grouped *classification* final, not every grouped
-  category's browsing implementation.
+- **`flora/<name>` and `structures/<name>` reuse this exact browser**
+  (#888), rooted at the ITEM's folder instead of the category root: they
+  are flat sets of static PNGs (stage textures, piece sprites), so they
+  deliberately have no viewer of their own — same list, same first-entry
+  default, same static preview, `mode == "list"` in the dump. Anything
+  beyond routing the resolved folder into `discoverEntries` means the
+  routing is wrong, not the reuse. (Assembled-structure visualization
+  and animated flora stay epic-deferred.)
 - Trimmed loading: preview mode loads only its font, the list widget's
   own chrome textures (`assets/textures/ui/{highlight,scroll*}.png`,
   loaded once, list-mode only), and textures within the requested
-  category — never `data/*.yaml` gameplay catalogs (the units viewer's
-  ONE `data/units/<name>.yaml` read, below, is the sole exception),
-  unrelated world/HUD texture sets, or the normal script set.
+  category/item — never `data/*.yaml` gameplay catalogs. There are
+  exactly TWO exceptions, both a single file for the requested item:
+  the units viewer's `data/units/<name>.yaml` and the buildings
+  viewer's `data/buildings/<name>.yaml`.
 - Debug-console introspection: `require("scripts.preview_manager").dump()`
   (self-registered into `package.loaded` the same way `unit_ai.lua`/
   `debug.lua` are, despite being `engine.loadScript`-loaded, not
   `require`d) reports `mode`
-  (`"list"`/`"item"`/`"unit"`/`"placeholder"`), `state`
+  (`"list"`/`"item"`/`"unit"`/`"building"` — #632's `"placeholder"` is
+  GONE as of #888, every canonical category now dispatching to real
+  behavior), `state`
   (`"loading"`/`"ready"`/`"empty"`), the current `selected` entry, and in
   list mode the FULL ordered `entries` list (not just its `entryCount`
   — a probe needs the complete list to catch an omission/substitution
@@ -594,19 +609,64 @@ pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
   (enough to locate and click a real cell without a hardcoded
   coordinate).
 
+Buildings viewer (`--preview buildings/<name>`, #888;
+`Engine.Preview.Building` pre-boot +
+`scripts/ui/building_asset_view.lua` in-engine):
+
+- **The filesystem is authoritative**, the same split the units viewer
+  uses. The building's own folder decides which entries exist and, in an
+  animation directory, the numeric `frame_NNN.png` order;
+  `data/buildings/<name>.yaml` only AUGMENTS a matched animation with
+  `fps`/`loop` and supplies the default-selection hints. A missing,
+  malformed, or unmatched YAML never rejects a valid asset folder
+  (`dungeon_1` has no YAML at all; `cargo_hold_S`/`furnace` ship a
+  `demolish/` folder no YAML mentions).
+- **One list, both kinds.** A recognized animation directory is ONE
+  entry labeled by its directory name; every other directory is
+  descended into so its textures surface as ordinary item-relative
+  statics (`dungeon_1/damaged/floor.png`) rather than being played as
+  one clip or silently lost. Ordering is the single label-lexicographic
+  rule the rest of the browser uses, across both kinds together.
+- **A directory is an animation** iff a YAML animation's declared frame
+  paths live in it, OR every `.png` in it follows the numbered-frame
+  convention (`frame_000.png`, `frame_10.png`, `frame-3.png`).
+- **YAML association is by CONTENT, never by equal names.**
+  `acolyte_portal.yaml` names its animations `portal-appear`/
+  `portal-idle` while the directories are `appear/`/`idle/`, so a
+  directory is matched through the frame paths its animation declares.
+- **Default selection ladder:** `state_animations.built`'s animation
+  (resolved that same way — selected label `idle`, not `portal-idle`),
+  else the def's own `sprite` when it names a discovered static, else
+  `default.png`, else the first entry. `dungeon_1` (no YAML, no
+  `default.png`) lands on the last rung.
+- **Playback defaults are `fps=8`, `loop=false`** — `BuildingYamlAnim`'s
+  own, NOT the units viewer's `loop=true`. One wall clock per selected
+  animation, reset on a real selection change but preserved across a
+  resize; non-loop end-of-clip HOLDS the last frame. A STATIC selection
+  has no playback at all.
+- **Dump extension:** building mode adds `building`, the ordered
+  `entries` list (each with `kind` `"animation"`/`"static"`, `animated`,
+  `fps`, `loop`, `frameCount`), `defaultEntry`, `selected`,
+  `scrollOffset`, per-visible-row `rows` bounds/handles, and — for an
+  animation selection ONLY — `playback` (`entry`, `frameIndex`,
+  `frameCount`, effective `fps`/`loop`, `ready`).
+
 Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
-check above the "always opens a real window" line, units rejections
-included) and `tools/preview_probe.py` (manual-only, `needs-gpu` — the
-real-boot browser checks: discovery/selection/scroll/resize via the
-dump, forced nearest filtering, the whole units viewer above, and
-trimmed loading verified against `engine.getLoadedTexturePaths()` —
-`Engine.Asset`'s `apAssetPaths`, populated by `engine.loadTexture`'s own
-Haskell handler regardless of Lua caller, so this is the engine's own
-authoritative loaded-texture record, not previewManager's self-reported
-bookkeeping — plus the grouped-category placeholder boot). Focused hspec
-coverage for the pure discovery/labeling/ordering/containment logic:
-`cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`
-and `--match "Preview.UnitAnimation"`.
+check above the "always opens a real window" line, units and
+flora/buildings/structures item rejections included) and
+`tools/preview_probe.py` (manual-only, `needs-gpu`, ~15 window boots —
+the real-boot browser checks: discovery/selection/scroll/resize via the
+dump, forced nearest filtering, the whole units and buildings viewers
+above, flora/structures dispatching into the shared simple browser, a
+final every-canonical-category no-placeholder sweep, and trimmed loading
+verified against `engine.getLoadedTexturePaths()` — `Engine.Asset`'s
+`apAssetPaths`, populated by `engine.loadTexture`'s own Haskell handler
+regardless of Lua caller, so this is the engine's own authoritative
+loaded-texture record, not previewManager's self-reported bookkeeping).
+Focused hspec coverage for the pure
+discovery/labeling/ordering/containment logic:
+`cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`,
+`--match "Preview.UnitAnimation"`, and `--match "Preview.Building"`.
 
 ### Dump mode (no TCP, JSON to stdout)
 

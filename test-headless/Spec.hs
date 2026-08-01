@@ -37,6 +37,7 @@ import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
+import qualified Test.Headless.Preview.Building as PreviewBuilding
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -221,6 +222,7 @@ main = hspec $ do
     describe "Asset.Types" AssetTypes.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
+    describe "Preview.Building" PreviewBuilding.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec

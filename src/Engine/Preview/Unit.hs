@@ -44,17 +44,15 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Control.Monad (filterM)
-import Data.Char (isDigit, toLower)
-import Data.List (sortOn, sort, isPrefixOf, find)
+import Data.Char (toLower)
+import Data.List (sort, find)
 import Data.Maybe (mapMaybe)
 import System.Directory
-    ( doesDirectoryExist, doesFileExist, listDirectory, canonicalizePath
-    , pathIsSymbolicLink )
-import System.FilePath
-    ( (</>), (<.>), isAbsolute, splitDirectories, takeExtension
-    , pathSeparator, dropExtension )
+    ( doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink )
+import System.FilePath ((</>), (<.>), takeExtension)
 import Engine.Asset.YamlUnits (UnitYamlAnim(..))
 import Engine.Core.Types (PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..))
+import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir, sortFrameFiles)
 import Unit.Direction (Direction(..), mirrorDir)
 
 -- | Every reason a requested @--preview units/\<name\>@ target can fail
@@ -147,19 +145,6 @@ previewDirectionOrder = [minBound .. maxBound]
 --   bilaterally-symmetric animation ships when it relies on mirroring.
 canonicalFiveDirections ∷ [Direction]
 canonicalFiveDirections = [DirS, DirSE, DirE, DirNE, DirN]
-
--- | Order a direction's @frame_NNN.png@ files NUMERICALLY, not
---   lexicographically: the shipped names are zero-padded so the two
---   agree today, but an unpadded @frame_10.png@ must not sort before
---   @frame_2.png@. Files whose stem carries no trailing digits sort
---   after the numbered ones, by name, so nothing is silently dropped.
-sortFrameFiles ∷ [FilePath] → [FilePath]
-sortFrameFiles = sortOn key
-  where
-    key f = (maybe (1 ∷ Int, 0 ∷ Integer) ((,) 0) (trailingNumber f), f)
-    trailingNumber f =
-        let digits = reverse (takeWhile isDigit (reverse (dropExtension f)))
-        in if null digits then Nothing else Just (read digits)
 
 -- | Default selection (Requirement 2, made deterministic by the review
 --   amendment): @idle@ when the unit has one, otherwise the first name
@@ -289,61 +274,39 @@ loadUnitAnimMeta unitName = do
 
 -- | Validate @name@ as exactly one contained, non-symlinked direct
 --   child of @root@ holding an @animations\/@ subtree, and return that
---   child's path. Structure is rejected before the filesystem is
---   touched (absolute paths, separators, @.@\/@..@, empty), the
---   directory is lstat-checked for symlink-ness, and a final
---   canonicalization confirms containment defensively — the same
---   layered rule 'Engine.Preview.Discovery.resolveFocusedEntry' uses.
+--   child's path.
+--
+--   The containment rule itself is
+--   'Engine.Preview.Discovery.resolveItemDir' — the SAME pre-boot check
+--   every grouped category applies (#888), so a unit target and a
+--   building\/flora\/structure target can never disagree about which
+--   names are safe. This function adds only the units-specific
+--   @animations\/@ requirement on top, and restates the errors in the
+--   units vocabulary ('UnitFocusError') the CLI already reports. A
+--   candidate that exists but is a regular file reports as 'UnitNotFound',
+--   exactly as it did before the shared helper existed.
 resolveUnitDir ∷ FilePath → String → IO (Either UnitFocusError FilePath)
-resolveUnitDir root name
-    | null name ∨ isAbsolute name ∨ length (splitDirectories name) /= 1
-        ∨ name ≡ "." ∨ name ≡ ".." ∨ pathSeparator `elem` name =
-        pure (Left UnitNameEscapesRoot)
-    | otherwise = do
-        let candidate = root </> name
-        rootExists ← doesDirectoryExist root
-        if not rootExists
-            then pure (Left UnitNotFound)
+resolveUnitDir root name = resolveItemDir root name ⌦ \case
+    Left ItemDirEscapesRoot     → pure (Left UnitNameEscapesRoot)
+    Left ItemDirSymlink         → pure (Left UnitNameSymlink)
+    Left ItemDirNotFound        → pure (Left UnitNotFound)
+    Left ItemDirNotADirectory   → pure (Left UnitNotFound)
+    Right candidate → do
+        let animRoot = candidate </> "animations"
+        hasAnims ← doesDirectoryExist animRoot
+        if not hasAnims
+            then pure (Left UnitNoAnimations)
             else do
-                -- Existence FIRST: 'pathIsSymbolicLink' throws on a
-                -- path that isn't there at all, which is exactly the
-                -- ordinary `units/nosuch` case. A dangling symlink
-                -- fails this check too and reports as not-found, which
-                -- is the honest answer — there's no unit behind it.
-                isDir ← doesDirectoryExist candidate
-                if not isDir
-                    then pure (Left UnitNotFound)
-                    else do
-                        isLink ← pathIsSymbolicLink candidate
-                        if isLink
-                            then pure (Left UnitNameSymlink)
-                            else do
-                                canonRoot ← canonicalizePath root
-                                canonCand ← canonicalizePath candidate
-                                if not (canonRoot `isPathPrefixOf` canonCand)
-                                    then pure (Left UnitNameEscapesRoot)
-                                    else do
-                                        let animRoot = candidate </> "animations"
-                                        hasAnims ← doesDirectoryExist animRoot
-                                        if not hasAnims
-                                            then pure (Left UnitNoAnimations)
-                                            else do
-                                                -- The animations/ root gets
-                                                -- the SAME lstat as every
-                                                -- other level: a symlinked
-                                                -- one would otherwise let a
-                                                -- non-symlinked unit pull
-                                                -- animations and textures
-                                                -- from outside its own tree
-                                                -- (doesDirectoryExist follows
-                                                -- links), breaking both the
-                                                -- symlink rule and the
-                                                -- requested-unit-only
-                                                -- trimmed-loading contract.
-                                                animLink ← pathIsSymbolicLink animRoot
-                                                pure $ if animLink
-                                                    then Left UnitNameSymlink
-                                                    else Right candidate
+                -- The animations/ root gets the SAME lstat as every
+                -- other level: a symlinked one would otherwise let a
+                -- non-symlinked unit pull animations and textures from
+                -- outside its own tree (doesDirectoryExist follows
+                -- links), breaking both the symlink rule and the
+                -- requested-unit-only trimmed-loading contract.
+                animLink ← pathIsSymbolicLink animRoot
+                pure $ if animLink
+                    then Left UnitNameSymlink
+                    else Right candidate
 
 -- | Every animation the unit's asset tree holds, in the case-sensitive
 --   lexicographic directory-name order the list displays, each mapped
@@ -456,10 +419,3 @@ buildPreviewUnit root name = resolveUnitDir root name ⌦ \case
                     , puDefault = fromMaybe ""
                         (defaultAnimationName (map paName anims))
                     })
-
--- | Path-boundary-aware prefix check (same rule as
---   'Engine.Preview.Discovery'\'s own): @root@ must be exactly
---   @candidate@ or followed immediately by a path separator.
-isPathPrefixOf ∷ FilePath → FilePath → Bool
-isPathPrefixOf root candidate =
-    root ≡ candidate ∨ (root ⧺ [pathSeparator]) `isPrefixOf` candidate

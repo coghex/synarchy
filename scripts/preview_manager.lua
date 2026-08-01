@@ -1,17 +1,20 @@
--- Preview mode entry point (#632 Phase 1, #886 Phase 2 of the
--- --preview texture browser epic #427).
+-- Preview mode entry point (#632 Phase 1, #886 Phase 2, #887 Phase 3,
+-- #888 Phase 4 of the --preview texture browser epic #427).
 --
 -- Loaded by scripts/init.lua's game.init in place of the ~25 normal
 -- gameplay/UI scripts whenever engine.getBootProfile() == "preview".
 -- Phase 1 proved the boot skeleton: a font, one placeholder label, the
 -- grey (#828382) clear color Engine.Graphics.Vulkan.Command.Record
--- already special-cases for the BootPreview profile. Phase 2 adds the
--- real simple-category browser: app/Main.hs already discovered and
--- validated everything (Engine.Preview.Discovery) BEFORE this script
--- ever ran, so engine.getPreviewBrowse() is the single source of truth
--- here — nil keeps the Phase 1 placeholder alive for a grouped category
--- (#887/#888 land their own browsing later), "list" backs a bare
--- --preview <simple category>, "item" backs a validated
+-- already special-cases for the BootPreview profile. Phase 2 replaced
+-- that with the real simple-category browser, and #888 deleted the
+-- placeholder path entirely: app/Main.hs discovers and validates every
+-- canonical target (Engine.Preview.Discovery / .Unit / .Building)
+-- BEFORE this script ever runs, so engine.getPreviewBrowse() is the
+-- single source of truth here and always answers with a real mode —
+-- "list" backs a bare --preview <simple category> AND a
+-- --preview flora/<name> / structures/<name> target (#888 routes those
+-- flat, static-PNG item folders into the SAME browser rather than
+-- forking a viewer per category), "item" backs a validated
 -- --preview <simple category>/<item> (focused mode: no list).
 --
 -- Trimmed loading (Requirement 5) still holds: this module loads its
@@ -31,10 +34,18 @@
 -- Engine.Preview.Unit. The list holds animation names with frame-zero/
 -- south thumbnails; scripts/ui/unit_animation_view.lua owns the enlarged
 -- sprite, the direction row, and the shared playback clock.
-local label = require("scripts.ui.label")
+--
+-- #888 (Phase 4) adds the fourth, "building": one list mixing the
+-- building folder's animation subdirectories and its loose static PNGs,
+-- resolved by Engine.Preview.Building (including the
+-- state_animations.built default selection, matched to a directory
+-- through the frame paths its YAML animation declares, never by equal
+-- names). scripts/ui/building_asset_view.lua owns the panel sprite and
+-- the animation clock.
 local assetBrowser = require("scripts.ui.asset_browser")
 local list = require("scripts.ui.list")
 local unitAnimationView = require("scripts.ui.unit_animation_view")
+local buildingAssetView = require("scripts.ui.building_asset_view")
 
 -- #886: self-register into the require cache (the same convention
 -- scripts/unit_ai.lua and scripts/debug.lua use) so the debug console
@@ -48,16 +59,14 @@ local FONT_SIZE = 24
 local labelFont = nil
 local page = nil
 
--- mode: "placeholder" (Phase 1, grouped category) | "list" | "item" | "unit"
+-- mode: "list" | "item" | "unit" | "building" (nil only if the engine
+-- somehow reports no browse state at all — see onAssetLoaded)
 local mode = nil
 local readyState = "loading"  -- "loading" | "ready" | "empty"
 
 -- Thumbnail edge (unscaled) for the units list's per-row frame-zero/
 -- south icons — scripts/ui/list.lua applies the uiscale itself.
 local UNIT_THUMB_SIZE = 24
-
--- Phase 1 placeholder (grouped category / no browse state).
-local labelId = nil
 
 -- Phase 2 simple-category browsing state.
 local browserId = nil
@@ -70,6 +79,11 @@ local spriteId = nil
 local unitData = nil    -- the resolved PreviewUnit table from the engine
 local animViewId = nil
 local selectedAnim = nil
+
+-- Phase 4 (#888) building state.
+local buildingData = nil   -- the resolved PreviewBuilding table
+local buildingViewId = nil
+local selectedEntry = nil
 
 -- path -> texture handle, for entries already uploaded; never evicted
 -- (see the module comment above).
@@ -87,18 +101,7 @@ local loadedPaths = {}
 local pendingHandle = nil
 local pendingPath = nil
 
-local function targetText()
-    local target = engine.getPreviewTarget()
-    if not target then
-        return "Preview: (no target)"
-    elseif target.item then
-        return "Preview: " .. target.category .. "/" .. target.item
-    else
-        return "Preview: " .. target.category
-    end
-end
-
--- Unit mode's texture accessor: hand back a handle for 'path'
+-- Unit/building mode's texture accessor: hand back a handle for 'path'
 -- IMMEDIATELY (uploads are async, and both UI.newSprite and
 -- UI.setSpriteTexture tolerate a not-yet-resolved handle — the same
 -- thing scripts/ui/list.lua's own init() does with highlight.png), one
@@ -107,9 +110,10 @@ end
 -- 60 Hz playback tick would allocate a fresh handle every frame.
 --
 -- Unlike list/item mode's requestTexture below, this never touches
--- pendingHandle/readyState: unit mode has many textures in flight at
--- once and drives its own readiness off engine.getTextureSize instead
--- of a single-slot onAssetLoaded handshake.
+-- pendingHandle/readyState: unit and building modes have many textures
+-- in flight at once and drive their own readiness off
+-- engine.getTextureSize instead of a single-slot onAssetLoaded
+-- handshake.
 local function acquireTexture(path)
     if not path then return nil end
     local cached = textureCache[path]
@@ -351,6 +355,95 @@ local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDi
     end
 end
 
+-----------------------------------------------------------
+-- Building asset viewer (#888, Phase 4)
+-----------------------------------------------------------
+
+local function findBuildingEntry(entryLabel)
+    for _, e in ipairs(buildingData and buildingData.entries or {}) do
+        if e.label == entryLabel then return e end
+    end
+    return nil
+end
+
+-- A genuine entry selection: always starts the clip fresh from the
+-- current wall clock (a static entry simply never advances from frame
+-- zero). The resize path deliberately does NOT come through here — it
+-- must preserve the playback phase, see buildBuildingUI.
+local function onBuildingEntrySelected(value, _label, _index)
+    local entry = findBuildingEntry(value)
+    if not entry or not buildingViewId then return end
+    selectedEntry = value
+    -- "loading" until the frames actually upload; previewManager.update
+    -- promotes it, so `state` means the same thing here as in every
+    -- other mode.
+    readyState = "loading"
+    buildingAssetView.setEntry(buildingViewId, entry, engine.realTime())
+end
+
+-- restoreEntry/restoreScroll: nil for the initial build (a fresh
+-- default selection). Real values on the resize rebuild, where the
+-- selected entry, list scroll offset, AND playback phase must all
+-- survive — so the restore path silently re-selects the list row and
+-- only re-panels the view, never re-entering setEntry (which would
+-- reset the clock).
+local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
+    mode = "building"
+    buildingData = building
+
+    assetBrowser.init()
+
+    local listItems = {}
+    for i, e in ipairs(building.entries or {}) do
+        -- The label IS the value: entry labels are unique within a
+        -- building folder (they're distinct relative paths), and
+        -- Engine.Preview.Building already ordered them.
+        listItems[i] = { label = e.label, path = e.label }
+    end
+
+    browserId = assetBrowser.new({
+        page = page,
+        font = labelFont,
+        x = 40, y = 40,
+        width = math.max(200, fbW - 80),
+        height = math.max(100, fbH - 80),
+        entries = listItems,
+        onSelect = onBuildingEntrySelected,
+    })
+    panelBounds = assetBrowser.getPanelBounds(browserId)
+
+    if #listItems == 0 then
+        readyState = "empty"
+        return
+    end
+
+    if not buildingViewId then
+        buildingViewId = buildingAssetView.new({
+            page = page,
+            panel = panelBounds,
+            requestTexture = acquireTexture,
+        })
+    else
+        buildingAssetView.setPanel(buildingViewId, panelBounds)
+    end
+
+    if restoreEntry then
+        assetBrowser.selectEntrySilently(browserId, restoreEntry)
+        selectedEntry = restoreEntry
+        -- Phase-preserving: only the panel geometry changed.
+        buildingAssetView.setPanel(buildingViewId, panelBounds)
+    else
+        -- Requirement 1: state_animations.built, else sprite, else
+        -- default.png, else the first entry — already decided by
+        -- Engine.Preview.Building, never re-derived here.
+        assetBrowser.selectEntry(browserId, building.defaultEntry)
+    end
+
+    if restoreScroll and restoreScroll > 0 then
+        assetBrowser.setScrollOffset(browserId, restoreScroll)
+    end
+end
+
 function previewManager.init(scriptId)
     -- Requirement 3: nearest-neighbour is REQUIRED for the browser, not
     -- just the default — a user's persisted config/video.local.yaml can
@@ -376,21 +469,15 @@ function previewManager.onAssetLoaded(assetType, handle, path)
             buildFocusedUI(browse.entry, fbW, fbH)
         elseif browse and browse.mode == "unit" then
             buildUnitUI(browse.unit, fbW, fbH, nil, nil, nil)
+        elseif browse and browse.mode == "building" then
+            buildBuildingUI(browse.building, fbW, fbH, nil, nil)
         else
-            -- Phase 1 (#632) placeholder: grouped category, or no
-            -- browse state at all.
-            mode = "placeholder"
-            readyState = "ready"
-            labelId = label.new({
-                name     = "preview_target_label",
-                text     = targetText(),
-                font     = labelFont,
-                fontSize = FONT_SIZE,
-                color    = {1.0, 1.0, 1.0, 1.0},
-                page     = page,
-                x        = 40,
-                y        = 40,
-            })
+            -- #888 Requirement 4: the Phase 1 (#632) placeholder-label
+            -- boot is GONE. Every canonical --preview target now
+            -- resolves to a real browse mode before this script ever
+            -- runs, so a nil browse state can only mean a boot outside
+            -- BootPreview — which never loads this script at all.
+            readyState = "empty"
         end
 
         UI.showPage(page)
@@ -407,22 +494,26 @@ end
 -- frame is correct, so a slow or bursty tick can't desynchronize the
 -- direction row from the enlarged sprite.
 function previewManager.update(dt)
-    if not animViewId then return end
-    unitAnimationView.update(animViewId, engine.realTime())
-    -- Unit mode's readiness signal: the enlarged sprite has a real,
-    -- uploaded texture fitted to the panel. Same meaning "ready" carries
-    -- in list/item mode, so poll_state works uniformly across all three.
+    -- Unit/building readiness signal: the panel sprite has a real,
+    -- uploaded texture fitted to the panel. Same meaning "ready"
+    -- carries in list/item mode, so poll_state works uniformly across
+    -- every mode.
+    local view = nil
+    if animViewId then
+        unitAnimationView.update(animViewId, engine.realTime())
+        view = unitAnimationView.dump(animViewId)
+    elseif buildingViewId then
+        buildingAssetView.update(buildingViewId, engine.realTime())
+        view = buildingAssetView.dump(buildingViewId)
+    else
+        return
+    end
     if readyState ~= "empty" then
-        local d = unitAnimationView.dump(animViewId)
-        readyState = (d and d.ready) and "ready" or "loading"
+        readyState = (view and view.ready) and "ready" or "loading"
     end
 end
 
 function previewManager.shutdown()
-    if labelId then
-        label.destroy(labelId)
-        labelId = nil
-    end
     if browserId then
         assetBrowser.destroy(browserId)
         browserId = nil
@@ -430,6 +521,10 @@ function previewManager.shutdown()
     if animViewId then
         unitAnimationView.destroy(animViewId)
         animViewId = nil
+    end
+    if buildingViewId then
+        buildingAssetView.destroy(buildingViewId)
+        buildingViewId = nil
     end
     if spriteId then
         UI.deleteElement(spriteId)
@@ -446,6 +541,8 @@ function previewManager.shutdown()
     panelBounds = nil
     unitData = nil
     selectedAnim = nil
+    buildingData = nil
+    selectedEntry = nil
     textureCache = {}
     loadedPaths = {}
     pendingHandle = nil
@@ -453,9 +550,9 @@ function previewManager.shutdown()
 end
 
 -----------------------------------------------------------
--- Input routing (list mode only — see scripts/ui_manager_scroll.lua
--- for the identical broadcast-callback pattern every other list-backed
--- screen in the normal boot path uses).
+-- Input routing (every list-backed mode — see
+-- scripts/ui_manager_scroll.lua for the identical broadcast-callback
+-- pattern every other list-backed screen in the normal boot path uses).
 -----------------------------------------------------------
 
 function previewManager.onListItemClick(elemHandle)
@@ -517,9 +614,17 @@ function previewManager.onFramebufferResize(width, height)
         end
         buildUnitUI(unitData, width, height, selectedAnim, prevScroll,
                     prevDump and prevDump.direction or nil)
+    elseif mode == "building" then
+        -- #888 amendment: the selected entry, list scroll offset, AND
+        -- playback phase all survive a reflow — same shape as unit
+        -- mode above (list rebuilt, view only re-panelled).
+        local prevScroll = browserId and assetBrowser.getScrollOffset(browserId) or 0
+        if browserId then
+            assetBrowser.destroy(browserId)
+            browserId = nil
+        end
+        buildBuildingUI(buildingData, width, height, selectedEntry, prevScroll)
     end
-    -- "placeholder" mode (Phase 1, #632): the label's fixed (40,40)
-    -- position never overflows, so nothing to reflow.
 end
 
 -----------------------------------------------------------
@@ -581,6 +686,39 @@ function previewManager.dump()
         out.rows = assetBrowser.dump(browserId)
         out.panelBounds = panelBounds
         out.playback = animViewId and unitAnimationView.dump(animViewId) or nil
+    elseif mode == "building" then
+        -- #888 Requirement 4 + its amendment: the FULL ordered entry
+        -- list with each entry's static/animation identity and
+        -- effective fps/loop, the current selection, per-visible-row
+        -- interactive bounds/handles, the scroll offset, and — for an
+        -- ANIMATION selection only — the live playback state. A static
+        -- selection exposes no playback at all, which is exactly what
+        -- distinguishes it.
+        out.building = buildingData and buildingData.name or nil
+        out.entries = {}
+        for i, e in ipairs(buildingData and buildingData.entries or {}) do
+            out.entries[i] = {
+                label = e.label,
+                kind = (e.animated == true) and "animation" or "static",
+                animated = e.animated == true,
+                fps = e.fps,
+                loop = e.loop == true,
+                frameCount = #(e.frames or {}),
+            }
+        end
+        out.entryCount = #out.entries
+        out.defaultEntry = buildingData and buildingData.defaultEntry or nil
+        out.selected = {
+            label = assetBrowser.getSelectedLabel(browserId),
+            path  = assetBrowser.getSelectedPath(browserId),
+        }
+        out.scrollOffset = assetBrowser.getScrollOffset(browserId)
+        out.rows = assetBrowser.dump(browserId)
+        out.panelBounds = panelBounds
+        local view = buildingViewId and buildingAssetView.dump(buildingViewId)
+        if view and view.animated then
+            out.playback = view
+        end
     end
     return out
 end
