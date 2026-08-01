@@ -102,7 +102,5 @@ defaultGraphicsConfig ∷ GraphicsConfig
 defaultGraphicsConfig = GraphicsConfig
     { gcDebugMode = False
     , gcAppName = "VulkanTest"
-    , gcWidth = 800
-    , gcHeight = 600
     , gcMaxFrames = 2
     }
