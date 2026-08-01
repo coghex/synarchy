@@ -20,8 +20,8 @@ import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
-import App.Boot (BootWorkers(..), FatalStream(..), bootConfig
-                , handleBootResult, shutdownBootWorkers)
+import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine in headless mode (no window, no GPU)
@@ -41,13 +41,13 @@ runHeadless bootProfile mPort = do
 
   -- Headless starts no input thread — the debug console lives inside
   -- the Lua thread.
-  let workers = BootWorkers
-        { bwCombat = Just combatThreadState
-        , bwSim    = Just simThreadState
-        , bwUnit   = Just unitThreadState
-        , bwWorld  = Just worldThreadState
-        , bwInput  = Nothing
-        , bwLua    = Just luaThreadState
+  let workers = EngineWorkers
+        { ewCombat = Just combatThreadState
+        , ewSim    = Just simThreadState
+        , ewUnit   = Just unitThreadState
+        , ewWorld  = Just worldThreadState
+        , ewInput  = Nothing
+        , ewLua    = Just luaThreadState
         }
 
   let engineAction ∷ EngineM' ()
@@ -55,7 +55,7 @@ runHeadless bootProfile mPort = do
         logInfoM CatSystem "Starting engine (headless)..."
         headlessLoop
         logInfoM CatSystem "Headless engine shutting down..."
-        liftIO $ shutdownBootWorkers workers
+        liftIO $ shutdownEngineWorkers workers
         logger ← liftIO $ readIORef $ loggerRef env'
         liftIO $ shutdownLogger logger
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
