@@ -21,7 +21,7 @@ import UPrelude
 import Test.Hspec
 import Data.List (isInfixOf)
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
-import GHC.Stack (HasCallStack, SrcLoc(..))
+import GHC.Stack (SrcLoc(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.State (EngineEnv, loggerRef)
