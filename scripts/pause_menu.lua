@@ -323,6 +323,13 @@ function pauseMenu.onExitToMenu()
     -- Clear any pending mine-tool anchor so the next world's first click
     -- doesn't commit a rectangle from a stale origin (#102).
     pcall(function() require("scripts.mine_tool").cancel() end)
+    -- Clear any pending transfer session (#1014) — it's transient,
+    -- unsaved state naming a source unit/receiver in THIS world; the
+    -- save-load reset hook (scripts/transfer_session.lua) only fires on
+    -- an actual load, never on this destroyAll-and-fresh-init path, so
+    -- without this a session survives into the next game pointing at
+    -- entities that no longer exist.
+    pcall(function() require("scripts.transfer_session").clear() end)
     if worldManager.currentWorld then
         world.hide(worldManager.currentWorld)
     end

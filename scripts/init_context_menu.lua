@@ -4,13 +4,14 @@
 -- the click — mirrors the tool handleMouseDown claim convention.
 local M = {}
 
--- Storage / work-station building right-click → "Contents" / "Bills"
--- menu, regardless of unit selection. Move commands still work on
--- non-cargo, non-station tiles. building.hitTestAt takes framebuffer
--- pixel coords via the same conversion the tile-menu function uses.
--- A single building can offer BOTH (a workshop with cargo storage),
--- so this hit-tests once and builds one combined menu instead of two
--- competing ones.
+-- Storage / work-station building right-click → "Contents" / "Bills" /
+-- "Transfer" menu, regardless of unit selection. Move commands still
+-- work on non-cargo, non-station tiles. building.hitTestAt takes
+-- framebuffer pixel coords via the same conversion the tile-menu
+-- function uses. A single building can offer more than one of these
+-- (a workshop with cargo storage, transfer-eligible), so this
+-- hit-tests once and builds one combined menu instead of competing
+-- ones.
 function M.tryBuildingMenu(x, y)
     local hitBid = building.hitTestAt(x, y)
     if not hitBid then return false end
@@ -25,7 +26,25 @@ function M.tryBuildingMenu(x, y)
     -- won't work it until Built), so this doesn't gate on
     -- activity the way Contents does.
     local hasStation = ops and #ops > 0
-    if not (hasStorage or hasStation) then return false end
+
+    -- Transfer (#1014): resolved through A1's own eligibility query
+    -- (unit.transferReceiverInfo) rather than the hasStorage check
+    -- above, so a future change to Unit.Transfer.receiverEligible
+    -- (e.g. an additional precondition) flows through without a UI
+    -- change here — a Built station with zero storage capacity
+    -- (hasStation but not hasStorage, "Bills" only) is exactly the
+    -- case that query must ALSO refuse. transferSession.resolveSource
+    -- returns nil for any selection that isn't exactly one
+    -- player-commandable unit (#1014 review requirement 4: zero or
+    -- multiple selected sources both omit the entry, never a silent
+    -- pick).
+    local transferSession = require("scripts.transfer_session")
+    local source = transferSession.resolveSource(unit.getSelected())
+    local receiverInfo = source
+        and unit.transferReceiverInfo("building", hitBid)
+    local hasTransfer = receiverInfo and receiverInfo.eligible
+
+    if not (hasStorage or hasStation or hasTransfer) then return false end
 
     local fbW, fbH = engine.getFramebufferSize()
     local ww, wh   = engine.getWindowSize()
@@ -50,6 +69,12 @@ function M.tryBuildingMenu(x, y)
         table.insert(items, { label = "Bills",
             callback = function()
                 craftingPanel.show(hitBid)
+            end })
+    end
+    if hasTransfer then
+        table.insert(items, { label = "Transfer",
+            callback = function()
+                transferSession.create(source, "building", hitBid)
             end })
     end
     contextMenu.show(items, mx, my)
@@ -128,6 +153,24 @@ function M.tryUnitMenu(x, y)
                 end
             end,
         })
+    end
+    -- Transfer (#1014): the target itself is the receiver here (e.g.
+    -- the technomule), resolved through A1's own eligibility query
+    -- (unit.transferReceiverInfo) rather than a def-name check, so
+    -- this isn't hardcoded to the technomule. transferSession.resolveSource
+    -- excludes the target from a would-be source (self-transfer) and
+    -- requires exactly one selected, player-commandable unit.
+    do
+        local transferSession = require("scripts.transfer_session")
+        local source = transferSession.resolveSource(selectedUids, targetUid)
+        local receiverInfo = source
+            and unit.transferReceiverInfo("unit", targetUid)
+        if receiverInfo and receiverInfo.eligible then
+            table.insert(items, { label = "Transfer",
+                callback = function()
+                    transferSession.create(source, "unit", targetUid)
+                end })
+        end
     end
     -- Treat bleeding: a selected unit that KNOWS bleed-control
     -- dresses the target's worst bleeding wound, drawing

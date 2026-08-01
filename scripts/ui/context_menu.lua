@@ -397,6 +397,57 @@ function cm.show(items, x, y)
 end
 
 -----------------------------------------------------------
+-- Introspection (F3/#645, #1014)
+-----------------------------------------------------------
+
+-- Normalized dump of every currently-visible row (root panel + open
+-- submenu, if any), for ui.dumpWidgets() -- mirrors button.lua's own
+-- dump() (bounds/visible/hovered/focused resolved from the engine's
+-- own element state via UI.getElementInfo, not the locally-cached
+-- geometry). A context-menu row is built from raw UI.newSprite/
+-- UI.newText calls rather than a scripts/ui/*.lua widget module, and
+-- its label text is a SEPARATE sibling element rather than a child of
+-- the clickable row (see buildPanel above) -- so without this,
+-- ui.dumpWidgets()'s generic UI.getVisibleElements() fallback can only
+-- report the row's internal engine name (e.g. "context_menu_root_row_1"),
+-- never its actual visible label, leaving every "locate a menu action
+-- through ui.dumpWidgets" probe (e.g. tools/transfer_context_menu_probe.py,
+-- #1014) with nothing to match on.
+local function dumpPanel(panel, out)
+    if not panel then return end
+    for i, r in ipairs(panel.rows) do
+        if r.kind == "row" then
+            local info = UI.getElementInfo(r.bgId)
+            if info then
+                local item = panel.items[i]
+                out[#out + 1] = {
+                    id = "context_menu_item:" .. r.bgId,
+                    name = info.name,
+                    type = "context_menu_item",
+                    bounds = { x = info.x, y = info.y,
+                               w = info.width, h = info.height },
+                    label = (item and item.label) or "",
+                    enabled = r.enabled,
+                    visible = info.visible,
+                    hovered = info.hovered,
+                    focused = info.focused,
+                    screen = info.page,
+                    handle = info.handle,
+                }
+            end
+        end
+    end
+end
+
+-- Registered into scripts/ui/registry.lua's WIDGET_MODULES.
+function cm.dump()
+    local out = {}
+    dumpPanel(cm.rootPanel, out)
+    dumpPanel(cm.subPanel, out)
+    return out
+end
+
+-----------------------------------------------------------
 -- Submenu management
 -----------------------------------------------------------
 

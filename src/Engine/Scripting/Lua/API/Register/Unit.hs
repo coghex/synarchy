@@ -70,6 +70,7 @@ registerUnitAPI env = do
   registerLuaFunction "checkTransfer"      (unitCheckTransferFn env)
   registerLuaFunction "commitTransfer"     (unitCommitTransferFn env)
   registerLuaFunction "transferContract"   (unitTransferContractFn env)
+  registerLuaFunction "transferReceiverInfo" (unitTransferReceiverInfoFn env)
   registerLuaFunction "transitionTo" (unitTransitionToFn env)
   registerLuaFunction "getPose"      (unitGetPoseFn env)
   registerLuaFunction "getFaction"   (unitGetFactionFn env)

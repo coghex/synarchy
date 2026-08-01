@@ -245,6 +245,11 @@ PROBES = [
      "whole-session load transaction: mutual exclusion, complete replacement "
      "(not merge), missing-def rejection leaves the old session intact, "
      "paused dwell + default-speed unpause, no ghost pages on repeat (#763)"),
+    ("transfer_context_menu", "transfer_context_menu_probe.py",
+     "offscreen: right-click 'Transfer' on a built storage building and on "
+     "the technomule, located via ui.dumpWidgets(), creates a session with "
+     "the exact source/receiver identities and never falls through to a "
+     "move order (#1014)"),
     ("wire", "wire_probe.py",
      "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]
