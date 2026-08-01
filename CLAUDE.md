@@ -137,22 +137,22 @@ or a local), and needs no new field.
 
 **Capability records (#889–#899, epic complete):** each capability gets
 its own `Engine.Core.Capability.<Name>` module exporting one
-`<Name>Capability` record (fields sharing the SAME live `IORef`/queue
-handles `EngineEnv` already carries — a projection, never a copy) plus
-a total `to<Name>Capability ∷ EngineEnv → <Name>Capability`. One-way
-only (never reassembled back into an `EngineEnv`); no capability module
-imports its own consumers; don't introduce a record before the
-migration issue that actually narrows a real consumer to it. `EngineM`
-stays hard-wired to `MonadReader EngineEnv` (no capability typeclass
-layer), so a narrowed module's own public API is typically two layers:
-primitives taking the capability explicitly, plus thin `MonadReader
-EngineEnv` wrappers preserving existing call sites (see
-`Engine.Core.Log.Monad`/`Engine.Core.Capability.Core`) — narrowing the
-*module's own field access* is the goal, not rewriting every caller.
-There are **eight capability identifiers and thirteen record/view
-types** (§2.1's table): five capabilities are split, four of them by
-§3.1's rule that a thread-private field forces a strictly narrower
-worker-safe view rather than a comment on a wide record.
+`<Name>Capability` record plus a total `to<Name>Capability ∷ EngineEnv
+→ <Name>Capability` projection.
+`docs/engineenv_capability_inventory.md` §2.1's canonical convention
+block is the one authoritative statement of the naming/placement,
+one-way-projection, shared-live-container, no-back-import,
+no-record-ahead-of-need, and thread-private-split rules — read it
+before adding a capability record rather than inferring the shape from
+an existing one. `EngineM` stays hard-wired to `MonadReader EngineEnv`
+(no capability typeclass layer), so a narrowed module's own public API
+is typically two layers: primitives taking the capability explicitly,
+plus thin `MonadReader EngineEnv` wrappers preserving existing call
+sites (see `Engine.Core.Log.Monad`/`Engine.Core.Capability.Core`) —
+narrowing the *module's own field access* is the goal, not rewriting
+every caller. There are **eight capability identifiers and thirteen
+record/view types** (§2.1's table): five capabilities are split, four
+of them by the thread-private-split rule above (§3.1).
 
 The same audit enforces a production-only (`src/`+`app/`, `test/`
 exempt) full-access boundary: importing `Engine.Core.State` with
