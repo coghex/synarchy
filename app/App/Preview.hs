@@ -1,9 +1,10 @@
 -- | Preview boot path: GLFW window + Vulkan, same as 'App.Graphical', but
 --   a structurally distinct thread topology — no world/unit/sim/combat
---   threads. Phase 1 (#632) of the @--preview@ texture-browser epic
---   (#427): boots straight to @scripts/preview_manager.lua@ (wired via
---   @game.init@'s preview branch in @scripts/init.lua@) instead of the
---   normal menu/HUD script set.
+--   threads. Introduced by Phase 1 (#632) of the @--preview@
+--   texture-browser epic (#427): boots straight to
+--   @scripts/preview_manager.lua@ (wired via @game.init@'s preview
+--   branch in @scripts/init.lua@) instead of the normal menu/HUD script
+--   set.
 module App.Preview
   ( runPreview
   ) where
@@ -33,9 +34,10 @@ import App.Exception (guardNativeExceptions)
 --   unit, sim, or combat thread. The input thread is kept so the OS
 --   window-close button and the debug console (started inside the Lua
 --   thread, same as headless) both work normally. 'mBrowse' is the
---   simple-category browsing state @app/Main.hs@ already resolved
---   (discovery/containment done, #886) — 'Nothing' for a grouped
---   category, which keeps Phase 1's (#632) placeholder-label boot.
+--   browsing state @app/Main.hs@ already resolved (discovery,
+--   containment, and default selection all done pre-boot — #886/#887/
+--   #888); as of #888 every canonical target supplies one, so a
+--   'Nothing' here is only the degenerate no-target case.
 runPreview ∷ (Text, Maybe Text) → Maybe PreviewBrowse → Maybe Int → IO ()
 runPreview target mBrowse mPort = do
   EngineInitResult env ← initializeEngine

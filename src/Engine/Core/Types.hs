@@ -6,6 +6,8 @@ module Engine.Core.Types
   , PreviewFrameDir(..)
   , PreviewAnim(..)
   , PreviewUnit(..)
+  , PreviewBuildingEntry(..)
+  , PreviewBuilding(..)
   , PreviewBrowse(..)
   ) where
 
@@ -83,21 +85,59 @@ data PreviewUnit = PreviewUnit
     --   order; empty only when the unit has no animations at all.
   } deriving (Eq, Show)
 
+-- | One browsable entry of a previewed building (#888): either a
+--   recognized animation subdirectory (labeled by its directory name,
+--   'pbeAnimated' 'True', frames in numeric order) or a loose static
+--   PNG (labeled by its path relative to the building's own folder,
+--   one frame). Both live in the SAME list — the building folder mixes
+--   them, so the viewer's list does too.
+data PreviewBuildingEntry = PreviewBuildingEntry
+  { pbeLabel    ∷ !Text
+  , pbeAnimated ∷ !Bool
+  , pbeFps      ∷ !Float
+    -- ^ From @data/buildings/\<name\>.yaml@ when the animation has a
+    --   matching entry, else 'Engine.Preview.Building'\'s documented
+    --   default (the SAME value @BuildingYamlAnim@ decodes to).
+    --   Meaningless for a static entry, which never plays.
+  , pbeLoop     ∷ !Bool
+  , pbeFrames   ∷ ![Text]
+    -- ^ Texture paths in numeric @frame_NNN.png@ order; exactly one for
+    --   a static entry. Never empty.
+  } deriving (Eq, Show)
+
+-- | A resolved @--preview buildings/\<name\>@ target (#888): every
+--   animation subdirectory and loose static texture the building's own
+--   asset folder holds, ordered by label, plus the default selection.
+data PreviewBuilding = PreviewBuilding
+  { pbName    ∷ !Text
+  , pbEntries ∷ ![PreviewBuildingEntry]
+  , pbDefault ∷ !Text
+    -- ^ The @state_animations.built@ animation where the building's own
+    --   YAML defines a usable one, else its @sprite@, else
+    --   @default.png@, else the first entry — empty only when the
+    --   folder holds no browsable texture at all.
+  } deriving (Eq, Show)
+
 -- | Resolved browsing state, computed once in @Main@ before boot so the
 --   discovery/containment logic ('Engine.Preview.Discovery',
---   'Engine.Preview.Unit') never has to run again from the Lua thread.
+--   'Engine.Preview.Unit', 'Engine.Preview.Building') never has to run
+--   again from the Lua thread.
 --   'PreviewList' backs a bare @--preview \<simple category\>@ (#886
---   Requirement 3); 'PreviewItem' backs a validated
---   @--preview \<simple category\>/\<item\>@ (#886 Requirement 4);
---   'PreviewUnitAnims' backs a validated @--preview units/\<name\>@
---   (#887). The remaining grouped categories (and anything outside
---   'BootPreview') carry no 'PreviewBrowse' at all —
---   'ecPreviewBrowse' stays 'Nothing' and the Phase 1 (#632)
---   placeholder-label boot is unaffected.
+--   Requirement 3) AND a @--preview flora\/\<name\>@ \/
+--   @--preview structures\/\<name\>@ target, which #888 deliberately
+--   routes into that same browser rooted at the item's own folder
+--   rather than forking a viewer per category; 'PreviewItem' backs a
+--   validated @--preview \<simple category\>/\<item\>@ (#886
+--   Requirement 4); 'PreviewUnitAnims' backs a validated
+--   @--preview units/\<name\>@ (#887); 'PreviewBuildingAssets' backs a
+--   validated @--preview buildings/\<name\>@ (#888). Every canonical
+--   category now resolves to one of these — outside 'BootPreview'
+--   'ecPreviewBrowse' is simply 'Nothing'.
 data PreviewBrowse
   = PreviewList ![PreviewEntry]
   | PreviewItem !PreviewEntry
   | PreviewUnitAnims !PreviewUnit
+  | PreviewBuildingAssets !PreviewBuilding
   deriving (Eq, Show)
 
 data EngineConfig = EngineConfig
