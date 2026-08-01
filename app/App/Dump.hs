@@ -83,7 +83,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
         , bwLua    = Just luaThreadState
         }
 
-  let engineAction ∷ EngineM' EngineEnv ()
+  let engineAction ∷ EngineM' ()
       engineAction = do
         liftIO $ writeIORef (lifecycleRef env') EngineRunning
         liftIO $ threadDelay 500000

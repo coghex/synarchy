@@ -37,7 +37,7 @@ import Vulkan.Zero
 recordSceneCommandBuffer ∷ CommandBuffer → Word64 → Int → SceneDynamicBuffer
                          → Map.Map LayerId (V.Vector RenderItem)
                          → Maybe (Image, Buffer)
-                         → EngineM ε σ ()
+                         → EngineM σ ()
 recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBatches mCapture = do
     logDebugSM CatRender "Recording command buffer"
       [("image", T.pack $ show imageIndex)
@@ -181,7 +181,7 @@ renderLayerItems ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
                  → TextInstanceBuffer
                  → V.Vector (Word32, Word32)
                  → IORef Int
-                 → EngineM ε σ ()
+                 → EngineM σ ()
 renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer items
                  vertexOffsetRef isUI
                  tib drawInfos batchIdxRef = do

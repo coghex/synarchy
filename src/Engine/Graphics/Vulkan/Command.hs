@@ -20,7 +20,7 @@ import Vulkan.Zero
 
 -- | Run commands once and wait for completion
 runCommandsOnce ∷ Device → CommandPool → Queue
-  → (CommandBuffer → EngineM ε σ α) → EngineM ε σ α
+  → (CommandBuffer → EngineM σ α) → EngineM σ α
 runCommandsOnce device commandPool cmdQueue action = do
   let allocInfo = zero 
         { level = COMMAND_BUFFER_LEVEL_PRIMARY
@@ -56,7 +56,7 @@ runCommandsOnce device commandPool cmdQueue action = do
   pure result
 
 -- | Create a set of frame resources
-createFrameResources ∷ Device → DevQueues → EngineM ε σ FrameResources
+createFrameResources ∷ Device → DevQueues → EngineM σ FrameResources
 createFrameResources device queues = do
     let poolInfo = (zero ∷ CommandPoolCreateInfo)
           { flags = COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT

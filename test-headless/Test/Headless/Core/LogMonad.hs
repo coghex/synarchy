@@ -16,7 +16,7 @@ import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
 import GHC.Stack (SrcLoc(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM')
-import Engine.Core.State (EngineEnv, loggerRef)
+import Engine.Core.State (loggerRef)
 import Engine.Core.Log
   ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
   , LogCategory(..), LogEntry(..)
@@ -33,7 +33,7 @@ spec = describe "capability-scoped logging source-location attribution (#889)" $
       }
     writeIORef (loggerRef env) testLogger
 
-    let action ∷ EngineM' EngineEnv ()
+    let action ∷ EngineM' ()
         action = logInfoM CatTest "probe message"
     _ ← runEngineM action env pure
 

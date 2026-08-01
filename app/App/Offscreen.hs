@@ -72,7 +72,7 @@ runOffscreen bootProfile mPort mSize = do
   Q.writeQueue (luaQueue env') (LuaWindowResize w h)
   Q.writeQueue (luaQueue env') (LuaFramebufferResize w h)
 
-  let engineAction ∷ EngineM' EngineEnv ()
+  let engineAction ∷ EngineM' ()
       engineAction = do
         logInfoM CatSystem "Starting engine (offscreen)..."
         _ ← initializeVulkanOffscreen (w, h)

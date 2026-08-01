@@ -26,7 +26,7 @@ import Engine.Core.Log.Monad (logDebugM, logAndThrowM)
 
 -- | Create a descriptor pool dedicated to font atlas textures
 -- Each font gets one descriptor set with one combined image sampler
-createFontDescriptorPool ∷ Device → Word32 → EngineM ε σ DescriptorPool
+createFontDescriptorPool ∷ Device → Word32 → EngineM σ DescriptorPool
 createFontDescriptorPool device maxFonts = do
   let poolSize = zero
         { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
@@ -44,7 +44,7 @@ createFontDescriptorPool device maxFonts = do
 -- * GPU Upload
 
 uploadFontAtlasToGPU ∷ FontAtlas → DescriptorSetLayout
-  → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
+  → EngineM σ (TextureHandle, DescriptorSet, ImageView, Sampler)
 uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
     state ← gets graphicsState
 
@@ -77,7 +77,7 @@ uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
 
 createFontTextureGrayscale ∷ Device → PhysicalDevice → CommandPool → Queue
                            → Int → Int → [Word8] → DescriptorSetLayout
-                           → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
+                           → EngineM σ (TextureHandle, DescriptorSet, ImageView, Sampler)
 createFontTextureGrayscale device pDevice cmdPool queue width height pixels fontDescLayout = do
     let bufferSize = fromIntegral $ width * height
 
@@ -169,7 +169,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
 -- * Helper Functions
 
 transitionImageLayout ∷ CommandBuffer → Image → Format
-                      → ImageLayout → ImageLayout → EngineM ε σ ()
+                      → ImageLayout → ImageLayout → EngineM σ ()
 transitionImageLayout cmdBuf image _format oldLayout newLayout = do
     let (srcAccess, dstAccess, srcStage, dstStage) = case (oldLayout, newLayout) of
           (IMAGE_LAYOUT_UNDEFINED, IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) →

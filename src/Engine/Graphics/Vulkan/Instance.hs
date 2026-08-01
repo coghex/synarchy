@@ -45,7 +45,7 @@ data InstanceSurfaceUse = InstanceForWindow | InstanceOffscreen
 --   Linux). Only the GLFW surface extensions are hard requirements, and
 --   only for 'InstanceForWindow'.
 createVulkanInstance ∷ GraphicsConfig → InstanceSurfaceUse
-                     → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
+                     → EngineM σ (Instance, Maybe DebugUtilsMessengerEXT)
 createVulkanInstance config surfaceUse = do
   logDebugM CatVulkan "Initializing Vulkan instance"
 
@@ -145,14 +145,14 @@ createVulkanInstance config surfaceUse = do
     
   return (inst, dbgMessenger)
 
-destroyVulkanInstance ∷ (Instance, Maybe DebugUtilsMessengerEXT) → EngineM ε σ ()
+destroyVulkanInstance ∷ (Instance, Maybe DebugUtilsMessengerEXT) → EngineM σ ()
 destroyVulkanInstance (inst, mbMessenger) = do
   case mbMessenger of
     Just messenger → liftIO $ destroyDebugUtilsMessengerEXT inst messenger Nothing
     Nothing → return ()
   liftIO $ destroyInstance inst Nothing
 
-getAvailableExtensions ∷ EngineM ε σ [BS.ByteString]
+getAvailableExtensions ∷ EngineM σ [BS.ByteString]
 getAvailableExtensions = do
   (_, exts) ← liftIO $ enumerateInstanceExtensionProperties Nothing
   return $ map extensionName $ V.toList exts

@@ -61,7 +61,7 @@ import Vulkan.Core10 (Instance(..))
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)
 
 -- | Initialize GLFW with error handling
-initializeGLFW ∷ EngineM ε σ ()
+initializeGLFW ∷ EngineM σ ()
 initializeGLFW = do
   success ← liftIO $ GLFW.init
   case success of
@@ -74,7 +74,7 @@ initializeGLFW = do
     GLFW.windowHint $ GLFW.WindowHint'Resizable True
 
 -- | Creates a GLFW window with given configuration
-createWindow ∷ WindowConfig → EngineM ε σ Window
+createWindow ∷ WindowConfig → EngineM σ Window
 createWindow config = do
   allocResource (\_ → do
                   terminateGLFW
@@ -152,53 +152,53 @@ createRawWindow config = do
     Just win → Just $ Window win
 
 -- | Destroy a GLFW window
-destroyWindow ∷ Window → EngineM' ε ()
+destroyWindow ∷ Window → EngineM' ()
 destroyWindow (Window win) = liftIO $ GLFW.destroyWindow win
 
 -- | Show a window
-showWindow ∷ GLFW.Window → EngineM ε σ ()
+showWindow ∷ GLFW.Window → EngineM σ ()
 showWindow win = liftIO $ GLFW.showWindow win
 
 -- | Hide a window
-hideWindow ∷ GLFW.Window → EngineM ε σ ()
+hideWindow ∷ GLFW.Window → EngineM σ ()
 hideWindow win = liftIO $ GLFW.hideWindow win
 
 -- | Check if a window should close
-windowShouldClose ∷ GLFW.Window → EngineM ε σ Bool
+windowShouldClose ∷ GLFW.Window → EngineM σ Bool
 windowShouldClose = liftIO ∘ GLFW.windowShouldClose
 
 -- | Set whether a window should close
-setWindowShouldClose ∷ GLFW.Window → Bool → EngineM ε σ ()
+setWindowShouldClose ∷ GLFW.Window → Bool → EngineM σ ()
 setWindowShouldClose win = liftIO ∘ GLFW.setWindowShouldClose win
 
 -- | Get the current window size
-getWindowSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
+getWindowSize ∷ GLFW.Window → EngineM σ (Int, Int)
 getWindowSize = liftIO ∘ GLFW.getWindowSize
 
 -- | Get the current framebuffer size
-getFramebufferSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
+getFramebufferSize ∷ GLFW.Window → EngineM σ (Int, Int)
 getFramebufferSize = liftIO ∘ GLFW.getFramebufferSize
 
 -- | Poll for pending events
-pollEvents ∷ EngineM ε σ ()
+pollEvents ∷ EngineM σ ()
 pollEvents = liftIO GLFW.pollEvents
 pollRawEvents ∷ IO ()
 pollRawEvents = GLFW.pollEvents
 
 -- | Wait for events
-waitEvents ∷ EngineM ε σ ()
+waitEvents ∷ EngineM σ ()
 waitEvents = liftIO GLFW.waitEvents
 
 -- | Wait for events with timeout
-waitEventsTimeout ∷ Double → EngineM ε σ ()
+waitEventsTimeout ∷ Double → EngineM σ ()
 waitEventsTimeout = liftIO ∘ GLFW.waitEventsTimeout
 
 -- | Make a window's context current
-makeContextCurrent ∷ Maybe GLFW.Window → EngineM ε σ ()
+makeContextCurrent ∷ Maybe GLFW.Window → EngineM σ ()
 makeContextCurrent = liftIO ∘ GLFW.makeContextCurrent
 
 -- | Hint that we're on the main thread
-mainThreadHint ∷ EngineM ε σ ()
+mainThreadHint ∷ EngineM σ ()
 mainThreadHint = do
   logger ← liftIO . readIORef ⌫ asks loggerRef
   liftIO $ GLFW.setErrorCallback $ Just $ \errCode msg →
@@ -206,7 +206,7 @@ mainThreadHint = do
       "GLFW error: " ⧺ show errCode ⧺ ": " ⧺ msg
 
 -- | Get required Vulkan instance extensions
-getRequiredInstanceExtensions ∷ EngineM ε σ [BS.ByteString]
+getRequiredInstanceExtensions ∷ EngineM σ [BS.ByteString]
 getRequiredInstanceExtensions = do
   exts ← liftIO GLFW.getRequiredInstanceExtensions
   liftIO $ traverse BS.packCString exts
@@ -214,7 +214,7 @@ getRequiredInstanceExtensions = do
 -- | Create a Vulkan surface for a window
 createWindowSurface ∷ Window 
                    → Instance  -- ^ Raw Vulkan instance handle
-                   → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
+                   → EngineM σ SurfaceKHR  -- ^ Raw Vulkan surface handle
 createWindowSurface (Window win) inst = allocResource
   (\surface → do
       logDebugM CatVulkan "Destroying window surface"
@@ -237,12 +237,12 @@ createWindowSurface (Window win) inst = allocResource
                    T.pack $ "Failed to create window surface: " ⧺ err
 
 -- | Terminate GLFW
-terminateGLFW ∷ EngineM ε σ ()
+terminateGLFW ∷ EngineM σ ()
 terminateGLFW = liftIO GLFW.terminate
 
 -- | Get the GLFW window handle
 getGLFWWindow ∷ Window → GLFW.Window
 getGLFWWindow (Window win) = win
 
-vulkanSupported ∷ EngineM ε σ Bool
+vulkanSupported ∷ EngineM σ Bool
 vulkanSupported = liftIO GLFW.vulkanSupported

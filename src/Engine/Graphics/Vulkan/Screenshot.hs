@@ -60,7 +60,7 @@ screenshotOrderOf _                     = Nothing
 --   clear error and 'Nothing' comes back; the frame then proceeds as
 --   if no capture was pending.
 prepareCapture ∷ Device → PhysicalDevice → SwapchainInfo → Word32
-               → ScreenshotRequest → EngineM ε σ (Maybe PendingCapture)
+               → ScreenshotRequest → EngineM σ (Maybe PendingCapture)
 prepareCapture device pDevice si imageIndex req
   | not (siSupportsCapture si) = do
         liftIO $ Q.writeQueue (srReply req) $ Left

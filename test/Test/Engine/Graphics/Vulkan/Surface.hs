@@ -62,7 +62,7 @@ spec env state = do
                         replicateM_ 5 createAndDestroySurface
 
     where
-        runEngineTest ∷ ∀ ε α. EngineEnv → EngineState → EngineM ε EngineState α → IO α
+        runEngineTest ∷ ∀ α. EngineEnv → EngineState → EngineM EngineState α → IO α
         runEngineTest env state action = do
             stateRef ← newIORef state
             let env' = env { engineStateRef = stateRef }

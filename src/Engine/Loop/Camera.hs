@@ -156,7 +156,7 @@ gotoTileZoomSafe worldSizeChunks =
         cornerV   = (halfSize - effBuffer) + 2 * chunkLoadRadius
     in cornerV ≤ halfSize - 2
 
-updateCameraPanning ∷ EngineM ε σ ()
+updateCameraPanning ∷ EngineM σ ()
 updateCameraPanning = do
     env ← ask
     inpSt ← liftIO $ readIORef (inputStateRef env)
@@ -199,7 +199,7 @@ updateCameraPanning = do
         in (cam { camPosition = (cx', cy')
                 , camVelocity = (vx'', vy'') }, ())
 
-updateCameraMouseDrag ∷ EngineM ε σ ()
+updateCameraMouseDrag ∷ EngineM σ ()
 updateCameraMouseDrag = do
     env ← ask
     inpSt ← liftIO $ readIORef (inputStateRef env)
@@ -305,7 +305,7 @@ stepCameraZoom dtF z zv =
         zv'' = if abs zv' < zoomMinSpeed then 0 else zv'
     in (z', zv'')
 
-updateCameraZoom ∷ EngineM ε σ ()
+updateCameraZoom ∷ EngineM σ ()
 updateCameraZoom = do
     env ← ask
     dt ← gets (deltaTime . timingState)

@@ -28,7 +28,7 @@ import Vulkan.Core10 (deviceWaitIdle, destroyBuffer, freeMemory)
 --   The window is 'Nothing' for the offscreen mode (#650), which has
 --   no GLFW state to tear down.
 shutdownEngine ∷ Maybe Window → Maybe ThreadState → Maybe ThreadState
-  → ThreadState → ThreadState → EngineM ε σ ()
+  → ThreadState → ThreadState → EngineM σ ()
 shutdownEngine mWindow mUnitThreadState mWorldThreadState
                        inputThreadState luaThreadState = do
     logInfoM CatSystem "Starting engine shutdown..."

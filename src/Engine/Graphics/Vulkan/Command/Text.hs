@@ -28,7 +28,7 @@ import Vulkan.Zero
 --   Uses createVulkanBufferManual — caller owns the lifetime.
 ensureTextInstanceBuffer ∷ Device → PhysicalDevice → Word64
                          → Maybe TextInstanceBuffer
-                         → EngineM ε σ TextInstanceBuffer
+                         → EngineM σ TextInstanceBuffer
 ensureTextInstanceBuffer device pDevice requiredInstances mOld = do
     case mOld of
         Just existing | tibCapacity existing ≥ requiredInstances → do
@@ -72,7 +72,7 @@ ensureTextInstanceBuffer device pDevice requiredInstances mOld = do
 --   offsets, one per input batch, for use in draw calls.
 uploadTextInstances ∷ Device → TextInstanceBuffer
                     → V.Vector TextRenderBatch
-                    → EngineM ε σ (TextInstanceBuffer, V.Vector (Word32, Word32))
+                    → EngineM σ (TextInstanceBuffer, V.Vector (Word32, Word32))
 uploadTextInstances device tib batches = do
     let !instanceSize = fromIntegral $ sizeOf (undefined ∷ GlyphInstance)
         offsets = V.prescanl' (\acc trb → acc + fromIntegral (V.length (trbInstances trb))) 0 batches
@@ -109,7 +109,7 @@ renderTextBatches ∷ CommandBuffer
                   → Buffer → PipelineLayout → DescriptorSet
                   → TextInstanceBuffer
                   → V.Vector (TextRenderBatch, (Word32, Word32))
-                  → EngineM ε σ ()
+                  → EngineM σ ()
 renderTextBatches cmdBuf quadBuffer layout uniformSet tib batchesWithOffsets = do
     env ← ask
     cache ← liftIO $ readIORef (rcFontCacheRef (toRenderCapability env))

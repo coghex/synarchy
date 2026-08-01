@@ -50,7 +50,7 @@ runHeadless bootProfile mPort = do
         , bwLua    = Just luaThreadState
         }
 
-  let engineAction ∷ EngineM' EngineEnv ()
+  let engineAction ∷ EngineM' ()
       engineAction = do
         logInfoM CatSystem "Starting engine (headless)..."
         headlessLoop

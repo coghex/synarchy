@@ -21,7 +21,7 @@ import qualified Data.Vector as V
 import qualified Engine.Graphics.Window.GLFW as GLFW
 
 -- Helper function to run engine tests
-runEngineTest ∷ ∀ ε α. EngineEnv → EngineState → EngineM ε EngineState α → IO α
+runEngineTest ∷ ∀ α. EngineEnv → EngineState → EngineM EngineState α → IO α
 runEngineTest env state action = do
     stateRef ← newIORef state
     let env' = env { engineStateRef = stateRef }

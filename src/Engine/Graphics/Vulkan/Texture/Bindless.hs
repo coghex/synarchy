@@ -80,7 +80,7 @@ createBindlessTextureSystem ∷ PhysicalDevice
                             → CommandPool
                             → Queue
                             → BindlessConfig
-                            → EngineM ε σ BindlessTextureSystem
+                            → EngineM σ BindlessTextureSystem
 createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   undefinedTex ← createUndefinedTexture pdev dev cmdPool cmdQueue
 
@@ -140,7 +140,7 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 -- | Initialize all descriptor slots with the undefined texture
 -- Required for MoltenVK argument buffer compatibility
 initializeAllSlots ∷ Device → DescriptorSet → BindlessConfig 
-                   → ImageView → Sampler → EngineM ε σ ()
+                   → ImageView → Sampler → EngineM σ ()
 initializeAllSlots dev descSet config imageView sampler = do
   let maxSlots = bcMaxTextures config
       imageInfo = zero
@@ -162,7 +162,7 @@ initializeAllSlots dev descSet config imageView sampler = do
   updateDescriptorSets dev (V.singleton $ SomeStruct write) V.empty
 
 -- | Create descriptor pool with UPDATE_AFTER_BIND support
-createBindlessDescriptorPool ∷ Device → BindlessConfig → EngineM ε σ DescriptorPool
+createBindlessDescriptorPool ∷ Device → BindlessConfig → EngineM σ DescriptorPool
 createBindlessDescriptorPool dev config = do
   let poolSize = zero
         { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
@@ -185,7 +185,7 @@ createBindlessDescriptorPool dev config = do
 
 -- | Create descriptor set layout with bindless flags
 -- Note: We do NOT use VARIABLE_DESCRIPTOR_COUNT for MoltenVK compatibility
-createBindlessDescriptorSetLayout ∷ Device → BindlessConfig → EngineM ε σ DescriptorSetLayout
+createBindlessDescriptorSetLayout ∷ Device → BindlessConfig → EngineM σ DescriptorSetLayout
 createBindlessDescriptorSetLayout dev config = do
   -- Not using VARIABLE_DESCRIPTOR_COUNT due to MoltenVK limitations
   let bindingFlags =
@@ -232,7 +232,7 @@ allocateBindlessDescriptorSet ∷ Device
                               → DescriptorPool 
                               → DescriptorSetLayout 
                               → BindlessConfig
-                              → EngineM ε σ DescriptorSet
+                              → EngineM σ DescriptorSet
 allocateBindlessDescriptorSet dev pool layout _config = do
   let allocInfo = zero
         { descriptorPool = pool
@@ -249,7 +249,7 @@ writeDescriptorSlot ∷ Device
                     → Word32
                     → ImageView 
                     → Sampler 
-                    → EngineM ε σ ()
+                    → EngineM σ ()
 writeDescriptorSlot dev descSet config slotIndex imageView sampler = do
   let imageInfo = zero
         { imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
@@ -271,7 +271,7 @@ writeDescriptorSlot dev descSet config slotIndex imageView sampler = do
 -- | Point the handle→slot table descriptor (binding 1) at its storage
 --   buffer. Written once at creation; the buffer object never changes
 --   afterwards (only its contents, via 'writeHandleSlotEntry').
-writeHandleSlotDescriptor ∷ Device → DescriptorSet → Buffer → EngineM ε σ ()
+writeHandleSlotDescriptor ∷ Device → DescriptorSet → Buffer → EngineM σ ()
 writeHandleSlotDescriptor dev descSet buf = do
   let bufInfo = zero
         { buffer = buf
@@ -310,7 +310,7 @@ registerTexture ∷ Device
                 → ImageView
                 → Sampler
                 → BindlessTextureSystem
-                → EngineM ε σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+                → EngineM σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
 registerTexture = registerTextureImpl False
 
 -- | Register a texture pinned to a SPECIFIC sampler that must survive a
@@ -322,7 +322,7 @@ registerPinnedTexture ∷ Device
                       → ImageView
                       → Sampler
                       → BindlessTextureSystem
-                      → EngineM ε σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+                      → EngineM σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
 registerPinnedTexture = registerTextureImpl True
 
 registerTextureImpl ∷ Bool          -- ^ pin this slot's sampler?
@@ -331,7 +331,7 @@ registerTextureImpl ∷ Bool          -- ^ pin this slot's sampler?
                     → ImageView
                     → Sampler
                     → BindlessTextureSystem
-                    → EngineM ε σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+                    → EngineM σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
 registerTextureImpl pinned dev texHandle imageView sampler system = do
   case Map.lookup texHandle (btsHandleMap system) of
     Just existingHandle → pure (Just existingHandle, system)
@@ -366,7 +366,7 @@ registerTextureImpl pinned dev texHandle imageView sampler system = do
 unregisterTexture ∷ Device
                   → TextureHandle
                   → BindlessTextureSystem
-                  → EngineM ε σ BindlessTextureSystem
+                  → EngineM σ BindlessTextureSystem
 unregisterTexture dev texHandle system = do
   case Map.lookup texHandle (btsHandleMap system) of
     Nothing → pure system
@@ -404,7 +404,7 @@ unregisterTexture dev texHandle system = do
 setTextureFilter ∷ Device
                  → Filter                  -- ^ The new global filter
                  → BindlessTextureSystem
-                 → EngineM ε σ BindlessTextureSystem
+                 → EngineM σ BindlessTextureSystem
 setTextureFilter dev flt system = do
     env ← ask
     let ref     = rcSamplerCacheRef (toRenderCapability env)

@@ -24,7 +24,7 @@ addNode node graph =
 
 -- | Modify the active scene graph directly
 -- Returns True if the scene graph was found (even if transform is identity)
-withSceneGraph ∷ (SceneGraph → SceneGraph) → EngineM ε σ Bool
+withSceneGraph ∷ (SceneGraph → SceneGraph) → EngineM σ Bool
 withSceneGraph f = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
@@ -38,7 +38,7 @@ withSceneGraph f = do
 
 -- | Modify the active scene graph with a function that returns a result
 -- Returns Nothing if no active scene/graph, otherwise returns Just result
-withSceneGraphM ∷ (SceneGraph → (SceneGraph, a)) → EngineM ε σ (Maybe a)
+withSceneGraphM ∷ (SceneGraph → (SceneGraph, a)) → EngineM σ (Maybe a)
 withSceneGraphM f = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
@@ -53,7 +53,7 @@ withSceneGraphM f = do
 
 -- | Modify a specific node in the active scene graph
 -- Returns True only if the node was found and modified
-modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM ε σ Bool
+modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM σ Bool
 modifySceneNode objId f = do
     result ← withSceneGraphM $ \graph →
       case Map.lookup objId (sgNodes graph) of
@@ -66,7 +66,7 @@ modifySceneNode objId f = do
 
 -- | Remove a node from the active scene graph
 -- Returns True only if the node existed and was removed
-deleteSceneNode ∷ ObjectId → EngineM ε σ Bool
+deleteSceneNode ∷ ObjectId → EngineM σ Bool
 deleteSceneNode objId = do
     result ← withSceneGraphM $ \graph →
       if Map.member objId (sgNodes graph)
