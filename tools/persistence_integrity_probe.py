@@ -19,7 +19,7 @@ instead:
      save -> quit -> fresh restart -> load round trip WITHOUT blocking
      the load (the #761-established tolerated-dangling-reference
      contract) -- and the new cross-validation
-     (`Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData` /
+     (`Engine.Scripting.Lua.API.Save.Integrity`'s `knownEntitiesFromSaveData` /
      `World.Save.Integrity.luaReferenceErrors`) actually reports it as
      a diagnostic, naming the component, the reference kind, and the
      destroyed unit's id, AT BOTH the pre-save boundary (over the same

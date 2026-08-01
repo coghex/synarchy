@@ -255,15 +255,15 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   side of any live ref) FAILED for this request id
               --   before ever reaching 'LuaLoadStaged' — a staging
               --   exception or 'World.Load.Stage.StageError'. By this
-              --   point 'Engine.Scripting.Lua.API.Save.prepareLuaLoad'
+              --   point 'Engine.Scripting.Lua.API.Save.Bridge.prepareLuaLoad'
               --   already succeeded (staging only ever runs after it
               --   does), leaving Lua's registration guard
               --   (@saveModules._loadActive@) active with no
               --   'LuaLoadStaged' ever coming to drive
-              --   'Engine.Scripting.Lua.API.Save.applyLuaLoad' (the only
+              --   'Engine.Scripting.Lua.API.Save.Bridge.applyLuaLoad' (the only
               --   other thing that clears it) — so this tells the Lua
               --   thread to call
-              --   'Engine.Scripting.Lua.API.Save.abortLuaLoad' instead.
+              --   'Engine.Scripting.Lua.API.Save.Bridge.abortLuaLoad' instead.
             deriving (Eq, Show)
 
 data LuaResult = LuaSuccess
