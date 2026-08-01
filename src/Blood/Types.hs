@@ -115,11 +115,10 @@ newtype BloodTextureId = BloodTextureId { unBloodTextureId ∷ Word32 }
     deriving stock (Show, Eq, Ord, Generic)
     deriving anyclass (Hashable)
 
--- | One generated-texture descriptor: everything a real texture
---   generator (a future issue, #3 in the design doc's suggested
---   split) would need to reproduce the same look, plus what the
---   matcher here reads. Field order isn't load-bearing (no Serialize
---   instance — this store is never saved).
+-- | One generated-texture descriptor: everything
+--   'Blood.Texture.generateBloodTexture' (#606) needs to reproduce the
+--   same look, plus what the matcher here reads. Field order isn't
+--   load-bearing (no Serialize instance — this store is never saved).
 data BloodTextureDescriptor = BloodTextureDescriptor
     { btdId         ∷ !BloodTextureId
     , btdStyle      ∷ !BloodStyle
@@ -132,9 +131,10 @@ data BloodTextureDescriptor = BloodTextureDescriptor
     , btdAnisotropy ∷ !AnisotropyBucket
     , btdEdge       ∷ !EdgeBucket
     , btdSeed       ∷ !Int
-      -- ^ Generation seed / lineage — opaque here, meaningful once a
-      --   real texture generator (design doc's "3. Procedural blood
-      --   texture generation") reads it.
+      -- ^ Generation seed / lineage — opaque here (never read by
+      --   'requestDistance'/matching); folded into
+      --   'Blood.Texture.generateBloodTexture's (#606) pixel-generation
+      --   seed instead.
     } deriving (Show, Eq, Generic)
 
 -- | What a blood request asks the pool to resolve to. Same shape as
