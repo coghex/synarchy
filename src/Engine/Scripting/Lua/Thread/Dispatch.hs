@@ -343,7 +343,7 @@ processLuaMsg env ls stateRef msg = case msg of
       -- terminal and a NEWER request has been accepted and prepared its
       -- own Lua state. Passing 'requestId' through lets 'abortLuaLoad'
       -- no-op instead of clearing state that belongs to that newer
-      -- request (see 'Engine.Scripting.Lua.API.Save.abortLuaLoad').
+      -- request (see 'Engine.Scripting.Lua.API.Save.Bridge.abortLuaLoad').
       logger ← readIORef (loggerRef env)
       Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
 
@@ -357,7 +357,7 @@ processLuaMsg env ls stateRef msg = case msg of
 --   Simulation are all quiesced before either side of the publish
 --   becomes observable (requirement 10). Once quiesced, this function
 --   applies the ALREADY-VALIDATED prepared Lua state
---   ('Engine.Scripting.Lua.API.Save.applyLuaLoad') itself (an HsLua call,
+--   ('Engine.Scripting.Lua.API.Save.Bridge.applyLuaLoad') itself (an HsLua call,
 --   so it must run here, on the Lua thread) and only then queues
 --   'WorldLoadPublish' for the world thread to perform the matching
 --   Haskell-side ref swap — satisfying requirement 11 (no Haskell state

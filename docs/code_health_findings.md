@@ -71,7 +71,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[deferred]` blocke
 - [ ] CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme
 - [ ] CH-41. The 500-line module budget doesn't constrain function size
 - [ ] CH-42. Three different facade idioms across nine sibling API domains
-- [ ] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
+- [ ] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090 — [#985] covers `Save.hs`'s State-free extraction only
 - [ ] CH-44. Two `Focus` modules, neither of which says which focus it means
 - [ ] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler
 - [ ] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface

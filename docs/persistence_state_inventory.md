@@ -577,7 +577,7 @@ session at load time, never an embedded copy.
 registered Lua save component's `references()` hook reports
 (`scripts/unit_ai_save_refs.lua`, `scripts/building_spawn.lua` — see
 #761's `references` spec field). Cross-validated by
-`Engine.Scripting.Lua.API.Save`'s `knownEntitiesFromSaveData` /
+`Engine.Scripting.Lua.API.Save.Integrity`'s `knownEntitiesFromSaveData` /
 `World.Save.Integrity.luaReferenceErrors`: `unit`/`building`/
 `item_instance` resolve session-wide (matching each component's own
 declared `scope = "global"` — these three are GLOBAL allocators, one
