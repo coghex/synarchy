@@ -50,7 +50,7 @@ createUndefinedTexture ∷ PhysicalDevice
                        → Device 
                        → CommandPool 
                        → Queue 
-                       → EngineM ε σ UndefinedTexture
+                       → EngineM σ UndefinedTexture
 createUndefinedTexture pdev dev cmdPool cmdQueue = do
   let width = undefinedTextureWidth
       height = undefinedTextureHeight

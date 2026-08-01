@@ -29,7 +29,7 @@ import Vulkan.Extensions.VK_KHR_swapchain (SwapchainKHR)
 import GHC.Stack (HasCallStack)
 
 -- | Validate descriptor state is ready for rendering
-validateDescriptorState ∷ GraphicsState → EngineM ε σ ()
+validateDescriptorState ∷ GraphicsState → EngineM σ ()
 validateDescriptorState state = case descriptorState state of
     Nothing → logAndThrowM CatGraphics (ExGraphics DescriptorError)
         "Descriptor manager is missing in graphics state"
@@ -38,7 +38,7 @@ validateDescriptorState state = case descriptorState state of
             "No active descriptor sets"
 
 -- | Get frame resources for a given frame index
-getFrameResources ∷ GraphicsState → Word32 → EngineM ε σ FrameResources
+getFrameResources ∷ GraphicsState → Word32 → EngineM σ FrameResources
 getFrameResources state frameIdx = 
     case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
         Nothing → logAndThrowM CatGraphics (ExGraphics CommandBufferError) $
@@ -46,7 +46,7 @@ getFrameResources state frameIdx =
         Just res → pure res
 
 -- | Get command buffer from frame resources
-getCommandBuffer ∷ FrameResources → EngineM ε σ CommandBuffer
+getCommandBuffer ∷ FrameResources → EngineM σ CommandBuffer
 getCommandBuffer resources = 
     case safeVectorHead (frCommandBuffer resources) of
         Nothing → logAndThrowM CatGraphics (ExGraphics CommandBufferError)
@@ -54,14 +54,14 @@ getCommandBuffer resources =
         Just cb → pure cb
 
 -- | Get Vulkan device
-getDevice ∷ GraphicsState → EngineM ε σ Device
+getDevice ∷ GraphicsState → EngineM σ Device
 getDevice state = case vulkanDevice state of
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No device"
     Just d  → pure d
 
 -- | Get swapchain. Only the windowed acquire/present path calls this;
 --   an offscreen target (#650) reaching it is a mode-dispatch bug.
-getSwapchain ∷ GraphicsState → EngineM ε σ SwapchainKHR
+getSwapchain ∷ GraphicsState → EngineM σ SwapchainKHR
 getSwapchain state = case siTarget ⊚ swapchainInfo state of
     Nothing → logAndThrowM CatGraphics (ExGraphics SwapchainError) "No swapchain"
     Just (TargetSwapchain sc) → pure sc
@@ -69,7 +69,7 @@ getSwapchain state = case siTarget ⊚ swapchainInfo state of
         "getSwapchain: offscreen render target has no swapchain"
 
 -- | Get device queues
-getQueues ∷ GraphicsState → EngineM ε σ DevQueues
+getQueues ∷ GraphicsState → EngineM σ DevQueues
 getQueues state = case deviceQueues state of
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No queues"
     Just q  → pure q

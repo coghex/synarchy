@@ -18,7 +18,7 @@ import Vulkan.Zero
 -- | Creates a Vulkan buffer with the specified properties and allocates memory for it
 createVulkanBuffer ∷ Device → PhysicalDevice → DeviceSize
                    → BufferUsageFlags → MemoryPropertyFlags 
-                   → EngineM ε σ (DeviceMemory, Buffer)
+                   → EngineM σ (DeviceMemory, Buffer)
 createVulkanBuffer device pDevice bufferSize usage memProperties = do
   let bufferInfo = zero 
         { size = bufferSize
@@ -52,7 +52,7 @@ createVulkanBuffer device pDevice bufferSize usage memProperties = do
 
 -- | Find a memory type that satisfies both the type filter and properties
 findMemoryType ∷ PhysicalDevice → Word32 → MemoryPropertyFlags 
-               → EngineM ε σ Word32
+               → EngineM σ Word32
 findMemoryType pDevice typeFilter properties = do
   PhysicalDeviceMemoryProperties memTypeCount memTypes _ _ ← 
     getPhysicalDeviceMemoryProperties pDevice
@@ -74,7 +74,7 @@ findMemoryType pDevice typeFilter properties = do
 -- Caller is responsible for destroying buffer and freeing memory
 createVulkanBufferManual ∷ Device → PhysicalDevice → DeviceSize
                          → BufferUsageFlags → MemoryPropertyFlags 
-                         → EngineM ε σ (DeviceMemory, Buffer)
+                         → EngineM σ (DeviceMemory, Buffer)
 createVulkanBufferManual device pDevice bufferSize usage memProperties = do
   let bufferInfo = zero 
         { size = bufferSize

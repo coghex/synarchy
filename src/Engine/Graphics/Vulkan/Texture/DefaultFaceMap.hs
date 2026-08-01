@@ -50,7 +50,7 @@ createDefaultFaceMap ∷ PhysicalDevice
                      → CommandPool
                      → Queue
                      → BindlessTextureSystem
-                     → EngineM ε σ (DefaultFaceMap, BindlessTextureSystem)
+                     → EngineM σ (DefaultFaceMap, BindlessTextureSystem)
 createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
   let width  = 1 ∷ Word32
       height = 1 ∷ Word32

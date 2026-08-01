@@ -120,7 +120,7 @@ parallelism), and drive it via `--headless` + `world.waitForInit`, never
 Modules are split into `Base.hs` and `Types.hs` files. Base files have **no local dependencies** (only external packages). Types files import from other project modules freely. This prevents circular imports.
 
 ### Core monad: EngineM
-`Engine.Core.Monad` defines `EngineM ε σ α` — a continuation-passing-style monad transformer with environment (ε via Reader), mutable state (σ via State), IO, error handling, and logging. Most engine code runs in this monad.
+`Engine.Core.Monad` defines `EngineM σ α` — a continuation-passing-style monad with a concrete `EngineEnv` Reader environment, concrete `EngineState` mutable state, IO, error handling, and logging. Its two type parameters are `σ` (the continuation result) and `α` (the value); neither the environment nor the state is a parameter. Most engine code runs in this monad.
 
 `Engine.Core.State`'s `EngineEnv` is one shared record (83 fields)
 reachable from any thread. The capability-split epic (#537) that

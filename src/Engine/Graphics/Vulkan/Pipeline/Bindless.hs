@@ -25,7 +25,7 @@ createBindlessPipeline ∷ Device
                        → DescriptorSetLayout
                        → DescriptorSetLayout
                        → SampleCountFlagBits
-                       → EngineM ε σ (Pipeline, PipelineLayout)
+                       → EngineM σ (Pipeline, PipelineLayout)
 createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
       device renderPass swapExtent uniformLayout textureLayout sampleCount
@@ -47,7 +47,7 @@ createBindlessUIPipeline ∷ Device
                          → DescriptorSetLayout
                          → DescriptorSetLayout
                          → SampleCountFlagBits
-                         → EngineM ε σ (Pipeline, PipelineLayout)
+                         → EngineM σ (Pipeline, PipelineLayout)
 createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
       device renderPass swapExtent uniformLayout textureLayout sampleCount
@@ -72,7 +72,7 @@ createBindlessPipelineWithShader ∷ Device
                                  → SampleCountFlagBits
                                  → BS.ByteString  -- ^ Vertex shader code
                                  → BS.ByteString  -- ^ Fragment shader code
-                                 → EngineM ε σ (Pipeline, PipelineLayout)
+                                 → EngineM σ (Pipeline, PipelineLayout)
 createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout sampleCount vertShaderCode fragShaderCode = do
   vertShaderModule ← createShaderModule' device vertShaderCode
   fragShaderModule ← createShaderModule' device fragShaderCode
@@ -198,7 +198,7 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
   pure (pipeline, pipelineLayout)
 
 -- | Create a shader module from SPIR-V bytecode
-createShaderModule' ∷ Device → BS.ByteString → EngineM ε σ ShaderModule
+createShaderModule' ∷ Device → BS.ByteString → EngineM σ ShaderModule
 createShaderModule' device code = do
   let createInfo = zero { code = code }
   createShaderModule device createInfo Nothing

@@ -60,7 +60,7 @@ runPreview target mBrowse mPort = do
 
   videoConfig ← readIORef (videoConfigRef env')
 
-  let engineAction ∷ EngineM' EngineEnv ()
+  let engineAction ∷ EngineM' ()
       engineAction = do
         logInfoM CatSystem "Starting engine (preview)..."
         window ← GLFW.createWindow $ defaultWindowConfig videoConfig

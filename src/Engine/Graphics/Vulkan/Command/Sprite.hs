@@ -22,14 +22,14 @@ import Vulkan.Core10
 -- | Render sprites using the bindless UI pipeline
 renderSpritesBindlessUI ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
                         → DescriptorSet → SceneDynamicBuffer → V.Vector RenderBatch
-                        → IORef Word32 → EngineM ε σ ()
+                        → IORef Word32 → EngineM σ ()
 renderSpritesBindlessUI = renderSpritesWith
     (\state → (bindlessUIPipeline state, "Bindless UI pipeline not available"))
 
 -- | Render sprites using the bindless pipeline
 renderSpritesBindless ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
                       → DescriptorSet → SceneDynamicBuffer → V.Vector RenderBatch
-                      → IORef Word32 → EngineM ε σ ()
+                      → IORef Word32 → EngineM σ ()
 renderSpritesBindless = renderSpritesWith
     (\state → (bindlessPipeline state, "Bindless pipeline not available"))
 
@@ -39,7 +39,7 @@ renderSpritesBindless = renderSpritesWith
 renderSpritesWith ∷ (GraphicsState → (Maybe (Pipeline, PipelineLayout), Text))
                   → CommandBuffer → GraphicsState → Viewport → Rect2D
                   → DescriptorSet → SceneDynamicBuffer → V.Vector RenderBatch
-                  → IORef Word32 → EngineM ε σ ()
+                  → IORef Word32 → EngineM σ ()
 renderSpritesWith selectPipeline cmdBuf state viewport scissor uniformSet
                   dynamicBuffer spriteBatches vertexOffsetRef =
   unless (V.null spriteBatches) $ do

@@ -21,7 +21,7 @@ import Engine.Loop.Mode (LoopMode(..), runLoopMode, frameBudgetMicros)
 
 -- | Windowed main loop. See 'Engine.Loop.Mode.LoopMode' for what this
 --   mode does that the others don't.
-mainLoop ∷ EngineM ε σ ()
+mainLoop ∷ EngineM σ ()
 mainLoop = runLoopMode windowedMode
 
 -- | Offscreen (#650) main loop: the windowed loop minus GLFW — no
@@ -30,10 +30,10 @@ mainLoop = runLoopMode windowedMode
 --   vsync'd present to pace frames, each iteration sleeps a ~60 fps
 --   budget so an offscreen instance doesn't spin the GPU — several may
 --   run in parallel (that is this mode's point).
-mainLoopOffscreen ∷ EngineM ε σ ()
+mainLoopOffscreen ∷ EngineM σ ()
 mainLoopOffscreen = runLoopMode offscreenMode
 
-windowedMode ∷ LoopMode ε σ
+windowedMode ∷ LoopMode σ
 windowedMode = LoopMode
   { lmStartingLog   = "Engine starting..."
   , lmRunningLog    = Just "Engine running"
@@ -48,7 +48,7 @@ windowedMode = LoopMode
   , lmEndOfTick     = drawFrame *> updateFrameTiming
   }
 
-offscreenMode ∷ LoopMode ε σ
+offscreenMode ∷ LoopMode σ
 offscreenMode = LoopMode
   { lmStartingLog   = "Engine starting..."
   , lmRunningLog    = Just "Engine running"
@@ -68,14 +68,14 @@ offscreenMode = LoopMode
 
 -- | The per-tick camera integration both rendering modes run, on an
 --   unlocked tick only (see 'Engine.Loop.Mode.runGatedByCaptureLock').
-cameraUpdates ∷ EngineM ε σ ()
+cameraUpdates ∷ EngineM σ ()
 cameraUpdates = do
     updateCameraPanning
     updateCameraZoom
     updateCameraMouseDrag
 
 -- | The GLFW window the windowed mode cannot run without.
-requireWindow ∷ EngineM ε σ Window
+requireWindow ∷ EngineM σ Window
 requireWindow = do
     state ← gets graphicsState
     case glfwWindow state of

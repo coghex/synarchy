@@ -43,7 +43,7 @@ setActiveScene sceneId manager =
         , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
         }
 
-updateSceneManager ∷ Float → Float → SceneManager → EngineM ε σ SceneManager
+updateSceneManager ∷ Float → Float → SceneManager → EngineM σ SceneManager
 updateSceneManager viewWidth viewHeight manager =
     case smActiveScene manager of
         Nothing → pure manager

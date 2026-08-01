@@ -60,7 +60,7 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends (SomeStruct(..))
 
 -- | Initialize all Vulkan resources for the windowed (swapchain) path.
-initializeVulkan ∷ Window → EngineM ε σ CommandPool
+initializeVulkan ∷ Window → EngineM σ CommandPool
 initializeVulkan window = do
   let Window glfwWin = window
 
@@ -114,7 +114,7 @@ initializeVulkan window = do
 --   render target, sized by @(w, h)@, one per frame in flight. The
 --   device is picked on graphics capability alone and the present
 --   queue slots alias the graphics queue (nothing ever presents).
-initializeVulkanOffscreen ∷ (Int, Int) → EngineM ε σ CommandPool
+initializeVulkanOffscreen ∷ (Int, Int) → EngineM σ CommandPool
 initializeVulkanOffscreen (w, h) = do
   logDebugM CatVulkan "Creating Vulkan instance (offscreen)"
   (vkInstance, _debugMessenger) ← allocResource destroyVulkanInstance $
@@ -151,7 +151,7 @@ initializeVulkanOffscreen (w, h) = do
 --   @fbSize@ is the initial framebuffer size for the UBO/UI camera
 --   (windowed: the GLFW framebuffer; offscreen: the target extent).
 initializeVulkanCommon ∷ PhysicalDevice → Device → DevQueues
-                       → SwapchainInfo → (Int, Int) → EngineM ε σ CommandPool
+                       → SwapchainInfo → (Int, Int) → EngineM σ CommandPool
 initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
@@ -295,7 +295,7 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
 
 
 createUniformBuffersForFrames ∷ Device → PhysicalDevice
-  → (Int, Int) → V.Vector DescriptorSet → EngineM ε σ ()
+  → (Int, Int) → V.Vector DescriptorSet → EngineM σ ()
 createUniformBuffersForFrames device physicalDevice (width, height) descSets = do
   env ← ask
   let cRef   = rcCameraRef (toRenderCapability env)

@@ -17,7 +17,7 @@ import Engine.Core.State (EngineState(..), GraphicsState(..))
 -- for a swapchain, TRANSFER_SRC for an offscreen capture target (#650)
 -- — see 'Engine.Graphics.Types.renderedImageLayout'.
 createVulkanRenderPass ∷ Device → Format → SampleCountFlagBits → ImageLayout
-                       → EngineM ε σ RenderPass
+                       → EngineM σ RenderPass
 createVulkanRenderPass device swapchainImageFormat sampleCount targetLayout = do
     renderPass ← if sampleCount ≡ SAMPLE_COUNT_1_BIT
         then createRenderPassNoMSAA device swapchainImageFormat targetLayout
@@ -30,7 +30,7 @@ createVulkanRenderPass device swapchainImageFormat sampleCount targetLayout = do
     pure renderPass
 
 -- | Single-sample render pass (no MSAA) — original behavior
-createRenderPassNoMSAA ∷ Device → Format → ImageLayout → EngineM ε σ RenderPass
+createRenderPassNoMSAA ∷ Device → Format → ImageLayout → EngineM σ RenderPass
 createRenderPassNoMSAA device swapchainImageFormat targetLayout = do
     let attachmentDesc = zero
           { format         = swapchainImageFormat
@@ -73,7 +73,7 @@ createRenderPassNoMSAA device swapchainImageFormat targetLayout = do
 -- Attachment 0: multisampled color (rendered to, then discarded)
 -- Attachment 1: resolve target (swapchain/offscreen image, consumed)
 createRenderPassMSAA ∷ Device → Format → SampleCountFlagBits → ImageLayout
-                     → EngineM ε σ RenderPass
+                     → EngineM σ RenderPass
 createRenderPassMSAA device swapchainImageFormat sampleCount targetLayout = do
     let -- Attachment 0: Multisampled color attachment
         msaaColorAttachment = zero

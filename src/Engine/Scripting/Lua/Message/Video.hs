@@ -36,7 +36,7 @@ import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scripting.Lua.Types
 import qualified Graphics.UI.GLFW as GLFW
 
-handleSetResolution ∷ Int → Int → EngineM ε σ ()
+handleSetResolution ∷ Int → Int → EngineM σ ()
 handleSetResolution w h = do
     state ← gets graphicsState
     case glfwWindow state of
@@ -84,7 +84,7 @@ publishWindowGeometry rc lq win = do
 --   applied mode untouched. A request for the mode already applied is
 --   inert ('windowModeAlreadyApplied') — see that function for why a
 --   redundant @windowed@ request must not re-run the restore.
-handleSetWindowMode ∷ WindowMode → EngineM ε σ ()
+handleSetWindowMode ∷ WindowMode → EngineM σ ()
 handleSetWindowMode mode = do
     state ← gets graphicsState
     case glfwWindow state of
@@ -149,7 +149,7 @@ handleSetWindowMode mode = do
                                      (applyWindowModeTransition mode livePos liveSize)
 
 
-handleSetVSync ∷ Bool → EngineM ε σ ()
+handleSetVSync ∷ Bool → EngineM σ ()
 handleSetVSync vsync = do
     env ← ask
     liftIO $ atomicModifyIORef' (rcVideoConfigRef (toRenderCapability env)) $ \c →
@@ -163,7 +163,7 @@ handleSetVSync vsync = do
                 <> if vsync then "enabled" else "disabled"
             recreateSwapchain window
 
-handleSetMSAA ∷ Int → EngineM ε σ ()
+handleSetMSAA ∷ Int → EngineM σ ()
 handleSetMSAA msaa = do
     env ← ask
     liftIO $ atomicModifyIORef' (rcVideoConfigRef (toRenderCapability env)) $ \c →
@@ -177,14 +177,14 @@ handleSetMSAA msaa = do
                 <> T.pack (show msaa) <> "x"
             recreateSwapchain window
 
-handleSetBrightness ∷ Int → EngineM ε σ ()
+handleSetBrightness ∷ Int → EngineM σ ()
 handleSetBrightness pct = do
     env ← ask
     let brightness = max 50 (min 300 pct)
     liftIO $ writeIORef (rcBrightnessRef (toRenderCapability env)) brightness
     logDebugM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
 
-handleSetPixelSnap ∷ Bool → EngineM ε σ ()
+handleSetPixelSnap ∷ Bool → EngineM σ ()
 handleSetPixelSnap enabled = do
     env ← ask
     liftIO $ writeIORef (rcPixelSnapRef (toRenderCapability env)) enabled
@@ -193,7 +193,7 @@ handleSetPixelSnap enabled = do
 -- | Live-swap every bound texture sampler to a new filter mode
 --   ('LuaSetTextureFilter'). No-op (besides the config write) when no
 --   Vulkan device/bindless system is up yet.
-handleSetTextureFilter ∷ TextureFilter → EngineM ε σ ()
+handleSetTextureFilter ∷ TextureFilter → EngineM σ ()
 handleSetTextureFilter tf = do
     logInfoM CatTexture $ "Texture filter changed to: " <> textureFilterToText tf
     env ← ask

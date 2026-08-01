@@ -19,7 +19,7 @@ import Vulkan.Zero
 -- | Copy data between buffers using a command buffer
 copyBuffer ∷ Device → CommandPool → Queue 
           → Buffer → Buffer → DeviceSize 
-          → EngineM ε σ ()
+          → EngineM σ ()
 copyBuffer device cmdPool cmdQueue srcBuffer dstBuffer size =
   runCommandsOnce device cmdPool cmdQueue $ \cmdBuf → do
     let copyRegion = zero 
@@ -32,7 +32,7 @@ copyBuffer device cmdPool cmdQueue srcBuffer dstBuffer size =
 
 -- | Create a uniform buffer
 createUniformBuffer ∷ Device → PhysicalDevice → DeviceSize 
-                    → EngineM ε σ (Buffer, DeviceMemory)
+                    → EngineM σ (Buffer, DeviceMemory)
 createUniformBuffer device pDevice bufferSize = do
   (mem, buf) ← createVulkanBuffer device pDevice bufferSize
       BUFFER_USAGE_UNIFORM_BUFFER_BIT
@@ -40,7 +40,7 @@ createUniformBuffer device pDevice bufferSize = do
   pure (buf, mem)
 
 -- | Update uniform buffer data
-updateUniformBuffer ∷ Storable α ⇒ Device → DeviceMemory → α → EngineM ε σ ()
+updateUniformBuffer ∷ Storable α ⇒ Device → DeviceMemory → α → EngineM σ ()
 updateUniformBuffer device memory uboData = do
   let size = fromIntegral $ sizeOf uboData
   dataPtr ← mapMemory device memory 0 size zero

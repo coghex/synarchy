@@ -16,7 +16,7 @@ import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugSM)
 
-updateFrameTiming ∷ EngineM ε σ ()
+updateFrameTiming ∷ EngineM σ ()
 updateFrameTiming = do
   state ← get
   let timing = timingState state
