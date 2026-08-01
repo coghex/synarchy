@@ -29,7 +29,8 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
 import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
-    , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..))
+    , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..)
+    , PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
 import qualified HsLua as Lua
@@ -134,20 +135,27 @@ getPreviewTargetFn env = do
 -- | engine.getPreviewBrowse() → nil | {mode="list", entries={{label=,path=},...}}
 --   | {mode="item", entry={label=,path=}}
 --   | {mode="unit", unit={name=,defaultAnim=,animations={...}}}
+--   | {mode="building", building={name=,defaultEntry=,entries={...}}}
 --   The browsing state @app/Main.hs@ resolved before boot:
---   'PreviewList' for a bare @--preview \<simple category\>@ (#886),
---   'PreviewItem' for a validated
+--   'PreviewList' for a bare @--preview \<simple category\>@ (#886) and
+--   for a @--preview flora\/\<name\>@ \/ @structures\/\<name\>@ target
+--   (#888 routes both into that same browser, rooted at the item's own
+--   folder), 'PreviewItem' for a validated
 --   @--preview \<simple category\>/\<item\>@ (#886), 'PreviewUnitAnims'
---   for a validated @--preview units/\<name\>@ (#887). 'nil' for the
---   remaining grouped categories (or outside 'BootPreview') —
---   @scripts/preview_manager.lua@ falls back to the Phase 1 (#632)
---   placeholder-label boot in that case.
+--   for a validated @--preview units/\<name\>@ (#887), and
+--   'PreviewBuildingAssets' for a validated
+--   @--preview buildings/\<name\>@ (#888). 'nil' only outside
+--   'BootPreview' — every canonical preview target now resolves to a
+--   real browsing mode.
 --
 --   The unit payload's @animations@ array is already in the viewer's
 --   display order, and each entry's @directions@ array is already in
 --   the game's @S, SW, W, NW, N, NE, E, SE@ order with unavailable
---   directions omitted — 'Engine.Preview.Unit' owns those rules, the
---   Lua side never re-derives them.
+--   directions omitted; the building payload's @entries@ array is
+--   likewise already ordered, each carrying its own static\/animation
+--   identity and effective @fps@\/@loop@ —
+--   'Engine.Preview.Unit'\/'Engine.Preview.Building' own those rules,
+--   the Lua side never re-derives them.
 getPreviewBrowseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getPreviewBrowseFn env = do
   case ecPreviewBrowse (ccEngineConfig (toCoreCapability env)) of
@@ -173,6 +181,12 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "mode"
       pushPreviewUnit unit
       Lua.setfield (-2) "unit"
+    Just (PreviewBuildingAssets building) → do
+      Lua.newtable
+      Lua.pushstring "building"
+      Lua.setfield (-2) "mode"
+      pushPreviewBuilding building
+      Lua.setfield (-2) "building"
   return 1
   where
     pushPreviewEntry entry = do
@@ -221,6 +235,25 @@ getPreviewBrowseFn env = do
       Lua.pushboolean (pfdMirrored d)
       Lua.setfield (-2) "mirrored"
       pushArray (Lua.pushstring ∘ TE.encodeUtf8) (pfdFrames d)
+      Lua.setfield (-2) "frames"
+
+    pushPreviewBuilding building = do
+      Lua.newtable
+      pushTextField "name"         (pbName building)
+      pushTextField "defaultEntry" (pbDefault building)
+      pushArray pushBuildingEntry (pbEntries building)
+      Lua.setfield (-2) "entries"
+
+    pushBuildingEntry e = do
+      Lua.newtable
+      pushTextField "label" (pbeLabel e)
+      Lua.pushboolean (pbeAnimated e)
+      Lua.setfield (-2) "animated"
+      Lua.pushnumber (realToFrac (pbeFps e))
+      Lua.setfield (-2) "fps"
+      Lua.pushboolean (pbeLoop e)
+      Lua.setfield (-2) "loop"
+      pushArray (Lua.pushstring ∘ TE.encodeUtf8) (pbeFrames e)
       Lua.setfield (-2) "frames"
 
 -- | engine.realTime() → number

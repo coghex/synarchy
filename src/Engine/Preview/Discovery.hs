@@ -8,23 +8,28 @@
 module Engine.Preview.Discovery
   ( FocusError(..)
   , focusErrorMessage
+  , ItemDirError(..)
+  , itemDirErrorMessage
   , textureCategoryRoot
   , isSupportedTextureFile
   , sortEntries
+  , sortFrameFiles
   , discoverEntries
   , resolveFocusedEntry
+  , resolveItemDir
   ) where
 
 import UPrelude
 import qualified Data.Text as T
-import Data.Char (toLower)
-import Data.List (sortBy, isPrefixOf)
+import Data.Char (isDigit, toLower)
+import Data.List (sortBy, sortOn, isPrefixOf)
 import Data.Ord (comparing)
 import System.Directory
     ( doesDirectoryExist, doesFileExist, listDirectory, canonicalizePath
     , pathIsSymbolicLink )
 import System.FilePath
-    ( (</>), isAbsolute, splitDirectories, takeExtension, pathSeparator )
+    ( (</>), isAbsolute, splitDirectories, takeExtension, pathSeparator
+    , dropExtension )
 import Engine.Core.Types (PreviewEntry(..))
 
 -- | Every reason a requested @--preview \<simple category\>/\<item\>@
@@ -64,7 +69,47 @@ focusErrorMessage FocusNotAFile = "is a directory, not a texture file"
 focusErrorMessage FocusUnsupportedExtension =
     "unsupported file type (expected .png)"
 
--- | @assets/textures/\<category\>@ — the canonical simple-category root.
+-- | Every reason a requested GROUPED-category item directory
+--   (@--preview \<grouped category\>/\<item\>@ — a unit, building, flora
+--   species, or structure pack) can fail to resolve, all rejected
+--   BEFORE 'App.Preview.runPreview' ever creates a window (#888
+--   Requirement 3). The grouped counterpart of 'FocusError' above: an
+--   item there names a FILE within the category, an item here names one
+--   contained, non-symlinked direct child DIRECTORY of it.
+data ItemDirError
+  = ItemDirEscapesRoot
+  -- ^ Empty, absolute, carries a path separator, is @.@\/@..@, or (after
+  --   canonicalization — a defensive final check) resolves outside the
+  --   category root.
+  | ItemDirSymlink
+  -- ^ The item directory is a symlink — refused unconditionally (not
+  --   just an escaping one), the same rule 'walkFiles' applies to every
+  --   entry it walks past. 'doesDirectoryExist' follows links, so a
+  --   symlinked item would otherwise browse (and load textures from)
+  --   another tree entirely, breaking the trimmed-loading contract.
+  | ItemDirNotFound
+  -- ^ No such entry under the category root (or the root itself is
+  --   missing). A dangling symlink reports here too — there is no item
+  --   behind it.
+  | ItemDirNotADirectory
+  -- ^ The name resolves to a regular file, not a browsable item
+  --   directory (e.g. @assets\/textures\/flora\/unknown_flora.png@, the
+  --   per-category fallback texture sitting beside the real items).
+  deriving (Eq, Show)
+
+itemDirErrorMessage ∷ ItemDirError → Text
+itemDirErrorMessage ItemDirEscapesRoot =
+    "item must be a single directory name under the category root (no \
+    \absolute paths, path separators, or \"..\" components)"
+itemDirErrorMessage ItemDirSymlink =
+    "item directory must not be a symlink"
+itemDirErrorMessage ItemDirNotFound = "no such item in this category"
+itemDirErrorMessage ItemDirNotADirectory =
+    "is a file, not a browsable item directory"
+
+-- | @assets/textures/\<category\>@ — the canonical category root, for
+--   simple categories (browsed recursively) and grouped ones
+--   (whose direct children are the browsable items) alike.
 textureCategoryRoot ∷ String → FilePath
 textureCategoryRoot cat = "assets" </> "textures" </> cat
 
@@ -82,6 +127,22 @@ isSupportedTextureFile p = map toLower (takeExtension p) ≡ ".png"
 --   'Ord' on the category-relative label string.
 sortEntries ∷ [PreviewEntry] → [PreviewEntry]
 sortEntries = sortBy (comparing peLabel)
+
+-- | Order a directory's @frame_NNN.png@ files NUMERICALLY, not
+--   lexicographically: the shipped names are zero-padded so the two
+--   agree today, but an unpadded @frame_10.png@ must not sort before
+--   @frame_2.png@. Files whose stem carries no trailing digits sort
+--   after the numbered ones, by name, so nothing is silently dropped.
+--   Shared by the units viewer ('Engine.Preview.Unit', which re-exports
+--   it) and the buildings viewer ('Engine.Preview.Building') so the two
+--   can never disagree about frame order.
+sortFrameFiles ∷ [FilePath] → [FilePath]
+sortFrameFiles = sortOn key
+  where
+    key f = (maybe (1 ∷ Int, 0 ∷ Integer) ((,) 0) (trailingNumber f), f)
+    trailingNumber f =
+        let digits = reverse (takeWhile isDigit (reverse (dropExtension f)))
+        in if null digits then Nothing else Just (read digits)
 
 -- | Recursively discover every supported texture under 'root' (e.g.
 --   'textureCategoryRoot' of a simple category), labeled by the @/@-
@@ -177,6 +238,53 @@ resolveFocusedEntry root item
                                             , pePath  = T.pack candidate
                                             })
                                         else pure (Left FocusEscapesRoot)
+
+-- | Validate @item@ as exactly ONE contained, non-symlinked direct
+--   child DIRECTORY of @root@ (a grouped category's item folder) and
+--   return its path — the shared pre-boot containment rule behind every
+--   grouped category: @units/\<name\>@ (via
+--   'Engine.Preview.Unit.resolveUnitDir', which layers its own
+--   @animations\/@ requirement on top), @buildings/\<name\>@ (via
+--   'Engine.Preview.Building.buildPreviewBuilding'), and the
+--   @flora/\<name\>@ \/ @structures/\<name\>@ targets @app\/Main.hs@
+--   routes straight into 'discoverEntries' (#888 Requirement 2 — the
+--   simple-category browser, rooted at the item's own folder).
+--
+--   Structure is rejected before the filesystem is touched at all
+--   (absolute, separators, @.@\/@..@, empty), the directory is
+--   lstat-checked for symlink-ness, and a final canonicalization
+--   confirms containment defensively — the same layered rule
+--   'resolveFocusedEntry' applies to a focused simple-category file.
+resolveItemDir ∷ FilePath → String → IO (Either ItemDirError FilePath)
+resolveItemDir root item
+    | null item ∨ isAbsolute item ∨ length (splitDirectories item) /= 1
+        ∨ item ≡ "." ∨ item ≡ ".." ∨ pathSeparator `elem` item =
+        pure (Left ItemDirEscapesRoot)
+    | otherwise = do
+        let candidate = root </> item
+        rootExists ← doesDirectoryExist root
+        if not rootExists
+            then pure (Left ItemDirNotFound)
+            else do
+                -- Existence FIRST: 'pathIsSymbolicLink' throws on a path
+                -- that isn't there at all, which is exactly the ordinary
+                -- "no such item" case.
+                isDir ← doesDirectoryExist candidate
+                if not isDir
+                    then do
+                        isFile ← doesFileExist candidate
+                        pure (Left (if isFile then ItemDirNotADirectory
+                                              else ItemDirNotFound))
+                    else do
+                        isLink ← pathIsSymbolicLink candidate
+                        if isLink
+                            then pure (Left ItemDirSymlink)
+                            else do
+                                canonRoot ← canonicalizePath root
+                                canonCand ← canonicalizePath candidate
+                                pure $ if canonRoot `isPathPrefixOf` canonCand
+                                    then Right candidate
+                                    else Left ItemDirEscapesRoot
 
 -- | True if 'root' followed by any prefix of 'segs' (checked
 --   incrementally, root-outward) is itself a symlink — every ancestor

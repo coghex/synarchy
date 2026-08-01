@@ -1,0 +1,314 @@
+-- | Focused tests for 'Engine.Preview.Building' and the shared
+--   grouped-item containment rule 'Engine.Preview.Discovery.resolveItemDir'
+--   (#888, Phase 4 of the @--preview@ browser epic #427): direct-child
+--   containment and symlink rejection, the combined static/animation
+--   entry list and its ordering, numeric frame ordering, the
+--   CONTENT-based YAML association that resolves @portal-idle@ to the
+--   @idle\/@ directory despite the name mismatch, the built /
+--   sprite / default.png / first-entry default-selection ladder, the
+--   exact building metadata defaults (@fps=8@, @loop=false@ — NOT the
+--   units viewer's @loop=true@), a building with no YAML at all
+--   (@dungeon_1@), and its non-animation @damaged\/@ subtree. No engine
+--   needed — everything here is pure or filesystem-only.
+module Test.Headless.Preview.Building (spec) where
+
+import UPrelude
+import Test.Hspec
+import Control.Exception (finally)
+import Data.List (isPrefixOf, sort)
+import qualified Data.Text as T
+import qualified Data.Map.Strict as Map
+import System.Directory
+    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
+    , createDirectoryLink, removeDirectoryLink )
+import System.FilePath ((</>))
+import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
+import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
+import Engine.Preview.Building
+import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir)
+
+-- The real shipped trees — every claim below is proved against the
+-- ACTUAL canonical layout, not just a synthetic fixture (the
+-- Test.Headless.Preview.Discovery / .UnitAnimation convention).
+--
+--   acolyte_portal — YAML animation names (portal-appear/portal-idle)
+--                    that DON'T match their directories (appear/idle),
+--                    plus state_animations.built and a default.png.
+--   cargo_hold_S   — a YAML animation (construct) AND a demolish/
+--                    folder the YAML never mentions, with NO
+--                    state_animations.built at all.
+--   dungeon_1      — no data/buildings YAML whatsoever, no default.png,
+--                    and a damaged/ subtree of ordinary statics.
+portalBuilding, cargoBuilding, dungeonBuilding ∷ String
+portalBuilding  = "acolyte_portal"
+cargoBuilding   = "cargo_hold_S"
+dungeonBuilding = "dungeon_1"
+
+labelsOf ∷ [PreviewBuildingEntry] → [Text]
+labelsOf = map pbeLabel
+
+entryNamed ∷ Text → [PreviewBuildingEntry] → Maybe PreviewBuildingEntry
+entryNamed lbl = listToMaybe ∘ filter ((≡ lbl) ∘ pbeLabel)
+
+-- Discover a real shipped building's entries through the same pairing
+-- 'buildPreviewBuilding' uses (its own YAML augmenting its own folder).
+realEntries ∷ String → IO [PreviewBuildingEntry]
+realEntries name = do
+    meta ← loadBuildingPreviewMeta (T.pack name)
+    discoverBuildingEntries (bpmAnims meta) (buildingsCategoryRoot </> name)
+
+anim ∷ Float → Bool → [Text] → BuildingYamlAnim
+anim fps loop framePaths = BuildingYamlAnim
+    { byaFps = fps, byaLoop = loop
+    , byaFrames = Map.singleton "default" framePaths }
+
+static ∷ Text → Text → PreviewBuildingEntry
+static lbl path = PreviewBuildingEntry
+    { pbeLabel = lbl, pbeAnimated = False, pbeFps = buildingDefaultFps
+    , pbeLoop = buildingDefaultLoop, pbeFrames = [path] }
+
+animated ∷ Text → [Text] → PreviewBuildingEntry
+animated lbl frames = PreviewBuildingEntry
+    { pbeLabel = lbl, pbeAnimated = True, pbeFps = buildingDefaultFps
+    , pbeLoop = buildingDefaultLoop, pbeFrames = frames }
+
+-- A synthetic building tree, for the cases no shipped asset exhibits:
+--   <root>/unpadded/frame_{1,2,10}.png -- numeric, not lexicographic
+--   <root>/mixed/{frame_001.png, cover.png}
+--                                  -- NOT the frame convention: every
+--                                     png must surface as a static
+--   <root>/top.png                 -- a loose top-level static
+withBuildingFixture ∷ (FilePath → IO ()) → IO ()
+withBuildingFixture action = do
+    tmp ← getTemporaryDirectory
+    let root = tmp </> "synarchy-preview-building-spec"
+        item = root </> "fixture_building"
+        put sub fs = do
+            createDirectoryIfMissing True (item </> sub)
+            forM_ fs $ \f → writeFile (item </> sub </> f) ""
+    createDirectoryIfMissing True item
+    put "unpadded" ["frame_1.png", "frame_2.png", "frame_10.png"]
+    put "mixed"    ["frame_001.png", "cover.png"]
+    writeFile (item </> "top.png") ""
+    (`finally` removeDirectoryRecursive root) (action root)
+
+-- A symlinked item directory: rejected unconditionally before boot,
+-- exactly like a symlinked unit directory (#887) — doesDirectoryExist
+-- follows links, so browsing one would load another tree's textures
+-- and break the trimmed-loading contract.
+withSymlinkFixture ∷ (FilePath → IO ()) → IO ()
+withSymlinkFixture action = do
+    tmp ← getTemporaryDirectory
+    let root = tmp </> "synarchy-preview-building-symlink-spec"
+        outside = tmp </> "synarchy-preview-building-symlink-spec-outside"
+    createDirectoryIfMissing True root
+    createDirectoryIfMissing True outside
+    writeFile (outside </> "default.png") ""
+    createDirectoryLink outside (root </> "shortcut")
+    -- Unlink the directory symlink FIRST so removeDirectoryRecursive is
+    -- never given a chance to follow it into 'outside'.
+    let cleanup = do
+            removeDirectoryLink (root </> "shortcut")
+            removeDirectoryRecursive root
+            removeDirectoryRecursive outside
+    (`finally` cleanup) (action root)
+
+spec ∷ Spec
+spec = do
+    describe "resolveItemDir (shared grouped-item containment)" $ do
+        it "rejects a name carrying path structure, before touching the disk" $
+            forM_ ["", "/etc", "sub/dir", ".", "..", "a/../b"] $ \bad → do
+                got ← resolveItemDir buildingsCategoryRoot bad
+                got `shouldBe` Left ItemDirEscapesRoot
+
+        it "rejects an unknown item" $ do
+            got ← resolveItemDir buildingsCategoryRoot "nosuch_building"
+            got `shouldBe` Left ItemDirNotFound
+
+        it "rejects a FILE sitting beside the real item directories" $ do
+            -- assets/textures/flora/unknown_flora.png — the per-category
+            -- fallback texture, a real file in a grouped category root.
+            got ← resolveItemDir ("assets" </> "textures" </> "flora")
+                                 "unknown_flora.png"
+            got `shouldBe` Left ItemDirNotADirectory
+
+        it "rejects a symlinked item directory unconditionally" $
+            withSymlinkFixture $ \root → do
+                got ← resolveItemDir root "shortcut"
+                got `shouldBe` Left ItemDirSymlink
+
+        it "accepts a real, contained building directory" $ do
+            got ← resolveItemDir buildingsCategoryRoot portalBuilding
+            got `shouldBe` Right (buildingsCategoryRoot </> portalBuilding)
+
+    describe "isFrameFileName (the numbered-frame convention)" $ do
+        it "accepts the checked-in frame spellings" $
+            map isFrameFileName ["frame_000.png", "frame_10.png", "frame1.png"
+                                , "frame-3.PNG"]
+                `shouldBe` [True, True, True, True]
+        it "rejects the dungeon piece sprites (dungeon_1/damaged/)" $
+            map isFrameFileName ["floor.png", "wall_ne.png", "ceiling.png"
+                                , "post.png", "default.png", "frame.png"]
+                `shouldBe` [False, False, False, False, False, False]
+
+    describe "buildingDefault* (the exact metadata defaults)" $
+        it "matches BuildingYamlAnim, NOT the units viewer's loop=true" $ do
+            buildingDefaultFps `shouldBe` 8.0
+            buildingDefaultLoop `shouldBe` False
+
+    describe "matchAnimForDir (content association, never equal names)" $ do
+        it "matches a directory through the frame paths its YAML declares" $ do
+            let anims = Map.fromList
+                    [ ("portal-idle", anim 8 True
+                        ["assets/textures/buildings/acolyte_portal/idle/frame_000.png"])
+                    , ("portal-appear", anim 8 False
+                        ["assets/textures/buildings/acolyte_portal/appear/frame_000.png"])
+                    ]
+            fst <$> matchAnimForDir anims
+                    ("assets" </> "textures" </> "buildings" </> "acolyte_portal"
+                        </> "idle")
+                `shouldBe` Just "portal-idle"
+
+        it "does not match a directory merely sharing an animation's name" $ do
+            let anims = Map.fromList
+                    [ ("idle", anim 8 True ["assets/textures/buildings/x/other/f.png"]) ]
+            fst <$> matchAnimForDir anims ("assets" </> "textures" </> "buildings"
+                                            </> "x" </> "idle")
+                `shouldBe` Nothing
+
+    describe "discoverBuildingEntries (real shipped trees)" $ do
+        it "lists acolyte_portal's animation dirs and its static together, \
+           \in label order" $ do
+            entries ← realEntries portalBuilding
+            labelsOf entries `shouldBe` ["appear", "default.png", "idle"]
+            map pbeAnimated entries `shouldBe` [True, False, True]
+
+        it "augments a matched animation with its OWN yaml fps/loop" $ do
+            entries ← realEntries portalBuilding
+            -- portal-idle: fps 8, loop true; portal-appear: fps 8, loop false.
+            fmap pbeLoop (entryNamed "idle" entries)   `shouldBe` Just True
+            fmap pbeLoop (entryNamed "appear" entries) `shouldBe` Just False
+            fmap pbeFps  (entryNamed "idle" entries)   `shouldBe` Just 8.0
+
+        it "orders an animation's frames numerically, from the filesystem" $ do
+            entries ← realEntries portalBuilding
+            let frames = maybe [] pbeFrames (entryNamed "idle" entries)
+            length frames `shouldBe` 8
+            frames `shouldBe` sort frames   -- zero-padded: numeric ≡ lexicographic
+            (T.unpack <$> listToMaybe frames)
+                `shouldBe` Just (buildingsCategoryRoot </> portalBuilding
+                                    </> "idle" </> "frame_000.png")
+
+        it "recognizes a YAML-less numbered-frame directory by convention, \
+           \with the documented defaults" $ do
+            entries ← realEntries cargoBuilding
+            labelsOf entries `shouldBe` ["construct", "default.png", "demolish"]
+            -- construct is YAML-declared (fps 4, loop false); demolish is
+            -- convention-recognized with no YAML entry at all.
+            fmap pbeFps  (entryNamed "construct" entries) `shouldBe` Just 4.0
+            fmap pbeAnimated (entryNamed "demolish" entries) `shouldBe` Just True
+            fmap pbeFps  (entryNamed "demolish" entries)
+                `shouldBe` Just buildingDefaultFps
+            fmap pbeLoop (entryNamed "demolish" entries)
+                `shouldBe` Just buildingDefaultLoop
+
+        it "surfaces a non-animation subtree as ordinary statics \
+           \(dungeon_1/damaged/)" $ do
+            entries ← realEntries dungeonBuilding
+            -- The damaged/ folder holds piece sprites, not frames: it is
+            -- never ONE animation entry, and none of its textures is lost.
+            entryNamed "damaged" entries `shouldBe` Nothing
+            all (not ∘ pbeAnimated) entries `shouldBe` True
+            let damaged = filter (("damaged/" `isPrefixOf`) ∘ T.unpack ∘ pbeLabel)
+                                 entries
+            labelsOf damaged `shouldBe`
+                [ "damaged/floor.png", "damaged/post.png", "damaged/wall_ne.png"
+                , "damaged/wall_nw.png", "damaged/wall_se.png"
+                , "damaged/wall_sw.png" ]
+            labelsOf entries `shouldBe` sort (labelsOf entries)
+
+    describe "discoverBuildingEntries (synthetic edges)" $
+        it "orders unpadded frames numerically and keeps a mixed \
+           \directory's textures as statics" $
+            withBuildingFixture $ \root → do
+                entries ← discoverBuildingEntries Map.empty
+                                                  (root </> "fixture_building")
+                labelsOf entries `shouldBe`
+                    [ "mixed/cover.png", "mixed/frame_001.png", "top.png"
+                    , "unpadded" ]
+                map (T.pack ∘ drop (length (root </> "fixture_building") + 1)
+                        ∘ T.unpack)
+                    (maybe [] pbeFrames (entryNamed "unpadded" entries))
+                    `shouldBe` [ "unpadded/frame_1.png", "unpadded/frame_2.png"
+                               , "unpadded/frame_10.png" ]
+
+    describe "defaultBuildingEntry (the selection ladder)" $ do
+        it "prefers state_animations.built, resolved through the animation's \
+           \OWN frame paths" $ do
+            let frame = "assets/textures/buildings/x/idle/frame_000.png"
+                meta = BuildingPreviewMeta
+                    { bpmAnims  = Map.singleton "portal-idle" (anim 8 True [frame])
+                    , bpmStates = Map.singleton "built" "portal-idle"
+                    , bpmSprite = Just "assets/textures/buildings/x/default.png"
+                    }
+                entries = [ animated "idle" [frame]
+                          , static "default.png"
+                                   "assets/textures/buildings/x/default.png" ]
+            defaultBuildingEntry meta entries `shouldBe` "idle"
+
+        it "falls back to the building's own sprite when no built state exists" $ do
+            let sprite = "assets/textures/buildings/x/default.png"
+                meta = BuildingPreviewMeta
+                    { bpmAnims  = Map.singleton "x-construct"
+                                    (anim 4 False
+                                        ["assets/textures/buildings/x/construct/frame_001.png"])
+                    , bpmStates = Map.singleton "appearing" "x-construct"
+                    , bpmSprite = Just sprite
+                    }
+                entries = [ animated "construct"
+                              ["assets/textures/buildings/x/construct/frame_001.png"]
+                          , static "default.png" sprite ]
+            defaultBuildingEntry meta entries `shouldBe` "default.png"
+
+        it "falls back to default.png when the YAML names an unusable built \
+           \animation" $ do
+            let meta = BuildingPreviewMeta
+                    { bpmAnims  = Map.empty        -- 'built' names a missing anim
+                    , bpmStates = Map.singleton "built" "gone"
+                    , bpmSprite = Nothing
+                    }
+                entries = [ static "ceiling.png" "assets/textures/buildings/x/ceiling.png"
+                          , static "default.png" "assets/textures/buildings/x/default.png" ]
+            defaultBuildingEntry meta entries `shouldBe` "default.png"
+
+        it "falls back to the first entry, and is empty only for an empty folder" $ do
+            let entries = [ static "ceiling.png" "assets/textures/buildings/x/ceiling.png"
+                          , static "floor.png" "assets/textures/buildings/x/floor.png" ]
+            defaultBuildingEntry emptyBuildingPreviewMeta entries
+                `shouldBe` "ceiling.png"
+            defaultBuildingEntry emptyBuildingPreviewMeta [] `shouldBe` ""
+
+    describe "buildPreviewBuilding (real shipped trees, end to end)" $ do
+        it "selects the built animation's DIRECTORY for acolyte_portal" $ do
+            got ← buildPreviewBuilding buildingsCategoryRoot portalBuilding
+            fmap pbDefault got `shouldBe` Right "idle"
+            fmap (labelsOf ∘ pbEntries) got
+                `shouldBe` Right ["appear", "default.png", "idle"]
+
+        it "selects the sprite for a building with no built state" $ do
+            got ← buildPreviewBuilding buildingsCategoryRoot cargoBuilding
+            fmap pbDefault got `shouldBe` Right "default.png"
+
+        it "browses a building with no YAML at all, defaulting to its first \
+           \entry" $ do
+            got ← buildPreviewBuilding buildingsCategoryRoot dungeonBuilding
+            -- dungeon_1 has neither data/buildings/dungeon_1.yaml nor a
+            -- default.png, so the ladder falls all the way through.
+            meta ← loadBuildingPreviewMeta (T.pack dungeonBuilding)
+            meta `shouldBe` emptyBuildingPreviewMeta
+            fmap pbDefault got `shouldBe` Right "ceiling.png"
+            fmap (pbName) got `shouldBe` Right (T.pack dungeonBuilding)
+
+        it "rejects a bad target with the shared containment error" $ do
+            got ← buildPreviewBuilding buildingsCategoryRoot "nosuch_building"
+            fmap pbName got `shouldBe` Left ItemDirNotFound

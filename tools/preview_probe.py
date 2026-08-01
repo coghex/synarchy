@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""--preview real-boot browser probe (#632 Phase 1, #886 Phase 2, #887 Phase 3).
+"""--preview real-boot browser probe (#886 Phase 2, #887 Phase 3, #888 Phase 4).
 
 Needs a GPU (a real GLFW window — --preview has no offscreen variant) —
 manual-only, never CI-gated (see tools/preview_cli_probe.py for the
@@ -7,12 +7,13 @@ no-GPU CLI-contract checks this probe used to also carry, split out in
 #886 so a classifier/path-containment regression fails PRs directly
 instead of waiting for a manual dev-machine run).
 
+Every check boots its own engine, so the whole run opens (and closes) a
+window per target — around fifteen of them, a few minutes end to end.
+
 Checks:
   1. Boot profile + preview target over the debug console
-     (engine.getBootProfile/getPreviewTarget) on a still-placeholder
-     grouped category ("flora/example") — the Phase 1 (#632)
-     placeholder-label boot path, which #888 will replace.
-  2. Simple-category list mode (--preview icons): the texture filter is
+     (engine.getBootProfile/getPreviewTarget), plus simple-category list
+     mode (--preview icons): the texture filter is
      forced to nearest regardless of the persisted video config; the
      discovered entry list (require("scripts.preview_manager").dump())
      matches a filesystem-derived expectation computed independently in
@@ -27,10 +28,10 @@ Checks:
      visible row count actually fits the reported panel height (no
      overflow); a subsequent SHRINK well below the list's natural row
      budget reduces the visible row count and still fits.
-  3. Focused item mode (--preview icons/<item>): texture filter forced
+  2. Focused item mode (--preview icons/<item>): texture filter forced
      to nearest; no list (dump().rows is absent/empty) while the
      requested texture resolves; a resize reflows the panel bounds.
-  4. Unit animation viewer (--preview units/acolyte, #887): the
+  3. Unit animation viewer (--preview units/acolyte, #887): the
      animation list matches a filesystem-derived expectation exactly and
      in order; the default selection is idle/south; the known YAML
      fps/loop values for the selected clip are reported; the frame index
@@ -40,11 +41,42 @@ Checks:
      (located the same way) enlarges it and reports its real source
      direction; a resize preserves the animation, direction, and scroll
      offset; only the requested unit's textures load.
-  5. Missing-YAML defaults (--preview units/tiller, #887): a unit with
+  4. Missing-YAML defaults (--preview units/tiller, #887): a unit with
      no data/units/<name>.yaml at all still browses, with fps=8 /
      loop=true on every animation and all eight direction cells
      populated by the inferred five-direction mirroring.
-  6. Trimmed loading (Requirement 5): engine.getLoadedTexturePaths() —
+  5. Buildings viewer (--preview buildings/acolyte_portal, #888): the
+     entry list — animation subdirectories AND loose statics together —
+     matches a filesystem+YAML-derived expectation exactly and in order,
+     each row carrying its own static/animation identity; the default
+     selection is the DIRECTORY holding the state_animations.built
+     animation's declared frames (`idle`, never the YAML's own
+     `portal-idle` name); its effective fps/loop come from that YAML
+     entry; the frame index advances over wall time; a resize preserves
+     the selection and scroll offset; clicking a STATIC row (located
+     from the dump, never hardcoded coordinates) selects it and exposes
+     NO playback; only this building's textures load.
+  6. Buildings with no built state (--preview buildings/cargo_hold_S,
+     #888): the default falls back to the YAML's own sprite
+     (`default.png`), and the `demolish/` folder the YAML never mentions
+     is still recognized as an animation by the numbered-frame
+     convention, reporting the documented fps=8 / loop=false defaults
+     (NOT the units viewer's loop=true).
+  7. Buildings with no YAML at all (--preview buildings/dungeon_1,
+     #888): every entry is a static — including the `damaged/` subtree,
+     which surfaces as ordinary item-relative statics rather than one
+     animation — and the default falls all the way through to the first
+     entry.
+  8. Flat grouped items (--preview flora/<name>, --preview
+     structures/wire, #888): both dispatch into #886's SIMPLE-category
+     browser rooted at the item's own folder (mode == "list") rather
+     than a bespoke viewer, with the item folder's own textures listed
+     in order and the first auto-selected.
+  9. Canonical dispatch sweep (#888 / epic #427 acceptance): every
+     canonical category — icons, items, ui, world, units, flora,
+     buildings, structures — boots to its documented mode, and the
+     Phase 1 (#632) "placeholder" mode is gone from every one of them.
+ 10. Trimmed loading (Requirement 5): engine.getLoadedTexturePaths() —
      the engine's OWN authoritative record of every texture ever loaded
      this session (Engine.Asset's apAssetPaths, populated by
      engine.loadTexture's Haskell handler itself, not any Lua caller's
@@ -174,13 +206,14 @@ def check_no_gameplay_scripts_loaded(port: int) -> bool:
                  result == "true", result)
 
 
-def expected_entries(category: str) -> list[str]:
+def expected_entries_at(root: str) -> list[str]:
     """Independent, filesystem-derived expectation — mirrors
     Engine.Preview.Discovery.discoverEntries's contract (recursive,
     .png only, "/"-joined, sorted) without importing any Haskell/Lua
     code, so this actually cross-checks the real discovery behavior
-    rather than restating it."""
-    root = os.path.join("assets", "textures", category)
+    rather than restating it. Takes an arbitrary root, because #888
+    routes a flora/structures ITEM folder through the very same
+    discovery the simple categories use."""
     labels = []
     for dirpath, _dirs, files in os.walk(root):
         rel = os.path.relpath(dirpath, root)
@@ -191,38 +224,26 @@ def expected_entries(category: str) -> list[str]:
     return sorted(labels)
 
 
-def check_grouped_real_boot(port: int) -> bool:
-    # A still-placeholder grouped category (#888 replaces it) — units is
-    # the real viewer as of #887 and is covered by check 4 below.
-    print("1. grouped+item real boot: boot profile + preview target (Phase 1 placeholder)")
-    proc = boot(port, log=LOG, mode=("--preview", "flora/example"),
-                label="preview engine (grouped placeholder)")
-    try:
-        profile = send(port, "return engine.getBootProfile()")
-        ok1 = check("boot profile == preview", profile == "preview", profile)
-
-        target = send_json(port, "return engine.getPreviewTarget()")
-        ok2 = check(
-            "preview target == flora/example",
-            isinstance(target, dict)
-            and target.get("category") == "flora"
-            and target.get("item") == "example",
-            target)
-
-        d = dump(port)
-        ok3 = check("mode == placeholder (grouped categories #888 has yet to land)",
-                    d.get("mode") == "placeholder", d.get("mode"))
-        return ok1 and ok2 and ok3
-    finally:
-        quit_engine(port, proc)
+def expected_entries(category: str) -> list[str]:
+    return expected_entries_at(os.path.join("assets", "textures", category))
 
 
 def check_simple_list_mode(port: int) -> bool:
-    print("2. simple-category list mode (--preview icons)")
+    print("1. boot profile/target + simple-category list mode (--preview icons)")
     proc = boot(port, log=LOG, mode=("--preview", "icons"),
                 label="preview engine (icons list)")
     try:
         expected = expected_entries("icons")
+
+        profile = send(port, "return engine.getBootProfile()")
+        ok_profile = check("boot profile == preview", profile == "preview", profile)
+        target = send_json(port, "return engine.getPreviewTarget()")
+        ok_target = check("preview target == icons (bare category)",
+                          isinstance(target, dict)
+                          and target.get("category") == "icons"
+                          and target.get("item") is None,
+                          target)
+
         d = poll_state(port, "ready")
 
         # Requirement 3: nearest-neighbour is forced for the preview
@@ -386,7 +407,8 @@ def check_simple_list_mode(port: int) -> bool:
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
-        return all([ok_filter, ok_mode, ok_count, ok_entries, ok_first, ok_ready,
+        return all([ok_profile, ok_target, ok_filter, ok_mode, ok_count,
+                    ok_entries, ok_first, ok_ready,
                     ok_click, ok_scroll, ok_resize_bounds, ok_resize_selection,
                     ok_resize_scroll, ok_grow_fit, ok_shrank, ok_shrink_rows,
                     ok_shrink_fit, ok_trimmed, ok_no_gameplay])
@@ -395,7 +417,7 @@ def check_simple_list_mode(port: int) -> bool:
 
 
 def check_focused_item_mode(port: int) -> bool:
-    print("3. focused item mode (--preview icons/skill/climbing.png): no list")
+    print("2. focused item mode (--preview icons/skill/climbing.png): no list")
     target = "icons/skill/climbing.png"
     proc = boot(port, log=LOG, mode=("--preview", target),
                 label="preview engine (icons item)")
@@ -542,7 +564,7 @@ def poll_unit_ready(port: int, seconds: float = 15.0) -> dict:
 
 
 def check_units_mode(port: int) -> bool:
-    print("4. unit animation viewer (--preview units/acolyte)")
+    print("3. unit animation viewer (--preview units/acolyte)")
     unit = "acolyte"
     proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
                 label="preview engine (units)")
@@ -697,7 +719,7 @@ def check_units_mode(port: int) -> bool:
 
 
 def check_units_without_yaml(port: int) -> bool:
-    print("5. unit with NO data/units YAML (--preview units/tiller): documented defaults")
+    print("4. unit with NO data/units YAML (--preview units/tiller): documented defaults")
     unit = "tiller"
     proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
                 label="preview engine (units, no yaml)")
@@ -737,17 +759,428 @@ def check_units_without_yaml(port: int) -> bool:
         quit_engine(port, proc)
 
 
+def is_frame_name(f: str) -> bool:
+    """The checked-in numbered-frame convention, mirroring
+    Engine.Preview.Building.isFrameFileName: frame_000.png, frame1.png,
+    frame-3.png — but never floor.png or wall_ne.png."""
+    stem = os.path.splitext(f)[0].lower()
+    if not stem.startswith("frame"):
+        return False
+    rest = stem[len("frame"):].lstrip("-_")
+    return bool(rest) and rest.isascii() and rest.isdigit()
+
+
+def building_yaml(name: str) -> dict:
+    """{'sprite': str|None, 'built': str|None,
+        'anims': {name: {'fps': float, 'loop': bool, 'frames': [paths]}}}
+    from data/buildings/<name>.yaml, or all-empty when the file is
+    absent (dungeon_1 has none).
+
+    Parsed with a deliberately dumb indent scanner rather than PyYAML
+    (not a probe dependency), the same way expected_yaml_meta above
+    reads a unit file. The per-animation defaults restated here (fps 8,
+    loop FALSE) are BuildingYamlAnim's own — note loop differs from the
+    units schema's default of true."""
+    out: dict = {"sprite": None, "built": None, "anims": {}}
+    path = os.path.join("data", "buildings", name + ".yaml")
+    if not os.path.exists(path):
+        return out
+    section = None            # None | "state_animations" | "animations"
+    section_indent = -1
+    anim_indent = None
+    cur = None
+    with open(path) as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            if section is not None and indent <= section_indent:
+                section, anim_indent, cur = None, None, None
+            if section is None:
+                if stripped.startswith("sprite:"):
+                    out["sprite"] = stripped.split(":", 1)[1].strip().strip('"')
+                elif stripped == "state_animations:":
+                    section, section_indent = "state_animations", indent
+                elif stripped == "animations:":
+                    section, section_indent = "animations", indent
+                continue
+            if section == "state_animations":
+                if stripped.startswith("built:"):
+                    out["built"] = stripped.split(":", 1)[1].strip().strip('"')
+                continue
+            # section == "animations": a key at the block's own child
+            # indent starts a new animation; anything deeper belongs to it.
+            if stripped.endswith(":") and (anim_indent is None
+                                           or indent == anim_indent):
+                anim_indent = indent
+                cur = stripped[:-1].strip()
+                out["anims"][cur] = {"fps": 8.0, "loop": False, "frames": []}
+            elif cur is None:
+                continue
+            elif stripped.startswith("fps:"):
+                out["anims"][cur]["fps"] = float(stripped.split(":", 1)[1].strip())
+            elif stripped.startswith("loop:"):
+                out["anims"][cur]["loop"] = (
+                    stripped.split(":", 1)[1].strip() == "true")
+            elif stripped.startswith("- "):
+                out["anims"][cur]["frames"].append(stripped[2:].strip().strip('"'))
+    return out
+
+
+def expected_building_entries(name: str) -> list[tuple[str, bool]]:
+    """Independent, filesystem+YAML-derived expectation for a building's
+    entry list — mirrors Engine.Preview.Building.discoverBuildingEntries
+    without importing any Haskell/Lua code: a directory whose textures a
+    YAML animation actually DECLARES, or whose textures all follow the
+    numbered-frame convention, is ONE animation entry labeled by its
+    item-relative path; every other directory is descended into, so its
+    textures surface as ordinary statics. Returns (label, animated)
+    pairs in the engine's own label order."""
+    root = os.path.join("assets", "textures", "buildings", name)
+    meta = building_yaml(name)
+    anim_dirs = {
+        os.path.dirname(p).replace(os.sep, "/")
+        for a in meta["anims"].values() for p in a["frames"]
+    }
+    out: list[tuple[str, bool]] = []
+
+    def walk(d: str) -> None:
+        for entry in sorted(os.listdir(d)):
+            full = os.path.join(d, entry)
+            if os.path.islink(full):
+                continue
+            label = os.path.relpath(full, root).replace(os.sep, "/")
+            if os.path.isdir(full):
+                pngs = [f for f in os.listdir(full)
+                        if f.lower().endswith(".png")
+                        and not os.path.islink(os.path.join(full, f))]
+                if pngs and (full.replace(os.sep, "/") in anim_dirs
+                             or all(is_frame_name(f) for f in pngs)):
+                    out.append((label, True))
+                else:
+                    walk(full)
+            elif entry.lower().endswith(".png"):
+                out.append((label, False))
+
+    walk(root)
+    return sorted(out)
+
+
+def dumped_building_entries(d: dict) -> list[tuple[str, bool]]:
+    return [(e.get("label"), e.get("animated") is True)
+            for e in (d.get("entries") or [])]
+
+
+def built_default_label(name: str) -> str | None:
+    """The label the state_animations.built animation must resolve to:
+    the DIRECTORY its declared frames live in — deliberately computed
+    from the frame paths, never from the animation's own YAML name,
+    because acolyte_portal's differ (portal-idle vs idle/)."""
+    meta = building_yaml(name)
+    built = meta["built"]
+    frames = meta["anims"].get(built, {}).get("frames") if built else None
+    if not frames:
+        return None
+    return os.path.basename(os.path.dirname(frames[0]))
+
+
+def check_buildings_mode(port: int) -> bool:
+    print("5. buildings viewer (--preview buildings/acolyte_portal)")
+    name = "acolyte_portal"
+    proc = boot(port, log=LOG, mode=("--preview", f"buildings/{name}"),
+                label="preview engine (buildings)")
+    try:
+        meta = building_yaml(name)
+        expected = expected_building_entries(name)
+        want_default = built_default_label(name)
+        d = poll_state(port, "ready")
+
+        ok_mode = check("mode == building (no placeholder remains)",
+                        d.get("mode") == "building", d.get("mode"))
+
+        # Requirement 1: the FULL ordered entry list — animation
+        # subdirectories AND loose statics together — cross-checked
+        # against the filesystem+YAML.
+        ok_entries = check("entry list (labels + static/animation identity) "
+                           "matches the filesystem-derived expectation "
+                           "exactly, in order",
+                           dumped_building_entries(d) == expected,
+                           f"dumped={dumped_building_entries(d)} "
+                           f"expected={expected}")
+
+        ok_default = check("default selection is the state_animations.built "
+                           "animation's DIRECTORY, not its YAML name",
+                           want_default is not None
+                           and d.get("defaultEntry") == want_default
+                           and (d.get("selected") or {}).get("label") == want_default,
+                           f"defaultEntry={d.get('defaultEntry')} "
+                           f"selected={d.get('selected')} want={want_default} "
+                           f"(yaml animation name={meta['built']!r})")
+
+        # Requirement 1: playback metadata comes from that YAML entry.
+        pb = d.get("playback") or {}
+        want_meta = meta["anims"].get(meta["built"] or "", None)
+        ok_meta = check("effective fps/loop match data/buildings/"
+                        f"{name}.yaml",
+                        want_meta is not None
+                        and abs((pb.get("fps") or 0) - want_meta["fps"]) < 1e-6
+                        and pb.get("loop") == want_meta["loop"],
+                        f"dump=({pb.get('fps')}, {pb.get('loop')}) yaml={want_meta}")
+
+        # The frame index advances over WALL time. NB the 1-tuple:
+        # poll_until returns on a TRUTHY value and frame 0 is falsy.
+        before = ((dump(port).get("playback") or {}).get("frameIndex"))
+        after = poll_until(6.0, lambda: (
+            (lambda i: (i,) if i != before else None)(
+                (dump(port).get("playback") or {}).get("frameIndex"))))
+        ok_advance = check("frame index advances over wall time",
+                           after is not None and after[0] != before,
+                           f"before={before} after={after}")
+
+        # Resize: the selected entry and scroll offset both survive.
+        pre = dump(port)
+        pre_bounds = pre.get("panelBounds") or {}
+        pre_selected = (pre.get("selected") or {}).get("label")
+        pre_scroll = pre.get("scrollOffset")
+        win_w, win_h = window_size(port)
+        send(port, f"return engine.setResolution({win_w + 200}, {win_h + 150})",
+             timeout=10.0)
+        post = poll_until(10.0, lambda: (
+            (lambda s: s if (s.get("panelBounds") or {}) != pre_bounds else None)(
+                dump(port)))) or dump(port)
+        ok_resize = check("panel bounds reflow while the selection and scroll "
+                          "offset survive a resize",
+                          (post.get("panelBounds") or {}) != pre_bounds
+                          and (post.get("selected") or {}).get("label") == pre_selected
+                          and post.get("scrollOffset") == pre_scroll,
+                          f"before=({pre_selected}, {pre_scroll}) "
+                          f"after=({(post.get('selected') or {}).get('label')}, "
+                          f"{post.get('scrollOffset')})")
+
+        # Requirement 1: selecting a STATIC row (located from the dump,
+        # never a hardcoded coordinate) switches to it — and a static
+        # selection exposes NO playback at all, which is exactly what
+        # distinguishes it from an animation entry.
+        statics = {label for label, animated in expected if not animated}
+        row = next((r for r in (post.get("rows") or [])
+                    if r.get("label") in statics), None)
+        if row is None:
+            ok_static = check("clicking a static row selects it with no playback",
+                              False, "no visible static row to click")
+        else:
+            click_element(port, row.get("bounds") or {})
+            after_click = poll_until(10.0, lambda: (
+                (lambda s: s if (s.get("selected") or {}).get("label")
+                    == row["label"] and s.get("state") == "ready" else None)(
+                        dump(port)))) or dump(port)
+            ok_static = check("clicking a static row (via row bounds, not "
+                              "hardcoded coords) selects it, resolves, and "
+                              "exposes no playback",
+                              (after_click.get("selected") or {}).get("label")
+                              == row["label"]
+                              and after_click.get("state") == "ready"
+                              and after_click.get("playback") is None,
+                              f"selected={after_click.get('selected')} "
+                              f"state={after_click.get('state')} "
+                              f"playback={after_click.get('playback')}")
+
+        # Requirement 1: only THIS building's textures (plus list chrome).
+        root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
+        ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
+
+        return all([ok_mode, ok_entries, ok_default, ok_meta, ok_advance,
+                    ok_resize, ok_static, ok_trimmed, ok_no_gameplay])
+    finally:
+        quit_engine(port, proc)
+
+
+def check_buildings_without_built(port: int) -> bool:
+    print("6. building with no state_animations.built "
+          "(--preview buildings/cargo_hold_S): sprite fallback + "
+          "convention-recognized animation")
+    name = "cargo_hold_S"
+    proc = boot(port, log=LOG, mode=("--preview", f"buildings/{name}"),
+                label="preview engine (buildings, no built state)")
+    try:
+        meta = building_yaml(name)
+        expected = expected_building_entries(name)
+        ok_fixture = check("the fixture really declares no built state (or "
+                           "this check proves nothing)",
+                           meta["built"] is None and meta["sprite"] is not None,
+                           f"built={meta['built']} sprite={meta['sprite']}")
+        d = poll_state(port, "ready")
+        ok_entries = check("entry list matches the filesystem-derived "
+                           "expectation exactly, in order",
+                           dumped_building_entries(d) == expected,
+                           f"dumped={dumped_building_entries(d)} "
+                           f"expected={expected}")
+        ok_default = check("default selection falls back to the YAML's own "
+                           "sprite",
+                           d.get("defaultEntry")
+                           == os.path.basename(meta["sprite"] or ""),
+                           f"defaultEntry={d.get('defaultEntry')} "
+                           f"sprite={meta['sprite']}")
+
+        # demolish/ is a real numbered-frame folder the YAML never
+        # mentions: recognized by convention, with the documented
+        # building defaults (fps 8, loop FALSE — not the units viewer's
+        # loop=true).
+        by_label = {e.get("label"): e for e in (d.get("entries") or [])}
+        demolish = by_label.get("demolish")
+        ok_convention = check("a YAML-less numbered-frame directory is still "
+                              "an animation, with fps=8 / loop=false",
+                              demolish is not None
+                              and demolish.get("animated") is True
+                              and abs((demolish.get("fps") or 0) - 8.0) < 1e-6
+                              and demolish.get("loop") is False,
+                              demolish)
+
+        root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
+        return all([ok_fixture, ok_entries, ok_default, ok_convention, ok_trimmed])
+    finally:
+        quit_engine(port, proc)
+
+
+def check_buildings_without_yaml(port: int) -> bool:
+    print("7. building with NO data/buildings YAML (--preview buildings/dungeon_1): "
+          "first-entry default, nested statics")
+    name = "dungeon_1"
+    proc = boot(port, log=LOG, mode=("--preview", f"buildings/{name}"),
+                label="preview engine (buildings, no yaml)")
+    try:
+        ok_fixture = check("the fixture really has no building YAML (or this "
+                           "check proves nothing)",
+                           not os.path.exists(os.path.join("data", "buildings",
+                                                           name + ".yaml")))
+        expected = expected_building_entries(name)
+        d = poll_state(port, "ready")
+        ok_entries = check("entry list matches the filesystem-derived "
+                           "expectation exactly, in order",
+                           dumped_building_entries(d) == expected,
+                           f"dumped={dumped_building_entries(d)} "
+                           f"expected={expected}")
+        # damaged/ holds piece sprites, not frames: it must surface as
+        # item-relative statics, never as one animation entry.
+        labels = [label for label, _ in dumped_building_entries(d)]
+        ok_nested = check("the damaged/ subtree surfaces as ordinary "
+                          "item-relative statics, not one animation",
+                          "damaged" not in labels
+                          and any(l.startswith("damaged/") for l in labels)
+                          and all(not animated
+                                  for _, animated in dumped_building_entries(d)),
+                          labels)
+        ok_default = check("default falls all the way through to the first entry",
+                           d.get("defaultEntry") == (expected[0][0] if expected else "")
+                           and (d.get("selected") or {}).get("label")
+                               == (expected[0][0] if expected else None),
+                           f"defaultEntry={d.get('defaultEntry')} "
+                           f"selected={d.get('selected')}")
+        ok_no_playback = check("a static selection exposes no playback",
+                               d.get("playback") is None, d.get("playback"))
+        root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
+        return all([ok_fixture, ok_entries, ok_nested, ok_default,
+                    ok_no_playback, ok_trimmed])
+    finally:
+        quit_engine(port, proc)
+
+
+def first_item(category: str) -> str:
+    """The first real item directory of a grouped category — derived,
+    not hardcoded, so renaming an asset folder can't silently turn this
+    into a pre-boot rejection check."""
+    root = os.path.join("assets", "textures", category)
+    return sorted(d for d in os.listdir(root)
+                  if os.path.isdir(os.path.join(root, d))
+                  and not os.path.islink(os.path.join(root, d)))[0]
+
+
+def check_flat_grouped_item(port: int, category: str, item: str) -> bool:
+    """#888 Requirement 2: flora and structures item folders are flat
+    sets of static PNGs, so they are ROUTED into #886's simple-category
+    browser rooted at the item's own folder rather than given viewers of
+    their own. This is a dispatch-level check by design — the browsing
+    behavior itself is already gated by check 1."""
+    proc = boot(port, log=LOG, mode=("--preview", f"{category}/{item}"),
+                label=f"preview engine ({category}/{item})")
+    try:
+        root = os.path.join("assets", "textures", category, item)
+        expected = expected_entries_at(root)
+        d = poll_state(port, "ready")
+        ok_mode = check(f"{category}/{item}: mode == list (the shared simple "
+                        "browser, rooted at the item folder)",
+                        d.get("mode") == "list", d.get("mode"))
+        listed = [e.get("label") for e in (d.get("entries") or [])]
+        ok_entries = check(f"{category}/{item}: the item folder's own textures, "
+                           "in order",
+                           listed == expected,
+                           f"dumped={listed} expected={expected}")
+        ok_first = check(f"{category}/{item}: first entry auto-selected and "
+                         "resolved",
+                         (d.get("selected") or {}).get("label")
+                         == (expected[0] if expected else None)
+                         and d.get("state") == "ready",
+                         f"selected={d.get('selected')} state={d.get('state')}")
+        ok_trimmed = check_trimmed_loading(port, root + os.sep, allow_chrome=True)
+        ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
+        return all([ok_mode, ok_entries, ok_first, ok_trimmed, ok_no_gameplay])
+    finally:
+        quit_engine(port, proc)
+
+
+def check_flat_grouped_dispatch(port: int) -> bool:
+    print("8. flora/structures items reuse the simple-category browser")
+    return all([check_flat_grouped_item(port, "flora", first_item("flora")),
+                check_flat_grouped_item(port, "structures", "wire")])
+
+
+def check_canonical_dispatch_sweep(port: int) -> bool:
+    """The epic (#427) acceptance sweep: EVERY canonical category
+    dispatches to its documented behavior, and the Phase 1 (#632)
+    placeholder mode no longer exists anywhere."""
+    print("9. canonical dispatch sweep: every category, no placeholder left")
+    targets = [
+        ("icons", "list"), ("items", "list"), ("ui", "list"), ("world", "list"),
+        ("units/acolyte", "unit"),
+        (f"flora/{first_item('flora')}", "list"),
+        ("buildings/workbench", "building"),
+        ("structures/wire", "list"),
+    ]
+    results = []
+    for target, want_mode in targets:
+        proc = boot(port, log=LOG, mode=("--preview", target),
+                    label=f"preview engine (sweep {target})")
+        try:
+            d = poll_until(20.0, lambda: (
+                (lambda s: s if s.get("mode") else None)(dump(port)))) or dump(port)
+            mode = d.get("mode")
+            results.append(check(f"--preview {target} dispatches to mode="
+                                 f"{want_mode}",
+                                 mode == want_mode and mode != "placeholder",
+                                 f"mode={mode}"))
+        finally:
+            quit_engine(port, proc)
+    return all(results)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9150)
     args = ap.parse_args()
 
     results = [
-        check_grouped_real_boot(args.port),
         check_simple_list_mode(args.port),
         check_focused_item_mode(args.port),
         check_units_mode(args.port),
         check_units_without_yaml(args.port),
+        check_buildings_mode(args.port),
+        check_buildings_without_built(args.port),
+        check_buildings_without_yaml(args.port),
+        check_flat_grouped_dispatch(args.port),
+        check_canonical_dispatch_sweep(args.port),
     ]
 
     passed = all(results)
