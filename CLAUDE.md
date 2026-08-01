@@ -34,6 +34,13 @@ seconds and the expensive gates at the end.
    `test_audit.py` only when changing `world_audit.py`/`world_check.py`.
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
+
+**Module-budget scope:** the 500-line Haskell/Lua limits are per-split
+ratchets, enforced only for module families explicitly listed in the relevant
+budget tool. They are not a tree-wide size policy. For a structural split with
+no explicit budget entry, extract the cohesive, correctness-relevant boundary
+first even if the facade remains above 500 lines; record a later pass rather
+than forcing unrelated `EngineEnv`/capability refactoring just to hit 500.
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (+~25 s),
    then re-capture baselines `python3 tools/world_baseline.py` (~7 min)
