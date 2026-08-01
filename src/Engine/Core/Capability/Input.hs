@@ -11,8 +11,9 @@
 --   @inputBarrierNextRef@ (the barrier-token allocator — read and
 --   written by @LuaThread@ only) and @currentKeyDownRef@ (the
 --   transient-handoff current key, "meaningful only for the duration
---   of one @onKeyDown@ broadcast" — again @LuaThread@ only). E1's
---   convention (see "Engine.Core.Capability.Core") makes that a
+--   of one @onKeyDown@ broadcast" — again @LuaThread@ only). The
+--   capability-record convention
+--   ('docs/engineenv_capability_inventory.md' SS2.1) makes that a
 --   structural obligation rather than a comment: because a capability
 --   record is exported as @XCapability(..)@ — constructor AND
 --   accessors — every module that can import THIS record can construct

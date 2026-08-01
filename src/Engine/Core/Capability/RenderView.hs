@@ -6,11 +6,12 @@
 --   == Why a second record exists
 --
 --   'docs/engineenv_capability_inventory.md' SS3 makes @EngineState@
---   main-render-thread-private, and E1's convention exports every
---   capability record as @Capability(..)@ — constructor and accessors
---   alike. A single @render-gpu-asset@ record visible to worker
---   threads would therefore hand @WorldThread@\/@LuaThread@ code a way
---   to /inspect/ @engineStateRef@, no matter what its Haddock said.
+--   main-render-thread-private, and the capability-record convention
+--   (SS2.1) exports every capability record as @Capability(..)@ —
+--   constructor and accessors alike. A single @render-gpu-asset@
+--   record visible to worker threads would therefore hand
+--   @WorldThread@\/@LuaThread@ code a way to /inspect/
+--   @engineStateRef@, no matter what its Haddock said.
 --   This record is the resolution: it exposes only the render fields
 --   SS5 documents a non-@MainRender@ thread as a legitimate reader (or
 --   writer) of, and it __contains no @engineStateRef@ field at all__,

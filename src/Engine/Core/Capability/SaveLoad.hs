@@ -20,13 +20,10 @@
 --   @acknowledgeCurrent@ acknowledgments the world\/input\/sim\/unit\/
 --   combat loops make, and the allocator's any-thread bump.
 --
---   Follows E1's convention verbatim (see "Engine.Core.Capability.Core"
---   for the full statement of it): one record named
---   @\<Name\>Capability@ with fields prefixed by the record's own
---   initials (here @sl@), one total one-way @to\<Name\>Capability@
---   projection, every field the exact same live handle 'EngineEnv'
---   already carries (never a copy or a reconstruction), and no import
---   of any consumer of this module.
+--   Follows the capability-record convention
+--   ('docs/engineenv_capability_inventory.md' SS2.1 is its one
+--   authoritative statement, not restated here); this record's own
+--   field prefix is @sl@.
 --
 --   One record, not a §3.1-style full\/view pair: none of these five
 --   handles is private to a single thread the way @engineStateRef@ is
