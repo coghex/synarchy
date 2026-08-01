@@ -8,10 +8,9 @@ module Engine.Asset.YamlEquipment
 
 import UPrelude
 import GHC.Generics (Generic)
-import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | One slot entry inside an equipment class YAML.
 data EquipmentYamlSlot = EquipmentYamlSlot
@@ -62,15 +61,5 @@ instance FromJSON EquipmentYamlFile where
         ⊚ v .: "classes"
 
 loadEquipmentYaml ∷ LoggerState → FilePath → IO [EquipmentYamlClass]
-loadEquipmentYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse equipment YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right f → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (eyfClasses f)))
-                <> " equipment classes from " <> T.pack path
-            return (eyfClasses f)
+loadEquipmentYaml logger =
+    loadYamlList logger "equipment" "equipment classes" eyfClasses

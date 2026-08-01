@@ -11,11 +11,11 @@ module Engine.Asset.YamlLocations
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value(..), Object)
 import Data.Aeson.Types (parseEither, Parser)
 import qualified Data.Aeson.Key as Key
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | A fixed relative tile offset from a location's anchor (#90).
 data LocationYamlPosition = LocationYamlPosition
@@ -204,15 +204,5 @@ instance FromJSON LocationYamlFile where
         ⊚ v .: "locations"
 
 loadLocationYaml ∷ LoggerState → FilePath → IO [LocationYamlDef]
-loadLocationYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse location YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right lf → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (lyfLocations lf)))
-                <> " location definitions from " <> T.pack path
-            return (lyfLocations lf)
+loadLocationYaml logger =
+    loadYamlList logger "location" "location definitions" lyfLocations

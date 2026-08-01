@@ -7,10 +7,9 @@ module Engine.Asset.YamlSubstance
 
 import UPrelude
 import GHC.Generics (Generic)
-import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | YAML shape for a substance entry. Only `name`, `density`, `tensile_strength`,
 --   and `fracture_toughness` are required; the others default to 0
@@ -51,15 +50,4 @@ instance FromJSON SubstanceYamlFile where
         ⊚ v .: "substances"
 
 loadSubstanceYaml ∷ LoggerState → FilePath → IO [SubstanceYamlDef]
-loadSubstanceYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse substance YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right f → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (syfSubstances f)))
-                <> " substances from " <> T.pack path
-            return (syfSubstances f)
+loadSubstanceYaml logger = loadYamlList logger "substance" "substances" syfSubstances

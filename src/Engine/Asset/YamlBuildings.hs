@@ -9,11 +9,10 @@ module Engine.Asset.YamlBuildings
 
 import UPrelude
 import GHC.Generics (Generic)
-import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | Reuse of the unit anim YAML shape: per-direction frame paths.
 --   For buildings we only use the "default" direction key.
@@ -93,15 +92,5 @@ instance FromJSON BuildingYamlFile where
         ⊚ v .: "buildings"
 
 loadBuildingYaml ∷ LoggerState → FilePath → IO [BuildingYamlDef]
-loadBuildingYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse building YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right uf → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (byfBuildings uf)))
-                <> " building definitions from " <> T.pack path
-            return (byfBuildings uf)
+loadBuildingYaml logger =
+    loadYamlList logger "building" "building definitions" byfBuildings

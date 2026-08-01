@@ -9,10 +9,9 @@ module Engine.Asset.YamlInfection
 
 import UPrelude
 import GHC.Generics (Generic)
-import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | YAML shape for one infection entry. Only `id` + `name` + `category`
 --   are required; everything else has a sensible default so a terse entry
@@ -89,15 +88,5 @@ instance FromJSON InfectionYamlFile where
         ⊚ v .: "infections"
 
 loadInfectionYaml ∷ LoggerState → FilePath → IO [InfectionYamlDef]
-loadInfectionYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse infection YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right f → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (iyfInfections f)))
-                <> " infections from " <> T.pack path
-            return (iyfInfections f)
+loadInfectionYaml logger =
+    loadYamlList logger "infection" "infections" iyfInfections

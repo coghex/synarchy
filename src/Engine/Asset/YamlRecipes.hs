@@ -13,9 +13,9 @@ module Engine.Asset.YamlRecipes
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | One `{ item, count }` line (an input, the fuel, or an output).
 --   `count` defaults to 1 so a terse `- item: steel_bar` still loads.
@@ -82,15 +82,4 @@ instance FromJSON RecipeYamlFile where
         ⊚ v .: "recipes"
 
 loadRecipeYaml ∷ LoggerState → FilePath → IO [RecipeYamlDef]
-loadRecipeYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse recipe YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right f → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (ryfRecipes f)))
-                <> " recipes from " <> T.pack path
-            return (ryfRecipes f)
+loadRecipeYaml logger = loadYamlList logger "recipe" "recipes" ryfRecipes

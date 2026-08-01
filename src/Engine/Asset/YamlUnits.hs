@@ -22,11 +22,10 @@ module Engine.Asset.YamlUnits
 
 import UPrelude
 import GHC.Generics (Generic)
-import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 import Unit.Types.Combat (BodyPart(..))
 
 -- | One named animation as loaded from YAML. Per-direction frame paths;
@@ -444,15 +443,5 @@ instance FromJSON UnitYamlFile where
         ⊚ v .: "units"
 
 loadUnitYaml ∷ LoggerState → FilePath → IO [UnitYamlDef]
-loadUnitYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse unit YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right uf → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (uyfUnits uf)))
-                <> " unit definitions from " <> T.pack path
-            return (uyfUnits uf)
+loadUnitYaml logger =
+    loadYamlList logger "unit" "unit definitions" uyfUnits

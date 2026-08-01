@@ -159,6 +159,7 @@ library
                      Engine.Asset.Types
                      Engine.Asset.Handle
                      Engine.Asset.Manager
+                     Engine.Asset.YamlList
                      Engine.Asset.YamlTextures
                      Engine.Asset.YamlFlora
                      Engine.Asset.YamlUnits
@@ -1027,6 +1028,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.QualityTier
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.Types
+                   Test.Headless.Asset.YamlList
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building
