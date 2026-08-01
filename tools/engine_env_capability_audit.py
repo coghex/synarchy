@@ -54,6 +54,29 @@ SS6.1 and SS6.2 must stay an exact, exhaustive mirror of the live
 full-access set, never merely an upper bound on it. `test/` sources
 remain outside this ratchet entirely (SS6.3's test-only exception).
 
+Since issue #899 (E8, the epic's final child) that ceiling is __EMPTY__
+and the boundary is PERMANENT-ONLY: the live unrestricted production
+importer set equals PERMANENT_IMPORTERS exactly, so there is no legal
+path left for a module to take unrestricted access -- "add the field
+now, narrow it later" no longer exists. Two checks make that flip
+unforgiving:
+
+  * `audit_permanent_boundary` parses SS6.1's DOCUMENTED module set
+    (its first column only -- Reason cells cite other module names as
+    context) and requires it to equal PERMANENT_DEFINER +
+    PERMANENT_IMPORTERS, with every row carrying a real, non-placeholder
+    Category AND Reason. Documentation alone cannot admit a permanent
+    importer, and neither can a constant change with no written
+    justification.
+  * `audit_save_load_projection` pins E8's own record: the module
+    exists, is listed in synarchy.cabal's explicit library module list,
+    and its projection binds exactly the five documented
+    `save-load-coordination` handles from their matching `EngineEnv`
+    accessors.
+
+SS6.4 documents the procedure for what to do instead (most new state
+does not belong on `EngineEnv` at all).
+
 Usage:
   python3 tools/engine_env_capability_audit.py
 Exit codes: 0 = every live EngineEnv field is validly classified and
@@ -476,10 +499,27 @@ PERMANENT_IMPORTERS = frozenset({
 # new one, requires this file to change; merely documenting an addition
 # in SS6.2 without growing the matching set below still fails the
 # ratchet (see `audit_ratchet`).
+#
+# __EMPTY since issue #899 (E8) -- the epic's end state.__ Every key
+# below is retained deliberately: `audit_ratchet`'s doc/ceiling
+# cross-check iterates `set(ceiling) | set(doc_temporary)`, so dropping
+# a key would silently stop cross-checking that capability's SS6.2 row,
+# and the end-state self-test's "every value is empty / SS6.2 has
+# exactly the eight CAPABILITIES keys" assertions would go vacuous. The
+# ceiling stays shrink-only: with every set empty there is no longer
+# ANY legal path for a production module to take unrestricted access --
+# it must be narrowed, or (exceptionally, with maintainer approval)
+# join SS6.1's permanent set with a documented justification. See
+# SS6.4's post-flip procedure.
 TEMPORARY_CEILING: dict[str, frozenset[str]] = {
-    "core-init": frozenset({
-        "Engine.Graphics.Vulkan.Command.Record", "Engine.Scripting.Lua.API.Log",
-    }),
+    # Emptied by issue #899 (E8): `Engine.Graphics.Vulkan.Command.Record`
+    # now reads its one `engineConfig` hit through
+    # Engine.Core.Capability.Core plus a narrow `EngineState(..)`/
+    # `GraphicsState(..)` import (the CPS state, not `EngineEnv`), and
+    # `Engine.Scripting.Lua.API.Log`'s four `log*Fn` entry points take
+    # `CoreCapability` directly and no longer import
+    # `Engine.Core.State` at all -- see SS7.1.
+    "core-init": frozenset(),
     # Emptied by issue #891 (E3): all 45 modules now reach their render
     # fields through Engine.Core.Capability.Render (MainRender) or
     # Engine.Core.Capability.RenderView (worker threads) -- see the SS3
@@ -505,7 +545,8 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # texPaletteHandlesRef), composed with the already-landed WorldSim/
     # RenderView/ContentRegistries/InputView/UnitCombat/Building/Core
     # records plus the one narrow `saveBarrierRef` accessor World.Thread
-    # keeps until #899 -- see SS7.4.
+    # kept until #899 (E8), which moved it onto
+    # Engine.Core.Capability.SaveLoad -- see SS7.4 and SS7.8.
     "world-sim-render-handoff": frozenset(),
     # Emptied by issues #895 (E6a) and #896 (E6b): E6a moved the ten
     # unit/combat fields onto Engine.Core.Capability.UnitCombat (49 -> 14,
@@ -535,6 +576,12 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # Engine.Core.Capability.Events -- see SS7.7. Neither half has an
     # unrestricted consumer left.
     "ui-hud-events": frozenset(),
+    # Never had a temporary consumer: every module whose dominant field
+    # usage is save/load coordination is a permanent SS6.1 whole-session
+    # orchestration boundary (SS7.8). #899 (E8) added
+    # Engine.Core.Capability.SaveLoad for the NON-permanent touchpoints
+    # -- the per-tick `captureLocked`/`acknowledgeCurrent` sites -- and
+    # narrowed `World.Thread` onto it.
     "save-load-coordination": frozenset(),
 }
 
@@ -941,6 +988,7 @@ def scan_production_sources(repo_root: Path) -> dict[str, str]:
     return sources
 
 
+SECTION_6_1_HEADING = "### 6.1 Permanent (production)"
 SECTION_6_2_HEADING = "### 6.2 Temporary compatibility boundary (production)"
 # A Modules cell that is ENTIRELY one italicized parenthetical --
 # `*(...)*` spanning the whole cell -- is explanatory prose (citing
@@ -990,6 +1038,244 @@ def parse_temporary_boundary(inventory_text: str) -> dict[str, set[str]]:
         else:
             result[capability] = set(BACKTICK_RE.findall(modules_cell))
     return result
+
+
+def parse_permanent_boundary(inventory_text: str
+                             ) -> list[tuple[set[str], str, str]]:
+    """Parse SS6.1's table into one `(modules, category, reason)` triple
+    per row.
+
+    __First column only.__ SS6.1's Reason cells routinely cite OTHER
+    backtick-quoted module names as supporting context
+    (`World.Save.Snapshot`, `Engine.Save.Barrier`, `Engine.Loop.Mode`,
+    ...) which are explicitly NOT permanent-allowlist entries -- reading
+    the whole row would admit every one of them. The Module(s) cell may
+    name several modules (the `Engine.Loop.*` and `app/App/*.hs`
+    families each occupy one row); the Category/Reason cells are
+    returned verbatim so the caller can reject a name-only row that
+    provides none of the justification SS6.1/SS6.4 demand.
+    """
+    lines = inventory_text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines)
+                     if line.strip() == SECTION_6_1_HEADING) + 1
+    except StopIteration:
+        return []
+
+    rows: list[tuple[set[str], str, str]] = []
+    header_seen = False
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            break  # SS6.2 (or any later heading) ends the table
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if not header_seen:
+            header_seen = True
+            continue
+        if all(_SEPARATOR_ROW_RE.fullmatch(c) for c in cells if c):
+            continue
+        if len(cells) < 3:
+            continue
+        modules = set(BACKTICK_RE.findall(cells[0]))
+        if not modules:
+            continue
+        rows.append((modules, cells[1], cells[2]))
+    return rows
+
+
+def audit_permanent_boundary(inventory_text: str, *,
+                             permanent: frozenset[str] = PERMANENT_IMPORTERS,
+                             definer: str = PERMANENT_DEFINER) -> list[str]:
+    """SS6.1's DOCUMENTED permanent set must equal the checked-in
+    `PERMANENT_DEFINER` + `PERMANENT_IMPORTERS` constants exactly, and
+    every row must actually justify itself.
+
+    `audit_ratchet` already pins the constants to the LIVE source in
+    both directions. This closes the remaining gap: without it, growing
+    a live importer AND the Python constant together passes, with the
+    inventory never recording why the new module is a genuine
+    whole-session orchestration boundary. Requirement 3 of issue #899
+    ("documentation alone, or a Python constant change without the
+    matching inventory justification, must not admit a new permanent
+    importer") is exactly this check plus `audit_ratchet`'s.
+    """
+    violations: list[str] = []
+    rows = parse_permanent_boundary(inventory_text)
+    if not rows:
+        return [f"docs/{INVENTORY_PATH.name} SS6.1's permanent-allowlist "
+                f"table could not be parsed (heading "
+                f"`{SECTION_6_1_HEADING}` missing, or it has no rows) -- "
+                f"the permanent boundary has no documented set to compare "
+                f"the checked-in PERMANENT_IMPORTERS/PERMANENT_DEFINER "
+                f"constants against"]
+
+    documented: set[str] = set()
+    for modules, category, reason in rows:
+        names = ", ".join(f"`{m}`" for m in sorted(modules))
+        if _is_placeholder(category):
+            violations.append(
+                f"SS6.1's row for {names} has an empty or placeholder "
+                f"Category cell -- a permanent exception must state which "
+                f"kind it is (permanent initialization/orchestration "
+                f"infrastructure, or the engine-monad carrier itself), not "
+                f"merely name the module")
+        if _is_placeholder(reason):
+            violations.append(
+                f"SS6.1's row for {names} has an empty or placeholder "
+                f"Reason cell -- a permanent exception must carry an "
+                f"explicit written justification for why it is a genuine "
+                f"whole-session boundary that cannot be narrowed (see "
+                f"SS6.4's post-flip procedure)")
+        documented |= modules
+
+    expected = set(permanent) | {definer}
+    for module in sorted(documented - expected):
+        violations.append(
+            f"`{module}` is documented in SS6.1's permanent allowlist but "
+            f"is not in the checked-in PERMANENT_IMPORTERS/"
+            f"PERMANENT_DEFINER constants (tools/"
+            f"engine_env_capability_audit.py) -- documenting a permanent "
+            f"exception does not grant it; the constants and the "
+            f"inventory must be changed together")
+    for module in sorted(expected - documented):
+        violations.append(
+            f"`{module}` is in the checked-in PERMANENT_IMPORTERS/"
+            f"PERMANENT_DEFINER constants but has no row in "
+            f"docs/{INVENTORY_PATH.name} SS6.1 -- a Python constant "
+            f"change without the matching inventory justification must "
+            f"not admit a permanent importer")
+    return violations
+
+
+# ===========================================================================
+# SaveLoadCapability projection correspondence (issue #899, E8)
+# ===========================================================================
+#
+# The static half of the aliasing contract. A Python audit cannot
+# observe runtime container identity, so it checks the SOURCE-LEVEL
+# correspondence -- every capability field bound from the matching
+# `EngineEnv` accessor -- in the same shape the SS3/SS7.3 boundary
+# checks already use. Genuine aliasing (the same live IORef/TVar) is
+# proven separately by the hspec module
+# `Test.Headless.Capability.SaveLoad`, using the established
+# `sameContainer` pattern. Both are required: the static check catches
+# a transposed or renamed binding in review, the runtime one catches a
+# projection that copies or reconstructs a container.
+SAVE_LOAD_CAPABILITY_MODULE = "Engine.Core.Capability.SaveLoad"
+SAVE_LOAD_CAPABILITY_FILE = "src/Engine/Core/Capability/SaveLoad.hs"
+SAVE_LOAD_PROJECTION = "toSaveLoadCapability"
+
+# `{capability field: EngineEnv accessor}` -- the exact five handles
+# docs/engineenv_capability_inventory.md SS5's `save-load-coordination`
+# table lists, and nothing else.
+SAVE_LOAD_FIELD_MAP = {
+    "slLoadStatusRef": "loadStatusRef",
+    "slPendingLoadRef": "pendingLoadRef",
+    "slSaveBarrierRef": "saveBarrierRef",
+    "slLastSaveTimeRef": "lastSaveTimeRef",
+    "slNextItemInstanceIdRef": "nextItemInstanceIdRef",
+}
+
+_PROJECTION_BINDING_RE = re.compile(
+    r"(?<![A-Za-z0-9_'])([A-Za-z][A-Za-z0-9_']*)\s*=\s*"
+    r"([A-Za-z][A-Za-z0-9_']*)\s+env(?![A-Za-z0-9_'])")
+
+
+def parse_projection_bindings(source_text: str, projection: str
+                              ) -> dict[str, str]:
+    """`{capability field: EngineEnv accessor}` for every
+    `field = accessor env` binding inside `projection`'s record
+    construction. Comments are stripped first, so a Haddock example
+    never counts as a binding. Returns `{}` if the projection is not
+    defined in `source_text` at all."""
+    code = _strip_haskell_comments(source_text)
+    lines = code.split("\n")
+    start = None
+    equation = re.compile(rf"^{re.escape(projection)}\s+env\s*=")
+    for i, line in enumerate(lines):
+        if equation.match(line):
+            start = i
+            break
+    if start is None:
+        return {}
+
+    depth = 0
+    seen_open = False
+    body: list[str] = []
+    for line in lines[start:]:
+        body.append(line)
+        depth += line.count("{") - line.count("}")
+        if "{" in line:
+            seen_open = True
+        if seen_open and depth <= 0:
+            break
+    return dict(_PROJECTION_BINDING_RE.findall("\n".join(body)))
+
+
+def audit_save_load_projection(
+    sources: dict[str, str], cabal_text: str, *,
+    field_map: dict[str, str] | None = None,
+) -> list[str]:
+    """Pure core of the E8 record check: the module exists in the
+    production sources, is listed in the library's explicit
+    `synarchy.cabal` module list (an unlisted source file compiles
+    nowhere and so could satisfy a warning-clean build while being
+    dead), and its projection binds exactly the five documented handles
+    from their matching `EngineEnv` accessors."""
+    expected = dict(SAVE_LOAD_FIELD_MAP if field_map is None else field_map)
+    violations: list[str] = []
+
+    source = None
+    for relpath, text in sources.items():
+        if module_identifier(relpath) == SAVE_LOAD_CAPABILITY_MODULE:
+            source = text
+            break
+    if source is None:
+        return [f"`{SAVE_LOAD_CAPABILITY_MODULE}` is missing from the "
+                f"production sources ({SAVE_LOAD_CAPABILITY_FILE}) -- the "
+                f"`save-load-coordination` capability record is what "
+                f"non-permanent barrier/load-status consumers narrow to "
+                f"(docs/engineenv_capability_inventory.md SS7.8)"]
+
+    if not re.search(rf"^\s*{re.escape(SAVE_LOAD_CAPABILITY_MODULE)}\s*$",
+                     cabal_text, re.MULTILINE):
+        violations.append(
+            f"`{SAVE_LOAD_CAPABILITY_MODULE}` is not listed in "
+            f"synarchy.cabal's explicit library module list -- an "
+            f"unlisted source file is never compiled, so a warning-clean "
+            f"build would say nothing about it")
+
+    bindings = parse_projection_bindings(source, SAVE_LOAD_PROJECTION)
+    if not bindings:
+        return violations + [
+            f"`{SAVE_LOAD_CAPABILITY_MODULE}` defines no "
+            f"`{SAVE_LOAD_PROJECTION} env = ...` record construction -- "
+            f"E1's convention requires one total, one-way "
+            f"`EngineEnv -> XCapability` projection"]
+
+    for field, accessor in sorted(expected.items()):
+        actual = bindings.get(field)
+        if actual is None:
+            violations.append(
+                f"`{SAVE_LOAD_PROJECTION}` does not bind `{field}` -- the "
+                f"projection must be TOTAL over the five "
+                f"`save-load-coordination` handles")
+        elif actual != accessor:
+            violations.append(
+                f"`{SAVE_LOAD_PROJECTION}` binds `{field}` from "
+                f"`{actual} env`, not `{accessor} env` -- a projection "
+                f"wired to the wrong same-typed `EngineEnv` handle "
+                f"typechecks silently and detaches the capability's view "
+                f"from the live state")
+    for field in sorted(set(bindings) - set(expected)):
+        violations.append(
+            f"`{SAVE_LOAD_PROJECTION}` binds `{field}`, which is not one "
+            f"of the five documented `save-load-coordination` handles -- "
+            f"widening the record needs a SS5/SS6.4 inventory change "
+            f"first, not a silent addition")
+    return violations
 
 
 def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
@@ -1092,6 +1378,23 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
+    permanent_violations = audit_permanent_boundary(inventory_text)
+    if permanent_violations:
+        print(f"{len(permanent_violations)} SS6.1 permanent-allowlist "
+              f"violation(s):")
+        for v in permanent_violations:
+            print(f"  - {v}")
+        return 1
+
+    save_load_violations = audit_save_load_projection(
+        production_sources, (REPO_ROOT / "synarchy.cabal").read_text(encoding="utf-8"))
+    if save_load_violations:
+        print(f"{len(save_load_violations)} save-load capability record "
+              f"violation(s):")
+        for v in save_load_violations:
+            print(f"  - {v}")
+        return 1
+
     boundary_violations = audit_render_boundary(production_sources)
     if boundary_violations:
         print(f"{len(boundary_violations)} SS3 main-render boundary "
@@ -1109,10 +1412,13 @@ def main() -> int:
         return 1
 
     total_fields = len(extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN))
+    temporary_total = sum(len(m) for m in TEMPORARY_CEILING.values())
     print(f"engine-env capability-inventory audit: {total_fields} EngineEnv "
           f"field(s) all classified, {len(unrestricted) + 1} full-access "
           f"modules (incl. the {PERMANENT_DEFINER} definer) within the SS6 "
-          f"ratchet, {len(RENDER_MAIN_ONLY_MODULES)} MainRender module(s) "
+          f"ratchet, all permanent (SS6.1 documented set == the checked-in "
+          f"constants; {temporary_total} temporary), "
+          f"{len(RENDER_MAIN_ONLY_MODULES)} MainRender module(s) "
           f"holding the full render capability and no non-owner naming "
           f"`engineStateRef` (SS3), {len(INPUT_LUA_ONLY_MODULES)} LuaThread "
           f"module(s) holding the full input capability and no non-owner "
