@@ -207,6 +207,24 @@ def test_lowercase_prefix_is_not_a_valid_qualifier():
            f"qualifier (got {v})")
 
 
+def test_unicode_uppercase_qualifier_is_detected():
+    # Haskell module names may start with any Unicode uppercase letter,
+    # not just ASCII A-Z -- same as this codebase's own Unicode
+    # operators are not ASCII-limited.
+    text = "f x y = x Δ..&. y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {".&."} and len(v) == 1,
+           f"a Unicode-uppercase-led qualifier ('Δ..&.') is flagged "
+           f"(got {[str(x) for x in v]})")
+
+
+def test_unicode_lowercase_prefix_is_not_a_valid_qualifier():
+    text = "f x y = x δ..&. y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(v == [], f"a Unicode-lowercase-led prefix is not treated as "
+           f"a qualifier (got {v})")
+
+
 # ----- Whole-file exemption (UPrelude.hs) -------------------------------
 
 def test_uprelude_whole_file_is_exempt():
@@ -356,6 +374,8 @@ def main() -> int:
         test_multi_segment_qualified_operator_is_detected,
         test_dot_prefixed_run_with_no_real_qualifier_is_not_flagged,
         test_lowercase_prefix_is_not_a_valid_qualifier,
+        test_unicode_uppercase_qualifier_is_detected,
+        test_unicode_lowercase_prefix_is_not_a_valid_qualifier,
         test_uprelude_whole_file_is_exempt,
         test_glsl_quasiquote_is_exempt_but_surrounding_haskell_is_not,
         test_eq_instance_method_is_exempt_but_other_eq_uses_are_not,

@@ -52,19 +52,37 @@ _SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
 # spelling -- true for all five forbidden operators regardless of how
 # many dotted segments the qualifier itself has (each earlier internal
 # separator sits between two identifier segments and never touches the
-# run). `_QUALIFIER_CHARS`/`_VALID_QUALIFIER` confirm a genuine
+# run). `_qualifier_before`/`_is_valid_qualifier` confirm a genuine
 # uppercase-led module path sits immediately before the run, so this
 # can't misfire on an unrelated same-shaped run with no real qualifier.
-_QUALIFIER_CHARS = re.compile(r"[A-Za-z0-9_'.]")
-_VALID_QUALIFIER = re.compile(r"^(?:[A-Z][A-Za-z0-9_']*\.)*[A-Z][A-Za-z0-9_']*$")
+# `\w` (Python `re`'s default, Unicode-aware) and `str.isupper()` --
+# not an ASCII-only `[A-Z]` -- since Haskell module names may start
+# with any Unicode uppercase letter, same as this codebase's own
+# Unicode operators are not ASCII-limited.
+_QUALIFIER_CHARS = re.compile(r"[\w'.]")
 
 
 def _qualifier_before(text: str, pos: int) -> str:
-    """The maximal `[A-Za-z0-9_'.]` run immediately before `pos`."""
+    """The maximal `[\\w'.]` run immediately before `pos`."""
     start = pos
     while start > 0 and _QUALIFIER_CHARS.match(text[start - 1]):
         start -= 1
     return text[start:pos]
+
+
+def _is_valid_qualifier(candidate: str) -> bool:
+    """True if `candidate` (e.g. `B`, `Data.Bits`, `Δ`) is a valid
+    Haskell qualified-module path: one or more dot-separated segments,
+    each a Unicode-uppercase letter followed by letters, digits, `_`,
+    or `'`."""
+    if not candidate:
+        return False
+    segments = candidate.split(".")
+    return all(
+        seg and seg[0].isupper()
+        and all(ch.isalnum() or ch in "_'" for ch in seg[1:])
+        for seg in segments
+    )
 
 
 def _matched_token(run: str, text: str, run_start: int) -> str | None:
@@ -73,7 +91,7 @@ def _matched_token(run: str, text: str, run_start: int) -> str | None:
     if run in FORBIDDEN_TOKENS:
         return run
     if run.startswith(".") and run[1:] in FORBIDDEN_TOKENS:
-        if _VALID_QUALIFIER.match(_qualifier_before(text, run_start)):
+        if _is_valid_qualifier(_qualifier_before(text, run_start)):
             return run[1:]
     return None
 
