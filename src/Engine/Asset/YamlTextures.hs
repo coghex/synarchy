@@ -26,13 +26,13 @@ import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Data.IORef (IORef, atomicModifyIORef')
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Log (LoggerState, logInfo, logWarn, logDebug, LogCategory(..))
+import Engine.Asset.YamlList (loadYamlList)
+import Engine.Core.Log (LoggerState, logInfo, LogCategory(..))
 import World.Material
     (MaterialRegistry, MaterialProps(..), registerMaterial, emptyMaterialRegistry)
 
@@ -147,18 +147,8 @@ registryToList = HM.toList
 -- * YAML parsing
 
 loadMaterialYaml ∷ LoggerState → FilePath → IO [MaterialDef]
-loadMaterialYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse material YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right mf → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (mfMaterials mf)))
-                <> " materials from " <> T.pack path
-            return (mfMaterials mf)
+loadMaterialYaml logger =
+    loadYamlList logger "material" "materials" mfMaterials
 
 -- | Load and concatenate all @.yaml@\/@.yml@ files in a directory (non-recursive)
 loadMaterialDirectory ∷ LoggerState → FilePath → IO [MaterialDef]
@@ -208,18 +198,8 @@ loadPopulatedMaterialRegistry logger dir = do
         ) emptyMaterialRegistry matDefs
 
 loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
-loadVegetationYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse vegetation YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right vf → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (vfVegetation vf)))
-                <> " vegetation types from " <> T.pack path
-            return (vfVegetation vf)
+loadVegetationYaml logger =
+    loadYamlList logger "vegetation" "vegetation types" vfVegetation
 
 -- * Registry building
 

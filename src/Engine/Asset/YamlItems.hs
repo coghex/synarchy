@@ -16,11 +16,10 @@ module Engine.Asset.YamlItems
 
 import UPrelude
 import GHC.Generics (Generic)
-import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 
 -- | Optional container block. Items without this can't hold a fluid.
 data ItemYamlContainer = ItemYamlContainer
@@ -229,15 +228,5 @@ instance FromJSON ItemYamlFile where
         ⊚ v .: "items"
 
 loadItemYaml ∷ LoggerState → FilePath → IO [ItemYamlDef]
-loadItemYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse item YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right uf → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (iyfItems uf)))
-                <> " item definitions from " <> T.pack path
-            return (iyfItems uf)
+loadItemYaml logger =
+    loadYamlList logger "item" "item definitions" iyfItems

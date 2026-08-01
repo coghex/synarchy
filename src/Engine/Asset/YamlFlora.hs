@@ -16,10 +16,9 @@ module Engine.Asset.YamlFlora
 import UPrelude
 import GHC.Generics (Generic)
 import Control.Applicative ((<|>))
-import qualified Data.Text as T
-import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState)
+import Engine.Asset.YamlList (loadYamlList)
 import World.Flora.Types (LifePhaseTag(..), AnnualStageTag(..))
 
 -- * YAML sub-structures
@@ -190,18 +189,8 @@ instance FromJSON FloraYamlFile where
 -- * YAML parsing
 
 loadFloraYaml ∷ LoggerState → FilePath → IO [FloraYamlDef]
-loadFloraYaml logger path = do
-    result ← Yaml.decodeFileEither path
-    case result of
-        Left err → do
-            logWarn logger CatAsset $ "Failed to parse flora YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
-            return []
-        Right ff → do
-            logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length (fyfFlora ff)))
-                <> " flora species from " <> T.pack path
-            return (fyfFlora ff)
+loadFloraYaml logger =
+    loadYamlList logger "flora" "flora species" fyfFlora
 
 -- * Tag parsers
 
