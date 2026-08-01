@@ -19,6 +19,7 @@ import Engine.Preview.Building (buildPreviewBuilding)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
+               , simplePreviewCategories, groupedPreviewCategories
                , parseLanguageReport, parseSeeds)
 import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
@@ -103,8 +104,9 @@ main = do
         Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
           UnknownPreviewCategory → do
               hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
-                  ⧺ " (expected one of: icons, items, ui, world, units, "
-                  ⧺ "flora, buildings, structures)"
+                  ⧺ " (expected one of: " ⧺ intercalate ", "
+                      (simplePreviewCategories ⧺ groupedPreviewCategories)
+                  ⧺ ")"
               exitWith (ExitFailure 1)
           GroupedPreviewCategory → case mItem of
               Nothing → do
