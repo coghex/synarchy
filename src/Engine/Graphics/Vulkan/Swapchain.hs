@@ -21,7 +21,7 @@ import Vulkan.Extensions.VK_KHR_swapchain as Swap
 import Engine.Core.State (EngineState(..), GraphicsState(..))
 
 -- | Query swapchain support details from physical device
-querySwapchainSupport ∷ PhysicalDevice → SurfaceKHR → EngineM ε σ SwapchainSupportDetails
+querySwapchainSupport ∷ PhysicalDevice → SurfaceKHR → EngineM σ SwapchainSupportDetails
 querySwapchainSupport pdev surface = do
   logDebugM CatGraphics "Querying swapchain support"
   caps ← liftIO $ getPhysicalDeviceSurfaceCapabilitiesKHR pdev surface
@@ -61,7 +61,7 @@ swapchainImageUsage supported =
 --   when the surface reports the 0xFFFFFFFF "application chooses"
 --   extent sentinel (e.g. Wayland).
 createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR → Bool
-  → (Int, Int) → EngineM ε σ SwapchainInfo
+  → (Int, Int) → EngineM σ SwapchainInfo
 createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   logDebugM CatSwapchain "Creating swapchain"
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
@@ -131,7 +131,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
     }
 
 -- | Creates image views for swapchain images
-createSwapchainImageViews ∷ Device → SwapchainInfo → EngineM ε σ (V.Vector ImageView)
+createSwapchainImageViews ∷ Device → SwapchainInfo → EngineM σ (V.Vector ImageView)
 createSwapchainImageViews dev SwapchainInfo{..} = do
   logDebugSM CatSwapchain "Creating swapchain image views"
     [("count", T.pack $ show $ V.length siSwapImgs)]
@@ -175,7 +175,7 @@ chooseSwapSurfaceFormat (SwapchainSupportDetails _ formats _) = best
         preferred = zero { format = FORMAT_B8G8R8A8_UNORM
                        , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
 
-chooseSwapPresentMode ∷ SwapchainSupportDetails → Bool → EngineM ε σ Swap.PresentModeKHR
+chooseSwapPresentMode ∷ SwapchainSupportDetails → Bool → EngineM σ Swap.PresentModeKHR
 chooseSwapPresentMode ssd vsyncEnabled = do
   let available = presentModes ssd
   

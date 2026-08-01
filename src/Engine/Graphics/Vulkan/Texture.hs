@@ -35,7 +35,7 @@ data ImageLayoutTransition = Undef_TransDst
                           | Undef_ColorAtt
 
 createTextureImageView ∷ PhysicalDevice → Device → CommandPool
-                      → Queue → FilePath → EngineM ε σ (VulkanImage, ImageView)
+                      → Queue → FilePath → EngineM σ (VulkanImage, ImageView)
 createTextureImageView pdev dev cmdPool cmdQueue path = do
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
@@ -79,7 +79,7 @@ createTextureImageView pdev dev cmdPool cmdQueue path = do
 -- | Create a texture image view with cleanup action
 createTextureImageView' ∷ PhysicalDevice → Device → CommandPool
                        → Queue → FilePath
-                       → EngineM ε σ ((VulkanImage, ImageView)
+                       → EngineM σ ((VulkanImage, ImageView)
                                       , IO ())
 createTextureImageView' pdev dev cmdPool cmdQueue path = do
   logDebugSM CatTexture "Loading texture image"
@@ -183,7 +183,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
 --   time.
 createTextureFromRGBABytes ∷ PhysicalDevice → Device → CommandPool → Queue
                           → (Int, Int) → BS.ByteString
-                          → EngineM ε σ ((VulkanImage, ImageView), IO ())
+                          → EngineM σ ((VulkanImage, ImageView), IO ())
 createTextureFromRGBABytes pdev dev cmdPool cmdQueue (w, h) rgba = do
   let width   = fromIntegral w ∷ Word32
       height  = fromIntegral h ∷ Word32
@@ -220,7 +220,7 @@ createTextureFromRGBABytes pdev dev cmdPool cmdQueue (w, h) rgba = do
   pure ((image, imageView), cleanView >> cleanImage)
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
-                     → Word32 → CommandBuffer → EngineM ε σ ()
+                     → Word32 → CommandBuffer → EngineM σ ()
 transitionImageLayout (VulkanImage image _) _format transition
                       mipLevels cmdBuf = do
   let (oldLayout, newLayout, srcAccess, dstAccess, srcStage, dstStage) =

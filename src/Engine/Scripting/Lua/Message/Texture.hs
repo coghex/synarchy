@@ -84,7 +84,7 @@ invalidateAllWorldRenderCaches env = do
         writeIORef (wsBgQuadCacheRef ws) Nothing
 
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
-                           → TextureAtlas → EngineM ε σ ()
+                           → TextureAtlas → EngineM σ ()
 duplicateCachedTextureHandle env handle assetId atlas = do
     poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
@@ -127,7 +127,7 @@ duplicateCachedTextureHandle env handle assetId atlas = do
 
 prepareTextureUpload ∷ AssetPool → Device → PhysicalDevice
                      → (TextureHandle, FilePath)
-                     → EngineM ε σ TextureUploadPrep
+                     → EngineM σ TextureUploadPrep
 prepareTextureUpload pool dev pdev (handle, path) = do
     assetId ← liftIO $ generateAssetId pool
     JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
@@ -159,7 +159,7 @@ prepareTextureUpload pool dev pdev (handle, path) = do
         , tupCleanImage = cleanImage
         }
 
-handleLoadTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM ε σ ()
+handleLoadTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM σ ()
 handleLoadTextureBatch [] = pure ()
 handleLoadTextureBatch requests = do
     env ← ask
@@ -300,14 +300,14 @@ handleLoadTextureBatch requests = do
 
             _ → logWarnM CatTexture "Cannot batch-load textures: Vulkan not ready"
 
-handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
+handleLoadTexture ∷ TextureHandle → FilePath → EngineM σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
                     <> " (handle: " <> T.pack (show handle) <> ")"
     handleLoadTextureBatch [(handle, path)]
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
 
-handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
+handleLoadFont ∷ FontHandle → FilePath → Int → EngineM σ ()
 handleLoadFont handle path _size = do
     logDebugM CatLua $ "Loading font from Lua: " <> T.pack path
     actualHandle ← loadSDFFont handle path

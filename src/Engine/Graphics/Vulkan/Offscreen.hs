@@ -40,7 +40,7 @@ offscreenFormat = FORMAT_B8G8R8A8_UNORM
 --   swapchain path uses: views in 'cleanupImageViews', images+memory
 --   in 'cleanupSwapchain'.
 createOffscreenTarget ∷ PhysicalDevice → Device → (Int, Int) → Int
-                      → EngineM ε σ SwapchainInfo
+                      → EngineM σ SwapchainInfo
 createOffscreenTarget pDevice device (w, h) count = do
   let extent = Extent2D (fromIntegral w) (fromIntegral h)
       imageInfo = zero

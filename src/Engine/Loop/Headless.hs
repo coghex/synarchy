@@ -17,14 +17,14 @@ import Engine.Loop.Mode (LoopMode(..), runLoopMode, frameBudgetMicros)
 --   the same queue, so a headless load's publish must wait for it too
 --   — see 'Engine.Loop.Mode.runGatedByCaptureLock', which is the one
 --   place that handshake is defined and explained.
-headlessLoop ∷ EngineM ε σ ()
+headlessLoop ∷ EngineM σ ()
 headlessLoop = runLoopMode headlessMode
 
 -- | The headless mode's answers to 'LoopMode'\'s per-mode differences:
 --   no window to pump, no camera to integrate, no frame to draw, and
 --   exit only via @engine.quit@ (i.e. the lifecycle). All it does past
 --   the shared gated drain is pace itself.
-headlessMode ∷ LoopMode ε σ
+headlessMode ∷ LoopMode σ
 headlessMode = LoopMode
   { lmStartingLog   = "Headless engine starting..."
   , lmRunningLog    = Nothing

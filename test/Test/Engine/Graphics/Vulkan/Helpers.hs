@@ -7,7 +7,7 @@ import Engine.Graphics.Vulkan.Instance
 import Vulkan.Core10
 import Vulkan.Extensions.VK_EXT_debug_utils
 
-createTestInstance ∷ Bool → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
+createTestInstance ∷ Bool → EngineM σ (Instance, Maybe DebugUtilsMessengerEXT)
 createTestInstance withDebug = do
     let config = defaultGraphicsConfig 
             { gcDebugMode = withDebug

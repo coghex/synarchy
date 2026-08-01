@@ -18,7 +18,7 @@ import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log (LogCategory(..))
 
 -- | Load a TTF font at specified size
-loadFont ∷ FontHandle → FilePath → Int → EngineM ε σ FontHandle
+loadFont ∷ FontHandle → FilePath → Int → EngineM σ FontHandle
 loadFont requestedHandle fontPath fontSize = do
     logDebugSM CatFont "Font atlas generation started"
         [("path", T.pack fontPath)
@@ -66,7 +66,7 @@ loadFont requestedHandle fontPath fontSize = do
             return handle
 
 -- | Load an SDF font (generates atlas once, scalable to any size)
-loadSDFFont ∷ FontHandle → FilePath → EngineM ε σ FontHandle
+loadSDFFont ∷ FontHandle → FilePath → EngineM σ FontHandle
 loadSDFFont requestedHandle fontPath = do
     logDebugSM CatFont "SDF Font atlas generation started"
         [("path", T.pack fontPath)
@@ -97,7 +97,7 @@ loadSDFFont requestedHandle fontPath = do
         Nothing → loadNewSDFFont requestedHandle fontPath cacheRef gs
 
 -- | Load a new SDF font when not found in cache
-loadNewSDFFont ∷ FontHandle → FilePath → IORef FontCache → GraphicsState → EngineM ε σ FontHandle
+loadNewSDFFont ∷ FontHandle → FilePath → IORef FontCache → GraphicsState → EngineM σ FontHandle
 loadNewSDFFont requestedHandle fontPath cacheRef gs = do
     fontDescLayout ← case fontDescriptorLayout gs of
         Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)

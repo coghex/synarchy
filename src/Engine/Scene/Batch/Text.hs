@@ -26,7 +26,7 @@ import Engine.Core.Capability.Render
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Log (LogCategory(..))
 
-collectTextBatches ∷ SceneGraph → Float → Float → EngineM ε σ (V.Vector TextRenderBatch)
+collectTextBatches ∷ SceneGraph → Float → Float → EngineM σ (V.Vector TextRenderBatch)
 collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
       textNodes = filter (\n → nodeType n ≡ TextObject ∧ nodeVisible n) allNodes

@@ -21,7 +21,7 @@ import Engine.Graphics.Vulkan.Types.Descriptor
 import Vulkan.Core10
 import Vulkan.Zero
 
-createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorPool
+createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM σ DescriptorPool
 createVulkanDescriptorPool device config = do
   logDebugSM CatDescriptor "Creating descriptor pool"
     [("max_sets", T.pack $ show $ dmcMaxSets config)
@@ -48,7 +48,7 @@ createVulkanDescriptorPool device config = do
   allocResource (\pool → destroyDescriptorPool device pool Nothing) $
     createDescriptorPool device createInfo Nothing
 
-createUniformDescriptorSetLayout ∷ Device → EngineM ε σ DescriptorSetLayout
+createUniformDescriptorSetLayout ∷ Device → EngineM σ DescriptorSetLayout
 createUniformDescriptorSetLayout device = do
   let bindings = zero
         { binding = 0
@@ -63,7 +63,7 @@ createUniformDescriptorSetLayout device = do
   allocResource (\layout → destroyDescriptorSetLayout device layout Nothing) $
     createDescriptorSetLayout device createInfo Nothing
 
-createVulkanDescriptorManager ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorManager
+createVulkanDescriptorManager ∷ Device → DescriptorManagerConfig → EngineM σ DescriptorManager
 createVulkanDescriptorManager device config = do
   pool ← createVulkanDescriptorPool device config
   uniformLayout ← createUniformDescriptorSetLayout device
@@ -74,7 +74,7 @@ createVulkanDescriptorManager device config = do
     , dmActiveSets = V.empty
     }
 
-allocateVulkanDescriptorSets ∷ Device → DescriptorManager → Word32 → EngineM ε σ (V.Vector DescriptorSet)
+allocateVulkanDescriptorSets ∷ Device → DescriptorManager → Word32 → EngineM σ (V.Vector DescriptorSet)
 allocateVulkanDescriptorSets device manager count = do
   logDebugSM CatDescriptor "Allocating descriptor sets"
     [("count", T.pack $ show count)
@@ -87,7 +87,7 @@ allocateVulkanDescriptorSets device manager count = do
   
   allocateDescriptorSets device allocInfo
 
-destroyVulkanDescriptorManager ∷ Device → DescriptorManager → EngineM ε σ ()
+destroyVulkanDescriptorManager ∷ Device → DescriptorManager → EngineM σ ()
 destroyVulkanDescriptorManager device manager = do
   destroyDescriptorSetLayout device (dmUniformLayout manager) Nothing
   -- Pool destruction implicitly frees all allocated sets

@@ -24,7 +24,7 @@ import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
 import Vulkan.Zero
 
-updateSceneForRender ∷ EngineM ε σ ()
+updateSceneForRender ∷ EngineM σ ()
 updateSceneForRender = do
     state ← gets graphicsState
     sceneMgr ← gets sceneManager
@@ -83,7 +83,7 @@ updateSceneForRender = do
             logDebugM CatScene "No active scene"
             modify $ \s → s { sceneManager = updatedSceneMgr }
 
-getCurrentRenderBatches ∷ EngineM ε σ (V.Vector RenderBatch)
+getCurrentRenderBatches ∷ EngineM σ (V.Vector RenderBatch)
 getCurrentRenderBatches = do
     sceneMgr ← gets sceneManager
     let batches = getCurrentBatches sceneMgr
@@ -95,7 +95,7 @@ getCurrentRenderBatches = do
 --   Reuses the cached buffer from GraphicsState when it's big enough.
 --   When a new buffer must be allocated, the old one is destroyed first.
 --   Uses createVulkanBufferManual because we manage the lifetime ourselves.
-ensureDynamicVertexBuffer ∷ Int → Word64 → EngineM ε σ SceneDynamicBuffer
+ensureDynamicVertexBuffer ∷ Int → Word64 → EngineM σ SceneDynamicBuffer
 ensureDynamicVertexBuffer frameIdx requiredVertices = do
     state ← gets graphicsState
 
@@ -158,7 +158,7 @@ ensureDynamicVertexBuffer frameIdx requiredVertices = do
 
             pure newBuf
 
-uploadBatchesToBuffer ∷ Int → V.Vector RenderBatch → SceneDynamicBuffer → EngineM ε σ SceneDynamicBuffer
+uploadBatchesToBuffer ∷ Int → V.Vector RenderBatch → SceneDynamicBuffer → EngineM σ SceneDynamicBuffer
 uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
     state ← gets graphicsState
     device ← case vulkanDevice state of
@@ -213,7 +213,7 @@ uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
 
 -- | Get world-layer DrawableObjects as SortableQuads for interleaving
 -- with world tiles. Filters to only world layers (< uiLayerThreshold).
-getWorldSceneQuads ∷ EngineM ε σ (V.Vector SortableQuad)
+getWorldSceneQuads ∷ EngineM σ (V.Vector SortableQuad)
 getWorldSceneQuads = do
     sceneMgr ← gets sceneManager
     let bm = smBatchManager sceneMgr

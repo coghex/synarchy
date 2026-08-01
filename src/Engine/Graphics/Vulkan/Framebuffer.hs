@@ -20,7 +20,7 @@ createVulkanFramebuffers ∷ Device
                         → SwapchainInfo
                         → V.Vector ImageView     -- ^ Swapchain image views
                         → Maybe ImageView         -- ^ MSAA color image view (shared across all framebuffers)
-                        → EngineM ε σ (V.Vector Framebuffer)
+                        → EngineM σ (V.Vector Framebuffer)
 createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView = do
   framebuffers ← V.mapM (createOneFramebuffer device renderPass swapInfo mMsaaView) imageViews
   -- Build cleanup action

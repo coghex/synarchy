@@ -41,7 +41,7 @@ data QueueFamilyIndices = QueueFamilyIndices
 createVulkanDevice ∷ Instance 
                    → PhysicalDevice 
                    → Maybe SurfaceKHR
-                   → EngineM ε σ (Device, DevQueues)
+                   → EngineM σ (Device, DevQueues)
 createVulkanDevice _inst physicalDevice mSurface = do
   logDebugM CatVulkan "Finding queue families"
   -- pickPhysicalDevice only selects devices whose probe succeeded, so
@@ -122,7 +122,7 @@ createVulkanDevice _inst physicalDevice mSurface = do
   
   return (device, queues)
 
-destroyVulkanDevice ∷ Device → EngineM ε σ ()
+destroyVulkanDevice ∷ Device → EngineM σ ()
 destroyVulkanDevice device = liftIO $ destroyDevice device Nothing
 
 -- | Pick a suitable physical device (GPU). The surface is 'Nothing'
@@ -130,7 +130,7 @@ destroyVulkanDevice device = liftIO $ destroyDevice device Nothing
 --   alone, with no present-support or swapchain-extension demands.
 pickPhysicalDevice ∷ Instance 
                    → Maybe SurfaceKHR  -- ^ Window surface for checking present support
-                   → EngineM ε σ PhysicalDevice
+                   → EngineM σ PhysicalDevice
 pickPhysicalDevice inst mSurface = do
   (_, devices) ← liftIO $ enumeratePhysicalDevices inst
   when (V.null devices) $
@@ -153,7 +153,7 @@ pickPhysicalDevice inst mSurface = do
       return $ snd bestDevice
 
 -- | Rate a physical device's suitability (higher is better, 0 = unusable)
-rateDevice ∷ Maybe SurfaceKHR → PhysicalDevice → EngineM ε σ Int
+rateDevice ∷ Maybe SurfaceKHR → PhysicalDevice → EngineM σ Int
 rateDevice mSurface device = do
   props ← liftIO $ getPhysicalDeviceProperties device
   queueFamilies ← findQueueFamilies device mSurface
@@ -182,7 +182,7 @@ rateDevice mSurface device = do
 --   family aliases the graphics family to keep 'QueueFamilyIndices'
 --   (and DevQueues built from it) total.
 findQueueFamilies ∷ PhysicalDevice → Maybe SurfaceKHR
-  → EngineM ε σ (Maybe QueueFamilyIndices)
+  → EngineM σ (Maybe QueueFamilyIndices)
 findQueueFamilies device mSurface = do
   props ← liftIO $ getPhysicalDeviceQueueFamilyProperties device
 
@@ -207,7 +207,7 @@ findQueueFamilies device mSurface = do
 
 -- | Check if device supports required extensions. Swapchain support is
 --   only demanded when the device must present (windowed modes).
-checkDeviceExtensionSupport ∷ PhysicalDevice → Bool → EngineM ε σ Bool
+checkDeviceExtensionSupport ∷ PhysicalDevice → Bool → EngineM σ Bool
 checkDeviceExtensionSupport device needsPresent = do
   (_, availableExtensions) ← liftIO $
     enumerateDeviceExtensionProperties device Nothing

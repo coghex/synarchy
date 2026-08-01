@@ -58,7 +58,7 @@ import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForAc
 --   itself differently ("Headless engine starting...") and has never
 --   logged a running line at all, so those strings are fields rather
 --   than something this module invents.
-data LoopMode ε σ = LoopMode
+data LoopMode σ = LoopMode
   { lmStartingLog   ∷ Text
     -- ^ Debug line for the 'EngineStarting' tick.
   , lmRunningLog    ∷ Maybe Text
@@ -70,19 +70,19 @@ data LoopMode ε σ = LoopMode
     -- ^ Debug line for a 'CleaningUp' tick.
   , lmStoppedLog    ∷ Text
     -- ^ Debug line for an 'EngineStopped' tick.
-  , lmPollEvents    ∷ EngineM ε σ ()
+  , lmPollEvents    ∷ EngineM σ ()
     -- ^ Pump the window system. Windowed only — offscreen and headless
     --   receive input solely through the injection verbs (#644).
-  , lmCameraUpdates ∷ EngineM ε σ ()
+  , lmCameraUpdates ∷ EngineM σ ()
     -- ^ Per-tick camera integration, run only on an UNLOCKED tick (see
     --   'runGatedByCaptureLock'). Windowed and offscreen; headless has
     --   no camera to integrate and never ran these even before #763.
-  , lmExitRequested ∷ EngineM ε σ Bool
+  , lmExitRequested ∷ EngineM σ Bool
     -- ^ A mode-specific reason to shut down, checked alongside the
     --   lifecycle. Windowed reports the GLFW close button; offscreen
     --   and headless exit only via @engine.quit@ (i.e. the lifecycle),
     --   so they answer 'False'.
-  , lmEndOfTick     ∷ EngineM ε σ ()
+  , lmEndOfTick     ∷ EngineM σ ()
     -- ^ Everything the mode does after deciding to keep running, in its
     --   own order: windowed draws then updates timing (the swapchain
     --   present paces it), offscreen draws, sleeps 'frameBudgetMicros'
@@ -101,7 +101,7 @@ startupSettleMicros = 100000
 
 -- | Drive one lifecycle tick of @mode@'s loop, recursing while the
 --   engine is meant to keep running.
-runLoopMode ∷ LoopMode ε σ → EngineM ε σ ()
+runLoopMode ∷ LoopMode σ → EngineM σ ()
 runLoopMode mode = do
     env ← ask
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
@@ -124,7 +124,7 @@ runLoopMode mode = do
 --   @LuaInjectFollowup@ writes 'inputQueue' from the input injection
 --   verbs (#644), so the queue is not structurally empty in any mode
 --   and the same condition deserves the same warning everywhere.
-runStartupHandshake ∷ LoopMode ε σ → EngineEnv → EngineM ε σ ()
+runStartupHandshake ∷ LoopMode σ → EngineEnv → EngineM σ ()
 runStartupHandshake mode env = do
     logDebugM CatSystem (lmStartingLog mode)
     liftIO $ threadDelay startupSettleMicros
@@ -180,7 +180,7 @@ runStartupHandshake mode env = do
 --   'lmEndOfTick' still runs every tick regardless (called by
 --   'runLoopTick' after this), so a rendering mode keeps presenting
 --   throughout.
-runGatedByCaptureLock ∷ LoopMode ε σ → EngineEnv → EngineM ε σ ()
+runGatedByCaptureLock ∷ LoopMode σ → EngineEnv → EngineM σ ()
 runGatedByCaptureLock mode env = do
     locked ← liftIO $ captureLocked (saveBarrierRef env)
     if locked
@@ -197,7 +197,7 @@ runGatedByCaptureLock mode env = do
 -- | One 'EngineRunning' tick: pump the window system, do the gated
 --   work, then either shut down or run the mode's end-of-tick work and
 --   go round again.
-runLoopTick ∷ LoopMode ε σ → EngineEnv → EngineM ε σ ()
+runLoopTick ∷ LoopMode σ → EngineEnv → EngineM σ ()
 runLoopTick mode env = do
     lmPollEvents mode
     runGatedByCaptureLock mode env

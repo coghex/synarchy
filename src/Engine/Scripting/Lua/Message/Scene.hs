@@ -32,7 +32,7 @@ import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text
-                → Vec4 → LayerId → Float → EngineM ε σ ()
+                → Vec4 → LayerId → Float → EngineM σ ()
 handleSpawnText oid x y fontHandle text color layer size = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
@@ -56,7 +56,7 @@ handleSpawnText oid x y fontHandle text color layer size = do
           Nothing → logDebugM CatLua $ "Failed to add text object " <> T.pack (show oid)
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
-handleSetText ∷ ObjectId → Text → EngineM ε σ ()
+handleSetText ∷ ObjectId → Text → EngineM σ ()
 handleSetText objId text = do
     env ← ask
     liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
@@ -66,7 +66,7 @@ handleSetText objId text = do
     return ()
 
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float
-                  → TextureHandle → LayerId → EngineM ε σ ()
+                  → TextureHandle → LayerId → EngineM σ ()
 handleSpawnSprite objId x y width height texHandle layer = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
@@ -86,22 +86,22 @@ handleSpawnSprite objId x y width height texHandle layer = do
           Nothing → logDebugM CatLua $ "Failed to add sprite " <> T.pack (show objId)
       Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"
 
-handleSetPos ∷ ObjectId → Float → Float → EngineM ε σ ()
+handleSetPos ∷ ObjectId → Float → Float → EngineM σ ()
 handleSetPos objId x y =
     void $ modifySceneNode objId $ \node →
       node { nodeTransform = (nodeTransform node) { position = (x, y) } }
 
-handleSetColor ∷ ObjectId → Vec4 → EngineM ε σ ()
+handleSetColor ∷ ObjectId → Vec4 → EngineM σ ()
 handleSetColor objId color =
     void $ modifySceneNode objId $ \node → node { nodeColor = color }
 
-handleSetSize ∷ ObjectId → Float → Float → EngineM ε σ ()
+handleSetSize ∷ ObjectId → Float → Float → EngineM σ ()
 handleSetSize objId width height =
     void $ modifySceneNode objId $ \node → node { nodeSize = (width, height) }
 
-handleSetVisible ∷ ObjectId → Bool → EngineM ε σ ()
+handleSetVisible ∷ ObjectId → Bool → EngineM σ ()
 handleSetVisible objId visible =
     void $ modifySceneNode objId $ \node → node { nodeVisible = visible }
 
-handleDestroy ∷ ObjectId → EngineM ε σ ()
+handleDestroy ∷ ObjectId → EngineM σ ()
 handleDestroy objId = void $ deleteSceneNode objId
