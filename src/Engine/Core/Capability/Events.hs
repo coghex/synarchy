@@ -4,12 +4,9 @@
 --   UI\/focus\/HUD half (#897, "Engine.Core.Capability.Ui"), in SS5's
 --   own table order.
 --
---   Follows E1's convention (stated in full in
---   "Engine.Core.Capability.Core"): one record named
---   @\<Name\>Capability@, one total one-way @to\<Name\>Capability@
---   projection, every field the exact same live handle 'EngineEnv'
---   already carries (never a copy or a reconstruction), and no import
---   of any consumer of this module.
+--   Follows the capability-record convention
+--   ('docs/engineenv_capability_inventory.md' SS2.1 is its one
+--   authoritative statement, not restated here).
 --
 --   == Field prefix
 --

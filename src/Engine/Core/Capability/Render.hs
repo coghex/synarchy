@@ -3,13 +3,10 @@
 --   the 21 fields 'docs/engineenv_capability_inventory.md' SS5's
 --   @render-gpu-asset@ table groups, in that table's own order.
 --
---   Follows E1's convention (stated in full in
---   "Engine.Core.Capability.Core"): one record named
---   @\<Name\>Capability@ with fields prefixed by the record's own
---   initials (here @rc@), one total one-way @to\<Name\>Capability@
---   projection, every field the exact same live 'IORef'\/'Q.Queue'
---   handle 'EngineEnv' already carries (never a copy or a
---   reconstruction), and no import of any consumer of this module.
+--   Follows the capability-record convention
+--   ('docs/engineenv_capability_inventory.md' SS2.1 is its one
+--   authoritative statement, not restated here); this record's own
+--   field prefix is @rc@.
 --
 --   == The privacy-preserving split this capability adds to the convention
 --

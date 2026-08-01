@@ -127,12 +127,51 @@ consumer coupling:
 The `world-sim-render-handoff` split is the one that is not a §3.1
 thread-privacy split: neither half carries a thread-private field, and
 it exists because the seven render-handoff fields' consumers straddle
-this group and `render-gpu-asset` (§7.4). Every record follows E1's
-convention (see `Engine.Core.Capability.Core`'s module header for the
-full statement): one record per module, initials-prefixed fields, one
-total one-way `EngineEnv → XCapability` projection over the identical
-live containers, no import of a consumer, and no record introduced
-ahead of a real narrowed consumer.
+this group and `render-gpu-asset` (§7.4).
+
+**The capability-record convention (canonical statement).** Every
+record/view in the table above — and any future one — follows exactly
+these six rules. This is their one authoritative statement; no other
+file in the tree restates it in full, only summarizes and links back
+here:
+
+* **Naming and placement.** One module per capability under
+  `Engine.Core.Capability.<Name>`, exporting one record named
+  `<Name>Capability` with fields prefixed by the record's own
+  initials, plus a single total `to<Name>Capability` projection.
+* **One-way projection only.** The projection function goes
+  `EngineEnv → XCapability` and nothing travels the other direction —
+  a capability record is never assembled back into (or used to
+  reconstruct) an `EngineEnv`. Each record/view is projected
+  independently and totally from `EngineEnv` itself, never derived
+  from a wider capability record.
+* **Shared live containers, never copied state.** Every field is the
+  exact same `IORef`/`TVar`/`Queue` handle (or immutable value)
+  `EngineEnv` already carries — the projection aliases live state, it
+  does not snapshot or duplicate it.
+* **No capability module imports its own consumers.** A capability
+  module may be imported freely by the modules it narrows access for,
+  but must never import back into them.
+* **No unused capability records ahead of need.** A capability record —
+  or a field within one — is introduced only in the migration that
+  actually narrows a real consumer to it, never in anticipation of a
+  future one.
+* **A thread-private field forces a split, not a comment** (§3.1). A
+  capability record is exported as `XCapability(..)` — constructor and
+  accessors alike — so any module that can import it can construct and
+  inspect every field it carries. When a record would be importable by
+  a thread other than the one that privately owns one of its fields
+  (`render-gpu-asset`'s `engineStateRef`; `input-lua-transport`'s
+  barrier-token allocator and current-key handoff), documenting the
+  restriction on that field is not enough: the capability is exposed
+  as one main-only/owner-only record plus one or more strictly
+  narrower worker-safe views that omit the private field entirely
+  (§3.1 has the worked example and the audit's enforcement). A field
+  being read or written by only one thread today is not by itself the
+  trigger — `save-load-coordination`'s `slLastSaveTimeRef` and two
+  `ui-hud-events` fields are single-role with no privileged pointer
+  behind them, so documenting the restriction on the field alone is
+  sufficient there (`Engine.Core.Capability.SaveLoad`/`.Ui`).
 
 ### 2.2 Thread / execution-role identifiers
 
