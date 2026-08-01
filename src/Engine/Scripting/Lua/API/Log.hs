@@ -14,7 +14,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
-import Engine.Core.State
+import Engine.Core.Capability.Core (CoreCapability(..))
 import Engine.Core.Log
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 
@@ -29,8 +29,8 @@ dropDir ('/':ss)     = ss
 dropDir (_:ss)       = dropDir ss
 dropDir _            = ""
 
-logInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-logInfoFn env = do
+logInfoFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
+logInfoFn core = do
     msg ← Lua.tostring 1
     -- Level 2: 0=C function, 1=logInfoFn wrapper, 2=Lua caller
     mInfo ← getSourceInfo 2
@@ -40,7 +40,7 @@ logInfoFn env = do
         srcFileStripped = dropDir srcFile
     case msg of
         Just msgBS → Lua.liftIO $ do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
@@ -48,8 +48,8 @@ logInfoFn env = do
         Nothing → pure ()
     return 0
 
-logWarnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-logWarnFn env = do
+logWarnFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
+logWarnFn core = do
     msg ← Lua.tostring 1
     -- Level 2: 0=C function, 1=logWarnFn wrapper, 2=Lua caller
     mInfo ← getSourceInfo 2
@@ -59,7 +59,7 @@ logWarnFn env = do
         srcFileStripped = dropDir srcFile
     case msg of
         Just msgBS → Lua.liftIO $ do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
@@ -67,8 +67,8 @@ logWarnFn env = do
         Nothing → pure ()
     return 0
 
-logErrorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-logErrorFn env = do
+logErrorFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
+logErrorFn core = do
     msg ← Lua.tostring 1
     -- Level 2: 0=C function, 1=logErrorFn wrapper, 2=Lua caller
     mInfo ← getSourceInfo 2
@@ -78,7 +78,7 @@ logErrorFn env = do
         srcFileStripped = dropDir srcFile
     case msg of
         Just msgBS → Lua.liftIO $ do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
@@ -86,8 +86,8 @@ logErrorFn env = do
         Nothing → pure ()
     return 0
 
-logDebugFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-logDebugFn env = do
+logDebugFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
+logDebugFn core = do
     msg ← Lua.tostring 1
     
     -- Level 2: 0=C function, 1=logInfoFn wrapper, 2=Lua caller
@@ -100,7 +100,7 @@ logDebugFn env = do
 
     case msg of
         Just msgBS → Lua.liftIO $ do
-            logger ← readIORef (loggerRef env)
+            logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":" <> T.pack (show srcLine) <> "] " <> msgText
             logThreadDebug logger CatLua fullMsg

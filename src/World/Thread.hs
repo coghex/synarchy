@@ -14,8 +14,10 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.List (partition)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
+import Engine.Core.State (EngineEnv, EngineLifecycle(..))
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.SaveLoad
+    (SaveLoadCapability(..), toSaveLoadCapability)
 import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.RenderView
@@ -77,7 +79,7 @@ worldLoop env stateRef lastTimeRef = do
                 let dt = now - lastTime ∷ Double
                 writeIORef lastTimeRef now
 
-                locked ← captureLocked (saveBarrierRef env)
+                locked ← captureLocked (slSaveBarrierRef (toSaveLoadCapability env))
                 if locked
                     then processAuthorizedSave env logger
                     else do
@@ -102,7 +104,8 @@ worldLoop env stateRef lastTimeRef = do
                         tickWorldTime env (realToFrac dt)
                         updateChunkLoading env logger
                         pollCursorInfo env
-                        acknowledgeCurrent (saveBarrierRef env) SaveWorld
+                        acknowledgeCurrent (slSaveBarrierRef (toSaveLoadCapability env))
+                                           SaveWorld
 
                 _camera ← readIORef (rvCameraRef (toRenderViewCapability env))
                 allQuads ← updateWorldTiles env

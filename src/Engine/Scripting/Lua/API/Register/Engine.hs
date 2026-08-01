@@ -91,10 +91,10 @@ registerEngineAPI lst env backendState = do
 
   registerLuaFunction "quit"              (quitFn env)
   registerLuaFunction "debugThrow"        debugThrowFn
-  registerLuaFunction "logInfo"           (logInfoFn env)
-  registerLuaFunction "logWarn"           (logWarnFn env)
-  registerLuaFunction "logError"          (logErrorFn env)
-  registerLuaFunction "logDebug"          (logDebugFn env)
+  registerLuaFunction "logInfo"           (logInfoFn core)
+  registerLuaFunction "logWarn"           (logWarnFn core)
+  registerLuaFunction "logError"          (logErrorFn core)
+  registerLuaFunction "logDebug"          (logDebugFn core)
   registerLuaFunction "showDebug"         (showDebugFn backendState)
   registerLuaFunction "hideDebug"         (hideDebugFn backendState)
   registerLuaFunction "toggleDebug"       (toggleDebugFn backendState)

@@ -26,6 +26,12 @@ from engine_env_capability_audit import (  # type: ignore
     scan_production_unrestricted_importers, audit_render_boundary,
     scan_production_sources, RENDER_CAPABILITY_MODULE, RENDER_VIEW_MODULE,
     audit_input_boundary, INPUT_CAPABILITY_MODULE, INPUT_VIEW_MODULE,
+    CAPABILITIES, PERMANENT_IMPORTERS, PERMANENT_DEFINER, TEMPORARY_CEILING,
+    parse_permanent_boundary, audit_permanent_boundary,
+    audit_save_load_projection, parse_projection_bindings,
+    SAVE_LOAD_CAPABILITY_MODULE, SAVE_LOAD_CAPABILITY_FILE,
+    SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
+    _import_chunks, _strip_haskell_comments,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -655,6 +661,194 @@ def test_real_repo_ratchet_consistency():
            f"core-init migration, got: {violations}")
 
 
+# ----- SS6.1 permanent-boundary parse/compare (issue #899, E8) ----------
+#
+# `audit_ratchet` pins the checked-in constants to the LIVE source in
+# both directions, but before #899 nothing pinned them to SS6.1's
+# DOCUMENTED table -- so growing a live importer AND the Python
+# constant together passed with the inventory never recording why the
+# module is a genuine whole-session orchestration boundary. These
+# fixtures exercise the pure parse/compare core synthetically; the
+# real-repository assertion lives in the end-state test below.
+
+_SECTION_6_1 = """\
+### 6.1 Permanent (production)
+
+| Module(s) | Category | Reason |
+|---|---|---|
+| `Perm.One` | Permanent initialization infrastructure | Defines the record; see `Some.Other.Module` for context. |
+| `Perm.Two`, `Perm.Three` | Permanent orchestration infrastructure | Boot wire-up: constructs everything, by job description. |
+
+### 6.2 Temporary compatibility boundary (production)
+
+| Target capability | Modules | Roadmap entry |
+|---|---|---|
+| `core-init` | *(none)* | SS7.1 |
+"""
+
+
+def test_section_6_1_parser_reads_first_column_only():
+    rows = parse_permanent_boundary(_SECTION_6_1)
+    modules = set()
+    for names, _cat, _reason in rows:
+        modules |= names
+    expect(modules == {"Perm.One", "Perm.Two", "Perm.Three"},
+           f"SS6.1's parser must read the Module(s) column ONLY -- the "
+           f"Reason cells deliberately cite other backtick-quoted module "
+           f"names as supporting context, and those are NOT permanent "
+           f"allowlist entries, got: {sorted(modules)}")
+    expect(not any("Some.Other.Module" in names for names, _c, _r in rows),
+           "a module named only inside a Reason cell must never be "
+           "admitted to the documented permanent set")
+
+
+def test_section_6_1_matching_constants_accepted():
+    violations = audit_permanent_boundary(
+        _SECTION_6_1,
+        permanent=frozenset({"Perm.Two", "Perm.Three"}), definer="Perm.One")
+    expect(violations == [],
+           f"a SS6.1 table whose documented set equals PERMANENT_DEFINER + "
+           f"PERMANENT_IMPORTERS, with real Category/Reason cells, must "
+           f"pass, got: {violations}")
+
+
+def test_section_6_1_undocumented_permanent_importer_rejected():
+    violations = audit_permanent_boundary(
+        _SECTION_6_1,
+        permanent=frozenset({"Perm.Two", "Perm.Three", "Perm.Sneaky"}),
+        definer="Perm.One")
+    expect(any("Perm.Sneaky" in v for v in violations),
+           "growing PERMANENT_IMPORTERS without a matching SS6.1 row (the "
+           "'Python constant change without the matching inventory "
+           "justification' case) must be rejected")
+
+
+def test_section_6_1_documented_but_ungoverned_module_rejected():
+    violations = audit_permanent_boundary(
+        _SECTION_6_1,
+        permanent=frozenset({"Perm.Two"}), definer="Perm.One")
+    expect(any("Perm.Three" in v for v in violations),
+           "documenting a module in SS6.1 without adding it to the "
+           "checked-in constants must be rejected -- documentation alone "
+           "does not admit a permanent importer")
+
+
+def test_section_6_1_placeholder_justification_rejected():
+    doc = _SECTION_6_1.replace(
+        "| `Perm.One` | Permanent initialization infrastructure | Defines "
+        "the record; see `Some.Other.Module` for context. |",
+        "| `Perm.One` | — | — |")
+    violations = audit_permanent_boundary(
+        doc, permanent=frozenset({"Perm.Two", "Perm.Three"}),
+        definer="Perm.One")
+    expect(sum("Perm.One" in v for v in violations) == 2,
+           f"a name-only SS6.1 row with placeholder Category AND Reason "
+           f"cells must be rejected on BOTH -- otherwise it satisfies the "
+           f"module-set equality while providing none of the explicit "
+           f"justification SS6.1/SS6.4 demand, got: {violations}")
+
+
+def test_section_6_1_missing_table_rejected():
+    violations = audit_permanent_boundary(
+        "## 6. Full-EngineEnv compatibility boundary\n\nno table here\n",
+        permanent=frozenset({"Perm.Two"}), definer="Perm.One")
+    expect(len(violations) == 1 and "could not be parsed" in violations[0],
+           f"an unparseable/absent SS6.1 table must fail loudly rather "
+           f"than silently comparing against an empty documented set, "
+           f"got: {violations}")
+
+
+# ----- SaveLoadCapability projection correspondence (#899, E8) ----------
+
+_SAVE_LOAD_GOOD = """\
+module Engine.Core.Capability.SaveLoad where
+
+-- | Haddock mentioning slSaveBarrierRef = loadStatusRef env must not count.
+data SaveLoadCapability = SaveLoadCapability
+  { slLoadStatusRef ∷ LoadStatusRef
+  }
+
+toSaveLoadCapability ∷ EngineEnv → SaveLoadCapability
+toSaveLoadCapability env = SaveLoadCapability
+  { slLoadStatusRef         = loadStatusRef env
+  , slPendingLoadRef        = pendingLoadRef env
+  , slSaveBarrierRef        = saveBarrierRef env
+  , slLastSaveTimeRef       = lastSaveTimeRef env
+  , slNextItemInstanceIdRef = nextItemInstanceIdRef env
+  }
+"""
+
+_SAVE_LOAD_CABAL = "                     Engine.Core.Capability.SaveLoad\n"
+
+
+def test_save_load_projection_clean_case_passes():
+    violations = audit_save_load_projection(
+        {SAVE_LOAD_CAPABILITY_FILE: _SAVE_LOAD_GOOD}, _SAVE_LOAD_CABAL)
+    expect(violations == [],
+           f"a projection binding all five handles from their matching "
+           f"EngineEnv accessors, with the module listed in the cabal "
+           f"file, must pass, got: {violations}")
+
+
+def test_save_load_projection_transposed_binding_rejected():
+    bad = _SAVE_LOAD_GOOD.replace(
+        "slPendingLoadRef        = pendingLoadRef env",
+        "slPendingLoadRef        = loadStatusRef env")
+    violations = audit_save_load_projection(
+        {SAVE_LOAD_CAPABILITY_FILE: bad}, _SAVE_LOAD_CABAL)
+    expect(any("slPendingLoadRef" in v and "loadStatusRef" in v
+               for v in violations),
+           "a field bound from the WRONG EngineEnv accessor must be "
+           "caught: the static check is what a Python audit can do about "
+           "an aliasing mistake that typechecks silently")
+
+
+def test_save_load_projection_missing_field_rejected():
+    bad = _SAVE_LOAD_GOOD.replace(
+        "  , slSaveBarrierRef        = saveBarrierRef env\n", "")
+    violations = audit_save_load_projection(
+        {SAVE_LOAD_CAPABILITY_FILE: bad}, _SAVE_LOAD_CABAL)
+    expect(any("slSaveBarrierRef" in v for v in violations),
+           "a projection that is not TOTAL over the five documented "
+           "handles must be rejected")
+
+
+def test_save_load_projection_extra_field_rejected():
+    bad = _SAVE_LOAD_GOOD.replace(
+        "  }\n", "  , slSomethingElse         = engineConfig env\n  }\n")
+    violations = audit_save_load_projection(
+        {SAVE_LOAD_CAPABILITY_FILE: bad}, _SAVE_LOAD_CABAL)
+    expect(any("slSomethingElse" in v for v in violations),
+           "silently widening the record past SS5's five documented "
+           "handles must be rejected")
+
+
+def test_save_load_projection_unlisted_in_cabal_rejected():
+    violations = audit_save_load_projection(
+        {SAVE_LOAD_CAPABILITY_FILE: _SAVE_LOAD_GOOD}, "no module list here\n")
+    expect(any("synarchy.cabal" in v for v in violations),
+           "an unlisted source file is never compiled, so a warning-clean "
+           "build says nothing about it -- the cabal listing must be "
+           "checked explicitly")
+
+
+def test_save_load_projection_missing_module_rejected():
+    violations = audit_save_load_projection({}, _SAVE_LOAD_CABAL)
+    expect(len(violations) == 1
+           and SAVE_LOAD_CAPABILITY_MODULE in violations[0],
+           f"a missing capability module must fail on its own, not as five "
+           f"per-field errors, got: {violations}")
+
+
+def test_save_load_projection_ignores_haddock_bindings():
+    bindings = parse_projection_bindings(_SAVE_LOAD_GOOD, SAVE_LOAD_PROJECTION)
+    expect(bindings.get("slSaveBarrierRef") == "saveBarrierRef",
+           f"a `field = accessor env` pair inside a Haddock comment must "
+           f"never be read as a real binding (the fixture's comment says "
+           f"`slSaveBarrierRef = loadStatusRef env`), got: "
+           f"{bindings.get('slSaveBarrierRef')}")
+
+
 # ----- SS3 main-render boundary (issue #891, capability split E3) -------
 #
 # The SS3 boundary is what makes `render-gpu-asset`'s two-interface
@@ -983,6 +1177,115 @@ def test_audit_against_the_real_repo():
            f"#913's `playerIntentGenRef`), got {len(live_fields)}")
 
 
+def test_real_repo_end_state():
+    """Issue #899 (E8) requirement 7: the epic's END STATE, asserted
+    against the REAL repository rather than a fixture.
+
+    Every other real-repo test above asks "do the checked-in constants
+    and the live source still agree?" -- which stays true no matter how
+    large the temporary ceiling is. This one asserts the ceiling is
+    GONE: the boundary is permanent-only, and the record set is
+    complete. It is deliberately a set of narrow, independently
+    diagnosable assertions rather than one `audit() == []`, so a
+    regression names which part of the end state slipped."""
+    real_inventory = (REPO_ROOT / "docs" /
+                       "engineenv_capability_inventory.md").read_text(encoding="utf-8")
+    sources = scan_production_sources(REPO_ROOT)
+    unrestricted = scan_production_unrestricted_importers(REPO_ROOT)
+
+    # 1. The live unrestricted importer set IS the permanent allowlist --
+    #    checked as set equality in both directions, so neither a new
+    #    full-access module nor a stale allowlist entry passes.
+    expect(unrestricted == set(PERMANENT_IMPORTERS),
+           f"the live unrestricted production importer set must equal "
+           f"PERMANENT_IMPORTERS exactly (SS6.1's permanent-only "
+           f"boundary); extra: {sorted(unrestricted - set(PERMANENT_IMPORTERS))}, "
+           f"missing: {sorted(set(PERMANENT_IMPORTERS) - unrestricted)}")
+
+    # 2. Every TEMPORARY_CEILING value is empty -- the flip itself.
+    nonempty = {cap: sorted(mods) for cap, mods in TEMPORARY_CEILING.items()
+                if mods}
+    expect(nonempty == {},
+           f"every TEMPORARY_CEILING value must be empty after #899's "
+           f"flip -- there is no legal path left for a production module "
+           f"to take unrestricted access, got: {nonempty}")
+
+    # 3. SS6.2's documented table still carries all eight capability keys,
+    #    each with an EMPTY module set. The keys matter as much as the
+    #    emptiness: `audit_ratchet`'s doc/ceiling cross-check iterates the
+    #    UNION of both key sets, so a dropped row would silently stop
+    #    cross-checking that capability rather than fail.
+    doc_temporary = parse_temporary_boundary(real_inventory)
+    expect(set(doc_temporary) == set(CAPABILITIES),
+           f"SS6.2's table must have exactly the eight CAPABILITIES keys, "
+           f"got: {sorted(doc_temporary)}")
+    expect(set(TEMPORARY_CEILING) == set(CAPABILITIES),
+           f"TEMPORARY_CEILING must retain all eight CAPABILITIES keys "
+           f"mapped to empty frozensets, not be reduced to {{}} -- "
+           f"otherwise this test's own emptiness assertions go vacuous; "
+           f"got: {sorted(TEMPORARY_CEILING)}")
+    documented_nonempty = {cap: sorted(mods)
+                           for cap, mods in doc_temporary.items() if mods}
+    expect(documented_nonempty == {},
+           f"every SS6.2 row must document an empty module set, got: "
+           f"{documented_nonempty}")
+
+    # 4. SS6.1's DOCUMENTED set matches the permanent constants, with a
+    #    real justification on every row.
+    permanent_violations = audit_permanent_boundary(real_inventory)
+    expect(permanent_violations == [],
+           f"SS6.1's documented permanent set must equal PERMANENT_DEFINER "
+           f"+ PERMANENT_IMPORTERS, with a non-placeholder Category and "
+           f"Reason on every row, got: {permanent_violations}")
+
+    # 5. The E8 record exists, is listed in synarchy.cabal, and its
+    #    projection binds exactly the five documented handles from their
+    #    matching EngineEnv accessors. (Runtime container identity is
+    #    proven separately by Test.Headless.Capability.SaveLoad's
+    #    sameContainer assertions -- a Python audit cannot observe it.)
+    cabal_text = (REPO_ROOT / "synarchy.cabal").read_text(encoding="utf-8")
+    save_load_violations = audit_save_load_projection(sources, cabal_text)
+    expect(save_load_violations == [],
+           f"`{SAVE_LOAD_CAPABILITY_MODULE}` must exist, be listed in "
+           f"synarchy.cabal, and alias all five "
+           f"`save-load-coordination` handles, got: {save_load_violations}")
+
+    # 6. ...and the five handles it aliases are exactly the five fields
+    #    SS5's `save-load-coordination` table classifies -- so the record
+    #    and the inventory cannot drift apart.
+    inventory_rows, _ = parse_inventory(real_inventory)
+    inventory_fields = {row.field for row in inventory_rows
+                        if row.capability == "save-load-coordination"}
+    expect(inventory_fields == set(SAVE_LOAD_FIELD_MAP.values()),
+           f"SAVE_LOAD_FIELD_MAP must name exactly SS5's "
+           f"`save-load-coordination` fields, got inventory: "
+           f"{sorted(inventory_fields)} vs map: "
+           f"{sorted(SAVE_LOAD_FIELD_MAP.values())}")
+
+    # 7. World.Thread -- requirement 2's named real consumer -- must
+    #    actually adopt the record: its `Engine.Core.State` import may
+    #    name NO save-load-coordination accessor, and its barrier access
+    #    must go through the capability. Without this, #899 could ship an
+    #    unadopted twelfth-plus record, which E1's convention forbids.
+    world_thread = sources.get("src/World/Thread.hs", "")
+    expect(bool(world_thread),
+           "src/World/Thread.hs must exist in the production sources")
+    state_import = "".join(
+        chunk for chunk in _import_chunks(_strip_haskell_comments(world_thread))
+        if chunk.startswith("import Engine.Core.State"))
+    leaked = sorted(f for f in SAVE_LOAD_FIELD_MAP.values()
+                    if f in state_import)
+    expect(leaked == [],
+           f"`World.Thread`'s Engine.Core.State import must name no "
+           f"save-load-coordination field accessor after #899 -- it goes "
+           f"through SaveLoadCapability now; got: {leaked}")
+    expect("slSaveBarrierRef" in world_thread
+           and "toSaveLoadCapability" in world_thread,
+           "`World.Thread` must reach the save barrier through "
+           "`slSaveBarrierRef (toSaveLoadCapability env)` -- E1 forbids "
+           "introducing a capability record with no real consumer")
+
+
 def main() -> int:
     tests = [
         test_complete_inventory_has_no_violations,
@@ -1027,6 +1330,19 @@ def main() -> int:
         test_stale_permanent_importer_rejected,
         test_ceiling_and_doc_mismatch_detected,
         test_real_repo_ratchet_consistency,
+        test_section_6_1_parser_reads_first_column_only,
+        test_section_6_1_matching_constants_accepted,
+        test_section_6_1_undocumented_permanent_importer_rejected,
+        test_section_6_1_documented_but_ungoverned_module_rejected,
+        test_section_6_1_placeholder_justification_rejected,
+        test_section_6_1_missing_table_rejected,
+        test_save_load_projection_clean_case_passes,
+        test_save_load_projection_transposed_binding_rejected,
+        test_save_load_projection_missing_field_rejected,
+        test_save_load_projection_extra_field_rejected,
+        test_save_load_projection_unlisted_in_cabal_rejected,
+        test_save_load_projection_missing_module_rejected,
+        test_save_load_projection_ignores_haddock_bindings,
         test_boundary_clean_tree_has_no_violations,
         test_boundary_worker_importing_full_capability_rejected,
         test_boundary_non_owner_naming_engine_state_ref_rejected,
@@ -1047,6 +1363,7 @@ def main() -> int:
         test_input_boundary_stale_lua_only_entry_rejected,
         test_input_boundary_stale_field_owner_rejected,
         test_real_repo_input_boundary_holds,
+        test_real_repo_end_state,
     ]
 
     for t in tests:
