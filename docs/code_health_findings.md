@@ -5,7 +5,7 @@ oversized modules, misplaced functions, and poor names. Each entry is scoped to
 be filed as its own issue. Working order: engine core → engine subsystems →
 world → gameplay → Lua → tools → docs.
 
-Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[deferred]` blocked on a stated precondition
+Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` reviewed and deliberately never to be filed · `[deferred]` blocked on a stated precondition
 
 > **Methodology note (corrected 2026-07-25).** The "unreferenced export" scans
 > in batches 2-11 originally searched `src/`, `app/`, and `test/` only, and
@@ -42,57 +42,57 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[deferred]` blocke
 - [ ] CH-11. `ErrorContext` is exported by field but not by name — [deferred]: #946 must land
 - [x] CH-12. `Engine.Core.Var` is a production module used only by tests — [#947]
 - [x] CH-13. `luaQueue` is misnamed relative to its sibling — [no-issue]
-- [ ] CH-14. Capability-record conventions are documented in three places — [deferred]: #899 must land
+- [x] CH-14. Capability-record conventions are documented in three places — [#1031]
 - [x] CH-15. Cross-cutting: 136 comments cite PR review rounds — [#949]
 - [x] CH-16. Cross-cutting: 555 files repeat a global `LANGUAGE` pragma — [#950]
 - [x] CH-17. `Show Font` drops its closing brace when a cleanup action is present — [#951]
 - [x] CH-18. `AssetConfig` advertises four features that do not exist — [#952]
-- [ ] CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie
-- [ ] CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose
-- [ ] CH-21. The module-budget guard has a subdirectory hole, and code already sits in it
-- [ ] CH-22. The 500-line norm guards 6 Lua files while 30 exceed it
-- [ ] CH-23. Oversized Haskell modules are now concentrated in `World/Save/`
+- [x] CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie — [#964]
+- [x] CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose — [#965]
+- [x] CH-21. The module-budget guard has a subdirectory hole, and code already sits in it — [#967]
+- [x] CH-22. The 500-line norm guards 6 Lua files while 30 exceed it — [no-issue]
+- [x] CH-23. Oversized Haskell modules are now concentrated in `World/Save/` — [no-issue]
 - [ ] CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
-- [ ] CH-25. `tools/` is 122 flat Python files
-- [ ] CH-26. `CHANGELOG.md` has not been touched in 18 months
-- [ ] CH-27. Minor defects worth folding into one cleanup issue
-- [ ] CH-28. Five modules are not in `synarchy.cabal` — never compiled, never linted
-- [ ] CH-29. Dead types kept alive by other dead types
-- [ ] CH-30. The demo quad vertex buffer is uploaded to the GPU every boot and never drawn
-- [ ] CH-31. The bindless texture limit is duplicated in five places with no check
-- [ ] CH-32. `Bindless.hs`'s header claims 64× the real texture limit
-- [ ] CH-33. `Texture.System`'s "legacy path" is a throw
-- [ ] CH-34. `destroyBindlessTextureSystem` is exported, never called, and incomplete
-- [ ] CH-35. The uniform buffer layout is hand-maintained across five declarations
-- [ ] CH-36. `fontFragmentShaderCode` is dead, and says so
-- [ ] CH-37. `graphicsState` nested-record-update boilerplate, 50×
-- [ ] CH-38. Naming inconsistencies in the graphics records
-- [ ] CH-39. Minor graphics defects for one cleanup issue
-- [ ] CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme
-- [ ] CH-41. The 500-line module budget doesn't constrain function size
-- [ ] CH-42. Three different facade idioms across nine sibling API domains
+- [x] CH-25. `tools/` is 122 flat Python files — [no-issue]
+- [x] CH-26. `CHANGELOG.md` has not been touched in 18 months — [no-issue]
+- [x] CH-27. Minor defects worth folding into one cleanup issue — [no-issue]
+- [x] CH-28. Four modules are not in `synarchy.cabal` — never compiled, never linted — [#972]
+- [x] CH-29. Dead types kept alive by other dead types — [#973]
+- [x] CH-30. The demo quad vertex buffer is uploaded to the GPU every boot and never drawn — [#974]
+- [x] CH-31. The bindless texture limit is duplicated in five places with no check — [#975]
+- [x] CH-32. `Bindless.hs`'s header claims 64× the real texture limit — [#976]
+- [x] CH-33. `Texture.System`'s "legacy path" is a throw — [#977]
+- [x] CH-34. `destroyBindlessTextureSystem` is exported, never called, and incomplete — [#978]
+- [ ] CH-35. The uniform buffer layout is hand-maintained across five declarations — [deferred]: #975 must land
+- [x] CH-36. `fontFragmentShaderCode` is dead, and says so — [#980]
+- [x] CH-37. `graphicsState` nested-record-update boilerplate, 50× — [#981]
+- [x] CH-38. Naming inconsistencies in the graphics records — [#982]
+- [x] CH-39. Minor graphics defects for one cleanup issue — [#983]
+- [x] CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme — [#984]
+- [x] CH-41. The 500-line module budget doesn't constrain function size — [no-issue]
+- [x] CH-42. Three different facade idioms across nine sibling API domains — [no-issue]
 - [ ] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090 — [#985] covers `Save.hs`'s State-free extraction only
-- [ ] CH-44. Two `Focus` modules, neither of which says which focus it means
-- [ ] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler
-- [ ] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface
-- [ ] CH-47. `Engine.Core.Log`'s callsite skip-list has a matching hazard here
-- [ ] CH-48. Minor Lua-tree defects for one cleanup issue
-- [ ] CH-49. Cross-cutting: normalise the enforced Unicode operators (owner decision recorded)
-- [ ] CH-50. `Engine.Graphics.Transform` is a fully dead module
-- [ ] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator
-- [ ] CH-52. 14 verbatim copies of the same YAML loader
-- [ ] CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things
-- [ ] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module
-- [ ] CH-55. `Engine.Core.Init`'s three exports have no callers
-- [ ] CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout
-- [ ] CH-57. Minor remaining-Engine defects for one cleanup issue
-- [ ] CH-58. `--seed`, `--worldSize`, and `--plates` are silently ignored outside `--dump`
-- [ ] CH-59. `allLayers` is not all layers
-- [ ] CH-60. The preview category list is duplicated as an error-message string
-- [ ] CH-61. Five boot modes hand-copy the same error-recovery block
-- [ ] CH-62. `shutdownEngine`'s five positional parameters are mutually swappable
-- [ ] CH-63. Three separate main loops
-- [ ] CH-64. `--dump` emits three fields that no documentation mentions
+- [x] CH-44. Two `Focus` modules, neither of which says which focus it means — [no-issue]
+- [x] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler — [#992]
+- [x] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface — [no-issue]
+- [x] CH-47. `Engine.Core.Log`'s callsite skip-list has a matching hazard here — [no-issue]
+- [ ] CH-48. Minor Lua-tree defects for one cleanup issue — [deferred]: #992 must land
+- [x] CH-49. Cross-cutting: normalise the enforced Unicode operators (owner decision recorded) — [#1005]
+- [x] CH-50. `Engine.Graphics.Transform` is a fully dead module — [#1006]
+- [x] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator — [#1007]
+- [x] CH-52. 14 verbatim copies of the same YAML loader — [#1008]
+- [x] CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things — [#1009]
+- [ ] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module — [#1010] covers only the `Window/GLFW.hs` cluster
+- [x] CH-55. `Engine.Core.Init`'s three exports have no callers — [no-issue]
+- [x] CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout — [no-issue]
+- [x] CH-57. Minor remaining-Engine defects for one cleanup issue — [#1011]
+- [x] CH-58. `--seed`, `--worldSize`, and `--plates` are silently ignored outside `--dump` — [#1012]
+- [x] CH-59. `allLayers` is not all layers — [#1016]
+- [x] CH-60. The preview category list is duplicated as an error-message string — [#1019]
+- [x] CH-61. Five boot modes hand-copy the same error-recovery block — [#1021]
+- [x] CH-62. `shutdownEngine`'s five positional parameters are mutually swappable — [#1036]
+- [x] CH-63. Three separate main loops — [#1022]
+- [x] CH-64. `--dump` emits three fields that no documentation mentions — [#1040]
 - [ ] CH-65. `App/Dump.hs` hand-concatenates JSON
 - [ ] CH-66. Primitive-obsession in the dump signatures
 - [ ] CH-67. `parseRegion` silently substitutes a default for malformed input
@@ -340,9 +340,7 @@ local as `engineToLuaQueue` and then assigns `luaQueue = engineToLuaQueue`.
 
 Fix: rename the field to `engineToLuaQueue`.
 
-### [deferred] CH-14. Capability-record conventions are documented in three places
-> **Deferred:** #899 will rewrite `CLAUDE.md`'s `EngineEnv` guidance and add the post-flip capability procedure to the authoritative inventory, changing two of the three duplicated surfaces — resume after #899 is closed by a merged implementation, then re-read those documents and scope only any surviving `Core.hs`/global-convention duplication.
-
+### [#1031] CH-14. Capability-record conventions are documented in three places
 `Engine/Core/Capability/Core.hs` opens with a 63-line module haddock stating
 the conventions **every** capability record must follow (naming, one-way
 projection, shared containers, no back-imports, no records ahead of need,
@@ -401,7 +399,7 @@ without opening a second file.
 
 Fix: delete `AssetConfig` and `EngineState.assetConfig`, or implement it.
 
-### CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie
+### [#964] CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie
 Only `deltaTime` is read outside `Engine/Loop/Timing.hs`. `frameCount`,
 `currentTime`, `frameTimeAccum`, `lastFrameTime`, and `targetFPS` have zero
 external readers.
@@ -419,7 +417,7 @@ hundred.
 Fix: make the five fields local to the timing computation; delete or rename
 `targetFPS` and `frameCount`.
 
-### CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose
+### [#965] CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose
 The header says the #787 split moved logic into `Dispatch` plus the four
 per-domain modules, and concludes: *"Both are re-exported here so the public
 API is unchanged."*
@@ -430,7 +428,7 @@ processInput`. Only `Dispatch`'s two functions are re-exported;
 nor re-exported. Anyone trusting the header will look for the per-domain entry
 points here and not find them.
 
-### CH-21. The module-budget guard has a subdirectory hole, and code already sits in it
+### [#967] CH-21. The module-budget guard has a subdirectory hole, and code already sits in it
 `tools/haskell_module_budget.py` guards the #787 input split with the pattern
 `src/Engine/Input/Thread/*.hs` at 500 lines. `Path.glob` does not cross
 directory separators, so `src/Engine/Input/Thread/Mouse/Activation.hs` is
@@ -443,7 +441,9 @@ overflow has an obvious, silent escape hatch.
 Fix: use `**/*.hs` in `BUDGETS`, and add a self-test asserting the pattern
 matches nested files.
 
-### CH-22. The 500-line norm guards 6 Lua files while 30 exceed it
+### [no-issue] CH-22. The 500-line norm guards 6 Lua files while 30 exceed it
+> **Disposition:** No issue — the 500-line Lua guard is an intentional per-split ratchet, documented as applying only to module families with an explicit split agreement; 33 unrelated scripts exceeding 500 lines do not violate that contract.
+
 `tools/lua_module_budget.py` enforces 500 lines on six historical splits
 (`debug`, `unit_resources`, `unit_ai`, `unit_info_v2`, `init`, `ui_manager`).
 Meanwhile **30** Lua files exceed 500 lines and are unguarded, including the
@@ -466,7 +466,9 @@ generalise the rule or state plainly that it is a per-split ratchet.
 (`scripts/ui/dropdown.lua` at 1399 lines for one widget is a split candidate
 in its own right.)
 
-### CH-23. Oversized Haskell modules are now concentrated in `World/Save/`
+### [no-issue] CH-23. Oversized Haskell modules are now concentrated in `World/Save/`
+> **Disposition:** No issue — this is a size count, not a defect. The 500-line limit is an explicit per-split ratchet (`tools/haskell_module_budget.py` guards three named splits) and no persistence module carries a split agreement, the same policy that closed CH-22 and CH-41. Its actionable content is owned elsewhere, not discarded: `Component/Entities.hs` by CH-74 ("the largest single win available against CH-23"), `Types.hs` by CH-72, `Envelope.hs` by CH-78, and `Lua/API/Save.hs` by #985. The residue (`Storage.hs` 819, `Component/WorldGen.hs` 830, `Component/Page.hs` 792, `Integrity.hs` 531) is size-only with no identified boundary defect. The table is also stale: 19 modules now exceed 500, not 17; `Types.hs` is 1102 after #984 archived its changelog, so it is neither the largest module in the tree (`Entities.hs` 1139, `Lua/API/Save.hs` 1126) nor growing; `WorldGen.hs`/`Page.hs` were already 830/792 at the sweep commit.
+
 The 2026-07-07 triage (`docs/history/haskell_large_file_submodule_triage_2026-07.md`)
 found 43 modules over 500 lines. That is down to **17** — good progress — but
 the remainder is no longer spread evenly:
@@ -493,6 +495,13 @@ The other five are `Engine/Scripting/Lua/API/*` (`Units/Inventory` 719,
 category the triage rated "High feasibility".
 
 ### CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
+> **Re-verify:** #949 removes review-round provenance phrases (`round N review`)
+> and explicitly keeps the technical explanation that follows them, so it does not
+> reach this 25-line narration of a superseded attempt — being "the worst instance
+> of CH-15" is not the same as being fixed by CH-15's issue. The defect is still
+> live, only relocated: #1022 moved `runGatedByCaptureLock` verbatim from
+> `Engine/Loop.hs` to `Engine/Loop/Mode.hs:140-183`, narration intact.
+
 `Engine/Loop.hs:69-105` — a 37-line haddock in which ~25 lines narrate a
 *previous failed attempt*: "The first attempt at this fix only READ
 `captureLocked` as a point-in-time pre-check … but this thread was not a real
@@ -504,7 +513,9 @@ owner; it acknowledges unconditionally; `acknowledgeCurrent` no-ops when
 exist, which every future reader must read and then discard. Worst instance of
 CH-15.
 
-### CH-25. `tools/` is 122 flat Python files
+### [no-issue] CH-25. `tools/` is 122 flat Python files
+> **Disposition:** No issue — the role partition already exists in the filenames (`*_probe.py`/`*_audit.py`/`*_check.py`/`test_*.py`), which is why the finding could partition all 127 files "without ambiguity" from names alone; `ls tools/*_probe.py` gives the same grouping `tools/probes/` would, and directories would make the suffixes redundant. The two navigation surfaces the finding cites as evidence are the deliberate answer: `tools/README.md` carries a curated per-probe table (Probe/Gates/Boot/Purpose) and CLAUDE.md declares `tools/ci_probes.py --status` authoritative over any prose list. The "one atomic sweep" is also not achievable: 124 distinct `tools/*.py` paths are cited at 407 sites outside `tools/` (persistence_state_inventory 137, persistence_contract 36, CLAUDE.md 23, CI workflow, Makefile/ci-local.sh) and 385 inside it, and part of the invocation surface lives outside the repository (`~/.codex/rules/default.rules`, agent memory) where a PR cannot update it — a stale path fails as `No such file` exactly when an agent runs a gate. No defect behind the layout; same discretionary category as CH-22/CH-41/CH-42. Counts are also stale: 127 flat `.py` files and 76 probes today, not 122/74. CH-131 restates this finding and needs the matching disposition.
+
 No subdirectories except `playtest/` and `baselines/`. The 122 files divide
 cleanly by role — 74 `*_probe.py`, 10 `*_audit.py`, 6 `*_check.py`, 14
 `test_*.py`, 22 reports/utilities — and `tools/README.md` plus
@@ -517,7 +528,9 @@ staying at the top. Note this touches every `python3 tools/x_probe.py`
 invocation in CLAUDE.md, CI, and the skills, so it needs to be done in one
 sweep.
 
-### CH-26. `CHANGELOG.md` has not been touched in 18 months
+### [no-issue] CH-26. `CHANGELOG.md` has not been touched in 18 months
+> **Disposition:** No issue — `CHANGELOG.md` records the sole `0.1.0.0` package version; the repository has no subsequent version, tag, GitHub release, or release process that would require a new entry.
+
 Its entire content:
 
 ```
@@ -534,7 +547,9 @@ and it says "sprites and input".
 
 Fix: delete it, or regenerate from merged PRs and keep it current.
 
-### CH-27. Minor defects worth folding into one cleanup issue
+### [no-issue] CH-27. Minor defects worth folding into one cleanup issue
+> **Disposition:** No issue — this is not one reviewable cleanup: 25 (not 29) Engine modules lack explicit export lists, the VSync-off compensation has no measured fault, and the remaining changes are harmless local cleanups.
+
 - `Engine/Loop.hs:30` — `_state ← gets graphicsState` in `mainLoop`: an unused
   binding that reads engine state on every tick and discards it.
 - `Engine/Loop.hs:127` — `GLFWError "handleEngineRunning: "` — the error
@@ -564,7 +579,7 @@ Fix: delete it, or regenerate from merged PRs and keep it current.
 No module here exceeds 500 lines; the problems are dead modules, duplicated
 constants, and comments that contradict the code beside them.
 
-### CH-28. Five modules are not in `synarchy.cabal` — never compiled, never linted
+### [#972] CH-28. Four modules are not in `synarchy.cabal` — never compiled, never linted
 `synarchy.cabal` uses an explicit module list. These `src/` modules are absent
 from it, so GHC never compiles them, `-Wall -Werror` never sees them, and
 `cabal sdist` would ship a broken tarball:
@@ -592,7 +607,7 @@ a logging subsystem that has never been part of the build.
 Fix: delete all four. Then add a CI check that every `src/**/*.hs` appears in
 the cabal module list — this class of rot is invisible otherwise.
 
-### CH-29. Dead types kept alive by other dead types
+### [#973] CH-29. Dead types kept alive by other dead types
 `Engine.Graphics.Vulkan.Types.SyncObjects` carries this haddock:
 
 > LEGACY: unused by the render loop. […] Type kept only because
@@ -608,7 +623,7 @@ Also zero uses in the same two files: `VulkanExtensions`, `VulkanLayers`,
 `Types.Core.VulkanCore` (CH-28) duplicate field sets that live inline in
 `GraphicsState` — they were the abstraction that never landed.
 
-### CH-30. The demo quad vertex buffer is uploaded to the GPU every boot and never drawn
+### [#974] CH-30. The demo quad vertex buffer is uploaded to the GPU every boot and never drawn
 `Engine.Graphics.Vulkan.Vertex.quadVertices` is 12 hardcoded vertices —
 "Two side-by-side quads with different atlas IDs … (unused demo geometry)",
 per its own comment. `Engine/Graphics/Vulkan/Init.hs:202` calls
@@ -627,7 +642,7 @@ Compounding it: the `vertexBuffer` field is the one crammed onto
 Fix: delete `quadVertices`, `createVertexBuffer`, the `Init.hs` call, and the
 `GraphicsState.vertexBuffer` field.
 
-### CH-31. The bindless texture limit is duplicated in five places with no check
+### [#975] CH-31. The bindless texture limit is duplicated in five places with no check
 `16384` must agree across:
 
 1. `Bindless.hs:47` — `bcMaxTextures = 16384`
@@ -647,7 +662,7 @@ Fix: one Haskell constant, interpolated into the GLSL (the shaders are
 `QuasiQuotes` strings already), or a test asserting the shader source contains
 the Haskell values.
 
-### CH-32. `Bindless.hs`'s header claims 64× the real texture limit
+### [#976] CH-32. `Bindless.hs`'s header claims 64× the real texture limit
 Line 1-2:
 
 ```haskell
@@ -660,7 +675,7 @@ The header describes the technique's theoretical ceiling as if it were the
 system's capacity. Anyone sizing an asset budget off the module header is off
 by 64×.
 
-### CH-33. `Texture.System`'s "legacy path" is a throw
+### [#977] CH-33. `Texture.System`'s "legacy path" is a throw
 Module header: *"Unified texture system that handles both bindless and legacy
 paths."* The legacy branch in full:
 
@@ -682,7 +697,7 @@ There is no legacy path. Consequences:
 - `loadTexture` takes a `_filterMode` parameter it ignores (correctly — atlases
   share the global sampler now), still present in the signature.
 
-### CH-34. `destroyBindlessTextureSystem` is exported, never called, and incomplete
+### [#978] CH-34. `destroyBindlessTextureSystem` is exported, never called, and incomplete
 It releases the shared sampler and destroys the descriptor pool and layout. It
 does **not** touch `btsUndefinedTexture` (image + view + memory),
 `btsHandleSlotBuffer`/`btsHandleSlotMemory` (a persistently-mapped 256 KB
@@ -696,7 +711,9 @@ dead; the day someone wires up device-loss recovery it is a leak.
 Fix: delete it, or complete it and document that it must run before the
 `allocResource` scope unwinds.
 
-### CH-35. The uniform buffer layout is hand-maintained across five declarations
+### [deferred] CH-35. The uniform buffer layout is hand-maintained across five declarations
+> **Deferred:** #975 rewrites these same shader quasi-quotes in `ShaderCode.hs` from the non-interpolating `[vert|`/`[frag|` quoters to `$(compileShaderQ … [glsl| … |])`, which is both the mechanism a single shared UBO block needs and a rewrite of every shader declaration this finding touches — resume after #975 is closed by a merged implementation, then re-read `ShaderCode.hs` and `Engine/Graphics/Vulkan/Types.hs` and scope the shared UBO block and derived offsets on top of the landed interpolation.
+
 `UniformBufferObject` is declared in:
 
 - `Vulkan/Types.hs` — the record (14 fields)
@@ -715,12 +732,12 @@ corrupts every shader that declares the shorter prefix, with no build error.
 (Also: `alignment _ = 16` while `sizeOf` is 356, which is not a multiple of 16.
 Harmless for a single instance, wrong for an array.)
 
-### CH-36. `fontFragmentShaderCode` is dead, and says so
+### [#980] CH-36. `fontFragmentShaderCode` is dead, and says so
 `-- | Legacy font fragment shader (non-SDF, kept for compatibility)` — zero
 call sites. Compatibility with nothing. The SDF shader is the only one wired
 up.
 
-### CH-37. `graphicsState` nested-record-update boilerplate, 50×
+### [#981] CH-37. `graphicsState` nested-record-update boilerplate, 50×
 ```haskell
 modify $ \s → s { graphicsState = (graphicsState s) { vulkanRenderPass = Just renderPass } }
 ```
@@ -728,7 +745,7 @@ appears **50 times** across 16 modules (18× in `Vulkan/Init.hs` alone, 12× in
 `Recreate.hs`). No `modifyGraphicsState ∷ (GraphicsState → GraphicsState) →
 EngineM ε σ ()` helper exists. Each site would collapse to one line.
 
-### CH-38. Naming inconsistencies in the graphics records
+### [#982] CH-38. Naming inconsistencies in the graphics records
 - **`vc` prefix collision.** `VulkanCore`'s fields are `vcInstance`,
   `vcDevice`, … while `VideoConfig`'s are `vcWidth`, `vcVSync`,
   `vcWindowMode`, … Two records in the same subsystem sharing a prefix, with
@@ -742,7 +759,7 @@ EngineM ε σ ()` helper exists. Each site would collapse to one line.
 - **`BufferUtils`** — a `*Utils` module name that says nothing about content;
   it sits beside `Buffer.hs`, which does something different.
 
-### CH-39. Minor graphics defects for one cleanup issue
+### [#983] CH-39. Minor graphics defects for one cleanup issue
 - `Bindless.hs:229` — `allocateBindlessDescriptorSet` takes `_config` and
   ignores it; every caller threads a `config` through for nothing.
 - `Bindless.hs:421` — `Nothing → pure ()  -- shouldn't happen` silently keeps
@@ -772,7 +789,7 @@ EngineM ε σ ()` helper exists. Each site would collapse to one line.
 inconsistency rather than dead code: three facade idioms, uncapped function
 size, and one comment block that is 22% of the tree's largest file.
 
-### CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme
+### [#984] CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme
 `src/World/Save/Types.hs` — one `Int` constant with **296 lines of comment**
 attached (70 lines of leading haddock + 226 lines of trailing right-hand-side
 comment), documenting ~65 historical save versions back to v2. That is **22% of
@@ -802,7 +819,9 @@ number that was replaced by per-component versioning. `docs/save_compat/` and
 
 Fix: move the history to `docs/save_compat/`, leave two lines at the constant.
 
-### CH-41. The 500-line module budget doesn't constrain function size
+### [no-issue] CH-41. The 500-line module budget doesn't constrain function size
+> **Disposition:** No issue — `tools/haskell_module_budget.py` is a per-split guard (three named splits held to their agreed shape), never a general size policy, so it was never meant to constrain function size; a tree-wide function-length gate would fail on ~96 definitions at once with no defect behind any of them, which the expedition-arc scope rule excludes as discretionary, and the repo already ran the module-granularity version of this program (#550-#588, closed). The counts also overstate: ~96/29/10 definitions exceed 100/200/300 lines (not 124/30/16), and three named offenders are misattributed — `World/Magma/Pool.hs`'s `rimJitter` is a two-line constant, `knownEntitiesFromSaveData` is 46 lines (not 265), `callSaveModules0` is 30 (not 194).
+
 124 top-level definitions in `src/` exceed 100 lines; 30 exceed 200; 16 exceed
 300. Worst offenders:
 
@@ -831,7 +850,9 @@ top-level definitions — `knownEntitiesFromSaveData` alone is 265 lines and
 Fix: add a function-length guard alongside the module guard, or file the top
 ~16 as individual decomposition issues.
 
-### CH-42. Three different facade idioms across nine sibling API domains
+### [no-issue] CH-42. Three different facade idioms across nine sibling API domains
+> **Disposition:** No issue — the two-idiom split is principled and documented rather than drift: the four hand-listed facades preserve their pre-split export lists verbatim per the closed split program's stability requirement (#565 and siblings), and each hand-listing narrows a surface a blanket `module` re-export would widen. Zero staleness exists today — all 151 hand-listed names (Equipment 10, Items 14, WorldQuery 24 — not 22 — Units 103) match their submodules' Lua-facing `*Fn` exports exactly. The silent hazard doesn't exist either: every `Register/*.hs` consumer imports its facade unqualified with no import list, so an unlisted function is a `Variable not in scope` build error at the registration site. `Register/` is not a third idiom but a non-facade — `Engine.Scripting.Lua.API` sequences its 13 `registerXAPI` entry points and has no cross-domain surface to re-export. Only Items (no internals) and WorldQuery (internals already isolated in `.Lookup`) are convertible as prescribed; Units and Equipment would need 7 shared helpers moved into new internal modules — churn inside the subsystem the live #537/#889-#899 capability epic is rewriting, with no observable change, which the expedition-arc scope rule excludes as discretionary.
+
 Every `API/<Domain>.hs` facade does the same job — re-export its submodules —
 in one of three ways:
 
@@ -853,7 +874,14 @@ by simply not re-exporting that one.
 Fix: pick one idiom (module re-exports, with internal submodules omitted) and
 apply it to all nine.
 
-### CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
+### [#985] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
+> **Partial:** #985 (merged) extracted only `API/Save.hs`'s `EngineEnv`-free
+> definitions into `API/Save/{Bridge,Config,Integrity,Page}.hs`, leaving the
+> facade at 859 lines; its Out of scope defers `API/Blood.hs`, `API/Power.hs`,
+> `API/YamlTextures.hs`, `API/Construct.hs`, and `API/InputInject.hs`, and its
+> approved issue review requires this entry stay unchecked until those are
+> dispositioned.
+
 Nine domains were split into facade + subdirectory. These were not:
 
 | Lines | Module |
@@ -870,7 +898,9 @@ obvious next split (it already partitions cleanly: save listing/status, the
 save path, the load path, integrity/`KnownEntities`, and the Lua save-module
 bridge).
 
-### CH-44. Two `Focus` modules, neither of which says which focus it means
+### [no-issue] CH-44. Two `Focus` modules, neither of which says which focus it means
+> **Disposition:** No issue — CH-120 states it "supersedes and widens CH-44", and its fix subsumes this one verbatim (the same `Engine/Scripting/Lua/API/ShellFocus.hs` rename, plus `UI/ShellFocus.hs` and a system-naming haddock on all five focus modules); a separate issue would fragment one rename across two PRs over the same files. Re-verified today: `UI/Focus.hs`, `UI/Manager/Focus.hs`, and `API/Focus.hs` still open straight into `module … where`, and `API/UI/Focus.hs`'s header is still the ambiguous "Lua bindings for keyboard/input focus management".
+
 `Engine.Scripting.Lua.API.Focus` and `Engine.Scripting.Lua.API.UI.Focus` are
 indistinguishable by name and bind **two genuinely different focus systems**:
 
@@ -892,7 +922,7 @@ equally well.
 Fix: rename to `API/ShellFocus.hs` (or `API/Focus/Shell.hs`) and document the
 two-system split once, in both.
 
-### CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler
+### [#992] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler
 `Engine.Scripting.Types.ScriptValue` has six constructors. `ScriptFunction
 Dynamic` is **never constructed** anywhere, exists only to force a
 `Data.Dynamic` dependency, and its handler silently drops the value:
@@ -908,7 +938,9 @@ than error.
 
 `ScriptBool` (1 use) and `ScriptNil`/`ScriptTable` (2 each) are thin but live.
 
-### CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface
+### [no-issue] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface
+> **Disposition:** No issue — the premise is false by the repository's own authoritative measure. `tools/engine_env_capability_audit.py`'s live scan (the CI-enforced definition: `EngineEnv(..)` or a bare `Engine.Core.State` import under `src/`+`app/`) finds **30** unrestricted importers, **7** under `Engine/Scripting` — 23%, not 57% of 49. Five of the seven (`Lua.Thread`, `.Thread.Dispatch`, `.Thread.Console`, `.Message`, `.API.Save`) are §6.1 permanent allowlist entries, which #899 records as orchestration boundaries that are "not migration targets". The real Lua-tree residue is two modules, and the migration issues already point at both: #894 (E5b) names `Engine.Scripting.Lua.API.Structure` as one of exactly four §6.2 remainder modules it migrates, and #899 (E8) empties the temporary ceiling entirely, covering `Engine.Scripting.Lua.API.Log`. The whole remaining §6.2 ceiling tree-wide is 6 modules. The "93 modules import `Engine.Core.State`" figure is accurate but is the wrong denominator — importing that module for the `EngineEnv` type alone is the narrowed shape the epic migrates *to*. This is not staleness: the sweep-date commit and HEAD have identical counts (202/93/18), so 49/28 was a measurement error when written.
+
 The #889-#899 capability epic ratchets modules importing
 `Engine.Core.State (EngineEnv(..))`. Of the 49 such modules in all of `src/` +
 `app/`, **28 are under `Engine/Scripting/`** — 28 of the tree's 93 modules that
@@ -918,13 +950,17 @@ Not a defect on its own, but it locates the epic's remaining work: the Lua API
 binding layer is where narrowing pays off most, and it is not currently where
 the migration issues point.
 
-### CH-47. `Engine.Core.Log`'s callsite skip-list has a matching hazard here
+### [no-issue] CH-47. `Engine.Core.Log`'s callsite skip-list has a matching hazard here
+> **Disposition:** No issue — the check CH-47 asks for was run and came back clean. `Engine/Scripting/Lua/API/Internal.hs` is 42 lines and performs no source-location reporting at all: it imports no logging module, carries no `HasCallStack`, and its `Catch.catch` handler pushes a Lua string and calls `Lua.error`, identifying the function by the `name` ByteString passed explicitly at registration — the opposite of CH-9's implicit dependence on wrapper names appearing as call-stack frames. The one place this path is logged is downstream at `Engine/Scripting/Lua/Script.hs:77` (`logWarn logger CatLua $ "Lua error in " <> funcName <> "(): " <> msg`), plain direct logging that #945 (CH-9's issue) must preserve under requirement 1 and whose skip-list mechanism its requirements 2-3 remove outright. No separate work exists at this choke point.
+
 (Cross-reference to CH-9.) `Engine.Scripting.Lua.API.Internal.registerLuaFunction`
 is the single choke point through which every Lua-facing Haskell function is
 registered, and it wraps each in a `Catch.catch` handler. Any source-location
 reporting through this path inherits CH-9's fragility. Worth checking together.
 
-### CH-48. Minor Lua-tree defects for one cleanup issue
+### [deferred] CH-48. Minor Lua-tree defects for one cleanup issue
+> **Deferred:** Two sub-items are false and the bundle's only substantial item collides with a filed issue. Verified false: `flattenItemInstanceIds'` (now `Save.hs:421`) DOES have an unprimed sibling — `World/Save/Snapshot.hs:299`, character-identical — which is the duplication CH-70 owns, and renaming it away would erase CH-70's signal; and `callSaveModules0` (now `Save.hs:771`) DOES have a sibling, `callSaveModules1` at `Save.hs:735`, whose haddock at `:769` documents the 0/1 arity pair. Of the rest, `Engine.Scripting.Types` (14 lines, one type, all four consumers under `Engine.Scripting.Lua.*`) is the same file #992 is rewriting — it deletes `ScriptFunction`, drops the `Data.Dynamic` import, and pins the constructor set — so folding the module now conflicts. Resume after #992 is closed by a merged implementation, then scope one Lua-tree cleanup over the three surviving items: the duplicate `-- |` opener at `Script.hs:46-47`; `registerEngineAPI`'s explicit `Lua.State` (the only one of THIRTEEN registrars, not twelve — and the parameter is genuinely used by `loadScriptFn`/`killScriptFn` at `Register/Engine.hs:109-110`, so first check whether hslua can recover the state inside `LuaE`); and folding `Engine.Scripting.Types` into `Engine.Scripting.Lua.Types`.
+
 - `Engine/Scripting/Lua/Script.hs:46-47` — two consecutive `-- |` haddock
   openers on `callModuleFunction`; the first (`-- | Call a function on a module
   table`) is a leftover stub that haddock will fold into the real one. Same
@@ -941,7 +977,7 @@ reporting through this path inherits CH-9's fragility. Worth checking together.
   sitting beside the 272-line `Engine.Scripting.Lua.Types`. The split buys
   nothing — `ScriptValue` is Lua-specific in practice.
 
-### CH-49. Cross-cutting: normalise the enforced Unicode operators (owner decision recorded)
+### [#1005] CH-49. Cross-cutting: normalise the enforced Unicode operators (owner decision recorded)
 CLAUDE.md publishes an operator table as the codebase convention, but adoption
 varies from 99% to 10%. Measured across `src/` + `app/`:
 
@@ -989,7 +1025,7 @@ rewritten inside Lua/GLSL string payloads or Python-facing text.
 
 This closes `src/Engine/` coverage.
 
-### CH-50. `Engine.Graphics.Transform` is a fully dead module
+### [#1006] CH-50. `Engine.Graphics.Transform` is a fully dead module
 67 lines, three exported functions (`createModelMatrix`, `applyTransform`,
 `combineTransforms`), listed in `synarchy.cabal` so it compiles on every build,
 and **no module imports it**. It operates on `Transform2D`, which lives in
@@ -999,7 +1035,7 @@ module's operations on it are dead.
 Distinct from CH-28: those modules were invisible to the build; this one is
 compiled, warning-checked, and still useless.
 
-### CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator
+### [#1007] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator
 23 of its 27 exports have **no external consumer**:
 
 > `cleanupAssetManager`, `loadTextureAtlas`, `loadTextureAtlasWithHandle`,
@@ -1029,7 +1065,7 @@ half (`ShaderProgram`, `generateShaderHandle`, `updateShaderState`,
 Fix: reduce to the handle allocators + state setters actually used, and delete
 the shader-asset half (or say why it is kept).
 
-### CH-52. 14 verbatim copies of the same YAML loader
+### [#1008] CH-52. 14 verbatim copies of the same YAML loader
 Thirteen `Engine/Asset/Yaml*.hs` modules each define a `load<Thing>Yaml` that
 is character-identical except for three strings and one field accessor:
 
@@ -1065,7 +1101,7 @@ returns `IO (Maybe LootTableYamlDef)` and `loadNamePool` returns `IO NamePool`
 while every sibling returns `IO [x]` — three different failure conventions for
 the same operation.
 
-### CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things
+### [#1009] CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things
 Its contents:
 
 1. **Material YAML** — `MaterialDef`, `MaterialFile`, `loadMaterialYaml`,
@@ -1086,7 +1122,14 @@ Compare the sibling naming: `YamlItems` loads items, `YamlFlora` loads flora,
 Fix: split into `YamlMaterials.hs`, `YamlVegetation.hs`, and
 `Engine/Asset/TextureNameRegistry.hs`.
 
-### CH-54. 97 exported names in `src/Engine/` have no consumer outside their module
+### [#1010] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module
+> **Partial:** #1010's Out of scope excludes "any other module in CH-54's
+> inventory", so it settles only the `Window/GLFW.hs` wrappers. Its body says the
+> rest of kind (a) is tracked by #1007, #1006, #943, #946, #972, #947, #1009 and
+> CH-55, and that kind (b) is excluded because the `Loop/Camera.hs` exemplar is
+> wrong (four of its eight names are used by `test-headless/Test/Headless/Camera/`).
+> Re-process to confirm that set closes the finding before checking it off.
+
 Full inventory captured by scan (qualified uses counted, so no
 `import qualified … as GLFW` false positives). It splits into two kinds:
 
@@ -1114,7 +1157,9 @@ don't narrow, no refactor can be reasoned about locally.
 
 Fix: two issues — delete kind (a); shrink the export lists for kind (b).
 
-### CH-55. `Engine.Core.Init`'s three exports have no callers
+### [no-issue] CH-55. `Engine.Core.Init`'s three exports have no callers
+> **Disposition:** No issue as a separate item — the defect is real but is a single export-list line, and CH-57 is the bundle for exactly this class. Verified: the module exports **seven** names (not three), and only `initializeEngineWith` is unreferenced — the string appears nowhere outside its own module, where `initializeEngine` (`Init.hs:135`) and `initializeEngineHeadlessWith` (`:364`) call it. The body's 2026-07-25 correction holds: `resolveConfigPath` and `migrateLegacyConfig` are each used by `test-headless/Test/Headless/Core/ConfigState.hs`, `initializeEngineHeadless` by `app/App/Headless.hs` plus five test modules, and `initializeEngineHeadlessWith` by `app/App/Dump.hs`. CH-57 already lists five bullets of the identical shape (`Loop/Resource.hs`'s `safeVector*`, `Font/Util.hs`'s `calculateTextWidth`, `Scene/Graph.hs`'s `withSceneGraph*`, `Input/Thread/Mouse.hs`'s `uiDragThresholdPx`, `Preview/Discovery.hs`'s `isSupportedTextureFile`/`sortEntries`); **un-exporting `initializeEngineWith` is a sixth bullet and must be folded into CH-57 when CH-57 is processed**. A standalone PR for one export-list line would fragment that bundle — the same reasoning that closed CH-44 in favour of CH-120. It cannot fold into #1010, whose Out of scope excludes every other module in CH-54's inventory.
+
 **Corrected 2026-07-25:** only `initializeEngineWith` is genuinely
 unreferenced — `resolveConfigPath` and `migrateLegacyConfig` each have one
 consumer in `test-headless/`, which the original scan missed.
@@ -1123,7 +1168,9 @@ consumer in `test-headless/`, which the original scan missed.
 and `initializeEngineHeadlessWith` reach it internally. A one-line
 un-export.
 
-### CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout
+### [no-issue] CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout
+> **Disposition:** No issue — the exemplar is wrong and the proposed rule contradicts a documented, CI-enforced shape. Measured across `src/`: **69** `X.hs`-beside-`X/` pairs — 30 pure re-export facades, 8 facade-plus-content, 31 content-only siblings. The Scene exemplar does not hold: `Engine/Scene/Types.hs` (16 lines) and `Engine/Scene/Batch.hs` (19 lines) contain nothing but `module Engine.Scene.Types.Node`-style re-exports and zero definitions, so a scene batch type *cannot* live in `Scene/Types.hs` — `Engine/Scene/` already follows the rule the finding asks for. The Vulkan half is accurate (`Vulkan/Types.hs` 11 definitions, `Command.hs` 4, `Pipeline.hs` 6, none re-exporting). But "`X.hs` beside `X/` means facade, full stop" would restructure 39 of the 69 and would forbid a shape the repository documents and enforces: CLAUDE.md:172 calls `Engine.Input.Thread` (#787) "a thin lifecycle facade" although it keeps four definitions and re-exports nothing, `tools/haskell_module_budget.py` caps that parent together with its children, and CLAUDE.md:42 explicitly anticipates "the facade remains above 500 lines". The closed #543-#588 split program deliberately produced both shapes — pure shells (`World/Plate.hs`, `UI/Manager.hs`, `World/Slope.hs`, `Combat/Wounds.hs`, `Lua/API/Units.hs`) and orchestrating parents (`Combat/Resolution.hs`, `World/Generate/Chunk.hs`, `World/Geology/Coastal.hs`, `Engine/Input/Thread.hs`). Converging them is discretionary churn across 39 modules with no defect behind it — the category that closed CH-22, CH-41, and CH-42. Where the layout genuinely costs something it has its own finding: CH-78 (`World/Save/Envelope.hs`, 860 lines and 74 definitions beside `Envelope/`), CH-97, and CH-127.
+
 `Engine/Scene/` contains `Base.hs`, `Graph.hs`, `Render.hs`, `Types.hs`, plus
 both `Batch/` and `Types/` subdirectories — so a scene batch type can live in
 `Scene/Types.hs`, `Scene/Types/Batch.hs`, or `Scene/Batch/Update.hs`, and the
@@ -1139,7 +1186,7 @@ cannot tell which without opening the file.
 Fix: state the rule — `X.hs` beside `X/` means facade, full stop — and move
 non-facade content out.
 
-### CH-57. Minor remaining-Engine defects for one cleanup issue
+### [#1011] CH-57. Minor remaining-Engine defects for one cleanup issue
 - `Engine/Loop/Resource.hs` exports `safeVectorHead` and `safeVectorIndex`,
   both unused externally — generic container helpers sitting in a module named
   for the render loop's resources.
@@ -1161,7 +1208,7 @@ non-facade content out.
 1275 lines across 10 modules; all are in the cabal `other-modules` list. The
 problems are boot-mode duplication and CLI flags that silently do nothing.
 
-### CH-58. `--seed`, `--worldSize`, and `--plates` are silently ignored outside `--dump`
+### [#1012] CH-58. `--seed`, `--worldSize`, and `--plates` are silently ignored outside `--dump`
 `Main.hs` parses all three, normalises them (`normalizeWorldSize`,
 `normalizePlateCount`, `defaultPlatesFor`), and then hands them to exactly one
 dispatch target:
@@ -1191,7 +1238,7 @@ Fix: reject unsupported flags per boot mode with a clear error, or thread them
 through. Silently accepting a flag that does nothing is the worst of the three
 options.
 
-### CH-59. `allLayers` is not all layers
+### [#1016] CH-59. `allLayers` is not all layers
 `App/Cli.hs:38`:
 
 ```haskell
@@ -1207,7 +1254,7 @@ Also: six bare positional booleans, unreadable without counting fields against
 the record declaration (the same anti-pattern as `AssetConfig 100 100 True
 True`, CH-18). Use field syntax.
 
-### CH-60. The preview category list is duplicated as an error-message string
+### [#1019] CH-60. The preview category list is duplicated as an error-message string
 `App/Cli.classifyPreviewCategory` holds the authoritative lists:
 
 ```haskell
@@ -1227,7 +1274,7 @@ exactly this set, no compatibility aliases" — and `tools/preview_cli_probe.py`
 is CI-eligible, so a drift here fails CI *late* rather than not compiling.
 Export the lists and build the message from them.
 
-### CH-61. Five boot modes hand-copy the same error-recovery block
+### [#1021] CH-61. Five boot modes hand-copy the same error-recovery block
 `Graphical`, `Headless`, `Offscreen`, `Dump`, and `Preview` each end with the
 identical shape — including this comment reproduced **verbatim in all five**:
 
@@ -1264,7 +1311,7 @@ it to one line.
 Fix: `App.Boot` with `withBootConfig` and `shutdownAllWorkers`, used by all
 five.
 
-### CH-62. `shutdownEngine`'s five positional parameters are mutually swappable
+### [#1036] CH-62. `shutdownEngine`'s five positional parameters are mutually swappable
 ```haskell
 shutdownEngine ∷ Maybe Window → Maybe ThreadState → Maybe ThreadState
                → ThreadState → ThreadState → EngineM ε σ ()
@@ -1282,7 +1329,7 @@ shutdownEngine Nothing (Just unitThreadState)
 
 `Nothing` for what, at a glance? Fix: a record.
 
-### CH-63. Three separate main loops
+### [#1022] CH-63. Three separate main loops
 `Engine.Loop.mainLoop`, `Engine.Loop.mainLoopOffscreen` (both in `Loop.hs`),
 and `Engine.Loop.Headless.headlessLoop`. The first two are already
 near-duplicates sharing `runGatedByCaptureLock` (CH-24); the third lives in a
@@ -1292,7 +1339,7 @@ tick, shut down" story is told six times.
 Worth one design issue: one loop parameterised by mode (poll events? present?
 pace frames?), or an explicit statement of why three are irreducible.
 
-### CH-64. `--dump` emits three fields that no documentation mentions
+### [#1040] CH-64. `--dump` emits three fields that no documentation mentions
 Actual output includes `waterTableZ`, `waterTableSummer`, and
 `waterTableWinter` under the `terrain` layer. CLAUDE.md's dump field table —
 presented as the contract, and what the audit tooling is written against —
