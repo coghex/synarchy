@@ -41,6 +41,7 @@ extra-source-files: cbits/*.h
                     scripts/**/*.lua
                     config/keybinds_default.yaml
                     config/pathing.yaml
+                    config/save_default.yaml
                     config/video_default.yaml
                     config/world_gen_default.yaml
 
@@ -346,6 +347,7 @@ library
                      Engine.Core.Capability.UnitCombat
                      Engine.Core.Capability.WorldSim
                      Engine.Save.Barrier
+                     Engine.Save.Config
                      Engine.Load.Status
                      Engine.Preview.Discovery
                      Engine.Preview.Unit
@@ -756,6 +758,8 @@ library
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component
+                     World.Save.Autosave
+                     World.Save.Compat.MetadataV1
                      World.Save.Compat.SessionV90
                      World.Save.Reference
                      World.Save.Integrity
@@ -1034,6 +1038,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
+                   Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot

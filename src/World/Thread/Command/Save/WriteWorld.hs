@@ -21,9 +21,11 @@ import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Control.Exception (SomeException, evaluate, try)
+import Control.Exception (SomeException, evaluate, finally, try)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim
+    (toWorldSimCapability, restoreIfPlayerIdle)
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
@@ -54,9 +56,13 @@ import World.Generate.Coordinates (chunkToGlobal)
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → Text → [(Text, Word32, Bool, BS.ByteString)]
                        → [(Text, Text, Int, Maybe Int, Text, Maybe Text)]
+                       → Maybe AutosaveRequest
                        → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
-                        luaRefs = do
+                        luaRefs mAutosave = do
+    -- Only the WORDING of a failure report depends on this; every other
+    -- autosave-specific behaviour reads 'mAutosave' itself.
+    let isAutosave = isJust mAutosave
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
     -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
@@ -77,7 +83,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             do
                 let err = "World not found for save: " <> unWorldPageId primaryId
                 logWarn logger CatWorld err
-                failTransaction env err
+                failTransaction env isAutosave err
         Just primaryWs → do
             -- Auto-pause BEFORE reading state so the snapshot
             -- captures pause = True (DF convention — saved worlds
@@ -106,7 +112,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                     do
                         let err = "Cannot save: visible world has no gen params"
                         logWarn logger CatWorld err
-                        failTransaction env err
+                        failTransaction env isAutosave err
                 Just _ → do
                     -- Every page must be snapshotable.  Omitting an
                     -- in-progress page makes a superficially successful save
@@ -190,7 +196,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                     case sequence maybePages of
                       Left err → do
                         logWarn logger CatWorld err
-                        failTransaction env err
+                        failTransaction env isAutosave err
                       Right pages → do
                         let liveCamera = LiveCameraSnapshot
                                 { lcsOwnerPage = visibleId
@@ -234,7 +240,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 msg = "session snapshot failed validation: "
                                     <> T.intercalate "; " (capped ⧺ trailer)
                             logWarn logger CatWorld msg
-                            failTransaction env msg
+                            failTransaction env isAutosave msg
                           Right snap → case capIntegrityErrors
                                               (sessionIntegrityErrors snap) of
                             report | not (null (irErrors report)) → do
@@ -242,7 +248,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                         \validation: " <> T.intercalate "; "
                                         (renderIntegrityReport report)
                               logWarn logger CatWorld msg
-                              failTransaction env msg
+                              failTransaction env isAutosave msg
                             _ → do
                                 -- Issue #764 (save-overhaul C3): cross-validate
                                 -- every Lua-declared reference (gathered on the
@@ -286,6 +292,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 let req = SaveRequestMeta
                                         { srmSlotName  = saveName
                                         , srmTimestamp = timestampTxt
+                                        , srmAutosave  = isJust mAutosave
                                         }
                                     meta = snapshotSaveMetadata req snap
                                 -- Force the FULL encoding now, while the capture
@@ -310,7 +317,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     let msg = "session snapshot failed to encode: "
                                             <> T.pack (show e)
                                     logWarn logger CatWorld msg
-                                    failTransaction env msg
+                                    failTransaction env isAutosave msg
                                   Right encoded → do
                                     -- Every state owner may resume as soon as the
                                     -- snapshot is fully captured, validated, AND
@@ -334,23 +341,117 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                                 luaKnownNames luaRequiredNames
                                     case result of
                                       Right warnings →
-                                        do
-                                            completeTransaction env
+                                        -- #913: the transaction stays
+                                        -- NON-TERMINAL until every piece of
+                                        -- session state this save is going to
+                                        -- touch has been touched. Completing it
+                                        -- first would drop the save/load
+                                        -- mutual exclusion while the autosave
+                                        -- restore below still has pause and
+                                        -- time scale left to write: a
+                                        -- Lua-thread engine.loadSave accepted
+                                        -- in that window pauses synchronously
+                                        -- at acceptance, and this restore would
+                                        -- then unpause or retime a session
+                                        -- mid-load. 'finally' rather than a
+                                        -- plain reorder so an exception in the
+                                        -- restore or the event emission can
+                                        -- never leave the barrier wedged open
+                                        -- (the disk write already succeeded, so
+                                        -- success is still the honest outcome).
+                                        (do
                                             forM_ warnings $ \w →
                                                 logWarn logger CatWorld $
                                                     "World saved with a cleanup \
                                                     \warning: " <> w
                                             logInfo logger CatWorld $
                                                 "World saved successfully: " <> saveName
+                                            -- The restore runs BEFORE the
+                                            -- success event, which a
+                                            -- pause-configured notification
+                                            -- category may itself pause on
+                                            -- (Engine.PlayerEvent.Emit writes
+                                            -- enginePausedRef directly). That
+                                            -- ordering is what makes the
+                                            -- event's own result authoritative
+                                            -- rather than something this
+                                            -- restore could undo.
+                                            restored ← restoreAfterAutosave
+                                                env logger visibleId mAutosave
                                             emitEvent env "save_load" "World.Save" $
                                                 "Game saved: " <> saveName
+                                            when restored $
+                                                healEventImposedPause env visibleId)
+                                          `finally` completeTransaction env
                                       Left err →
                                         do
-                                            failTransaction env err
+                                            failTransaction env isAutosave err
                                             logError logger CatWorld $
                                                 "Failed to save world: " <> err
-                                            emitEvent env "save_load" "World.Save" $
-                                                "Save failed: " <> err
+
+-- | #913: hand an AUTOSAVE's pre-request pause state and visible-world
+--   time scale back to the player, once the transaction has actually
+--   succeeded. Returns whether anything was restored.
+--
+--   Three ways this deliberately does nothing:
+--
+--     * a MANUAL save ('Nothing') — the save path's pause is the
+--       long-standing DF-style contract and is not this issue's to
+--       change;
+--     * the player touched pause or the time scale during the request
+--       window ('arIntentGen' no longer matches
+--       'playerIntentGenRef') — the player wins outright, including the
+--       double-toggle case where the final BOOLEAN is unchanged, which
+--       is exactly why this compares a generation rather than values;
+--     * the autosave began from an already-PAUSED world — there is
+--       nothing to resume, and resuming would be the autosave changing
+--       gameplay.
+--
+--   A FAILED transaction never reaches here at all, so the existing
+--   one-way "a failed save leaves you paused" safety ratchet is
+--   preserved untouched.
+restoreAfterAutosave
+    ∷ EngineEnv → LoggerState → Maybe WorldPageId → Maybe AutosaveRequest
+    → IO Bool
+restoreAfterAutosave _ _ _ Nothing = pure False
+restoreAfterAutosave env logger visibleId (Just ar)
+    | arPrePaused ar = pure False
+    | otherwise = do
+        -- The comparison and the writes are ONE critical section, under
+        -- the same lock every player pause/time-scale transition takes.
+        -- Read-then-write would leave a window in which the Lua thread
+        -- applies a pause, sees a bump land, and has it overwritten here
+        -- anyway by a value that was already stale when it was read.
+        restored ← restoreIfPlayerIdle (toWorldSimCapability env)
+                                       (arIntentGen ar) $ do
+            -- Scale first, then the flag: writing the flag last means
+            -- there is never even a momentary "unpaused at scale 0"
+            -- reading of the pair.
+            forM_ visibleId $ \vid → do
+                mgr ← readIORef (worldManagerRef env)
+                forM_ (lookup vid (wmWorlds mgr)) $ \ws →
+                    writeIORef (wsTimeScaleRef ws) (arPreTimeScale ar)
+            writeIORef (enginePausedRef env) False
+        unless restored $
+            logInfo logger CatWorld
+                "Autosave finished, but the player changed pause or time \
+                \scale while it ran -- leaving their choice in place"
+        pure restored
+
+-- | The @save_load@ success event may be configured to pause the game
+--   ('Engine.PlayerEvent.Emit' writes 'enginePausedRef' directly). That
+--   result is authoritative over the restore that just ran — but the
+--   event never zeroes the world clock, which would leave exactly the
+--   "ticks frozen, world time still advancing" split @scripts\/pause.lua@
+--   documents and heals elsewhere. Re-zero the visible page's scale so a
+--   paused world stays a coherently paused world.
+healEventImposedPause ∷ EngineEnv → Maybe WorldPageId → IO ()
+healEventImposedPause env visibleId = do
+    paused ← readIORef (enginePausedRef env)
+    when paused $ forM_ visibleId $ \vid → do
+        mgr ← readIORef (worldManagerRef env)
+        forM_ (lookup vid (wmWorlds mgr)) $ \ws →
+            writeIORef (wsTimeScaleRef ws) 0
 
 -- | #758: release the barrier so state owners resume WITHOUT declaring
 --   the transaction terminally complete yet — see 'releaseCaptureLock'.
@@ -364,10 +465,29 @@ completeTransaction env = do
     current ← readSaveStatus (saveBarrierRef env)
     forM_ current $ \s → finishSave (saveBarrierRef env) (ssRequestId s)
 
-failTransaction ∷ EngineEnv → Text → IO ()
-failTransaction env err = do
+-- | Fail the transaction AND tell the player, in one place.
+--
+--   Every branch below this point is a TERMINAL failure of an ALREADY
+--   ACCEPTED save: acceptance has paused the game, and (#913) an
+--   autosave leaves it paused as the deliberate safety ratchet. A
+--   failure that only logged would strand the player paused with no
+--   explanation and no save — for an autosave, one they never asked for
+--   at that moment and would have no reason to be looking for. Reporting
+--   lives HERE rather than at each call site so a future failure branch
+--   physically cannot forget it (only the storage-write branch used to
+--   report, and every earlier one — page not found, missing gen params,
+--   an unsnapshotable page, snapshot/integrity validation, encode — did
+--   not).
+--
+--   @isAutosave@ only picks the wording: an unexplained \"Save failed\"
+--   for a save the player never initiated reads as a bug report about
+--   something they did.
+failTransaction ∷ EngineEnv → Bool → Text → IO ()
+failTransaction env isAutosave err = do
     current ← readSaveStatus (saveBarrierRef env)
     forM_ current $ \s → failSave (saveBarrierRef env) (ssRequestId s) err
+    emitEvent env "save_load" "World.Save" $
+        (if isAutosave then "Autosave failed: " else "Save failed: ") <> err
 
 -- | The simulation owns the live fluid map and publishes it back to the
 -- world thread.  Preserve the settled state of every loaded chunk as trailing

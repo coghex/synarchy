@@ -20,6 +20,10 @@ config/shell_history.txt
 config/video.local.yaml
 config/keybinds.local.yaml
 config/notifications.local.yaml
+# Autosave settings (#913). New in the #786 layout, so it has no
+# pre-#786 tracked path and is deliberately absent from
+# migrateLegacyConfig — there is no legacy source to migrate from.
+config/save.local.yaml
 saves/
 .claude/
 .codex/

@@ -499,7 +499,8 @@ validateCandidate expectedMeta luaKnownNames luaRequiredNames bytes = do
         Left "re-read candidate metadata does not match the intended save \
              \request"
     let req = SaveRequestMeta { srmSlotName  = smName meta
-                              , srmTimestamp = smTimestamp meta }
+                              , srmTimestamp = smTimestamp meta
+                              , srmAutosave  = smAutosave meta }
     sd ← checkWorldCount (snapshotToSaveData req snap)
     -- Deep-force the reconstructed SaveData: decoding alone only forces
     -- each field to WHNF (Strict/HashMap.Strict force the outer shape,
@@ -813,6 +814,7 @@ decodeGenerationFile luaKnownNames luaRequiredNames path = do
                         decodeSessionEnvelopeClassified
                             luaKnownNames luaRequiredNames bytes
                     let req = SaveRequestMeta (smName meta) (smTimestamp meta)
+                                    (smAutosave meta)
                     sd ← either (Left . GenerationIncompatible) Right
                            (checkWorldCount (snapshotToSaveData req snap))
                     pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ]

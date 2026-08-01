@@ -105,6 +105,7 @@ the affected fields as unclassified.
 | `pathingConfigRef` | global | Rebuild | `config/pathing.yaml` | global pathing tunables | none yet |
 | `simQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `enginePausedRef` | global | Persist exactly | — | `sdEnginePaused`; authoritative over any Lua-side copy (see §7 `pause` module) | `tools/save_pause_probe.py` |
+| `playerIntentGenRef` | global | Exclude | — | #913: runtime-only monotonic counter of PLAYER pause/time-scale intents (an `MVar` so it doubles as the mutex serializing them against the autosave restore), bumped by `engine.setPaused`/`world.setTimeScale` and by nothing the engine itself writes. An autosave compares a snapshot of it to decide whether restoring its own pre-request pause/time scale would overwrite a choice the player made during the save. Meaningless across sessions (only differences within one request window matter), so persisting it would be recording a number nothing could ever read. | `tools/autosave_probe.py` |
 | `saveBarrierRef` | global | Exclude | — | Runtime-only coordinated-save request/owner acknowledgement diagnostics; never serialized. | save-barrier hspec + headless probe |
 | `gameTimeRef` | global | Persist exactly | — | `sdGameTime` | `tools/save_pause_probe.py` |
 | `lastSaveTimeRef` | global | Exclude | — | wall-clock bookkeeping, session-only | none yet |
@@ -261,6 +262,7 @@ record to classify:
 | `smTimestamp` | Persist exactly | — | none beyond type-correctness (display only) | `tools/persistence_contract_probe.py` (well-formed timestamp string; see §12) |
 | `smWorldName` | Persist exactly | the active page's `wpsIdentity` at save time | mirrors that page's identity; `Nothing` for an unnamed world | `tools/multiworld_save_probe.py` |
 | `smWorldGloss` | Persist exactly | `smWorldName` | must be `Nothing` whenever `smWorldName` is `Nothing` (a gloss cannot exist without a display name) | `tools/multiworld_save_probe.py` |
+| `smAutosave` | Persist exactly | the save REQUEST (`srmAutosave`), not any gameplay state | `True` only for a generation the interval autosave scheduler requested; a `"metadata"` v1 payload has no such field and migrates to `False` (legacy saves are manual saves) via `World.Save.Compat.MetadataV1` | `tools/autosave_probe.py` |
 
 ### WorldPageSave
 

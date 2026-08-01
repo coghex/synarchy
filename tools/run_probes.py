@@ -212,6 +212,11 @@ PROBES = [
      "fresh-process migration probe: a tracked pre-#760 B1 fixture loads, "
      "publishes, dwells paused, re-saves current-format, and reloads "
      "cleanly across a real process restart (#766)"),
+    ("autosave", "autosave_probe.py",
+     "interval autosave (#913): default-off dwell, a real one-minute interval "
+     "firing, pause/time-scale restoration and its player-intent suppression, "
+     "the failed-autosave pause ratchet, silent skips, manual-slot collision "
+     "refusal, ordered rotation, and depth-reduction/disable retention"),
     ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
     ("save_barrier", "save_barrier_probe.py",

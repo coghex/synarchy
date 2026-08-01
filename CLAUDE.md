@@ -966,10 +966,48 @@ before touching each area:
   wound deaths): `injury.drainEvents()`. These are DRAINED streams —
   don't drain manually in a test while the panel script is loaded, or
   you'll race it. Gate: `injury_log_probe.py`.
+- **Autosave (#913)** — OFF by default (`config/save_default.yaml`,
+  overlaid key-by-key with `config/save.local.yaml`; Settings → General
+  edits it). `scripts/autosave.lua` owns the WALL-CLOCK interval and
+  fires only when `uiManager.isGameplayView()` is true — a deadline
+  reached in a menu / with no world / during a save or load is SKIPPED
+  silently (no request, no failure event, nothing queued), and menus
+  never suspend or reset the cadence. Slots are the reserved
+  `autosave-<n>` family, `autosave-1` newest; ownership is the durable
+  `smAutosave` metadata flag (`"metadata"` component v2, v1 payloads
+  migrate to manual via `World.Save.Compat.MetadataV1`), NEVER the
+  name — a manual save (directory OR pre-#762 flat file) squatting on
+  one of those names fails the attempt through `save_load` with nothing
+  rotated. PUBLISH FIRST, ROTATE SECOND: every autosave is written to
+  the reserved `autosave-incoming` staging slot and the family only
+  ages down once that transaction reports success, so a failed
+  autosave can never have discarded or renumbered a generation; a
+  staged generation left by a crash is rotated in by the next cycle. The
+  rotation is ordered the same way — the oldest is RETIRED by rename and
+  only deleted once every other move succeeded — so an interrupted
+  rotation leaves a partially shifted family, never a shorter one. The
+  shift plan is DERIVED from what's on disk (retire only when the family
+  is genuinely full; then walk down from the first free index), which is
+  what makes a resumed rotation land the interrupted generations where
+  they belong instead of ageing a second one out. A SUCCESSFUL
+  autosave restores the pre-request pause + visible time scale, but
+  only if `playerIntentGenRef` still matches — an `MVar` that doubles
+  as the mutex, so the comparison and the writes are one critical
+  section with those verbs: any `engine.setPaused` /
+  `world.setTimeScale` during the window means the player wins. A
+  FAILED one stays paused and zero-scaled (the existing ratchet — the
+  acceptance step zeroes the visible clock too, so a failure BEFORE the
+  world thread's own capture can't leave a half-paused world), every
+  terminal failure of an accepted save reports through `save_load`, and
+  the success event's own pause (if the category is configured for it)
+  is authoritative over the restore. Gate: `autosave_probe.py`
+  (manual-only).
 - **Config state (#638/#786)** — settings save to gitignored
   `config/*.local.yaml`; boot falls back to tracked `*_default.yaml`
   (notifications self-materializes from
-  `data/notification_categories.yaml`). The tracked legacy
+  `data/notification_categories.yaml`; `save` (#913) resolves as an
+  explicit KEY-LEVEL overlay instead — a sparse local file keeps every
+  tracked default it doesn't mention). The tracked legacy
   `video.yaml`/`keybinds.yaml`/`notifications.yaml` exist ONLY as a
   one-time migration source: `Engine.Core.Init.migrateLegacyConfig`
   copies a legacy file to the local path iff the local file is absent
@@ -1014,6 +1052,12 @@ policy):** selection, build-tool placement mode, active toolbar tool
 (always default tool post-load; HUD resets via the `onSaveLoaded`
 broadcast), and time scale (always 1). Older schema versions are
 rejected with "expected vN, got vM".
+
+**Autosave (#913):** interval autosaves ride the SAME transaction —
+they only add a request-time `AutosaveRequest` (pre-request pause,
+visible time scale, player-intent generation) plus the durable
+`smAutosave` classification `engine.listSaves()` exposes. See the
+subsystem table above for the full contract.
 
 **Enum schema policy:** `Direction`, `Pose`, `UnitActivity` (and any
 enum serialized via `Generic Serialize`) are positional by constructor

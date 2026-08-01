@@ -326,7 +326,7 @@ spec = do
            \(encodeSessionSnapshot / decodeSessionEnvelope), comparing \
            \EVERY persistent field via SessionSnapshot's derived Eq, \
            \PLUS every lua.<module> component payload byte-for-byte" $ do
-            let req = SaveRequestMeta { srmSlotName = "contract_test", srmTimestamp = "ts" }
+            let req = SaveRequestMeta { srmSlotName = "contract_test", srmTimestamp = "ts", srmAutosave = False }
                 meta = snapshotSaveMetadata req representativeSnapshot
                 encoded = encodeSessionSnapshot meta representativeSnapshot
                               syntheticLuaComponents
@@ -342,7 +342,7 @@ spec = do
            \drift -- no cycle accumulates ghost pages, duplicate \
            \entities, or allocator drift, INCLUDING the lua.<module> \
            \component payloads" $ do
-            let req = SaveRequestMeta { srmSlotName = "cycle_test", srmTimestamp = "ts" }
+            let req = SaveRequestMeta { srmSlotName = "cycle_test", srmTimestamp = "ts", srmAutosave = False }
                 cycleOnce (snap, lua) =
                     let meta = snapshotSaveMetadata req snap
                         encoded = encodeSessionSnapshot meta snap lua
@@ -361,7 +361,7 @@ spec = do
            \EVERY page in the representative (not just minimal) \
            \session -- DefaultTool and time scale 1, never a captured \
            \value" $ do
-            let req = SaveRequestMeta { srmSlotName = "reset_test", srmTimestamp = "ts" }
+            let req = SaveRequestMeta { srmSlotName = "reset_test", srmTimestamp = "ts", srmAutosave = False }
                 sd = snapshotToSaveData req representativeSnapshot
             forM_ (sdWorlds sd) $ \wps → do
                 wpsTimeScale wps `shouldBe` 1

@@ -20,7 +20,7 @@ import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
-import World.Save.Types (SaveData(..))
+import World.Save.Types (SaveData(..), AutosaveRequest(..))
 import World.Texture.Types (WorldTextureType(..))
 import World.Fluid.Types (FluidType(..), FluidCell(..))
 
@@ -226,7 +226,7 @@ data WorldCommand
         --   via the WeAddTile edit path (debug terrain placement —
         --   same machinery spoil promotion uses, so it persists).
     | WorldSave WorldPageId Text Text [(Text, Word32, Bool, BS.ByteString)]
-        [(Text, Text, Int, Maybe Int, Text, Maybe Text)]
+        [(Text, Text, Int, Maybe Int, Text, Maybe Text)] (Maybe AutosaveRequest)
         -- ^ pageId, save-name, request-timestamp (ISO 8601 microsecond
         --   precision, monotonically clamped), every currently-
         --   registered Lua save component (bare registry name, schema
@@ -249,7 +249,14 @@ data WorldCommand
         --   process them) and calls @saveModules.snapshotAll()@ before
         --   queueing this command, aborting the save entirely rather
         --   than enqueueing it if any REQUIRED Lua component failed to
-        --   snapshot.
+        --   snapshot. The trailing 'AutosaveRequest' (#913) is 'Just'
+        --   exactly for a save the interval autosave scheduler asked
+        --   for: it carries the durable autosave classification into
+        --   the save's metadata AND the pre-request pause / visible-page
+        --   time scale / player-intent generation the world thread
+        --   restores from once the transaction succeeds. 'Nothing' for
+        --   every manual save, which is classified manual and never
+        --   touches the pause the save path imposed.
     | WorldLoadTransaction Int SaveData MaterialRegistry
         -- ^ requestId, decoded + content-validated 'SaveData', and the
         --   'MaterialRegistry' 'Engine.Scripting.Lua.API.Save.continueLoad'

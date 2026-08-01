@@ -120,8 +120,12 @@ Press **Escape** in the world to open the menu: **Save**, **Settings**,
 Space to carry on. On the title screen, **Continue** (shown once you
 have a save) resumes the most recent one, and **Load Game** (shown once
 you have several) picks among them; a loaded game always starts paused,
-so press Space to set it running. There is no autosave — save before
-you exit.
+so press Space to set it running.
+
+Autosave is **off** in this development build. Turn it on in
+**Settings → General**, where you can also set how many minutes it
+waits and how many autosaves it keeps; they appear in the load list
+labelled `Autosave`, newest first. Until then, save before you exit.
 
 ## Scope note
 

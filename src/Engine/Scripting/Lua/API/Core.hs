@@ -21,7 +21,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, withPlayerIntent)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.RenderView
@@ -95,7 +95,19 @@ setPausedFn env = do
                 \it either publishes or fails"
             pure False
         else do
-            writeIORef (wsEnginePausedRef (toWorldSimCapability env)) b
+            -- #913: an APPLIED pause/resume is player intent. The flag
+            -- write happens INSIDE the intent lock, so an autosave's
+            -- compare-then-restore (which takes the same lock) can
+            -- neither miss this transition nor overwrite it afterwards.
+            -- Counted unconditionally rather than only on a value CHANGE:
+            -- the generation records that the player asked for something
+            -- during a save's request window, and an autosave that finds
+            -- it bumped declines to restore its own pre-save state — so
+            -- over-counting is the safe direction and under-counting is
+            -- not. A REJECTED call above deliberately doesn't count:
+            -- nothing changed for anyone.
+            withPlayerIntent (toWorldSimCapability env) $
+                writeIORef (wsEnginePausedRef (toWorldSimCapability env)) b
             pure True
   Lua.pushboolean applied
   return 1

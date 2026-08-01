@@ -206,9 +206,12 @@ data WorldPageSaveV90 = WorldPageSaveV90
 --   used by 'migrateSessionV90' (the real metadata comes from the
 --   envelope's separately-decoded @"metadata"@ component instead), so
 --   no assertion on it would incidentally notice either. Field order
---   matches 'SaveMetadata''s CURRENT declaration, which has been stable
---   since v82 (#707, predating this v90 baseline) — see
---   'World.Save.Types.SaveMetadata''s own haddock.
+--   matches 'SaveMetadata' as it stood at v82 (#707, predating this v90
+--   baseline). The live type has since diverged — #913 appended
+--   'World.Save.Types.smAutosave' — which is precisely the drift this
+--   frozen mirror exists to absorb, so this record stays at seven fields
+--   forever; see 'World.Save.Types.SaveMetadata''s own haddock and the
+--   parallel frozen mirror in "World.Save.Compat.MetadataV1".
 data SaveMetadataV90 = SaveMetadataV90
     { sm90Name       ∷ !Text
     , sm90Seed       ∷ !Word64

@@ -555,6 +555,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/lua-unit-ai-v4.expected.json"
         }
       ]
+    },
+    {
+      "id": "f1-autosave-classification",
+      "description": "Autosave classification (issue #913): the \"metadata\" component became v2, appending SaveMetadata's durable smAutosave autosave/manual flag. This baseline tracks a REAL current-format session written by the live engine at metadata v2, so the NEW shape has its own compatibility coverage; every pre-#913 payload stays tracked by the b1/b2/b3/c3/d1/e1 baselines above and decodes through the frozen World.Save.Compat.MetadataV1 mirror, which supplies smAutosave = False (legacy saves are manual saves).",
+      "declaredAt": "2026-07-31",
+      "declaredByIssue": 913,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Envelope.decodeMetadataComponent (metadata v1 -> v2 via World.Save.Compat.MetadataV1.migrateSaveMetadataV1)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "f1-autosave-classification-session",
+          "path": "test-headless/data/save-compat/f1-autosave-classification.bin",
+          "kind": "complete-session",
+          "sha256": "f3e9748c711fd3154cec3d72d025d36f245e8dbbced81314b92f1a47f525fa0e",
+          "sizeBytes": 429256,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 8, 3), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/f1-autosave-classification.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

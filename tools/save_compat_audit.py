@@ -216,6 +216,17 @@ CURRENT_ENVELOPE_VERSION_RE = re.compile(
     r"^currentEnvelopeVersion\s*=\s*(\d+)", re.MULTILINE)
 METADATA_COMPONENT_VERSION_RE = re.compile(
     r"^metadataComponentVersion\s*=\s*(\d+)", re.MULTILINE)
+# #913: "metadata" is the one component whose accepted-input-version set
+# is not a singleton derivable from its current version -- it gained a
+# frozen v1 predecessor (World.Save.Compat.MetadataV1) when smAutosave
+# was appended. Parsed from the SAME source binding
+# World.Save.Envelope.decodeMetadataComponent actually gates on, so
+# dropping a historical decoder there shows up here immediately rather
+# than only when someone remembers to edit this tool too.
+METADATA_COMPONENT_INPUT_VERSIONS_RE = re.compile(
+    r"^metadataComponentInputVersions\s*=\s*\[([^\]]*)\]", re.MULTILINE)
+LEGACY_METADATA_COMPONENT_VERSION_RE = re.compile(
+    r"^legacyMetadataComponentVersion\s*=\s*(\d+)", re.MULTILINE)
 SESSION_COMPONENT_VERSION_RE = re.compile(
     r"^sessionComponentVersion\s*=\s*(\d+)", re.MULTILINE)
 COMPONENT_ID_LITERAL_RE = re.compile(
@@ -393,6 +404,44 @@ def current_envelope_version(path: Path = ENVELOPE_SOURCE_PATH) -> int:
     return int(m.group(1))
 
 
+def metadata_input_versions(envelope_text: str, current: int) -> list[int]:
+    """Every "metadata" schema version World.Save.Envelope can decode.
+
+    Resolves the literal `metadataComponentInputVersions` list, whose
+    entries are either integers or the `legacyMetadataComponentVersion`
+    binding declared alongside it. Raises if the binding is missing or an
+    entry cannot be resolved -- an unparseable declaration must fail
+    loudly rather than silently degrade to "only the current version",
+    which would wrongly accuse every historical baseline of declaring a
+    version whose decoder had been removed."""
+    m = METADATA_COMPONENT_INPUT_VERSIONS_RE.search(envelope_text)
+    if not m:
+        raise ValueError(
+            f"could not find metadataComponentInputVersions in "
+            f"{ENVELOPE_SOURCE_PATH}")
+    legacy_m = LEGACY_METADATA_COMPONENT_VERSION_RE.search(envelope_text)
+    names = {"metadataComponentVersion": current}
+    if legacy_m:
+        names["legacyMetadataComponentVersion"] = int(legacy_m.group(1))
+    versions: list[int] = []
+    for raw in m.group(1).split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        if token.isdigit():
+            versions.append(int(token))
+        elif token in names:
+            versions.append(names[token])
+        else:
+            raise ValueError(
+                f"metadataComponentInputVersions in {ENVELOPE_SOURCE_PATH} "
+                f"carries an entry this parser cannot resolve: {token!r}")
+    if not versions:
+        raise ValueError(
+            f"metadataComponentInputVersions in {ENVELOPE_SOURCE_PATH} is empty")
+    return sorted(set(versions))
+
+
 def real_component_registry() -> dict[str, dict]:
     """Every save component this build's REAL source currently declares,
     id -> {"currentVersion": int, "inputVersions": [int, ...],
@@ -414,8 +463,10 @@ def real_component_registry() -> dict[str, dict]:
             f"could not find metadataComponentVersion in {ENVELOPE_SOURCE_PATH}")
     # metadata is unconditionally required -- every envelope carries it
     # (World.Save.Envelope's own decode refuses one that doesn't).
+    metadata_current = int(m.group(1))
     registry["metadata"] = {
-        "currentVersion": int(m.group(1)), "inputVersions": [int(m.group(1))],
+        "currentVersion": metadata_current,
+        "inputVersions": metadata_input_versions(envelope_text, metadata_current),
         "required": True}
 
     # "session" is the ONE frozen legacy component (World.Save.Compat.

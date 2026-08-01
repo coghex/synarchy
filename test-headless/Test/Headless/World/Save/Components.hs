@@ -19,6 +19,7 @@ import Numeric (readHex)
 
 import qualified Data.HashSet as HS
 import World.Save.Envelope
+import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Envelope.Codec (encodeEnvelope, decodeEnvelope, deManifest)
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), EnvelopeManifest(..)
@@ -185,7 +186,7 @@ minimalSaveMetadataV90 = SaveMetadata
     { smName = "b1-hand-built", smSeed = wgpSeed defaultGP
     , smWorldSize = wgpWorldSize defaultGP, smPlateCount = wgpPlateCount defaultGP
     , smTimestamp = "2026-07-16T00:00:00.000000Z"
-    , smWorldName = Nothing, smWorldGloss = Nothing }
+    , smWorldName = Nothing, smWorldGloss = Nothing, smAutosave = False }
 
 -- | The SAME values as 'minimalSaveMetadataV90', but as the frozen
 --   'SaveMetadataV90' type (round-17 review) -- the "session" payload's
@@ -198,6 +199,23 @@ minimalFrozenSaveMetadataV90 = SaveMetadataV90
     , sm90WorldSize = wgpWorldSize defaultGP, sm90PlateCount = wgpPlateCount defaultGP
     , sm90Timestamp = "2026-07-16T00:00:00.000000Z"
     , sm90WorldName = Nothing, sm90WorldGloss = Nothing }
+
+-- | And the SAME values again as the frozen v1 @"metadata"@ component
+--   payload (#913). A hand-built B1 envelope must carry METADATA v1 as
+--   well as its v90 session: a real B1 file was written while the
+--   metadata component was still at v1, and the B1 recognizer pins that
+--   historical version deliberately
+--   ('World.Save.Envelope.legacyMetadataComponentVersion'), so a
+--   metadata bump can never stop this build recognizing its own frozen
+--   baseline. Decoding it must yield 'minimalSaveMetadataV90' exactly —
+--   including @smAutosave = False@, the documented "legacy saves are
+--   manual saves" answer 'migrateSaveMetadataV1' supplies.
+minimalSaveMetadataV1 ∷ SaveMetadataV1
+minimalSaveMetadataV1 = SaveMetadataV1
+    { sm1Name = "b1-hand-built", sm1Seed = wgpSeed defaultGP
+    , sm1WorldSize = wgpWorldSize defaultGP, sm1PlateCount = wgpPlateCount defaultGP
+    , sm1Timestamp = "2026-07-16T00:00:00.000000Z"
+    , sm1WorldName = Nothing, sm1WorldGloss = Nothing }
 
 -- | A minimal, otherwise-valid frozen v90 'SaveDataV90' (issue #766,
 --   save-overhaul C4) — the exact shape a real #759-era @"session"@
@@ -389,7 +407,7 @@ richSnapshot = case captureSessionSnapshot
 
 richMeta ∷ SaveMetadata
 richMeta = snapshotSaveMetadata
-    (SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts" }) richSnapshot
+    (SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts", srmAutosave = False }) richSnapshot
 
 encodeRich ∷ BS.ByteString
 encodeRich = encodeSessionSnapshot richMeta richSnapshot []
@@ -708,7 +726,7 @@ spec = do
         -- data here.
         it "round-trips a session populating EVERY component's data, \
            \reconstructing the EXACT snapshot" $ do
-            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t") fullSnapshot
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) fullSnapshot
                 bytes = encodeSessionSnapshot meta fullSnapshot []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
@@ -727,7 +745,7 @@ spec = do
             -- component's rcApply runs without error against the decoded
             -- payloads — the structural guarantee that registration and
             -- assembly cannot diverge (rcApply is a mandatory field).
-            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t") fullSnapshot
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) fullSnapshot
                 bytes = encodeSessionSnapshot meta fullSnapshot []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
@@ -817,7 +835,7 @@ spec = do
                     { pgsUnitSimStates = HM.singleton (UnitId 77) minimalSimState }
                 snap = buildSessionSnapshot minimalGlobals [orphanPage]
                 meta = snapshotSaveMetadata
-                         (SaveRequestMeta "s" "t") snap
+                         (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
@@ -829,14 +847,14 @@ spec = do
                         51 }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextBuildingId = 50 } [badPage]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
         it "rejects a missing active-page reference" $ do
             let snap = buildSessionSnapshot
                          minimalGlobals { sgActivePage = page2 } [minimalPage page1]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
@@ -915,7 +933,7 @@ spec = do
                         [ WeSetStructure 1 2 0 5 6 3 ] }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgTexPalette = emptyTexPalette } [badPage]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             decodeSessionEnvelope HS.empty HS.empty bytes `shouldSatisfy` isLeft
 
@@ -931,7 +949,7 @@ spec = do
                         [ WeSetStructure 1 2 0 5 6 3 ] }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgTexPalette = tp } [goodPage]
-                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t") snap
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
                 bytes = encodeSessionSnapshot meta snap []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
@@ -1060,8 +1078,8 @@ spec = do
            \build rather than being rejected as unknown" $ do
             let b1Meta = minimalSaveMetadataV90
                 b1Specs =
-                    [ (metadataComponentId, metadataComponentVersion, True
-                      , S.encode b1Meta)
+                    [ (metadataComponentId, legacyMetadataComponentVersion, True
+                      , S.encode minimalSaveMetadataV1)
                     , (ComponentId "session", 90, True
                       , S.encode minimalSaveDataV90) ]
                 bytes = case encodeEnvelope defaultEnvelopeLimits

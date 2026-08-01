@@ -6,6 +6,7 @@ module World.Save.Serialize
     , listSaves
     , SaveListing(..)
     , savesDirectory
+    , saveExtension
     , sanitizeSaveName
     ) where
 
@@ -62,6 +63,12 @@ sanitizeSaveName name
 savesDirectory ∷ FilePath
 savesDirectory = "saves"
 
+-- | The extension of a pre-#762 LEGACY FLAT save file
+--   (@saves\/\<name\>.synworld@). Nothing writes this shape any more —
+--   every save is published as a slot DIRECTORY — but 'listSaves' still
+--   lists one and 'loadWorld' still loads one, so any code reasoning
+--   about whether a save NAME is occupied has to consider both forms
+--   (see "World.Save.Autosave").
 saveExtension ∷ String
 saveExtension = ".synworld"
 
@@ -243,7 +250,8 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                 (meta, snap, luaComponents, isMigrated) ←
                     decodeSessionEnvelope luaKnownNames luaRequiredNames bytes
                 let req = SaveRequestMeta { srmSlotName  = smName meta
-                                          , srmTimestamp = smTimestamp meta }
+                                          , srmTimestamp = smTimestamp meta
+                                          , srmAutosave  = smAutosave meta }
                 sd ← checkWorldCount (snapshotToSaveData req snap)
                 pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ]
                      , isMigrated)

@@ -277,7 +277,7 @@ spec = do
             pgsCameraY (snapPages snap HM.! page2) `shouldBe` 222
 
     describe "adapter (temporary bridge to v88 SaveData)" $ do
-        let req = SaveRequestMeta { srmSlotName = "my_save", srmTimestamp = "ts" }
+        let req = SaveRequestMeta { srmSlotName = "my_save", srmTimestamp = "ts", srmAutosave = False }
             snap = buildSessionSnapshot minimalGlobals
                 [minimalPage page1, minimalPage page2]
             sd = snapshotToSaveData req snap
@@ -342,8 +342,7 @@ spec = do
            \snapshot's own structural equivalence -- two adapts of the \
            \SAME snapshot with DIFFERENT request metadata still compare \
            \equal at the snapshot level" $ do
-            let req2 = SaveRequestMeta { srmSlotName = "different_name"
-                                       , srmTimestamp = "different_ts" }
+            let req2 = SaveRequestMeta { srmSlotName = "different_name", srmTimestamp = "different_ts", srmAutosave = False }
                 sd2  = snapshotToSaveData req2 snap
             snap `shouldBe` buildSessionSnapshot minimalGlobals
                 [minimalPage page1, minimalPage page2]
@@ -378,7 +377,7 @@ spec = do
         it "encodeSessionSnapshot forces that same deferred thunk and throws \
            \-- proving the #758 fix catches it BEFORE the barrier would \
            \release, rather than later during the disk write" $ do
-            let req = SaveRequestMeta { srmSlotName = "my_save", srmTimestamp = "ts" }
+            let req = SaveRequestMeta { srmSlotName = "my_save", srmTimestamp = "ts", srmAutosave = False }
                 explodingEdits = HM.singleton (ChunkCoord 0 0)
                     [error "deferred nested payload boom" ∷ WorldEdit]
                 page = (minimalPage page1) { pgsEdits = explodingEdits }
