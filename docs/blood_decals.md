@@ -1,68 +1,101 @@
 # Procedural Blood Decals
 
-Status: design draft, written 2026-07-07.
+Status: implemented — this is the final documentation/verification gate
+for epic #603 (closed once this PR merges, as a repository-management
+step). This is the as-built record — see git history and the
+referenced issues (their comment threads carry the round-by-round
+design/review narrative) for how each decision below was reached.
 
-## Goals
+Visible blood from injuries, without hand-authored blood texture assets:
 
-Add visible blood from injuries without hand-authored blood texture
-assets:
+- A wound creates an immediate blood mark on the ground (`Blood.Impact`,
+  #607).
+- A bleeding unit leaves drops/smears while moving (`Blood.Trail`,
+  #882) or grows a local pool while stationary/collapsed (`Blood.Pool`,
+  #883).
+- Every visible mark is procedurally generated and deterministic from a
+  compact descriptor (`Blood.Texture`, #606) — no stamped repeated
+  asset, and near-identical requests reuse an existing texture instead
+  of minting a new one.
+- Blood ages visually from wet red toward dark dried red, with a floor
+  so an old mark never disappears from aging alone (`Blood.Render`,
+  #606).
+- Runtime texture and decal counts are hard-bounded (FIFO eviction on
+  both), so a long fight cannot leak unbounded GPU textures, CPU
+  records, or dynamic quads.
+- Blood is **transient by design** — see "Transience" below. A loaded
+  session always starts with no marks.
 
-- A wound can create an immediate blood mark on the ground.
-- A bleeding unit can leave drops, trails, or a local pool over time.
-- Each visible mark should look procedurally unique, not like a stamped
-  repeated asset.
-- Blood should age visually from wet red toward dark dried red.
-- Runtime texture and decal counts must be bounded so long fights cannot
-  leak unbounded GPU textures, CPU records, or dynamic quads.
-
-## Non-goals for the first pass
+## Non-goals
 
 - True liquid simulation.
-- Rain washing, fluid dilution, or blood flowing through the world fluid
-  system.
 - Blood on walls or vertical tile faces.
 - Gore, severed-part sprites, body overlays, or unit-sprite wound art.
-- A general-purpose decal system for scorch marks, grime, footprints, or
-  damage.
+- A general-purpose decal system for scorch marks, grime, footprints,
+  or damage.
+- Rain washing, fluid dilution, or blood interacting with the world
+  fluid system — **deliberately deferred**, not merely unbuilt; see
+  "Deferred: rain and fluid integration" below.
+- Persisting blood across save/load — **deliberately deferred**; see
+  "Transience" below.
 
-Rain and fluid integration should be designed as future cleanup and
-interaction hooks. Blood should expose enough metadata that later weather
-or fluid code can darken, dilute, wash away, cover, or remove decals, but
-that behavior should not ride along in the initial implementation.
+## As-built architecture
+
+| Module | Landed in | Role |
+|---|---|---|
+| `Blood.Types` | #604 | World-scoped data model: `BloodTexturePool` (FIFO of generated-texture descriptors), `BloodDecals` (FIFO of placed marks), the combined per-page `BloodStore`, and the one `spawnDecal` entrypoint that resolves a texture (reuse or create + evict) and places a decal atomically. |
+| `Blood.Texture` | #606 | Pure `BloodTextureDescriptor → RGBA8 pixels` generator — no IO, no GPU. |
+| `Blood.Render` | #606 | Pure `BloodDecal + now → BloodRenderRecord` — resolved world placement plus an aged tint/alpha. The ONE definition both the headless debug surface and the real renderer consume, so they can't drift apart. |
+| `World.Render.BloodQuads` | #606 | GPU half: uploads new descriptors' pixel data and unregisters evicted ones once per frame (`uploadBloodTextures`), and turns visible `BloodRenderRecord`s into world-space `SortableQuad`s (`renderBloodDecalQuads`) through the same bindless/vertex path every other world sprite uses. |
+| `World.Blood.Teardown` | #788 | Cross-thread GPU-dispose transport for a page removed/replaced outright (destroy, destroy-all, re-init under a reused id, arena replacement, save-load page replacement) — hands the orphaned page's live blood-texture handle map to the render thread via `EngineEnv.bloodDisposeQueue`. |
+| `Blood.Impact` | #607 | One-shot impact marks: maps a fresh wound's kind + severity onto a blood request (or nothing), and `spawnImpactBlood` places it. Integration owners: `Combat.Resolution.runResolution` (combat hits), `Unit.Thread.Movement.tickAllMovement` (fall injuries), `Engine.Scripting.Lua.API.Units.unitInjureFn` (debug). |
+| `Unit.Types.Trail` | #882 | `TrailState` — the transient per-unit accumulator BOTH ongoing-bleeding halves share (pending volume, distance/cadence bookkeeping, pool cluster anchor/layer count). Fed by `Combat.Wounds.Tick`'s conserved external-blood-loss accounting; consumed by `Unit.Thread.Movement`. |
+| `Blood.Trail` | #882 | The MOVING half of ongoing bleeding: `consumeTrailMarks` pops zero or more drop/smear marks from a unit's accumulator, gated on distance AND cadence; `spawnTrailMark` places them via `Blood.Types.spawnDecal`. |
+| `Blood.Pool` | #883 | The STATIONARY half: `classifyOngoing` arbitrates travel-vs-dwell by displacement from a cluster anchor, `consumePoolLayers` pops bounded, cadence/volume-gated pool layers, and `spawnPoolLayer` places them — same `spawnDecal` entrypoint, decal records are never mutated (a pool grows by layering new marks, not by resizing one). |
+| `Engine.Scripting.Lua.API.Blood` | #604, #606, #882, #883 | The full debug/headless Lua surface — see "Debug/introspection surface" below. |
+
+`Combat.Wounds.Tick` is the integration owner that feeds `TrailState`
+(conserved external blood-loss accounting); `Unit.Thread.Movement` is
+the integration owner that consumes it every movement tick and decides,
+via `Blood.Pool.classifyOngoing`, whether that tick's emission goes
+through `Blood.Trail` or `Blood.Pool`.
 
 ## Shape of the system
 
-The intended architecture is a bounded procedural decal system, not an
-ever-growing collection of permanent texture uploads.
-
 1. Gameplay code observes an injury or ongoing bleed and calls a blood
-   API with parameters such as wound kind, severity, source unit, current
-   tile/world position, direction if known, and amount.
-2. The blood system turns those parameters into a requested decal style:
-   pool, drops, spatter, streak, smear, or no mark.
-3. Before generating a new texture, the blood texture pool checks whether
-   an existing generated blood texture is close enough to the requested
-   style.
-4. If a match exists within the accepted threshold, the new decal reuses
-   that texture reference with its own transform, tint, age, and world
-   placement.
-5. If no match exists, the system procedurally generates texture data,
-   uploads it through the renderer's texture path, assigns it a stable
-   blood texture reference, and pushes that reference onto the blood
-   texture FIFO.
-6. When the FIFO exceeds its configured maximum, the oldest blood texture
-   is evicted. All world decal records that reference that texture are
-   removed at the same time so stale placements simply disappear instead
-   of pointing at invalid texture data.
+   API with parameters such as wound kind, severity, source unit,
+   current tile/world position, direction if known, and amount.
+2. The blood system turns those parameters into a requested decal
+   style: pool, drops, spatter, streak, smear, or no mark.
+3. Before generating a new texture, the blood texture pool
+   (`Blood.Types.findMatch`) checks whether an existing generated blood
+   texture is close enough to the requested style.
+4. If a match exists within the accepted threshold, the new decal
+   reuses that texture reference with its own transform, tint, age, and
+   world placement.
+5. If no match exists, the pool synchronously mints a fresh descriptor
+   (assigned a stable `BloodTextureId`) and joins it to the blood
+   texture FIFO right away — no pixel data is generated at this point.
+   On a later frame, `World.Render.BloodQuads.uploadBloodTextures`
+   diffs the FIFO against what's already GPU-resident, generates that
+   descriptor's pixel data (`Blood.Texture.generateBloodTexture`), and
+   uploads it into a bindless slot. That slot is recyclable GPU
+   bookkeeping, kept separate from the stable `BloodTextureId` decals
+   actually reference.
+6. When the FIFO exceeds its configured maximum, the oldest blood
+   texture is evicted. Every decal referencing that texture is removed
+   at the same time (`removeDecalsForTexture`) so stale placements
+   simply disappear instead of pointing at invalid texture data.
 
-This is what "bounded procedural decals" means here: individual injuries
-can still produce unique-looking marks, but the system has a hard upper
-bound on generated texture resources.
+Individual injuries can still produce unique-looking marks, but the
+system has a hard upper bound on generated texture resources (and,
+independently, on live decal records — see "Runtime tuning" below).
 
 ## Texture identity and matching
 
-A generated blood texture should have a descriptor that records the
-important visual dimensions used for matching:
+A generated blood texture's descriptor (`BloodTextureDescriptor`)
+records the dimensions `Blood.Types.requestDistance` compares when
+deciding whether a request can reuse an existing texture:
 
 - style: pool, drops, spatter, streak, smear
 - wound kind that requested it
@@ -70,376 +103,359 @@ important visual dimensions used for matching:
 - approximate footprint size
 - directionality/anisotropy bucket
 - edge roughness and droplet density bucket
-- seed or generation lineage
 
-The exact match metric is an implementation detail, but the observable
-contract is:
+Style and severity bucket are **hard gates** — any difference there
+always mints a new descriptor, regardless of the other dimensions.
+Wound kind, footprint, anisotropy, and edge are **soft**: a wound-kind
+mismatch costs a flat 2, each bucketed dimension costs its ordinal
+distance, and a request reuses the closest existing descriptor whose
+total cost is ≤ `Blood.Types.matchThreshold` (1) — one near-match bucket
+step away still reuses; two or more, or any wound-kind mismatch on its
+own, mint a new descriptor.
 
-- nearby wounds should not all stamp the exact same mark when new variety
-  is needed;
-- visually similar requests may reuse textures to keep the pool bounded;
-- repeated visible patterns should be hard to notice in normal play;
-- evicting a texture must also clean up decals that reference it.
+The descriptor also carries a generation seed (`btdSeed`) — but it
+plays NO role in matching (`requestDistance` never reads it). It only
+feeds `Blood.Texture.generateBloodTexture`'s pixel data once a
+descriptor is actually generated/uploaded, which is exactly why two
+descriptors that match on every dimension above reuse ONE texture
+rather than each getting their own seed-varied pixels.
 
-The texture reference used by world decals should be independent from the
-raw GPU slot. Existing texture infrastructure already treats stable
-handles and live slots as separate concepts; blood should preserve that
-kind of separation so cached world placements do not depend on recyclable
-GPU slots.
+The texture reference used by world decals (`BloodTextureId`) is
+independent from the live bindless GPU slot — the same separation every
+other world sprite's handle keeps from its recyclable slot, so cached
+world placements never depend on GPU-side bookkeeping.
 
 ## World decal records
 
-Each blood spot on the map is a world decal record. It should carry
-enough information to render, age, save, and eventually interact with
-weather/fluids:
+Each blood spot on the map is a `Blood.Types.BloodDecal`:
 
 - blood texture reference
 - world/page identity
-- tile or continuous world position
+- tile or continuous world position (`bdeX`/`bdeY`, float, sub-tile)
 - surface z at placement time
 - local offset, rotation, and scale
-- creation game time
-- current age/wetness/dryness
+- creation game time (`bdeCreatedAt`)
+- initial wetness (`bdeInitialWetness`) — current age/wetness/dryness
+  are derived at read time from this plus elapsed time, never stored
+  themselves (`Blood.Types.wetnessAt`)
 - source wound kind and severity bucket
 - source unit id when known
 - amount/opacity
 
-When a texture reference is evicted, every decal using it is removed.
-That cleanup may happen by reverse index, scan, or any other safe bounded
-mechanism.
+Decal records are **immutable** once placed — nothing "grows" or
+rewrites an existing decal (`Blood.Pool`'s layered-spawn design
+depends on this). When a texture reference is evicted, every decal
+using it is removed (`removeDecalsForTexture`); independently, the
+decal store has its own FIFO cap (`defaultBloodDecalCap`) so a request
+that keeps reusing an already-live texture — never triggering texture
+eviction — still can't grow the decal list without bound.
 
-## Injury behavior
+## Injury behavior (impact marks, `Blood.Impact`, #607)
 
-Immediate impact marks should reflect wound kind and severity:
+Immediate impact marks reflect wound kind and severity
+(`impactBloodForWound`):
 
-- `stab`: small pool and/or clustered drops near the victim.
-- `slash`: spatter or directional streaks; use attack or movement
-  direction when available, otherwise choose deterministic variation from
-  the event seed.
-- `blunt`: usually no external blood. Only severe crushing, pulverizing,
-  severing, or otherwise catastrophic wounds should create blood.
-- `arterial` / `severed`: high amount, strong spatter or rapid pooling.
-- `internal`, `fracture`, `concussion`: generally no external ground
-  decal unless paired with a catastrophic external injury.
+- `stab`: pool style.
+- `slash`: streak style, using attack/movement direction when known,
+  otherwise a deterministic fallback angle from the event seed
+  (`impactFallbackAngle`).
+- `blunt`/`concussion`: no external blood below
+  `catastrophicBluntThreshold` (0.85, reused from
+  `scripts/injury_log.lua`'s own T4 tier boundary — the same point that
+  script's narration switches to "crushing"/"pulverizing"/"pulping").
+  At or above it, blood.
+- `fracture`: no external blood below `Combat.Wounds.destroyThreshold`
+  (1.0, the existing structural-destruction cutoff). At or above it,
+  blood.
+- `arterial`/`severed`: always at least `SeverityModerate` (floored),
+  scaling further with severity above that floor.
+- `internal`: never draws blood, at any severity — no plausible
+  skin-breaking mechanism.
 
-Severity should scale both the chance of creating blood and the size,
-count, opacity, and aggressiveness of the mark. A minor scratch should
-not paint the ground like a fatal wound.
+Severity scales the resulting severity bucket, footprint, and opacity
+(`impactSeverityBucket`/`impactFootprint`/`impactOpacity`), reusing the
+SAME T1..T4 tier boundaries (0.25/0.50/0.85) `scripts/injury_log.lua`
+narrates wounds with, so "how strong the mark looks" always agrees with
+"how the wound narrates".
 
-## Ongoing bleeding behavior
+A single attack/fall that produces several wounds picks ONE headline
+wound to represent the whole event (`pickImpactWound`, ranked by
+resulting severity bucket then opacity) — bounded per event, not per
+wound. Production call sites: `Combat.Resolution.runResolution`,
+`Unit.Thread.Movement.tickAllMovement` (fall injuries), and the debug
+surface `unit.injure`. Skips silently (never crashes) if the wounded
+unit's page isn't currently loaded.
 
-Each unit that is externally bleeding needs a bleed-decal accumulator.
-The accumulator should advance from the same effective bleed rate used
-by the wound system, so bandaging, clotting, and healing naturally reduce
-or stop visible blood.
+## Ongoing bleeding behavior (`Blood.Trail` #882, `Blood.Pool` #883)
 
-The accumulator should support two visible outcomes:
+Every unit with an externally-bleeding wound has a bleed-decal
+accumulator (`Unit.Types.Trail.TrailState`), advanced by
+`Combat.Wounds.Tick` from the same effective bleed rate the wound
+system uses — bandaging, clotting, and healing naturally reduce or stop
+new marks. `Unit.Thread.Movement` arbitrates which half of the system
+consumes it each tick (`Blood.Pool.classifyOngoing`, by displacement
+from a pool cluster anchor, not raw step distance — a unit shuffling in
+place keeps feeding one pool rather than restarting a cluster every
+tick):
 
-- A moving unit leaves a trail of drops or short smears.
-- A stationary or collapsed unit grows a local pool over time.
+- **Moving (`Blood.Trail`)**: a unit travelling leaves drops or short
+  smears. A mark needs BOTH a minimum path distance AND a minimum real
+  elapsed time since the last mark (`TrailThresholds`) — neither alone
+  gates it, so a fast unit's trail can't flood the decal store, and a
+  slow unit's trail still reads as continuous. A mark's weight is the
+  FULL volume banked since the last mark (never itself gated), so a
+  light trickle produces a lighter mark than a heavy bleed over the
+  same distance/time.
+- **Stationary/collapsed (`Blood.Pool`)**: a unit that isn't covering
+  ground grows a local pool instead — layered bounded spawns, small
+  overlapping pool/drop marks placed on a deterministic golden-angle
+  spiral around a cluster anchor (`poolLayerOffset`), up to a
+  documented per-cluster layer bound (`ptMaxLayers`). At the bound,
+  nothing more is added — the layer count is never re-derived from the
+  live decal store, so a global FIFO eviction of an old layer can never
+  reopen an exhausted budget. Layers are gated on BOTH cadence and a
+  volume floor, so a trickle pools slowly and an arterial bleed pools
+  fast.
 
-Emission should consider both elapsed game time and movement distance.
-That prevents a moving unit from dropping many decals on the same pixel
-every tick, while still allowing a stationary badly bleeding unit to pool.
+Both halves share the ONE accumulator (`TrailState`), so a
+walk-then-stop-then-walk sequence hands conserved blood seamlessly
+between them with nothing lost at the seam — a pool layer resets the
+same cadence/distance gates a trail mark would. Emission always
+considers both elapsed game time and movement distance, which is what
+prevents a moving unit from dropping many decals on the same pixel
+every tick while still letting a stationary badly-bleeding unit pool.
 
-## Aging
+`TrailState` is entirely runtime/transient — see "Transience" below.
 
-Blood should age visually without needing new textures for each age.
-The first pass can use tint and alpha:
+## Aging (`Blood.Render.decalTint`, #606)
 
-- fresh blood: wet, saturated dark red;
-- drying blood: darker and less glossy/saturated;
-- old blood: very dark red/brown or faded.
+Blood ages visually without ever regenerating a texture — purely a
+function of the current time and the decal's own stored fields
+(creation time, initial wetness):
 
-Aging does not need to force a texture rewrite. Per-decal tint, opacity,
-or shader parameters are enough for the first pass.
+- fresh blood: wet, saturated dark red, full opacity.
+- drying blood: interpolates toward darker, desaturated brown.
+- old/dry blood: alpha floors at 0.35 rather than fading to nothing —
+  **aging never removes a mark**. Removal only happens via texture-FIFO
+  eviction, the decal store's own FIFO cap, page replacement/teardown,
+  or an explicit `blood.clear()`.
 
-## Save/load
+`bloodDryDuration` (600 seconds of unpaused engine time —
+`wsGameTimeRef`, never the world calendar `world.setTimeScale`
+advances) is how long a decal takes to linearly dry from its initial
+wetness to fully dry.
 
-Persistence can be built on the same texture-reference model:
+## Rendering (`World.Render.BloodQuads`, #606)
 
-1. Save the blood texture FIFO descriptors or enough generation
-   parameters to recreate the generated textures.
-2. Save world decal records with their blood texture reference ids.
-3. On load, rebuild or reload the FIFO texture set first.
-4. Reconnect each saved decal to the loaded texture reference.
-5. Drop any decal whose texture reference cannot be restored.
+Blood renders through the same world-space quad / bindless-texture path
+every other world sprite uses — no dedicated decal pipeline:
 
-The first implementation may choose whether save/load is included in its
-scope, but the data model should not paint itself into a corner where
-save/load requires replacing the whole design.
+- Sits just above bare terrain and below ground items/units (a fixed
+  sort-key nudge above terrain, below the ground-item/unit band — the
+  same convention `World.Render.SpoilQuads`/`FloraQuads` use for "sits
+  on the ground").
+- Rotation is real corner-vertex rotation, not a shader flag.
+- Culled to visible chunks/regions via the same chunk-visibility
+  culling ground items use, so the per-frame quad count stays bounded
+  regardless of world size.
+- A decal whose texture hasn't been GPU-uploaded yet (or never will be
+  — headless) simply contributes no quad; it appears once
+  `uploadBloodTextures` catches up.
+- Omitted once its texture reference has been evicted (defensive
+  double-check in `Blood.Render.bloodRenderRecord`, on top of eviction
+  already having removed the decal itself).
 
-## Rendering notes
+The headless debug surface (`blood.getRenderQuads`) exposes the exact
+same resolved `Blood.Render.BloodRenderRecord` data the real renderer
+consumes, computed purely from decal + texture-pool state with no GPU
+dependency, so a headless probe can assert renderability and aging tint
+without a display.
 
-Blood is expected to render through world-space quads at first:
+## Runtime tuning
 
-- above terrain/floor surfaces;
-- below unit sprites;
-- with the same camera-facing and world wrapping rules as other world
-  overlays where applicable;
-- culled to visible chunks/regions;
-- omitted when its texture reference has been evicted.
+These are compiled production defaults, not dynamically configurable
+runtime settings:
 
-A dedicated blood/decal pipeline may be useful later, but the first
-version should prove the gameplay and visual behavior before adding a
-new renderer path.
+| Parameter | Value | Where |
+|---|---|---|
+| Texture-FIFO cap | 24 | `Blood.Types.defaultBloodTextureCap` |
+| Decal-FIFO cap (per page) | 512 | `Blood.Types.defaultBloodDecalCap` |
+| Dry duration | 600 s (unpaused engine time) | `Blood.Types.bloodDryDuration` |
+| Trail: min distance between marks | 1.0 tile | `Blood.Trail.defaultTrailThresholds` (`ttMinDistance`) |
+| Trail: min cadence between marks | 0.5 s | `Blood.Trail.defaultTrailThresholds` (`ttMinCadence`) |
+| Trail volume bands (moderate/severe/catastrophic) | 0.05 / 0.15 / 0.4 L | `Blood.Trail.trailModerateVolume`/`trailSevereVolume`/`trailCatastrophicVolume` |
+| Pool: cluster radius | 1.0 tile | `Blood.Pool.defaultPoolThresholds` (`ptClusterRadius`) |
+| Pool: max layers per cluster | 12 | `Blood.Pool.defaultPoolThresholds` (`ptMaxLayers`) |
+| Pool: min cadence between layers | 1.5 s | `Blood.Pool.defaultPoolThresholds` (`ptMinCadence`) |
+| Pool: min volume per layer | 0.015 L | `Blood.Pool.defaultPoolThresholds` (`ptMinVolume`) |
+| Pool: jitter radius | 0.35 tile | `Blood.Pool.defaultPoolThresholds` (`ptJitterRadius`) |
+| Match threshold (soft-distance reuse) | 1 | `Blood.Types.matchThreshold` |
+| Max generated texture dimension | 32 px | `Blood.Texture.maxBloodTextureDim` |
 
-## Implementation notes (#604)
+## Debug/introspection surface (`Engine.Scripting.Lua.API.Blood`)
 
-The first landing (model + debug surface, `Blood.Types` +
-`Engine.Scripting.Lua.API.Blood`) pins down some things this design left
-open:
+The complete registered Lua surface:
 
-- **Match metric.** Style and the severity/amount bucket are hard
-  gates — any difference there always mints a new descriptor,
-  regardless of the other dimensions (this is what makes "different
-  styles or severity buckets create distinct descriptors" a hard
-  contract, not just a likely outcome). Wound kind, footprint,
-  anisotropy, and edge are soft: a wound-kind mismatch costs a flat 2,
-  each bucketed dimension costs its ordinal distance, and a request
-  reuses the closest existing descriptor whose total cost is ≤ 1 (one
-  near-match bucket step away still reuses; two or more, or any
-  wound-kind mismatch on its own, mint a new descriptor).
-- **Texture cap.** Defaults to 24 (`Blood.Types.defaultBloodTextureCap`)
-  — small on purpose, since this landing is the model and debug
-  surface, not final tuning (see "Aging, caps, and cleanup tuning"
-  below).
-- **Storage shape.** The texture pool and the decal store live in one
-  combined `Blood.Types.BloodStore` (one `IORef` per world page,
-  `wsBloodStoreRef`) rather than two separate registries. Eviction has
-  to cascade into decal removal, and that cascade needs to be atomic
-  against a concurrent Lua call — two separate refs would only allow
-  evicting the texture and removing its decals as two non-atomic
-  steps.
-- **Scope held to the issue.** No `Serialize` instance, no
-  `WorldPageSave` field, no save-version bump — the store is
-  per-session and dies with the `WorldState`, mirroring
-  `wsStructureStageRef`. No rendering, no combat/wound hook, and no
-  real texture generation (`btdSeed` is stored but unused pending a
-  future generator).
-- **Debug Lua surface.** `blood.spawn(gx, gy, woundKind, severity[,
-  props])` resolves/creates a texture and places a decal in one call;
-  `blood.getDecal`/`listDecals`, `blood.getTexture`/`listTextures`
-  (oldest-first, each entry carries its 0-based FIFO rank),
-  `blood.getTextureCap`, and `blood.clear` round out the inspection +
-  reset surface.
+- `blood.spawn(gx, gy, woundKind, severity [, props])` — resolves/
+  creates a texture and places a decal in one call; the debug entry
+  point every headless probe drives.
+- `blood.getDecal(decalId)` / `blood.listDecals()` — decal inspection,
+  oldest first, with derived `age`/`wetness`/`dryness`.
+- `blood.getTexture(textureId)` / `blood.listTextures()` — texture
+  descriptor inspection, oldest (FIFO front) first, each reporting its
+  0-based FIFO rank plus regenerated `width`/`height`/`pixelHash`.
+- `blood.getTextureCap()` — the active world's configured texture-pool
+  cap.
+- `blood.getRenderQuads([pageId])` — the resolved
+  `Blood.Render.BloodRenderRecord` data a real quad would use, without
+  a GPU.
+- `blood.gpuStats()` — GPU-side resource counts (bindless registrations,
+  texture-size cache entries, the active page's live blood handle-map
+  size) for teardown/leak probes.
+- `blood.clear()` — empties both the decal list and the texture pool on
+  the active world.
+- `blood.getTrailState(uid)` — the per-unit ongoing-bleeding
+  accumulator (pending volume, distance/cadence bookkeeping, pool
+  cluster anchor/layer count/at-bound flag), or `nil` for a unit with no
+  active accumulator.
 
-## Implementation notes (#606)
+## Transience (deliberate design decision, not an omission)
 
-The second landing (procedural texture generation + world-space
-rendering, `Blood.Texture` + `Blood.Render` + `World.Render.BloodQuads`)
-fills in the pieces #604 deliberately left open:
+Blood is **transient by design**. `wsBloodStoreRef` (the per-page
+`BloodStore` — texture pool + decal list) is deliberately never
+persisted, and `Unit.Types.Trail.TrailState` (the per-unit ongoing-
+bleeding accumulator) is deliberately never persisted either. A loaded
+session always starts with no decals and no active trail/pool
+accumulators, even if the session that was saved had plenty of both.
 
-- **Texture generation.** `Blood.Texture.generateBloodTexture` is a
-  pure function of a `BloodTextureDescriptor` — no IO, no lookup table.
-  It folds every descriptor field into one `StdGen` seed
-  (`descriptorSeed`), then composes a handful of soft-edged "splat"
-  primitives into the requested style: a pool is 1–2 big overlapping
-  blobs, drops/spatter scatter many small splats (count scaled by
-  severity), and streak/smear lay a chain of splats along a seeded
-  direction (thin+tapered vs. short+wide). Anisotropy is applied as a
-  shared rotate/stretch transform over the whole canvas rather than
-  per-splat, so it reads as directional regardless of style. Canvas
-  size is bounded by footprint bucket (16/24/32 px square,
-  `maxBloodTextureDim` = 32) — RGBA8, fully transparent
-  (`0,0,0,0`) outside the generated shape. Determinism/distinctness/
-  bounds are covered directly in `Test.Headless.Blood.Texture`
-  (`cabal test synarchy-test-headless --test-options='--match
-  "Blood"'`).
-- **Aging stays decal-level, not texture-level**, exactly as the
-  design's "Aging" section calls for: `Blood.Render.decalTint` derives
-  an RGB tint + alpha from a decal's current `wetnessAt` (fresh =
-  saturated dark red at full opacity; dry = desaturated brown at a
-  0.35 alpha floor, never vanishing outright — eviction is what
-  removes a mark, not aging). No texture is ever regenerated for
-  aging.
-- **Rendering reuses the existing quad/bindless path**, per
-  requirement 9 — no dedicated decal pipeline. `World.Render.BloodQuads`
-  splits into two independent halves that only meet through a new
-  per-world `wsBloodTextureHandlesRef` map:
-  - `uploadBloodTextures` (GPU-touching, runs once per frame from
-    `Engine.Scripting.Lua.Message.processLuaMessages`, gated on
-    `whenGraphical` — headless has no device) diffs each loaded
-    world's texture FIFO against what's already GPU-resident: uploads
-    pixel data for anything new (`Engine.Graphics.Vulkan.Texture.
-    createTextureFromRGBABytes`, a factored-out version of the
-    staging-buffer upload `handleWorldPreview`/`handleZoomAtlasUpload`
-    already did inline) and registers it with the bindless system.
-    Eviction unregisters the bindless slot, drops the now-stale
-    `textureSizeRef` entry, and disposes the GPU image/view — but only
-    after a `deviceWaitIdle`, since this runs from `processLuaMessages`
-    before `drawFrame`, and `drawFrame` only waits the CURRENT frame's
-    own fence, not every frame still in flight (the same reasoning
-    `Engine.Scripting.Lua.Message.disposeTransientTexture` documents
-    for the shared preview/zoom-atlas texture). The wait only fires
-    when a pass actually has something to evict, not every frame.
-  - `renderBloodDecalQuads` (pure IO, no GPU calls, same shape as
-    `World.Render.GroundItemQuads`) turns each visible decal into a
-    `SortableQuad`, sat at a sort-key nudge of 0.0003 above bare
-    terrain (0.0) and below ground items/units (0.0006) — the same
-    convention `World.Render.SpoilQuads`/`FloraQuads` use for "sits on
-    the ground". Rotation is applied as real corner-vertex rotation
-    (no shader change); a decal whose texture hasn't been GPU-uploaded
-    yet (or never will be, headless) simply contributes no quad.
-  - Chunk-visibility culling (`isChunkVisibleWrapped`/
-    `computeViewBounds`, the same functions ground items use) keeps
-    the VISIBLE quad count bounded regardless of world size.
-- **Decal count has its own cap, independent of the texture cap.**
-  Texture-FIFO eviction cascades to remove its decals, but a request
-  that keeps *reusing* an already-live texture (the near-match design
-  is built to encourage exactly that) never triggers texture eviction
-  at all — without a bound of its own, decals could accumulate
-  forever, and `Blood.Render.bloodRenderRecords` scans every stored
-  decal before `renderBloodDecalQuads` gets to cull by visibility, so
-  an unbounded decal list means unbounded per-frame work even for an
-  empty screen. `BloodDecals` now carries its own FIFO
-  (`bdlOrder`/`bdlCap`, `defaultBloodDecalCap` = 512, mirroring
-  `BloodTexturePool`'s `btpOrder`/`btpCap`) — `addDecal` evicts the
-  oldest decal once over cap, independent of which texture it
-  references. `removeDecalsForTexture` (the texture-eviction cascade)
-  also prunes `bdlOrder` of the ids it removes, so that queue can't
-  grow unboundedly stale either.
-- **Debug/headless surface without a GPU.** `blood.getRenderQuads
-  ([pageId])` exposes `Blood.Render.bloodRenderRecords` directly —
-  the same resolved position/tint/alpha data the real renderer
-  consumes, computed purely from the decal + texture-pool state (no
-  dependency on `wsBloodTextureHandlesRef`/GPU upload), so a headless
-  probe can assert renderability and aging tint without a display.
-  `blood.listTextures`/`getTexture` also now report each descriptor's
-  generated `width`/`height`/`pixelHash` (regenerated on demand via
-  `generateBloodTexture` — never cached alongside the descriptor, so
-  it can't drift from what actually gets uploaded).
-- **GPU cleanup on world teardown (#788).** FIFO eviction *within* a
-  live world always unregisters + disposes the GPU texture (requirement
-  5). World-lifecycle paths that remove or replace a page — single-page
-  destroy, destroy-all (Exit to Menu), same-id `world.init`, arena
-  replacement, save-load page replacement, and stale-page removal during
-  a within-session load (`LoadWorld` dropping a remapped-away or
-  superseded page) — now do the same for whatever blood textures the
-  orphaned page still held. Those paths run
-  on the world thread with no GPU access, so each hands the orphaned
-  page's live `wsBloodTextureHandlesRef` to the render thread over
-  `EngineEnv.bloodDisposeQueue` (`World.Blood.Teardown`); the render
-  thread drains it beside `uploadBloodTextures`
-  (`disposeQueuedBloodTextures`), running the same
-  bindless-unregister + `textureSizeRef`-delete + image/view-cleanup
-  sequence as FIFO eviction, then empties the map. Enqueuing the *live*
-  ref (not a snapshot) keeps it disjoint from any still-in-flight FIFO
-  eviction of the same map, so no handle is freed twice; a single
-  `deviceWaitIdle` covers in-flight frames; the drain is idempotent and
-  a safe no-op headless (nothing ever uploads there, so nothing is
-  enqueued with records).
+**What actually removes a mark.** Aging alone never does — it floors at
+0.35 alpha rather than fading to nothing (see "Aging" above). A mark
+disappears only via: texture-FIFO eviction (cascades to every decal
+referencing that texture), the decal store's own independent FIFO cap,
+a page being torn down or replaced (destroy, destroy-all, re-init under
+a reused id, arena replacement, save-load page replacement —
+`World.Blood.Teardown` reclaims the GPU side of this), or an explicit
+`blood.clear()`.
 
-## Implementation notes (#607)
+**Save/load specifically.** `World.Thread.Command.Save.WriteWorld`'s
+save capture never reads `wsBloodStoreRef` at all — it isn't part of
+`World.Save.Snapshot.PageSnapshot`/`World.Save.Types.WorldPageSave`, so
+there is structurally nothing for a save to carry. On load,
+`World.Load.Stage` always builds pages from a fresh `WorldState`
+(`emptyWorldState`), which starts with an empty `BloodStore` — staging
+never writes to `wsBloodStoreRef`. The per-unit trail/pool accumulator
+resets independently, through a different path:
+`World.Save.Types.fromUnitSnapshot` always reconstructs a loaded unit
+with `uiTrailState = Nothing`, regardless of what the live unit's
+accumulator held at save time. These are two SEPARATE resets on two
+separate save/load surfaces, not one shared mechanism. Note that
+`blood.clear()` only empties the active page's `BloodStore`; it does
+NOT touch any unit's `uiTrailState` — that resets independently, via
+several paths that have nothing to do with save/load: the save/load
+reconstruction above, unit death/destroy, and — most often, in normal
+play — the instant a unit's external bleed rate reaches zero for ANY
+reason (clotting, bandaging, healing, or an explicit treatment), which
+`Combat.Wounds.Tick`'s own wound tick clears synchronously, and
+`Unit.Thread.Movement` re-checks defensively (a treatment or a healed-
+out wound can drop external bleed to zero between wound ticks, and
+consuming stale banked volume on that tick would stamp a mark for
+blood that stopped flowing) — see `Test.Headless.Blood.Trail`'s
+lifecycle coverage.
 
-The third landing (`Blood.Impact`) connects fresh wound creation to
-one-shot impact blood — the "Injury behavior" section above, made
-concrete:
+**Why.** Blood marks are cosmetic and already capacity-bounded — the
+texture pool and decal store are both hard-capped (see "Runtime
+tuning"), so the worst-case footprint a save component would ever need
+to carry is small and fixed, not unbounded. They are NOT self-expiring,
+though: aging never removes a mark (see "Aging" above), and FIFO
+eviction only fires when NEW activity pushes a store over its cap — an
+isolated old mark with nothing further spawned into that page can sit
+untouched for the rest of the session. Building and maintaining a full
+save component for them — schema, migration, integrity-graph coverage
+— is a real ongoing cost for state that is inherently disposable: every
+mark is regenerable from live gameplay, and a mark from a fight several
+sessions back has no gameplay meaning worth preserving. #884 (persist
+blood decals as a versioned save component) was closed as not planned
+on this basis.
 
-- **Reused existing severity signals, not a new "blunt severity"
-  threshold**, per the issue's explicit ask. Two thresholds, both
-  already load-bearing elsewhere:
-  - `catastrophicBluntThreshold = 0.85` — `scripts/injury_log.lua`'s
-    own T4 tier boundary, the point at which that script's narration
-    switches to "crushing" (bone), "pulverizing" (nerve — the same
-    family concussion's wording draws from), or "pulping" (soft
-    tissue). Gates `blunt` and `concussion`: below it, a hit is merely
-    "strikes"/"clubs"/"bashes"/"smashes" — no blood; at/above it, blood.
-  - `Combat.Wounds.destroyThreshold = 1.0` — the existing structural-
-    destruction cutoff (a fracture/severed wound at/above it "destroys"
-    the part). Gates `fracture`.
-  - `impactSeverityBucket` reuses the SAME T1..T4 boundaries
-    (0.25/0.50/0.85) for the generated mark's own severity bucket, so
-    "how strong the mark looks" agrees with "how the wound narrates".
-- **Wound kind → style** (`defaultStyleForWound`) was already defined
-  in `Engine.Scripting.Lua.API.Blood` for the #604 debug `blood.spawn`
-  surface's inferred-style default; it now lives in `Blood.Impact` and
-  that Lua module imports it, so an automatic impact mark and a
-  manually-spawned one for the same wound kind read as the same family
-  of mark instead of two mappings that could drift apart.
-- **`internal` never draws blood**, at any severity — it's the one
-  kind with no "catastrophic" exception, since it names damage with no
-  plausible skin-breaking mechanism.
-- **`arterial`/`severed` floor at `SeverityModerate`** rather than
-  being unconditionally `SeverityCatastrophic` — "always at least a
-  strong mark" (the design's "high-volume" framing) while still
-  scaling further with actual severity above that floor, so the "wound
-  severity must affect amount" requirement holds for every kind that
-  draws blood, not just stab/slash.
-- **Direction**: real attacker→target angle when one exists (combat
-  resolution always has both positions); `impactFallbackAngle` — a
-  pure function of a caller-supplied deterministic seed — otherwise
-  (falls have no attacker; `unit.injure` is a bare debug call). Feeds
-  the decal's own `bspRotation`, not the texture's internal seed.
-- **Bounded per event, not per wound.** A single landed hit or fall can
-  produce several tissue-layer wounds (a combo "paw", several
-  fractured bones); each PRODUCER calls `spawnImpactBlood` at most
-  ONCE per event, keyed off the same "headline" (kind, severity) the
-  surrounding code already treats as canonical for that event (combat
-  resolution's death-check/stance-hit scalar; the fall model's
-  worst-injury scalar) — `spawnImpactBlood` itself always places
-  exactly one decal per call, so bounding is entirely the caller's
-  responsibility, not something the shared function enforces.
-- **Three production call sites**, all Haskell (no Lua round-trip):
-  `Combat.Resolution.runResolution` (after the wound-append + hit
-  event), `Unit.Thread.Movement.tickAllMovement` (after the fall
-  injury-log push), and `Engine.Scripting.Lua.API.Units.unitInjureFn`
-  (the debug surface requirement 2 calls for, letting headless probes
-  exercise every wound kind without staging a real attack). The
-  wound-tick's `propagateSevering` cascade (a destroyed part severing
-  its children, `Combat.Wounds`) is deliberately NOT a fourth site —
-  it's bookkeeping on an ALREADY-bled wound, not a fresh injury landing.
-- **Skips safely, never crashes**, per requirement 8:
-  `spawnImpactBlood` looks up the wounded unit's page in `wmWorlds`
-  and does nothing if it isn't found, after the wound itself has
-  already been committed — a missing/unloaded page can never roll back
-  or corrupt the wound creation it rode in on.
+**The reversal path, if this decision is ever revisited.** Both records
+are already persistence-shaped: `BloodTextureDescriptor` and
+`BloodDecal` carry every field a save component would need, and
+`Blood.Texture.generateBloodTexture` is a PURE, deterministic function
+of a descriptor — a saved descriptor regenerates byte-identical pixel
+data with no separate texture-data serialization required. Persisting
+blood later is a self-contained new save component under the #759/#760
+envelope architecture (a `wpsBloodStore`-shaped field, a
+`Blood.Types.BloodStore` `Serialize` instance, a schema-version bump,
+integrity-graph coverage for `bdeSourceUnit`), not a redesign of the
+data model. Closed issue #884 is the specification for that future
+work, should it be picked back up.
 
-## Suggested issue split
+**What stays correct, unchanged, under this decision.** `Blood.Types`'
+module-level "never persisted" note and
+`docs/persistence_state_inventory.md`'s `Exclude` classification for
+`wsBloodStoreRef` were both already correct — they just used to read as
+provisional ("#604 scope", "not yet decided") rather than as the
+epic's settled, deliberate contract. Both have been reworded to say so
+plainly; neither's underlying behavior changed.
 
-### 1. Epic: procedural injury blood decals
+## Deferred: rain and fluid integration
 
-Track the complete feature arc: impact blood, generated texture pool,
-world decal storage, rendering, ongoing bleeding trails, aging, cleanup,
-persistence, and future rain/fluid hooks.
+Rain washing, fluid dilution, and blood interacting with the world
+fluid system are **deliberately deferred beyond this epic's closure**
+(#901, closed as not planned as a fluid-only half-measure — the
+decision is that rain and fluid weathering should be specified together
+against ONE shared mechanism once a weather system exists, not built
+piecemeal now).
 
-### 2. Blood decal model and debug surface
+**What a future integration would read.** Every `BloodDecal` already
+carries the metadata a weather/fluid pass would need: wound kind
+(`bdeWoundKind`), severity bucket (`bdeSeverity`), creation time +
+wetness (`bdeCreatedAt`/`bdeInitialWetness`, from which current
+wetness/dryness derive), position (`bdeX`/`bdeY`/`bdeSurfaceZ`), and
+source unit (`bdeSourceUnit`).
 
-Add the world-scoped blood decal data model, generated texture
-descriptor model, FIFO pool policy, and debug/headless commands to spawn,
-list, and clear decals. This issue should not require combat or rendering
-to be complete.
+**What exists today, precisely — no more, no less.** Three hooks exist,
+none of them a weathering primitive on their own:
 
-### 3. Procedural blood texture generation and rendering
+- `Blood.Types.clearBlood` / `blood.clear()` — clears an ENTIRE page's
+  `BloodStore` (every texture and every decal). Not selective.
+- `Blood.Types.removeDecalsForTexture` — removes every decal that
+  shares a given texture reference, as the texture-FIFO-eviction
+  cascade. Not exposed as a standalone Lua verb, and not selective by
+  position, age, or unit.
+- `Blood.Render.decalTint` — computes an age-derived tint/alpha at
+  READ/render time. It doesn't mutate a decal (decal records are
+  immutable) and can't be redirected by external state (rain, a nearby
+  fluid tile) today.
 
-Render decals from generated blood textures. The implementation should
-create unique-looking texture data, reuse near-matching textures within a
-threshold, evict by FIFO when over cap, and remove corresponding world
-decals on eviction.
+There is **no per-decal removal primitive** (e.g. "remove decals within
+this radius" or "remove this one decal") and **no weather-driven
+mutation hook** (e.g. "darken/dilute decals touched by rain this tick")
+today. A future rain/fluid integration would need to add such a
+primitive — this is a real gap to design against, not an existing
+capability this doc is merely under-explaining.
 
-### 4. Impact blood from new wounds
+## Testing
 
-Connect wound creation to blood decal spawning. `stab`, `slash`, severe
-`blunt`, `arterial`, and `severed` wounds should produce distinct
-severity-scaled requests.
+See CLAUDE.md's "Testing blood decals headless" section (under
+"Subsystem probes & domain contracts") for the turnkey probes, hspec
+`--match` targets, and the transience contract restated for anyone
+writing a new blood test.
 
-### 5. Ongoing bleeding trails and pools
+## Implementation history
 
-Add per-unit bleed-decal accumulators driven by effective bleed rate.
-Moving units leave trails; stationary units pool; clotting/bandaging/
-healing reduces emission.
+The issues below carry the round-by-round design/review narrative in
+their comment threads; this doc states only the resulting contract.
 
-### 6. Aging, caps, and cleanup tuning
-
-Tune drying/darkening, decal caps, texture caps, eviction behavior, and
-test coverage so long-running combat remains bounded.
-
-### 7. Save/load persistence
-
-Persist the blood texture FIFO descriptors and world decal records, then
-restore them across save/load.
-
-### 8. Rain/fluid integration follow-up
-
-Later, connect blood decals to rain and fluid behavior: washing, fading,
-dilution, covering, and removal.
+- #604 — decal/texture-pool data model + debug Lua surface.
+- #606 — procedural texture generation + world-space rendering.
+- #607 — impact blood from fresh wounds.
+- #788 — GPU teardown on world page removal/replacement.
+- #882 — ongoing bleeding: moving trail marks.
+- #883 — ongoing bleeding: stationary/collapsed pooling.
+- #884 — blood decal persistence — **closed, not planned** (see
+  "Transience" above).
+- #901 — rain/fluid weathering — **closed, not planned** (see
+  "Deferred: rain and fluid integration" above).
+- #885 — this doc; the final gate for epic #603 (closed after this PR
+  merges, as a post-merge repository-management step).

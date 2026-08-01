@@ -202,7 +202,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsTillDesignationsRef` | Persist exactly | — | `wpsTillDesignations` | `tools/till_probe.py` |
 | `wsCropPlotsRef` | Persist exactly | — | `wpsCropPlots` | `tools/crop_probe.py` |
 | `wsPlantDesignationsRef` | Persist exactly | — | `wpsPlantDesignations` | `tools/plant_probe.py` |
-| `wsBloodStoreRef` | Exclude | — | explicitly never saved (#604, decal/model debug feature) | `tools/blood_decal_probe.py` (behavior, not persistence) |
+| `wsBloodStoreRef` | Exclude | — | blood is transient BY DESIGN, an epic-wide (#603) deliberate contract — see docs/blood_decals.md's "Transience" section and closed issue #884 | `tools/blood_decal_probe.py` (behavior, not persistence) |
 | `wsBloodTextureHandlesRef` | Exclude | — | GPU handle cache | none yet |
 | `wsIdentityRef` | Persist exactly | — | `wpsIdentity` (#707 player-facing world identity) | `tools/multiworld_save_probe.py` |
 
