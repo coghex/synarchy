@@ -15,10 +15,12 @@
 --   the pool is over its cap, and places a decal, all as one pure
 --   step so a single atomicModifyIORef' covers the whole operation.
 --
---   Deliberately never persisted (issue #604 scope) — mirrors
---   'World.State.Types.wsStructureStageRef': a fresh 'WorldState' gets
---   an empty 'BloodStore' and it dies with the world, no
---   'WorldPageSave' field, no save-version bump.
+--   Deliberately never persisted — blood is transient BY DESIGN (the
+--   epic's settled contract, not a scope placeholder; see
+--   docs/blood_decals.md's "Transience" section and closed issue #884).
+--   Mirrors 'World.State.Types.wsStructureStageRef': a fresh
+--   'WorldState' gets an empty 'BloodStore' and it dies with the world,
+--   no 'WorldPageSave' field, no save-version bump.
 module Blood.Types
     ( BloodStyle(..)
     , SeverityBucket(..)
@@ -113,11 +115,10 @@ newtype BloodTextureId = BloodTextureId { unBloodTextureId ∷ Word32 }
     deriving stock (Show, Eq, Ord, Generic)
     deriving anyclass (Hashable)
 
--- | One generated-texture descriptor: everything a real texture
---   generator (a future issue, #3 in the design doc's suggested
---   split) would need to reproduce the same look, plus what the
---   matcher here reads. Field order isn't load-bearing (no Serialize
---   instance — this store is never saved).
+-- | One generated-texture descriptor: everything
+--   'Blood.Texture.generateBloodTexture' (#606) needs to reproduce the
+--   same look, plus what the matcher here reads. Field order isn't
+--   load-bearing (no Serialize instance — this store is never saved).
 data BloodTextureDescriptor = BloodTextureDescriptor
     { btdId         ∷ !BloodTextureId
     , btdStyle      ∷ !BloodStyle
@@ -130,9 +131,10 @@ data BloodTextureDescriptor = BloodTextureDescriptor
     , btdAnisotropy ∷ !AnisotropyBucket
     , btdEdge       ∷ !EdgeBucket
     , btdSeed       ∷ !Int
-      -- ^ Generation seed / lineage — opaque here, meaningful once a
-      --   real texture generator (design doc's "3. Procedural blood
-      --   texture generation") reads it.
+      -- ^ Generation seed / lineage — opaque here (never read by
+      --   'requestDistance'/matching); folded into
+      --   'Blood.Texture.generateBloodTexture's (#606) pixel-generation
+      --   seed instead.
     } deriving (Show, Eq, Generic)
 
 -- | What a blood request asks the pool to resolve to. Same shape as
@@ -159,11 +161,9 @@ data BloodTexturePool = BloodTexturePool
     , btpCap      ∷ !Int
     } deriving (Show, Eq, Generic)
 
--- | The #604 default cap. Deliberately small — this issue is the
---   model + debug surface, not final tuning (design doc's suggested
---   split leaves "aging, caps, and cleanup tuning" as its own later
---   issue); a small cap keeps eviction reachable in a short headless
---   probe run.
+-- | The settled compiled production default (see docs/blood_decals.md's
+--   "Runtime tuning" table) — deliberately small, since it also keeps
+--   eviction reachable in a short headless probe run.
 defaultBloodTextureCap ∷ Int
 defaultBloodTextureCap = 24
 
@@ -277,7 +277,8 @@ newtype BloodDecalId = BloodDecalId { unBloodDecalId ∷ Word32 }
     deriving anyclass (Hashable)
 
 -- | One placed blood mark. Field order isn't load-bearing (no
---   Serialize — never saved, #604 scope).
+--   Serialize — blood is deliberately transient, see the module
+--   haddock and docs/blood_decals.md's "Transience" section).
 data BloodDecal = BloodDecal
     { bdeId         ∷ !BloodDecalId
     , bdeTexture    ∷ !BloodTextureId
@@ -297,9 +298,11 @@ data BloodDecal = BloodDecal
     , bdeScale      ∷ !Float
     , bdeCreatedAt  ∷ !Double
       -- ^ Game time at placement. "Current age" (design doc) is
-      --   derived at read time (now - bdeCreatedAt), not stored — no
-      --   ticking system owns this yet (#604 scope excludes rain/
-      --   fluid interaction and aging renders).
+      --   derived at read time (now - bdeCreatedAt), not stored —
+      --   'Blood.Render.decalTint' (#606) is the aging render this
+      --   value drives; rain/fluid interaction remains deliberately
+      --   deferred (see docs/blood_decals.md's "Deferred: rain and
+      --   fluid integration").
     , bdeInitialWetness ∷ !Float
       -- ^ Wetness at creation, 0..1 (design doc's "current age/
       --   wetness/dryness" — the stored half; a caller can spawn an
@@ -346,16 +349,15 @@ data BloodDecals = BloodDecals
     , bdlCap    ∷ !Int
     } deriving (Show, Eq, Generic)
 
--- | The #606 default cap on live decals per world page — independent of
---   'defaultBloodTextureCap' (many decals can legitimately share one
---   reused texture, per the near-match design). Without a bound of its
---   own, decals whose requests keep reusing an already-live texture
---   never age out (only texture eviction cascades to decal removal),
---   so repeated same/near-same spawns — a long fight, a filler-heavy
---   probe — could otherwise grow the decal list, and the per-frame
---   render-record scan over it, without bound. Small on purpose, same
---   "not final tuning" caveat as the texture cap (design doc's "Aging,
---   caps, and cleanup tuning" is the later issue for that).
+-- | The settled compiled production default (see docs/blood_decals.md's
+--   "Runtime tuning" table) — independent of 'defaultBloodTextureCap'
+--   (many decals can legitimately share one reused texture, per the
+--   near-match design). Without a bound of its own, decals whose
+--   requests keep reusing an already-live texture never age out (only
+--   texture eviction cascades to decal removal), so repeated same/
+--   near-same spawns — a long fight, a filler-heavy probe — could
+--   otherwise grow the decal list, and the per-frame render-record scan
+--   over it, without bound.
 defaultBloodDecalCap ∷ Int
 defaultBloodDecalCap = 512
 
@@ -412,10 +414,12 @@ lookupDecal did = HM.lookup did . bdlDecals
 allDecals ∷ BloodDecals → [BloodDecal]
 allDecals = sortOn bdeId . HM.elems . bdlDecals
 
--- | Game-seconds for a decal to linearly dry from its initial wetness
---   to fully dry (design doc's "Aging": wet → drying → old/faded).
---   Only a placeholder scale for this issue's derived read — no
---   ticking system exists yet to drive a real aging *render*.
+-- | Seconds of unpaused engine time for a decal to linearly dry from its
+--   initial wetness to fully dry (design doc's "Aging": wet → drying →
+--   old/faded). The settled compiled production default (see
+--   docs/blood_decals.md's "Runtime tuning" table); 'Blood.Render.decalTint'
+--   (#606) is the real aging render this value drives — never a texture
+--   rewrite, just a derived tint/alpha read.
 bloodDryDuration ∷ Double
 bloodDryDuration = 600
 

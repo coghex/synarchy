@@ -173,8 +173,11 @@ data WorldState = WorldState
       --   world decal placements (see Blood.Types). Like
       --   wsStructureStageRef, per-world so it can't leak across
       --   worlds and dies with the WorldState; a reloaded world gets a
-      --   fresh empty store. Never saved — #604 is explicitly model +
-      --   debug-surface only, no save/load persistence.
+      --   fresh empty store. Never saved — blood is transient BY
+      --   DESIGN, an epic-wide (#603) deliberate contract covering
+      --   every landed piece (impact marks, trails, pooling), not a
+      --   #604-only scope limit; see docs/blood_decals.md's
+      --   "Transience" section and closed issue #884.
     , wsBloodTextureHandlesRef ∷ IORef BloodTextureHandles
       -- ^ GPU-upload state for #606's procedurally generated blood
       --   textures: which 'BloodTextureId's currently have a live
