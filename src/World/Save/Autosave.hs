@@ -312,29 +312,53 @@ finalizeAutosaveRotation logger luaKnownNames requestedDepth = do
 -- | Drop the oldest owned generation, shift the rest down, then move the
 --   staged generation into @autosave-1@. Runs only after every check
 --   above has passed AND a real generation is durably on disk.
---   Deletion is the LAST step, and it only ever removes a generation
---   that has already been moved out of the family. The aged-out
---   generation is RETIRED by rename first, so an interrupted or failing
---   rotation leaves every generation still on disk — a partially shifted
---   family, but not a shorter one. Deleting first (the obvious order,
---   since the shift needs the oldest slot free) meant a rename failing
---   halfway had already destroyed one generation, and left the next
---   cycle retrying from a family whose contents no longer matched their
---   indices.
+--   Every move here has a destination that is FREE at the moment it
+--   runs, and the single deletion is last. That combination is what
+--   makes an interruption survivable, and it is why the plan is derived
+--   from what is actually on disk rather than assumed:
+--
+--     * The oldest generation is retired ONLY when the family is
+--       genuinely full — "rotation replaces only the oldest owned
+--       autosave once the configured depth is full", literally. If any
+--       index is already free, nothing has aged out and nothing is
+--       retired.
+--     * The shift then walks DOWN from that first free index, so it only
+--       ever moves the contiguous block below it and every destination
+--       was just vacated. It never has to reason about which of two
+--       occupied slots moves first.
+--
+--   Together those make a resumed rotation correct without a journal. An
+--   interrupted cycle leaves a family with a hole in it; the next one
+--   simply finds that hole as its first free index and shifts into it,
+--   so the generations that had already moved stay where they are
+--   instead of being shifted a second time (which would either clobber
+--   or, with the naive positional version, age out a generation that had
+--   not actually reached the end of the family).
+--
+--   Retiring by rename rather than deleting outright is the other half:
+--   until step 4 every generation is still on disk, just not all of it
+--   inside the numbered family.
 performRotation
     ∷ LoggerState → Int → (Int → Maybe SlotState) → SlotState → SlotState
     → IO (Either Text ())
 performRotation logger depth slotAt incoming retired = do
+    let occupied i = maybe False ssDirExists (slotAt i)
     result ← try $ do
-        -- 1. Move the aged-out generation ASIDE. Nothing is destroyed.
-        forM_ (slotAt depth) $ \oldest →
-            when (ssDirExists oldest) $ do
-                logInfo logger CatWorld $
-                    "Autosave rotation: retiring oldest generation '"
-                    <> ssName oldest <> "'"
-                renameDirectory (ssDir oldest) (ssDir retired)
-        -- 2. Shift descending, so each destination is free before use.
-        forM_ [depth - 1, depth - 2 .. 1] $ \i →
+        -- 1. Room for the shift: the first already-free index, or — only
+        --    if the family is FULL — the one the oldest generation
+        --    vacates by being retired. Nothing is destroyed either way.
+        firstFree ← case [ i | i ← [1 .. depth], not (occupied i) ] of
+            (i : _) → pure i
+            [] → do
+                forM_ (slotAt depth) $ \oldest → do
+                    logInfo logger CatWorld $
+                        "Autosave rotation: retiring oldest generation '"
+                        <> ssName oldest <> "'"
+                    renameDirectory (ssDir oldest) (ssDir retired)
+                pure depth
+        -- 2. Age the contiguous block below it down one place. Descending,
+        --    so each destination is the slot the previous move vacated.
+        forM_ [firstFree - 1, firstFree - 2 .. 1] $ \i →
             case (slotAt i, slotAt (i + 1)) of
                 (Just from, Just to) | ssDirExists from →
                     renameDirectory (ssDir from) (ssDir to)

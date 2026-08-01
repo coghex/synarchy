@@ -45,8 +45,9 @@ What it proves, in order:
  10. ROTATION IS ORDERED AND OWNED, AND ONLY EVER FOLLOWS A REAL
      PUBLISH. Repeated autosaves keep `autosave-1` newest, only
      classified-autosave slots are ever replaced, a failed write against
-     a FULL family discards and renumbers nothing, and a rotation that
-     fails part-way leaves every generation on disk and retries cleanly.
+     a FULL family discards and renumbers nothing, a rotation that fails
+     part-way leaves every generation on disk, and one interrupted AFTER
+     a partial shift resumes without ageing out a second generation.
  11. RETENTION. Reducing `rotation_depth` and disabling autosave both
      RETAIN existing higher-numbered generations untouched.
 
@@ -652,6 +653,47 @@ def main() -> int:
                and "autosave-retired" not in slot_dirs(root),
                "and neither staging slot is left behind",
                str(slot_dirs(root)))
+
+        # RESUMING a rotation that was interrupted AFTER it had already
+        # shifted part of the family. Reconstructed on disk exactly as a
+        # crash would leave it -- oldest retired, one shift done, the rest
+        # not -- because racing a real crash into that window is not
+        # something a gate can do deterministically.
+        rows = listing(args.port)
+        t1 = rows["autosave-1"]["timestamp"]
+        t2 = rows["autosave-2"]["timestamp"]
+        t3 = rows["autosave-3"]["timestamp"]
+        send(args.port,
+             "local a = require('scripts.autosave'); "
+             f"a.performSave('{PAGE}'); a.pending = nil; return 'ok'",
+             timeout=30.0)
+        chk.ok(poll_until(90, lambda: staged_slot_exists(root)) or False,
+               "a fresh generation is staged")
+        # 3 -> retired and 2 -> 3 done; 1 -> 2 never happened.
+        os.rename(os.path.join(saves_dir, "autosave-3"),
+                  os.path.join(saves_dir, "autosave-retired"))
+        os.rename(os.path.join(saves_dir, "autosave-2"),
+                  os.path.join(saves_dir, "autosave-3"))
+        r = send(args.port, "return tostring(engine.finalizeAutosaveRotation(3))")
+        chk.ok(r == "true", "the next rotation resumes from the partial state", r)
+        rows = listing(args.port)
+        chk.ok(autosave_slots(root) == ["autosave-1", "autosave-2", "autosave-3"],
+               "the family is whole again, not one generation shorter",
+               str(autosave_slots(root)))
+        # The generation that had already been shifted must NOT be aged out
+        # a second time: only the one the interrupted cycle retired is gone.
+        chk.ok(rows["autosave-2"]["timestamp"] == t1
+               and rows["autosave-3"]["timestamp"] == t2,
+               "both already-shifted generations survive in the right order",
+               f"want {t1}/{t2}, got {rows['autosave-2']['timestamp']}/"
+               f"{rows['autosave-3']['timestamp']}")
+        chk.ok(rows["autosave-1"]["timestamp"] > t1,
+               "and the staged generation landed as the newest")
+        chk.ok(t3 not in {r["timestamp"] for r in rows.values()},
+               "only the generation the interrupted cycle had retired is gone")
+        chk.ok(not staged_slot_exists(root)
+               and "autosave-retired" not in slot_dirs(root),
+               "with both staging slots cleaned up", str(slot_dirs(root)))
 
         # ---------------------------------------------------------
         # 11. Retention on depth reduction and on disable.
