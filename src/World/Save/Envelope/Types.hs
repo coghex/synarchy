@@ -159,13 +159,13 @@ encodeW32 w = BS.pack
     ]
 
 decodeW32 ∷ BS.ByteString → Word32
-decodeW32 = BS.foldl' (\acc byte → (acc `shiftL` 8) .|. fromIntegral byte) 0
+decodeW32 = BS.foldl' (\acc byte → (acc `shiftL` 8) ⌄ fromIntegral byte) 0
 
 encodeW64 ∷ Word64 → BS.ByteString
 encodeW64 w = BS.pack [ fromIntegral (w `shiftR` (8 * i)) | i ← [7,6..0 ∷ Int] ]
 
 decodeW64 ∷ BS.ByteString → Word64
-decodeW64 = BS.foldl' (\acc byte → (acc `shiftL` 8) .|. fromIntegral byte) 0
+decodeW64 = BS.foldl' (\acc byte → (acc `shiftL` 8) ⌄ fromIntegral byte) 0
 
 -- | Length of a component id's own text, for the
 --   'elMaxComponentIdLength' check.

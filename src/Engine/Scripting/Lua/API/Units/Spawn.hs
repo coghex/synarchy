@@ -419,7 +419,7 @@ unitTransitionToFn env = do
     let stride = case mStrideArg of
             Just s | s ≥ 1 → fromIntegral s
             _              → 1
-    case (idArg, mPoseBS >>= parsePose . TE.decodeUtf8Lenient) of
+    case (idArg, mPoseBS ⌦ parsePose . TE.decodeUtf8Lenient) of
         (Just n, Just target) → do
             let uid = UnitId (fromIntegral n)
             Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $

@@ -63,7 +63,7 @@ worldInitFn env = do
                 -- still honored after minimum-count normalization.
                 rawPlates = maybe (defaultPlatesFor size) fromIntegral platesArg
                 plates = normalizePlateCount rawPlates
-            when (size /= rawSize ∨ plates /= rawPlates) $ do
+            when (size ≢ rawSize ∨ plates ≢ rawPlates) $ do
                 logger ← readIORef (ccLoggerRef (toCoreCapability env))
                 logWarn logger CatWorld $
                     "world.init normalized worldgen inputs: worldSize "

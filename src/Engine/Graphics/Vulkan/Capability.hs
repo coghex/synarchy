@@ -38,8 +38,8 @@ queryBindlessSupport ∷ PhysicalDevice → IO BindlessSupport
 queryBindlessSupport pDevice = do
   props ← getPhysicalDeviceProperties pDevice
   let PhysicalDeviceProperties { apiVersion = version, limits = deviceLimits } = props
-      major = fromIntegral $ (version `shiftR` 22) .&. 0x7F ∷ Int
-      minor = fromIntegral $ (version `shiftR` 12) .&. 0x3FF ∷ Int
+      major = fromIntegral $ (version `shiftR` 22) ⌃ 0x7F ∷ Int
+      minor = fromIntegral $ (version `shiftR` 12) ⌃ 0x3FF ∷ Int
       isVulkan12OrHigher = major > 1 ∨ (major ≡ 1 ∧ minor ≥ 2)
 
   props12 ← if isVulkan12OrHigher

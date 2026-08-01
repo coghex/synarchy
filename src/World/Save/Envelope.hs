@@ -210,7 +210,7 @@ decodeSaveEnvelopeMetadata
     ∷ HS.HashSet Text → BS.ByteString → Either Text SaveMetadata
 decodeSaveEnvelopeMetadata luaKnownNames bytes =
     case decodeValidatedEnvelope luaKnownNames HS.empty bytes
-             >>= decodeMetadataComponent of
+             ⌦ decodeMetadataComponent of
         Right meta     → Right meta
         Left modernErr → case tryLegacyMetadataFallbacks bytes of
             NotLegacyShaped         → Left modernErr

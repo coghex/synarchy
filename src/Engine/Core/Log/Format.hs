@@ -77,7 +77,7 @@ formatLocation ∷ Maybe SrcLoc → Text
 formatLocation Nothing = ""
 formatLocation (Just loc) =
   let modName = T.pack $ srcLocModule loc
-      fileName = T.takeWhileEnd (/= '.') modName  -- Get last component
+      fileName = T.takeWhileEnd (≢ '.') modName  -- Get last component
   in "[" <> fileName <> ":" <> T.pack (show (srcLocStartLine loc)) <> "]"
 
 formatFields ∷ Map.Map Text Text → Text

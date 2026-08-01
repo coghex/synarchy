@@ -35,7 +35,7 @@ worldGetFluidAtFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -70,7 +70,7 @@ worldGetSurfaceAtFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
                     return 1

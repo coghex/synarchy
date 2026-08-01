@@ -115,7 +115,7 @@ pushScriptValue v = case v of
 pushNumeric ∷ Double → Lua.LuaE Lua.Exception ()
 pushNumeric n
     | isNaN n || isInfinite n = Lua.pushnumber (Lua.Number n)
-    | n == fromIntegral asInt = Lua.pushinteger (fromIntegral asInt)
+    | n ≡ fromIntegral asInt = Lua.pushinteger (fromIntegral asInt)
     | otherwise               = Lua.pushnumber (Lua.Number n)
   where
     asInt = round n ∷ Int

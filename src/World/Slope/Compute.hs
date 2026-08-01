@@ -128,9 +128,9 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
         wetW = neighborHasFluidAt coord (lx - 1) ly fluidMap fluidNeighborLookup
 
         rawSlope = (if bitN then 1 else 0)
-               .|. (if bitE then 2 else 0)
-               .|. (if bitS then 4 else 0)
-               .|. (if bitW then 8 else 0) ∷ Word8
+               ⌄ (if bitE then 2 else 0)
+               ⌄ (if bitS then 4 else 0)
+               ⌄ (if bitW then 8 else 0) ∷ Word8
 
         -- Local relief: the steepest single-neighbour DROP from this tile
         -- (absent neighbours read back as the minBound sentinel and never

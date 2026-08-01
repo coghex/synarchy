@@ -141,7 +141,7 @@ batchFromSortedQuads layer sorted =
                then 0
                else let last' = sqSortKey (V.last sorted)
                         first' = sqSortKey (V.head sorted)
-                    in if last' == first'
+                    in if last' ≡ first'
                        then last'
                        else (last' + first') / 2
         !allVerts = VS.create $ do

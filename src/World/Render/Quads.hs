@@ -215,7 +215,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           -- filter below). Decorative co-tenants on the
                           -- same tile are unaffected.
                           mHarvest = lookupSpecies (fiSpecies inst) floraCat
-                                       >>= fsHarvest
+                                       ⌦ fsHarvest
                           harvested = isJust mHarvest
                                     ∧ HM.member (gx, gy) harvests
                           texHandle = case (harvested, mHarvest) of
@@ -223,7 +223,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                               _ → resolveFloraTexture floraCat daysPerYear
                                       absDay inst'
                     , actualZ > minBound  -- skip empty columns
-                    , texHandle /= TextureHandle 0
+                    , texHandle ≢ TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
                                      gx gy inst' texHandle zSlice effectiveDepth
                                      zoomAlpha xOffset texSizes]
@@ -436,5 +436,5 @@ findTopSolid col =
   where
     go i
         | i < 0 = minBound
-        | ctMats col VU.! i /= 0 = ctStartZ col + i
+        | ctMats col VU.! i ≢ 0 = ctStartZ col + i
         | otherwise = go (i - 1)

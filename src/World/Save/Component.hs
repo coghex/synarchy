@@ -328,7 +328,7 @@ metadataErrors meta snap =
         Just p  ->
             let gp = pgsGenParams p
                 nm = wiName <$> pgsIdentity p
-                gl = pgsIdentity p >>= wiGloss
+                gl = pgsIdentity p ⌦ wiGloss
             in concat
                 [ disagree "seed" (smSeed meta) (wgpSeed gp)
                 , disagree "world size" (smWorldSize meta) (wgpWorldSize gp)

@@ -211,8 +211,8 @@ createFontPipelineWith vertShaderCode setCleanup device renderPass swapExtent
           }
 
         colorBlendAttachment = zero
-          { colorWriteMask = COLOR_COMPONENT_R_BIT .|. COLOR_COMPONENT_G_BIT
-                            .|. COLOR_COMPONENT_B_BIT .|. COLOR_COMPONENT_A_BIT
+          { colorWriteMask = COLOR_COMPONENT_R_BIT ⌄ COLOR_COMPONENT_G_BIT
+                            ⌄ COLOR_COMPONENT_B_BIT ⌄ COLOR_COMPONENT_A_BIT
           , blendEnable = True
           , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
           , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
@@ -281,7 +281,7 @@ createFontQuadBuffer device pDevice queue cmdPool = do
     
     (stagingMem, stagingBuff) ← createVulkanBufferManual device pDevice vertSize
         BUFFER_USAGE_TRANSFER_SRC_BIT
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
     
     dataPtr ← mapMemory device stagingMem 0 vertSize zero
     liftIO $ VS.unsafeWith quadVertices $ \srcPtr →
@@ -289,7 +289,7 @@ createFontQuadBuffer device pDevice queue cmdPool = do
     unmapMemory device stagingMem
     
     (vertexMem, vertexBuff) ← createVulkanBuffer device pDevice vertSize
-        (BUFFER_USAGE_VERTEX_BUFFER_BIT .|. BUFFER_USAGE_TRANSFER_DST_BIT)
+        (BUFFER_USAGE_VERTEX_BUFFER_BIT ⌄ BUFFER_USAGE_TRANSFER_DST_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     
     copyBuffer device cmdPool queue stagingBuff vertexBuff vertSize

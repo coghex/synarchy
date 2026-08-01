@@ -58,7 +58,7 @@ zoomTileHash seed x y =
     in h5
 
 zoomHashToFloat ∷ Word64 → Float
-zoomHashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word64)
+zoomHashToFloat h = fromIntegral (h ⌃ 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word64)
 
 zoomSmoothstep ∷ Float → Float
 zoomSmoothstep t = t * t * (3.0 - 2.0 * t)

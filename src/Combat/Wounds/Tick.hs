@@ -159,7 +159,7 @@ tickOneUnit
     → Random.StdGen → UnitInstance → Bool
     → (UnitInstance, WoundTickOutcome, Random.StdGen)
 tickOneUnit gt def dt infMgr mClim gen0 inst testMode
-    | uiPose inst == "dead" = (inst, NoChange, gen0)
+    | uiPose inst ≡ "dead" = (inst, NoChange, gen0)
     | null (uiWounds inst)  =
         -- No wounds → no infection, but the immune response must still wind
         -- down and acquired immunity fade (else a recovered unit would keep a
@@ -197,7 +197,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
             -- go_to_sleep goal's real Pose chain; bears use the same
             -- shared goal since #613 (PR #659), not a bearPosture-only
             -- side channel.
-            restMult = if uiPose inst == "sleeping" then sleepHealMult else 1.0
+            restMult = if uiPose inst ≡ "sleeping" then sleepHealMult else 1.0
             -- A starving unit heals slower (calorie gating). Wildlife
             -- without a calorie store reads 1.0.
             calHealMlt = calorieHealMultiplier (uiStats inst)
@@ -300,7 +300,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                         -- the worsen threshold — actively deteriorates as
                         -- woundHeal reverses below zero, so effSev climbs above
                         -- the inflicted value, capped by woundHealFloor).
-                        canHeal    = woundKind w /= "severed"
+                        canHeal    = woundKind w ≢ "severed"
                         clotHealF  = healClotFloor + (1 - healClotFloor) * newClot
                         infHealMlt = max 0 (1 - newInf)
                         healAdv    = if canHeal
@@ -428,9 +428,9 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
             -- "collapsed" for the same reason.
             outcome
                 | uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart "exsanguination"
-                | uiPose inst /= "dead"
+                | uiPose inst ≢ "dead"
                 , (g:_) ← gangrenousVital        = DiedNow g "gangrene"
-                | newBlood < unconsCut, uiPose inst /= "collapsed"
+                | newBlood < unconsCut, uiPose inst ≢ "collapsed"
                                      = UnconsciousNow worstPart
                 | otherwise          = NoChange
             inst' = inst

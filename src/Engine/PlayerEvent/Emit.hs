@@ -162,10 +162,10 @@ pushBounded window ref ev = modifyTVar' ref $ \s →
         let dt = peGameTime a - peGameTime b
         in sameEntry a b ∧ dt >= 0 ∧ dt <= window
 
-    sameEntry a b = peCategory a == peCategory b
-                  ∧ peText a == peText b
-                  ∧ peUid a == peUid b
-                  ∧ peSourcePage a == peSourcePage b
+    sameEntry a b = peCategory a ≡ peCategory b
+                  ∧ peText a ≡ peText b
+                  ∧ peUid a ≡ peUid b
+                  ∧ peSourcePage a ≡ peSourcePage b
 
 -- | Snapshot of the event log. Returns events oldest-first; the Lua
 --   side reverses if it wants newest-on-top.

@@ -33,7 +33,7 @@ createMSAAColorImage pDevice device format extent sampleCount = do
           , samples       = sampleCount
           , tiling        = IMAGE_TILING_OPTIMAL
           , usage         = IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                            .|. IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT
+                            ⌄ IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT
           , sharingMode   = SHARING_MODE_EXCLUSIVE
           , initialLayout = IMAGE_LAYOUT_UNDEFINED
           }
@@ -113,7 +113,7 @@ findMemType typeBits requiredFlags memTypes =
     let indexed = V.imap (,) memTypes
         matches = V.filter (\(i, mt) →
             testBit typeBits (fromIntegral i)
-            ∧ (propertyFlags mt .&. requiredFlags) ≡ requiredFlags
+            ∧ (propertyFlags mt ⌃ requiredFlags) ≡ requiredFlags
           ) indexed
     in case V.null matches of
         True  → Nothing

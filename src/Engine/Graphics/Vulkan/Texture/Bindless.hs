@@ -112,7 +112,7 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   let tableBytes = fromIntegral (handleSlotTableSize * 4) ∷ DeviceSize
   (tblMem, tblBuf) ← createVulkanBuffer dev pdev tableBytes
         BUFFER_USAGE_STORAGE_BUFFER_BIT
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
   -- Map persistently (host-coherent): the pointer lives in the system so
   -- every handle→slot mutation site can poke it directly.
   tblPtrRaw ← mapMemory dev tblMem 0 tableBytes zero
@@ -190,7 +190,7 @@ createBindlessDescriptorSetLayout dev config = do
   -- Not using VARIABLE_DESCRIPTOR_COUNT due to MoltenVK limitations
   let bindingFlags =
         DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
-        .|. DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
+        ⌄ DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
 
       -- The handle→slot table (binding 1) is a plain storage buffer: not
       -- update-after-bind (so it needs no extra device feature), written

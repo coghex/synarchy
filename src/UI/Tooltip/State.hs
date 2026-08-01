@@ -84,7 +84,7 @@ tickTooltip mouse fbSize dtMs fontCache mgr
         -- The hovered element is what the cursor is over, ignoring the
         -- tooltip page itself (otherwise it would hijack its own hover).
         hovered = findElementAtExcept ignored mouse mgr
-        hoveredContent = hovered >>= \h → getElementTooltip h mgr
+        hoveredContent = hovered ⌦ \h → getElementTooltip h mgr
         prevHovered = ttsHoveredElem tts
         -- Reset dwell on hover-target change; otherwise count down by dt.
         dwellRemaining'

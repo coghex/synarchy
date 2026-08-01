@@ -114,7 +114,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
             -- starting_equipment. Resolved against the EquipmentClass
             -- so each item's kind can be validated against the slot.
             ecMgr ← readIORef (crEquipmentClassManagerRef regs)
-            let mClass = udEquipmentClass def >>= (`lookupEquipmentClass` ecMgr)
+            let mClass = udEquipmentClass def ⌦ (`lookupEquipmentClass` ecMgr)
             initialEquipment ← buildStartingEquipment env logger itemMgr mClass
                                   (udStartingEquipment def)
             initialAccessories ← buildStartingAccessories env logger itemMgr

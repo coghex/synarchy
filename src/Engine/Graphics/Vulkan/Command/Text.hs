@@ -58,7 +58,7 @@ ensureTextInstanceBuffer device pDevice requiredInstances mOld = do
             (!memory, !buffer) ← createVulkanBufferManual device pDevice
                 (fromIntegral bufferSize)
                 BUFFER_USAGE_VERTEX_BUFFER_BIT
-                (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                (MEMORY_PROPERTY_HOST_VISIBLE_BIT ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
             pure $ TextInstanceBuffer
                 { tibBuffer   = buffer

@@ -43,10 +43,10 @@ applyRoughness seed (ChunkCoord cx cy) lx ly hardness rawSlope
     | hardness < 0.3  = rawSlope
     | otherwise =
         let h = tileHash seed cx cy lx ly
-            roll = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
+            roll = fromIntegral (h ⌃ 0xFF) / 255.0 ∷ Float
             roughnessChance = (hardness - 0.3) * 0.75
         in if roll < roughnessChance
-           then let dirBits = (h `shiftR` 8) .&. 0x3
+           then let dirBits = (h `shiftR` 8) ⌃ 0x3
                     randomSlope = case dirBits of
                         0 → 1
                         1 → 2
@@ -96,14 +96,14 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
     | maxDrop < 1 = 0   -- no downhill neighbour: flat-topped rock, blocky
     | otherwise =
         let h    = tileHash seed cx cy lx ly
-            roll = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
+            roll = fromIntegral (h ⌃ 0xFF) / 255.0 ∷ Float
             reliefNorm = min 1.0 (fromIntegral maxDrop / rockJaggedReliefMax)
             jaggedChance = clamp01 $ rockJaggedBase
                 + (hardness - slopeHardnessThreshold) * rockJaggedHardK
                 + reliefNorm * rockJaggedReliefK
             -- Wet-direction bitmask (seam-aware via the wet* flags).
-            wetMask = (if wetN then 1 else 0) .|. (if wetE then 2 else 0)
-                  .|. (if wetS then 4 else 0) .|. (if wetW then 8 else 0) ∷ Word8
+            wetMask = (if wetN then 1 else 0) ⌄ (if wetE then 2 else 0)
+                  ⌄ (if wetS then 4 else 0) ⌄ (if wetW then 8 else 0) ∷ Word8
             -- Candidate jagged-lean directions: cardinal neighbours that
             -- are present, NOT wet (bank rule), and NOT strictly HIGHER
             -- (@nz ≤ z@). Strictly-lower neighbours are downhill ramps;
@@ -128,7 +128,7 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
             -- across a chunk seam would otherwise survive in rawSlope and
             -- ramp into water. (15 `xor` wetMask) is the 4-bit complement of
             -- the wet mask.
-            dryFlank = rawSlope .&. (15 `xor` wetMask)
+            dryFlank = rawSlope ⌃ (15 `xor` wetMask)
             -- The non-jagged result: the clean terrace flank, or flat (0)
             -- when it is empty or the degenerate all-four (15 renders as a
             -- flat top, never a slope). This is also the floor the jagged
@@ -155,7 +155,7 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
            -- divide by zero on the empty-cand fall-through case.
            then let lean = cand !! fromIntegral ((h `shiftR` 8) `mod`
                                                   fromIntegral (length cand))
-                    combined = dryFlank .|. lean
+                    combined = dryFlank ⌄ lean
                 -- If OR-ing the lean would complete the degenerate all-four
                 -- (15 renders as a flat top, never a slope) we must NOT
                 -- return 'lean' alone: it can be a subset of dryFlank and so

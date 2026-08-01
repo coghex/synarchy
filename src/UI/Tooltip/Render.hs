@@ -287,7 +287,7 @@ pickFrame animMs sprite =
 --   available (in which case the separator is skipped).
 pickSeparatorTexture ∷ TooltipStyle → UIPageManager → TextureHandle
 pickSeparatorTexture style mgr
-    | toInt (tsSeparatorTexture style) /= 0 = tsSeparatorTexture style
+    | toInt (tsSeparatorTexture style) ≢ 0 = tsSeparatorTexture style
     | otherwise = case getBoxTextureSet (tsBoxTextures style) mgr of
         Just bts → btsCenter bts
         Nothing  → TextureHandle 0

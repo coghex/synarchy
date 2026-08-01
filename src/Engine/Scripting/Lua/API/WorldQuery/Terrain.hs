@@ -46,7 +46,7 @@ worldGetTerrainAtFn wsc = do
                         Just ws → Just <$> readIORef (wsTilesRef ws)
                         Nothing → pure Nothing
                 Nothing → getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -76,7 +76,7 @@ worldGetSlopeAtFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -108,7 +108,7 @@ worldGetVegAtFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -143,7 +143,7 @@ worldIsPlantableFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
                     return 1

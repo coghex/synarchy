@@ -187,7 +187,7 @@ findQueueFamilies device mSurface = do
   props ← liftIO $ getPhysicalDeviceQueueFamilyProperties device
 
   let graphicsIdx = V.findIndex
-        (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT ≢ zeroBits)
+        (\p → (queueFlags p) ⌃ QUEUE_GRAPHICS_BIT ≢ zeroBits)
         props
 
   presentIdx ← case mSurface of
