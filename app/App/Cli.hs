@@ -12,6 +12,8 @@ module App.Cli
   , parsePreview
   , PreviewCategoryKind(..)
   , classifyPreviewCategory
+  , simplePreviewCategories
+  , groupedPreviewCategories
   , parseLanguageReport
   , parseSeeds
   ) where
@@ -138,12 +140,19 @@ data PreviewCategoryKind
 
 classifyPreviewCategory ∷ String → PreviewCategoryKind
 classifyPreviewCategory cat
-    | cat `elem` simpleCategories  = SimplePreviewCategory
-    | cat `elem` groupedCategories = GroupedPreviewCategory
-    | otherwise                    = UnknownPreviewCategory
-  where
-    simpleCategories  = ["icons", "items", "ui", "world"]
-    groupedCategories = ["units", "flora", "buildings", "structures"]
+    | cat `elem` simplePreviewCategories  = SimplePreviewCategory
+    | cat `elem` groupedPreviewCategories = GroupedPreviewCategory
+    | otherwise                           = UnknownPreviewCategory
+
+-- | Preview categories backed by a single flat, recursively-browsable
+--   asset folder. The canonical set from #886 — see 'classifyPreviewCategory'.
+simplePreviewCategories ∷ [String]
+simplePreviewCategories = ["icons", "items", "ui", "world"]
+
+-- | Preview categories requiring a specific --preview <category>/<item>
+--   target. The canonical set from #886 — see 'classifyPreviewCategory'.
+groupedPreviewCategories ∷ [String]
+groupedPreviewCategories = ["units", "flora", "buildings", "structures"]
 
 -- | Whether @--language-report@ (#710) is present at all. It never
 --   boots the engine/world (unlike --dump/--headless/--offscreen), so
