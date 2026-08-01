@@ -3,7 +3,7 @@
 --   parsing.
 module App.Cli
   ( DumpLayers(..)
-  , allLayers
+  , defaultLayers
   , parseDump
   , parseArg
   , parseStrArg
@@ -35,15 +35,22 @@ data DumpLayers = DumpLayers
 --   byte-identical to historical output — the worldgen baselines and the
 --   determinism/audit tools all drive a bare --dump and must not see new
 --   fields.
-allLayers ∷ DumpLayers
-allLayers = DumpLayers True True True True True False
+defaultLayers ∷ DumpLayers
+defaultLayers = DumpLayers
+    { dlTerrain  = True
+    , dlMaterial = True
+    , dlFluid    = True
+    , dlIce      = True
+    , dlOre      = True
+    , dlSlope    = False
+    }
 
 -- | Parse --dump or --dump=layer1,layer2,... from args.
 --   Returns Nothing if --dump not present, Just layers otherwise.
 parseDump ∷ [String] → Maybe DumpLayers
 parseDump [] = Nothing
 parseDump (a:rest)
-    | a ≡ "--dump" = Just allLayers
+    | a ≡ "--dump" = Just defaultLayers
     | "--dump=" `isPrefixOf` a =
         let flags = map (map toLower) $ splitOn ',' (drop 7 a)
         in Just DumpLayers
