@@ -46,7 +46,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-15. Cross-cutting: 136 comments cite PR review rounds — [#949]
 - [x] CH-16. Cross-cutting: 555 files repeat a global `LANGUAGE` pragma — [#950]
 - [x] CH-17. `Show Font` drops its closing brace when a cleanup action is present — [#951]
-- [x] CH-18. `AssetConfig` advertises four features that do not exist — [#952]
+- [x] CH-18. `AssetConfig` advertises three features that do not exist — [#952]
 - [x] CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie — [#964]
 - [x] CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose — [#965]
 - [x] CH-21. The module-budget guard has a subdirectory hole, and code already sits in it — [#967]
@@ -385,7 +385,7 @@ The `" }"` is inside the *else* string, so any `Font` that has a cleanup
 action — i.e. every loaded font — renders as `Font { … fCleanup = <present>`
 with no terminating brace. A real (cosmetic) bug in a hand-written `Show`.
 
-### [#952] CH-18. `AssetConfig` advertises four features that do not exist
+### [#952] CH-18. `AssetConfig` advertises three features that do not exist
 `Engine.Asset.Types.AssetConfig` declares `acMaxTextureAtlases`,
 `acPreloadAssets`, `acEnableHotReload` (plus, until #1007 removed it alongside
 the shader asset model, `acMaxShaderPrograms`). It is constructed exactly once
@@ -395,7 +395,7 @@ appears to support asset preloading and hot reload and to enforce an atlas cap;
 it does none of those.
 
 Worse than plain dead code: it is a false capability advertisement, written
-positionally so the four bare literals cannot even be matched to their meaning
+positionally so the three bare literals cannot even be matched to their meaning
 without opening a second file.
 
 Fix: delete `AssetConfig` and `EngineState.assetConfig`, or implement it.
@@ -1252,8 +1252,8 @@ has no =value)" and then explains slope is deliberately excluded — so the doc
 and the name disagree in the first two words. Rename to `defaultLayers`.
 
 Also: six bare positional booleans, unreadable without counting fields against
-the record declaration (the same anti-pattern as `AssetConfig 100 100 True
-True`, CH-18). Use field syntax.
+the record declaration (the same anti-pattern as `AssetConfig 100 True True`,
+CH-18). Use field syntax.
 
 ### [#1019] CH-60. The preview category list is duplicated as an error-message string
 `App/Cli.classifyPreviewCategory` holds the authoritative lists:
