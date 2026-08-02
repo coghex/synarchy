@@ -209,6 +209,7 @@ library
                      Engine.Graphics.Vulkan.Texture.Undefined
                      Engine.Graphics.Vulkan.Texture.DefaultFaceMap
                      Engine.Graphics.Vulkan.Texture.Types
+                     Engine.Graphics.Vulkan.Texture.Limits
                      Engine.Graphics.Vulkan.Texture.Slot
                      Engine.Graphics.Vulkan.Texture.System
                      Engine.Graphics.Vulkan.Texture.Handle

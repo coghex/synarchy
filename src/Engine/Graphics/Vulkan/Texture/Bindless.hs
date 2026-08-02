@@ -2,7 +2,7 @@
 --
 --   The texture array this module allocates is sized by 'bcMaxTextures' in
 --   the 'BindlessConfig' passed in — production derives that value from the
---   device's bindless capability, capped at 16384
+--   device's bindless capability, capped at 'maxBindlessTextures'
 --   ("Engine.Graphics.Vulkan.Texture.System"), not the much larger
 --   update-after-bind sampled-image ceiling
 --   "Engine.Graphics.Vulkan.Capability" queries from the device and caps
@@ -41,6 +41,8 @@ import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Sampler.Cache
 import Engine.Graphics.Vulkan.Texture.Slot
 import Engine.Graphics.Vulkan.Texture.Handle
+import Engine.Graphics.Vulkan.Texture.Limits
+  (maxBindlessTextures, handleSlotTableSize)
 import Engine.Graphics.Vulkan.Texture.Rebind
   (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
@@ -52,11 +54,12 @@ import Vulkan.Core12
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
--- | Sensible defaults for bindless config
--- Note: This MUST match the shader array size!
+-- | Sensible defaults for bindless config. The array size is
+--   'maxBindlessTextures' ("Engine.Graphics.Vulkan.Texture.Limits"), the
+--   single definition the bindless fragment shaders interpolate too.
 defaultBindlessConfig ∷ BindlessConfig
 defaultBindlessConfig = BindlessConfig
-  { bcMaxTextures    = 16384  -- Must match shader: sampler2D textures[16384]
+  { bcMaxTextures    = maxBindlessTextures
   , bcTextureBinding = 0
   , bcDescriptorSet  = 1
   }
@@ -67,17 +70,10 @@ defaultBindlessConfig = BindlessConfig
 handleSlotBinding ∷ Word32
 handleSlotBinding = 1
 
--- | Number of entries in the handle→slot table. The fragment shader
---   indexes it with a STABLE texture-handle id (not a recyclable slot),
---   so this MUST cover the handle-id space. Handle ids are dense and
---   monotonic from 0 ('generateTextureHandle'); world-tile material /
---   facemap handles are allocated at startup (low ids), so they are
---   always in range. A handle id beyond this cap resolves to slot 0
---   (undefined) in the shader — a graceful degrade that can only bite a
---   transient texture in an extremely long session, never a cached tile.
---   MUST match @HANDLE_TABLE_SIZE@ in the bindless fragment shaders.
-handleSlotTableSize ∷ Int
-handleSlotTableSize = 65536
+-- The handle→slot table size is defined once in
+-- "Engine.Graphics.Vulkan.Texture.Limits" and re-exported here; the
+-- bindless fragment shaders interpolate that same definition as
+-- @HANDLE_TABLE_SIZE@, so the two cannot drift apart.
 
 -- | Create the bindless texture system
 createBindlessTextureSystem ∷ PhysicalDevice
