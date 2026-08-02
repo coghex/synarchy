@@ -114,6 +114,7 @@ import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.World.Render.WaterSlope as RenderWaterSlope
 import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
+import qualified Test.Headless.Graphics.BindlessRebind as BindlessRebind
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
@@ -229,6 +230,7 @@ main = hspec $ do
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
+    describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec

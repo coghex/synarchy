@@ -212,6 +212,7 @@ library
                      Engine.Graphics.Vulkan.Texture.Slot
                      Engine.Graphics.Vulkan.Texture.System
                      Engine.Graphics.Vulkan.Texture.Handle
+                     Engine.Graphics.Vulkan.Texture.Rebind
                      Engine.Graphics.Vulkan.Texture.Bindless
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
@@ -1151,6 +1152,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.RenderQueue
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
+                   Test.Headless.Graphics.BindlessRebind
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers
