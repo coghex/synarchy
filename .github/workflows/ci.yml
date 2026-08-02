@@ -357,6 +357,18 @@ jobs:
           python3 tools/test_save_compat_audit.py
           python3 tools/save_compat_audit.py
 
+      # Cheap, no-engine guard (issue #972, CH-28): fails if a
+      # `src/**/*.hs` module is missing from synarchy.cabal's explicit
+      # library inventory. Deliberately unconditional rather than
+      # path-selective -- an unlisted module is invisible to every other
+      # gate (the build stays green precisely because the file is not
+      # part of it), and a filter keyed on `src/` would not fire for a
+      # cabal-only edit that drops a module from the list.
+      - name: Cabal library module inventory audit
+        run: |
+          python3 tools/test_cabal_module_audit.py
+          python3 tools/cabal_module_audit.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
