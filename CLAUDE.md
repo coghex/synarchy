@@ -703,6 +703,8 @@ Region coordinates are **chunk coords**. Per-tile fields:
 |-------|-------|-------------|
 | `x`, `y`, `v` | always | Global tile coords and v-axis (gx+gy) |
 | `terrainZ`, `surfaceZ` | terrain | Raw terrain and max(terrain, fluid) |
+| `waterTableZ` | terrain | Finalized per-tile water-table z from the chunk's own map (climate baseline, fluid/shoreline-adjusted) |
+| `waterTableSummer`, `waterTableWinter` | terrain | Seasonal water-table z-levels for the tile, bilinearly interpolated from the climate model |
 | `matId` | material | Top surface material ID |
 | `fluidType`, `fluidSurf` | fluid | "ocean"/"lake"/"river"/"lava" or null |
 | `iceSurf`, `iceMode` | ice | Ice surface Z and "basin"/"drape" or null |
