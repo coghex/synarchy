@@ -8,7 +8,6 @@
 --   'Engine.Input.Thread.Dispatch.dispatchInput'.
 module Engine.Input.Thread.Mouse
   ( dispatchMouseEvent
-  , uiDragThresholdPx
   ) where
 
 import UPrelude

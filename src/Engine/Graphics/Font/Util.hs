@@ -1,6 +1,5 @@
 module Engine.Graphics.Font.Util
-    ( calculateTextWidth
-    , calculateTextWidthScaled
+    ( calculateTextWidthScaled
     ) where
 
 import UPrelude
