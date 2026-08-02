@@ -225,7 +225,11 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   modifyGraphicsState $ \gs → gs {
                       vulkanRenderPass = Just renderPass }
   
-  let bindlessTexLayout = btsDescriptorLayout texSystem
+  -- Read the layout from the system actually stored as live above, not
+  -- from the pre-face-map local (#983). Identical today —
+  -- 'createDefaultFaceMap' rewrites slot bookkeeping, never
+  -- 'btsDescriptorLayout' — but reading the stale copy is a trap.
+  let bindlessTexLayout = btsDescriptorLayout texSystemWithFaceMap
   logDebugM CatGraphics "Creating bindless pipeline"
   (bindlessPipe, bindlessPipeLayout) ← 
     createBindlessPipeline device renderPass (siSwapExtent swapInfo) 

@@ -28,9 +28,12 @@ module Engine.Graphics.Vulkan.Texture.Bindless
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logWarnM)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -38,6 +41,8 @@ import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Sampler.Cache
 import Engine.Graphics.Vulkan.Texture.Slot
 import Engine.Graphics.Vulkan.Texture.Handle
+import Engine.Graphics.Vulkan.Texture.Rebind
+  (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..), BindlessConfig(..))
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..))
@@ -88,7 +93,7 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 
   descriptorLayout ← createBindlessDescriptorSetLayout dev config
 
-  descriptorSet ← allocateBindlessDescriptorSet dev descriptorPool descriptorLayout config
+  descriptorSet ← allocateBindlessDescriptorSet dev descriptorPool descriptorLayout
 
   let slotAllocator = createSlotAllocator (bcMaxTextures config)
 
@@ -228,12 +233,11 @@ createBindlessDescriptorSetLayout dev config = do
 
 -- | Allocate the bindless descriptor set
 -- Note: Not using variable descriptor count for MoltenVK compatibility
-allocateBindlessDescriptorSet ∷ Device 
-                              → DescriptorPool 
-                              → DescriptorSetLayout 
-                              → BindlessConfig
+allocateBindlessDescriptorSet ∷ Device
+                              → DescriptorPool
+                              → DescriptorSetLayout
                               → EngineM σ DescriptorSet
-allocateBindlessDescriptorSet dev pool layout _config = do
+allocateBindlessDescriptorSet dev pool layout = do
   let allocInfo = zero
         { descriptorPool = pool
         , setLayouts = V.singleton layout
@@ -414,23 +418,41 @@ setTextureFilter dev flt system = do
         newKind = textureSamplerKind flt
     newSampler ← liftIO $ acquireSampler dev ref newKind
     -- Repaint all slots first: unallocated → undefined view + new global
-    -- sampler. Then each allocated slot → its real view, using the new
-    -- global sampler UNLESS the handle is pinned (preview/zoom), in which
-    -- case it keeps its own sampler so its look is unaffected.
+    -- sampler. This pre-pass is also what leaves an unrecoverable slot
+    -- (below) pointing at the undefined image with the NEW sampler, so it
+    -- must stay unconditional and ahead of the per-slot writes.
     initializeAllSlots dev descSet config
       (utImageView $ btsUndefinedTexture system) newSampler
-    forM_ (Map.toList $ btsHandleMap system) $ \(texHandle, bindlessHandle) → do
-        let slotIdx = tsIndex (bthSlot bindlessHandle)
-            slotSampler = Map.findWithDefault newSampler texHandle (btsPinned system)
-        case Map.lookup texHandle (btsImageViews system) of
-            Just imageView →
-                writeDescriptorSlot dev descSet config slotIdx imageView slotSampler
-            Nothing → pure ()  -- shouldn't happen
+    -- Then each slot with a canonical image view → that view, using the
+    -- new global sampler UNLESS its canonical owner is pinned
+    -- (preview/zoom), in which case the slot keeps that owner's sampler
+    -- so its look is unaffected. Cached-atlas aliases share a canonical
+    -- owner's slot and rebind through it silently; only a slot with no
+    -- canonical image view at all is reported.
+    let plan = planFilterRebind (btsHandleMap system) (btsImageViews system)
+                                (btsPinned system) newSampler
+    forM_ (frpRebinds plan) $ \rebind →
+        writeDescriptorSlot dev descSet config
+          (srSlot rebind) (srImageView rebind) (srSampler rebind)
+    forM_ (frpUnrecoverable plan) $ \(TextureHandle hid, slotIdx) →
+        logWarnM CatTexture $ "setTextureFilter: texture handle "
+          <> T.pack (show hid) <> " maps to bindless slot "
+          <> T.pack (show slotIdx) <> " but no canonical image view owns "
+          <> "that slot; it stays on the undefined texture."
     -- Now no slot references the old sampler — safe to release.
     liftIO $ releaseSampler dev ref oldKind
     pure system { btsTextureSampler = newSampler, btsTextureKind = newKind }
 
--- | Get the slot index for a texture handle
+-- | Get the slot index for a texture handle.
+--
+--   An unregistered handle returns @0@, which is not a sentinel the
+--   caller has to test for — slot 0 is the undefined-texture slot
+--   ('undefinedSlot'), so the value is directly usable. What the shader
+--   then does depends on which
+--   binding it feeds: a BASE texture resolving to slot 0 is sampled as
+--   the undefined texture like any other slot, while only the FACE-MAP
+--   path treats slot 0 specially and substitutes the default face map
+--   ("Engine.Graphics.Vulkan.ShaderCode").
 getTextureSlotIndex ∷ TextureHandle → BindlessTextureSystem → Word32
 getTextureSlotIndex texHandle system =
   case Map.lookup texHandle (btsHandleMap system) of
