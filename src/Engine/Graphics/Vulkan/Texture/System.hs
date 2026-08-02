@@ -1,22 +1,22 @@
--- | Unified texture system that handles both bindless and legacy paths
+-- | Builds the renderer's bindless texture system from the capability the
+--   device reports ("Engine.Graphics.Vulkan.Capability").
+--
+--   Bindless is a hard requirement of this renderer: there is no non-bindless
+--   path, so anything short of 'BindlessTextures' — a device without
+--   update-after-bind descriptor support, or one with too few usable slots
+--   left after the reservations — fails initialization here.
 module Engine.Graphics.Vulkan.Texture.System
   ( TextureSystemConfig(..)
   , createTextureSystem
-  , loadTexture
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logInfoM, logDebugM, logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
-import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Graphics.Vulkan.Texture (createTextureImageView)
 import Engine.Graphics.Vulkan.Texture.Bindless
-import Engine.Graphics.Vulkan.Texture.Handle
 import Engine.Graphics.Vulkan.Texture.Types
-import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Capability
 import Vulkan.Core10
 
@@ -32,49 +32,17 @@ createTextureSystem pdev dev cmdPool queue config = do
   let capability = determineTextureCapability support (tscReservedSlots config)
 
   case capability of
-    BindlessTextures maxSlots | not (tscForceLegacy config) → do
+    BindlessTextures maxSlots → do
       let actualMax = min 16384 (min maxSlots (tscMaxTextures config))
       let bindlessConfig = defaultBindlessConfig
             { bcMaxTextures = actualMax
             }
-      
+
       bindless ← createBindlessTextureSystem pdev dev cmdPool queue bindlessConfig
       pure bindless
 
-    _ → do
-      logInfoM CatTexture "BINDLESS TEXTURES NOT SUPPORTED - LEGACY SYSTEM BROKEN!!!"
-      logAndThrowM CatTexture (ExGraphics TextureLoadFailed) 
-        "Legacy texture system is not implemented."
-
--- | Load a texture into the system.
---
---   Returns the slot index for shader use. A failed slot allocation
---   returns @0@, which is not a sentinel the caller has to test for —
---   slot 0 is the undefined-texture slot (@undefinedSlot@ in
---   "Engine.Graphics.Vulkan.Texture.Slot"), so the value is directly
---   usable. What the shader then does depends on which
---   binding it feeds: a BASE texture resolving to slot 0 is sampled as
---   the undefined texture like any other slot, while only the FACE-MAP
---   path treats slot 0 specially and substitutes the default face map
---   ("Engine.Graphics.Vulkan.ShaderCode").
-loadTexture ∷ Device → PhysicalDevice → CommandPool → Queue
-  → TextureHandle → FilePath → Filter → BindlessTextureSystem
-  → EngineM σ (Word32, BindlessTextureSystem)
-loadTexture dev pdev cmdPool queue texHandle path _filterMode system = do
-    (_vulkanImage, imageView) ←
-      createTextureImageView pdev dev cmdPool queue path
-
-    -- Atlases share the bindless system's single texture sampler — they
-    -- no longer mint their own (the global filter governs all of them).
-    (mbHandle, newBindless) ←
-      registerTexture dev texHandle imageView (btsTextureSampler system) system
-    
-    case mbHandle of
-      Just bHandle → do
-        let slotIndex = tsIndex (bthSlot bHandle)
-        logDebugM CatTexture $ "Loaded texture " <> T.pack path 
-                  <> " at slot " <> T.pack (show slotIndex)
-        pure (slotIndex, newBindless)
-      Nothing → do
-        logInfoM CatTexture $ "Failed to allocate slot for texture: " <> T.pack path
-        pure (0, newBindless)  -- Return undefined texture slot
+    unsupported →
+      logAndThrowM CatTexture (ExGraphics TextureLoadFailed) $
+        "Bindless textures are required, but this device does not meet the \
+        \renderer's required bindless capability: "
+        <> describeCapability unsupported

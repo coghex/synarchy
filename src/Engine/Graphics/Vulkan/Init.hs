@@ -201,7 +201,6 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   let texSystemConfig = TextureSystemConfig
         { tscMaxTextures   = 16384
         , tscReservedSlots = 1      -- Slot 0 = undefined texture
-        , tscForceLegacy   = False
         }
   texSystem ← createTextureSystem physicalDevice device cmdPool 
                                    (dqGraphicsQueue queues) texSystemConfig
