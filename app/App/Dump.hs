@@ -9,9 +9,11 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
-import Data.List (intercalate, sortBy)
+import Data.List (sortBy)
 import Data.Ord (comparing)
-import qualified Data.ByteString.Char8 as BS
+import Data.Aeson (Value(..), (.=), object, encode)
+import Data.Aeson.Types (Pair)
+import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -205,7 +207,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                                 ⧺ " median_chunk="
                                 ⧺ show (pick (length chunkVols `div` 2))
                         Nothing → pure ()
-                    BS.putStr json
+                    BSL.putStr json
                     hFlush stdout
                     hPutStrLn stderr $ "dump: done"
                 [] → hPutStrLn stderr "dump: no world data"
@@ -221,52 +223,52 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
   handleBootResult FatalToStderr env' workers result
 
--- | Poll until world generation is done. The argument is a timeout in
---   /seconds/; internally we poll every 250ms (4 iterations per second).
---   Returns 'True' on completion, 'False' on timeout so the caller can
---   fail the dump rather than emit partial output.
-waitForInit ∷ EngineEnv → Int → IO Bool
-waitForInit env seconds = go (seconds * pollsPerSecond)
+-- | The one polling loop behind every dump-mode wait. The timeout is
+--   given in /seconds/; internally we poll every 250ms (4 iterations
+--   per second). Returns 'True' on completion, 'False' on timeout so
+--   the caller can fail the dump rather than emit partial output.
+--
+--   Readiness is checked BEFORE deciding to time out, so a completion
+--   that lands in the final poll window (after the last sleep) is still
+--   counted as success rather than a spurious timeout. Every wait below
+--   inherits that ordering from here.
+pollUntil ∷ String → String → Int → IO Bool → IO Bool
+pollUntil doneMsg timeoutMsg seconds isReady = go (seconds * pollsPerSecond)
   where
-    -- Check readiness BEFORE deciding to time out, so a completion that
-    -- lands in the final poll window (after the last sleep) is still
-    -- counted as success rather than a spurious timeout.
     go n = do
-        manager ← readIORef (worldManagerRef env)
-        done ← case wmWorlds manager of
-            ((_, ws):_) → do
-                phase ← readIORef (wsLoadPhaseRef ws)
-                pure $ case phase of
-                    LoadDone → True
-                    _        → False
-            [] → pure False
+        done ← isReady
         if done
-            then hPutStrLn stderr "dump: init complete" >> pure True
+            then hPutStrLn stderr doneMsg >> pure True
             else if n ≤ 0
-                then hPutStrLn stderr "dump: init timeout" >> pure False
+                then hPutStrLn stderr timeoutMsg >> pure False
                 else threadDelay pollInterval >> go (n - 1)
 
--- | Poll until chunk init queue is empty. The argument is a timeout in
---   /seconds/; internally we poll every 250ms (4 iterations per second).
---   Returns 'True' once the queue drains, 'False' on timeout so the
---   caller can fail the dump rather than emit partial output.
+-- | Run a readiness check against the dump's world page. Not-yet-ready
+--   while the world manager still holds no page.
+worldReady ∷ EngineEnv → (WorldState → IO Bool) → IO Bool
+worldReady env check = do
+    manager ← readIORef (worldManagerRef env)
+    case wmWorlds manager of
+        ((_, ws):_) → check ws
+        []          → pure False
+
+-- | Poll until world generation is done.
+waitForInit ∷ EngineEnv → Int → IO Bool
+waitForInit env seconds =
+    pollUntil "dump: init complete" "dump: init timeout" seconds $
+        worldReady env $ \ws → do
+            phase ← readIORef (wsLoadPhaseRef ws)
+            pure $ case phase of
+                LoadDone → True
+                _        → False
+
+-- | Poll until the chunk init queue is empty.
 waitForChunks ∷ EngineEnv → Int → IO Bool
-waitForChunks env seconds = go (seconds * pollsPerSecond)
-  where
-    -- Check readiness BEFORE deciding to time out (see 'waitForInit').
-    go n = do
-        manager ← readIORef (worldManagerRef env)
-        done ← case wmWorlds manager of
-            ((_, ws):_) → do
-                remaining ← length <$> readIORef (wsInitQueueRef ws)
-                pure (remaining ≡ 0)
-            [] → pure False
-        if done
-            then hPutStrLn stderr "dump: all chunks loaded" >> pure True
-            else if n ≤ 0
-                then hPutStrLn stderr "dump: chunk load timeout"
-                        >> pure False
-                else threadDelay pollInterval >> go (n - 1)
+waitForChunks env seconds =
+    pollUntil "dump: all chunks loaded" "dump: chunk load timeout" seconds $
+        worldReady env $ \ws → do
+            remaining ← length <$> readIORef (wsInitQueueRef ws)
+            pure (remaining ≡ 0)
 
 -- | Poll cadence for the dump-mode wait helpers: a 250ms sleep between
 --   checks, so four polls make up one second of timeout budget.
@@ -280,11 +282,11 @@ pollsPerSecond = 1000000 `div` pollInterval
 --   Every tile in the region gets one object. Fields are included
 --   based on the DumpLayers whitelist.
 dumpTilesJSON ∷ DumpLayers → MaterialRegistry → Int → ClimateState → WorldTileData
-              → Int → Int → Int → Int → BS.ByteString
+              → Int → Int → Int → Int → BSL.ByteString
 dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
     let entries = concatMap dumpChunkTiles
             [ ChunkCoord x y | x ← [cx1..cx2], y ← [cy1..cy2] ]
-    in BS.pack $ "[" ⧺ intercalate "," entries ⧺ "]\n"
+    in encode entries <> "\n"
   where
     dumpChunkTiles coord = case lookupChunk coord td of
         Nothing → []
@@ -300,45 +302,63 @@ dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
 
     tileToJSON lc gx gy idx =
         let v = gx + gy
-            base = "{\"x\":" ⧺ show gx ⧺ ",\"y\":" ⧺ show gy
-                 ⧺ ",\"v\":" ⧺ show v
+            base ∷ [Pair]
+            base = [ "x" .= gx, "y" .= gy, "v" .= v ]
             terrainZ = lcTerrainSurfaceMap lc VU.! idx
             surfZ    = lcSurfaceMap lc VU.! idx
             waterTableZ = lcWaterTableMap lc VU.! idx
             (wtSummer, wtWinter) = lookupWaterTable climate worldSize gx gy
+            terrainFields ∷ [Pair]
             terrainFields
               | dlTerrain layers =
-                  ",\"terrainZ\":" ⧺ show terrainZ
-                  ⧺ ",\"surfaceZ\":" ⧺ show surfZ
-                  ⧺ ",\"waterTableZ\":" ⧺ show waterTableZ
-                  ⧺ ",\"waterTableSummer\":" ⧺ show wtSummer
-                  ⧺ ",\"waterTableWinter\":" ⧺ show wtWinter
-              | otherwise = ""
+                  [ "terrainZ" .= terrainZ
+                  , "surfaceZ" .= surfZ
+                  , "waterTableZ" .= waterTableZ
+                  , "waterTableSummer" .= wtSummer
+                  , "waterTableWinter" .= wtWinter
+                  ]
+              | otherwise = []
+            matFields ∷ [Pair]
             matFields
               | dlMaterial layers =
                   let col = lcTiles lc V.! idx
                       matId = if VU.null (ctMats col) then 0
                               else ctMats col VU.! (VU.length (ctMats col) - 1)
-                  in ",\"matId\":" ⧺ show matId
-              | otherwise = ""
+                  in [ "matId" .= matId ]
+              | otherwise = []
+            -- Enum labels are plain values handed to the encoder, which
+            -- quotes and escapes them — nothing here writes JSON text.
+            fluidFields ∷ [Pair]
             fluidFields
               | dlFluid layers =
                   case lcFluidMap lc V.! idx of
-                      Just fc → ",\"fluidType\":\"" ⧺ fluidTypeStr (fcType fc) ⧺ "\""
-                              ⧺ ",\"fluidSurf\":" ⧺ show (fcSurface fc)
-                      Nothing → ",\"fluidType\":null,\"fluidSurf\":null"
-              | otherwise = ""
+                      Just fc →
+                          let ftype = case fcType fc of
+                                  Ocean → "ocean"
+                                  Lake  → "lake"
+                                  River → "river"
+                                  Lava  → "lava"
+                          in [ "fluidType" .= (ftype ∷ Text)
+                             , "fluidSurf" .= fcSurface fc ]
+                      Nothing → [ "fluidType" .= Null, "fluidSurf" .= Null ]
+              | otherwise = []
+            iceFields ∷ [Pair]
             iceFields
               | dlIce layers = case lcIceMap lc V.! idx of
-                  Just ic → ",\"iceSurf\":" ⧺ show (icSurface ic)
-                          ⧺ ",\"iceMode\":\"" ⧺ iceModeStr (icMode ic) ⧺ "\""
-                  Nothing → ",\"iceSurf\":null,\"iceMode\":null"
-              | otherwise = ""
+                  Just ic →
+                      let imode = case icMode ic of
+                              BasinIce → "basin"
+                              DrapeIce → "drape"
+                      in [ "iceSurf" .= icSurface ic
+                         , "iceMode" .= (imode ∷ Text) ]
+                  Nothing → [ "iceSurf" .= Null, "iceMode" .= Null ]
+              | otherwise = []
             -- Ore layer: scan the column's strata for ore materials.
             -- Reports the topmost ore band: its material, its top z,
             -- and how many cells of that material the column holds.
             -- Only covers the stored strata range (ctStartZ up) —
             -- which is the mineable band the report tool cares about.
+            oreFields ∷ [Pair]
             oreFields
               | dlOre layers =
                   let col = lcTiles lc V.! idx
@@ -349,13 +369,14 @@ dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
                                            | otherwise = go (i - 1)
                                   in go (VU.length mats - 1)
                   in if topOreIdx < 0
-                     then ",\"oreId\":null,\"oreTopZ\":null,\"oreCount\":0"
+                     then [ "oreId" .= Null, "oreTopZ" .= Null
+                          , "oreCount" .= (0 ∷ Int) ]
                      else let oid = mats VU.! topOreIdx
                               cnt = VU.length (VU.filter (≡ oid) mats)
-                          in ",\"oreId\":" ⧺ show oid
-                           ⧺ ",\"oreTopZ\":" ⧺ show (ctStartZ col + topOreIdx)
-                           ⧺ ",\"oreCount\":" ⧺ show cnt
-              | otherwise = ""
+                          in [ "oreId" .= oid
+                             , "oreTopZ" .= (ctStartZ col + topOreIdx)
+                             , "oreCount" .= cnt ]
+              | otherwise = []
             -- Slope layer: the rendered slope bitmask of the surface
             -- tile (bit0=N,1=E,2=S,3=W; 0 = flat top). Lets headless
             -- tools measure how often terrain slopes vs. steps (#224).
@@ -364,6 +385,7 @@ dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
             -- max(terrain, fluid), so on submerged tiles surfZ overshoots
             -- the stored range and would report a spurious flat/empty bed.
             -- terrainZ gives the real bed slope + bed material everywhere.
+            slopeFields ∷ [Pair]
             slopeFields
               | dlSlope layers =
                   let col = lcTiles lc V.! idx
@@ -373,20 +395,11 @@ dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
                       smat = if i ≥ 0 ∧ i < VU.length (ctMats col)
                              then ctMats col VU.! i else 0
                       hard = mpHardness (getMaterialProps registry (MaterialId smat))
-                  in ",\"slope\":" ⧺ show sl
-                   ⧺ ",\"hardness\":" ⧺ show hard
-              | otherwise = ""
+                  in [ "slope" .= sl, "hardness" .= hard ]
+              | otherwise = []
+            zoneFields ∷ [Pair]
             zoneFields =
-                  ",\"glacierZone\":" ⧺ boolStr (isGlacierZone worldSize gx gy)
-                ⧺ ",\"beyondGlacier\":" ⧺ boolStr (isBeyondGlacier worldSize gx gy)
-        in base ⧺ terrainFields ⧺ matFields ⧺ fluidFields
-                ⧺ iceFields ⧺ oreFields ⧺ slopeFields ⧺ zoneFields ⧺ "}"
-
-    fluidTypeStr Ocean = "ocean"
-    fluidTypeStr Lake  = "lake"
-    fluidTypeStr River = "river"
-    fluidTypeStr Lava  = "lava"
-    iceModeStr BasinIce = "basin"
-    iceModeStr DrapeIce = "drape"
-    boolStr True  = "true"
-    boolStr False = "false"
+                [ "glacierZone" .= isGlacierZone worldSize gx gy
+                , "beyondGlacier" .= isBeyondGlacier worldSize gx gy ]
+        in object $ base ⧺ terrainFields ⧺ matFields ⧺ fluidFields
+                 ⧺ iceFields ⧺ oreFields ⧺ slopeFields ⧺ zoneFields
