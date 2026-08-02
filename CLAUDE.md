@@ -11,7 +11,7 @@ referenced issues/PRs when you need the full story behind a contract stated here
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`; restores any `cabal.project.local` on exit (`tools/ci-local.sh`). It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
 - **Debug output:** `ENGINE_DEBUG=Vulkan,Graphics,...` environment variable
 
 ## Testing Tiers
@@ -62,8 +62,9 @@ than forcing unrelated `EngineEnv`/capability refactoring just to hit 500.
 Baselines (`tools/baselines/`) are **tracked in git**: a fresh
 clone/worktree runs world_check directly, and a tier-3 re-capture lands
 in the PR diff. Don't edit baseline JSON by hand — regenerate with
-`world_baseline.py`. CI runs on every PR/push to master on Linux with
-`-Werror` (headless suite always blocking; some steps path-selective on
+`world_baseline.py`. CI runs on every PR/push to master on Linux, where
+`synarchy.cabal`'s checked-in `-Werror` policy applies the same as any
+build (headless suite always blocking; some steps path-selective on
 PRs). Worldgen output is bit-identical across macOS/aarch64 and
 Linux/x86_64, so baselines are platform-agnostic; a worldgen-output PR
 that skips its tier-3 rebaseline fails CI.
