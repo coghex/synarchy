@@ -4,8 +4,6 @@
 --   and scale take effect at vertex generation, not here.
 module Engine.Scene.Graph
   ( addNode
-  , withSceneGraph
-  , withSceneGraphM
   , modifySceneNode
   , deleteSceneNode
   ) where
@@ -21,20 +19,6 @@ addNode ∷ SceneNode → SceneGraph → (ObjectId, SceneGraph)
 addNode node graph =
   ( nodeId node
   , graph { sgNodes = Map.insert (nodeId node) node (sgNodes graph) } )
-
--- | Modify the active scene graph directly
--- Returns True if the scene graph was found (even if transform is identity)
-withSceneGraph ∷ (SceneGraph → SceneGraph) → EngineM σ Bool
-withSceneGraph f = do
-    sceneMgr ← gets sceneManager
-    case smActiveScene sceneMgr of
-      Nothing → return False
-      Just sceneId → case Map.lookup sceneId (smSceneGraphs sceneMgr) of
-        Nothing → return False
-        Just graph → do
-          let updatedGraphs = Map.insert sceneId (f graph) (smSceneGraphs sceneMgr)
-          modify $ \s → s { sceneManager = sceneMgr { smSceneGraphs = updatedGraphs } }
-          return True
 
 -- | Modify the active scene graph with a function that returns a result
 -- Returns Nothing if no active scene/graph, otherwise returns Just result
