@@ -16,7 +16,7 @@ import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import System.Random
-import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
+import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
@@ -118,7 +118,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- in erosion / water-table / etc. a no-op. Idempotent — reloading on
     -- successive world inits just rewrites the same data.
     -- Shared with the whole-session LOAD path (issue #763 round 5) via
-    -- 'Engine.Asset.YamlTextures.loadPopulatedMaterialRegistry' — a
+    -- 'Engine.Asset.YamlMaterials.loadPopulatedMaterialRegistry' — a
     -- headless boot that goes straight to engine.loadSave with no prior
     -- world.init in the same process needs this SAME population before
     -- it can validate a save's material references.
