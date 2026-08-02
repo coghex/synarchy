@@ -4,6 +4,7 @@ module Engine.Core.Monad
   , runEngineM
   , MonadIO(..)
   , MonadError(..)
+  , modifyGraphicsState
   ) where
 
 import UPrelude
@@ -83,3 +84,7 @@ instance MonadState EngineState (EngineM σ) where
     readIORef (engineStateRef e) ⌦ \st → c (Right st)
   put newSt = EngineM $ \e c →
     writeIORef (engineStateRef e) newSt ⌦ \_ → c (Right ())
+
+-- | Apply a pure update to the 'GraphicsState' nested inside 'EngineState'.
+modifyGraphicsState ∷ (GraphicsState → GraphicsState) → EngineM σ ()
+modifyGraphicsState f = modify $ \s → s { graphicsState = f (graphicsState s) }

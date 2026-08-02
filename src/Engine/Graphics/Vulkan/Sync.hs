@@ -7,7 +7,7 @@ import qualified Data.Vector as V
 import qualified Vulkan as Vk
 import Engine.Core.Monad
 import Engine.Graphics.Vulkan.Types.Cleanup
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | Create one render-finished semaphore per swapchain IMAGE and store
 --   the vector in 'renderFinishedSems'. The semaphore that
@@ -25,10 +25,10 @@ createRenderFinishedSemaphores device count = do
         , flags = Vk.SemaphoreCreateFlags 0
         }
   sems ← V.replicateM count $ Vk.createSemaphore device semaphoreInfo Nothing
-  modify $ \s → s { graphicsState = (graphicsState s)
+  modifyGraphicsState $ \gs → gs
     { renderFinishedSems = sems
-    , vulkanCleanup = (vulkanCleanup (graphicsState s))
+    , vulkanCleanup = (vulkanCleanup gs)
         { cleanupRenderFinishedSems =
             V.mapM_ (\sem → Vk.destroySemaphore device sem Nothing) sems
-        } } }
+        } }
   pure sems

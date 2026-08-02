@@ -13,8 +13,8 @@ import UPrelude
 import Data.IORef (readIORef)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
-import Engine.Core.Monad (runEngineM, EngineM', liftIO)
-import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
+import Engine.Core.Monad (runEngineM, EngineM', liftIO, modifyGraphicsState)
+import Engine.Core.State (EngineEnv(..), glfwWindow)
 import Engine.Core.Types (PreviewBrowse)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
@@ -64,8 +64,8 @@ runPreview target mBrowse mPort = do
       engineAction = do
         logInfoM CatSystem "Starting engine (preview)..."
         window ← GLFW.createWindow $ defaultWindowConfig videoConfig
-        modify $ \s → s { graphicsState = (graphicsState s) {
-                            glfwWindow = Just window } }
+        modifyGraphicsState $ \gs → gs {
+                            glfwWindow = Just window }
 
         let Window glfwWin = window
         liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')

@@ -92,10 +92,8 @@ cleanupPendingInstanceBuffers = do
             V.forM_ pending $ \(buffer, memory) → liftIO $ do
                 destroyBuffer device buffer Nothing
                 freeMemory device memory Nothing
-            modify $ \s → s 
-                { graphicsState = (graphicsState s) 
-                    { pendingInstanceBuffers = V.empty 
-                    }
+            modifyGraphicsState $ \gs → gs
+                { pendingInstanceBuffers = V.empty
                 }
 
 -- * Pipeline Creation
@@ -257,8 +255,8 @@ createFontPipelineWith vertShaderCode setCleanup device renderPass swapExtent
             destroyPipeline device pipeline Nothing
             destroyPipelineLayout device pipelineLayout Nothing
 
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        vulkanCleanup = setCleanup cleanupAction (vulkanCleanup (graphicsState s)) } }
+    modifyGraphicsState $ \gs → gs {
+        vulkanCleanup = setCleanup cleanupAction (vulkanCleanup gs) }
 
     pure (pipeline, pipelineLayout)
 

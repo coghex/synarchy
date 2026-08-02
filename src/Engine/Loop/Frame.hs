@@ -215,8 +215,8 @@ advanceFrameIndex = do
     state ← gets graphicsState
     let nextFrame = (currentFrame state + 1)
             `mod` fromIntegral (gcMaxFrames defaultGraphicsConfig)
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        currentFrame = nextFrame } }
+    modifyGraphicsState $ \gs → gs {
+        currentFrame = nextFrame }
 
 -- | The target-agnostic middle of a frame: collect world + scene + UI
 --   quads, upload uniforms and vertices, prepare a pending screenshot

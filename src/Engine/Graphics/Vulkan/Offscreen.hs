@@ -24,7 +24,7 @@ import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10 hiding (size)
 import Vulkan.Core10.MemoryManagement (size)
 import Vulkan.Zero
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | The one format offscreen targets use: the same B8G8R8A8_UNORM the
 --   windowed swapchain picker prefers, so offscreen screenshots decode
@@ -95,11 +95,11 @@ createOffscreenTarget pDevice device (w, h) count = do
       cleanupImages = V.forM_ imgsAndMem $ \(img, mem) → do
           destroyImage device img Nothing
           freeMemory device mem Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s))
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs)
         { cleanupImageViews = cleanupViews
         , cleanupSwapchain  = cleanupImages
-        } } }
+        } }
 
   logDebugSM CatGraphics "Offscreen render target created"
     [("extent", T.pack (show w) <> "x" <> T.pack (show h))
