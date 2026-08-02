@@ -79,9 +79,9 @@ debugThrowFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 debugThrowFn = error "debugThrow: deliberate test exception"
 
 -- | Populate and install the @engine@ global table.
-registerEngineAPI ∷ Lua.State → EngineEnv → LuaBackendState
+registerEngineAPI ∷ EngineEnv → LuaBackendState
                   → Lua.LuaE Lua.Exception ()
-registerEngineAPI lst env backendState = do
+registerEngineAPI env backendState = do
   -- The content-registry loaders are narrowed to the `content-registries`
   -- capability (#890) — projected once here, alongside `core-init` for
   -- their logging. See docs/engineenv_capability_inventory.md SS7.6.
@@ -108,8 +108,8 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "getLoadStatus"     (loadStatusFn env)
   registerLuaFunction "realTime"          realTimeFn
   registerLuaFunction "gameTime"          (gameTimeFn env)
-  registerLuaFunction "loadScript"        (loadScriptFn env backendState lst)
-  registerLuaFunction "killScript"        (killScriptFn env backendState lst)
+  registerLuaFunction "loadScript"        (loadScriptFn env backendState)
+  registerLuaFunction "killScript"        (killScriptFn env backendState)
   registerLuaFunction "pauseScript"       (pauseScriptFn backendState)
   registerLuaFunction "resumeScript"      (resumeScriptFn backendState)
   registerLuaFunction "setTickInterval"   (setTickIntervalFn env backendState)

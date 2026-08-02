@@ -67,6 +67,7 @@ import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
+import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
@@ -183,6 +184,7 @@ main = hspec $ do
         describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
         describe "Lua.PauseGate" LuaPauseGate.spec
+        describe "Lua.ScriptState" LuaScriptState.spec
         -- Same technique as Input.Followup above: F4 (#730) Layer A's
         -- non-click producers live inside Engine.Input.Thread's real
         -- processInputs, driven directly against the live EngineEnv.

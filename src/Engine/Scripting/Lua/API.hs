@@ -30,7 +30,7 @@ import qualified HsLua as Lua
 
 registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 registerLuaAPI lst env backendState stateRef = Lua.runWith lst $ do
-  registerEngineAPI lst env backendState
+  registerEngineAPI env backendState
   registerDebugAPI env
   registerInputAPI env backendState stateRef
   registerUIAPI env
