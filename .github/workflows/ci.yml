@@ -307,7 +307,9 @@ jobs:
       # to stay reviewable (the input-thread facade + its dispatch
       # submodules) grows back past its agreed line budget.
       - name: Haskell module line budget
-        run: python3 tools/haskell_module_budget.py
+        run: |
+          python3 tools/test_haskell_module_budget.py
+          python3 tools/haskell_module_budget.py
 
       # Cheap, no-engine guard (#1005): fails if any of the five ASCII
       # operators normalised to Unicode (.&., .|., >>=, ==, /=) reappears
