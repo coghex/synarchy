@@ -5,7 +5,6 @@
 module Engine.Asset.Handle
   ( TextureHandle(..)
   , FontHandle(..)
-  , ShaderHandle(..)
   , AssetHandle(..)
   , AssetState(..)
   , Dependent(..)
@@ -23,9 +22,6 @@ newtype TextureHandle = TextureHandle Int
   deriving (Show, Eq, Ord, Generic, Serialize, NFData, Hashable)
 
 newtype FontHandle = FontHandle Int
-  deriving (Show, Eq, Ord)
-
-newtype ShaderHandle = ShaderHandle Int
   deriving (Show, Eq, Ord)
 
 -- | Asset state tracking
@@ -63,7 +59,3 @@ instance AssetHandle TextureHandle where
 instance AssetHandle FontHandle where
   fromInt       = FontHandle
   toInt (FontHandle n) = n
-
-instance AssetHandle ShaderHandle where
-  fromInt       = ShaderHandle
-  toInt (ShaderHandle n) = n

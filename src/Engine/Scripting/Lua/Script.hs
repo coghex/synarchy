@@ -89,8 +89,6 @@ callLuaFunction funcName args = do
 -- | Push one 'ScriptValue' onto the Lua stack. 'ScriptTable' pushes
 --   a real Lua table built from the key/value list — without this,
 --   broadcasts couldn't pass list/record data to Lua callbacks.
---   'ScriptFunction' is still nil since 'Dynamic' has no Lua
---   representation.
 --
 --   Whole-number 'ScriptNumber' values within Int range are pushed
 --   as Lua integers rather than floats so they work cleanly as
@@ -108,7 +106,6 @@ pushScriptValue v = case v of
             pushScriptValue k
             pushScriptValue val
             Lua.rawset (-3)
-    ScriptFunction _ → Lua.pushnil
 
 -- | Push a 'Double' as a Lua integer when it represents a
 --   round-trippable whole number, otherwise as a Lua float.

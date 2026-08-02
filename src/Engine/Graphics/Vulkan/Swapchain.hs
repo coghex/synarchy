@@ -18,7 +18,7 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_surface as Surf
 import Vulkan.Extensions.VK_KHR_swapchain as Swap
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | Query swapchain support details from physical device
 querySwapchainSupport ∷ PhysicalDevice → SurfaceKHR → EngineM σ SwapchainSupportDetails
@@ -67,12 +67,12 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
   let ssd = SwapchainSupportDetails{..}
       SurfaceFormatKHR{format=form,colorSpace=cs} = chooseSwapSurfaceFormat ssd
-      desired    = Surf.minImageCount capabilities + 1
-      maxImg     = Surf.maxImageCount capabilities
+      desired    = Surf.minImageCount ssdCapabilities + 1
+      maxImg     = Surf.maxImageCount ssdCapabilities
       imageCount = if maxImg > 0 then min desired maxImg else desired
   spMode ← chooseSwapPresentMode ssd vsyncEnabled
   let (usage, captureOK) =
-        swapchainImageUsage (Surf.supportedUsageFlags capabilities)
+        swapchainImageUsage (Surf.supportedUsageFlags ssdCapabilities)
   unless captureOK $ logDebugM CatSwapchain $
     "surface lacks TRANSFER_SRC swapchain usage — "
     <> "debug.captureScreenshot will report itself unavailable"
@@ -80,10 +80,10 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
       -- Sharing is decided by queue FAMILY, not queue handle — two
       -- distinct queues from the same family still allow EXCLUSIVE,
       -- and CONCURRENT requires the family indices to be distinct.
-      (sharing, qfi) = if (graphicsFamIdx queues ≠ presentFamIdx queues)
+      (sharing, qfi) = if (dqGraphicsFamIdx queues ≠ dqPresentFamIdx queues)
                        then (SHARING_MODE_CONCURRENT
-                           , V.fromList [ graphicsFamIdx queues
-                                      , presentFamIdx queues])
+                           , V.fromList [ dqGraphicsFamIdx queues
+                                      , dqPresentFamIdx queues])
                        else (SHARING_MODE_EXCLUSIVE, [])
       swCreateInfo = zero
         { surface = surface
@@ -98,7 +98,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
         , imageUsage = usage
         , imageSharingMode = sharing
         , queueFamilyIndices = qfi
-        , preTransform = currentTransform capabilities
+        , preTransform = currentTransform ssdCapabilities
         , compositeAlpha = COMPOSITE_ALPHA_OPAQUE_BIT_KHR
         , presentMode = spMode
         , clipped = True
@@ -114,11 +114,11 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   swapchain ← createSwapchainKHR dev swCreateInfo Nothing
   
   let cleanupAction = destroySwapchainKHR dev swapchain Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupSwapchain = cleanupAction
       }
-  }}
+  }
   
   (_, swapImgs) ← getSwapchainImagesKHR dev swapchain
   pure $ SwapchainInfo
@@ -141,11 +141,11 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
   
   let cleanupAction = V.forM_ imageViews $ \iv →
           destroyImageView dev iv Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupImageViews = cleanupAction
       }
-  }}
+  }
   
   pure imageViews
   where
@@ -169,15 +169,15 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
 
 -- | Choose the best swap surface format
 chooseSwapSurfaceFormat ∷ SwapchainSupportDetails → SurfaceFormatKHR
-chooseSwapSurfaceFormat (SwapchainSupportDetails _ formats _) = best
-  where best = if preferred `elem` formats then preferred else 
-                 if V.null formats then preferred else V.head formats
+chooseSwapSurfaceFormat (SwapchainSupportDetails _ ssdFormats _) = best
+  where best = if preferred `elem` ssdFormats then preferred else
+                 if V.null ssdFormats then preferred else V.head ssdFormats
         preferred = zero { format = FORMAT_B8G8R8A8_UNORM
                        , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
 
 chooseSwapPresentMode ∷ SwapchainSupportDetails → Bool → EngineM σ Swap.PresentModeKHR
 chooseSwapPresentMode ssd vsyncEnabled = do
-  let available = presentModes ssd
+  let available = ssdPresentModes ssd
   
   if vsyncEnabled
     then do
@@ -203,9 +203,9 @@ chooseSwapExtent ∷ SwapchainSupportDetails → (Int, Int) → Extent2D
 chooseSwapExtent SwapchainSupportDetails{..} (fbW, fbH) = zero
   { width  = ( max (minw) $ min (maxw) w )
   , height = ( max (minh) $ min (maxh) h ) }
-  where Extent2D{width=minw,height=minh} = minImageExtent capabilities
-        Extent2D{width=maxw,height=maxh} = maxImageExtent capabilities
-        Extent2D{width=curw,height=curh} = currentExtent  capabilities
+  where Extent2D{width=minw,height=minh} = minImageExtent ssdCapabilities
+        Extent2D{width=maxw,height=maxh} = maxImageExtent ssdCapabilities
+        Extent2D{width=curw,height=curh} = currentExtent  ssdCapabilities
         (w, h) = if curw ≡ 0xFFFFFFFF
                  then (fromIntegral fbW, fromIntegral fbH)
                  else (curw, curh)

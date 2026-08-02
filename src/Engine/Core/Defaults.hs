@@ -90,6 +90,6 @@ defaultEngineState = EngineState
     , previewTexture         = Nothing
     , zoomAtlasTexture       = Nothing
     }
-  , assetConfig      = AssetConfig 100 100 True True
+  , assetConfig      = AssetConfig 100 True True
   , sceneManager     = createSceneManager
   }

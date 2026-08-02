@@ -87,7 +87,7 @@ handleWorldPreview = do
                     let width  = fromIntegral w ∷ Word32
                         height = fromIntegral h ∷ Word32
                         bufSize = fromIntegral (BS.length rgbaData)
-                        queue  = graphicsQueue queues
+                        queue  = dqGraphicsQueue queues
 
                     -- Prime variants: explicit cleanups, NOT exit-time
                     -- allocResource — this texture is replaced on every
@@ -138,10 +138,9 @@ handleWorldPreview = do
                     -- one. View before image: the view references it.
                     forM_ (previewTexture gs) (disposeTransientTexture dev)
                     let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    modify $ \st → st { graphicsState =
-                        (graphicsState st)
+                    modifyGraphicsState $ \gs' → gs'
                             { previewTexture =
-                                Just (TransientTexture texHandle cleanupAll) } }
+                                Just (TransientTexture texHandle cleanupAll) }
 
                     -- Round 8/9/10 review: staleness here can NOT be
                     -- decided at upload-completion time (this point).
@@ -209,7 +208,7 @@ handleZoomAtlasUpload = do
                     let width  = fromIntegral w ∷ Word32
                         height = fromIntegral h ∷ Word32
                         bufSize = fromIntegral (BS.length rgbaData)
-                        queue  = graphicsQueue queues
+                        queue  = dqGraphicsQueue queues
 
                     -- Prime variants: explicit cleanups, NOT exit-time
                     -- allocResource — this texture is replaced on every
@@ -261,10 +260,9 @@ handleZoomAtlasUpload = do
                     -- one. View before image: the view references it.
                     forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
                     let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    modify $ \st → st { graphicsState =
-                        (graphicsState st)
+                    modifyGraphicsState $ \gs' → gs'
                             { zoomAtlasTexture =
-                                Just (TransientTexture texHandle cleanupAll) } }
+                                Just (TransientTexture texHandle cleanupAll) }
 
                     let chunksPerRow = w `div` zoomTileSize
                         atlasInfo = ZoomAtlasInfo

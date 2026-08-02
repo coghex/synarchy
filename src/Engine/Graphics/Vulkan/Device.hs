@@ -114,10 +114,10 @@ createVulkanDevice _inst physicalDevice mSurface = do
   logDebugM CatVulkan "Device queues retrieved"
   
   let queues = DevQueues
-        { graphicsQueue = graphicsQ
-        , presentQueue = presentQ
-        , graphicsFamIdx = graphicsFamily indices
-        , presentFamIdx = presentFamily indices
+        { dqGraphicsQueue = graphicsQ
+        , dqPresentQueue = presentQ
+        , dqGraphicsFamIdx = graphicsFamily indices
+        , dqPresentFamIdx = presentFamily indices
         }
   
   return (device, queues)

@@ -5,7 +5,6 @@
 module Engine.Asset.Types where
 
 import UPrelude
-import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import Data.IORef (IORef, newIORef)
 import Vulkan.Core10
@@ -13,20 +12,17 @@ import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Asset.Handle
 import Engine.Graphics.Vulkan.Base (TextureInfo)
 
--- | Central registry of every loaded texture, font, and shader, plus the
+-- | Central registry of every loaded texture and font, plus the
 --   'IORef' counters used for atomic handle\/ID generation
 data AssetPool = AssetPool
   { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
   , apFonts             ∷ Map.Map AssetId Font
-  , apShaders           ∷ Map.Map AssetId ShaderProgram
   , apAssetPaths        ∷ Map.Map Text AssetId
   , apNextAssetId       ∷ IORef Int
   , apNextTextureHandle ∷ IORef Int
   , apNextFontHandle    ∷ IORef Int
-  , apNextShaderHandle  ∷ IORef Int
   , apTextureHandles    ∷ IORef (Map.Map TextureHandle (AssetState AssetId))
   , apFontHandles       ∷ IORef (Map.Map FontHandle (AssetState AssetId))
-  , apShaderHandles     ∷ IORef (Map.Map ShaderHandle (AssetState AssetId))
   }
 
 data GlyphInfo = GlyphInfo
@@ -41,28 +37,22 @@ defaultAssetPool = do
   nextAssetIdRef ← newIORef 0
   nextTextureHandleRef ← newIORef 0
   nextFontHandleRef ← newIORef 0
-  nextShaderHandleRef ← newIORef 0
   textureHandlesRef ← newIORef Map.empty
   fontHandlesRef ← newIORef Map.empty
-  shaderHandlesRef ← newIORef Map.empty
-  
+
   pure $ AssetPool
     { apTextureAtlases = Map.empty
     , apFonts          = Map.empty
-    , apShaders        = Map.empty
     , apAssetPaths     = Map.empty
     , apNextAssetId    = nextAssetIdRef
     , apNextTextureHandle = nextTextureHandleRef
     , apNextFontHandle    = nextFontHandleRef
-    , apNextShaderHandle  = nextShaderHandleRef
     , apTextureHandles    = textureHandlesRef
     , apFontHandles       = fontHandlesRef
-    , apShaderHandles     = shaderHandlesRef
     }
 
 data AssetConfig = AssetConfig
   { acMaxTextureAtlases ∷ Word32
-  , acMaxShaderPrograms ∷ Word32
   , acPreloadAssets     ∷ Bool
   , acEnableHotReload   ∷ Bool
   } deriving (Show)
@@ -114,19 +104,3 @@ instance Show Font where
          <> ", fCleanup = "
          <> (if isJust (fCleanup f) then "<present>" else "<absent>")
          <> " }"
-        
-data ShaderStageInfo = ShaderStageInfo
-  { ssiStage       ∷ ShaderStageFlags
-  , ssiEntryPoint  ∷ Text
-  , ssiPath        ∷ Text
-  } deriving (Show)
-
-data ShaderProgram = ShaderProgram
-  { spId           ∷ AssetId
-  , spName         ∷ Text
-  , spStages       ∷ V.Vector ShaderStageInfo
-  , spStatus       ∷ AssetStatus
-  , spModules      ∷ V.Vector ShaderModule
-  , spRefCount     ∷ Word32
-  , spCleanup      ∷ Maybe (IO ())      -- ^ Destroy shader modules on unload
-  }

@@ -10,7 +10,7 @@ import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10 hiding (size)
 import Vulkan.Core10.MemoryManagement (size)
 import Vulkan.Zero
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | Create a multisampled color image for MSAA rendering.
 -- Returns the image, its memory, and an image view.
@@ -79,11 +79,11 @@ createMSAAColorImage pDevice device format extent sampleCount = do
             destroyImage device image Nothing
             freeMemory device memory Nothing
 
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+    modifyGraphicsState $ \gs → gs {
+        vulkanCleanup = (vulkanCleanup gs) {
             cleanupMSAAImage = cleanupAction
         }
-    }}
+    }
 
     pure (image, memory, imageView)
 
