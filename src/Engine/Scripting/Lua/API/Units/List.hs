@@ -190,7 +190,7 @@ unitGetInfoFn env = do
                     -- prettified def name ("bear_brown" → "Bear Brown").
                     Lua.pushstring (TE.encodeUtf8
                         (fromMaybe (prettifyDefName (uiDefName inst))
-                                   (mDef >>= udDisplayName)))
+                                   (mDef ⌦ udDisplayName)))
                     Lua.setfield (-2) "displayName"
                     Lua.pushnumber (Lua.Number (realToFrac (uiGridX inst)))
                     Lua.setfield (-2) "gridX"
@@ -219,7 +219,7 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "knockedDown"
                     -- equipmentClass is per-def, not per-instance. Only
                     -- present in the table when the def declares one.
-                    case mDef >>= udEquipmentClass of
+                    case mDef ⌦ udEquipmentClass of
                         Just cls → do
                             Lua.pushstring (TE.encodeUtf8 cls)
                             Lua.setfield (-2) "equipmentClass"

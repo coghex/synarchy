@@ -60,6 +60,6 @@ resolveTexture camFacing unitFacing dirSprites fallback
         let dir = screenDirOf camFacing unitFacing
         in case Map.lookup dir dirSprites of
             Just h  → (h, False)
-            Nothing → case mirrorDir dir >>= (`Map.lookup` dirSprites) of
+            Nothing → case mirrorDir dir ⌦ (`Map.lookup` dirSprites) of
                 Just h  → (h, True)
                 Nothing → (fallback, False)

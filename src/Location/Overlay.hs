@@ -242,7 +242,7 @@ computeLocationPlacement seed worldSize plates oceanMap oceanDist lakes rivers d
             cyg = cy * chunkSize + chunkSize `div` 2
             (_, centerMat) = elevationAtGlobal seed plates worldSize cxg cyg
             cm = chunkMetricsAt seed plates worldSize oceanDist coord
-            isLand = centerMat /= matGlacier
+            isLand = centerMat ≢ matGlacier
                    ∧ not (isBeyondGlacier worldSize cxg cyg)
                    ∧ not (HS.member coord oceanMap)
                    ∧ cmMedianElev cm > seaLevel

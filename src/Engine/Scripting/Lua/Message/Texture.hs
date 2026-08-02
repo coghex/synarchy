@@ -144,7 +144,7 @@ prepareTextureUpload pool dev pdev (handle, path) = do
         (width, height)
         FORMAT_R8G8B8A8_UNORM
         IMAGE_TILING_OPTIMAL
-        (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
+        (IMAGE_USAGE_TRANSFER_DST_BIT ⌄ IMAGE_USAGE_SAMPLED_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
     pure TextureUploadPrep
@@ -209,7 +209,7 @@ handleLoadTextureBatch requests = do
                         (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
                             BUFFER_USAGE_TRANSFER_SRC_BIT
                             (MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                             .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                             ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
                         stagingPtr ← mapMemory dev stagingMem 0 bufSize zero
                         liftIO $ withForeignPtr (tupPixels prep) $ \srcPtr →
                             copyBytes (castPtr stagingPtr) srcPtr (tupPixelLen prep)

@@ -108,7 +108,7 @@ instanceHashFrac fi =
         h1 = h0 `xor` (h0 `shiftR` 16)
         h2 = h1 * 1640531527
         h3 = h2 `xor` (h2 `shiftR` 13)
-    in fromIntegral (h3 .&. 0xFFFF) / 65535.0
+    in fromIntegral (h3 ⌃ 0xFFFF) / 65535.0
 
 -- | Derive an instance's growth state at an absolute world day.
 floraGrowth ∷ FloraSpecies → Int → FloraInstance → FloraGrowth

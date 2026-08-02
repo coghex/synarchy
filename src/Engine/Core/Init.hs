@@ -217,7 +217,7 @@ initializeEngineWith logBackend = do
   unitManagerRef ← newIORef emptyUnitManager
   unitQueue ← Q.newQueue
   utsRef ← newIORef emptyUnitThreadState
-  statRNGRef ← Random.newStdGen >>= newIORef
+  statRNGRef ← Random.newStdGen ⌦ newIORef
   buildingManagerRef ← newIORef emptyBuildingManager
   texPaletteRef ← newIORef emptyTexPalette
   texPaletteHandlesRef ← newIORef HM.empty

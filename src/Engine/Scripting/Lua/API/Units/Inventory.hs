@@ -583,7 +583,7 @@ unitGetInventoryFn env = do
                             -- and two kits whose contents diverged read as
                             -- different weights (#67A).
                             weight = itemTotalWeight itemMgr inst
-                            mContainer = mDef >>= idContainer
+                            mContainer = mDef ⌦ idContainer
                         Lua.pushstring (TE.encodeUtf8 name)
                         Lua.setfield (-2) "defName"
                         -- Process-unique identity so right-click actions
@@ -632,7 +632,7 @@ unitGetInventoryFn env = do
                                         Lua.setfield (-2) "qualityTier"
                                     Nothing → pure ()
                             _ → pure ()
-                        case mDef >>= idConditionSpec of
+                        case mDef ⌦ idConditionSpec of
                             Just _ → do
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (iiCondition inst)))
@@ -688,7 +688,7 @@ unitGetInventoryFn env = do
                                 Lua.pushstring (TE.encodeUtf8 (icHolds c))
                                 Lua.setfield (-2) "holds"
                             Nothing → pure ()
-                        case mDef >>= idFood of
+                        case mDef ⌦ idFood of
                             Just f → do
                                 Lua.newtable                -- food
                                 Lua.newtable                -- food.nutrition
@@ -699,7 +699,7 @@ unitGetInventoryFn env = do
                                 Lua.setfield (-2) "nutrition"
                                 Lua.setfield (-2) "food"
                             Nothing → pure ()
-                        case mDef >>= idWeapon of
+                        case mDef ⌦ idWeapon of
                             Just w → do
                                 Lua.newtable
                                 Lua.pushnumber

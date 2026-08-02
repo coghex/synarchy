@@ -55,7 +55,7 @@ combatAttackFn env = do
     reachArg ← Lua.tonumber 4
     speedArg ← Lua.tonumber 5
     let mode = case modeArg of
-            Just bs | TE.decodeUtf8Lenient bs == ("heavy" ∷ Text) → Heavy
+            Just bs | TE.decodeUtf8Lenient bs ≡ ("heavy" ∷ Text) → Heavy
             _                                              → Quick
         reachBonus = case reachArg of
             Just (Lua.Number v) → realToFrac v   -- lunge strike-reach (m)

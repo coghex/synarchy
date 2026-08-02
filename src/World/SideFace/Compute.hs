@@ -62,12 +62,12 @@ computeColumnDeco seed (ChunkCoord cx cy) lx ly myZ terrainSurfMap neighborLooku
        then 0
        else let -- Hash for deterministic selection
                 h = tileHash seed cx cy lx ly
-                roll = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
+                roll = fromIntegral (h ⌃ 0xFF) / 255.0 ∷ Float
                 -- ~40% chance of having a deco on a cliff face
             in if roll > 0.4
                then 0
                else let -- Select type based on hash bits
-                        typeBits = (h `shiftR` 8) .&. 0x3
+                        typeBits = (h `shiftR` 8) ⌃ 0x3
                         decoType = case typeBits of
                             0 → DecoVines
                             1 → DecoMoss

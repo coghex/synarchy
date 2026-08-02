@@ -202,7 +202,7 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                         Just _ →
                             let (e, m, _, gx, gy) = td
                                 h = vegHash seed gx gy
-                                var = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
+                                var = fromIntegral ((h `shiftR` 8) ⌃ 0x03) ∷ Word8
                             in (e, m, vegSnow + var, gx, gy)
                         Nothing → td
                     ) [0 ∷ Int ..] tileData

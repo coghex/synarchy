@@ -141,8 +141,8 @@ ensureDynamicVertexBuffer frameIdx requiredVertices = do
                 device
                 pDevice
                 paddedSize
-                (BUFFER_USAGE_VERTEX_BUFFER_BIT .|. BUFFER_USAGE_TRANSFER_DST_BIT)
-                (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                (BUFFER_USAGE_VERTEX_BUFFER_BIT ⌄ BUFFER_USAGE_TRANSFER_DST_BIT)
+                (MEMORY_PROPERTY_HOST_VISIBLE_BIT ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
             let newBuf = SceneDynamicBuffer
                     { sdbBuffer = buffer

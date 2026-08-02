@@ -39,13 +39,13 @@ clampSampleCount supported requested =
     -- Try requested first, then fall back to lower counts
     fromMaybe SAMPLE_COUNT_1_BIT $ listToMaybe $ filter isSupported candidates
   where
-    candidates = dropWhile (/= requested)
+    candidates = dropWhile (≢ requested)
         [ SAMPLE_COUNT_8_BIT
         , SAMPLE_COUNT_4_BIT
         , SAMPLE_COUNT_2_BIT
         , SAMPLE_COUNT_1_BIT
         ]
-    isSupported sc = (sc .&. supported) ≢ zeroBits
+    isSupported sc = (sc ⌃ supported) ≢ zeroBits
 
 -- | Window display mode
 data WindowMode

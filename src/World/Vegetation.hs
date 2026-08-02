@@ -180,7 +180,7 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
 
             -- Per-tile hash for texture variant selection only
             h = vegHash seed gx gy
-            variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
+            variant = fromIntegral ((h `shiftR` 8) ⌃ 0x03) ∷ Word8
 
             -- Spatially coherent noise for vegetation type selection.
             -- Cell size ~10 tiles creates natural-looking patches.

@@ -32,7 +32,7 @@ pushAeson v = case v of
     A.Number n →
         let d = realToFrac n ∷ Double
             i = round d ∷ Int
-        in if fromIntegral i == d   -- whole number → push as a Lua integer
+        in if fromIntegral i ≡ d   -- whole number → push as a Lua integer
            then Lua.pushinteger (fromIntegral i)
            else Lua.pushnumber (Lua.Number d)
     A.Array a  → do

@@ -431,7 +431,7 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                                     MV.write mv nIdx (Just d
                                         { afcVolume = afcVolume d + fromIntegral actual })
                             fd ← readSTRef flowDirRef
-                            writeSTRef flowDirRef (fd .|. ((1 ∷ Word8) `shiftL` dirBit))
+                            writeSTRef flowDirRef (fd ⌄ ((1 ∷ Word8) `shiftL` dirBit))
                             MVU.write decoMv idx
                                 (sideDecoBase DecoWaterfall
                                     + fromIntegral (dirBit `mod` 4))

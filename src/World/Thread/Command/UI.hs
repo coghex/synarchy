@@ -64,7 +64,7 @@ handleWorldHideCommand wsc logger pageId = do
     -- invalid / already-hidden page is a no-op for sim state, and hiding one
     -- world never tears down the others' sim (per-world deactivate, #55).
     wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
-        ( mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }
+        ( mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) }
         , pageId `elem` wmVisible mgr )
 
     -- Clear this page's cursor selection on hide: the ground-item

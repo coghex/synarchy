@@ -30,10 +30,10 @@ hashCoord seed x y =
         h5 = h4 `xor` (h4 `shiftR` 33)
         h6 = h5 * 0xc4ceb9fe1a85ec53
         h7 = h6 `xor` (h6 `shiftR` 33)
-    in fromIntegral (h7 .&. 0xFFFFFFFF)
+    in fromIntegral (h7 ⌃ 0xFFFFFFFF)
 
 hashToFloat' ∷ Word32 → Float
-hashToFloat' h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word32)
+hashToFloat' h = fromIntegral (h ⌃ 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word32)
 
 hashToRange ∷ Word32 → Int → Int → Int
 hashToRange h lo hi =

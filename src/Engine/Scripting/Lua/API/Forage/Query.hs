@@ -319,7 +319,7 @@ itemGetFoodFn env = do
             let name = TE.decodeUtf8Lenient nameBS
             mFood ← Lua.liftIO $ do
                 itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
-                pure (lookupItemDef name itemMgr >>= idFood)
+                pure (lookupItemDef name itemMgr ⌦ idFood)
             case mFood of
                 Nothing → Lua.pushnil
                 Just f → do

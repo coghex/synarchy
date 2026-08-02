@@ -11,7 +11,7 @@ referenced issues/PRs when you need the full story behind a contract stated here
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the persistence-inventory / EngineEnv-capability / save-compat audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`; restores any `cabal.project.local` on exit (`tools/ci-local.sh`). It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`; restores any `cabal.project.local` on exit (`tools/ci-local.sh`). It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
 - **Debug output:** `ENGINE_DEBUG=Vulkan,Graphics,...` environment variable
 
 ## Testing Tiers
@@ -119,7 +119,17 @@ parallelism), and drive it via `--headless` + `world.waitForInit`, never
 | `⊙` | filepath extension | `<.>` |
 | `≫=` / `=≪` | monadic bind (from Control.Monad.Unicode) | `>>=` / `=<<` |
 | `≡` | equality (from Prelude.Unicode) | `==` |
+| `≢` | inequality (from Prelude.Unicode) | `/=` |
 | `∧` / `∨` | logical and/or (from Prelude.Unicode) | `&&` / `\|\|` |
+
+Five of these are **enforced**: `.&.`, `.\|.`, `>>=`, `==`, and `/=` must
+not appear as Haskell operators in `src/`/`app/` outside
+`tools/unicode_operator_audit.py`'s short, explicit exemption list
+(`src/UPrelude.hs`'s own definitions; `ShaderCode.hs`'s quasiquoted
+GLSL; the `Eq`/`Monad` instance method names, which must stay ASCII) —
+see issue #1005 / `docs/code_health_findings.md` CH-49. `fmap`'s two
+spellings, `<$>` and `⊚`, are a deliberate exception: **both are kept**,
+picked per call site by readability, not enforced either way.
 
 ## Architecture
 

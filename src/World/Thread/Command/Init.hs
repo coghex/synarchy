@@ -109,7 +109,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
         (mgr { wmWorlds = (pageId, worldState)
-                        : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
+                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -366,7 +366,7 @@ handleWorldInitArenaCommand env logger pageId = do
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
         (mgr { wmWorlds = (pageId, worldState)
-                        : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
+                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Arena chunk set: shared with the save-load restore path (#365) so a
     -- loaded arena page is rebuilt exactly like a fresh one.

@@ -103,7 +103,7 @@ combatLoop env stateRef tick = do
                     else do
                         processAllCommands env
                         let next = (tick + 1) `mod` woundsTickEvery
-                        when (next == 0) $
+                        when (next ≡ 0) $
                             tickAllWounds env
                                 (realToFrac (combatTickRate
                                     * fromIntegral woundsTickEvery))

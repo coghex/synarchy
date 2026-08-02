@@ -58,7 +58,7 @@ createRenderPassNoMSAA device swapchainImageFormat targetLayout = do
           , srcAccessMask = zero
           , dstStageMask  = PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
           , dstAccessMask = ACCESS_COLOR_ATTACHMENT_READ_BIT
-                             .|. ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                             ⌄ ACCESS_COLOR_ATTACHMENT_WRITE_BIT
           }
 
         renderPassInfo = zero
@@ -118,7 +118,7 @@ createRenderPassMSAA device swapchainImageFormat sampleCount targetLayout = do
           , srcAccessMask = zero
           , dstStageMask  = PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
           , dstAccessMask = ACCESS_COLOR_ATTACHMENT_READ_BIT
-                             .|. ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                             ⌄ ACCESS_COLOR_ATTACHMENT_WRITE_BIT
           }
 
         renderPassInfo = zero

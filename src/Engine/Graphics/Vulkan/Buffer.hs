@@ -36,7 +36,7 @@ createUniformBuffer ∷ Device → PhysicalDevice → DeviceSize
 createUniformBuffer device pDevice bufferSize = do
   (mem, buf) ← createVulkanBuffer device pDevice bufferSize
       BUFFER_USAGE_UNIFORM_BUFFER_BIT
-      (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+      (MEMORY_PROPERTY_HOST_VISIBLE_BIT ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
   pure (buf, mem)
 
 -- | Update uniform buffer data

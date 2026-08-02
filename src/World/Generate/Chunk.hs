@@ -428,7 +428,7 @@ generateChunk registry catalog params coord =
                         gx = cx * chunkSize + lx
                         gy = cy * chunkSize + ly
                         h = vegHash seed gx gy
-                        variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
+                        variant = fromIntegral ((h `shiftR` 8) ⌃ 0x03) ∷ Word8
                     in vegSnow + variant
                 Nothing → v
             ) baseVegIds

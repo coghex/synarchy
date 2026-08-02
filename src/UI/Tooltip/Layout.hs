@@ -115,7 +115,7 @@ computeBoxSize fontCache style content =
         hasSep = isJust (ttText content)
               ∧ isJust (ttHint content)
               ∧ isFontSet (tsFont style)
-              ∧ (toInt (tsSeparatorTexture style) /= 0
+              ∧ (toInt (tsSeparatorTexture style) ≢ 0
                    ∨ isBoxTextureSet (tsBoxTextures style))
         sepH = if hasSep then tsSeparatorThickness style else 0
         sprites = ttSprites content
@@ -185,7 +185,7 @@ measureText fontCache fontH size (Just txt) =
 ------------------------------------------------------------
 
 isFontSet ∷ FontHandle → Bool
-isFontSet h = toInt h /= 0
+isFontSet h = toInt h ≢ 0
 
 isBoxTextureSet ∷ BoxTextureHandle → Bool
-isBoxTextureSet (BoxTextureHandle n) = n /= 0
+isBoxTextureSet (BoxTextureHandle n) = n ≢ 0

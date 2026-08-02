@@ -47,41 +47,45 @@ fi
 # -fforce-recomp so a warm build can't mask a warning CI would catch fresh.
 printf 'package synarchy\n  ghc-options: -Werror -fforce-recomp\n' > "$LOCAL"
 
-echo "==> [1/11] build (library + executable, -Werror)"
+echo "==> [1/12] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/11] build test suites"
+echo "==> [2/12] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/11] headless hspec suite"
+echo "==> [3/12] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/11] test audit"
+echo "==> [4/12] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/11] lua module line budget"
+echo "==> [5/12] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [6/11] lua duplicate function audit"
+echo "==> [6/12] lua duplicate function audit"
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [7/11] haskell module line budget"
+echo "==> [7/12] haskell module line budget"
 python3 tools/haskell_module_budget.py
 
-echo "==> [8/11] persistence inventory audit"
+echo "==> [8/12] unicode operator audit"
+python3 tools/test_unicode_operator_audit.py
+python3 tools/unicode_operator_audit.py
+
+echo "==> [9/12] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [9/11] EngineEnv capability inventory audit"
+echo "==> [10/12] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
-echo "==> [10/11] save compatibility audit"
+echo "==> [11/12] save compatibility audit"
 python3 tools/test_save_compat_audit.py
 python3 tools/save_compat_audit.py
 
-echo "==> [11/11] world_check --quick"
+echo "==> [12/12] world_check --quick"
 python3 tools/world_check.py --quick
 
 echo "==> make ci: all gates passed"
