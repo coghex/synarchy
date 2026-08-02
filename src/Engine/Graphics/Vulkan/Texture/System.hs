@@ -46,8 +46,17 @@ createTextureSystem pdev dev cmdPool queue config = do
       logAndThrowM CatTexture (ExGraphics TextureLoadFailed) 
         "Legacy texture system is not implemented."
 
--- | Load a texture into the system
--- Returns the slot index for shader use
+-- | Load a texture into the system.
+--
+--   Returns the slot index for shader use. A failed slot allocation
+--   returns @0@, which is not a sentinel the caller has to test for —
+--   slot 0 is the undefined-texture slot (@undefinedSlot@ in
+--   "Engine.Graphics.Vulkan.Texture.Slot"), so the value is directly
+--   usable. What the shader then does depends on which
+--   binding it feeds: a BASE texture resolving to slot 0 is sampled as
+--   the undefined texture like any other slot, while only the FACE-MAP
+--   path treats slot 0 specially and substitutes the default face map
+--   ("Engine.Graphics.Vulkan.ShaderCode").
 loadTexture ∷ Device → PhysicalDevice → CommandPool → Queue
   → TextureHandle → FilePath → Filter → BindlessTextureSystem
   → EngineM σ (Word32, BindlessTextureSystem)
