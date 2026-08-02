@@ -22,28 +22,34 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # (label, glob patterns relative to the repo root, max physical lines)
+#
+# A directory pattern uses **/*.hs so a module nested at any descendant
+# depth under the split directory (not just its direct children) is
+# discovered -- pathlib's `**` matches zero or more directories, so this
+# still covers direct children too (issue #967).
 BUDGETS: list[tuple[str, list[str], int]] = [
     ("input-thread split (#787)",
-     ["src/Engine/Input/Thread.hs", "src/Engine/Input/Thread/*.hs"], 500),
+     ["src/Engine/Input/Thread.hs", "src/Engine/Input/Thread/**/*.hs"], 500),
     ("timeline split (#588)",
-     ["src/World/Generate/Timeline.hs", "src/World/Generate/Timeline/*.hs"], 500),
+     ["src/World/Generate/Timeline.hs", "src/World/Generate/Timeline/**/*.hs"], 500),
     ("Unit.Types split (#575)",
-     ["src/Unit/Types.hs", "src/Unit/Types/*.hs"], 500),
+     ["src/Unit/Types.hs", "src/Unit/Types/**/*.hs"], 500),
 ]
 
 
-def check() -> list[str]:
+def check(repo_root: Path = REPO_ROOT,
+          budgets: list[tuple[str, list[str], int]] = BUDGETS) -> list[str]:
     failures: list[str] = []
-    for label, patterns, budget in BUDGETS:
+    for label, patterns, budget in budgets:
         matched: set[Path] = set()
         for pattern in patterns:
-            matched.update(REPO_ROOT.glob(pattern))
+            matched.update(repo_root.glob(pattern))
         if not matched:
             failures.append(f"{label}: no files matched {patterns!r}")
             continue
         for path in sorted(matched):
             n = sum(1 for _ in path.open("r", encoding="utf-8"))
-            rel = path.relative_to(REPO_ROOT)
+            rel = path.relative_to(repo_root)
             status = "OK" if n <= budget else "FAIL"
             print(f"  {status}: {rel} -- {n}/{budget} lines")
             if n > budget:
