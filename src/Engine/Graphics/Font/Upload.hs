@@ -83,7 +83,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
 
     (stagingMemory, stagingBuffer) ← createVulkanBufferManual device pDevice bufferSize
         BUFFER_USAGE_TRANSFER_SRC_BIT
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
     dataPtr ← mapMemory device stagingMemory 0 bufferSize zero
     liftIO $ pokeArray (castPtr dataPtr) pixels
@@ -93,7 +93,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
         (fromIntegral width, fromIntegral height)
         FORMAT_R8_UNORM
         IMAGE_TILING_OPTIMAL
-        (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
+        (IMAGE_USAGE_TRANSFER_DST_BIT ⌄ IMAGE_USAGE_SAMPLED_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
     -- locally: the one-shot command buffer is freed when this scope
@@ -185,8 +185,8 @@ transitionImageLayout cmdBuf image _format oldLayout newLayout = do
               , PIPELINE_STAGE_FRAGMENT_SHADER_BIT
               )
           _ →
-              ( ACCESS_MEMORY_READ_BIT .|. ACCESS_MEMORY_WRITE_BIT
-              , ACCESS_MEMORY_READ_BIT .|. ACCESS_MEMORY_WRITE_BIT
+              ( ACCESS_MEMORY_READ_BIT ⌄ ACCESS_MEMORY_WRITE_BIT
+              , ACCESS_MEMORY_READ_BIT ⌄ ACCESS_MEMORY_WRITE_BIT
               , PIPELINE_STAGE_ALL_COMMANDS_BIT
               , PIPELINE_STAGE_ALL_COMMANDS_BIT
               )

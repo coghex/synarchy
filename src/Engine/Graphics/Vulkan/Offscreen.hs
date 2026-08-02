@@ -52,7 +52,7 @@ createOffscreenTarget pDevice device (w, h) count = do
         , samples       = SAMPLE_COUNT_1_BIT
         , tiling        = IMAGE_TILING_OPTIMAL
         , usage         = IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                          .|. IMAGE_USAGE_TRANSFER_SRC_BIT
+                          ⌄ IMAGE_USAGE_TRANSFER_SRC_BIT
         , sharingMode   = SHARING_MODE_EXCLUSIVE
         , initialLayout = IMAGE_LAYOUT_UNDEFINED
         }

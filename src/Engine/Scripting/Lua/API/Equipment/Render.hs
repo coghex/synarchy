@@ -91,7 +91,7 @@ equipmentGetLoadoutFn env = do
                                         Lua.setfield (-2) "qualityTier"
                                     Nothing → pure ()
                             _ → pure ()
-                        case mDef >>= idConditionSpec of
+                        case mDef ⌦ idConditionSpec of
                             Just _ → do
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (iiCondition inst)))
@@ -197,7 +197,7 @@ pushItemInstance inst itemMgr = do
                     Lua.setfield (-2) "qualityTier"
                 Nothing → pure ()
         _ → pure ()
-    case mDef >>= idConditionSpec of
+    case mDef ⌦ idConditionSpec of
         Just _ → do
             Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))
             Lua.setfield (-2) "condition"

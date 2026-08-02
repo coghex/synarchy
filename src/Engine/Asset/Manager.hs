@@ -333,7 +333,7 @@ unloadAsset aid = do
           liftIO $ maybe (pure ()) id (taCleanup atlas)
           liftIO $ atomicModifyIORef' poolRef $ \p → (p
             { apTextureAtlases = Map.delete aid (apTextureAtlases p)
-            , apAssetPaths = Map.filter (/= aid) (apAssetPaths p)
+            , apAssetPaths = Map.filter (≢ aid) (apAssetPaths p)
             }, ())
       else
           liftIO $ atomicModifyIORef' poolRef $ \p → (p

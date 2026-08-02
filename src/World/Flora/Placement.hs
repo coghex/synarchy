@@ -54,7 +54,7 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                             lookupLocalClimate climate worldSize gx gy
 
                     occ ← VUM.read occupied idx
-                    if occ /= 0 ∨ hasFluid ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
+                    if occ ≢ 0 ∨ hasFluid ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
                     then go rest acc
                     else do
                         let newInsts = placeTileFlora seed gx gy lx ly surfZ
@@ -103,7 +103,7 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId
                temp precip humidity altitude wgSpecies catalog =
     concatMap (\(i, (fid, wg)) →
         let h = floraHash seed gx gy (fromIntegral i + 100)
-            roll = fromIntegral (h .&. 0xFFFF) / 65535.0 ∷ Float
+            roll = fromIntegral (h ⌃ 0xFFFF) / 65535.0 ∷ Float
             fitness = speciesFitness wg matId slopeId
                           temp precip humidity altitude
             effectiveDensity = fwDensity wg * fitness
@@ -156,10 +156,10 @@ instanceCount ∷ Text → Word64 → Int
 instanceCount cat h
     | cat ≡ "tree"      = 1
     | cat ≡ "shrub"     = 1
-    | cat ≡ "bush"      = 1 + fromIntegral ((h `shiftR` 16) .&. 0x01)
+    | cat ≡ "bush"      = 1 + fromIntegral ((h `shiftR` 16) ⌃ 0x01)
     | cat ≡ "cactus"    = 1
     | cat ≡ "row_crop"  = 3
-    | otherwise          = 2 + fromIntegral ((h `shiftR` 16) .&. 0x01)
+    | otherwise          = 2 + fromIntegral ((h `shiftR` 16) ⌃ 0x01)
 
 -- | Build one FloraInstance with a deterministic sub-tile offset.
 --   ALL instances get an offset (including trees with count=1). The
@@ -178,8 +178,8 @@ mkInstance ∷ Text → FloraId → Int → Int → Int → Word64 → Int → I
            → Int → Int → Int → Float → Float → Float → FloraInstance
 mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health =
     let h = floraHash seed gx gy (fromIntegral i + 1)
-        rawU = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
-        rawV = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
+        rawU = fromIntegral ((h `shiftR` 0)  ⌃ 0xFF) / 255.0 - 0.5
+        rawV = fromIntegral ((h `shiftR` 8)  ⌃ 0xFF) / 255.0 - 0.5
 
         halfBase = if baseWidth > 0.0
                    then (baseWidth / 2.0) / 96.0
@@ -191,10 +191,10 @@ mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health =
             | otherwise        = ( clamp (negate maxOff) maxOff (rawU * 0.7)
                                   , clamp (negate maxOff) maxOff (rawV * 0.7) )
 
-        variant = fromIntegral ((h `shiftR` 16) .&. 0x03)
+        variant = fromIntegral ((h `shiftR` 16) ⌃ 0x03)
 
         -- Randomize initial age from lifecycle data
-        ageFrac = fromIntegral ((h `shiftR` 24) .&. 0xFF) / 255.0
+        ageFrac = fromIntegral ((h `shiftR` 24) ⌃ 0xFF) / 255.0
         age = ageFrac * maxAge
 
     in FloraInstance

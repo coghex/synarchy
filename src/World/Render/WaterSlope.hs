@@ -62,9 +62,9 @@ waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
         gridS = checkNeighbor lx (ly + 1)
         gridW = checkNeighbor (lx - 1) ly
         raw = (if gridN then 3  else 0)   -- grid N → pixel NE (bits 1+2)
-          .|. (if gridE then 6  else 0)   -- grid E → pixel SE (bits 2+4)
-          .|. (if gridS then 12 else 0)   -- grid S → pixel SW (bits 4+8)
-          .|. (if gridW then 9  else 0)   -- grid W → pixel NW (bits 1+8)
+          ⌄ (if gridE then 6  else 0)   -- grid E → pixel SE (bits 2+4)
+          ⌄ (if gridS then 12 else 0)   -- grid S → pixel SW (bits 4+8)
+          ⌄ (if gridW then 9  else 0)   -- grid W → pixel NW (bits 1+8)
           ∷ Word8
         -- A tile with all four neighbours lower would slope every
         -- direction at once (raw ≡ 15) — an isolated high point in the

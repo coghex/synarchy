@@ -72,8 +72,8 @@ erosionSedimentScalar temp precip humid snow seed lastAge matId elev _isDepositi
         bucketFrac = fromIntegral (elev `mod` 8) / 8.0 ∷ Float
         hashBucket b = fromIntegral (seed `xor` fromIntegral matId
                                           `xor` (fromIntegral b * 0x9E3779B9)) ∷ Word64
-        roll0 = fromIntegral (hashBucket bucket .&. 0xFF) / 255.0 ∷ Float
-        roll1 = fromIntegral (hashBucket (bucket + 1) .&. 0xFF) / 255.0 ∷ Float
+        roll0 = fromIntegral (hashBucket bucket ⌃ 0xFF) / 255.0 ∷ Float
+        roll1 = fromIntegral (hashBucket (bucket + 1) ⌃ 0xFF) / 255.0 ∷ Float
         roll = roll0 + bucketFrac * (roll1 - roll0)
 
     in if lastAge

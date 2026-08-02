@@ -43,10 +43,10 @@ removeElementReference handle element mgr =
     case ueParent element of
         Just parentHandle →
             modifyElement parentHandle mgr $ \parent →
-                parent { ueChildren = filter (/= handle) (ueChildren parent) }
+                parent { ueChildren = filter (≢ handle) (ueChildren parent) }
         Nothing →
             modifyPage (uePage element) mgr $ \page →
-                page { upRootElements = filter (/= handle) (upRootElements page) }
+                page { upRootElements = filter (≢ handle) (upRootElements page) }
 
 -- * Internal Helpers
 

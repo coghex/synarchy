@@ -175,7 +175,7 @@ tileHash' seed x y =
     in h5
 
 hashToFloat' ∷ Word64 → Float
-hashToFloat' h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word64)
+hashToFloat' h = fromIntegral (h ⌃ 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word64)
 
 smoothstep' ∷ Float → Float
 smoothstep' t = t * t * (3.0 - 2.0 * t)

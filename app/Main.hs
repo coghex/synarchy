@@ -74,11 +74,11 @@ main = do
   -- mode: rejectIncompatibleFlags above already exits before this point
   -- for any other mode that was given --worldSize/--plates/--ages, so
   -- gating these on 'isJust mDump' would be redundant.
-  when (worldSize /= rawWorldSize) $
+  when (worldSize ≢ rawWorldSize) $
     hPutStrLn stderr $ "worldSize " ⧺ show rawWorldSize
         ⧺ " normalized to " ⧺ show worldSize
         ⧺ " (minimum/multiple " ⧺ show minimumWorldSize ⧺ ")."
-  when (plateCount /= rawPlateCount) $
+  when (plateCount ≢ rawPlateCount) $
     hPutStrLn stderr $ "plateCount " ⧺ show rawPlateCount
         ⧺ " normalized to " ⧺ show plateCount
         ⧺ " (minimum 1)."

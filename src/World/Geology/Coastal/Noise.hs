@@ -37,7 +37,7 @@ shorelineOffset seed gx gy =
 shoreHash ∷ Word64 → Int → Int → Float
 shoreHash seed x y =
     let h = coastHash seed (x * 7919) (y * 6271)
-    in fromIntegral (h .&. 0xFFFF) / 65535.0
+    in fromIntegral (h ⌃ 0xFFFF) / 65535.0
 
 -- * Hash Utility
 

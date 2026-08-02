@@ -56,4 +56,4 @@ isChunkVisibleWrapped facing worldSize vb camX coord =
 
 isChunkRelevantForSlice ∷ Int → LoadedChunk → Bool
 isChunkRelevantForSlice _zSlice lc =
-    VU.any (/= minBound) (lcSurfaceMap lc)
+    VU.any (≢ minBound) (lcSurfaceMap lc)

@@ -31,7 +31,7 @@ worldGetChunkInfoFn wsc = do
         (Just cx', Just cy') → do
             let coord = ChunkCoord (fromIntegral cx') (fromIntegral cy')
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd >>= lookupChunk coord of
+            case mTd ⌦ lookupChunk coord of
                 Nothing → do
                     Lua.newtable
                     Lua.pushboolean False

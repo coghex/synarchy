@@ -99,7 +99,7 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId gx gy ux uy amount
                             spoilName ← mpDigSpoil props
                             spoilId ← materialIdByName registry spoilName
                             pure (spoilId, mpDigBulking props)
-                        mChunkItem = mDigProps >>= mpDigChunk
+                        mChunkItem = mDigProps ⌦ mpDigChunk
                         tileOk = spoilTileOk td0 desigs (mdZ md)
                         startV = spoilStartVertex (ux, uy) (gx, gy)
                         -- Refusal gate: this tick's worst-case spoil

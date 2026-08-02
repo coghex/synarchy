@@ -194,7 +194,7 @@ craftReorderBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftReorderBillFn env = do
     idArg  ← Lua.tointeger 1
     dirArg ← Lua.tostring 2
-    ok ← case (idArg, dirArg >>= toDirection) of
+    ok ← case (idArg, dirArg ⌦ toDirection) of
         (Just n, Just dir) → Lua.liftIO $ do
             mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mPage of

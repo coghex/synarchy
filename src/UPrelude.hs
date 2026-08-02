@@ -47,7 +47,7 @@ import Control.Monad.Unicode ( (=≪), (↢), (↣), (≫), (≫=) )
 import Control.Applicative.Unicode ( (∅), (⊛) )
 
 import Data.Maybe (fromMaybe, isJust, isNothing, catMaybes, listToMaybe, maybeToList)
-import Data.Bits ((.&.), (.|.), zeroBits, testBit, setBit, clearBit, complement, shiftL, shiftR, rotateL, rotateR, bit, popCount, xor)
+import Data.Bits (zeroBits, testBit, setBit, clearBit, complement, shiftL, shiftR, rotateL, rotateR, bit, popCount, xor)
 
 import Foreign.C.String (peekCString)
 import Foreign.Storable (peek, Storable(..))

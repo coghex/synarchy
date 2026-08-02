@@ -88,7 +88,7 @@ unitFeedFn env = do
                 defName = TE.decodeUtf8Lenient nameBS
             mCredited ← Lua.liftIO $ do
                 itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
-                case lookupItemDef defName itemMgr >>= idFood of
+                case lookupItemDef defName itemMgr ⌦ idFood of
                     Nothing   → pure Nothing   -- no food data → can't feed
                     Just food → atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         case HM.lookup uid (umInstances um) of

@@ -90,7 +90,7 @@ packBitmask v =
         bitAt i = if i < n ∧ v VU.! i then 1 else 0 ∷ Word8
         byte b =
             let base = b * 8
-            in foldr (\i acc → acc `shiftL` 1 .|. bitAt (base + i)) 0 [0 .. 7]
+            in foldr (\i acc → acc `shiftL` 1 ⌄ bitAt (base + i)) 0 [0 .. 7]
     in [ byte b | b ← [0 .. nB - 1] ]
 
 -- | Inverse of 'packBitmask'. Always produces 256-element output
@@ -101,7 +101,7 @@ unpackBitmask bytes =
     let bsV      = VU.fromList (take 32 (bytes ⧺ replicate 32 0))
         byteAt b = bsV VU.! b
     in VU.fromList
-        [ (byteAt b `shiftR` i) .&. 1 ≡ 1
+        [ (byteAt b `shiftR` i) ⌃ 1 ≡ 1
         | b ← [0 .. 31]
         , i ← [0 .. 7]
         ]

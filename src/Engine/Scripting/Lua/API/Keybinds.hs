@@ -180,7 +180,7 @@ removeActionKeyFn env = do
             changed ← Lua.liftIO $ atomicModifyIORef' (icKeyBindingsRef (toInputCapability env)) $ \b →
                 case Map.lookup action b of
                     Just cur | key `elem` cur →
-                        (Map.insert action (filter (/= key) cur) b, True)
+                        (Map.insert action (filter (≢ key) cur) b, True)
                     _ → (b, False)
             Lua.pushboolean changed
         _ → Lua.pushboolean False

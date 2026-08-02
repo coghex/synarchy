@@ -103,7 +103,7 @@ removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageMana
 removeFromPage pageHandle elemHandle mgr0 =
     let mgr   = bumpElementRouteEpoch elemHandle mgr0
         mgr'  = modifyPage pageHandle mgr $ \page →
-            page { upRootElements = filter (/= elemHandle) (upRootElements page) }
+            page { upRootElements = filter (≢ elemHandle) (upRootElements page) }
         mgr'' = modifyElement elemHandle mgr' $ \elem →
             elem { ueParent = Nothing }
         -- Same focus hygiene as removeElement: detached ⇒ no keyboard.

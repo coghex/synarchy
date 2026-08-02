@@ -61,8 +61,8 @@ handleWorldDestroyCommand env logger pageId = do
 
     -- Remove from visible list
     atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr' →
-        (mgr' { wmVisible = filter (/= pageId) (wmVisible mgr')
-              , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr')
+        (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
+              , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
               }, ())
 
     -- Clear world quads so renderer stops drawing the old world

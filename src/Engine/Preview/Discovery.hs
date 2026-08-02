@@ -257,7 +257,7 @@ resolveFocusedEntry root item
 --   'resolveFocusedEntry' applies to a focused simple-category file.
 resolveItemDir ∷ FilePath → String → IO (Either ItemDirError FilePath)
 resolveItemDir root item
-    | null item ∨ isAbsolute item ∨ length (splitDirectories item) /= 1
+    | null item ∨ isAbsolute item ∨ length (splitDirectories item) ≢ 1
         ∨ item ≡ "." ∨ item ≡ ".." ∨ pathSeparator `elem` item =
         pure (Left ItemDirEscapesRoot)
     | otherwise = do

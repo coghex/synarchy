@@ -131,7 +131,7 @@ lootRollForFn regs = do
                         , lrcRollIndex  = fromIntegral roll
                         }
             reg ← Lua.liftIO $ readIORef (crLootTableRegistryRef regs)
-            case lookupLootTable tid reg >>= \def → rollLootTableFor def ctx of
+            case lookupLootTable tid reg ⌦ \def → rollLootTableFor def ctx of
                 Just pickedId → do
                     Lua.pushstring (TE.encodeUtf8 pickedId)
                     return 1

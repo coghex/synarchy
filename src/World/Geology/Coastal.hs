@@ -183,7 +183,7 @@ identifyCoastalErosion seed worldSize plates registry allMouths
                           nearRiver = isNearRiverMouth worldSize nearbyMouths
                               gx gy
                           localHash = coastHash seed gx gy
-                          roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
+                          roll = fromIntegral (localHash ⌃ 0xFF) / 255.0 ∷ Float
                           offset = shorelineOffset seed gx gy
                           effDist = max 1 (dist + round offset)
 

@@ -136,7 +136,7 @@ neighbors (gx, gy) =
     [ (gx + dx, gy + dy)
     | dx ← [-1, 0, 1]
     , dy ← [-1, 0, 1]
-    , (dx, dy) /= (0, 0)
+    , (dx, dy) ≢ (0, 0)
     ]
 
 -- | Walk the parent chain from `end` back to `src` and emit the

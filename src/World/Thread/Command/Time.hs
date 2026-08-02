@@ -48,7 +48,7 @@ handleWorldSetDateCommand wsc logger pageId year month day = do
             -- the same way the midnight rollover in tickWorldTime does —
             -- otherwise world.setDate leaves stale flora visuals until
             -- some unrelated invalidation.
-            when (oldDate /= newDate) $ bumpQuadCacheGen worldState
+            when (oldDate ≢ newDate) $ bumpQuadCacheGen worldState
         Nothing →
             logDebug logger CatWorld $
                 "World not found for date update: " <> unWorldPageId pageId

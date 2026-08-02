@@ -432,7 +432,7 @@ unitDisplayName ∷ LiveState → UnitId → Maybe Text
 unitDisplayName ls uid = do
     inst ← HM.lookup uid (umInstances (lsUnits ls))
     let mDef = HM.lookup (uiDefName inst) (umDefs (lsUnits ls))
-    pure (fromMaybe (prettifyDefName (uiDefName inst)) (mDef >>= udDisplayName))
+    pure (fromMaybe (prettifyDefName (uiDefName inst)) (mDef ⌦ udDisplayName))
 
 pushReceiverInfo ∷ Maybe TransferReceiverView → Maybe Text
                  → Lua.LuaE Lua.Exception Lua.NumResults
