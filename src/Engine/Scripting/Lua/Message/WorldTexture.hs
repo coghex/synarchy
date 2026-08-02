@@ -87,7 +87,7 @@ handleWorldPreview = do
                     let width  = fromIntegral w ∷ Word32
                         height = fromIntegral h ∷ Word32
                         bufSize = fromIntegral (BS.length rgbaData)
-                        queue  = graphicsQueue queues
+                        queue  = dqGraphicsQueue queues
 
                     -- Prime variants: explicit cleanups, NOT exit-time
                     -- allocResource — this texture is replaced on every
@@ -209,7 +209,7 @@ handleZoomAtlasUpload = do
                     let width  = fromIntegral w ∷ Word32
                         height = fromIntegral h ∷ Word32
                         bufSize = fromIntegral (BS.length rgbaData)
-                        queue  = graphicsQueue queues
+                        queue  = dqGraphicsQueue queues
 
                     -- Prime variants: explicit cleanups, NOT exit-time
                     -- allocResource — this texture is replaced on every
