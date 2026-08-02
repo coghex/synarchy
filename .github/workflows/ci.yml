@@ -13,8 +13,11 @@
 #     demote it to continue-on-error and investigate rather than
 #     rebaselining per-platform.
 #
-# -Werror is applied to the synarchy package only (not dependencies),
-# so the warning-clean state from #435 is enforced, not just observed.
+# The synarchy.cabal `common warnings` stanza carries -Werror (#1057),
+# scoped to the repository's own components (not dependencies), so the
+# warning-clean state from #435 is enforced by the checked-in package
+# configuration — the same policy a plain local build already applies —
+# rather than being turned on only here.
 #
 # Build caching (#526, reworked in #671): the GHC/cabal toolchain and a
 # hackage index snapshot are baked into the CI image (see
@@ -117,12 +120,16 @@
 # procedure; resolve-image detects the content change and publishes
 # automatically as part of that same PR/push's CI run.
 #
-# Trade-off accepted at #526: there is NO separate from-scratch clean
-# -Werror backstop job. A warning that only surfaces on a full rebuild of
-# the whole module graph (cross-module interactions in files that don't
-# get recompiled) can therefore slip past -Werror; cached modules are
-# assumed to have been warning-free when built. A warning in any
-# CHANGED / recompiled module still fails the build (-Werror stays on).
+# Trade-off accepted at #526, still true now that -Werror lives in
+# synarchy.cabal's checked-in warning policy (#1057) rather than being
+# injected only here: there is NO separate from-scratch clean-build
+# backstop job, in CI or locally. A warning that only surfaces on a full
+# rebuild of the whole module graph (cross-module interactions in files
+# that don't get recompiled) can therefore slip past -Werror; cached
+# modules — this dist-newstyle cache, or a long-lived local build dir —
+# are assumed to have been warning-free when built. A warning in any
+# CHANGED / recompiled module still fails the build (-Werror stays on);
+# see tools/ci-local.sh's -fforce-recomp for the local gate's mitigation.
 name: CI
 
 on:
@@ -195,17 +202,15 @@ jobs:
           echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
           echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
 
-      - name: Configure (-Werror for the local package only)
+      - name: Resolve dependency plan
         run: |
           # Incremental against the index snapshot baked into the image —
           # a delta fetch of seconds, not a full index download.
           cabal update
-          # Scoped to `package synarchy` so dependency warnings can't
-          # fail the build — only regressions against #435's clean slate.
-          {
-            echo "package synarchy"
-            echo "  ghc-options: -Werror"
-          } > cabal.project.local
+          # -Werror is part of the checked-in warning policy now
+          # (synarchy.cabal's `common warnings` stanza, #1057) — there is
+          # nothing to configure here. --dry-run only produces
+          # dist-newstyle/cache/plan.json, which the cache keys below hash.
           cabal build all --dry-run
 
       # Hspec is deliberately full and blocking on every PR. These two
