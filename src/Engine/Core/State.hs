@@ -12,7 +12,7 @@ import Control.Concurrent.STM.TVar (TVar)
 import System.Random (StdGen)
 import Engine.Asset.Types
 import Engine.Asset.Handle
-import Engine.Asset.YamlTextures
+import Engine.Asset.TextureNameRegistry (TextureNameRegistry)
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
