@@ -18,7 +18,7 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_surface as Surf
 import Vulkan.Extensions.VK_KHR_swapchain as Swap
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | Query swapchain support details from physical device
 querySwapchainSupport ∷ PhysicalDevice → SurfaceKHR → EngineM σ SwapchainSupportDetails

@@ -16,7 +16,7 @@ import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFrag
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | Create a pipeline for bindless rendering (world camera)
 createBindlessPipeline ∷ Device
