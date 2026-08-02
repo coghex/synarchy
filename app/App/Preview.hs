@@ -24,10 +24,10 @@ import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Callback (setupCallbacks)
 import Engine.Input.Thread (startInputThread)
 import Engine.Loop (mainLoop)
-import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
+import Engine.Loop.Shutdown (ShutdownTargets(..), shutdownEngine, checkStatus)
+import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Scripting.Lua.Thread (startLuaThread)
-import App.Boot (BootWorkers(..), FatalStream(..), previewBootConfig
-                , handleBootResult)
+import App.Boot (FatalStream(..), previewBootConfig, handleBootResult)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
@@ -49,13 +49,13 @@ runPreview target mBrowse mPort = do
 
   -- Preview's whole point is the trimmed topology: no world, unit, sim
   -- or combat thread ever starts.
-  let workers = BootWorkers
-        { bwCombat = Nothing
-        , bwSim    = Nothing
-        , bwUnit   = Nothing
-        , bwWorld  = Nothing
-        , bwInput  = Just inputThreadState
-        , bwLua    = Just luaThreadState
+  let workers = EngineWorkers
+        { ewCombat = Nothing
+        , ewSim    = Nothing
+        , ewUnit   = Nothing
+        , ewWorld  = Nothing
+        , ewInput  = Just inputThreadState
+        , ewLua    = Just luaThreadState
         }
 
   videoConfig ← readIORef (videoConfigRef env')
@@ -73,8 +73,8 @@ runPreview target mBrowse mPort = do
         _ ← initializeVulkan window
         mainLoop
 
-        shutdownEngine (Just window) Nothing Nothing
-                       inputThreadState luaThreadState
+        shutdownEngine ShutdownTargets { stWindow  = Just window
+                                       , stWorkers = workers }
         logDebugM CatSystem "Preview engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus

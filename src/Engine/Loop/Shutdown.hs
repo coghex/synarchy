@@ -1,5 +1,6 @@
 module Engine.Loop.Shutdown
-  ( shutdownEngine
+  ( ShutdownTargets(..)
+  , shutdownEngine
   , checkStatus
   ) where
 
@@ -11,7 +12,8 @@ import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
-import Engine.Core.Thread (ThreadState, shutdownThread)
+import Engine.Core.Workers (EngineWorkers, preRenderWorkers
+                           , postRenderWorkers, stopWorkers)
 import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Vulkan.Types.Cleanup (runAllCleanups)
@@ -22,16 +24,34 @@ import Engine.Scene.Types (createBatchManager, SceneManager(..)
                           , SceneDynamicBuffer(..), TextInstanceBuffer(..))
 import Vulkan.Core10 (deviceWaitIdle, destroyBuffer, freeMemory)
 
--- | Shutdown the engine. 'unitThreadState'/'worldThreadState' are
---   'Nothing' for a boot profile that never started them (preview mode
---   — see 'App.Preview' — has no world/unit/sim/combat threads at all).
---   The window is 'Nothing' for the offscreen mode (#650), which has
---   no GLFW state to tear down.
-shutdownEngine ∷ Maybe Window → Maybe ThreadState → Maybe ThreadState
-  → ThreadState → ThreadState → EngineM σ ()
-shutdownEngine mWindow mUnitThreadState mWorldThreadState
-                       inputThreadState luaThreadState = do
+-- | What 'shutdownEngine' tears down. Named fields rather than a
+--   positional argument list (#1036): the old signature took two
+--   adjacent @Maybe ThreadState@ and two adjacent @ThreadState@, so
+--   swapping either pair compiled and tore the engine down in a
+--   different order.
+data ShutdownTargets = ShutdownTargets
+  { stWindow  ∷ Maybe Window
+    -- ^ 'Nothing' for the offscreen mode (#650), which has no GLFW
+    --   state to tear down.
+  , stWorkers ∷ EngineWorkers
+    -- ^ The threads this boot mode started, each absent one named
+    --   'Nothing' at the call site.
+  }
+
+-- | Shutdown the engine: stop the pre-render workers, tear down Vulkan
+--   and GLFW, stop the post-render workers, flush the logger.
+--
+--   That split /is/ the phase boundary the boot modes have always had —
+--   combat and sim stop ahead of the render teardown, unit, world,
+--   input and Lua after it. 'Engine.Core.Workers' owns which worker
+--   belongs to which phase and in what order, so this and the
+--   fatal-error tail cannot drift apart.
+shutdownEngine ∷ ShutdownTargets → EngineM σ ()
+shutdownEngine targets = do
     logInfoM CatSystem "Starting engine shutdown..."
+
+    stopWorkers announceStop (preRenderWorkers (stWorkers targets))
+
     state ← gets graphicsState
     let device = vulkanDevice state
 
@@ -88,34 +108,26 @@ shutdownEngine mWindow mUnitThreadState mWorldThreadState
         Nothing → logDebugM CatSystem "No Vulkan device found, skipping buffer cleanup"
     
     -- GLFW cleanup (windowed modes only)
-    forM_ mWindow $ \(Window win) → do
+    forM_ (stWindow targets) $ \(Window win) → do
         logDebugM CatSystem "Cleaning up GLFW..."
         liftIO $ GLFW.postEmptyEvent
         GLFW.setWindowShouldClose win True
         liftIO $ clearGLFWCallbacks win
 
     -- Shutdown threads
-    env ← ask
-
-    logDebugM CatSystem "Shutting down unit thread..."
-    liftIO $ forM_ mUnitThreadState shutdownThread
-
-    logDebugM CatSystem "Shutting down world thread..."
-    liftIO $ forM_ mWorldThreadState shutdownThread
-
-    logDebugM CatSystem "Shutting down input thread..."
-    liftIO $ shutdownThread inputThreadState
-    
-    logDebugM CatSystem "Shutting down Lua thread..."
-    liftIO $ shutdownThread luaThreadState
+    stopWorkers announceStop (postRenderWorkers (stWorkers targets))
 
     -- shut down logger, then mark the engine stopped -- both are
     -- pure core-init capability (issue #889): nothing here needs
     -- graphics/window/thread state, unlike everything above it.
     logDebugM CatSystem "Shutting down logger..."
+    env ← ask
     finalizeCoreShutdown (toCoreCapability env)
 
     logDebugM CatSystem "Engine shutdown complete"
+  where
+    announceStop name =
+      logDebugM CatSystem $ "Shutting down " <> name <> " thread..."
 
 -- | Flush the logger and mark the engine lifecycle stopped -- the
 --   'core-init'-only tail of 'shutdownEngine', narrowed to

@@ -364,6 +364,7 @@ library
                      Engine.Core.Log.Format
                      Engine.Core.Log.Monad
                      Engine.Core.Thread
+                     Engine.Core.Workers
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
                      Engine.Core.Queue

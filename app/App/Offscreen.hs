@@ -14,24 +14,24 @@ import UPrelude
 import Data.IORef (readIORef, writeIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
-import Engine.Core.Monad (runEngineM, EngineM', liftIO)
+import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Types (BootProfile(..))
-import Engine.Core.Thread (shutdownThread)
+import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Graphics.Vulkan.Init (initializeVulkanOffscreen)
 import Engine.Input.Thread (startInputThread)
 import Engine.Loop (mainLoopOffscreen)
-import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
+import Engine.Loop.Shutdown (ShutdownTargets(..), shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Thread (startLuaThread)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
-import App.Boot (BootWorkers(..), FatalStream(..), bootConfig, handleBootResult)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine offscreen: GPU on, window off. The render size
@@ -52,13 +52,13 @@ runOffscreen bootProfile mPort mSize = do
   simThreadState   ← startSimThread env'
   combatThreadState ← startCombatThread env'
 
-  let workers = BootWorkers
-        { bwCombat = Just combatThreadState
-        , bwSim    = Just simThreadState
-        , bwUnit   = Just unitThreadState
-        , bwWorld  = Just worldThreadState
-        , bwInput  = Just inputThreadState
-        , bwLua    = Just luaThreadState
+  let workers = EngineWorkers
+        { ewCombat = Just combatThreadState
+        , ewSim    = Just simThreadState
+        , ewUnit   = Just unitThreadState
+        , ewWorld  = Just worldThreadState
+        , ewInput  = Just inputThreadState
+        , ewLua    = Just luaThreadState
         }
 
   videoConfig ← readIORef (videoConfigRef env')
@@ -78,13 +78,8 @@ runOffscreen bootProfile mPort mSize = do
         _ ← initializeVulkanOffscreen (w, h)
         mainLoopOffscreen
 
-        -- Combat first: wound ticks enqueue UnitKill/UnitCollapse onto
-        -- the unit queue, so the producer has to stop before the
-        -- consumer (unit thread) is torn down inside shutdownEngine.
-        liftIO $ shutdownThread combatThreadState
-        liftIO $ shutdownThread simThreadState
-        shutdownEngine Nothing (Just unitThreadState)
-                       (Just worldThreadState) inputThreadState luaThreadState
+        shutdownEngine ShutdownTargets { stWindow  = Nothing
+                                       , stWorkers = workers }
         logDebugM CatSystem "Offscreen engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus

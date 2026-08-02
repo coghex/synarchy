@@ -43,8 +43,8 @@ import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
 import App.Cli (DumpLayers(..))
-import App.Boot (BootWorkers(..), FatalStream(..), bootConfig
-                , handleBootResult, shutdownBootWorkers)
+import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine in dump mode: generate world, load chunks, dump tile
@@ -74,13 +74,13 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   combatThreadState ← startCombatThread env'
 
   -- Dump, like headless, starts no input thread.
-  let workers = BootWorkers
-        { bwCombat = Just combatThreadState
-        , bwSim    = Just simThreadState
-        , bwUnit   = Just unitThreadState
-        , bwWorld  = Just worldThreadState
-        , bwInput  = Nothing
-        , bwLua    = Just luaThreadState
+  let workers = EngineWorkers
+        { ewCombat = Just combatThreadState
+        , ewSim    = Just simThreadState
+        , ewUnit   = Just unitThreadState
+        , ewWorld  = Just worldThreadState
+        , ewInput  = Nothing
+        , ewLua    = Just luaThreadState
         }
 
   let engineAction ∷ EngineM' ()
@@ -211,7 +211,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                 [] → hPutStrLn stderr "dump: no world data"
 
         liftIO $ writeIORef (lifecycleRef env') CleaningUp
-        liftIO $ shutdownBootWorkers workers
+        liftIO $ shutdownEngineWorkers workers
         logger ← liftIO $ readIORef $ loggerRef env'
         liftIO $ shutdownLogger logger
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
