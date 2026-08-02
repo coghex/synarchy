@@ -74,6 +74,7 @@ echo "==> [6/12] lua duplicate function audit"
 python3 tools/lua_duplicate_function_audit.py
 
 echo "==> [7/12] haskell module line budget"
+python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
 
 echo "==> [8/12] unicode operator audit"
