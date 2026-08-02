@@ -5,32 +5,6 @@ import qualified Data.Vector as V
 import Linear (M44)
 import Vulkan.Core10
 
-data VulkanExtensions = VulkanExtensions
-  { veRequired ∷ V.Vector String  -- ^ Required extensions
-  , veOptional ∷ V.Vector String  -- ^ Optional extensions
-  }
-
-data VulkanLayers = VulkanLayers
-  { vlRequired ∷ V.Vector String  -- ^ Required layers
-  , vlOptional ∷ V.Vector String  -- ^ Optional layers
-  }
-
--- | LEGACY: unused by the render loop. Per-frame sync lives in
---   'FrameResources'; per-IMAGE render-finished semaphores live in
---   GraphicsState.renderFinishedSems. Type kept only because
---   Engine.Graphics.Types.vsSyncObjects still references it.
-data SyncObjects = SyncObjects
-  { imageAvailableSemaphores ∷ V.Vector Semaphore
-  , renderFinishedSemaphores ∷ V.Vector Semaphore
-  , inFlightFences           ∷ V.Vector Fence
-  } deriving (Show)
-
-data VulkanDescriptorInfo = VulkanDescriptorInfo
-  { vdiLayout  ∷ DescriptorSetLayout
-  , vdiPool    ∷ DescriptorPool
-  , vdiSets    ∷ V.Vector DescriptorSet
-  }
-
 -- | Configuration for descriptor manager
 data DescriptorManagerConfig = DescriptorManagerConfig
   { dmcMaxSets        ∷ Word32        -- ^ Maximum number of descriptor sets
