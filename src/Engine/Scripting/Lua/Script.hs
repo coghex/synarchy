@@ -42,7 +42,6 @@ loadModuleRef path = do
   where
     invalidRef = Lua.Reference (fromIntegral Lua.refnil)
 
--- | Call a function on a module table
 -- | Call a module function under 'pcall' so a Lua error in a callback
 --   does NOT throw a Haskell 'Lua.Exception' (which would propagate to
 --   the Lua-thread crash handler and shut the whole engine down). Errors
