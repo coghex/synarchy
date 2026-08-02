@@ -113,7 +113,8 @@ MONAD_INSTANCE_FILE = "src/Engine/Core/Monad.hs"
 
 CONSTRUCT_EXEMPTIONS = {
     GLSL_QUASIQUOTE_FILE:
-        "quasiquoted GLSL source literals (`[vert|...|]` / `[frag|...|]`) "
+        "quasiquoted GLSL source literals (`[vert|...|]` / `[frag|...|]` / "
+        "the interpolating `[glsl|...|]` spliced by `compileShaderQ`) "
         "-- GLSL's `==` etc. is not a Haskell operator.",
     EQ_INSTANCE_FILE:
         "`instance Eq EngineException`'s `(==) a b = ...` method "
@@ -123,7 +124,7 @@ CONSTRUCT_EXEMPTIONS = {
         "definition -- the method name must stay ASCII `>>=`.",
 }
 
-_GLSL_QUASIQUOTE_SPAN = re.compile(r"\[(?:vert|frag)\|.*?\|\]", re.DOTALL)
+_GLSL_QUASIQUOTE_SPAN = re.compile(r"\[(?:vert|frag|glsl)\|.*?\|\]", re.DOTALL)
 # Capture group 1 is the exempt token itself, so the exemption is the
 # ONE method-name occurrence, not the rest of its line -- a second
 # forbidden operator riding the same line (e.g. inside the method body)

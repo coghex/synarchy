@@ -16,6 +16,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
 import Engine.Graphics.Vulkan.Texture.Bindless
+import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Types
 import Engine.Graphics.Vulkan.Capability
 import Vulkan.Core10
@@ -33,7 +34,10 @@ createTextureSystem pdev dev cmdPool queue config = do
 
   case capability of
     BindlessTextures maxSlots → do
-      let actualMax = min 16384 (min maxSlots (tscMaxTextures config))
+      -- 'maxBindlessTextures' is the fixed upper bound the fragment
+      -- shaders are compiled against; the device-reported figure may
+      -- legitimately be lower, so allocate the minimum of the two.
+      let actualMax = min maxBindlessTextures (min maxSlots (tscMaxTextures config))
       let bindlessConfig = defaultBindlessConfig
             { bcMaxTextures = actualMax
             }

@@ -255,6 +255,27 @@ def test_glsl_quasiquote_is_exempt_but_surrounding_haskell_is_not():
            "not the GLSL block")
 
 
+def test_interpolating_glsl_quasiquote_is_exempt():
+    # #975: the two bindless fragment shaders are spliced as
+    # `$(compileShaderQ ... [glsl|...|])` so they can interpolate the
+    # shared Haskell limits -- that form is GLSL source just the same.
+    text = (
+        'shaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|\n'
+        "    if (a == b) { x = 1; }\n"
+        "|])\n"
+        "\n"
+        "otherCode x y = x == y\n"
+    )
+    v = find_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_tokens(v) == {"=="} and len(v) == 1,
+           f"GLSL '==' inside [glsl|...|] is exempt, but the real "
+           f"Haskell '==' elsewhere in the same file still fails "
+           f"(got {[str(x) for x in v]})")
+    expect(v[0].line == 5,
+           "the surviving violation is reported on the Haskell line, "
+           "not the interpolating GLSL block")
+
+
 def test_eq_instance_method_is_exempt_but_other_eq_uses_are_not():
     text = (
         "instance Eq EngineException where\n"
@@ -378,6 +399,7 @@ def main() -> int:
         test_unicode_lowercase_prefix_is_not_a_valid_qualifier,
         test_uprelude_whole_file_is_exempt,
         test_glsl_quasiquote_is_exempt_but_surrounding_haskell_is_not,
+        test_interpolating_glsl_quasiquote_is_exempt,
         test_eq_instance_method_is_exempt_but_other_eq_uses_are_not,
         test_eq_lookalike_instance_is_not_exempt,
         test_monad_bind_method_is_exempt_but_other_binds_are_not,

@@ -10,8 +10,16 @@ module Engine.Graphics.Vulkan.ShaderCode
     , bindlessUIFragmentShaderCode
     ) where
 
-import Vulkan.Utils.ShaderQQ.GLSL.Glslang (vert, frag)
+import UPrelude
+import Vulkan.Utils.ShaderQQ.GLSL.Glslang (compileShaderQ, glsl, vert, frag)
 import qualified Data.ByteString as BS
+-- The two bindless limits the fragment shaders below share with the
+-- Haskell renderer. `[vert|`/`[frag|` cannot interpolate, so the shaders
+-- that need these are written as `$(compileShaderQ … [glsl| … |])` and
+-- splice them in as `${name}` — which is also why they have to live in a
+-- separate module (Template Haskell's stage restriction). #975.
+import Engine.Graphics.Vulkan.Texture.Limits
+  (maxBindlessTextures, handleSlotTableSize)
 
 -- | Font vertex shader (instanced rendering, world camera / NDC)
 fontVertexShaderCode ∷ BS.ByteString
@@ -156,7 +164,7 @@ bindlessVertexShaderCode = [vert|
 -- | Bindless fragment shader with face-map directional lighting
 -- Used for world-space rendering (tiles, scene sprites)
 bindlessFragmentShaderCode ∷ BS.ByteString
-bindlessFragmentShaderCode = [frag|
+bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
     #extension GL_EXT_nonuniform_qualifier : enable
@@ -176,7 +184,7 @@ bindlessFragmentShaderCode = [frag|
     layout(location = 8) in flat uint fragRenderFlags;
     layout(location = 9) in flat int fragDefaultFaceMapSlot;
 
-    layout(set = 1, binding = 0) uniform sampler2D textures[16384];
+    layout(set = 1, binding = 0) uniform sampler2D textures[${maxBindlessTextures}];
 
     // Ambient-light curve (#483) — GLSL port of Engine.Loop.Frame's
     // computeAmbientLight. Evaluated here (fragment-side, per-pixel)
@@ -197,8 +205,9 @@ bindlessFragmentShaderCode = [frag|
     // Handle→slot table (#286). Vertices carry a STABLE texture-handle id;
     // this maps it to the live bindless slot at draw time, so cached
     // geometry can never encode a stale/recycled slot. HANDLE_TABLE_SIZE
-    // MUST match 'handleSlotTableSize' in Texture.Bindless.
-    const int HANDLE_TABLE_SIZE = 65536;
+    // is interpolated from 'handleSlotTableSize', the single definition
+    // in Texture.Limits that also sizes the buffer host-side.
+    const int HANDLE_TABLE_SIZE = ${handleSlotTableSize};
     layout(set = 1, binding = 1, std430) readonly buffer HandleSlotTable {
         uint handleToSlot[HANDLE_TABLE_SIZE];
     };
@@ -288,7 +297,7 @@ bindlessFragmentShaderCode = [frag|
         color.rgb *= brightness * fragBrightness;
         outColor = vec4(color.rgb, color.a * faceAlpha);
     }
-|]
+|])
 
 -- | Bindless UI vertex shader (uses UI camera matrices)
 -- NO pixel snap — UI vertices are already in integer pixel coordinates,
@@ -335,7 +344,7 @@ bindlessUIVertexShaderCode = [vert|
 
 -- | Bindless UI fragment shader — no face-map lighting, UI is unaffected by day/night
 bindlessUIFragmentShaderCode ∷ BS.ByteString
-bindlessUIFragmentShaderCode = [frag|
+bindlessUIFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
     #extension GL_EXT_nonuniform_qualifier : enable
@@ -345,11 +354,12 @@ bindlessUIFragmentShaderCode = [frag|
     layout(location = 2) in flat int fragTexIndex;
     layout(location = 3) in float fragBrightness;
 
-    layout(set = 1, binding = 0) uniform sampler2D textures[16384];
+    layout(set = 1, binding = 0) uniform sampler2D textures[${maxBindlessTextures}];
 
     // Handle→slot table (#286) — same buffer the world fragment shader
-    // reads; fragTexIndex carries a stable texture-handle id.
-    const int HANDLE_TABLE_SIZE = 65536;
+    // reads; fragTexIndex carries a stable texture-handle id. Both sizes
+    // are interpolated from Texture.Limits, the single definition.
+    const int HANDLE_TABLE_SIZE = ${handleSlotTableSize};
     layout(set = 1, binding = 1, std430) readonly buffer HandleSlotTable {
         uint handleToSlot[HANDLE_TABLE_SIZE];
     };
@@ -364,7 +374,7 @@ bindlessUIFragmentShaderCode = [frag|
         color.rgb *= fragBrightness;
         outColor = color;
     }
-|]
+|])
 
 -- | Font UI vertex shader (uses UI projection matrix)
 -- NO pixel snap — same reasoning as bindlessUIVertexShaderCode.
