@@ -86,13 +86,13 @@ initializeVulkan window = do
     [("graphics_family", T.pack $ show $ dqGraphicsFamIdx queues)
     ,("present_family", T.pack $ show $ dqPresentFamIdx queues)]
 
-  modify $ \s → s { graphicsState = (graphicsState s)
+  modifyGraphicsState $ \gs → gs
                     { vulkanInstance = Just vkInstance
                     , vulkanPDevice  = Just physicalDevice
                     , vulkanDevice   = Just device
                     , vulkanSurface  = Just surface
                     , deviceQueues   = Just queues
-                    } }
+                    }
 
   env ← ask
   videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
@@ -128,13 +128,13 @@ initializeVulkanOffscreen (w, h) = do
   (device, queues) ← createVulkanDevice vkInstance physicalDevice Nothing
   logDebugM CatVulkan "Logical device created successfully"
 
-  modify $ \s → s { graphicsState = (graphicsState s)
+  modifyGraphicsState $ \gs → gs
                     { vulkanInstance = Just vkInstance
                     , vulkanPDevice  = Just physicalDevice
                     , vulkanDevice   = Just device
                     , vulkanSurface  = Nothing
                     , deviceQueues   = Just queues
-                    } }
+                    }
 
   let numFrames = gcMaxFrames defaultGraphicsConfig
   swapInfo ← createOffscreenTarget physicalDevice device (w, h)
@@ -153,8 +153,8 @@ initializeVulkanOffscreen (w, h) = do
 initializeVulkanCommon ∷ PhysicalDevice → Device → DevQueues
                        → SwapchainInfo → (Int, Int) → EngineM σ CommandPool
 initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      swapchainInfo = Just swapInfo } }
+  modifyGraphicsState $ \gs → gs {
+                      swapchainInfo = Just swapInfo }
 
   env ← ask
   videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
@@ -172,9 +172,9 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   frameRes ← V.generateM (fromIntegral numFrames) $ \_ →
       createFrameResources device queues
   let cmdPool = frCommandPool $ frameRes V.! 0
-  modify $ \s → s { graphicsState = (graphicsState s) {
+  modifyGraphicsState $ \gs → gs {
                       frameResources = frameRes
-                    , vulkanCmdPool  = Just cmdPool } }
+                    , vulkanCmdPool  = Just cmdPool }
   
   let descConfig = DescriptorManagerConfig
         { dmcMaxSets      = fromIntegral $ numFrames * 2
@@ -186,17 +186,17 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
     ,("uniform_count", T.pack $ show $ dmcUniformCount descConfig)]
   descManager ← createVulkanDescriptorManager device descConfig
   logDebugM CatDescriptor "Descriptor manager created successfully"
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      descriptorState = Just descManager } }
+  modifyGraphicsState $ \gs → gs {
+                      descriptorState = Just descManager }
   logDebugM CatDescriptor "Creating font descriptor pool"
   fontDescPool ← createFontDescriptorPool device 64
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      fontDescriptorPool = Just fontDescPool } }
-  
+  modifyGraphicsState $ \gs → gs {
+                      fontDescriptorPool = Just fontDescPool }
+
   descSets ← allocateVulkanDescriptorSets device descManager (fromIntegral numFrames)
   let updatedManager = descManager { dmActiveSets = descSets }
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      descriptorState = Just updatedManager } }
+  modifyGraphicsState $ \gs → gs {
+                      descriptorState = Just updatedManager }
   
   let texSystemConfig = TextureSystemConfig
         { tscMaxTextures   = 16384
@@ -222,8 +222,8 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
 
   renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo) sampleCount
                    (renderedImageLayout (siTarget swapInfo))
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      vulkanRenderPass = Just renderPass } }
+  modifyGraphicsState $ \gs → gs {
+                      vulkanRenderPass = Just renderPass }
   
   -- Read the layout from the system actually stored as live above, not
   -- from the pre-face-map local (#983). Identical today —
@@ -236,36 +236,36 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
                            (dmUniformLayout descManager)
                            bindlessTexLayout sampleCount
   logDebugM CatGraphics "Bindless pipeline created successfully"
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                          bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
+  modifyGraphicsState $ \gs → gs {
+                          bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) }
   logDebugM CatGraphics "Creating bindless UI pipeline"
   (bindlessUIPipe, bindlessUIPipeLayout) ← 
     createBindlessUIPipeline device renderPass (siSwapExtent swapInfo) 
                              (dmUniformLayout descManager)
                              bindlessTexLayout sampleCount
   logDebugM CatGraphics "Bindless UI pipeline created successfully"
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                          bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
+  modifyGraphicsState $ \gs → gs {
+                          bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) }
   
   logDebugM CatGraphics "Creating font pipeline"
   (fontPipe, fontPipeLayout, fontDescLayout) ←
     createFontPipeline device renderPass (siSwapExtent swapInfo)
                               (dmUniformLayout descManager) sampleCount
   logDebugM CatGraphics "Font pipeline created successfully"
-  modify $ \s → s { graphicsState = (graphicsState s) {
+  modifyGraphicsState $ \gs → gs {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
-                    , fontDescriptorLayout = Just fontDescLayout } }
+                    , fontDescriptorLayout = Just fontDescLayout }
   logDebugM CatGraphics "Creating font UI pipeline"
   (fontUIPipe, fontUIPipeLayout) ←
     createFontUIPipeline device renderPass (siSwapExtent swapInfo)
                          (dmUniformLayout descManager) fontDescLayout sampleCount
   logDebugM CatGraphics "Font UI pipeline created successfully"
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
-  
+  modifyGraphicsState $ \gs → gs {
+                      fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) }
+
   quadBuf ← createFontQuadBuffer device physicalDevice (dqGraphicsQueue queues) cmdPool
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      fontQuadBuffer = Just quadBuf } }
+  modifyGraphicsState $ \gs → gs {
+                      fontQuadBuffer = Just quadBuf }
   
   let imageViews = siSwapImgViews swapInfo
 
@@ -274,13 +274,13 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
       (img, mem, view) ← createMSAAColorImage physicalDevice device
                                               (siSwapImgFormat swapInfo)
                                               (siSwapExtent swapInfo) sampleCount
-      modify $ \s → s { graphicsState = (graphicsState s) {
-                          msaaColorImage = Just (img, mem, view) } }
+      modifyGraphicsState $ \gs → gs {
+                          msaaColorImage = Just (img, mem, view) }
       logDebugM CatGraphics "MSAA color image created successfully"
       pure (Just view)
     else do
-      modify $ \s → s { graphicsState = (graphicsState s) {
-                          msaaColorImage = Nothing } }
+      modifyGraphicsState $ \gs → gs {
+                          msaaColorImage = Nothing }
       pure Nothing
   
   logDebugSM CatGraphics "Creating framebuffers"
@@ -288,8 +288,8 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo
                                           imageViews mMsaaImageView
   logDebugM CatGraphics "Framebuffers created successfully"
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      framebuffers = Just framebuffers } }
+  modifyGraphicsState $ \gs → gs {
+                      framebuffers = Just framebuffers }
 
   -- Per-IMAGE render-finished semaphores (present waits on these)
   _ ← createRenderFinishedSemaphores device (V.length framebuffers)
@@ -352,8 +352,8 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
                sunAngle ambientLight facing 0 worldCirc)
       pure (buffer, memory)
   
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      uniformBuffers = Just uniformBuffers } }
+  modifyGraphicsState $ \gs → gs {
+                      uniformBuffers = Just uniformBuffers }
   
   forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
     logDebugSM CatDescriptor "Updating descriptor set"

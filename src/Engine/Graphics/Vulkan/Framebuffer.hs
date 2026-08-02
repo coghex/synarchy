@@ -10,7 +10,7 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- | Creates framebuffers for each swapchain image view.
 -- When msaaImageView is provided (Just), creates MSAA framebuffers with two attachments.
@@ -26,11 +26,11 @@ createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView = do
   -- Build cleanup action
   let cleanupAction = V.forM_ framebuffers $ \fb →
           destroyFramebuffer device fb Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupFramebuffers = cleanupAction
       }
-  }}
+  }
   pure framebuffers
   where
     createOneFramebuffer dev rp si mMsaa swapchainImageView = do
