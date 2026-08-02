@@ -1,42 +1,26 @@
 {-# LANGUAGE Strict, DeriveGeneric #-}
-module Engine.Asset.YamlTextures
-    ( -- * YAML types (materials)
+-- | Material definitions loaded from @data/materials/*.yaml@, and the
+--   fold of those definitions into a 'World.Material.MaterialRegistry'.
+module Engine.Asset.YamlMaterials
+    ( -- * YAML types
       MaterialDef(..)
     , MaterialFile(..)
-      -- * YAML types (vegetation)
-    , VegetationDef(..)
-    , VegetationFile(..)
-      -- * Registry
-    , TextureNameRegistry
-    , emptyTextureNameRegistry
       -- * Loading
     , loadMaterialYaml
     , loadMaterialDirectory
     , loadPopulatedMaterialRegistry
-    , loadVegetationYaml
-      -- * Lookup
-    , lookupTextureName
-    , registerTextureName
-    , registryToList
-      -- * World distribution
-    , registryToWorldCommands
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
-import qualified Data.HashMap.Strict as HM
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Data.IORef (IORef, atomicModifyIORef')
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
-import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlList (loadYamlList)
 import Engine.Core.Log (LoggerState, logInfo, LogCategory(..))
 import World.Material
     (MaterialRegistry, MaterialProps(..), registerMaterial, emptyMaterialRegistry)
-
--- * Materials
 
 data MaterialDef = MaterialDef
     { mdId       ∷ Word8
@@ -99,51 +83,6 @@ instance FromJSON MaterialFile where
     parseJSON = withObject "MaterialFile" $ \v → MaterialFile
         ⊚ v .: "materials"
 
--- * Vegetation
-
--- | Variant IDs are @id_start .. id_start + len - 1@
-data VegetationDef = VegetationDef
-    { vdIdStart  ∷ Word8
-    , vdName     ∷ Text
-    , vdVariants ∷ [Text]
-    } deriving (Show, Eq, Generic)
-
-instance FromJSON VegetationDef where
-    parseJSON = withObject "VegetationDef" $ \v → VegetationDef
-        ⊚ v .: "id_start"
-        ⊛ v .: "name"
-        ⊛ v .: "variants"
-
-data VegetationFile = VegetationFile
-    { vfVegetation ∷ [VegetationDef]
-    } deriving (Show, Eq, Generic)
-
-instance FromJSON VegetationFile where
-    parseJSON = withObject "VegetationFile" $ \v → VegetationFile
-        ⊚ v .: "vegetation"
-
--- * Texture name registry
-
--- | Maps human-readable names to 'TextureHandle's. Populated by the Lua API
---   when textures are loaded.
---
---   Naming convention:
---
---   * @mat_tile_\<name\>@ — e.g. @"mat_tile_loam"@
---   * @mat_zoom_\<name\>@ — e.g. @"mat_zoom_loam"@
---   * @mat_bg_\<name\>@   — e.g. @"mat_bg_loam"@
---   * @veg_tile_\<id\>@   — e.g. @"veg_tile_1"@
-type TextureNameRegistry = HM.HashMap Text TextureHandle
-
-emptyTextureNameRegistry ∷ TextureNameRegistry
-emptyTextureNameRegistry = HM.empty
-
-lookupTextureName ∷ Text → TextureNameRegistry → Maybe TextureHandle
-lookupTextureName = HM.lookup
-
-registryToList ∷ TextureNameRegistry → [(Text, TextureHandle)]
-registryToList = HM.toList
-
 -- * YAML parsing
 
 loadMaterialYaml ∷ LoggerState → FilePath → IO [MaterialDef]
@@ -196,34 +135,3 @@ loadPopulatedMaterialRegistry logger dir = do
                            (mdMoveCost def))
             r
         ) emptyMaterialRegistry matDefs
-
-loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
-loadVegetationYaml logger =
-    loadYamlList logger "vegetation" "vegetation types" vfVegetation
-
--- * Registry building
-
-registerTextureName ∷ IORef TextureNameRegistry → Text → TextureHandle → IO ()
-registerTextureName ref name handle =
-    atomicModifyIORef' ref $ \reg → (HM.insert name handle reg, ())
-
--- * World distribution
-
--- | Translate name-keyed registry entries into the numeric-ID format
---   expected by @world.setTexture@ (e.g. @"mat_tile_loam"@ → @"mat_tile_56"@)
-registryToWorldCommands ∷ [MaterialDef] → TextureNameRegistry
-                        → [(Text, TextureHandle)]
-registryToWorldCommands defs registry =
-    concatMap defToCommands defs
-  where
-    defToCommands def =
-        let name = mdName def
-            matId = T.pack (show (mdId def))
-            tileName = "mat_tile_" <> name
-            zoomName = "mat_zoom_" <> name
-            bgName   = "mat_bg_" <> name
-        in catMaybes
-            [ (\h → ("mat_tile_" <> matId, h)) ⊚ HM.lookup tileName registry
-            , (\h → ("mat_zoom_" <> matId, h)) ⊚ HM.lookup zoomName registry
-            , (\h → ("mat_bg_"   <> matId, h)) ⊚ HM.lookup bgName   registry
-            ]
