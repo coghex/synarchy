@@ -11,8 +11,11 @@ CI gate: a warning-clean (`-Werror`) build of
 the library/exe + both test suites, the headless hspec suite,
 `test_audit.py`, and `world_check.py --quick`. PR CI is path-selective for
 the graphical test-suite build and quick worldgen check, while pushes to
-master run both; a green `make ci` remains a conservative CI prediction. It
-applies `-Werror` the same scoped way CI does and restores
+master run both; a green `make ci` remains a conservative CI prediction.
+`-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
+every build already carries it; `ci-local.sh` only scopes a temporary
+`-fforce-recomp` via `cabal.project.local` (forcing a genuine recheck of
+every module instead of trusting a possibly-stale warm build), restoring
 any pre-existing `cabal.project.local` on exit.
 
 ## World generation tools

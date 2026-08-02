@@ -73,7 +73,10 @@ flag profile
 -- Shared warning policy (#435): prod is the default for all routine
 -- work, so it must carry the full warning set. Keep this the single
 -- source of truth — don't re-add warning flags inside per-component
--- stanzas or the build-policy conditionals below.
+-- stanzas or the build-policy conditionals below. -Werror (#1057) is
+-- checked in here rather than injected at CI runtime, so a plain local
+-- build already fails on any warning a repository-owned component
+-- introduces.
 common warnings
     ghc-options: -Wall
                  -Wcompat
@@ -88,6 +91,13 @@ common warnings
                  -- type-defaults: all literal defaulting in log/format
                  -- code; annotating adds noise without catching bugs.
                  -Wno-type-defaults
+                 -- `cabal check` flags -Werror as a distribution-unsafe
+                 -- option (a future GHC's new warnings could break a
+                 -- release build someone else compiles); this package is
+                 -- built from this repository against a pinned toolchain,
+                 -- never released to Hackage, so the finding is accepted
+                 -- deliberately, not an oversight (#1057).
+                 -Werror
 
 common lang
     default-language: GHC2024

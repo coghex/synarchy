@@ -4,23 +4,29 @@
 # same checks .github/workflows/ci.yml runs, in the same order, so a green
 # run here predicts a green run in CI ("green locally => green in CI").
 #
-# -Werror is applied to the `synarchy` package exactly the way CI does it
-# (a scoped `cabal.project.local`), so dependency warnings can't fail the
-# build and a clean-checkout dependency build isn't compiled with -Werror.
+# -Werror is part of synarchy.cabal's checked-in warning policy now
+# (#1057), so every build of the `synarchy` package -- here, in CI, or a
+# plain `cabal build` -- already compiles under it. That closes the hole
+# this comment used to describe: a module compiled warm *without*
+# -Werror (because the flag was only ever injected here, at gate-run
+# time, via a scoped cabal.project.local) was never re-checked just
+# because -Werror got added afterwards, since GHC's recompilation
+# avoidance doesn't treat warning flags as affecting object code
+# (confirmed by hand: this let an unused-field warning ship past
+# `make ci` and fail CI, issue #869).
+#
+# Still scoped here via a temporary cabal.project.local: -fforce-recomp,
+# needed for the remaining gap -- cross-module interactions in files that
+# don't get recompiled, the same one .github/workflows/ci.yml's
+# no-clean-backstop trade-off note accepts for CI's cache. It forces
+# every module of the `synarchy` package to be genuinely rechecked every
+# run, trading warm-build reuse for a result you can actually trust;
+# already-built dependencies are unaffected and stay cached, so this is
+# not as costly as a full clean build. The exe it builds is the one
+# world_check drives.
+#
 # Any pre-existing cabal.project.local is backed up and restored on exit,
 # so your dev config is left untouched whether the gate passes or fails.
-#
-# Also scoped alongside -Werror: -fforce-recomp. GHC's recompilation
-# avoidance does not treat warning flags as affecting object code, so a
-# module already compiled warm *without* -Werror is never re-checked just
-# because -Werror is added afterwards via cabal.project.local -- a warning
-# that would fail a clean CI checkout can silently pass here otherwise
-# (confirmed by hand: this let an unused-field warning ship past `make ci`
-# and fail CI, issue #869). -fforce-recomp forces every module of the
-# `synarchy` package to be genuinely rechecked every run, trading warm-
-# build reuse for a result you can actually trust; already-built
-# dependencies are unaffected and stay cached, so this is not as costly as
-# a full clean build. The exe it builds is the one world_check drives.
 set -euo pipefail
 
 # Run from the repo root regardless of caller CWD.
@@ -43,9 +49,10 @@ if [ -e "$LOCAL" ]; then
   cp "$LOCAL" "$BACKUP"
 fi
 
-# Like the CI "Configure" step (-Werror for the local package only), plus
-# -fforce-recomp so a warm build can't mask a warning CI would catch fresh.
-printf 'package synarchy\n  ghc-options: -Werror -fforce-recomp\n' > "$LOCAL"
+# -fforce-recomp so a warm build can't mask a warning a fresh build would
+# catch; see the header comment above for why -Werror itself no longer
+# needs to be injected here.
+printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 
 echo "==> [1/12] build (library + executable, -Werror)"
 cabal build all
