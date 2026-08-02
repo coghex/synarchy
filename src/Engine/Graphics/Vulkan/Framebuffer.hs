@@ -26,11 +26,11 @@ createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView = do
   -- Build cleanup action
   let cleanupAction = V.forM_ framebuffers $ \fb →
           destroyFramebuffer device fb Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupFramebuffers = cleanupAction
       }
-  }}
+  }
   pure framebuffers
   where
     createOneFramebuffer dev rp si mMsaa swapchainImageView = do

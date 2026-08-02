@@ -79,11 +79,11 @@ createMSAAColorImage pDevice device format extent sampleCount = do
             destroyImage device image Nothing
             freeMemory device memory Nothing
 
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+    modifyGraphicsState $ \gs → gs {
+        vulkanCleanup = (vulkanCleanup gs) {
             cleanupMSAAImage = cleanupAction
         }
-    }}
+    }
 
     pure (image, memory, imageView)
 

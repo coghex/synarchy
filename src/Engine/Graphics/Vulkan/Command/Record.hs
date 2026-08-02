@@ -99,10 +99,10 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
         then do
             tib0 ← ensureTextInstanceBuffer device pDevice totalGlyphs mTib0
             (tib1, _) ← uploadTextInstances device tib0 allTextBatches
-            modify $ \s → s { graphicsState = (graphicsState s)
+            modifyGraphicsState $ \gs → gs
                                 { textInstanceBuffers =
-                                    textInstanceBuffers (graphicsState s)
-                                        V.// [(frameInFlight, Just tib1)] } }
+                                    textInstanceBuffers gs
+                                        V.// [(frameInFlight, Just tib1)] }
             pure tib1
         else pure $ case mTib0 of
                Just t  → t

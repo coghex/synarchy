@@ -33,11 +33,11 @@ createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout 
   let cleanupAction = do
           destroyPipeline device pipeline Nothing
           destroyPipelineLayout device pipelineLayout Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupBindless = cleanupAction
       }
-  }}
+  }
   pure (pipeline, pipelineLayout)
 
 -- | Create a pipeline for bindless UI rendering (UI camera)
@@ -55,11 +55,11 @@ createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayou
   let cleanupAction = do
           destroyPipeline device pipeline Nothing
           destroyPipelineLayout device pipelineLayout Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupBindlessUI = cleanupAction
       }
-  }}
+  }
   pure (pipeline, pipelineLayout)
 
 -- | Internal helper to create bindless pipeline with specified shaders

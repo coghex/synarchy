@@ -95,11 +95,11 @@ createOffscreenTarget pDevice device (w, h) count = do
       cleanupImages = V.forM_ imgsAndMem $ \(img, mem) → do
           destroyImage device img Nothing
           freeMemory device mem Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s))
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs)
         { cleanupImageViews = cleanupViews
         , cleanupSwapchain  = cleanupImages
-        } } }
+        } }
 
   logDebugSM CatGraphics "Offscreen render target created"
     [("extent", T.pack (show w) <> "x" <> T.pack (show h))

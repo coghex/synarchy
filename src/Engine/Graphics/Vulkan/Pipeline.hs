@@ -24,9 +24,9 @@ createVulkanRenderPass device swapchainImageFormat sampleCount targetLayout = do
         else createRenderPassMSAA device swapchainImageFormat sampleCount targetLayout
 
     let cleanupAction = destroyRenderPass device renderPass Nothing
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        vulkanCleanup = (vulkanCleanup (graphicsState s)) {
-            cleanupRenderPass = cleanupAction } } }
+    modifyGraphicsState $ \gs → gs {
+        vulkanCleanup = (vulkanCleanup gs) {
+            cleanupRenderPass = cleanupAction } }
     pure renderPass
 
 -- | Single-sample render pass (no MSAA) — original behavior

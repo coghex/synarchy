@@ -114,11 +114,11 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   swapchain ← createSwapchainKHR dev swCreateInfo Nothing
   
   let cleanupAction = destroySwapchainKHR dev swapchain Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupSwapchain = cleanupAction
       }
-  }}
+  }
   
   (_, swapImgs) ← getSwapchainImagesKHR dev swapchain
   pure $ SwapchainInfo
@@ -141,11 +141,11 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
   
   let cleanupAction = V.forM_ imageViews $ \iv →
           destroyImageView dev iv Nothing
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+  modifyGraphicsState $ \gs → gs {
+      vulkanCleanup = (vulkanCleanup gs) {
           cleanupImageViews = cleanupAction
       }
-  }}
+  }
   
   pure imageViews
   where

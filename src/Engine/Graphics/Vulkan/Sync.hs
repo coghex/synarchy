@@ -25,10 +25,10 @@ createRenderFinishedSemaphores device count = do
         , flags = Vk.SemaphoreCreateFlags 0
         }
   sems ← V.replicateM count $ Vk.createSemaphore device semaphoreInfo Nothing
-  modify $ \s → s { graphicsState = (graphicsState s)
+  modifyGraphicsState $ \gs → gs
     { renderFinishedSems = sems
-    , vulkanCleanup = (vulkanCleanup (graphicsState s))
+    , vulkanCleanup = (vulkanCleanup gs)
         { cleanupRenderFinishedSems =
             V.mapM_ (\sem → Vk.destroySemaphore device sem Nothing) sems
-        } } }
+        } }
   pure sems
