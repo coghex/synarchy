@@ -3,11 +3,6 @@ module Engine.Graphics.Window.GLFW
   ( -- * Window Management
     createWindow
   , createRawWindow
-  , destroyWindow
-  , showWindow
-  , hideWindow
-  , makeContextCurrent
-  , getGLFWWindow
     -- * Window State
   , windowShouldClose
   , setWindowShouldClose
@@ -18,9 +13,6 @@ module Engine.Graphics.Window.GLFW
   , GLFW.getWindowPos
     -- * Event Handling
   , pollEvents
-  , pollRawEvents
-  , waitEvents
-  , waitEventsTimeout
   , GLFW.postEmptyEvent
     -- * Keyboard and Mouse Input
   , GLFW.setKeyCallback
@@ -29,10 +21,6 @@ module Engine.Graphics.Window.GLFW
   , vulkanSupported
   , getRequiredInstanceExtensions
   , createWindowSurface
-  , mainThreadHint
-    -- * Initialization
-  , initializeGLFW
-  , terminateGLFW
     -- * Raw init since tests run in IO
   , GLFW.init
   , GLFW.terminate
@@ -42,16 +30,15 @@ module Engine.Graphics.Window.GLFW
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef, modifyIORef')
+import Data.IORef (writeIORef, modifyIORef')
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
-import Engine.Core.State (WindowState(..), appliedModeAtCreation
-  , loggerRef, luaQueue )
+import Engine.Core.State (WindowState(..), appliedModeAtCreation, luaQueue)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , InitError(..))
@@ -60,30 +47,26 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Vulkan.Core10 (Instance(..))
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)
 
--- | Initialize GLFW with error handling
-initializeGLFW ∷ EngineM σ ()
-initializeGLFW = do
-  success ← liftIO $ GLFW.init
-  case success of
-    True  → logDebugM CatGraphics "GLFW initialized"
-    False → logAndThrowM CatGraphics (ExInit WindowCreationFailed)
-                 "Failed to initialize GLFW"
-  -- Set necessary window hints for Vulkan
-  liftIO $ do
-    GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
-    GLFW.windowHint $ GLFW.WindowHint'Resizable True
-
 -- | Creates a GLFW window with given configuration
 createWindow ∷ WindowConfig → EngineM σ Window
 createWindow config = do
   allocResource (\_ → do
-                  terminateGLFW
+                  liftIO GLFW.terminate
                   logDebugM CatGraphics "GLFW terminated")
-                initializeGLFW
+                (do
+                  success ← liftIO $ GLFW.init
+                  case success of
+                    True  → logDebugM CatGraphics "GLFW initialized"
+                    False → logAndThrowM CatGraphics (ExInit WindowCreationFailed)
+                                 "Failed to initialize GLFW"
+                  -- Set necessary window hints for Vulkan
+                  liftIO $ do
+                    GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
+                    GLFW.windowHint $ GLFW.WindowHint'Resizable True)
 
   liftIO $ GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
 
-  window ← allocResource (\w0 → destroyWindow w0) $ do
+  window ← allocResource (\(Window w0) → liftIO $ GLFW.destroyWindow w0) $ do
     mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                     (T.unpack $ wcTitle config) Nothing Nothing
     case mw of
@@ -151,18 +134,6 @@ createRawWindow config = do
     Nothing → Nothing
     Just win → Just $ Window win
 
--- | Destroy a GLFW window
-destroyWindow ∷ Window → EngineM' ()
-destroyWindow (Window win) = liftIO $ GLFW.destroyWindow win
-
--- | Show a window
-showWindow ∷ GLFW.Window → EngineM σ ()
-showWindow win = liftIO $ GLFW.showWindow win
-
--- | Hide a window
-hideWindow ∷ GLFW.Window → EngineM σ ()
-hideWindow win = liftIO $ GLFW.hideWindow win
-
 -- | Check if a window should close
 windowShouldClose ∷ GLFW.Window → EngineM σ Bool
 windowShouldClose = liftIO ∘ GLFW.windowShouldClose
@@ -182,28 +153,6 @@ getFramebufferSize = liftIO ∘ GLFW.getFramebufferSize
 -- | Poll for pending events
 pollEvents ∷ EngineM σ ()
 pollEvents = liftIO GLFW.pollEvents
-pollRawEvents ∷ IO ()
-pollRawEvents = GLFW.pollEvents
-
--- | Wait for events
-waitEvents ∷ EngineM σ ()
-waitEvents = liftIO GLFW.waitEvents
-
--- | Wait for events with timeout
-waitEventsTimeout ∷ Double → EngineM σ ()
-waitEventsTimeout = liftIO ∘ GLFW.waitEventsTimeout
-
--- | Make a window's context current
-makeContextCurrent ∷ Maybe GLFW.Window → EngineM σ ()
-makeContextCurrent = liftIO ∘ GLFW.makeContextCurrent
-
--- | Hint that we're on the main thread
-mainThreadHint ∷ EngineM σ ()
-mainThreadHint = do
-  logger ← liftIO . readIORef ⌫ asks loggerRef
-  liftIO $ GLFW.setErrorCallback $ Just $ \errCode msg →
-    logWarn logger CatGraphics $ T.pack $
-      "GLFW error: " ⧺ show errCode ⧺ ": " ⧺ msg
 
 -- | Get required Vulkan instance extensions
 getRequiredInstanceExtensions ∷ EngineM σ [BS.ByteString]
@@ -235,14 +184,6 @@ createWindowSurface (Window win) inst = allocResource
       Right surface → pure surface
       Left err → logAndThrowM CatVulkan (ExGraphics VulkanSurfaceLost) $
                    T.pack $ "Failed to create window surface: " ⧺ err
-
--- | Terminate GLFW
-terminateGLFW ∷ EngineM σ ()
-terminateGLFW = liftIO GLFW.terminate
-
--- | Get the GLFW window handle
-getGLFWWindow ∷ Window → GLFW.Window
-getGLFWWindow (Window win) = win
 
 vulkanSupported ∷ EngineM σ Bool
 vulkanSupported = liftIO GLFW.vulkanSupported
