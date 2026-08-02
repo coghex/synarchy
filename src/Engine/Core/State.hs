@@ -328,6 +328,11 @@ data EngineEnv = EngineEnv
     --   would simply be overwritten. Runtime-only, never part of
     --   'SaveData'.
   , gameTimeRef        ∷ IORef Double
+    -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
+    --   only when `enginePausedRef` is False. All gameplay timestamps
+    --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
+    --   usReviveUntil) reference this clock instead of POSIX wall-time.
+    --   Updated by Unit.Thread.unitLoop once per tick.
   , saveBarrierRef     ∷ SaveBarrier
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
     -- and synchronization state, never part of 'SaveData'.
@@ -341,11 +346,6 @@ data EngineEnv = EngineEnv
     --   this to decide whether to include SaveInput, rather than
     --   'waitForOwners' timing out forever waiting for an owner that
     --   can never acknowledge. Runtime-only, never part of 'SaveData'.
-    -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
-    --   only when `enginePausedRef` is False. All gameplay timestamps
-    --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
-    --   usReviveUntil) reference this clock instead of POSIX wall-time.
-    --   Updated by Unit.Thread.unitLoop once per tick.
   , lastSaveTimeRef    ∷ IORef UTCTime
     -- ^ Wall-clock time of the most recently issued save (see
     --   `Engine.Scripting.Lua.API.Save.saveWorldFn`). Each save clamps
