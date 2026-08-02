@@ -26,7 +26,7 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, itemManagerRef)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Asset.YamlTextures (lookupTextureName)
+import Engine.Asset.TextureNameRegistry (lookupTextureName)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import Engine.Graphics.Viewport (windowDegenerate)
