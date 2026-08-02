@@ -1117,6 +1117,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Core.ConfigState
                    Test.Headless.Core.LogMonad
+                   Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll

@@ -14,45 +14,47 @@ import GHC.Stack (SrcLoc(..))
 import System.IO (hFlush)
 import Engine.Core.Log.Types (LogBackend(..), LogEntry(..), LogLevel(..), LogCategory)
 
+-- | Which optional components a formatted entry includes: normal output
+--   shows thread id/context/source location, thread output omits all
+--   three (CH-8, #944 — was two independently maintained assemblies).
+data FormatPolicy = NormalFormat | ThreadFormat
+
 writeLogEntry ∷ LogBackend → LogEntry → IO ()
-writeLogEntry backend entry = case backend of
-  LogToHandle h → TIO.hPutStrLn h (formatLogEntry entry) >> hFlush h
-  LogToFile path → appendFile path (T.unpack $ formatLogEntry entry <> "\n")
-  LogToCallback cb → cb entry
-  LogMulti backends → mapM_ (`writeLogEntry` entry) backends
+writeLogEntry = writeEntryWith NormalFormat writeLogEntry
 
 writeThreadLogEntry ∷ LogBackend → LogEntry → IO ()
-writeThreadLogEntry backend entry = case backend of
-  LogToHandle h → TIO.hPutStrLn h (formatThreadLogEntry entry) >> hFlush h
-  LogToFile path → appendFile path (T.unpack $ formatThreadLogEntry entry <> "\n")
+-- NB: a 'LogMulti' backend's nested entries deliberately recurse into the
+-- NORMAL writer here, not 'writeThreadLogEntry' itself — pre-existing
+-- behavior (#944) preserved as-is; LogMulti has no construction sites in
+-- the repo today, so this asymmetry is production-invisible either way.
+writeThreadLogEntry = writeEntryWith ThreadFormat writeLogEntry
+
+-- | Shared backend dispatch. @multiRecurse@ is the writer used for a
+--   'LogMulti' backend's nested entries.
+writeEntryWith ∷ FormatPolicy → (LogBackend → LogEntry → IO ()) → LogBackend → LogEntry → IO ()
+writeEntryWith policy multiRecurse backend entry = case backend of
+  LogToHandle h → TIO.hPutStrLn h (formatEntry policy entry) >> hFlush h
+  LogToFile path → appendFile path (T.unpack $ formatEntry policy entry <> "\n")
   LogToCallback cb → cb entry
-  LogMulti backends → mapM_ (`writeLogEntry` entry) backends
+  LogMulti backends → mapM_ (`multiRecurse` entry) backends
 
-formatLogEntry ∷ LogEntry → Text
-formatLogEntry LogEntry{..} =
+formatEntry ∷ FormatPolicy → LogEntry → Text
+formatEntry policy LogEntry{..} =
   T.intercalate " " $ filter (not . T.null)
     [ formatTimestamp leTimestamp
     , formatLevel leLevel
     , formatCategory leCategory
-    , formatThread leThreadId
-    , formatContext leContext
-    , formatLocation leSrcLoc
+    , optional formatThread leThreadId
+    , optional formatContext leContext
+    , optional formatLocation leSrcLoc
     , leMessage
     , formatFields leFields
     ]
-
-formatThreadLogEntry ∷ LogEntry → Text
-formatThreadLogEntry LogEntry{..} =
-  T.intercalate " " $ filter (not . T.null)
-    [ formatTimestamp leTimestamp
-    , formatLevel leLevel
-    , formatCategory leCategory
-    , ""
-    , ""
-    , ""
-    , leMessage
-    , formatFields leFields
-    ]
+  where
+    optional ∷ (a → Text) → a → Text
+    optional f x = case policy of
+      NormalFormat → f x
+      ThreadFormat → ""
 
 formatTimestamp ∷ Clock.UTCTime → Text
 formatTimestamp t = T.pack $ TimeFormat.formatTime TimeFormat.defaultTimeLocale "%Y-%m-%d %H:%M:%S" t
