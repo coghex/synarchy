@@ -18,7 +18,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Yaml as Yaml
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Asset.YamlTextures (emptyTextureNameRegistry)
+import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Scene.Base (LayerId(..))
