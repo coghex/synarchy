@@ -248,7 +248,6 @@ library
                      Engine.Input.Thread.Mouse
                      Engine.Input.Thread.Mouse.Activation
                      Engine.Input.Thread.Scroll
-                     Engine.Scripting.Types
                      Engine.Scripting.Lua.Debug
                      Engine.Scripting.Lua.DebugServer
                      Engine.Scripting.Lua.Types

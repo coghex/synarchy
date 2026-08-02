@@ -5,8 +5,7 @@ module Engine.Scripting.Lua.Script
   ) where
 
 import UPrelude
-import Engine.Scripting.Types (ScriptValue(..))
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Scripting.Lua.Types (ScriptValue(..), LuaBackendState(..))
 import Engine.Core.Log (logWarn, LogCategory(..))
 import Data.IORef (readIORef)
 import qualified HsLua as Lua

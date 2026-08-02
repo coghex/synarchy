@@ -17,7 +17,6 @@ module Engine.Scripting.Lua.Thread
   ) where
 
 import UPrelude
-import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Shell (setupShellSandbox)

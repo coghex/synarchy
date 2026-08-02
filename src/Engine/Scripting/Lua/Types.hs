@@ -20,6 +20,26 @@ import Engine.Core.Log (LoggerState)
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 
+-- | A Lua-representable value, marshalled across the Haskell/Lua
+--   boundary by "Engine.Scripting.Lua.Util"'s push/pull helpers.
+--   Folded in from the deleted one-type module that used to sit beside
+--   this namespace (#1059), once #992 removed its last
+--   non-Lua-specific constructor: every consumer was already under
+--   @Engine.Scripting.Lua.*@ and already imported this module.
+--
+--   The fields are explicitly lazy. This module enables 'StrictData'
+--   and the declaration's former home did not, so leaving them bare
+--   would force each field at construction time instead of at push
+--   time — a behavior change, not a move (broadcast argument lists are
+--   built for callbacks that may never run).
+data ScriptValue
+  = ScriptNumber ~Double
+  | ScriptString ~Text
+  | ScriptBool   ~Bool
+  | ScriptNil
+  | ScriptTable  ~[(ScriptValue, ScriptValue)]
+  deriving (Show)
+
 -- | Represents a single Lua script's metadata
 data LuaScript = LuaScript
   { scriptId        ∷ Word32   -- unique identifier

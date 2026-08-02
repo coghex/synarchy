@@ -5,8 +5,7 @@ module Engine.Scripting.Lua.Util
   ) where
 
 import UPrelude
-import Engine.Scripting.Types (ScriptValue)
-import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaScript(..))
+import Engine.Scripting.Lua.Types (ScriptValue, LuaBackendState(..), LuaScript(..))
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import qualified HsLua as Lua
 import qualified Data.Text as T
