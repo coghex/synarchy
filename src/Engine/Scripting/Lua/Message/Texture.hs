@@ -201,7 +201,7 @@ handleLoadTextureBatch requests = do
         case (vulkanDevice gs, vulkanPDevice gs, vulkanCmdPool gs, deviceQueues gs, mBindless) of
             (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
                 preps ← mapM (prepareTextureUpload pool dev pdev) (reverse freshReqs)
-                let queue = graphicsQueue queues
+                let queue = dqGraphicsQueue queues
 
                 locally $ do
                     stagingBuffers ← forM preps $ \prep → do
