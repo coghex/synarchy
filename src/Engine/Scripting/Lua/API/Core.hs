@@ -313,9 +313,22 @@ setTickIntervalFn env backendState = do
                "setTickInterval requires 2 arguments: scriptId, seconds"
    return 0
 
-loadScriptFn ∷ EngineEnv → LuaBackendState → Lua.State 
+-- | @engine.loadScript(path, tickRate)@.
+--
+--   The chunk runs on the backend's own canonical 'Lua.State'
+--   ('lbsLuaState'), NOT on whatever state this handler happens to be
+--   invoked with (#1059). Handler-local @Lua.state@ is the INVOKING
+--   state: a script calling @engine.loadScript@ from inside a
+--   coroutine would otherwise load the module onto the coroutine's
+--   stack instead of the main state the registrar was given. Every
+--   'Engine.Scripting.Lua.API.registerLuaAPI' caller passes
+--   @lbsLuaState backendState@ as that state already, so reading it
+--   back off the backend is the same state the old threaded
+--   'Lua.State' parameter carried.
+loadScriptFn ∷ EngineEnv → LuaBackendState
              → Lua.LuaE Lua.Exception Lua.NumResults
-loadScriptFn env backendState lst = do
+loadScriptFn env backendState = do
+    let lst = lbsLuaState backendState
     path ← Lua.tostring 1
     tickRate ← Lua.tonumber 2
     case (path, tickRate) of
@@ -384,8 +397,11 @@ loadScriptFn env backendState lst = do
         _ → Lua.pushnil
     return 1
 
-killScriptFn ∷ EngineEnv → LuaBackendState → Lua.State → Lua.LuaE Lua.Exception Lua.NumResults
-killScriptFn env backendState lst = do
+-- | @engine.killScript(id)@. Unrefs on the backend's own canonical
+--   'Lua.State' for the same reason 'loadScriptFn' loads on it.
+killScriptFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
+killScriptFn env backendState = do
+    let lst = lbsLuaState backendState
     sidNum ← Lua.tointeger 1
     case sidNum of
         Just sid → Lua.liftIO $ do

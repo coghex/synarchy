@@ -7,7 +7,6 @@ module Engine.Scripting.Lua.Thread.Dispatch
   ) where
 
 import UPrelude
-import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)

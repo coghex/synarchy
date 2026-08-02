@@ -5,8 +5,7 @@ module Engine.Scripting.Lua.Script
   ) where
 
 import UPrelude
-import Engine.Scripting.Types (ScriptValue(..))
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Scripting.Lua.Types (ScriptValue(..), LuaBackendState(..))
 import Engine.Core.Log (logWarn, LogCategory(..))
 import Data.IORef (readIORef)
 import qualified HsLua as Lua
@@ -43,7 +42,6 @@ loadModuleRef path = do
   where
     invalidRef = Lua.Reference (fromIntegral Lua.refnil)
 
--- | Call a function on a module table
 -- | Call a module function under 'pcall' so a Lua error in a callback
 --   does NOT throw a Haskell 'Lua.Exception' (which would propagate to
 --   the Lua-thread crash handler and shut the whole engine down). Errors
