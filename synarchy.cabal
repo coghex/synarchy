@@ -223,7 +223,6 @@ library
                      Engine.Graphics.Font.Upload
                      Engine.Graphics.Font.Util
                      Engine.Graphics.Font.STB
-                     Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Inject
