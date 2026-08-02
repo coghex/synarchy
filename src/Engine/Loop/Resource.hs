@@ -6,8 +6,6 @@ module Engine.Loop.Resource
   , getSwapchain
   , getQueues
   , extractWindow
-  , safeVectorIndex
-  , safeVectorHead
   ) where
 
 import UPrelude

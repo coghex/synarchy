@@ -1,7 +1,6 @@
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 module Engine.Core.Init
   ( initializeEngine
-  , initializeEngineWith
   , initializeEngineHeadless
   , initializeEngineHeadlessWith
   , EngineInitResult(..)
