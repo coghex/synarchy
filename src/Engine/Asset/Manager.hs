@@ -127,9 +127,9 @@ cleanupAssetManager = do
 
     when (cleanupStatus state ≡ InProgress) $
       logAndThrowM CatAsset (ExGraphics CleanupError) $ "Cleanup already in progress"
-
-    modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = InProgress } }
-
+    
+    modifyGraphicsState $ \gs → gs { cleanupStatus = InProgress }
+    
     device ← case vulkanDevice state of
         Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost) "No device during cleanup"
         Just d → pure d
@@ -139,12 +139,12 @@ cleanupAssetManager = do
 
     logDebugM CatAsset "Waiting for device to be idle..."
     liftIO $ do
-        Vk.queueWaitIdle (graphicsQueue queues)
-        Vk.queueWaitIdle (presentQueue queues)
+        Vk.queueWaitIdle (dqGraphicsQueue queues)
+        Vk.queueWaitIdle (dqPresentQueue queues)
         Vk.deviceWaitIdle device
 
     cleanupResources device state
-    modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
+    modifyGraphicsState $ \gs → gs { cleanupStatus = Completed }
     logInfoM CatAsset "Asset cleanup completed successfully"
 
 cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ()
@@ -170,10 +170,8 @@ cleanupResources device _state = do
               , apAssetPaths = Map.empty
               }
         in (clearedPool, ())
-    modify $ \s → s
-        { graphicsState = (graphicsState s)
-            { cleanupStatus = Completed
-            }
+    modifyGraphicsState $ \gs → gs
+        { cleanupStatus = Completed
         }
 
     (liftIO $ Vk.deviceWaitIdle device)

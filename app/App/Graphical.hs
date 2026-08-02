@@ -8,8 +8,8 @@ import UPrelude
 import Data.IORef (readIORef)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
-import Engine.Core.Monad (runEngineM, EngineM', liftIO)
-import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
+import Engine.Core.Monad (runEngineM, EngineM', liftIO, modifyGraphicsState)
+import Engine.Core.State (EngineEnv(..), glfwWindow)
 import Engine.Core.Types (BootProfile(..))
 import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Core.Log (LogCategory(..))
@@ -59,8 +59,8 @@ runGraphical bootProfile mPort = do
       engineAction = do
         logInfoM CatSystem "Starting engine..."
         window ← GLFW.createWindow $ defaultWindowConfig videoConfig
-        modify $ \s → s { graphicsState = (graphicsState s) {
-                            glfwWindow = Just window } }
+        modifyGraphicsState $ \gs → gs {
+                            glfwWindow = Just window }
 
         let Window glfwWin = window
         liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')

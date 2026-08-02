@@ -215,8 +215,8 @@ advanceFrameIndex = do
     state ← gets graphicsState
     let nextFrame = (currentFrame state + 1)
             `mod` fromIntegral (gcMaxFrames defaultGraphicsConfig)
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        currentFrame = nextFrame } }
+    modifyGraphicsState $ \gs → gs {
+        currentFrame = nextFrame }
 
 -- | The target-agnostic middle of a frame: collect world + scene + UI
 --   quads, upload uniforms and vertices, prepare a pending screenshot
@@ -399,7 +399,7 @@ submitFrame cmdBuffer resources queues renderFinishedSem = do
             , commandBuffers = V.singleton $ commandBufferHandle cmdBuffer
             , signalSemaphores = V.singleton renderFinishedSem
             }
-    liftIO $ queueSubmit (graphicsQueue queues)
+    liftIO $ queueSubmit (dqGraphicsQueue queues)
                (V.singleton $ SomeStruct submitInfo) (frInFlight resources)
 
 -- | Submit an offscreen frame (#650): nothing to wait on (no acquire)
@@ -410,7 +410,7 @@ submitFrameOffscreen cmdBuffer resources queues = do
     let submitInfo = zero
             { commandBuffers = V.singleton $ commandBufferHandle cmdBuffer
             } ∷ SubmitInfo '[]
-    liftIO $ queueSubmit (graphicsQueue queues)
+    liftIO $ queueSubmit (dqGraphicsQueue queues)
                (V.singleton $ SomeStruct submitInfo) (frInFlight resources)
 
 -- | Present frame and return result for handling
@@ -422,7 +422,7 @@ presentFrameWithResult renderFinishedSem queues swapchain imageIndex = do
             , swapchains = V.singleton swapchain
             , imageIndices = V.singleton imageIndex
             }
-    presentResult ← liftIO $ queuePresentKHR (presentQueue queues) presentInfo
+    presentResult ← liftIO $ queuePresentKHR (dqPresentQueue queues) presentInfo
     case presentResult of
         SUCCESS               → pure $ Right ()
         SUBOPTIMAL_KHR        → pure $ Left SUBOPTIMAL_KHR

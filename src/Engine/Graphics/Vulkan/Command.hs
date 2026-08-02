@@ -60,7 +60,7 @@ createFrameResources ∷ Device → DevQueues → EngineM σ FrameResources
 createFrameResources device queues = do
     let poolInfo = (zero ∷ CommandPoolCreateInfo)
           { flags = COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
-          , queueFamilyIndex = graphicsFamIdx queues
+          , queueFamilyIndex = dqGraphicsFamIdx queues
           }
     
     cmdPool ← allocResource (\pool → destroyCommandPool device pool Nothing) $

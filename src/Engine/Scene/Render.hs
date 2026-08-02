@@ -151,10 +151,10 @@ ensureDynamicVertexBuffer frameIdx requiredVertices = do
                     , sdbUsed = 0
                     }
 
-            modify $ \s → s { graphicsState = (graphicsState s) {
+            modifyGraphicsState $ \gs → gs {
                 dynamicVertexBuffers =
-                    dynamicVertexBuffers (graphicsState s)
-                        V.// [(frameIdx, Just newBuf)] } }
+                    dynamicVertexBuffers gs
+                        V.// [(frameIdx, Just newBuf)] }
 
             pure newBuf
 
@@ -204,10 +204,10 @@ uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
 
     let result = finalBuffer { sdbUsed = totalVertices }
 
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         dynamicVertexBuffers =
-            dynamicVertexBuffers (graphicsState s)
-                V.// [(frameIdx, Just result)] } }
+            dynamicVertexBuffers gs
+                V.// [(frameIdx, Just result)] }
 
     pure result
 

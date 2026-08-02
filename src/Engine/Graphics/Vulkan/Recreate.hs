@@ -57,15 +57,15 @@ recreateSwapchain window = do
             logDebugM CatSwapchain "Running cleanup before recreation..."
             liftIO $ runAllCleanups (vulkanCleanup state)
 
-            modify $ \s → s { graphicsState = (graphicsState s) {
+            modifyGraphicsState $ \gs → gs {
                 vulkanCleanup = emptyCleanup
-            }}
+            }
 
             recreateAllResources pDevice device queues surface window
-            
-            modify $ \s → s { graphicsState = (graphicsState s) {
+
+            modifyGraphicsState $ \gs → gs {
                 currentFrame = 0
-            }}
+            }
 
             env ← ask
             liftIO $ writeIORef (rcUiCameraRef (toRenderCapability env)) $ 
@@ -96,10 +96,10 @@ recreateAllResources pDevice device queues surface window = do
     fbSize ← GLFW.getFramebufferSize glfwWin
     swapInfo ← createVulkanSwapchain pDevice device queues surface
                  vsyncEnabled fbSize
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         swapchainInfo = Just swapInfo
-    }}
-    
+    }
+
     let newExtent = siSwapExtent swapInfo
         imgFormat = siSwapImgFormat swapInfo
     
@@ -110,34 +110,34 @@ recreateAllResources pDevice device queues surface window = do
         sampleCount      = clampSampleCount supportedSamples requestedSamples
     
     imageViews ← createSwapchainImageViews device swapInfo
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        swapchainInfo = case swapchainInfo (graphicsState s) of
+    modifyGraphicsState $ \gs → gs {
+        swapchainInfo = case swapchainInfo gs of
             Just si → Just si { siSwapImgViews = imageViews }
-            Nothing → Nothing } }
+            Nothing → Nothing }
     
     mMsaaView ← if sampleCount ≢ SAMPLE_COUNT_1_BIT
         then do
             (img, mem, view) ← createMSAAColorImage pDevice device imgFormat newExtent sampleCount
-            modify $ \s → s { graphicsState = (graphicsState s) {
+            modifyGraphicsState $ \gs → gs {
                 msaaColorImage = Just (img, mem, view)
-            }}
+            }
             pure (Just view)
         else do
-            modify $ \s → s { graphicsState = (graphicsState s) {
+            modifyGraphicsState $ \gs → gs {
                 msaaColorImage = Nothing
-            }}
+            }
             pure Nothing
     
     renderPass ← createVulkanRenderPass device imgFormat sampleCount
                      (renderedImageLayout (siTarget swapInfo))
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         vulkanRenderPass = Just renderPass
-    }}
-    
+    }
+
     framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         framebuffers = Just framebuffers
-    }}
+    }
 
     -- Per-IMAGE render-finished semaphores: the old set was destroyed by
     -- runAllCleanups above; create a fresh set sized to the new image count.
@@ -145,27 +145,27 @@ recreateAllResources pDevice device queues surface window = do
     
     (bindlessPipe, bindlessPipeLayout) ←
         createBindlessPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout)
-    }}
-    
+    }
+
     (bindlessUIPipe, bindlessUIPipeLayout) ←
         createBindlessUIPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout)
-    }}
-    
+    }
+
     (fontPipe, fontPipeLayout, _) ←
         createFontPipeline device renderPass newExtent uniformLayout sampleCount
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         fontPipeline = Just (fontPipe, fontPipeLayout)
-    }}
-    
+    }
+
     (fontUIPipe, fontUIPipeLayout) ←
         createFontUIPipeline device renderPass newExtent uniformLayout fontDescLayout sampleCount
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modifyGraphicsState $ \gs → gs {
         fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout)
-    }}
+    }
     
     logDebugM CatGraphics "All resources recreated"
 
