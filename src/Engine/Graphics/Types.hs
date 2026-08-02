@@ -20,10 +20,10 @@ data VulkanState = VulkanState
 
 -- | Device Queue Information
 data DevQueues = DevQueues
-  { graphicsQueue  ∷ Queue
-  , presentQueue   ∷ Queue
-  , graphicsFamIdx ∷ Word32
-  , presentFamIdx  ∷ Word32
+  { dqGraphicsQueue  ∷ Queue
+  , dqPresentQueue   ∷ Queue
+  , dqGraphicsFamIdx ∷ Word32
+  , dqPresentFamIdx  ∷ Word32
   }
 
 -- | What the frame loop renders into and (for a swapchain) presents
@@ -70,9 +70,9 @@ renderedImageLayout (TargetOffscreen _) = IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
 
 -- | Swapchain Support Details
 data SwapchainSupportDetails = SwapchainSupportDetails
-  { capabilities ∷ SurfaceCapabilitiesKHR
-  , formats      ∷ V.Vector SurfaceFormatKHR
-  , presentModes ∷ V.Vector PresentModeKHR
+  { ssdCapabilities ∷ SurfaceCapabilitiesKHR
+  , ssdFormats      ∷ V.Vector SurfaceFormatKHR
+  , ssdPresentModes ∷ V.Vector PresentModeKHR
   }
 
 -- | Channel order of a raw framebuffer grab (#643). The swapchain
