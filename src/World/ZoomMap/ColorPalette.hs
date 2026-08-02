@@ -16,8 +16,8 @@ import UPrelude
 import qualified Codec.Picture as JP
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
-import Engine.Asset.YamlTextures (MaterialDef(..), VegetationDef(..)
-                                 , loadMaterialDirectory, loadVegetationYaml)
+import Engine.Asset.YamlMaterials (MaterialDef(..), loadMaterialDirectory)
+import Engine.Asset.YamlVegetation (VegetationDef(..), loadVegetationYaml)
 import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)

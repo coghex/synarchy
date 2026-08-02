@@ -17,7 +17,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Asset.YamlTextures (TextureNameRegistry, lookupTextureName)
+import Engine.Asset.TextureNameRegistry (TextureNameRegistry, lookupTextureName)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld, packWorldUV)
 import Engine.Scene.Base (LayerId(..))

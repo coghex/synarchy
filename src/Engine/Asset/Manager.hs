@@ -233,7 +233,7 @@ loadTextureAtlasWithHandle texHandle name path _arrayName = do
       cmdQueue ← case (deviceQueues (graphicsState state)) of
         Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost)
                     "No device queues found"
-        Just queues → pure $ graphicsQueue queues
+        Just queues → pure $ dqGraphicsQueue queues
           
       -- Create the texture image, view and sampler
       ((_vulkanImage@(VulkanImage image imageMemory), imageView), imageCleanup) ←
@@ -404,8 +404,8 @@ cleanupAssetManager = do
 
     logDebugM CatAsset "Waiting for device to be idle..."
     liftIO $ do
-        Vk.queueWaitIdle (graphicsQueue queues)
-        Vk.queueWaitIdle (presentQueue queues)
+        Vk.queueWaitIdle (dqGraphicsQueue queues)
+        Vk.queueWaitIdle (dqPresentQueue queues)
         Vk.deviceWaitIdle device
 
     cleanupResources device state

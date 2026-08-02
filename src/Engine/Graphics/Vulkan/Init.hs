@@ -83,8 +83,8 @@ initializeVulkan window = do
   logDebugM CatVulkan "Logical device created successfully"
 
   logDebugSM CatVulkan "Queue family indices selected"
-    [("graphics_family", T.pack $ show $ graphicsFamIdx queues)
-    ,("present_family", T.pack $ show $ presentFamIdx queues)]
+    [("graphics_family", T.pack $ show $ dqGraphicsFamIdx queues)
+    ,("present_family", T.pack $ show $ dqPresentFamIdx queues)]
 
   modifyGraphicsState $ \gs → gs
                     { vulkanInstance = Just vkInstance
@@ -204,9 +204,9 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
         , tscForceLegacy   = False
         }
   texSystem ← createTextureSystem physicalDevice device cmdPool 
-                                   (graphicsQueue queues) texSystemConfig
+                                   (dqGraphicsQueue queues) texSystemConfig
   (defaultFaceMap, texSystemWithFaceMap) ← createDefaultFaceMap
-      physicalDevice device cmdPool (graphicsQueue queues) texSystem
+      physicalDevice device cmdPool (dqGraphicsQueue queues) texSystem
   -- textureSystem + defaultFaceMapSlot live solely in EngineEnv now
   -- (single source of truth, readable by worker threads).
   liftIO $ writeIORef (rcTextureSystemRef (toRenderCapability env)) (Just texSystemWithFaceMap)
@@ -259,7 +259,7 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   modifyGraphicsState $ \gs → gs {
                       fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) }
 
-  quadBuf ← createFontQuadBuffer device physicalDevice (graphicsQueue queues) cmdPool
+  quadBuf ← createFontQuadBuffer device physicalDevice (dqGraphicsQueue queues) cmdPool
   modifyGraphicsState $ \gs → gs {
                       fontQuadBuffer = Just quadBuf }
   

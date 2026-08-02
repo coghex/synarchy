@@ -33,7 +33,7 @@ import Engine.Scripting.Lua.API.Save.Config
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import Engine.Scripting.Lua.API.Save.Page (visiblePageState)
 import Engine.PlayerEvent.Emit (emitEvent)
-import Engine.Asset.YamlTextures (loadPopulatedMaterialRegistry)
+import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))

@@ -84,7 +84,7 @@ uploadBloodTextures = do
         (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
             mgr ← liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             finalBindless ← foldM
-                (syncWorldBloodTextures dev pdev cmdPool (graphicsQueue queues))
+                (syncWorldBloodTextures dev pdev cmdPool (dqGraphicsQueue queues))
                 bindless0 (wmWorlds mgr)
             let rv = toRenderViewCapability env
             liftIO $ writeIORef (rvTextureSystemRef rv) (Just finalBindless)

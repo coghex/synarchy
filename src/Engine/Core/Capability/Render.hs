@@ -58,7 +58,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef)
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Asset.Types (AssetPool)
-import Engine.Asset.YamlTextures (TextureNameRegistry)
+import Engine.Asset.TextureNameRegistry (TextureNameRegistry)
 import Engine.Core.Queue as Q
 import Engine.Graphics.Camera (Camera2D, UICamera)
 import Engine.Graphics.Config (TextureFilter, VideoConfig)

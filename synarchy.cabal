@@ -160,7 +160,9 @@ library
                      Engine.Asset.Handle
                      Engine.Asset.Manager
                      Engine.Asset.YamlList
-                     Engine.Asset.YamlTextures
+                     Engine.Asset.TextureNameRegistry
+                     Engine.Asset.YamlMaterials
+                     Engine.Asset.YamlVegetation
                      Engine.Asset.YamlFlora
                      Engine.Asset.YamlUnits
                      Engine.Asset.YamlNames
@@ -222,7 +224,6 @@ library
                      Engine.Graphics.Font.Upload
                      Engine.Graphics.Font.Util
                      Engine.Graphics.Font.STB
-                     Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Inject
