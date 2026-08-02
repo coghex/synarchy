@@ -387,11 +387,12 @@ with no terminating brace. A real (cosmetic) bug in a hand-written `Show`.
 
 ### [#952] CH-18. `AssetConfig` advertises four features that do not exist
 `Engine.Asset.Types.AssetConfig` declares `acMaxTextureAtlases`,
-`acMaxShaderPrograms`, `acPreloadAssets`, `acEnableHotReload`. It is
-constructed exactly once — positionally, as `AssetConfig 100 100 True True` in
-`Engine.Core.Defaults` — stored in `EngineState.assetConfig`, and **never read
-anywhere**. So the engine appears to support asset preloading and hot reload
-and to enforce atlas/shader caps; it does none of those.
+`acPreloadAssets`, `acEnableHotReload` (plus, until #1007 removed it alongside
+the shader asset model, `acMaxShaderPrograms`). It is constructed exactly once
+— positionally, as `AssetConfig 100 True True` in `Engine.Core.Defaults` —
+stored in `EngineState.assetConfig`, and **never read anywhere**. So the engine
+appears to support asset preloading and hot reload and to enforce an atlas cap;
+it does none of those.
 
 Worse than plain dead code: it is a false capability advertisement, written
 positionally so the four bare literals cannot even be matched to their meaning
