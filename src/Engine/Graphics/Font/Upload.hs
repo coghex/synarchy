@@ -68,7 +68,7 @@ uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
     let width = faAtlasWidth atlas
         height = faAtlasHeight atlas
         pixels = faAtlasBitmap atlas
-        queue = graphicsQueue queues
+        queue = dqGraphicsQueue queues
 
     (texHandle, descSet, imgView, samp) ← createFontTextureGrayscale device pDevice
                                             cmdPool queue width height pixels fontDescriptorsLayout

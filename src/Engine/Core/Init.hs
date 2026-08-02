@@ -1,7 +1,6 @@
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 module Engine.Core.Init
   ( initializeEngine
-  , initializeEngineWith
   , initializeEngineHeadless
   , initializeEngineHeadlessWith
   , EngineInitResult(..)
@@ -28,7 +27,7 @@ import qualified Combat.Types
 import Engine.ActionOutcome (emptyActionOutcomeQueue)
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg, OverridesFile)
-import Engine.Asset.YamlTextures
+import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..), LoggerState, logInfo, logWarn

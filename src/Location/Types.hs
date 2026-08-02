@@ -106,13 +106,13 @@ lookupLocation lid (LocationRegistry defs) =
 allLocations ∷ LocationRegistry → [LocationDef]
 allLocations = sortOn ldId . lrDefs
 
--- | Deterministic 'Engine.Asset.YamlTextures.TextureNameRegistry' key
+-- | Deterministic 'Engine.Asset.TextureNameRegistry.TextureNameRegistry' key
 --   for one state of a location's map-icon pair (#781) — shared between
 --   the YAML loader ('Engine.Scripting.Lua.API.Locations', which
 --   registers under this name) and the zoom-map renderer
 --   ('World.Render.Zoom.Icons', which looks it up under the same name),
 --   mirroring the @mat_tile_\<name\>@-style convention
---   'Engine.Asset.YamlTextures' already documents.
+--   'Engine.Asset.TextureNameRegistry' already documents.
 locationIconTextureName ∷ Text → Bool → Text
 locationIconTextureName lid isDiscovered =
     "loc_icon_" <> lid <> "_"
