@@ -27,7 +27,9 @@ import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
-import Engine.Asset.YamlTextures
+import Engine.Asset.TextureNameRegistry (lookupTextureName, registerTextureName)
+import Engine.Asset.YamlMaterials (MaterialDef(..), loadMaterialYaml)
+import Engine.Asset.YamlVegetation (VegetationDef(..), loadVegetationYaml)
 import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
