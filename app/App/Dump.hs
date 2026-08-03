@@ -25,12 +25,12 @@ import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
 import World.Fluid.River.Types (WorldRivers(..), rivFlowRate)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngineHeadlessWith, EngineInitResult(..))
+import Control.Monad.Error.Class (MonadError(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (BootProfile(..))
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
-                                   , SystemError(..), mkErrorContext
-                                   , throwEngineException)
+                                   , SystemError(..), mkErrorContext)
 import Engine.Core.Log (LogBackend(..), shutdownLogger)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 import Engine.Loop.Shutdown (checkStatus)
@@ -106,7 +106,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
         -- with worldSize, not with plate count). Min 300s for tiny
         -- worlds, plenty of headroom for the largest practical sizes.
         initOk ← liftIO $ waitForInit env' (max 300 (worldSize * 4))
-        unless initOk $ throwEngineException $ EngineException
+        unless initOk $ throwError $ EngineException
             (ExSystem (TimeoutError
                 "dump: world generation did not complete in time"))
             "dump aborted before emitting output"
@@ -132,7 +132,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                 [] → hPutStrLn stderr "dump: no world found"
 
         chunksOk ← liftIO $ waitForChunks env' 300
-        unless chunksOk $ throwEngineException $ EngineException
+        unless chunksOk $ throwError $ EngineException
             (ExSystem (TimeoutError
                 "dump: chunk load did not complete in time"))
             "dump aborted before emitting output"

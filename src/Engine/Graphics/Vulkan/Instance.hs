@@ -14,7 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logWarnM)
-import Engine.Core.Error.Exception (ExceptionType(..), InitError(..), catchEngine)
+import Engine.Core.Error.Exception (ExceptionType(..), InitError(..))
 import Engine.Core.Monad
 import Engine.Graphics.Base
 import qualified Engine.Graphics.Window.GLFW as GLFW
@@ -137,7 +137,7 @@ createVulkanInstance config surfaceUse = do
     then do
       logDebugM CatVulkan "Creating debug messenger"
       messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
-        `catchEngine` \err → logAndThrowM CatInit (ExInit VulkanInitFailed) $
+        `catchError` \err → logAndThrowM CatInit (ExInit VulkanInitFailed) $
           "Failed to create debug messenger: " <> T.pack (show err)
       logDebugM CatVulkan "Debug messenger created successfully"
       return $ Just messenger
