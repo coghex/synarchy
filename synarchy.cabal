@@ -225,6 +225,7 @@ library
                      Engine.Graphics.Vulkan.Texture.Handle
                      Engine.Graphics.Vulkan.Texture.Rebind
                      Engine.Graphics.Vulkan.Texture.Bindless
+                     Engine.Graphics.Vulkan.Uniform.Layout
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
@@ -1083,6 +1084,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
+                   Test.Headless.Graphics.UniformLayout
                    Test.Headless.Construct.Corners
                    Test.Headless.Construct.Footprint
                    Test.Headless.Craft.Execute
