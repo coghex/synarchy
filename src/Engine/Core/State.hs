@@ -456,13 +456,26 @@ data EngineLifecycle
   | EngineStopped
   deriving (Eq, Show)
 
+-- | Per-frame timing measurement, stepped once per frame by
+--   'Engine.Loop.Timing.updateFrameTiming' on the main render thread.
+--
+--   This record does NOT own frame pacing — the live 'VideoConfig' does
+--   ('vcVSync' presentation when VSync is on, otherwise 'vcFrameLimit',
+--   and no software cap when neither applies). Nothing here caps the
+--   frame rate; changing the frame rate means changing 'VideoConfig'.
+--
+--   The two @fpsWindow*@ fields are the CURRENT FPS SAMPLING WINDOW, not
+--   running totals: both reset to zero every time the window reaches one
+--   second and its average is published to @fpsRef@.
 data TimingState = TimingState
-  { frameCount       ∷ Word64
-  , currentTime      ∷ Double
+  { fpsWindowFrames  ∷ Word64
+    -- ^ Frames counted in the current FPS sampling window.
   , deltaTime        ∷ Double
-  , frameTimeAccum   ∷ Double
+    -- ^ Seconds elapsed since the previous frame.
+  , fpsWindowElapsed ∷ Double
+    -- ^ Seconds accumulated in the current FPS sampling window.
   , lastFrameTime    ∷ Double
-  , targetFPS        ∷ Double
+    -- ^ Timestamp of the previous frame, carried across frames.
   }
 
 -- | A replaceable GPU texture upload (zoom atlas / world preview).
