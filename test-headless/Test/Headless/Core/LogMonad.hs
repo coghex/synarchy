@@ -71,7 +71,7 @@ spec = describe "logging source-location attribution" $ do
   it "attributes a logAndThrowM call to its own call site" $ do
     entries ← withCapturingEngine $ \env → do
       let action ∷ EngineM' ()
-          action = logAndThrowM CatTest (ExSystem (TestError "probe")) "exception probe"
+          action = logAndThrowM CatTest (ExSystem (IOError "probe")) "exception probe"
       _ ← runEngineM action env pure
       pure ()
     expectExternalCallSite entries
