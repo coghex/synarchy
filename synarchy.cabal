@@ -380,7 +380,6 @@ library
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
                      Engine.Core.Queue
-                     Engine.Core.Var
                      Engine.Scene.Base
                      Engine.Scene.Batch
                      Engine.Scene.Batch.Sprite
@@ -970,7 +969,6 @@ test-suite synarchy-test-graphical
     main-is: Spec.hs
     other-modules: Test.UPrelude
                    Test.Engine.Core.Queue
-                   Test.Engine.Core.Var
                    Test.Engine.Input.State
                    Test.Engine.Graphics.Window.GLFW
                    Test.Engine.Graphics.Vulkan.Instance
