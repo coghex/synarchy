@@ -1,32 +1,28 @@
 {-# LANGUAGE CPP #-}
 module Engine.Core.Error.Exception
   ( -- * Types
-    EngineException(..)
+    EngineException(EngineException, errorType, errorMsg)
   , ExceptionType(..)
   , GraphicsError(..)
   , SystemError(..)
   , InitError(..)
   , AssetError(..)
   -- * Functions
-  , throwEngineException
   , mkErrorContext
-  , contextCallStack
-  , catchEngine
   ) where
 
 import UPrelude
 import Engine.Asset.Base (AssetId)
 import Control.Exception (Exception, displayException)
-import Control.Monad.Error.Class (MonadError(..), throwError)
 import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack)
 import qualified Data.Text as T
 
 -- | Sum of every error domain in the engine
 data ExceptionType
-  = ExGraphics GraphicsError    -- ^ Graphics/Vulkan related errors
-  | ExSystem SystemError       -- ^ System-level errors
-  | ExInit InitError         -- ^ Initialization errors
-  | ExAsset AssetError     -- ^ Asset loading errors
+  = ExGraphics GraphicsError  -- ^ Graphics/Vulkan related errors
+  | ExSystem SystemError      -- ^ System-level errors
+  | ExInit InitError          -- ^ Initialization errors
+  | ExAsset AssetError        -- ^ Asset loading errors
   deriving (Show, Eq)
 
 data GraphicsError
@@ -74,24 +70,15 @@ data ErrorContext = ErrorContext
   }
 
 instance Show EngineException where
-  show (EngineException etype msg ctx) = unlines
+  show ex = unlines
     [ "EngineException:"
-    , "Type: " ⧺ show etype
-    , "Message: " ⧺ T.unpack msg
-    , "Stack:\n" ⧺ prettyCallStack (contextCallStack ctx)
+    , "Type: " ⧺ show (errorType ex)
+    , "Message: " ⧺ T.unpack (errorMsg ex)
+    , "Stack:\n" ⧺ prettyCallStack (contextCallStack (errorContext ex))
     ]
 
 instance Exception EngineException where
   displayException ex = show ex
 
-throwEngineException ∷ MonadError EngineException m ⇒ EngineException → m a
-throwEngineException = throwError
-
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext
 mkErrorContext = ErrorContext { contextCallStack = callStack }
-
-catchEngine ∷ MonadError EngineException m 
-           ⇒ m a                                  -- ^ Action that might fail
-           → (EngineException → m a)            -- ^ Handler for exceptions
-           → m a
-catchEngine action handler = catchError action handler

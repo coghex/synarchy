@@ -39,7 +39,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim — [#944]
 - [x] CH-9. `extractCallSite`'s skip-list is an untested, order-sensitive trap — [#945]
 - [x] CH-10. Three whole error domains are never constructed — [#946]
-- [ ] CH-11. `ErrorContext` is exported by field but not by name — [deferred]: #946 must land
+- [x] CH-11. `ErrorContext` is exported by field but not by name — [#1077]
 - [x] CH-12. `Engine.Core.Var` is a production module used only by tests — [#947]
 - [x] CH-13. `luaQueue` is misnamed relative to its sibling — [no-issue]
 - [x] CH-14. Capability-record conventions are documented in three places — [#1031]
@@ -321,19 +321,22 @@ taxonomy that reads as the canonical Lua error vocabulary and is inert.
 Also dead here: `tryEngine` (0 uses), `TestError` (a test-only constructor in
 a production error domain).
 
-### [deferred] CH-11. `ErrorContext` is exported by field but not by name
-> **Deferred:** #946 removes `AssetFailedCleanup` and rewrites this exception taxonomy — resume after #946 is closed by a merged implementation, then re-read `Engine.Core.Error.Exception` and scope only the surviving export, alias, and comment defects.
-
-`Engine.Core.Error.Exception`'s export list omits the `ErrorContext` type
+### [#1077] CH-11. `ErrorContext` is exported by field but not by name
+`Engine.Core.Error.Exception`'s export list omitted the `ErrorContext` type
 while exporting its accessor `contextCallStack`, and `EngineException(..)`
-exposes `errorContext ∷ ErrorContext`. Downstream code can read the field but
-cannot name its type in a signature. Either export the type or make the field
-genuinely private.
+exposed `errorContext ∷ ErrorContext`. Downstream code could read the field
+but not name its type in a signature.
 
-Minor siblings in the same file: `throwEngineException` and `catchEngine` are
-pointless aliases for `throwError`/`catchError` (3 and 2 uses); `AssetError`'s
-`AssetFailedCleanup` is the one constructor with no haddock; the
-`ExceptionType` constructor comments are misaligned by 1-5 columns.
+Resolved in #1077 by sealing `ErrorContext`: the type, `contextCallStack`,
+and the `errorContext` field selector are no longer exported —
+`EngineException`'s export narrowed from the `(..)` wildcard to just its
+constructor and the `errorType`/`errorMsg` selectors callers actually use.
+The minor siblings are also resolved: `throwEngineException` and
+`catchEngine`, pointless aliases for `throwError`/`catchError`, are gone (3
+and 2 call sites now use the underlying `MonadError` methods directly), and
+the `ExceptionType` constructor comments are aligned on one column.
+`AssetError`'s haddock gap was already closed by #946, which removed the
+undocumented `AssetFailedCleanup` constructor.
 
 ### [#947] CH-12. `Engine.Core.Var` is a production module used only by tests
 `src/Engine/Core/Var.hs` exports a thin renaming of `Control.Concurrent.STM`
