@@ -689,8 +689,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = { [7] = { attackTargetUid = 'not_a_number' } }"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local snap = saveModules.snapshotAll()"
             , "assert(not snap.ok,"
@@ -1001,6 +1000,205 @@ spec = do
             , "assert(saveModules._loadActive == false)"
             ]
 
+    -- Issue #900: per-entity application, exercised against the GENERIC
+    -- mechanism with synthetic components. It has to be tested here
+    -- rather than through unit_ai/building_spawn themselves: this group
+    -- runs a bare Lua VM that loads only save_modules.lua + data_codec.lua,
+    -- while those modules need unit.exists/building.getInfo and the wider
+    -- script graph. Their own per-entity apply is gated end-to-end by
+    -- tools/lua_orphan_prune_probe.py against a real engine instead.
+    describe "per-entity component application (issue #900)" $ do
+        let perEntitySpec name live = T.concat
+                [ "{ version=1, inputVersions={1}, required=true, "
+                , "scope='global', deps={},"
+                , "  snapshot=function()"
+                , "    local out = {}"
+                , "    for k, v in pairs(", live, ") do out[k] = v end"
+                , "    return out end,"
+                , "  decode=function(v,d) return d end,"
+                , "  validate=function() return nil end,"
+                , "  apply=function(data, entities)"
+                , "    require('scripts.lib.save_modules').applyEntityRows("
+                , live, ", data, entities,"
+                , "      { kind='unit', component='", name, "' })"
+                , "  end }"
+                ]
+            captureWarnings =
+                [ "local warnings = {}"
+                , "engine.logWarn = function(msg)"
+                , "  warnings[#warnings + 1] = tostring(msg) end"
+                ]
+
+        it "applies each row against the restored session's own entity \
+           \set: a row whose owner is absent is dropped with a diagnostic \
+           \while its siblings apply normally" $ runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "saveModules.register('pe_drop', "
+              <> perEntitySpec "pe_drop" "live" <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='pe_drop', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [9]={tag='nine'} }) } },"
+            , "  1, false, { unit = { [7]=true }, building = {} })"
+            , "assert(prep.ok, 'an absent owner is tolerated-dangling, "
+              <> "never a load failure: ' .. tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'a row whose unit is in the restored session must apply')"
+            , "assert(live[9] == nil,"
+            , "  'a row whose unit is absent must be dropped, not applied')"
+            , "assert(#warnings == 1, 'the drop must emit exactly one "
+              <> "diagnostic, got ' .. #warnings)"
+            , "assert(warnings[1]:find('9', 1, true) ~= nil,"
+            , "  'the diagnostic must name the dropped entity: ' .. warnings[1])"
+            ]
+
+        it "keeps structurally malformed rows FAIL-FAST even when their \
+           \owner is absent from the restored session -- only unresolved \
+           \OWNERSHIP is tolerated-and-dropped, never malformed data" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = {}"
+            , "saveModules.register('pe_strict', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function(d)"
+            , "    local errs = {}"
+            , "    for uid, row in pairs(d) do"
+            , "      if type(row) ~= 'table' then"
+            , "        errs[#errs+1] = 'row ' .. tostring(uid)"
+            , "          .. ' is not a table' end"
+            , "    end"
+            , "    if #errs > 0 then return errs end"
+            , "    return nil end,"
+            , "  apply=function(data, entities)"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='pe_strict' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='pe_strict', version=1,"
+            , "      payload=codec.encode({ [4]='not_a_table' }) } },"
+            , "  1, false, { unit = {}, building = {} })"
+            , "assert(not prep.ok, 'a malformed row must fail the whole "
+              <> "load even though its owner is absent')"
+            ]
+
+        it "leaves the module holding EXACTLY the payload's applicable \
+           \rows: a live row with no row of its own in the payload does \
+           \not survive, even when its id exists in the restored session \
+           \(ids are session-global allocators that restart per session, \
+           \so a merge would let the new session's unit 7 inherit the old \
+           \session's unit 7 state)" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = { [7] = { tag='OLD SESSION' } }"
+            , "saveModules.register('pe_exact', "
+              <> perEntitySpec "pe_exact" "live" <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='pe_exact', version=1,"
+            , "      payload=codec.encode({ [9]={tag='nine'} }) } },"
+            , "  1, false, { unit = { [7]=true, [9]=true }, building = {} })"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(live[7] == nil, 'a pre-load row absent from the "
+              <> "payload must NOT survive, even though unit 7 exists in "
+              <> "the restored session')"
+            , "assert(live[9] ~= nil and live[9].tag == 'nine')"
+            ]
+
+        it "rolls a failed apply back VERBATIM, with no ownership \
+           \filtering -- the rollback capture is the OLD session's \
+           \snapshot, whose owners are by definition absent from the \
+           \RESTORED context, so filtering it would erase exactly the \
+           \state the rollback exists to restore" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = { [42] = { tag='preload' } }"
+            , "saveModules.register('pe_a_rollback', "
+              <> perEntitySpec "pe_a_rollback" "live" <> ")"
+            , "-- Sorts after pe_a_rollback, so it applies second."
+            , "saveModules.register('pe_z_boom', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() error('synthetic apply failure') end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='pe_a_rollback', version=1,"
+            , "      payload=codec.encode({ [9]={tag='nine'} }) },"
+            , "    { id='pe_z_boom', version=1, payload=codec.encode({}) } },"
+            , "  1, false, { unit = { [9]=true }, building = {} })"
+            , "assert(prep.ok)"
+            , "local ok = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'the failing component must abort the apply')"
+            , "assert(live[42] ~= nil and live[42].tag == 'preload',"
+            , "  'rollback must restore the pre-load row verbatim even "
+              <> "though unit 42 is absent from the restored session')"
+            , "assert(live[9] == nil, 'the rolled-back component must not "
+              <> "retain the new session rows')"
+            ]
+
+        it "resolves per-page nested references through the OWNING unit's \
+           \page, so equal per-page ids on two different pages neither \
+           \alias nor contaminate one another (rows themselves stay keyed \
+           \by the session-global unit id and are never re-keyed per page)" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = {}"
+            , "saveModules.register('pe_pages', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='pe_pages' })"
+            , "    -- A billId is a PER-PAGE allocator: it only means"
+            , "    -- anything relative to its owning unit's page."
+            , "    for uid, row in pairs(live) do"
+            , "      row.billPage = entities and entities.unitPage"
+            , "        and entities.unitPage[uid] or nil"
+            , "    end"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='pe_pages', version=1,"
+            , "      payload=codec.encode({ [3]={billId=1}, [4]={billId=1} }) } },"
+            , "  1, false, { unit = { [3]=true, [4]=true }, building = {},"
+            , "              unitPage = { [3]='alpha', [4]='beta' } })"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(live[3].billId == 1 and live[4].billId == 1,"
+            , "  'both pages legitimately carry bill id 1')"
+            , "assert(live[3].billPage == 'alpha', 'unit 3 resolves to its "
+              <> "own page, got ' .. tostring(live[3].billPage))"
+            , "assert(live[4].billPage == 'beta', 'unit 4 resolves to its "
+              <> "own page, got ' .. tostring(live[4].billPage))"
+            ]
+
+        it "treats a CONTEXTLESS applyAll as 'apply every row' rather than \
+           \'the restored session is empty', so every pre-#900 caller \
+           \keeps working unchanged" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = {}"
+            , "saveModules.register('pe_nocontext', "
+              <> perEntitySpec "pe_nocontext" "live" <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='pe_nocontext', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [9]={tag='nine'} }) } })"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(live[7] ~= nil and live[9] ~= nil,"
+            , "  'no context must mean no ownership filtering')"
+            ]
+
     describe "unit_ai save component (issue #761 requirements 13/14)" $ do
         it "strips every transient *Candidate scratch field from the \
            \persisted snapshot -- craftCandidate in particular embeds a \
@@ -1015,8 +1213,7 @@ spec = do
             , "               station = 'forge' }, demands = {}, dist = 3 },"
             , "  repairCandidate = { instanceId = 42, defName = 'axe' },"
             , "  digCandidate = { x = 3, y = 4 } } }"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local snap = saveModules.registry.unit_ai.snapshot()"
             , "assert(snap[1] ~= nil, 'live unit state must still be present')"
@@ -1053,7 +1250,7 @@ spec = do
             , "item = { listDefs = function()"
             , "  return { { name = 'wood' }, { name = 'stone' } } end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "unitAiSave.register({}, {})"
+            , "unitAiSave.register({})"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local function prepareWith(state)"
@@ -1107,8 +1304,7 @@ spec = do
             , "item = { listDefs = function() return { { name = 'wood' } } end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local function prepareWith(state)"
@@ -1169,7 +1365,7 @@ spec = do
             , "local fakeAiState = { [1] = { constructJob = {"
             , "  category = 'structure', pack = 'known_pack', kind = 'wall',"
             , "  build = liveBuild, need = { wood = 2 } } } }"
-            , "unitAiSave.register({}, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local function prepareWith(state)"
             , "  return saveModules.prepareLoad({"
             , "    { id = 'unit_ai', version = 1, payload = codec.encode(state) },"
@@ -1249,7 +1445,7 @@ spec = do
             [ "unit = { exists = function(_uid) return true end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local saveModules = require('scripts.lib.save_modules')"
-            , "unitAiSave.register({}, {})"
+            , "unitAiSave.register({})"
             , "local refs = saveModules.registry.unit_ai.references("
             , "  { [42] = { currentAction = 'idle' } })"
             , "local found = false"
@@ -1271,8 +1467,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "-- A v1 payload: every reference field is a BARE NUMBER,"
@@ -1336,8 +1531,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local v2 = { [7] = {"
@@ -1365,8 +1559,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local noOwner = { [7] = {} }"
@@ -1443,8 +1636,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "-- attackTargetUid must be __ref='unit' -- this payload"
@@ -1490,8 +1682,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local badId = { [7] = {"
@@ -1533,8 +1724,7 @@ spec = do
             , "item = { listDefs = function() return {} end }"
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local fakeAiState = {}"
-            , "local fakeUnitAi = {}"
-            , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+            , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local zeroGid = { [7] = {"
@@ -1607,7 +1797,7 @@ spec = do
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local buildingSpawn = require('scripts.building_spawn')"
             , "local saveModules = require('scripts.lib.save_modules')"
-            , "unitAiSave.register({}, {})"
+            , "unitAiSave.register({})"
             , "buildingSpawn.init('test')"
             , "local function hasDep(regId, dep)"
             , "  for _, d in ipairs(saveModules.registry[regId].deps) do"
@@ -1713,8 +1903,7 @@ spec = do
                 , "item = { listDefs = function() return {} end }"
                 , "local unitAiSave = require('scripts.unit_ai_save')"
                 , "local fakeAiState = {}"
-                , "local fakeUnitAi = {}"
-                , "unitAiSave.register(fakeUnitAi, fakeAiState)"
+                , "unitAiSave.register(fakeAiState)"
                 , "local saveModules = require('scripts.lib.save_modules')"
                 , "local prep = saveModules.prepareLoad({"
                 , "  { id = 'unit_ai', version = 1, payload = FIXTURE },"
@@ -1762,7 +1951,7 @@ spec = do
                 , "item = { listDefs = function() return {} end }"
                 , "local unitAiSave = require('scripts.unit_ai_save')"
                 , "local fakeAiState = {}"
-                , "unitAiSave.register({}, fakeAiState)"
+                , "unitAiSave.register(fakeAiState)"
                 , "local saveModules = require('scripts.lib.save_modules')"
                 , "local prep = saveModules.prepareLoad({"
                 , "  { id = 'unit_ai', version = 4, payload = FIXTURE },"

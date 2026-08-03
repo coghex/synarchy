@@ -20,9 +20,16 @@
 --       snapshot  = function() return dataOnlyTable end,
 --       decode    = function(version, data) return canonicalTable end,
 --       validate  = function(data) return errorStringsOrNil end,
---       apply     = function(data) ... end,   -- run only after ALL
+--       apply     = function(data, entities) ... end,
+--                                              -- run only after ALL
 --                                              -- required components
---                                              -- validate (requirement 11)
+--                                              -- validate (requirement 11).
+--                                              -- `entities` (issue #900) is
+--                                              -- the restored-session entity
+--                                              -- context, or nil meaning
+--                                              -- "apply every row, no
+--                                              -- ownership filtering" --
+--                                              -- see applyEntityRows below
 --       default   = function() return dataOnlyTable end, -- required
 --                                              -- iff required == false
 --       references = function(data) return {{kind=.., id=..}, ...} end,
@@ -74,7 +81,8 @@
 --                              validates these against the just-captured
 --                              live snapshot.
 --                              (requirement 7)
---   prepareLoad(components, requestId, isMigratingLegacyBaseline) --
+--   prepareLoad(components, requestId, isMigratingLegacyBaseline,
+--               restoredEntities) --
 --                              {ok=true, references={...}} or
 --                              {ok=false, errors={...}} -- decode +
 --                              migrate + component-local-validate EVERY
@@ -99,6 +107,14 @@
 --                              flattened --
 --                              the caller cross-validates these against
 --                              the loaded session's real entity sets.
+--                              restoredEntities (issue #900) is that same
+--                              entity set, handed IN so each component's
+--                              apply() can resolve per-entity ownership --
+--                              stashed alongside the prepared data and
+--                              consumed by the applyAll() below, which is
+--                              why the prepare->apply gap needs no carrier
+--                              of its own. Optional: absent means "no
+--                              ownership filtering" (see applyEntityRows).
 --   applyAll()              -- apply the prepared, already-validated
 --                              data (only reachable after prepareLoad
 --                              returned ok=true), then run every
@@ -121,6 +137,12 @@ saveModules._captureActive = false
 saveModules._loadActive     = false
 saveModules._pendingApply   = nil
 saveModules._pendingRequestId = nil
+-- Issue #900: the restored session's entity context, stashed by
+-- prepareLoad and consumed by applyAll. nil (no context supplied) means
+-- "apply every row" -- deliberately DISTINCT from a present-but-empty
+-- context, which means "the restored session has no entities of that
+-- kind, so drop every row".
+saveModules._pendingEntities = nil
 
 local VALID_ID_PATTERN = "^[a-z][a-z0-9_]*$"
 
@@ -697,10 +719,17 @@ end
 -- `isMigratingLegacyBaseline` (issue #766, save-overhaul C4) defaults
 -- every component absent from `componentsList` instead of hard-failing
 -- on "missing" -- see `prepareLoadImpl`.
-function saveModules.prepareLoad(componentsList, requestId, isMigratingLegacyBaseline)
+-- `restoredEntities` (issue #900) is the entity context of the session
+-- being loaded, stashed here for the following applyAll() -- the same
+-- prepare->apply gap `_pendingRequestId` already spans, which is why the
+-- caller needs no carrier of its own across the world-thread staging
+-- round trip that separates the two calls.
+function saveModules.prepareLoad(componentsList, requestId,
+                                 isMigratingLegacyBaseline, restoredEntities)
     saveModules._loadActive = true
     saveModules._pendingApply = nil
     saveModules._pendingRequestId = nil
+    saveModules._pendingEntities = nil
     local ok, result = pcall(prepareLoadImpl, componentsList, isMigratingLegacyBaseline)
     if not ok then
         saveModules._loadActive = false
@@ -709,6 +738,7 @@ function saveModules.prepareLoad(componentsList, requestId, isMigratingLegacyBas
     if result.ok then
         saveModules._pendingApply = result.prepared
         saveModules._pendingRequestId = requestId
+        saveModules._pendingEntities = restoredEntities
     else
         saveModules._loadActive = false
     end
@@ -752,7 +782,65 @@ function saveModules.abortPreparedLoad(requestId)
     end
     saveModules._pendingApply = nil
     saveModules._pendingRequestId = nil
+    saveModules._pendingEntities = nil
     saveModules._loadActive = false
+end
+
+-- Apply one component's per-entity ROWS into its live singleton, issue
+-- #900's replacement for the whole-singleton clobber every per-entity
+-- component used to open its apply() with.
+--
+-- `live` is the module's live table, mutated IN PLACE (never rebound --
+-- consumers all over the script graph hold direct references to it, and
+-- a fresh table would silently orphan every one of them). `rows` is the
+-- decoded payload keyed by the SESSION-GLOBAL entity id, already in
+-- live shape. `entities` is applyAll's restored-entity context, or nil.
+-- `opts.kind` names which id set to resolve against ("unit"/"building" --
+-- the same reference-kind vocabulary the references() hooks and
+-- World.Save.Integrity already speak); `opts.component` is the id used
+-- in diagnostics.
+--
+-- `live` is CLEARED first, so the module ends up holding EXACTLY the
+-- applicable rows. This is not incidental: ids are session-global
+-- allocators that restart per session, so merging rows into a live table
+-- would let the new session's unit 7 silently inherit the OLD session's
+-- unit 7 state whenever the payload has no row of its own for it -- and
+-- the survivor-set rebuild in onSaveLoaded could not catch it either,
+-- because 7 IS a survivor. The old wholesale clobber got this right by
+-- construction; a per-entity rewrite has to keep it deliberately.
+--
+-- A row whose owner is absent from the restored session is DROPPED with
+-- a warning rather than applied (the persistence contract's tolerated-
+-- dangling rule -- never a load failure). Note this is a DEFENSIVE path,
+-- not a fix for an observable bug: World.Load.Stage aborts a load whose
+-- entities can't be reconstructed, and every registered snapshot()
+-- already stores live entities only, so an ownerless row does not arise
+-- from a real save/load. Returns the number of rows dropped.
+function saveModules.applyEntityRows(live, rows, entities, opts)
+    opts = opts or {}
+    local label = opts.component or "<component>"
+    local kind  = opts.kind
+    -- nil context => no filtering (see _pendingEntities). An EMPTY set
+    -- for this kind is a real answer and does filter.
+    local known = nil
+    if entities ~= nil and kind ~= nil then
+        known = entities[kind]
+    end
+
+    for k in pairs(live) do live[k] = nil end
+
+    local dropped = 0
+    for id, row in pairs(rows or {}) do
+        if known ~= nil and not known[id] then
+            dropped = dropped + 1
+            engine.logWarn("saveModules: '" .. label .. "' dropped saved state for "
+                .. tostring(kind) .. " " .. tostring(id)
+                .. " -- absent from the restored session")
+        else
+            live[id] = row
+        end
+    end
+    return dropped
 end
 
 -- Apply the load prepared by the most recent successful `prepareLoad`,
@@ -761,9 +849,8 @@ end
 -- `prepareLoad` returned {ok=true} -- errors loudly otherwise, since
 -- that is a caller bug, not a data problem.
 --
--- Round 2 review: `apply()` mutates its module's live singleton
--- wholesale (the C2 compatibility adapter documented on every
--- registration) with no rollback of its own. Left unguarded, a LATER
+-- Round 2 review: `apply()` mutates its module's live singleton with no
+-- rollback of its own. Left unguarded, a LATER
 -- component's apply() throwing would abort the transaction with some
 -- earlier components already migrated to the new session and the rest
 -- still holding the old one -- a half-migrated Lua state paired with
@@ -777,12 +864,21 @@ end
 -- already-applied component from that capture, in reverse order,
 -- before re-raising -- the caller sees the same hard load-abort as
 -- before, but the live Lua session is left exactly as it was.
+--
+-- Issue #900: the forward pass hands each apply() the restored-entity
+-- context prepareLoad stashed, so a per-entity component can resolve
+-- ownership. The ROLLBACK pass deliberately does not: `rollback[id]` is
+-- the OLD session's own snapshot, whose entities are by definition
+-- absent from the RESTORED context, so filtering it would erase exactly
+-- the state the rollback exists to restore. A contextless apply() means
+-- "apply every row" precisely so that unwinding stays verbatim.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
         saveModules._loadActive = false
         error("saveModules.applyAll: no prepared load (call prepareLoad first and check its ok field)")
     end
+    local entities = saveModules._pendingEntities
 
     local rollback = {}
     for _, id in ipairs(sortedIds(saveModules.registry)) do
@@ -790,6 +886,7 @@ function saveModules.applyAll()
         if not ok then
             saveModules._pendingApply = nil
             saveModules._pendingRequestId = nil
+            saveModules._pendingEntities = nil
             saveModules._loadActive = false
             error("saveModules.applyAll: could not capture a rollback "
                 .. "point for '" .. id .. "' -- aborting before any "
@@ -838,7 +935,8 @@ function saveModules.applyAll()
     local applied = {}
     for _, id in ipairs(applyOrder) do
         if prepared[id] ~= nil then
-            local ok, err = pcall(saveModules.registry[id].apply, prepared[id])
+            local ok, err = pcall(saveModules.registry[id].apply, prepared[id],
+                                  entities)
             if not ok then
                 -- Round 5 review: `apply` is ordinary Lua code, not
                 -- guaranteed all-or-nothing -- it may have mutated
@@ -851,6 +949,7 @@ function saveModules.applyAll()
                 rollbackApplied(applied)
                 saveModules._pendingApply = nil
                 saveModules._pendingRequestId = nil
+                saveModules._pendingEntities = nil
                 saveModules._loadActive = false
                 error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
                     .. "rolled back every already-applied component "
@@ -872,6 +971,7 @@ function saveModules.applyAll()
             rollbackApplied(applied)
             saveModules._pendingApply = nil
             saveModules._pendingRequestId = nil
+            saveModules._pendingEntities = nil
             saveModules._loadActive = false
             error("saveModules.applyAll: reset hook '" .. id
                 .. "' failed after every component committed, rolled back "
@@ -881,6 +981,7 @@ function saveModules.applyAll()
 
     saveModules._pendingApply = nil
     saveModules._pendingRequestId = nil
+    saveModules._pendingEntities = nil
     saveModules._loadActive = false
 end
 

@@ -464,19 +464,19 @@ function buildingSpawn.init(scriptId)
         end,
         validate = validateBuildingSpawnData,
         references = buildingSpawnReferences,
-        -- Temporary C2 compatibility adapter (issue #761, requirement 15)
-        -- -- see unit_ai.lua's identical note: clobber `state` wholesale,
-        -- onSaveLoaded below still does the #195/#191 reconciliation.
+        -- Per-entity application (issue #900) -- see unit_ai_save.lua's
+        -- identical note: each per-building row is applied against the
+        -- restored session's own building set, an absent owner's row is
+        -- dropped with a diagnostic, and `state` ends up holding exactly
+        -- the applicable rows. `entities` is nil for a contextless apply,
+        -- including applyAll's rollback pass.
+        --
         -- Unwraps lastUid back to a bare number so `state`'s LIVE shape
-        -- (read by onSaveLoaded and every other consumer) never changes.
-        apply = function(data)
-            -- Snapshot the pre-load singleton BEFORE clobbering, so
-            -- onSaveLoaded can restore still-live OFF-PAGE buildings'
-            -- current state instead of the payload's stale copy (#195, #191).
-            buildingSpawn._preLoadState = {}
-            for k, v in pairs(state) do buildingSpawn._preLoadState[k] = v end
-            for k in pairs(state) do state[k] = nil end
-            for k, v in pairs(unwrapAllLastUid(data)) do state[k] = v end
+        -- (read by onSaveLoaded and every other consumer) never changes,
+        -- and mutates the table in place rather than rebinding it.
+        apply = function(data, entities)
+            saveMods.applyEntityRows(state, unwrapAllLastUid(data), entities,
+                { kind = "building", component = "building_spawn" })
         end,
     })
 end
@@ -487,38 +487,29 @@ end
 -- registered. The restored state still holds entries for those dropped
 -- ids, so a reused bid could inherit stale spawn-rate state.
 --
--- `state` is a global singleton, clobbered wholesale by the restore with
--- save-time state for every building the save contained. Since issue #763
--- (save-overhaul C2), a load REPLACES THE COMPLETE SESSION — there is no
--- more "other live page" to preserve (#191's off-page preservation is gone
--- along with the merge-based load path it protected); survBuildingIds now
--- names every building in the whole new session. We still rebuild `state`
--- defensively as:
---   * survivor (now: every live building) → its restored (blob) state;
---   * any OTHER entry (dead code in normal operation post-#763 — kept only
---     as a defensive no-op) → its pre-load state, IF that bid still
---     somehow exists live;
---   * everything else (orphans, dead, gone-before-save) → dropped.
--- The nested s.lastUid (last unit spawned) is scrubbed on every survivor
--- entry against the surviving unit set, so a stale/colliding uid can't gate
--- spawning.
+-- Since issue #900 the restore itself is per-entity (see the apply()
+-- above), so `state` already holds exactly the rows the payload carried
+-- for buildings present in the restored session. The pre-load
+-- snapshot/restore dance (`_preLoadState`, #195/#191) and its
+-- off-page-preservation branch are retired along with it — #763 made a
+-- load replace the complete session, so survBuildingIds names every
+-- building in the whole new session.
+--
+-- What remains is the reconcile apply-time ownership can't do: the
+-- ORPHAN PRUNE (the engine load path can still drop a building whose def
+-- is no longer registered, and a reused bid must not inherit its
+-- spawn-rate state) and the nested s.lastUid scrub against the surviving
+-- unit set, so a stale/colliding uid can't gate spawning.
 function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds)
     local survUnitSet, survBuildingSet = {}, {}
     for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
     for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
 
-    local pre = buildingSpawn._preLoadState or {}
-    buildingSpawn._preLoadState = nil
-    local blob = state   -- current contents = the just-restored blob
+    local blob = state   -- current contents = the just-restored rows
 
     local rebuilt = {}
     for bid in pairs(survBuildingSet) do
         if blob[bid] ~= nil then rebuilt[bid] = blob[bid] end
-    end
-    for bid, s in pairs(pre) do
-        if not survBuildingSet[bid] and building.getInfo(bid) then
-            rebuilt[bid] = s        -- live off-page building: keep current state
-        end
     end
 
     local kept = 0
