@@ -51,12 +51,6 @@ defaultAssetPool = do
     , apFontHandles       = fontHandlesRef
     }
 
-data AssetConfig = AssetConfig
-  { acMaxTextureAtlases ∷ Word32
-  , acPreloadAssets     ∷ Bool
-  , acEnableHotReload   ∷ Bool
-  } deriving (Show)
-
 data AtlasMetadata = AtlasMetadata
   { amDimensions    ∷ (Word32, Word32)  -- ^ Width and height in pixels
   , amFormat        ∷ Format
