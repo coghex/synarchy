@@ -88,12 +88,7 @@ shutdownLogger ∷ LoggerState → IO ()
 shutdownLogger LoggerState{..} =
   case lsBackend of
     LogToHandle h → hFlush h
-    LogToFile _ → return ()  -- File handles managed separately
     LogToCallback _ → return ()
-    LogMulti backends → mapM_ shutdownOne backends
-  where
-    shutdownOne (LogToHandle h) = hFlush h
-    shutdownOne _ = return ()
 
 setCategoryLevel ∷ LoggerState → LogCategory → LogLevel → IO ()
 setCategoryLevel LoggerState{..} cat level =

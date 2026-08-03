@@ -241,19 +241,24 @@ That paragraph belongs to `gameTimeRef` (declared four lines earlier at
 `vertexBuffer` is invisible when skimming the record and unreachable by a
 line-oriented grep for its declaration.
 
-### [#942] CH-6. Three of four `LogBackend` constructors are never constructed
-`LogToFile`, `LogToCallback`, and `LogMulti` have no construction site
-anywhere in `src/`, `app/`, or `test/` — only `LogToHandle` is ever used. They
-carry live handling code in `writeLogEntry`, `writeThreadLogEntry`, and
-`shutdownLogger`.
+### [#942] CH-6. Two of four `LogBackend` constructors are never constructed
+`LogToFile` and `LogMulti` had no construction site anywhere in `src/`,
+`app/`, `test/`, or `test-headless/`. They carried live handling code in
+`writeLogEntry`, `writeThreadLogEntry`, and `shutdownLogger`.
 
-That dead code is also **wrong**: `writeThreadLogEntry`'s `LogMulti` branch
-recurses into `writeLogEntry`, so a thread-log entry fanned out to multiple
-backends would be formatted with the non-thread formatter. Unreachable today,
-but it is the kind of defect that ships the moment someone adopts `LogMulti`.
+The originally reported count of three was wrong: `LogToCallback` **is**
+constructed, by the headless suite, to capture structured `LogEntry` values
+(`test-headless/Test/Headless/Core/LogMonad.hs`, and likewise in
+`LoopStartup.hs`, `LogParity.hs`, and `Asset/YamlList.hs`). Only `LogToHandle`
+and `LogToCallback` are live.
 
-Fix: delete the three unused constructors (preferred), or fix the `LogMulti`
-branch and add a test.
+That dead code was also **wrong**: `writeThreadLogEntry`'s `LogMulti` branch
+recursed into `writeLogEntry`, so a thread-log entry fanned out to multiple
+backends would have been formatted with the non-thread formatter. Unreachable,
+but the kind of defect that ships the moment someone adopts `LogMulti`.
+
+Resolved in #942 by deleting `LogToFile` and `LogMulti` and keeping the two
+constructors that have consumers.
 
 ### [#943] CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad`
 Exported, documented, zero call sites: `traceLog`, `logException`,
