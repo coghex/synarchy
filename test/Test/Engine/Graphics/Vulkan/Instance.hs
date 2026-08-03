@@ -8,13 +8,13 @@ import Test.Hspec
 import qualified Data.ByteString as BS
 import Engine.Core.State
 import Engine.Core.Monad
-import Engine.Core.Var
 import Data.IORef (newIORef)
 import Engine.Graphics.Base
 import Engine.Graphics.Vulkan.Instance
 import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_portability_enumeration
 import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
+import qualified Control.Concurrent.STM as STM
 
 -- | Main test specification for Vulkan Instance functionality
 spec ∷ EngineEnv → EngineState → Spec
@@ -75,16 +75,16 @@ spec env state = do
         runEngineTest env state action = do
             stateRef ← newIORef state
             let env' = env { engineStateRef = stateRef }
-            mvar ← atomically $ newVar Nothing
-            
+            mvar ← STM.atomically $ STM.newTVar Nothing
+
             let cont result = case result of
                     Right v → do
-                        atomically $ writeVar mvar (Just v)
+                        STM.atomically $ STM.writeTVar mvar (Just v)
                         pure state
                     Left err → error $ "Engine error: " ⧺ show err
-            
+
             _ ← unEngineM action env' cont
-            result ← atomically $ readVar mvar
+            result ← STM.atomically $ STM.readTVar mvar
             case result of
                 Just v → pure v
                 Nothing → error "No result produced"

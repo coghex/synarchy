@@ -12,10 +12,10 @@ import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Monad
-import Engine.Core.Var
 import Data.IORef (newIORef)
 import Vulkan.Core10
 import Vulkan.Zero
+import qualified Control.Concurrent.STM as STM
 
 spec ∷ EngineEnv → EngineState → Spec
 spec env state = do
@@ -66,16 +66,16 @@ spec env state = do
         runEngineTest env state action = do
             stateRef ← newIORef state
             let env' = env { engineStateRef = stateRef }
-            mvar ← atomically $ newVar Nothing
-            
+            mvar ← STM.atomically $ STM.newTVar Nothing
+
             let cont result = case result of
                     Right v → do
-                        atomically $ writeVar mvar (Just v)
+                        STM.atomically $ STM.writeTVar mvar (Just v)
                         pure state
                     Left err → error $ "Engine error: " ⧺ show err
-            
+
             _ ← unEngineM action env' cont
-            result ← atomically $ readVar mvar
+            result ← STM.atomically $ STM.readTVar mvar
             case result of
                 Just v → pure v
                 Nothing → error "No result produced"
