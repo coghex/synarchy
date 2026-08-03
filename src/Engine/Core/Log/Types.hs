@@ -87,15 +87,11 @@ parseCategory t = case T.toLower t of
 
 data LogBackend
   = LogToHandle Handle            -- ^ Write to file handle (stdout, stderr, file)
-  | LogToFile FilePath            -- ^ Write to file (auto-opens)
   | LogToCallback (LogEntry → IO ())  -- ^ Custom callback
-  | LogMulti [LogBackend]         -- ^ Multiple backends
 
 instance Show LogBackend where
   show (LogToHandle _) = "LogToHandle"
-  show (LogToFile path) = "LogToFile " ++ path
   show (LogToCallback _) = "LogToCallback"
-  show (LogMulti backends) = "LogMulti " ++ show backends
 
 data LogEntry = LogEntry
   { leLevel      ∷ LogLevel

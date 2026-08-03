@@ -20,23 +20,16 @@ import Engine.Core.Log.Types (LogBackend(..), LogEntry(..), LogLevel(..), LogCat
 data FormatPolicy = NormalFormat | ThreadFormat
 
 writeLogEntry ∷ LogBackend → LogEntry → IO ()
-writeLogEntry = writeEntryWith NormalFormat writeLogEntry
+writeLogEntry = writeEntryWith NormalFormat
 
 writeThreadLogEntry ∷ LogBackend → LogEntry → IO ()
--- NB: a 'LogMulti' backend's nested entries deliberately recurse into the
--- NORMAL writer here, not 'writeThreadLogEntry' itself — pre-existing
--- behavior (#944) preserved as-is; LogMulti has no construction sites in
--- the repo today, so this asymmetry is production-invisible either way.
-writeThreadLogEntry = writeEntryWith ThreadFormat writeLogEntry
+writeThreadLogEntry = writeEntryWith ThreadFormat
 
--- | Shared backend dispatch. @multiRecurse@ is the writer used for a
---   'LogMulti' backend's nested entries.
-writeEntryWith ∷ FormatPolicy → (LogBackend → LogEntry → IO ()) → LogBackend → LogEntry → IO ()
-writeEntryWith policy multiRecurse backend entry = case backend of
+-- | Shared backend dispatch.
+writeEntryWith ∷ FormatPolicy → LogBackend → LogEntry → IO ()
+writeEntryWith policy backend entry = case backend of
   LogToHandle h → TIO.hPutStrLn h (formatEntry policy entry) >> hFlush h
-  LogToFile path → appendFile path (T.unpack $ formatEntry policy entry <> "\n")
   LogToCallback cb → cb entry
-  LogMulti backends → mapM_ (`multiRecurse` entry) backends
 
 formatEntry ∷ FormatPolicy → LogEntry → Text
 formatEntry policy LogEntry{..} =
