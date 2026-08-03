@@ -44,7 +44,7 @@ import UI.Manager.Query (paintTraversalOrder)
 --   A drag-activation control ('UI.Types.ueDragActivation' — a slider
 --   knob/track, a scrollbar thumb) is excluded UNLESS it's also
 --   steppable ('UI.Types.ueSteppable'): Enter/Space deliberately never
---   fires a drag-starting callback (#745 review round 3), so a
+--   fires a drag-starting callback (#745), so a
 --   non-steppable one (the slider TRACK, the scrollbar thumb — neither
 --   has a keyboard-reachable action at all) would be a dead Tab stop.
 --   A steppable one (the slider KNOB) stays focusable — arrow-key

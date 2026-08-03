@@ -41,8 +41,7 @@ data ActionOutcome = ActionOutcome
       --   coordinates, but Layer A's screen-space clicks are frequently
       --   fractional (sub-pixel positions, and the playtest harness
       --   deliberately injects non-integral coordinates) — an Int field
-      --   would silently drop the whole `where` on every such click
-      --   (review round 9).
+      --   would silently drop the whole `where` on every such click.
     , aoWhereY    ∷ !(Maybe Double)
     , aoTarget    ∷ !(Maybe Word32)
     , aoRequested ∷ !(Maybe Int)

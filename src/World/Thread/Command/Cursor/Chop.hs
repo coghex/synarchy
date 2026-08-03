@@ -103,7 +103,7 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
             -- mental model ("I dragged a 5x5 box") — NOT the count of
             -- flora instances found, which undercounts every empty
             -- non-flora tile as if it had never been requested at all
-            -- (review round 1: a 5x5 sweep with one tree must report
+            -- (a 5x5 sweep with one tree must report
             -- 25/1/24 partial, not 1/1/0 accepted).
             recordDesignationOutcome env "chop.designate"
                 "no harvestable target for the requested tag in the swept rectangle"

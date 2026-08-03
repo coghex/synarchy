@@ -13,13 +13,13 @@ import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpE
 
 -- * Hierarchy
 
--- | #745 review round 11: deliberately does NOT bump
+-- | #745: deliberately does NOT bump
 --   'UI.Types.upmRouteEpoch' — only 'removeElement'/'removeFromPage'
 --   (the DETACH side) do. A detach→re-attach sequence is already
 --   caught by the detach's own bump alone (the epoch only needs to
 --   change ONCE somewhere in the press-to-release window to poison a
 --   pending activation; the later re-attach doesn't need to bump too).
---   Bumping here as well — round 10's original attempt — made
+--   Bumping here as well — the original attempt — made
 --   attaching a BRAND-NEW element (never detached this gesture) also
 --   invalidate every unrelated pending activation, which broke a real
 --   production flow: clicking a control that moves keyboard control
@@ -35,7 +35,7 @@ addElementToPage pageHandle elemHandle x y mgr =
     in modifyPage pageHandle mgr' $ \page →
             page { upRootElements = upRootElements page ⧺ [elemHandle] }
 
--- | #745 review round 11: see 'addElementToPage' — deliberately does
+-- | #745: see 'addElementToPage' — deliberately does
 --   NOT bump 'UI.Types.upmRouteEpoch' either.
 addChildElement ∷ ElementHandle → ElementHandle → Float → Float
                 → UIPageManager → UIPageManager
@@ -68,12 +68,12 @@ addChildElement parentHandle childHandle x y mgr =
             Just p  → walkUp (depth - 1) p
             Nothing → False
 
--- | #745 review round 12: also bumps this element's OWN
+-- | #745: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — a pending pointer activation on this
 --   handle, or on a descendant that has it as an ancestor, must not
 --   survive detach→re-add on the same handle; see
 --   'bumpElementRouteEpoch'. This is the ONLY hierarchy-side bump
---   (round 11 removed the attach-side ones — see 'addElementToPage')
+--   (the attach-side ones were removed — see 'addElementToPage')
 --   since a detach always precedes any re-attach, so this alone
 --   already poisons the epoch for that whole sequence.
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
@@ -88,7 +88,7 @@ removeElement handle mgr =
                 mgr'' = if upmGlobalFocus mgr' ≡ Just handle
                         then mgr' { upmGlobalFocus = Nothing }
                         else mgr'
-            -- #745 review round 3: same hygiene for CONTROL focus.
+            -- #745: same hygiene for CONTROL focus.
             in if upmControlFocus mgr'' ≡ Just handle
                then mgr'' { upmControlFocus = Nothing }
                else mgr''
@@ -97,7 +97,7 @@ removeElement handle mgr =
 -- This detaches the element so its sprites disappear, but the handle
 -- remains valid for potential re-use or deferred GC.
 --
--- #745 review round 12: also bumps this element's OWN
+-- #745: also bumps this element's OWN
 -- 'UI.Types.ueRouteEpoch' — see 'removeElement'.
 removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
 removeFromPage pageHandle elemHandle mgr0 =
@@ -110,7 +110,7 @@ removeFromPage pageHandle elemHandle mgr0 =
         mgr''' = if upmGlobalFocus mgr'' ≡ Just elemHandle
                  then mgr'' { upmGlobalFocus = Nothing }
                  else mgr''
-    -- #745 review round 3: same hygiene for CONTROL focus.
+    -- #745: same hygiene for CONTROL focus.
     in if upmControlFocus mgr''' ≡ Just elemHandle
        then mgr''' { upmControlFocus = Nothing }
        else mgr'''

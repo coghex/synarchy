@@ -96,7 +96,7 @@ consumeTimeoutMicros = 2 * 1000 * 1000
 
 -- | Drain + dispatch whatever is CURRENTLY pending on 'luaQueue', then
 --   push a fresh barrier and wait for it to fully process, then drain
---   once more. Two uses, both needed (#727 review round 3):
+--   once more. Two uses, both needed (#727):
 --
 --     * called AFTER pushing a verb's own sequence, this settles THAT
 --       verb's own fence, if it carried one (the first drain

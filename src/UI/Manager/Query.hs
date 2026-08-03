@@ -149,7 +149,7 @@ getElementChildren handle mgr =
 --   An element flush against a clip edge overlaps it in a
 --   zero-width/zero-height sliver only; treating each rect's own edge as
 --   independently inclusive would let a point on that sliver hit even
---   though the renderer draws nothing there (review round 5, #857).
+--   though the renderer draws nothing there (#857).
 isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
 isPointInElement (px, py) element mgr =
     if not (ueVisible element) then False

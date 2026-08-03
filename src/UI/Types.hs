@@ -143,18 +143,18 @@ data UIElement = UIElement
     --   knob, a scrollbar thumb). Defaults to 'False': an ordinary
     --   discrete control activates on a validated release instead.
   , ueRouteEpoch ∷ Int
-    -- ^ #745 review round 12: bumped ONLY by a route-affecting
+    -- ^ #745: bumped ONLY by a route-affecting
     --   mutation to THIS specific element — 'UI.setVisible',
     --   'UI.setClickable', or detach ('UI.removeElement'/
     --   'removeFromPage') — never by (re)attach ('UI.addToPage'/
-    --   'addChild', which never bumps anything at all, see round 11)
+    --   'addChild', which never bumps anything at all)
     --   and never by an unrelated element's own mutation.
     --   'UI.ControlActivation.resolveActivation' walks the pressed
     --   element's ANCESTOR chain (via 'ueParent') at press time and
     --   again at release, comparing each ancestor's (including the
     --   pressed element's own) epoch — deliberately scoped to that
-    --   ONE chain rather than global (round 10's global
-    --   @upmRouteEpoch@) so an unrelated sibling/child's passive
+    --   ONE chain rather than global (an earlier @upmRouteEpoch@)
+    --   so an unrelated sibling/child's passive
     --   visual churn (a hover-highlight sprite toggled by
     --   'scripts/ui/toggle.lua'\'s @onHoverEnter@/@onHoverLeave@ or
     --   'scripts/ui/list.lua'\'s @setHoveredSlot@ — neither is an
@@ -448,7 +448,7 @@ data UIPageManager = UIPageManager
     --   which is text-input focus only. See 'UI.FocusNavigation'.
   , upmTooltip     ∷ TooltipState
   , upmPageEpoch   ∷ Int
-    -- ^ #745 review round 12: bumped by 'hidePage'/'showPage' for ANY
+    -- ^ #745: bumped by 'hidePage'/'showPage' for ANY
     --   page — deliberately GLOBAL, unlike 'UIElement.ueRouteEpoch'.
     --   Page-level visibility is a genuinely route-affecting event
     --   REGARDLESS of which page it is: a page appearing changes
@@ -464,11 +464,11 @@ data UIPageManager = UIPageManager
     --   inside before release may restore pending activation"
     --   carve-out is scoped to drag POSITION only.
     --
-    --   History: round 10 first tried ONE global epoch covering every
-    --   route-affecting mutation (element AND page); round 11 excluded
-    --   (re)attach from bumping it (see 'ueRouteEpoch'); round 12 split
-    --   it into this page-only global epoch plus the per-element/
-    --   ancestor-chain-scoped 'ueRouteEpoch', because the round 10/11
+    --   History: ONE global epoch covering every route-affecting
+    --   mutation (element AND page) came first; (re)attach was then
+    --   excluded from bumping it (see 'ueRouteEpoch'); finally it was
+    --   split into this page-only global epoch plus the per-element/
+    --   ancestor-chain-scoped 'ueRouteEpoch', because a single
     --   global epoch still poisoned an unrelated pending activation
     --   whenever a PASSIVE hover decoration elsewhere (e.g.
     --   'scripts/ui/toggle.lua'\'s @onHoverEnter@/@onHoverLeave@,

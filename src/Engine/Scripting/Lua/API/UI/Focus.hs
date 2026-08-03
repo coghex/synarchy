@@ -71,7 +71,7 @@ uiHasFocusFn env = do
 
 -- | Apply a manager mutation that may change 'upmControlFocus' and
 --   report the transition via 'LuaUIControlFocusChanged' when it
---   actually changes — #745 review round 7: the single shared
+--   actually changes — #745: the single shared
 --   implementation for every control-focus-mutating Lua binding
 --   ('uiSetControlFocusFn'/'uiClearControlFocusFn' here,
 --   'Engine.Scripting.Lua.API.UI.Page.uiHidePageFn'/'uiDeletePageFn',

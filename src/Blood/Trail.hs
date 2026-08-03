@@ -120,24 +120,24 @@ data TrailMarkOut = TrailMarkOut
 --   catch-up dt, or a large single step in the hspec partition-
 --   invariance tests) pops that many marks, each getting an EQUAL share
 --   of the pending volume (so total emitted volume is exactly
---   conserved). Marks are placed SEQUENTIALLY (round-5 review): the
---   first mark's @tmoFraction@ within THIS call's [start,end] step is
---   whichever gate is the SLOWER (later-reached) one measured from
---   whatever was already banked before this call — @max@ of the
---   distance-implied and time-implied fraction, assuming uniform motion
---   across the call — but every mark AFTER the first is placed a fixed
+--   conserved). Marks are placed SEQUENTIALLY: the first mark's
+--   @tmoFraction@ within THIS call's [start,end] step is whichever gate
+--   is the SLOWER (later-reached) one measured from whatever was already
+--   banked before this call — @max@ of the distance-implied and
+--   time-implied fraction, assuming uniform motion across the call — but
+--   every mark AFTER the first is placed a fixed
 --   @max(ttMinDistance/stepDist, ttMinCadence/dt)@ fraction further
 --   along, i.e. gated against the PRECEDING mark's own actual position,
 --   not against this call's original starting baseline. Computing every
---   mark's fraction independently against that shared baseline (the
---   round-2 fix) keeps counts/volumes/positions invariant across
---   different chunkings, but does NOT guarantee two marks are actually
---   >= ttMinDistance apart from EACH OTHER — the gate governing mark k
---   can differ from the gate governing mark k+1, letting the pair
---   land closer together than the spacing floor (a confirmed round-5
---   review regression). Sequential placement fixes that while still
---   preserving partition invariance, since the per-mark advance depends
---   only on this call's own (stepDist, dt), not on which call it is.
+--   mark's fraction independently against that shared baseline keeps
+--   counts/volumes/positions invariant across different chunkings, but
+--   does NOT guarantee two marks are actually >= ttMinDistance apart
+--   from EACH OTHER — the gate governing mark k can differ from the gate
+--   governing mark k+1, letting the pair land closer together than the
+--   spacing floor (a confirmed regression). Sequential placement fixes
+--   that while still preserving partition invariance, since the per-mark
+--   advance depends only on this call's own (stepDist, dt), not on which
+--   call it is.
 consumeTrailMarks
     ∷ TrailThresholds → Float → Double → Double → TrailState
     → (TrailState, [TrailMarkOut])
@@ -148,13 +148,13 @@ consumeTrailMarks tp stepDist dt now ts0
     -- clotted, or a unit that was briefly not bleeding at all) — issue
     -- #882 requirement 2/3 forbid a mark with no real blood behind it.
     --
-    -- Likewise requiring stepDist > 0 (round-4 review): distance and
-    -- cadence can BOTH already be banked from earlier movement while
-    -- the unit has since stopped — cadence alone keeps advancing with
-    -- real time regardless of motion. Popping in a call where nothing
-    -- moved would place a mark at a stationary unit's resting
-    -- position, which is stationary/collapsed POOLING — issue #882
-    -- explicitly defers that to #883.
+    -- Likewise requiring stepDist > 0: distance and cadence can BOTH
+    -- already be banked from earlier movement while the unit has since
+    -- stopped — cadence alone keeps advancing with real time regardless
+    -- of motion. Popping in a call where nothing moved would place a
+    -- mark at a stationary unit's resting position, which is
+    -- stationary/collapsed POOLING — issue #882 explicitly defers that
+    -- to #883.
     --
     -- Either way, no pop happens; the banked distance/cadence/volume
     -- state is preserved untouched (harmlessly — the caller clears the
@@ -176,10 +176,9 @@ consumeTrailMarks tp stepDist dt now ts0
             fracStep = max distStep timeStep
             -- The FIRST mark still measures against whatever distance/
             -- time was already banked (d0/elapsedStart) from BEFORE
-            -- this call — unchanged from the round-2 fix. Clamped at 0:
-            -- both gates may already be satisfied from earlier banking,
-            -- in which case the first mark lands at this call's very
-            -- start.
+            -- this call. Clamped at 0: both gates may already be
+            -- satisfied from earlier banking, in which case the first
+            -- mark lands at this call's very start.
             firstDistFrac = (ttMinDistance tp - d0) / stepDist
             firstTimeFrac = if dt > 0
                             then realToFrac ((ttMinCadence tp - elapsedStart) / dt)
@@ -200,9 +199,9 @@ consumeTrailMarks tp stepDist dt now ts0
              let share = tsPendingVolume ts0 / fromIntegral n
                  marks = [ TrailMarkOut (clamp01 f) share | f ← fracs ]
                  -- Residual distance/time is measured from where the
-                 -- LAST mark actually landed (round-3 review), not from
-                 -- "n whole minDistance multiples" — only the portion
-                 -- of the step AFTER that fraction is unconsumed.
+                 -- LAST mark actually landed, not from "n whole
+                 -- minDistance multiples" — only the portion of the
+                 -- step AFTER that fraction is unconsumed.
                  lastFrac = last fracs
                  ts' = ts0
                      { tsPendingVolume = 0

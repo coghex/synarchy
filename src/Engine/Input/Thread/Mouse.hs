@@ -36,7 +36,7 @@ import Engine.Input.Thread.Mouse.Activation (resolvePendingActivation)
 import UI.FocusNavigation (isEligibleControl)
 import UI.Manager (setControlFocus, clearControlFocus, getControlFocus)
 
--- | F4 (#730 review round 2): window-pixel movement between a
+-- | F4 (#730): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
 --   reads as a UI-widget drag rather than a plain click — matches
 --   scripts/unit_drag_select.lua's own DRAG_THRESHOLD for the
@@ -68,7 +68,7 @@ dispatchMouseEvent env inpSt btn pos state = do
             Just fb → fb
             Nothing → wp
 
-    -- F4 (#646, #730 review round 2) Layer A: routes that consume a
+    -- F4 (#646, #730) Layer A: routes that consume a
     -- press WITHOUT ever queuing a Lua event (ClickSwallowed, and a
     -- ClickUI whose widget has no handler for this button) are
     -- otherwise invisible to the oracle. Record those routes right
@@ -98,8 +98,8 @@ dispatchMouseEvent env inpSt btn pos state = do
             let (whereX, whereY) = toFb (x, y)
             pushActionOutcome (actionOutcomeRef env) ActionOutcome
                 { aoTs = gt, aoKind = "input.click", aoOutcome = outcome
-                -- The real click position (review round 9 — these
-                -- routes previously hard-coded Nothing/Nothing,
+                -- The real click position (these routes
+                -- previously hard-coded Nothing/Nothing,
                 -- losing the location entirely; the critic needs it
                 -- to identify a phantom affordance). Framebuffer
                 -- coords (#774 — converted from the window-space x/y
@@ -151,7 +151,7 @@ dispatchMouseEvent env inpSt btn pos state = do
           -- elementBlocksPointer (#743 — a menu/panel/HUD background
           -- that opts in via ueBlocksPointer, or any control with a
           -- registered click callback, still blocks it) OR a modal
-          -- boundary existing at all (#742 review round 1: a gap in
+          -- boundary existing at all (#742: a gap in
           -- the modal's own layout must not leak a middle-click
           -- through to panning behind it). #743 narrowed this from
           -- "any sized element" pre-#742 parity — a purely visual,
@@ -173,7 +173,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                 then do
                     logDebug logger CatUI
                         "Middle-click swallowed by UI surface"
-                    -- #743 review round 5: middle-click has no Lua
+                    -- #743: middle-click has no Lua
                     -- event of its own to ride a focus-clear on
                     -- (unlike a RouteElement click), so — same as
                     -- the left/right-click RouteBlocked cases above
@@ -190,8 +190,8 @@ dispatchMouseEvent env inpSt btn pos state = do
                     -- chain with no recordClick call of its own (it
                     -- drives camera-drag polling instead, not the
                     -- click-dispatch chain) — record it here or it's
-                    -- invisible to F4 entirely (review round 2).
-                    -- Deferred to release (#730 review round 3), same
+                    -- invisible to F4 entirely.
+                    -- Deferred to release (#730), same
                     -- as the UI routes below: an H1 `drag` action can
                     -- specify button="middle" just as easily as
                     -- "left", and a middle-button press+hold+release
@@ -237,7 +237,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                   -- unchanged from the pre-#742 global search.
                   GLFW.MouseButton'1 → do
                     let leftRoute = routePointer PointerLeftClick mousePos uiMgr'
-                    -- #745 review rounds 1 & 2: a left click also moves
+                    -- #745: a left click also moves
                     -- keyboard CONTROL focus — landing on an eligible
                     -- non-text control focuses it, anything else (a
                     -- text field, a blocked/consumed route, a miss)
@@ -348,7 +348,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                             Q.writeQueue lq LuaUIFocusLost
                             logDebug logger CatUI
                                 "Right-click consumed by clickable UI element (no handler)"
-                            -- #743 review round 6: NO callback ever
+                            -- #743: NO callback ever
                             -- fires for this route — no
                             -- LuaUIRightClickEvent, and the control's
                             -- own left-click callback must not fire
@@ -365,7 +365,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                             -- below uses — with the consuming
                             -- control's OWN left-click callback name
                             -- preserved as the handler for diagnostic
-                            -- identity (#730 review round 8's
+                            -- identity (#730's
                             -- "records the consuming handler"
                             -- acceptance still holds, just under
                             -- outcome "noop" rather than "accepted").
@@ -398,8 +398,8 @@ dispatchMouseEvent env inpSt btn pos state = do
                     -- Lua button 0, and init_mouse.lua's onMouseDown
                     -- only branches on MOUSE_LEFT/MOUSE_RIGHT, so this
                     -- reaches the end of that chain with no defined
-                    -- behavior anywhere and no recordClick call
-                    -- (review round 3) — record it here instead.
+                    -- behavior anywhere and no recordClick call —
+                    -- record it here instead.
                     Q.writeQueue lq (LuaMouseDownEvent btn x y)
                     recordRouteOutcome "noop" (Just "unmapped_button")
                     return ClickGame
@@ -422,7 +422,7 @@ dispatchMouseEvent env inpSt btn pos state = do
         mActivationOutcome ← resolvePendingActivation env x y winW winH fbW fbH
             (Map.lookup btn (inpPendingActivation inpSt))
 
-        -- F4 (#730 review rounds 2 & 3): resolve a deferred
+        -- F4 (#730): resolve a deferred
         -- ClickUI/middle-button-camera-drag press's ONE outcome
         -- now that the whole gesture is known — the original click
         -- kind if the release landed close to the press (a plain

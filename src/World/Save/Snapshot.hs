@@ -247,7 +247,7 @@ validateSessionSnapshot snap = concat
     ]
 
 -- | Every texture/facemap palette id a persisted 'WeSetStructure' edit
---   references, across every page (#760 round 9). Unlike a craft bill's
+--   references, across every page (#760). Unlike a craft bill's
 --   station reference or a power node's host-building reference (both
 --   deliberately NOT checked above — a demolished station/building
 --   leaving a dangling reference is documented, tolerated gameplay
@@ -292,7 +292,7 @@ orphanedUnitSimStateErrors snap =
 
 -- | Every id reachable from one 'ItemInstance', including its own AND
 --   every id nested (recursively) in 'iiContents' — a first-aid kit's
---   own kit-in-kit contents (#760 round 8: the previous version only
+--   own kit-in-kit contents (#760: the previous version only
 --   ever looked at each container's OUTER id, so a nested item's id
 --   colliding with the allocator or with another item elsewhere in the
 --   session went undetected).

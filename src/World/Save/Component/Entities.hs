@@ -38,7 +38,7 @@
 --     ('UnitSimState', 'CraftBill'/'CraftBills', 'PowerNode'/'PowerNodes')
 --     have mirror DTOs 'UnitSimStateDTO', 'CraftBillDTO'/'BillQueueDTO',
 --     'PowerNodeDTO'/'NodeRegistryDTO'.
---   - The per-page ENTITY snapshots are frozen too (review round 6): the
+--   - The per-page ENTITY snapshots are frozen too: the
 --     @"buildings"@/@"units"@ components carry 'BuildingInstanceDTO' /
 --     'UnitInstanceDTO', NOT the "World.Save.Types" positional
 --     'BuildingInstanceSnapshot'/'UnitInstanceSnapshot'. Those snapshots
@@ -166,7 +166,7 @@ tshow = T.pack . show
 
 -- buildings ---------------------------------------------------------
 
--- | Frozen mirror of 'BuildingInstanceSnapshot' (review round 6). That
+-- | Frozen mirror of 'BuildingInstanceSnapshot'. That
 --   positional "World.Save.Types" snapshot directly carries mutable
 --   'ItemInstance' values ('bisMaterialsDelivered'/'bisStorage'), so
 --   embedding it would let an unrelated 'ItemInstance' change drift a v1
@@ -356,7 +356,7 @@ fromScarDTO d = Scar
     { scarPart = scdPart d, scarKind = scdKind d
     , scarSeverity = scdSeverity d, scarAt = scdAt d }
 
--- | Frozen mirror of 'UnitInstanceSnapshot' (review round 6). Like
+-- | Frozen mirror of 'UnitInstanceSnapshot'. Like
 --   'BuildingInstanceDTO', that positional "World.Save.Types" snapshot
 --   directly carries mutable 'ItemInstance' values
 --   ('uisInventory'/'uisEquipped'/'uisAccessories') AND the live
@@ -605,7 +605,7 @@ fromUnitSimStateDTO d = UnitSimState
     , usMoveGrade        = simMoveGrade d
     }
 
--- | Issue #764 (save-overhaul C3) round-3 review: @psSim@'s map KEY is a
+-- | Issue #764 (save-overhaul C3): @psSim@'s map KEY is a
 --   unit-simulation state's OWNING unit — a durable cross-component
 --   reference (this component's own dependency on @"units"@ exists
 --   precisely because of it) exactly like a craft bill's station or a
@@ -655,7 +655,7 @@ migratePageSimDTOv1 d = PageSimDTO
 migrateUnitSimDTOv1 ∷ UnitSimDTOv1 → UnitSimDTO
 migrateUnitSimDTOv1 (UnitSimDTOv1 ps) = UnitSimDTO (map migratePageSimDTOv1 ps)
 
--- | Issue #764 (save-overhaul C3) round-3 review: hand-rolled
+-- | Issue #764 (save-overhaul C3): hand-rolled
 --   'ComponentCodec' (mirrors 'craftBillsCodec'/'powerNodesCodec' —
 --   'serializeCodec' has no real multi-version dispatch) now that this
 --   component needs v1→v2 migration too.
@@ -847,7 +847,7 @@ migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
                       (bq1NextId (pcb1Bills p)))
     | p ← ps ]
 
--- | Component-local invariant (#760 round 8, mirrors
+-- | Component-local invariant (#760, mirrors
 --   "World.Save.Component.Page"'s @worldPagesCodec@ @validatePages@
 --   precedent): every bill's own id must sit below that PAGE's queue
 --   allocator ('bqNextId') — 'BillId' is allocated per-page (see
@@ -857,7 +857,7 @@ migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
 --   'HashMap' cannot carry two entries under the same key), so there is
 --   nothing further to check there.
 --
---   Round 9 adds the companion check the allocator check alone misses:
+--   A companion check covers what the allocator check alone misses:
 --   the map KEY and the DTO's own embedded 'bilId' are two independent
 --   copies of the same identity (mirrored from live 'CraftBill'/
 --   'CraftBills', which always keeps them in sync by construction — but
@@ -880,7 +880,7 @@ migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
 --   station leaving its bills "lingering, visible + cancellable" is
 --   tolerated gameplay behaviour, not corruption, and hard-failing on
 --   it would reject otherwise-valid saves. "World.Load.Stage" restores
---   bills/nodes VERBATIM (never prunes them, issue #763 round 9) —
+--   bills/nodes VERBATIM (never prunes them, issue #763) —
 --   exactly the "do not drop the source record" contract requirement 11
 --   asks for. Issue #764 (save-overhaul C3) adds the cross-component
 --   check this component-local validator structurally cannot:
@@ -1061,15 +1061,15 @@ migratePowerNodesDTOv1 (PowerNodesDTOv1 ps) = PowerNodesDTO
     [ PagePowerNodesDTO (ppn1PageId p) (migrateNodeRegistryDTOv1 (ppn1Nodes p))
     | p ← ps ]
 
--- | Component-local invariant (#760 round 8), same shape as
+-- | Component-local invariant (#760), same shape as
 --   'validateCraftBills': every node's own id must sit below that
 --   page's node-registry allocator ('regNextId') — 'PowerNodeId' is
 --   allocated per-page (see 'Power.Types.emptyPowerNodes'). A literal
 --   duplicate key within one page's @regNodes@ map is structurally
 --   impossible once decoded, same reasoning as bills.
 --
---   Round 9 adds the same key/value identity check 'validateCraftBills'
---   gained: the map key and the DTO's own embedded 'nodId' must agree —
+--   The same key/value identity check 'validateCraftBills' applies
+--   here: the map key and the DTO's own embedded 'nodId' must agree —
 --   a decoded envelope with @regNodes = {#1 -> node{nodId=#2}}@ would
 --   otherwise pass the allocator check yet leave runtime APIs (which key
 --   off both identities) disagreeing about which node this is.

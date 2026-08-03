@@ -170,13 +170,13 @@ data EngineEnv = EngineEnv
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString, Word64))
     -- ^ Pending world-preview pixel data for GPU upload, tagged with the
-    --   generation it was enqueued under (round 10 review, issue #763;
+    --   generation it was enqueued under (issue #763;
     --   see 'worldPreviewGenerationRef').
   , worldPreviewGenerationRef ∷ IORef Word64
     -- ^ Monotonic counter bumped once per preview enqueue (never read
     --   back down). The upload handler compares the generation it
-    --   dequeued against this counter's CURRENT value at delivery time
-    --   (round 10 review): if a newer preview has been enqueued since,
+    --   dequeued against this counter's CURRENT value at delivery time:
+    --   if a newer preview has been enqueued since,
     --   this counter has already moved past the dequeued generation, so
     --   the in-flight (now-stale) upload can tell it must not announce
     --   itself — no live-ref re-read of 'worldPreviewRef' itself is
@@ -185,7 +185,7 @@ data EngineEnv = EngineEnv
   , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString, [WorldState]))
     -- ^ Pending zoom atlas pixel data for GPU upload, plus the EXACT
     --   'WorldState's it belongs to, captured at the moment it was
-    --   enqueued (round 9 review, issue #763): the upload can take
+    --   enqueued (issue #763): the upload can take
     --   multiple frames, and re-reading 'worldManagerRef' only once
     --   the upload finishes would race a load publish that swaps it
     --   in between — this closes that gap completely rather than
@@ -337,7 +337,7 @@ data EngineEnv = EngineEnv
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
     -- and synchronization state, never part of 'SaveData'.
   , inputThreadActiveRef ∷ IORef Bool
-    -- ^ Round 3 review (issue #763): True once 'Engine.Input.Thread
+    -- ^ Issue #763: True once 'Engine.Input.Thread
     --   .startInputThread' has actually launched — headless boot
     --   ('App.Headless') never calls it at all (no GLFW window to
     --   poll), so SaveInput must not be a HARD requirement of every

@@ -110,7 +110,7 @@ callSaveModules0 logger fnName = do
 --   popped) via @readElem@, which must read whatever is at the NEW
 --   stack top (the current element, already pushed) and leave the
 --   stack depth unchanged relative to its own entry. FAILS CLOSED
---   (issue #761 round-4 review): a malformed element ('Nothing') aborts
+--   (issue #761): a malformed element ('Nothing') aborts
 --   the whole read with 'Left' rather than being silently skipped —
 --   the two callers this backs (component descriptors, snapshot
 --   payloads) can each carry a REQUIRED component's own record, and a
@@ -159,8 +159,8 @@ readComponentDescriptorField = do
 --   used to build the envelope's dynamic known/required id sets before
 --   both encode and decode. Returns 'Left' on any error (require
 --   failing, describeAll missing/crashing, or a malformed descriptor —
---   round-4 review "fail closed" — the caller decides whether that's
---   fatal for its own operation).
+--   fails closed) — the caller decides whether that's fatal for its
+--   own operation.
 describeLuaComponents
     ∷ LoggerState
     → Lua.LuaE Lua.Exception (Either Text [(Text, Word32, Bool)])
@@ -230,7 +230,7 @@ collectLuaComponents logger = do
                 arrResult ← readLuaArrayAt readSnapshotComponentField
                 Lua.pop 1  -- components array
                 case arrResult of
-                    -- round-4 review "fail closed": a component record
+                    -- Fail closed: a component record
                     -- HsLua can't fully read (e.g. an out-of-range
                     -- version) must abort the save, not vanish from
                     -- the list — dropping it here is indistinguishable
@@ -282,7 +282,7 @@ readErrorStringField = do
 --   result array (issue #764, save-overhaul C3): a single reference edge
 --   a Lua component's @references()@ hook reported. @owner@ (the owning
 --   unit id, when the hook supplied one) and @path@ (the source field
---   path, round-2 review — e.g. "unit[7].attackTargetUid") are both
+--   path — e.g. "unit[7].attackTargetUid") are both
 --   optional diagnostics-only fields: 'Nothing'/empty when absent or
 --   not the expected type, never a reason to drop the whole edge the
 --   way a malformed @component@/@kind@/@id@ does.
@@ -400,7 +400,7 @@ applyLuaLoad logger = do
     return $ if ok then Right ()
              else Left "save_modules.applyAll() failed (see engine log)"
 
--- | Call @saveModules.abortPreparedLoad(requestId)@ (round 6 review):
+-- | Call @saveModules.abortPreparedLoad(requestId)@:
 --   every failure path that can occur AFTER a successful 'prepareLuaLoad'
 --   but BEFORE 'applyLuaLoad' ever runs (a staging exception/'StageError'
 --   on the world thread, or the publish barrier itself failing/timing
@@ -413,7 +413,7 @@ applyLuaLoad logger = do
 --   propagated, since it always runs FROM an existing failure path that
 --   must still report ITS OWN error regardless.
 --
---   Round 9 review: the world-thread-queued failure path
+--   The world-thread-queued failure path
 --   ('LuaLoadStagingFailed') reaches its caller as a QUEUED Lua message,
 --   which can sit unprocessed for a while — long enough for the failing
 --   request to already be terminal

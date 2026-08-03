@@ -57,9 +57,9 @@ startInputThread env = do
             -- calls this — App.Headless never does (no GLFW window to
             -- poll) — so this is the single source of truth
             -- saveWorldFn/handleLoadStaged consult to decide whether
-            -- SaveInput belongs in a transaction's owner set (round 3
-            -- review: it must not be a hard requirement headless boot
-            -- can never satisfy).
+            -- SaveInput belongs in a transaction's owner set (it must
+            -- not be a hard requirement headless boot can never
+            -- satisfy).
             writeIORef (ccInputThreadActiveRef (toCoreCapability env)) True
             tid ← forkIO $ runInputLoop env stateRef `finally` putMVar doneVar ()
             return tid
@@ -87,7 +87,7 @@ runInputLoop env stateRef = do
         -- frame that never pops (unbounded stack growth).
         ok ← catch
           (do
-            -- Round 3 review (issue #763): Input joins the save
+            -- Issue #763: Input joins the save
             -- barrier's owner set as SaveInput so a load publish can
             -- actually quiesce it, same as every other owner —
             -- previously Input was not a SaveOwner at all, so it kept

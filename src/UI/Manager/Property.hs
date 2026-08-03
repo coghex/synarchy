@@ -41,13 +41,13 @@ setElementSize ∷ ElementHandle → Float → Float → UIPageManager → UIPag
 setElementSize handle w h = modifyElement handle `flip`
     (\elem → elem { ueSize = (w, h) })
 
--- | #745 review round 12: also bumps this element's OWN
+-- | #745: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — a pending pointer activation on this
 --   element, or on any of its descendants (checked via their ancestor
 --   chain), must not survive a visibility flip even if it's reverted
 --   before release; see 'bumpElementRouteEpoch'.
 --
---   #745 review round 13: only bumps when 'visible' actually differs
+--   #745: only bumps when 'visible' actually differs
 --   from the element's CURRENT 'ueVisible' — a no-op call (setting a
 --   value to what it already is, e.g. a widget's own defensive
 --   re-assert) must not poison an in-flight pending activation that
@@ -59,10 +59,10 @@ setElementVisible handle visible mgr =
         Just el | ueVisible el ≡ visible → mgr'
         _ → bumpElementRouteEpoch handle mgr'
 
--- | #745 review round 12: also bumps this element's OWN
+-- | #745: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — see 'setElementVisible'.
 --
---   #745 review round 13: only bumps on an actual change — see
+--   #745: only bumps on an actual change — see
 --   'setElementVisible'.
 setElementClickable ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementClickable handle clickable mgr =

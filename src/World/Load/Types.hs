@@ -71,7 +71,7 @@ data StagedSession = StagedSession
     , ssZoomAtlas     ∷ !(Maybe (Int, Int, ByteString))
     , ssPreview       ∷ !(Maybe (Int, Int, ByteString))
     , ssMaterialRegistry ∷ !MaterialRegistry
-      -- ^ Round 6 review: the off-session registry staged against (see
+      -- ^ The off-session registry staged against (see
       --   "World.Load.Stage"'s haddock) — carried through so publish is
       --   the SOLE point it ever reaches the live
       --   'Engine.Core.State.materialRegistryRef', same as every other

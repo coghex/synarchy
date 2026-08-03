@@ -187,7 +187,7 @@ loadStatusFn env = do
             forM_ (lsOutcome s) $ \outcome → do
                 Lua.pushstring . TE.encodeUtf8 . T.pack . show $ outcome
                 Lua.setfield (-2) "outcome"
-            -- Round 3 review: 'phase' above is 'LoadFailed' itself once
+            -- 'phase' above is 'LoadFailed' itself once
             -- the transaction is terminal-and-aborted, which on its own
             -- says nothing about how far the attempt actually got.
             -- 'failedAtPhase' is the phase 'lsPhase' held immediately
@@ -198,7 +198,7 @@ loadStatusFn env = do
                 Lua.setfield (-2) "failedAtPhase"
     pure 1
 
--- | The full save/load-transaction owner set (round 3 review), minus
+-- | The full save/load-transaction owner set, minus
 --   'SaveInput' when the input thread was never started —
 --   'App.Headless' boots without one (no GLFW window to poll), so
 --   requiring it unconditionally would make 'waitForOwners' time out
@@ -622,7 +622,7 @@ loadSaveFn env = do
                 return 1
 
 -- | Continue 'loadSaveFn' once the current Lua registry's component
---   descriptors are known (issue #761 round-4 review): split out so a
+--   descriptors are known (issue #761): split out so a
 --   malformed descriptor list can reject the load in 'loadSaveFn' BEFORE
 --   this ever runs, rather than proceeding with an incomplete
 --   known/required id set.
@@ -635,7 +635,7 @@ continueLoad env logger requestId saveName descriptors = do
     result ← Lua.liftIO $
         loadWorld logger saveName luaKnownNames luaRequiredNames
     case result of
-        -- Round 2 review: retain whichever phase 'loadWorld' actually
+        -- Retain whichever phase 'loadWorld' actually
         -- reached before failing, rather than jumping straight from
         -- 'LoadPaused' to 'LoadFailed' regardless of real progress.
         Left (phase, err) → do
@@ -655,14 +655,13 @@ continueLoad env logger requestId saveName descriptors = do
                 [ LoadSourceSelected, LoadEnvelopeValidated
                 , LoadComponentsDecoded, LoadComponentsMigrated
                 , LoadSnapshotAssembled ]
-            -- #760 req. 9 (round 8 extends this to every gameplay
-            -- content reference, not just building/unit defs; issue
-            -- #763's round-3 review extends it again to material ids,
-            -- round-5 to flora ids, round-7 to location-overlay ids,
-            -- and round-8 to wound-infection ids — the approved issue's
-            -- own acceptance criteria names "material" explicitly
-            -- alongside unit/item/building/recipe, and flora species /
-            -- placed locations / wound infections all drive gameplay
+            -- #760 req. 9 (extended to every gameplay content
+            -- reference, not just building/unit defs; issue #763
+            -- extends it again to material ids, flora ids,
+            -- location-overlay ids, and wound-infection ids — the
+            -- approved issue's own acceptance criteria names "material"
+            -- explicitly alongside unit/item/building/recipe, and flora
+            -- species / placed locations / wound infections all drive gameplay
             -- the same way): validate every saved content-definition
             -- reference against the currently-registered defs BEFORE
             -- publishing ANY live state. A missing gameplay DEFINITION
@@ -677,14 +676,14 @@ continueLoad env logger requestId saveName descriptors = do
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
             rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
-            -- Round 5/6 review: the material registry is otherwise only
+            -- The material registry is otherwise only
             -- populated by World.Thread.Command.Init's "Step 0.5" (part
             -- of world.init) — a headless boot that goes straight to
             -- engine.loadSave with no prior world.init in the SAME
             -- process would see an entirely empty registry here (every
             -- id but air reporting as "unknown"). Built OFF TO THE
             -- SIDE, never written to the live materialRegistryRef here
-            -- (round 6 review: this runs before the load is even known
+            -- (this runs before the load is even known
             -- to succeed — writing it live now would discard any
             -- runtime/custom material registrations the OLD, still-
             -- live session had if THIS load later gets rejected by one
@@ -695,7 +694,7 @@ continueLoad env logger requestId saveName descriptors = do
             -- reaches the live ref, same as every other piece of
             -- session state.
             --
-            -- Round 13 review: a from-disk-only rebuild silently
+            -- A from-disk-only rebuild silently
             -- dropped whatever the LIVE session had ALREADY registered
             -- at runtime — world.init's own base pass (irrelevant here,
             -- since it registers the exact same data/materials set this
@@ -760,7 +759,7 @@ continueLoad env logger requestId saveName descriptors = do
                     ⧺ map renderMissingFloraRef missingFlora
                     ⧺ map renderMissingLocationRef missingLocations
                     ⧺ map renderMissingInfectionRef missingInfections
-            -- Round 15 review: advance to the content-validation
+            -- Advance to the content-validation
             -- checkpoint BEFORE running the gate below, not only once it
             -- succeeds — a failure inside it (any of the missing-*
             -- checks folded into allMissing) previously left lsPhase at
@@ -835,8 +834,8 @@ continueLoad env logger requestId saveName descriptors = do
                         let known = knownEntitiesFromSaveData resolvedSaveData
                             edges = [ LuaRefEdge c k i o p pg
                                     | (c, k, i, o, p, pg) ← luaRefs ]
-                            -- componentVersions (round-2 review, issue
-                            -- #764): 'descriptors' is this SAME load's
+                            -- componentVersions (issue #764):
+                            -- 'descriptors' is this SAME load's
                             -- current Lua registry ({id,version,required}),
                             -- already threaded into 'continueLoad' above --
                             -- reused here rather than re-deriving it, so

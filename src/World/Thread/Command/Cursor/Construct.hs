@@ -160,7 +160,7 @@ handleWorldCancelConstructCommand env _logger pageId gx gy = do
 --   corner-progress display, returning the removed designation if any
 --   was present. Factored out of 'handleWorldCancelConstructCommand'
 --   so a SYNCHRONOUS caller (construction.cancelDesignationForRefund,
---   #799 review round 5) gets the SAME atomic pop-and-return the
+--   #799) gets the SAME atomic pop-and-return the
 --   queued command does — the atomicModifyIORef' delete is what
 --   actually serializes competing cancellations (a rapid double
 --   right-click, or a new designation quickly replacing the old one at

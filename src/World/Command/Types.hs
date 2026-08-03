@@ -240,9 +240,9 @@ data WorldCommand
         --   path, and (#915) the edge's own declared world page for the
         --   one kind whose id is page-local — issue #764,
         --   save-overhaul C3, mirrors the load path's
-        --   'prepareLuaLoad' result shape; the path is round-2 review's
-        --   addition, replacing a synthetic "kind#id" diagnostic path
-        --   with the actual field the edge came from). The Lua side captures the
+        --   'prepareLuaLoad' result shape; the path replaces a
+        --   synthetic "kind#id" diagnostic path with the actual field
+        --   the edge came from). The Lua side captures the
         --   timestamp at request time (so two saves queued close
         --   together get distinct timestamps reflecting when the
         --   player asked, not whenever the world thread happened to
@@ -262,8 +262,8 @@ data WorldCommand
         --   'MaterialRegistry' 'Engine.Scripting.Lua.API.Save.continueLoad'
         --   already built (and validated the save's material references
         --   against) off to the side, WITHOUT touching the live
-        --   'Engine.Core.State.materialRegistryRef' (issue #763, round 6
-        --   review: the registry is otherwise only populated by
+        --   'Engine.Core.State.materialRegistryRef' (issue #763: the
+        --   registry is otherwise only populated by
         --   @world.init@, so validating against a freshly-built one is
         --   required — but writing it to the live ref before the load
         --   is even known to succeed would discard any runtime/custom

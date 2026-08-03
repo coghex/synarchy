@@ -103,9 +103,9 @@ simLoop env stateRef simStateRef = do
                 unless locked $ processSimCommands env logger simStateRef
 
                 ss ← readIORef simStateRef
-                -- Round 7 review: 'ssPaused' is set ONLY by
-                -- 'SimFastSettleAll' (dump mode's own synchronous
-                -- settle path) -- engine.setPaused (Engine.Scripting
+                -- 'ssPaused' is set ONLY by 'SimFastSettleAll' (dump
+                -- mode's own synchronous settle path) --
+                -- engine.setPaused (Engine.Scripting
                 -- .Lua.API.Core.setPausedFn) writes ONLY
                 -- 'enginePausedRef' and has never dispatched a SimPause
                 -- command, so 'ssPaused' alone never reflected ordinary
@@ -118,10 +118,10 @@ simLoop env stateRef simStateRef = do
                 -- engine already reads) fixes both: the general
                 -- gameplay-pause gap and this issue's post-publish one.
                 enginePaused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
-                -- Round 7 review: acknowledging BEFORE this tick's own
-                -- work (the tick/emitWorldDirtyFluids branch below,
-                -- which queues WorldApplyFluids writebacks to the world
-                -- thread) let this ack be the FINAL one a quiescence
+                -- Acknowledging BEFORE this tick's own work (the
+                -- tick/emitWorldDirtyFluids branch below, which queues
+                -- WorldApplyFluids writebacks to the world thread) let
+                -- this ack be the FINAL one a quiescence
                 -- pass needed while a writeback was still about to be
                 -- produced -- the world thread could already have
                 -- processed WorldLoadPublish and released the barrier

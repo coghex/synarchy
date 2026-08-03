@@ -66,9 +66,8 @@ recordDesignationOutcome env kind rejectedReason gx1 gy1 requested applied = do
 --   exists but nothing in the sweep qualified"): there's no world
 --   state here to even attempt a filter against, so this is its own
 --   reason rather than routed through the generic requested/applied
---   calculus. Review round 7 found all four designation verbs
---   (till/chop/mine/plant) silently dropped this case with no F4
---   record at all.
+--   calculus. All four designation verbs (till/chop/mine/plant)
+--   previously dropped this case silently, with no F4 record at all.
 recordMissingWorldOutcome ∷ EngineEnv → Text → WorldPageId → Int → Int → IO ()
 recordMissingWorldOutcome env kind pageId gx1 gy1 = do
     gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))

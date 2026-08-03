@@ -53,7 +53,7 @@ deletePage handle mgr =
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgrWithoutElements)
                 }
 
--- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — a
+-- | #745: also bumps 'UI.Types.upmPageEpoch' — a
 --   pending pointer activation on ANY control (not just one this page
 --   owns — a SEPARATE modal/menu page appearing over it counts too)
 --   must not restore across a page flickering hidden-then-shown
@@ -61,7 +61,7 @@ deletePage handle mgr =
 --   Deliberately GLOBAL, unlike element-level property mutators —
 --   page visibility is a genuinely route-affecting event everywhere.
 --
---   #745 review round 13: only bumps when the page was actually
+--   #745: only bumps when the page was actually
 --   hidden — a no-op re-show (already visible) must not poison an
 --   in-flight pending activation that was never really interrupted.
 showPage ∷ PageHandle → UIPageManager → UIPageManager
@@ -74,10 +74,10 @@ showPage handle mgr =
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
--- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — see
+-- | #745: also bumps 'UI.Types.upmPageEpoch' — see
 --   'showPage'.
 --
---   #745 review round 13: only bumps when the page was actually
+--   #745: only bumps when the page was actually
 --   visible — see 'showPage'.
 hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
@@ -97,7 +97,7 @@ hidePage handle mgr =
                         Just fh | Just el ← Map.lookup fh (upmElements mgr)
                                 , uePage el ≡ handle → Nothing
                         other → other
-                -- #745 review round 3: keyboard CONTROL focus needs
+                -- #745: keyboard CONTROL focus needs
                 -- the exact same hide-time hygiene as TEXT focus above
                 -- — otherwise a control focused before its page is
                 -- hidden sits stale in upmControlFocus (unnoticed

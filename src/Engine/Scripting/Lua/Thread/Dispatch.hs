@@ -95,7 +95,7 @@ processLuaMsg env ls stateRef msg = case msg of
       ]
   LuaUIClickEvent elemHandle callbackName _x _y → do
     let (ElementHandle h) = elemHandle
-    -- F4 (#730 review round 2): NOT recorded here any more — a
+    -- F4 (#730): NOT recorded here any more — a
     -- ClickUI-routed press's outcome is deferred to its matching
     -- release, so the gesture can be classified as a plain click or a
     -- UI-widget drag exactly once (see Engine.Input.Thread's
@@ -103,7 +103,7 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
   LuaUIRightClickEvent elemHandle callbackName _x _y → do
     let (ElementHandle h) = elemHandle
-    -- F4 (#730 review round 2): see LuaUIClickEvent above.
+    -- F4 (#730): see LuaUIClickEvent above.
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
   LuaUIPressBeginEvent elemHandle callbackName → do
     let (ElementHandle h) = elemHandle
@@ -256,7 +256,7 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
   LuaSaveLoaded requestId survUnitIds survBuildingIds → do
-    -- Round 10 review (issue #763): the debug-console TCP server keeps
+    -- Issue #763: the debug-console TCP server keeps
     -- accepting commands onto 'lbsDebugQueue' regardless of the save
     -- barrier's capture-lock state — while this load held the boundary
     -- ('handleLoadStaged' through the world thread's matching publish),
@@ -287,7 +287,7 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
       , intsToScriptArray survBuildingIds ]
-    -- Round 2 review, requirement 9: the transaction is reported
+    -- The transaction is reported
     -- 'LoadPublished' only NOW, once this reconciliation broadcast has
     -- actually run — not the instant the Haskell-side ref swap
     -- happened (World.Load.Publish.publishStagedSession, well before
@@ -303,7 +303,7 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaHudLogResourcesInfo text →
     broadcastToModules ls "onSetResourcesInfo" [ScriptString text]
   LuaWorldPreviewReady handleInt gen → do
-    -- Round 11 review (issue #763): validated HERE, at delivery, not at
+    -- Issue #763: validated HERE, at delivery, not at
     -- upload-completion time — see the long comment on
     -- 'Engine.Scripting.Lua.Message.WorldTexture.handleWorldPreview'
     -- for why upload-completion time can't decide this correctly. Every
@@ -337,7 +337,7 @@ processLuaMsg env ls stateRef msg = case msg of
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
   LuaLoadStagingFailed requestId → do
-      -- Round 9 review: this message is QUEUED (not a direct call), so
+      -- This message is QUEUED (not a direct call), so
       -- it can be processed well after 'requestId' has already gone
       -- terminal and a NEWER request has been accepted and prepared its
       -- own Lua state. Passing 'requestId' through lets 'abortLuaLoad'
@@ -366,7 +366,7 @@ processLuaMsg env ls stateRef msg = case msg of
 handleLoadStaged ∷ EngineEnv → LuaBackendState → Int → IO ()
 handleLoadStaged env ls requestId = do
     logger ← readIORef (loggerRef env)
-    -- Round 3 review: SaveInput is omitted when the input thread was
+    -- SaveInput is omitted when the input thread was
     -- never started (App.Headless boots without one — no GLFW window
     -- to poll), so waitForOwners below never times out forever waiting
     -- on an owner that can never acknowledge. See
@@ -376,7 +376,7 @@ handleLoadStaged env ls requestId = do
     -- depends on for SaveBarrier itself, so importing EngineEnv there
     -- would cycle.
     --
-    -- Round 15 review, revised twice: SaveRender is ALWAYS included
+    -- SaveRender is ALWAYS included
     -- (unlike SaveInput above, never conditioned on a thread-active
     -- flag). Every boot mode capable of reaching this function at all
     -- (i.e. running a debug console that can accept 'engine.loadSave')
@@ -404,7 +404,7 @@ handleLoadStaged env ls requestId = do
             "load publish #" <> T.pack (show requestId)
             <> " could not begin the publish barrier: " <> err
         failLoad (loadStatusRef env) requestId err
-        -- Round 6 review: prepareLuaLoad already succeeded by the time
+        -- prepareLuaLoad already succeeded by the time
         -- staging (and thus this dispatch) ever runs, leaving Lua's
         -- registration guard (_loadActive) active until applyAll
         -- commits it -- which never happens on this failure path.
@@ -423,7 +423,7 @@ handleLoadStaged env ls requestId = do
                 <> " timed out waiting for state owners: " <> err
             failLoad (loadStatusRef env) requestId err
             writeIORef (pendingLoadRef env) Nothing
-            -- Round 6 review: same as the beginSave failure above --
+            -- Same as the beginSave failure above --
             -- abort the prepared-but-never-applied Lua load.
             Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
           Right () → do
@@ -446,7 +446,7 @@ handleLoadStaged env ls requestId = do
                 failLoad (loadStatusRef env) requestId err
                 writeIORef (pendingLoadRef env) Nothing
               Right () → do
-                -- Round 2 review (requirement 12): every message that
+                -- Every message that
                 -- reached this SAME queue while staging was in flight
                 -- (staging can take a while — worldgen chunk
                 -- regeneration is the dominant cost) is still sitting

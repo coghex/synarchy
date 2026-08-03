@@ -39,7 +39,7 @@ uiNewPageFn env = do
 
     return 1
 
--- | UI.deletePage(pageHandle) — #745 review round 6: deletePage
+-- | UI.deletePage(pageHandle) — #745: deletePage
 --   recursively deletes every element it owns (deleteElementTree),
 --   which already clears upmControlFocus for whichever handle it
 --   matches; report it the same way uiHidePageFn/the Hierarchy
@@ -63,7 +63,7 @@ uiShowPageFn env = do
         Nothing → pure ()
     return 0
 
--- | UI.hidePage(pageHandle) — #745 review round 4: hidePage proactively
+-- | UI.hidePage(pageHandle) — #745: hidePage proactively
 --   clears upmControlFocus (see UI.Manager.Page) for a control focused
 --   on the hidden page, same as it already does for text focus. That's
 --   a pure mutation with no notification of its own, and unlike a

@@ -23,8 +23,8 @@ sendGenLog env msg = Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaW
 
 -- | Signal Lua that a save finished loading, so per-id modules can
 --   reconcile their global singleton state (#195). Carries the load
---   transaction's own request id (round 2 review, requirement 9: the
---   world thread's 'World.Load.Publish.publishStagedSession' has
+--   transaction's own request id (the world thread's
+--   'World.Load.Publish.publishStagedSession' has
 --   already swapped every live Haskell ref by the time this fires, but
 --   the transaction is not reported 'LoadPublished' until the Lua
 --   thread finishes reconciling THIS broadcast — see
