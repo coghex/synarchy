@@ -45,8 +45,8 @@
 --       so cancels, even when reverted — but an UNRELATED element's
 --       own mutation (a decorative hover-highlight sibling, say) is
 --       invisible to this chain and never poisons the activation.
---       Deliberately scoped to the ONE chain, not global: a round
---       10/11 attempt at a single manager-wide epoch covering every
+--       Deliberately scoped to the ONE chain, not global: an earlier
+--       attempt at a single manager-wide epoch covering every
 --       element mutation broke real production hover-highlight code
 --       (@scripts/ui/toggle.lua@'s @onHoverEnter@/@onHoverLeave@,
 --       @scripts/ui/list.lua@'s @setHoveredSlot@), which legitimately

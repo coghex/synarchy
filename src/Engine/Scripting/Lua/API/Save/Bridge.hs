@@ -329,8 +329,8 @@ readReferenceEdgeField = do
 --   a require/call failure, or a reported validation error — aborts the
 --   load; nothing has touched live Lua state yet either way. @requestId@
 --   is stashed on the Lua side alongside the prepared data so a later
---   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (round
---   9 review — see 'abortLuaLoad'). @isMigratingLegacyBaseline@ is
+--   'abortLuaLoad' for a DIFFERENT, stale request can't clear it (see
+--   'abortLuaLoad'). @isMigratingLegacyBaseline@ is
 --   'True' only for a recognized pre-#760 compatibility migration
 --   (always empty @components@) — every currently-required module then
 --   gets its own empty-state default (via @reg.decode(reg.version,
