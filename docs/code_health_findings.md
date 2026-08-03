@@ -33,7 +33,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-2. `EngineConfig` carries four fields that nothing reads — [#932]
 - [x] CH-3. Vulkan reports the application name as "Vulkan Device Test" — [#933]
 - [x] CH-4. `EngineEnv.inputThreadActiveRef` carries `gameTimeRef`'s haddock — [#934]
-- [x] CH-5. Two record fields share one source line in `GraphicsState` — [#936]
+- [x] CH-5. Two record fields share one source line in `GraphicsState` — [#936, closed obsolete]
 - [x] CH-6. Three of four `LogBackend` constructors are never constructed — [#942]
 - [x] CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad` — [#943]
 - [x] CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim — [#944]
@@ -52,7 +52,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-21. The module-budget guard has a subdirectory hole, and code already sits in it — [#967]
 - [x] CH-22. The 500-line norm guards 6 Lua files while 30 exceed it — [no-issue]
 - [x] CH-23. Oversized Haskell modules are now concentrated in `World/Save/` — [no-issue]
-- [ ] CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
+- [x] CH-24. `runGatedByCaptureLock` documents a bug that no longer exists — [#1078]
 - [x] CH-25. `tools/` is 122 flat Python files — [no-issue]
 - [x] CH-26. `CHANGELOG.md` has not been touched in 18 months — [no-issue]
 - [x] CH-27. Minor defects worth folding into one cleanup issue — [no-issue]
@@ -63,7 +63,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-32. `Bindless.hs`'s header claims 64× the real texture limit — [#976]
 - [x] CH-33. `Texture.System`'s "legacy path" is a throw — [#977]
 - [x] CH-34. `destroyBindlessTextureSystem` is exported, never called, and incomplete — [#978]
-- [ ] CH-35. The uniform buffer layout is hand-maintained across five declarations — [deferred]: #975 must land
+- [x] CH-35. The uniform buffer layout is hand-maintained across five declarations — [#1072]
 - [x] CH-36. `fontFragmentShaderCode` is dead, and says so — [#980]
 - [x] CH-37. `graphicsState` nested-record-update boilerplate, 50× — [#981]
 - [x] CH-38. Naming inconsistencies in the graphics records — [#982]
@@ -76,7 +76,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler — [#992]
 - [x] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface — [no-issue]
 - [x] CH-47. `Engine.Core.Log`'s callsite skip-list has a matching hazard here — [no-issue]
-- [ ] CH-48. Minor Lua-tree defects for one cleanup issue — [deferred]: #992 must land
+- [x] CH-48. Minor Lua-tree defects for one cleanup issue — [#1059]
 - [x] CH-49. Cross-cutting: normalise the enforced Unicode operators (owner decision recorded) — [#1005]
 - [x] CH-50. `Engine.Graphics.Transform` is a fully dead module — [#1006]
 - [x] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator — [#1007]
@@ -93,7 +93,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-62. `shutdownEngine`'s five positional parameters are mutually swappable — [#1036]
 - [x] CH-63. Three separate main loops — [#1022]
 - [x] CH-64. `--dump` emits three fields that no documentation mentions — [#1040]
-- [ ] CH-65. `App/Dump.hs` hand-concatenates JSON
+- [x] CH-65. `App/Dump.hs` hand-concatenates JSON — [#1058]
 - [ ] CH-66. Primitive-obsession in the dump signatures
 - [ ] CH-67. `parseRegion` silently substitutes a default for malformed input
 - [ ] CH-68. Two module haddocks enumerate the boot modes and both are stale
@@ -231,7 +231,14 @@ reconciles with `EngineConfig`'s (see CH-2) or `VideoConfig`'s.
 That paragraph belongs to `gameTimeRef` (declared four lines earlier at
 `:304`), which is left completely undocumented. A pure doc-motion fix.
 
-### [#936] CH-5. Two record fields share one source line in `GraphicsState`
+### [#936, closed obsolete] CH-5. Two record fields share one source line in `GraphicsState`
+> **Closed as obsolete (2026-08-02):** #974 (CH-30) deleted the never-read
+> `vertexBuffer` field outright, so the two-fields-on-one-line defect this
+> finding described no longer exists — `msaaColorImage` is alone on its own
+> line at `Engine/Core/State.hs:514`. #974 landed after this issue was filed
+> and reviewed, so the fix arrived as a side effect of unrelated cleanup
+> rather than of #936 itself.
+
 `Engine/Core/State.hs:456`:
 
 ```haskell
@@ -332,8 +339,8 @@ and the `errorContext` field selector are no longer exported —
 `EngineException`'s export narrowed from the `(..)` wildcard to just its
 constructor and the `errorType`/`errorMsg` selectors callers actually use.
 The minor siblings are also resolved: `throwEngineException` and
-`catchEngine`, pointless aliases for `throwError`/`catchError`, are gone (3
-and 2 call sites now use the underlying `MonadError` methods directly), and
+`catchEngine`, pointless aliases for `throwError`/`catchError`, are gone (2
+and 1 call sites now use the underlying `MonadError` methods directly), and
 the `ExceptionType` constructor comments are aligned on one column.
 `AssetError`'s haddock gap was already closed by #946, which removed the
 undocumented `AssetFailedCleanup` constructor.
@@ -522,13 +529,13 @@ The other five are `Engine/Scripting/Lua/API/*` (`Units/Inventory` 719,
 `UI/Property` 645, `Units/Stats` 641, `Blood` 519, `Power` 516) — the same
 category the triage rated "High feasibility".
 
-### CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
-> **Re-verify:** #949 removes review-round provenance phrases (`round N review`)
-> and explicitly keeps the technical explanation that follows them, so it does not
-> reach this 25-line narration of a superseded attempt — being "the worst instance
-> of CH-15" is not the same as being fixed by CH-15's issue. The defect is still
-> live, only relocated: #1022 moved `runGatedByCaptureLock` verbatim from
-> `Engine/Loop.hs` to `Engine/Loop/Mode.hs:140-183`, narration intact.
+### [#1078] CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
+> **Note:** Confirmed live and relocated — the haddock is now `Engine/Loop/Mode.hs:140-182`.
+> Two count corrections: it is 43 lines (not 37) and the superseded-attempt narration is
+> 16 lines (not ~25); #1022 added an accurate headless paragraph, and its move commit —
+> not #949 — is what dropped the provenance phrase. #1078 scopes this as a REFRAMING, not
+> a deletion: the "a point-in-time `captureLocked` pre-check is insufficient" constraint is
+> load-bearing and must survive in present tense, or the race is easy to reintroduce.
 
 `Engine/Loop.hs:69-105` — a 37-line haddock in which ~25 lines narrate a
 *previous failed attempt*: "The first attempt at this fix only READ
@@ -739,9 +746,7 @@ dead; the day someone wires up device-loss recovery it is a leak.
 Fix: delete it, or complete it and document that it must run before the
 `allocResource` scope unwinds.
 
-### [deferred] CH-35. The uniform buffer layout is hand-maintained across five declarations
-> **Deferred:** #975 rewrites these same shader quasi-quotes in `ShaderCode.hs` from the non-interpolating `[vert|`/`[frag|` quoters to `$(compileShaderQ … [glsl| … |])`, which is both the mechanism a single shared UBO block needs and a rewrite of every shader declaration this finding touches — resume after #975 is closed by a merged implementation, then re-read `ShaderCode.hs` and `Engine/Graphics/Vulkan/Types.hs` and scope the shared UBO block and derived offsets on top of the landed interpolation.
-
+### [#1072] CH-35. The uniform buffer layout is hand-maintained across five declarations
 `UniformBufferObject` is declared in:
 
 - `Vulkan/Types.hs` — the record (14 fields)
@@ -986,8 +991,8 @@ is the single choke point through which every Lua-facing Haskell function is
 registered, and it wraps each in a `Catch.catch` handler. Any source-location
 reporting through this path inherits CH-9's fragility. Worth checking together.
 
-### [deferred] CH-48. Minor Lua-tree defects for one cleanup issue
-> **Deferred:** Two sub-items are false and the bundle's only substantial item collides with a filed issue. Verified false: `flattenItemInstanceIds'` (now `Save.hs:421`) DOES have an unprimed sibling — `World/Save/Snapshot.hs:299`, character-identical — which is the duplication CH-70 owns, and renaming it away would erase CH-70's signal; and `callSaveModules0` (now `Save.hs:771`) DOES have a sibling, `callSaveModules1` at `Save.hs:735`, whose haddock at `:769` documents the 0/1 arity pair. Of the rest, `Engine.Scripting.Types` (14 lines, one type, all four consumers under `Engine.Scripting.Lua.*`) is the same file #992 is rewriting — it deletes `ScriptFunction`, drops the `Data.Dynamic` import, and pins the constructor set — so folding the module now conflicts. Resume after #992 is closed by a merged implementation, then scope one Lua-tree cleanup over the three surviving items: the duplicate `-- |` opener at `Script.hs:46-47`; `registerEngineAPI`'s explicit `Lua.State` (the only one of THIRTEEN registrars, not twelve — and the parameter is genuinely used by `loadScriptFn`/`killScriptFn` at `Register/Engine.hs:109-110`, so first check whether hslua can recover the state inside `LuaE`); and folding `Engine.Scripting.Types` into `Engine.Scripting.Lua.Types`.
+### [#1059] CH-48. Minor Lua-tree defects for one cleanup issue
+> **Note:** Two sub-items below are verified FALSE and are excluded from #1059. `flattenItemInstanceIds'` DOES have an unprimed sibling — `World/Save/Snapshot.hs:299`, character-identical — which is the duplication CH-70 owns; renaming it away would erase CH-70's signal. `callSaveModules0` DOES have a sibling, `callSaveModules1`, whose haddock documents the 0/1 arity pair. #1059 covers the three real items: the duplicate `-- |` opener at `Script.hs:46-47`; `registerEngineAPI`'s explicit `Lua.State` (the only one of THIRTEEN registrars, not twelve); and folding `Engine.Scripting.Types` into `Engine.Scripting.Lua.Types`.
 
 - `Engine/Scripting/Lua/Script.hs:46-47` — two consecutive `-- |` haddock
   openers on `callModuleFunction`; the first (`-- | Call a function on a module
@@ -1385,7 +1390,7 @@ terrain layer grew three fields since.
 Fix: document them in CLAUDE.md's table, or drop them behind an opt-in layer
 like `slope`.
 
-### CH-65. `App/Dump.hs` hand-concatenates JSON
+### [#1058] CH-65. `App/Dump.hs` hand-concatenates JSON
 `dumpTilesJSON` builds output with ~100 lines of string concatenation —
 `",\"terrainZ\":" ⧺ show terrainZ` — plus its own `boolStr`, `fluidTypeStr`,
 and `iceModeStr` encoders. The package already depends on `aeson` (every
