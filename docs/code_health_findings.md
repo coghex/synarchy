@@ -530,23 +530,35 @@ The other five are `Engine/Scripting/Lua/API/*` (`Units/Inventory` 719,
 category the triage rated "High feasibility".
 
 ### [#1078] CH-24. `runGatedByCaptureLock` documents a bug that no longer exists
-> **Note:** Confirmed live and relocated — the haddock is now `Engine/Loop/Mode.hs:140-182`.
-> Two count corrections: it is 43 lines (not 37) and the superseded-attempt narration is
-> 16 lines (not ~25); #1022 added an accurate headless paragraph, and its move commit —
-> not #949 — is what dropped the provenance phrase. #1078 scopes this as a REFRAMING, not
-> a deletion: the "a point-in-time `captureLocked` pre-check is insufficient" constraint is
-> load-bearing and must survive in present tense, or the race is easy to reintroduce.
+> **Note:** Re-verified before the fix and relocated — the haddock was
+> `Engine/Loop/Mode.hs:140-182` by then. Two count corrections: it was 43 lines (not 37)
+> and the superseded-attempt narration was 16 lines (not ~25); #1022 added an accurate
+> headless paragraph, and its move commit — not #949 — is what dropped the provenance
+> phrase. #1078 scoped this as a REFRAMING, not a deletion: the "a point-in-time
+> `captureLocked` pre-check is insufficient" constraint is load-bearing and had to survive
+> in present tense, or the race is easy to reintroduce.
 
-`Engine/Loop.hs:69-105` — a 37-line haddock in which ~25 lines narrate a
+`Engine/Loop.hs:69-105` — a 37-line haddock in which ~25 lines narrated a
 *previous failed attempt*: "The first attempt at this fix only READ
 `captureLocked` as a point-in-time pre-check … but this thread was not a real
 `SaveOwner` at all, so nothing ever waited for it …".
 
-The durable content is about four lines (this thread is a real `SaveRender`
+The durable content was about four lines (this thread is a real `SaveRender`
 owner; it acknowledges unconditionally; `acknowledgeCurrent` no-ops when
-`SaveRender` isn't in the owner set). The rest describes code that does not
-exist, which every future reader must read and then discard. Worst instance of
+`SaveRender` isn't in the owner set). The rest described code that does not
+exist, which every future reader had to read and then discard. Worst instance of
 CH-15.
+
+Resolved in #1078 by restating the narration as a present-tense invariant: the
+gate participates as a real `SaveRender` owner because a thread that only reads
+`captureLocked` is not a `SaveOwner`, so `waitForOwners` has nothing to wait for
+on its behalf. The rewrite states only what the protocol establishes — the
+barrier waits for this thread's required quiescence acknowledgments before
+proceeding — and explicitly declines the removed text's stronger claim that
+owner participation excludes every interleaving before `reachSnapshot`. The
+`Unit.Thread`, `waitForOwners`, and `publishStagedSession` cross-references and
+the unconditional-`acknowledgeCurrent` rationale are retained; the other three
+paragraphs of the haddock are unchanged.
 
 ### [no-issue] CH-25. `tools/` is 122 flat Python files
 > **Disposition:** No issue — the role partition already exists in the filenames (`*_probe.py`/`*_audit.py`/`*_check.py`/`test_*.py`), which is why the finding could partition all 127 files "without ambiguity" from names alone; `ls tools/*_probe.py` gives the same grouping `tools/probes/` would, and directories would make the suffixes redundant. The two navigation surfaces the finding cites as evidence are the deliberate answer: `tools/README.md` carries a curated per-probe table (Probe/Gates/Boot/Purpose) and CLAUDE.md declares `tools/ci_probes.py --status` authoritative over any prose list. The "one atomic sweep" is also not achievable: 124 distinct `tools/*.py` paths are cited at 407 sites outside `tools/` (persistence_state_inventory 137, persistence_contract 36, CLAUDE.md 23, CI workflow, Makefile/ci-local.sh) and 385 inside it, and part of the invocation surface lives outside the repository (`~/.codex/rules/default.rules`, agent memory) where a PR cannot update it — a stale path fails as `No such file` exactly when an agent runs a gate. No defect behind the layout; same discretionary category as CH-22/CH-41/CH-42. Counts are also stale: 127 flat `.py` files and 76 probes today, not 122/74. CH-131 restates this finding and needs the matching disposition.
