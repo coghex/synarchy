@@ -260,8 +260,8 @@ tickAllMovement dt env utsRef = do
                                 let extRate = externalBleedRateFor def liveInst
                                 in if uiPose liveInst ≡ "dead" ∨ extRate ≤ 0
                                    -- Check death / zero-external-bleed
-                                   -- BEFORE consuming anything (#882,
-                                   -- round-2 review): a synchronous
+                                   -- BEFORE consuming anything
+                                   -- (#882): a synchronous
                                    -- treatment (unit.treatBleeding
                                    -- zeroing woundBandage) or a wound
                                    -- healing out can drop external bleed

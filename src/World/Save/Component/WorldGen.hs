@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
--- | Frozen worldgen-parameter DTOs (issue #760, save-overhaul B2 — review
---   round 6). The @"world-pages"@ component embeds a page's
+-- | Frozen worldgen-parameter DTOs (issue #760, save-overhaul B2).
+--   The @"world-pages"@ component embeds a page's
 --   'WorldGenParams', a mutable runtime record whose nested worldgen
 --   config/state sub-records evolve as features land. Per the component
 --   frozen-DTO boundary rule (see 'World.Save.Component.Types' — the ONE

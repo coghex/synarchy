@@ -91,7 +91,7 @@ data PageStageResult = PageStageResult
 --   at all (requirement 6 — staging must not send work through a live
 --   queue either, so unlike the pre-#763 restore this never calls
 --   'World.Thread.Helpers.sendGenLog'): the material registry to stage
---   against arrives as a PARAMETER — round 6 review: it's the SAME
+--   against arrives as a PARAMETER — it's the SAME
 --   off-session registry 'Engine.Scripting.Lua.API.Save.continueLoad'
 --   already built and validated the save's material references
 --   against (never the live 'Engine.Core.State.materialRegistryRef',
@@ -239,7 +239,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
     writeIORef (wsCropPlotsRef worldState) (wpsCropPlots wps)
     writeIORef (wsPlantDesignationsRef worldState) (wpsPlantDesignations wps)
-    -- Round 9 review (issue #763): craft bills / power nodes are
+    -- Issue #763: craft bills / power nodes are
     -- restored VERBATIM, never pruned against the save's own building
     -- snapshot. A bill/node whose station/building instance is absent
     -- (demolished before the save was ever taken) is EXPLICITLY

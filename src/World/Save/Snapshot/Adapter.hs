@@ -116,7 +116,7 @@ snapshotToSaveData req snap = SaveData
 --   side effect of the old capture code's shared @cam@ variable.
 --
 --   @nextBid@/@nextUid@ are the snapshot's own CANONICAL, validated
---   allocators (review round 1): 'pgsBuildings'/'pgsUnits' carry their
+--   allocators: 'pgsBuildings'/'pgsUnits' carry their
 --   own embedded 'bsnNextId'/'usnNextId' (an artifact of reusing
 --   'BuildingSnapshot'/'UnitSnapshot' as-is), but the adapter must
 --   never trust those over the snapshot's own fields — passing them

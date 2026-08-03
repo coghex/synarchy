@@ -127,7 +127,7 @@ uiIsInputBlockedFn env = do
     Lua.pushboolean (isGameplayBlocked mgr)
     return 1
 
--- | UI.isPageInScope(pageHandle) -> boolean (#742 review round 1) —
+-- | UI.isPageInScope(pageHandle) -> boolean (#742) —
 --   true when the page is at or above the modal boundary (or there is
 --   no boundary at all). Lets raw per-widget handlers that iterate
 --   every live instance regardless of page (dropdown/randbox

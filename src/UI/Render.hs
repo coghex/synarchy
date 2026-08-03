@@ -61,7 +61,7 @@ uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $
 --   slot. (Was: resolve to the bindless slot here, which now mismatches
 --   the shader and sampled the wrong texture.) Never actually depended
 --   on the 'BindlessTextureSystem' itself (only ever called 'toInt' on
---   the handle) — #747 review round 2 drops that dead parameter so
+--   the handle) — #747 drops that dead parameter so
 --   'makeBoxBatches'/'renderSpriteBatch' are genuinely pure and
 --   directly Hspec-testable, not just the clip geometry they call.
 lookupTextureSlot ∷ TextureHandle → Float
@@ -262,8 +262,8 @@ renderElementData mgr fontCache layerId elem absX absY clip =
             pure (batches, items)
 
 -- | Pure: a sprite element's render batch, clipped. This is the ACTUAL
---   function 'renderElementData''s 'RenderSprite' branch calls (#747
---   review round 2) — not just the underlying 'clipQuadUV' helper in
+--   function 'renderElementData''s 'RenderSprite' branch calls (#747)
+--   — not just the underlying 'clipQuadUV' helper in
 --   isolation — so a test exercising it gates real call-site wiring:
 --   removing the clip here would show up as a batch/vertex mismatch,
 --   not just a passing geometry-only test. 'Nothing'-equivalent (empty
@@ -333,7 +333,7 @@ tileTexture texSet tile = case tile of
 
 -- | Pure: the nine box-tile render batches, clipped. This is the
 --   ACTUAL function 'renderElementData''s 'RenderBox' branch calls
---   (#747 review round 2) — not just 'UI.Clipping.boxTileRects' in
+--   (#747) — not just 'UI.Clipping.boxTileRects' in
 --   isolation — so a test exercising it gates real call-site wiring:
 --   removing the clip here would show up as a batch/vertex mismatch
 --   (wrong count, wrong rect, wrong UV), not just a passing

@@ -234,8 +234,8 @@ materialIdByName (MaterialRegistry vec _) name =
 
 -- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by
 --   YAML. 'mrKnown' tracks exactly which ids were explicitly
---   registered (as opposed to merely defaulted) — issue #763 round-3
---   review: every 'MaterialId' 0-255 is a structurally valid index
+--   registered (as opposed to merely defaulted) — issue #763: every
+--   'MaterialId' 0-255 is a structurally valid index
 --   into the vector (so 'getMaterialProps' can never fail the way a
 --   Text-keyed def lookup can), which is exactly why a saved
 --   material's validity needs this separate set rather than an
@@ -252,8 +252,8 @@ registerMaterial idx props (MaterialRegistry vec known) =
     MaterialRegistry (vec V.// [(fromIntegral idx, props)]) (HS.insert idx known)
 
 -- | Overlay every explicitly-registered id from @overlay@ onto @base@,
---   overlay's own properties winning on any id collision (issue #763
---   round 13 review). Used to merge a freshly-loaded, off-session base
+--   overlay's own properties winning on any id collision (issue
+--   #763). Used to merge a freshly-loaded, off-session base
 --   registry (built straight from @data/materials/*.yaml@ — see
 --   'Engine.Asset.YamlMaterials.loadPopulatedMaterialRegistry') with
 --   whatever the LIVE session has already registered at runtime

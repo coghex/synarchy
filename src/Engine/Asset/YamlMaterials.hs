@@ -107,7 +107,7 @@ loadMaterialDirectory logger dir = do
 -- | 'loadMaterialDirectory' plus the fold into a real
 --   'World.Material.MaterialRegistry' — the exact population pass
 --   'World.Thread.Command.Init' runs at "Step 0.5" of every
---   @world.init@, extracted here (issue #763 round 5) so
+--   @world.init@, extracted here (issue #763) so
 --   'Engine.Scripting.Lua.API.Save' can call the SAME logic on a
 --   whole-session LOAD: the registry is otherwise populated only by
 --   @world.init@, so a fresh headless boot that goes straight to

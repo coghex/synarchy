@@ -203,7 +203,7 @@ assembleSnapshot meta de = do
                              <> T.intercalate " -> " (map cidText cyc)) ]
         Right o  → Right o
     -- 1. Decode + component-local-validate EVERY component (no live state),
-    --    collecting all failures (all-or-nothing). Round-3 review: capped
+    --    collecting all failures (all-or-nothing). Capped
     --    +sorted the SAME way every other boundary error list now is — a
     --    corrupted/adversarial envelope can carry an unbounded number of
     --    per-component decode failures just as easily as a cross-component
@@ -230,7 +230,7 @@ assembleSnapshot meta de = do
             --    haddock in "World.Save.Snapshot" for why that distinction
             --    matters (the capture-path "full-encode forcing" contract).
             --
-            --    Round-3 review: the 'sessionIntegrityErrors' portion used
+            --    The 'sessionIntegrityErrors' portion used
             --    to be capped via 'capIntegrityErrors' BEFORE joining the
             --    other three raw sources, which then went through
             --    'capComponentErrors' a second time — a double cap that
@@ -288,8 +288,8 @@ integrityErr ∷ IntegrityError → ComponentError
 integrityErr e = ComponentError (ieComponent e) (ieVersion e) AssemblePhase
     (iePath e <> ": " <> ieCode e <> ": " <> ieMessage e)
 
--- | Sort + cap the FULL cross-component error list uniformly (round-2
---   review, issue #764). Before this, only the
+-- | Sort + cap the FULL cross-component error list uniformly (issue
+--   #764). Before this, only the
 --   'sessionIntegrityErrors' portion went through 'capIntegrityErrors'
 --   (sorted, capped at 'integrityErrorCap') before landing in
 --   'crossErrs' — 'validateSessionSnapshot'/'structureEditPaletteErrors'/

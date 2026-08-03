@@ -44,8 +44,8 @@ import World.Thread.Command.Save.WriteWorld (handleWorldSaveCommand)
 --   'stageSession' does substantial pure work (worldgen chunk
 --   regeneration, zoom-cache/atlas construction, ...) forced via
 --   'Control.Exception.evaluate' — a genuinely malformed save can throw
---   a real Haskell exception there rather than returning a tidy 'Left'
---   (round 2 review). Uncaught, that exception would propagate out of
+--   a real Haskell exception there rather than returning a tidy 'Left'.
+--   Uncaught, that exception would propagate out of
 --   this handler, through 'World.Thread.handleWorldCommand'/
 --   'processAuthorizedSave', into 'World.Thread'\'s own top-level
 --   'Control.Exception.catch' — which treats ANY exception as fatal for
@@ -66,7 +66,7 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
             logWarn logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " staging crashed: " <> msg
             failLoad (loadStatusRef env) requestId msg
-            -- Round 6 review: prepareLuaLoad already succeeded by the
+            -- prepareLuaLoad already succeeded by the
             -- time staging ever runs, leaving Lua's registration guard
             -- (_loadActive) active with no LuaLoadStaged ever coming to
             -- drive applyAll — tell the Lua thread to abort it.
@@ -76,7 +76,7 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
             logWarn logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " staging failed: " <> msg
             failLoad (loadStatusRef env) requestId msg
-            -- Round 6 review: same as the exception case above.
+            -- Same as the exception case above.
             Q.writeQueue (luaQueue env) (LuaLoadStagingFailed requestId)
         Right (Right staged) → do
             writeIORef (pendingLoadRef env) (Just (requestId, staged))
@@ -94,8 +94,8 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
 --   'World.Load.Publish.publishStagedSession' is the sole place any
 --   gameplay consumer's view of the session actually changes.
 --
---   Deliberately does NOT call 'finishLoad' on success (round 2
---   review, requirement 9): the Haskell-side session is fully live the
+--   Deliberately does NOT call 'finishLoad' on success: the
+--   Haskell-side session is fully live the
 --   instant 'publishStagedSession' returns, but the transaction is not
 --   reported 'LoadPublished' to 'engine.getLoadStatus()' until the Lua
 --   thread also finishes the 'LuaSaveLoaded' reconciliation broadcast

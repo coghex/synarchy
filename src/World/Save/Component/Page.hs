@@ -581,7 +581,7 @@ worldPagesCodec = ComponentCodec
 
 -- | Component-local invariant (requirement 3): the page-set authority
 --   must not itself carry a duplicate or empty page set. Hoisted to top
---   level (round-14 review) so "World.Save.Compat.SessionV90"'s B1
+--   level so "World.Save.Compat.SessionV90"'s B1
 --   migration path can run the SAME validator a modern envelope's
 --   decode always does, rather than skip it entirely.
 validatePages ∷ WorldPages → [ComponentError]
@@ -735,7 +735,7 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
--- | Component-local invariant (#760 round 8, mirrors
+-- | Component-local invariant (#760, mirrors
 --   @worldPagesCodec@'s @validatePages@ precedent above): every ground
 --   item's own id must sit below that page's ground-items allocator
 --   ('gisiNextId') — 'Item.Ground.GroundItems' ids are allocated

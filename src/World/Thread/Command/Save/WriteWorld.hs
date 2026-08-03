@@ -219,7 +219,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do
-                            -- Round-2 review (issue #764): sort + cap this
+                            -- Issue #764: sort + cap this
                             -- list too, at the SAME 'integrityErrorCap' the
                             -- rest of the integrity graph uses, rather than
                             -- rendering a raw, uncapped, insertion-order
@@ -263,8 +263,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 let knownLua = buildKnownEntities snap
                                     luaEdges = [ LuaRefEdge c k i o p pg
                                                | (c, k, i, o, p, pg) ← luaRefs ]
-                                    -- componentVersions (round-2 review,
-                                    -- issue #764): luaComponents already
+                                    -- componentVersions (issue #764):
+                                    -- luaComponents already
                                     -- carries each component's just-
                                     -- snapshotted schema version, so this
                                     -- diagnostic reports the version the

@@ -65,7 +65,7 @@ data LoadStatus = LoadStatus
     , lsPhase     ∷ !LoadPhase
     , lsOutcome   ∷ !(Maybe LoadOutcome)
     , lsFailedAtPhase ∷ !(Maybe LoadPhase)
-        -- ^ Round 3 review: 'failLoad' unconditionally overwrites
+        -- ^ 'failLoad' unconditionally overwrites
         --   'lsPhase' to the terminal 'LoadFailed' value, so whatever
         --   phase the preceding 'advanceLoad' calls last recorded would
         --   otherwise be lost the instant a load fails — defeating the

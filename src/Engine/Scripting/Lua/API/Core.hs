@@ -61,7 +61,7 @@ getFPSFn env = do
 --   flag. Side effects (timeScale, etc.) are handled Lua-side in
 --   scripts/pause.lua so the engine doesn't depend on world state.
 --
---   Round 15 review (issue #763): an UNPAUSE (setPaused(false)) while a
+--   Issue #763: an UNPAUSE (setPaused(false)) while a
 --   load transaction is in flight is rejected outright — staging runs
 --   BEFORE the save barrier's capture lock is ever entered, and the Lua
 --   thread's own tick loop keeps servicing debug/script work throughout
@@ -73,7 +73,7 @@ getFPSFn env = do
 --   paused instead. A PAUSE (setPaused(true)) is never blocked: pausing
 --   an already-paused-or-not session can't violate that contract.
 --
---   Round 16 rereview: the boolean return (previously no return value
+--   The boolean return (previously no return value
 --   at all) reports whether the flag was actually flipped —
 --   scripts/pause.lua's pause.set was applying its OWN side effects
 --   (the paused-state mirror, world.setTimeScale) unconditionally,

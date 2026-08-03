@@ -52,7 +52,7 @@ import Unit.Sim.Types (UnitThreadState(..))
 --   staged page collected.
 publishStagedSession ∷ EngineEnv → LoggerState → Int → StagedSession → IO ()
 publishStagedSession env logger requestId staged = do
-    -- Requirement 12 (round 2 review): every OTHER owner thread
+    -- Every OTHER owner thread
     -- (Unit/Building/Combat/Simulation) is quiesced for this function's
     -- ENTIRE duration -- the same guarantee 'World.Thread.processAuthorizedSave'
     -- relies on for the world queue -- but unlike the world queue,
@@ -79,7 +79,7 @@ publishStagedSession env logger requestId staged = do
     -- offscreen render thread's 'Engine.Scripting.Lua.Message.processLuaMessages')
     -- is handled the same way, on ITS OWN consumer thread — see
     -- 'Engine.Loop''s captureLocked gate — for the identical reason:
-    -- flushing it from here (round 15 review's original attempt) raced
+    -- flushing it from here (an earlier attempt) raced
     -- that thread's own drain and, observed empirically, could leave a
     -- load transaction's publish-side work permanently stuck instead of
     -- merely losing one message.
@@ -110,7 +110,7 @@ publishStagedSession env logger requestId staged = do
     -- this whole function — see the module haddock.
     writeIORef (gameTimeRef env) (ssGameTime staged)
     writeIORef (enginePausedRef env) True
-    -- Round 6 review: the SOLE point the off-session registry
+    -- The SOLE point the off-session registry
     -- "World.Load.Stage" staged against (and
     -- "Engine.Scripting.Lua.API.Save.continueLoad" validated the save's
     -- material references against) ever reaches the live ref — not at
@@ -128,7 +128,7 @@ publishStagedSession env logger requestId staged = do
     writeIORef (unitManagerRef env) (ssUnits staged)
     writeIORef (utsRef env) (UnitThreadState { utsSimStates = ssUnitSimStates staged })
     writeIORef (cameraRef env) (ssCamera staged)
-    -- Round 9 review: pair the atlas with the EXACT WorldStates it
+    -- Pair the atlas with the EXACT WorldStates it
     -- belongs to (this publish's own pages) so the eventual GPU upload
     -- (Engine.Scripting.Lua.Message.WorldTexture.handleZoomAtlasUpload)
     -- never has to re-read worldManagerRef later and risk a NEWER
@@ -136,7 +136,7 @@ publishStagedSession env logger requestId staged = do
     let targetStates = map spWorldState (ssPages staged)
     forM_ (ssZoomAtlas staged) $ \(w, h, bytes) →
         writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, targetStates))
-    -- Round 10/11 review: bump the preview generation on EVERY publish,
+    -- Bump the preview generation on EVERY publish,
     -- unconditionally — never only inside the 'Just' branch below. A
     -- page staged via the arena-reconstruction path
     -- ('World.Load.Stage.stageSession', 'isArenaParams') carries no
@@ -254,7 +254,7 @@ dedupPageIds = go HS.empty
 --
 --   'uiManagerRef' additionally clears TEXT focus ('upmGlobalFocus'),
 --   keyboard CONTROL focus ('upmControlFocus'), and hover
---   ('upmHovered') — round 2 review: a control that held keyboard
+--   ('upmHovered') — a control that held keyboard
 --   focus before the load would otherwise still fire Enter/Space's
 --   'onClick' callback afterward, potentially against a closure that
 --   captured old-session state (e.g. a save-slot button, a build-tool
@@ -264,7 +264,7 @@ dedupPageIds = go HS.empty
 --   Lua-owned and rebuilt/reconciled by the same 'sendSaveLoaded'
 --   broadcast as before.
 --
---   'hudActivePageRef' (round 6 review) additionally resets to
+--   'hudActivePageRef' additionally resets to
 --   'Nothing': 'World.Thread.Cursor.pollCursorInfo' compares the
 --   active page id against this ref to detect an active-WORLD switch
 --   and force a fresh HUD push even when the raw cursor selection

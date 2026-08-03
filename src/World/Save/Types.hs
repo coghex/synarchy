@@ -270,7 +270,7 @@ data WorldPageSave = WorldPageSave
         --   BuildingIds, which restore verbatim (see wpsBuildings), so
         --   bills reconnect to their stations; restore keeps a bill
         --   whose station is orphaned intact rather than pruning it
-        --   (issue #763 round 9 — "World.Load.Stage" restores bills
+        --   (issue #763 — "World.Load.Stage" restores bills
         --   VERBATIM, never against the loaded page's own building
         --   snapshot; a demolished station's lingering bill is tolerated
         --   gameplay, not corruption). A station that resolves on a
@@ -283,7 +283,7 @@ data WorldPageSave = WorldPageSave
         --   storage node's current charge (pnStoredWh, #360). Like
         --   craft bills, references a BuildingId that restores
         --   verbatim (see wpsBuildings); an orphaned host building is
-        --   tolerated the same way (issue #763 round 9 — no pruning),
+        --   tolerated the same way (issue #763 — no pruning),
         --   a wrong-page one hard-rejected (issue #764). Appended for
         --   save v73, pnStoredWh for v75.
     , wpsTillDesignations ∷ !TillDesignations
@@ -744,7 +744,7 @@ missingDefReferences buildingDefs unitDefs pages = concatMap pageRefs pages
         | (uid, u) ← HM.toList (usnInstances us)
         , not (HS.member (uisDefName u) unitDefs) ]
 
--- Item / recipe / construct-target def-name validation (#760 round 8) -
+-- Item / recipe / construct-target def-name validation (#760) --------
 
 -- | A saved 'ItemInstance' (anywhere in the save — building storage/
 --   materials-delivered, unit inventory/equipped/accessories, ground
@@ -903,7 +903,7 @@ missingConstructDefReferences buildingDefs pages =
     , CtBuilding defName ← [cdTarget cd]
     , not (HS.member defName buildingDefs) ]
 
--- Material-id validation (issue #763 round-3 review) -----------------
+-- Material-id validation (issue #763) --------------------------------
 
 -- | A saved 'MaterialId' — from the edit log ('WeAddTile'/'WeSetCell'),
 --   a spoil pile, or a worldgen tectonic plate's base material — that
@@ -933,7 +933,7 @@ renderMissingMaterialRef r =
 -- | Every saved material reference, across all pages, that does not
 --   resolve against the currently-registered material set. Covers the
 --   edit log, spoil piles, AND each page's worldgen plate data
---   ('wgpPlates' — round 4 review: a plate's base material is
+--   ('wgpPlates' — a plate's base material is
 --   persisted just like any other 'MaterialId' and staging would
 --   otherwise silently render it with 'defaultMaterialProps' instead
 --   of rejecting the load). Empty ⇒ every reference resolves and the
@@ -964,7 +964,7 @@ missingMaterialReferences registry pages = concatMap pageRefs pages
     editMaterialRef (WeSetCell gx gy _z mat) = [(gx, gy, mat)]
     editMaterialRef _                        = []
 
--- Flora-id validation (issue #763 round-5 review) --------------------
+-- Flora-id validation (issue #763) -----------------------------------
 
 -- | A saved 'FloraId' — from the edit log ('WePlaceFlora') or a crop
 --   plot's species — that this build's 'World.Flora.Types.FloraCatalog'
@@ -1013,7 +1013,7 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
     editFloraRef _                                    = []
     unresolved fid = maybe True (const False) (lookupSpecies fid catalog)
 
--- Location-overlay-id validation (issue #763 round-7 review) ---------
+-- Location-overlay-id validation (issue #763) ------------------------
 
 -- | A saved location reference — an overlay entry
 --   ('WorldGenParams.wgpLocationOverlay', one per placed chunk) or a
@@ -1097,7 +1097,7 @@ resolveLegacyLocationParams registry params = params
         resolveLegacyLocationInstances registry
             (wgpLocationOverlay params) (wgpLocationInstances params) }
 
--- Infection-definition validation (issue #763 round-8 review) --------
+-- Infection-definition validation (issue #763) -----------------------
 
 -- | A saved 'Wound' whose 'woundInfectionType' does not resolve against
 --   the currently-registered 'Infection.Types.InfectionManager'. Empty

@@ -84,7 +84,7 @@ worldLoop env stateRef lastTimeRef = do
                     then processAuthorizedSave env logger
                     else do
                         processAllCommands env logger
-                        -- Round 7 review: acknowledging BEFORE the rest
+                        -- Acknowledging BEFORE the rest
                         -- of this tick's work (drainInitQueues/
                         -- tickWorldTime/updateChunkLoading/pollCursorInfo,
                         -- all of which can queue fresh Lua/HUD/sim

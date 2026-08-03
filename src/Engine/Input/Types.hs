@@ -16,7 +16,7 @@ data InputState = InputState
       --   matching release can tell Lua what its down did
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
     , inpPendingUIClick ∷ Map.Map GLFW.MouseButton (Text, Text, Double, Double)
-      -- ^ F4 (#730 review round 2): a ClickUI-routed press's (F4 kind
+      -- ^ F4 (#730): a ClickUI-routed press's (F4 kind
       --   — "input.click"/"input.rightClick", callback name, press-x,
       --   press-y), held until the matching release so
       --   Engine.Input.Thread can classify the WHOLE gesture as a
@@ -51,7 +51,7 @@ data InputState = InputState
       --   key-up per keystroke), so it naturally flushes once per
       --   real character.
     , inpControlFocusConsumedKeys ∷ Set.Set GLFW.Key
-      -- ^ #745 review round 3: GLFW keys currently mid-hold that the
+      -- ^ #745: GLFW keys currently mid-hold that the
       --   keyboard control-focus layer consumed at their initial
       --   Pressed dispatch (Tab/Shift+Tab, Enter/Space, a steppable
       --   arrow). 'GLFW.KeyState'Pressed'/'Repeating'/'Released' each

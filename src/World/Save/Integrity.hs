@@ -381,7 +381,7 @@ buildKnownEntities snap = KnownEntities
 --   from inside a per-unit loop, so it always has one;
 --   @buildingSpawnReferences@ entries never need one, since its
 --   "unit"/"building" kinds resolve session-wide regardless), and
---   (round-2 review, issue #764) the actual field path this edge came
+--   (issue #764) the actual field path this edge came
 --   from (@lrePath@ — e.g. @"unit[7].attackTargetUid"@,
 --   @"building[12].lastUid"@), in the SAME dotted-path style
 --   'refEdgeError' already uses for Haskell-side findings — see
@@ -462,7 +462,7 @@ luaEdgeExceedsAllocator ke e = case lreKind e of
 --   (requirement 16: exposed to headless diagnostics / load completion
 --   text) — NEVER a load-blocking failure, matching the #761-established
 --   tolerated-dangling-reference contract this module documents above.
---   @componentVersions@ (round-2 review, issue #764) maps a Lua
+--   @componentVersions@ (issue #764) maps a Lua
 --   component id to the schema version its edges were collected against
 --   (the save side's just-snapshotted payload version; the load side's
 --   just-decoded payload version — see the two call sites in

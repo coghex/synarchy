@@ -311,8 +311,8 @@ simulateHydrology _seed worldSize _ageIdx grid climate features =
         -- see 'calderaHazardsForWorld'. Empty at/above
         -- 'calderaGuardCeiling' so 128+ output stays bit-identical to
         -- before this change (issue #811 requires established 128+
-        -- behavior stay intact — review round 1 flagged the guard
-        -- changing it).
+        -- behavior stay intact, and without the guard this change
+        -- would alter it).
         calderaHazards ∷ [(Int, Int, Int)]
         calderaHazards = calderaHazardsForWorld worldSize features
 

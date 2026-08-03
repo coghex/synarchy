@@ -312,7 +312,7 @@ decodeLegacySessionMetadata bytes =
 -- | Shared structural step for both legacy entry points above: validate
 --   the envelope against exactly @{metadata, session}@ AND confirm both
 --   descriptors' own flags/versions match the ONE frozen B1 shape this
---   build recognizes (round-7 review) — not merely that those two ids
+--   build recognizes — not merely that those two ids
 --   are the only ones PRESENT. 'decodeEnvelope' only ever refuses a
 --   descriptor marked @cdRequired@ that ISN'T in the known-id set, or an
 --   id in the reader's OWN required set that's altogether absent — it
@@ -390,7 +390,7 @@ presentComponentIds decoded =
     HS.fromList (map cdId (emComponents (deManifest decoded)))
 
 -- | The exact frozen B1 component-id set: precisely @{metadata, session}@,
---   no more, no less. Hoisted to top level (round-9 review) so
+--   no more, no less. Hoisted to top level so
 --   'decodeLegacyStructureAndMetadata' and 'foreignOptionalComponentIds'
 --   share the one definition rather than risk two copies drifting apart.
 b1LegacyIds ∷ HS.HashSet ComponentId
@@ -399,10 +399,10 @@ b1LegacyIds = HS.fromList [metadataComponentId, sessionComponentId]
 -- | Whether a decoded envelope's descriptor for the given component id is
 --   present, marked REQUIRED, and at EXACTLY the given schema version.
 --   The one per-descriptor precision check every legacy-shape recognizer
---   needs (round-9 review): shared by the migrating decoders AND the
+--   needs: shared by the migrating decoders AND the
 --   overwrite guard so the two can never independently reimplement a
---   PARTIAL version of it and drift apart again, as happened in rounds
---   7-9 (the guard mirrored the check for "session"/"lua-state" but
+--   PARTIAL version of it and drift apart again, as happened before
+--   (the guard mirrored the check for "session"/"lua-state" but
 --   missed "metadata" in B1 and every non-"lua-state" descriptor in B2).
 descriptorIsExactlyRequiredAt
     ∷ DecodedEnvelope → ComponentId → Word32 → Bool
@@ -428,7 +428,7 @@ luaStateComponentId ∷ ComponentId
 luaStateComponentId = ComponentId "lua-state"
 
 -- | The only schema version a genuine #760-era writer ever produced for
---   the opaque blob above (round-8 review): this fallback only knows how
+--   the opaque blob above: this fallback only knows how
 --   to interpret THIS version's meaning of "empty payload migrates
 --   cleanly, non-empty is refused" -- an envelope claiming some OTHER
 --   version is not the recognized #760 shape at all (a hypothetical
@@ -441,7 +441,7 @@ luaStateComponentVersion = 1
 
 -- | The exact #760-era ("B2") component-id set: "metadata" plus every
 --   Haskell gameplay component plus the single opaque "lua-state" blob.
---   Hoisted to top level (round-9 review) so 'decodeB2StructureAndMetadata'
+--   Hoisted to top level so 'decodeB2StructureAndMetadata'
 --   and 'foreignOptionalComponentIds' share the one definition rather than
 --   risk two copies drifting apart.
 b2Ids ∷ HS.HashSet ComponentId
@@ -460,9 +460,9 @@ b2Ids = HS.insert metadataComponentId
 --   components (#761 hadn't landed yet). Every descriptor must be
 --   marked required, matching the real #760 writer -- an optional one
 --   is not that genuine historical shape (mirrors the B1 fallback's
---   identical precision, round-7 review). The @"lua-state"@ descriptor's
+--   identical precision). The @"lua-state"@ descriptor's
 --   own version must ALSO match 'luaStateComponentVersion' exactly
---   (round-8 review): the Haskell components are decoded through the
+--   too: the Haskell components are decoded through the
 --   real ccInputVers dispatch, which already validates their own
 --   historical version, but the opaque Lua blob is never actually
 --   interpreted, only checked for emptiness below -- so an envelope
@@ -493,7 +493,7 @@ decodeB2StructureAndMetadata bytes =
                 -- Every id's required flag is already confirmed by the
                 -- loop above (lua-state included) -- this only remains to
                 -- reject a version other than the one genuine #760
-                -- writers always used (round-8 review).
+                -- writers always used.
                 luaStateDesc ← maybe (Left "lua-state descriptor missing")
                                      Right
                                      (findDescriptor luaStateComponentId
@@ -535,7 +535,7 @@ decodeB2SessionMetadata bytes =
 --   interpret it was removed -- and is refused rather than silently
 --   discarded.
 --
---   Round-18 review: "empty" means a genuinely-decoded, empty
+--   "Empty" means a genuinely-decoded, empty
 --   @HashMap Text Text@ (the documented pre-#761 @sdLuaModules@/
 --   @snapLuaModules@ shape -- see 'World.Save.Compat.SessionV90'\'s own
 --   identical @sd90LuaModules@ field), NOT a literal zero-byte payload:
@@ -631,7 +631,7 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   re-save (the scenario this function exists for). But @"session"@ is
 --   only actually EXEMPTED from the returned foreign-id list when the
 --   decoded envelope's OTHER present ids contain no genuine MODERN
---   gameplay component (round-4 review) — @"session"@ may legitimately
+--   gameplay component — @"session"@ may legitimately
 --   appear alongside @"metadata"@ and/or genuinely-unrecognized optional
 --   data (that's exactly the B1-plus-extra-optional-data scenario this
 --   requirement protects), but if it appears alongside an ACTUAL modern
@@ -644,7 +644,7 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   happens to be NAMED @"session"@ inside a modern-shaped save would
 --   pass this guard and be silently dropped on the very next save.
 --
---   Round-7 review: presence of the id alone is not enough either — a
+--   Presence of the id alone is not enough either — a
 --   @"session"@ descriptor marked OPTIONAL (or at the wrong version)
 --   is NOT the real, always-required frozen B1 shape ('decodeEnvelope'
 --   never checks a PRESENT descriptor's own @cdRequired@ flag against
@@ -655,7 +655,7 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   exactly, so the two functions can never disagree about what counts
 --   as "genuinely B1-shaped".
 --
---   Round-7 review: the SAME reasoning applies to the #760-era ("B2")
+--   The SAME reasoning applies to the #760-era ("B2")
 --   shape 'decodeB2SessionEnvelope' recognizes — its own opaque
 --   @"lua-state"@ id must ALSO be exempted here (with the SAME
 --   exact-shape/required-flag precision), or a freshly-migrated #760
@@ -664,7 +664,7 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   proved it can be honestly handled (or refused the load outright, in
 --   which case this function is never reached for that generation).
 --
---   Round-8 review: the required-flag check alone still isn't the full
+--   The required-flag check alone still isn't the full
 --   "genuinely #760-shaped" precision — @decodeB2StructureAndMetadata@
 --   now also requires @"lua-state"@'s OWN descriptor version to match
 --   'luaStateComponentVersion' exactly (not merely a version this reader
@@ -676,9 +676,9 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   refuses to decode it — the two must never disagree about what counts
 --   as "genuinely B2-shaped", exactly as B1's pairing already ensures.
 --
---   Round-9 review: rounds 7-8 each mirrored only ONE descriptor's
---   precision into this guard (session's for B1, lua-state's for B2),
---   still leaving OTHER descriptors in the same shape unchecked — a
+--   Mirroring only ONE descriptor's precision into this guard
+--   (session's for B1, lua-state's for B2) left OTHER descriptors in
+--   the same shape unchecked — a
 --   @{metadata OPTIONAL, session required v90}@ envelope satisfied
 --   @looksLikeB1Shape@ even though 'decodeLegacyStructureAndMetadata'
 --   itself would refuse it (metadata's own required flag matters too),
@@ -691,7 +691,7 @@ decodeValidatedEnvelope luaKnownNames luaRequiredNames =
 --   future precision fix to either shape's recognition can never again
 --   land in only one of the two places.
 --
---   Round-10 review: even with that precision, @"lua-state"@ was STILL
+--   Even with that precision, @"lua-state"@ was STILL
 --   being exempted whenever the envelope merely LOOKED B1-shaped,
 --   because @knownIdsForDecode@ (the known-set the INITIAL
 --   'decodeEnvelope' call needs so a genuine B2 session's own required

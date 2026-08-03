@@ -41,7 +41,7 @@
 --   cross-page" acceptance path has real coverage without inventing a
 --   fake gameplay field.
 --
---   'SamePageRef' also derives 'Hashable' (round-3 review, issue #764):
+--   'SamePageRef' also derives 'Hashable' (issue #764):
 --   a same-page reference can be the very thing a wire DTO's
 --   'Data.HashMap.Strict.HashMap' is keyed BY, not only a field value
 --   inside one — see "World.Save.Component.Entities"'s @PageSimDTO@,
