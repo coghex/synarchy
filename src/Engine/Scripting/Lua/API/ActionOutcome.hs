@@ -57,7 +57,7 @@ debugRecordOutcomeFn env = do
         -- getInt above): Layer A's screen-space clicks are frequently
         -- fractional, and Lua's tointeger flatly refuses any non-integral
         -- number (returns nil), which previously dropped the WHOLE
-        -- `where` field on every such click (review round 9).
+        -- `where` field on every such click.
         getSubDouble ∷ Lua.Name → Lua.Name → Lua.LuaE Lua.Exception (Maybe Double)
         getSubDouble tbl name = do
             _ ← Lua.getfield (Lua.nth 1) tbl

@@ -101,10 +101,10 @@ handleUnitKillCommand env utsRef uid = do
     -- Combat.Wounds.Tick's own "uiPose inst == dead" early-exit guard
     -- reading a stale (pre-kill) pose for up to one more wound tick —
     -- long enough for a still-externally-bleeding corpse to recreate
-    -- uiTrailState from Nothing before the mirror ever lands (round-5
-    -- review). Stamping uiPose here directly closes that race; the
-    -- next publishToRender idempotently re-derives the SAME "dead"
-    -- string from usPose, so this never fights it.
+    -- uiTrailState from Nothing before the mirror ever lands. Stamping
+    -- uiPose here directly closes that race; the next publishToRender
+    -- idempotently re-derives the SAME "dead" string from usPose, so
+    -- this never fights it.
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing   → (um, ())

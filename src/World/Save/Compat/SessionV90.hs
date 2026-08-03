@@ -195,8 +195,8 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90Identity     ∷ !(Maybe WorldIdentityDTO)
     } deriving (Show, Generic, Serialize)
 
--- | Frozen mirror of the v90 'World.Save.Types.SaveMetadata' (round-17
---   review): unlike every OTHER field 'SaveDataV90' below composes from
+-- | Frozen mirror of the v90 'World.Save.Types.SaveMetadata': unlike
+--   every OTHER field 'SaveDataV90' below composes from
 --   an already-frozen leaf DTO, this field previously embedded the LIVE,
 --   ever-evolving 'SaveMetadata' directly -- a field added/removed/
 --   reordered there in the future would silently corrupt this frozen
@@ -259,7 +259,7 @@ decodeSessionV90 bytes = case S.decode bytes of
 --   cross-component + manifest-agreement checks
 --   'World.Save.Component.assembleSnapshot' runs on a modern envelope.
 --
---   Round-14 review: unlike 'World.Save.Component.assembleSnapshot',
+--   Unlike 'World.Save.Component.assembleSnapshot',
 --   this path previously only ran CROSS-component checks
 --   ('validateSessionSnapshot'/'structureEditPaletteErrors'/
 --   'sessionIntegrityErrors') and skipped every COMPONENT-LOCAL

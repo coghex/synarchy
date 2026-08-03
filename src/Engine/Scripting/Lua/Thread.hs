@@ -117,7 +117,7 @@ startLuaThread env = do
                         "Debug server failed to start on port "
                         <> T.pack (show port) <> ": " <> err
                     atomically newTQueue
-            -- Round 10 review (issue #763): the real debug queue only
+            -- Issue #763: the real debug queue only
             -- exists once 'startDebugServer' above returns, but
             -- 'backendState' was constructed earlier (so registerLuaAPI/
             -- script init could run against it) with the throwaway
@@ -148,7 +148,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
   scriptsVar ← newTVarIO Map.empty
   scriptIdRef ← newIORef 1
   -- Placeholder — 'startLuaThread' splices in the REAL debug queue via
-  -- record update once one exists (round 10 review, issue #763); every
+  -- record update once one exists (issue #763); every
   -- other caller (headless tests exercising unrelated Lua API surface)
   -- never touches 'lbsDebugQueue' at all, so an inert, never-fed queue
   -- here keeps their call sites unchanged.
@@ -196,7 +196,7 @@ runLuaLoop env ls stateRef debugQueue = do
             -- frame that never pops (unbounded stack growth).
             ok ← catch
               (do
-                -- Round 5 review (issue #763): the Lua thread is the
+                -- Issue #763: the Lua thread is the
                 -- one thread the save barrier never actually gated --
                 -- SaveLua's own self-ack (in saveWorldFn/handleLoadStaged)
                 -- persists across every later quiescence pass by
@@ -227,7 +227,7 @@ runLuaLoop env ls stateRef debugQueue = do
                 if locked
                   then threadDelay 1000 >> pure True
                   else do
-                    -- Round 8 review: releaseCaptureLock (world thread,
+                    -- releaseCaptureLock (world thread,
                     -- right after publishStagedSession) flips
                     -- captureLocked False the INSTANT publish
                     -- completes -- but LuaSaveLoaded was already queued
@@ -246,7 +246,7 @@ runLuaLoop env ls stateRef debugQueue = do
                     -- read removes what it reads.
                     processLuaMsgs env ls stateRef
 
-                    -- Round 12 review (issue #763): 'processLuaMsgs' just
+                    -- Issue #763: 'processLuaMsgs' just
                     -- above can itself dispatch 'LuaLoadStaged' —
                     -- 'handleLoadStaged' applies the prepared Lua state
                     -- (unit_ai/building_spawn singletons overwritten with

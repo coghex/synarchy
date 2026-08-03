@@ -67,7 +67,7 @@ data LuaBackendState = LuaBackendState
     --   errors (now caught via pcall) without threading a logger
     --   through every broadcast call site.
   , lbsDebugQueue   ∷ TQueue DebugCommand
-    -- ^ The debug-console command queue (round 10 review, issue #763):
+    -- ^ The debug-console command queue (issue #763):
     --   reachable from 'ls' at every 'processLuaMsg' call site so the
     --   'LuaSaveLoaded' handler can quarantine any command still queued
     --   at that point (queued sometime during the now-replaced session,
@@ -170,7 +170,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaInterrupt Word32
             | LuaUIClickEvent ElementHandle Text Double Double
               -- ^ Element, callback name, and the click's raw window
-              --   coordinates (#646 review round 9) — carried purely so
+              --   coordinates (#646) — carried purely so
               --   Dispatch.hs's F4 action-outcome record for this route
               --   isn't stuck reporting no location, same convention as
               --   LuaMouseDownEvent's own trailing x/y.
@@ -232,7 +232,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   and other live pages are untouched (#191); nested refs are
               --   scrubbed against the survivor set.
             | LuaSaveLoaded Int [Int] [Int]
-              -- ^ round 2 review: the leading 'Int' is the load
+              -- ^ The leading 'Int' is the load
               --   transaction's request id, so the dispatcher can
               --   report 'Engine.Load.Status.LoadPublished' only once
               --   THIS broadcast (below) actually completes.
@@ -245,7 +245,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text
             | LuaWorldPreviewReady Int Word64
-              -- ^ handle, generation. Round 11 review, issue #763: the
+              -- ^ handle, generation. Issue #763: the
               -- generation is validated at DELIVERY time
               -- ('Engine.Scripting.Lua.Thread.Dispatch', gated behind
               -- the same captureLocked check every Lua-thread message
@@ -271,7 +271,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   every other state-owner thread has quiesced, mirroring
               --   how 'engine.saveWorld' drives the save barrier.
             | LuaLoadStagingFailed Int
-              -- ^ Round 6 review: staging (the world thread, off to the
+              -- ^ Staging (the world thread, off to the
               --   side of any live ref) FAILED for this request id
               --   before ever reaching 'LuaLoadStaged' — a staging
               --   exception or 'World.Load.Stage.StageError'. By this

@@ -394,8 +394,8 @@ publishFailureFor slotName phase path reason =
 --   cleanly today. No existing authoritative file (first-ever publish,
 --   or one already lost to storage corruption) is trivially safe.
 --
---   Checks BOTH @world.synworld@ and @world.synworld.prev@ (round-4
---   review) — not merely the authoritative file. If the authoritative
+--   Checks BOTH @world.synworld@ and @world.synworld.prev@ — not
+--   merely the authoritative file. If the authoritative
 --   generation is corrupt (present but undecodable), a real load
 --   actually reads through to 'previousGenerationFileName' instead
 --   ('selectLoadGeneration'\'s fallback), and 'publishValidated' then

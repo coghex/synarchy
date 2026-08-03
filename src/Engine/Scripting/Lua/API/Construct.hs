@@ -178,7 +178,7 @@ constructGetDesignationAtFn wsc = do
         _ → Lua.pushnil >> return 1
 
 -- | construction.cancelDesignationForRefund(pageId, gx, gy) → job table
---   | nil. Synchronous, ATOMIC pop-and-return (#799 review round 5):
+--   | nil. Synchronous, ATOMIC pop-and-return (#799):
 --   unlike cancelDesignation (fire-and-forget, queued on the world
 --   thread), this removes the designation and returns its final state
 --   in ONE atomic step, so a caller computing a materials refund from
@@ -306,8 +306,8 @@ constructAddJobProgressFn wsc = do
 --   same cost twice. Silently ignored if the designation no longer
 --   exists.
 --
---   SYNCHRONOUS (direct atomicModifyIORef', not queued — review round 6):
---   a queued write raced construction.cancelDesignationForRefund's
+--   SYNCHRONOUS (direct atomicModifyIORef', not queued): a queued
+--   write raced construction.cancelDesignationForRefund's
 --   synchronous atomic pop — a cancel issued between "materials just
 --   consumed" and "the queued paid=true command finally drains" would
 --   pop cdMaterialsPaid still False, refunding nothing for a cost the

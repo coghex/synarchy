@@ -26,7 +26,7 @@
 --   tree → not hit), a modal now covering the point (the modal's own
 --   element wins the hit test instead), and a plain drag-outside-and-
 --   release-outside (the point simply misses). Two SEPARATE,
---   independent checks (#745 review round 12) catch an interruption
+--   independent checks (#745) catch an interruption
 --   when it's REVERTED before release, since by then routing looks
 --   identical to press time again:
 --
@@ -45,8 +45,8 @@
 --       so cancels, even when reverted — but an UNRELATED element's
 --       own mutation (a decorative hover-highlight sibling, say) is
 --       invisible to this chain and never poisons the activation.
---       Deliberately scoped to the ONE chain, not global: a round
---       10/11 attempt at a single manager-wide epoch covering every
+--       Deliberately scoped to the ONE chain, not global: an earlier
+--       attempt at a single manager-wide epoch covering every
 --       element mutation broke real production hover-highlight code
 --       (@scripts/ui/toggle.lua@'s @onHoverEnter@/@onHoverLeave@,
 --       @scripts/ui/list.lua@'s @setHoveredSlot@), which legitimately
@@ -83,7 +83,7 @@ import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer)
 --   always fires whichever callback the FRESH release-time routing
 --   resolves (a mid-press @UI.setOnClick@ reassignment fires the
 --   current callback, not a stale one).
---   #745 review round 12: 'paPageEpoch'/'paChain' additionally capture
+--   #745: 'paPageEpoch'/'paChain' additionally capture
 --   'UI.Types.upmPageEpoch' and the pressed element's ancestor-chain
 --   epochs at press time — see 'resolveActivation'.
 data PendingActivation = PendingActivation
@@ -132,7 +132,7 @@ ancestorChain h0 mgr = go (64 ∷ Int) h0
 --   'UI.Types.ueDragActivation' before reaching this — a drag-
 --   activation control's press fires immediately and never produces a
 --   'PendingActivation' at all. Captures 'UI.Types.upmPageEpoch' and
---   the pressed element's 'ancestorChain' (#745 review round 12) so
+--   the pressed element's 'ancestorChain' (#745) so
 --   'resolveActivation' can detect an intervening route-affecting
 --   mutation to the element, one of its ancestors, or any page, even
 --   if it's reverted before release.
@@ -146,8 +146,8 @@ beginActivation kind h mgr =
 --   because only the FINAL release POSITION is ever consulted for
 --   that check — intermediate movement has no bearing on the
 --   decision. A route-affecting STATE change to the pressed element,
---   one of its ancestors, or any page is different: #745 review round
---   12 — the issue's "returning inside before release may restore
+--   one of its ancestors, or any page is different: #745's
+--   "returning inside before release may restore
 --   pending activation" carve-out is scoped to position only, so
 --   either check below cancels permanently, even if fully reverted by
 --   release time (hide→show, disable→enable, detach→re-add, page

@@ -109,7 +109,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
     uiFocus ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) validateFocus
     let shellMode = getInputMode focusMgr
         key = fromGLFWKey glfwKey
-        -- #745 review round 3: was this physical key ALREADY consumed
+        -- #745: was this physical key ALREADY consumed
         -- by the control-focus layer at an earlier Pressed dispatch,
         -- still held (Repeating) or now releasing? See
         -- 'inpControlFocusConsumedKeys'.
@@ -241,7 +241,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- priority automatically. Validated the same way text focus
         -- already is (belt-and-suspenders repair against a
         -- hidden/deleted/disabled/detached/out-of-scope control).
-        -- #745 review round 4: one atomic transition, not a separate
+        -- #745: one atomic transition, not a separate
         -- readIORef/writeIORef pair — the Lua thread mutates this same
         -- uiManagerRef concurrently (element create/delete/visibility
         -- etc.), and a plain write-back here would silently DISCARD
@@ -250,7 +250,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         (mgr0, mgr1, controlFocus) ← atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \old →
             let (validated, cf) = validateControlFocusIn old
             in (validated, (old, validated, cf))
-        -- #745 review round 2: report a repair-triggered clear too —
+        -- #745: report a repair-triggered clear too —
         -- not just the explicit Tab/Escape transitions below — so a
         -- Lua focus-ring consumer never sees a stale handle linger
         -- after the control it names went invalid.
@@ -259,7 +259,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
 
         when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             let step = if GLFW.modifierKeysShift mods then prevFocus else nextFocus
-            -- #745 review round 5: traverse AND assign in the SAME
+            -- #745: traverse AND assign in the SAME
             -- atomic transition, computed from whatever is actually
             -- current at mutation time (not the earlier validation
             -- snapshot) — otherwise a concurrent Lua-thread mutation
@@ -271,7 +271,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
                     Nothing     → (m, (prior, Nothing))
                     Just target → (setControlFocus target m, (prior, Just target))
             when (isJust newFocus) $ do
-                -- #745 review round 8: a singleton focus list wraps
+                -- #745: a singleton focus list wraps
                 -- Tab back to the SAME handle it started on — that's
                 -- still a successful traversal (consume the key,
                 -- don't leak it to gameplay), but not an actual
@@ -292,7 +292,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
             Nothing → return ()
             Just elemHandle → do
                 let mFocusedEl = getElement elemHandle mgr1
-                    -- #745 review round 3: a drag-activation control's
+                    -- #745: a drag-activation control's
                     -- onClick STARTS A DRAG (slider knob/track,
                     -- scrollbar thumb — see 'UI.Types.ueDragActivation')
                     -- rather than performing a discrete action; firing
@@ -324,7 +324,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaShellToggle
             markMatched "openShell"
-        -- #745 review round 2: a key the control-focus layer above
+        -- #745: a key the control-focus layer above
         -- just consumed (Tab/Shift+Tab, Enter/Space, or a steppable
         -- arrow) must take precedence over gameplay dispatch, exactly
         -- like text focus already does by never reaching this
@@ -387,7 +387,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
     -- same way a text-focused key already is.
     controlFocusConsumedFresh ← readIORef controlFocusConsumedRef
     let controlFocusConsumed = controlFocusConsumedFresh ∨ alreadyConsumed
-        -- #745 review round 3: carry "consumed" through Repeating,
+        -- #745: carry "consumed" through Repeating,
         -- start it on a freshly-consumed Pressed, and drop it on
         -- Released regardless of outcome — mirrors inpPendingUIClick/
         -- inpPendingActivation's own press-to-release lifecycle.

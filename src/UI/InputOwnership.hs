@@ -21,7 +21,7 @@
 --   receiving input above any modal without this module treating debug
 --   as a special case. @scripts/debug.lua@'s F8 overlay and
 --   @scripts/debug_anim_panel.lua@ both render on a real @"debug"@
---   page (#742 review round 2 — they used to sit on @"overlay"@, below
+--   page (#742 — they used to sit on @"overlay"@, below
 --   'LayerModal''s band, which let their raw parallel rects claim a
 --   screen position a modal was actually painted over) but their own
 --   click detection runs a parallel Lua-side hit-test outside
@@ -146,7 +146,7 @@ pagesInScope mgr = case inputBoundaryPage mgr of
 
 -- | True when the given page is at or above the modal boundary (or
 --   there is no boundary at all) — still eligible to react to pointer
---   input. #742 review round 1: a handful of raw Lua handlers
+--   input. #742: a handful of raw Lua handlers
 --   (dropdown/randbox "click outside closes/submits me") iterate every
 --   LIVE instance regardless of which page it's on, entirely outside
 --   'routePointer'/'UI.Manager.Query' hit-testing — this lets them
@@ -236,7 +236,7 @@ routePointer kind pos mgr =
 routeScroll ∷ (Float, Float) → UIPageManager → Maybe ElementHandle
 routeScroll pos mgr = topHitBy (scopedPageOk mgr) elementCapturesScroll pos mgr
 
--- | #742 review round 1: the middle-click "UI surface blocks" check
+-- | #742: the middle-click "UI surface blocks" check
 --   ('Engine.Input.Thread' — middle-click has no owned handler of its
 --   own and exists purely to pan the camera). Pre-#742 this swallowed
 --   on ANY visible sized element; #743 narrows the surface check to

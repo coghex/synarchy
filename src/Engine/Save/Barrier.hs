@@ -66,7 +66,7 @@ beginSave (SaveBarrier next status) owners = atomically $ do
             pure $ Right n
 
 -- | An acknowledgment from an 'owner' that isn't a member of THIS
---   transaction's own 'ssOwners' (round 15 review, issue #763: a
+--   transaction's own 'ssOwners' (issue #763: a
 --   conditionally-registered owner like 'SaveRender'/'SaveInput' may
 --   still be ticking and acking during a transaction that never
 --   included it — e.g. the render thread's per-tick ack during a plain

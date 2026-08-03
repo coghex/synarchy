@@ -89,8 +89,8 @@ saveExtension = ".synworld"
 --   here is genuine, unpredictable-until-attempted I/O, which is why
 --   this is safe to run AFTER the #757 barrier releases (#758): a
 --   failure here is a real write failure, not a capture bug. The whole
---   transaction is internally exception-safe (review round 2 follow-up
---   still applies): the caller ('World.Thread.Command.Save.WriteWorld')
+--   transaction is internally exception-safe: the caller
+--   ('World.Thread.Command.Save.WriteWorld')
 --   runs on the world thread AFTER the barrier's capture lock has
 --   already released, so an uncaught exception here would escape all the
 --   way to "World.Thread"'s top-level crash handler instead of reaching
@@ -128,7 +128,7 @@ writeSaveFiles rawName meta encoded luaKnownNames luaRequiredNames =
 --   generation/recovery machinery applies to it: it either decodes
 --   cleanly or is rejected outright, exactly as before #762.
 --
---   Round 2/5 review (requirement 2/16): the failure case also names the
+--   The failure case also names the
 --   'LoadPhase' the attempt actually reached before failing, so
 --   'engine.getLoadStatus()' can retain real progress instead of every
 --   failure collapsing straight from 'LoadPaused' to 'LoadFailed'.
@@ -181,7 +181,7 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     reachedEnvelope ∷ Text → Bool
     reachedEnvelope = T.isInfixOf "incompatible with this build"
 
-    -- Round 5 review: rather than collapsing every "coherent but
+    -- Rather than collapsing every "coherent but
     -- incompatible" failure into one bucket, this reads the SAME
     -- per-component phase tag 'World.Save.Component.Types.ComponentPhase'
     -- already carries for its own diagnostic purpose (issue #760

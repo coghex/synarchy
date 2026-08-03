@@ -28,8 +28,8 @@ import World.Material (MaterialId(..), materialIdByName)
 --   world/page state), backed by the same 'findSpeciesByName' the
 --   world-thread plant designation handler
 --   ("World.Thread.Command.Cursor.Plant.handleWorldDesignatePlantCommand")
---   already uses to resolve a crop name. Added (issue #761 round-5
---   review) so a persisted plantJob.crop can be validated against the
+--   already uses to resolve a crop name. Added (issue #761) so a
+--   persisted plantJob.crop can be validated against the
 --   currently-registered species at load-prepare time, the same
 --   "reject before any live mutation" contract craftJob/repairJob's
 --   recipe/item checks already enforce -- unlike those, no per-tile

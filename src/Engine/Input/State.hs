@@ -63,7 +63,7 @@ updateWindowState state _ = state
 -- | Clear all held mouse-button and key state. Used on focus-loss /
 --   minimize transitions, where the OS may never deliver the releases
 --   that would normally clear it. Cursor position is left untouched.
---   'inpPendingUIClick' is cleared too (#730 review round 3) — any
+--   'inpPendingUIClick' is cleared too (#730) — any
 --   entry still in it at this point was already resolved (as an
 --   interrupted noop) by 'releaseHeldButtons', called just before this
 --   with the PRE-clear state; leaving it around would let a later,
@@ -75,7 +75,7 @@ clearHeldInput state = state
     , inpMouseRoutes    = Map.empty
     , inpPendingUIClick = Map.empty
     , inpPendingActivation = Map.empty
-    -- #745 review round 3: a key held mid-consumption across a
+    -- #745: a key held mid-consumption across a
     -- focus-loss/minimize gets no synthetic release from GLFW (only
     -- mouse buttons get one, via releaseHeldButtons below) — clear the
     -- tracking set too, or it leaks that key suppressed forever.
@@ -97,7 +97,7 @@ clearHeldInput state = state
 --   down drag state (slider / scrollbar / button) ignore the route and
 --   release as usual.
 --
---   F4 (#730 review round 3): a button with a pending deferred click/
+--   F4 (#730): a button with a pending deferred click/
 --   drag classification (see 'Engine.Input.Thread's pendingUIClickRef
 --   — a ClickUI press, or a middle-button camera-drag press, not yet
 --   resolved by a normal release) would otherwise lose its F4 record

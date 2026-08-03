@@ -86,7 +86,7 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 unless paused $ do
                     modifyIORef' (wsGameTimeRef (toWorldSimCapability env)) (+ dt)
                     tickAllMovement dt env utsRef
-                -- Round 3 review (issue #763): a load publish
+                -- Issue #763: a load publish
                 -- (World.Load.Publish.publishStagedSession) swaps
                 -- unitManagerRef and utsRef itself while THIS thread is
                 -- meant to be fully quiesced (SaveUnit) — but

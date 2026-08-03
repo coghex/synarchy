@@ -117,7 +117,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- hardness/density/drainage), making per-material differentiation
     -- in erosion / water-table / etc. a no-op. Idempotent — reloading on
     -- successive world inits just rewrites the same data.
-    -- Shared with the whole-session LOAD path (issue #763 round 5) via
+    -- Shared with the whole-session LOAD path (issue #763) via
     -- 'Engine.Asset.YamlMaterials.loadPopulatedMaterialRegistry' — a
     -- headless boot that goes straight to engine.loadSave with no prior
     -- world.init in the same process needs this SAME population before
@@ -255,7 +255,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env "Assembling zoom texture atlas..."
     let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
     _ ← evaluate (force atlas)
-    -- Round 9 review (issue #763): pair the atlas with the EXACT
+    -- Issue #763: pair the atlas with the EXACT
     -- WorldState it belongs to (this init's own page), mirroring
     -- World.Load.Publish's identical fix -- see EngineEnv.zoomAtlasDataRef.
     writeIORef (rhZoomAtlasDataRef handoff) $
@@ -273,7 +273,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     sendGenLog env "Rendering world preview..."
     let preview = buildPreviewFromPixels params zoomCache chunkPixels
     _ ← evaluate (force preview)
-    -- Round 10 review: stamp with a fresh generation (see
+    -- Stamp with a fresh generation (see
     -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
     previewGen ← atomicModifyIORef' (rhWorldPreviewGenerationRef handoff)
                     (\g → (g + 1, g + 1))

@@ -31,7 +31,7 @@ deleteElementTree handle mgr =
                 , upmGlobalFocus = if upmGlobalFocus mgrWithoutChildren ≡ Just handle
                                    then Nothing
                                    else upmGlobalFocus mgrWithoutChildren
-                -- #745 review round 3: same hygiene for keyboard
+                -- #745: same hygiene for keyboard
                 -- CONTROL focus.
                 , upmControlFocus = if upmControlFocus mgrWithoutChildren ≡ Just handle
                                     then Nothing
@@ -58,7 +58,7 @@ modifyPage ∷ PageHandle → UIPageManager → (UIPage → UIPage) → UIPageMa
 modifyPage handle mgr f =
     mgr { upmPages = Map.adjust f handle (upmPages mgr) }
 
--- | #745 review round 12: bump ONE element's 'UI.Types.ueRouteEpoch'
+-- | #745: bump ONE element's 'UI.Types.ueRouteEpoch'
 --   — called by 'UI.Manager.Property.setElementVisible'/
 --   'setElementClickable' and 'UI.Manager.Hierarchy.removeElement'/
 --   'removeFromPage' (detach only — see 'UI.Types.ueRouteEpoch' for
@@ -72,7 +72,7 @@ bumpElementRouteEpoch ∷ ElementHandle → UIPageManager → UIPageManager
 bumpElementRouteEpoch handle mgr =
     modifyElement handle mgr $ \el → el { ueRouteEpoch = ueRouteEpoch el + 1 }
 
--- | #745 review round 12: bump the manager-wide 'UI.Types.upmPageEpoch'
+-- | #745: bump the manager-wide 'UI.Types.upmPageEpoch'
 --   — called by 'UI.Manager.Page.hidePage'/'showPage' for ANY page.
 --   Deliberately GLOBAL (unlike 'bumpElementRouteEpoch'): see
 --   'UI.Types.upmPageEpoch' for why page-level visibility needs to

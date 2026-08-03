@@ -118,7 +118,7 @@ applyCoreSession d snap = snap
 
 -- texture-palette ---------------------------------------------------
 
--- | Frozen mirror of 'TexPalette' (#760 round 8). The previous version
+-- | Frozen mirror of 'TexPalette' (#760). The previous version
 --   rode directly on 'TexPalette''s own hand-written 'Serialize'
 --   instance ("Structure.Palette") via a @deriving newtype@ — exactly
 --   the live-manager-identity case the frozen-DTO boundary rule (see
@@ -151,7 +151,7 @@ fromTexPaletteDTO d =
         , tpNextId   = tpdNextId d
         }
 
--- | Component-local invariant (#760 round 9): 'TexPalette' is a
+-- | Component-local invariant (#760): 'TexPalette' is a
 --   bijective path<->id map plus a "next id to hand out" allocator —
 --   riding on the live instance's own hand-written 'put'/'get'
 --   (see "Structure.Palette") used to guarantee this structurally

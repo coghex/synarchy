@@ -139,9 +139,9 @@ runStartupHandshake mode env = do
 
 -- | Gate the mode's camera updates and Lua-to-engine message
 --   processing on the save barrier's capture lock, and genuinely
---   PARTICIPATE in the barrier as a 'SaveRender' owner (round 15
---   review, issue #763, revised twice — see below). A load
---   transaction's publish ("World.Load.Publish.publishStagedSession")
+--   PARTICIPATE in the barrier as a 'SaveRender' owner (issue #763 — see
+--   below). A load transaction's publish
+--   ("World.Load.Publish.publishStagedSession")
 --   writes cameraRef/worldQuadsRef/etc. entirely inside that window, so
 --   a held pan/drag computed against the pre-load camera/input state
 --   must not land moments after publish already wrote the replacement

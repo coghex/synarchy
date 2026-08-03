@@ -142,11 +142,11 @@ handleWorldPreview = do
                             { previewTexture =
                                 Just (TransientTexture texHandle cleanupAll) }
 
-                    -- Round 8/9/10 review: staleness here can NOT be
-                    -- decided at upload-completion time (this point).
-                    -- Round 8 re-read 'worldPreviewRef' and round 10
-                    -- compared 'worldPreviewGenerationRef' right here —
-                    -- both still race a publish that hasn't happened
+                    -- Staleness here can NOT be decided at
+                    -- upload-completion time (this point). Re-reading
+                    -- 'worldPreviewRef' here, or comparing
+                    -- 'worldPreviewGenerationRef' here, would
+                    -- still race a publish that hasn't happened
                     -- YET: 'World.Load.Publish.publishStagedSession'
                     -- runs asynchronously on the WORLD thread, so this
                     -- upload can reach this point and see nothing newer
@@ -155,7 +155,7 @@ handleWorldPreview = do
                     -- lands moments later. There is no live-ref check at
                     -- upload-completion time that can rule that out.
                     --
-                    -- Round 11 review: carry 'myGen' in the message
+                    -- Instead, carry 'myGen' in the message
                     -- itself and validate it at DELIVERY instead —
                     -- 'Engine.Scripting.Lua.Thread.Dispatch's handling
                     -- of every queued 'LuaMsg' (this one included) only
@@ -272,15 +272,15 @@ handleZoomAtlasUpload = do
                             , zaiChunksPerRow = chunksPerRow
                             }
 
-                    -- Round 8/9 review (issue #763): this upload is
+                    -- Issue #763: this upload is
                     -- async and can take multiple frames (staging
                     -- buffer + Vulkan copy above), so re-reading
                     -- 'worldManagerRef' HERE to find "every current
                     -- world" would race a load publish that swaps it
                     -- in the meantime — a peek-then-act check on
                     -- 'zoomAtlasDataRef' narrows that window but can't
-                    -- close it (round 8's attempt was itself flagged
-                    -- non-atomic in round 9). Writing to 'targetStates'
+                    -- close it: any such attempt is itself
+                    -- non-atomic. Writing to 'targetStates'
                     -- — the EXACT 'WorldState's captured back when this
                     -- atlas was enqueued (see 'EngineEnv.zoomAtlasDataRef'
                     -- and 'World.Load.Publish'/'World.Thread.Command.Init')

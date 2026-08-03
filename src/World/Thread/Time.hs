@@ -82,7 +82,7 @@ tickWorldTime env dt = do
     -- margin must discover it on the very next tick rather than
     -- waiting for an unpause.
     --
-    -- Round 12 review (issue #763): gated on a load transaction NOT
+    -- Issue #763: gated on a load transaction NOT
     -- being in flight, which is a DIFFERENT thing from the pause flag
     -- above and must stay independent of it. World.Load.Stage.stageSession
     -- (a whole-session load's staging phase) runs on this same world

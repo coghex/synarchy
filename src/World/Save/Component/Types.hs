@@ -52,7 +52,7 @@
 --         contract), e.g. @GeoTimeline@ — safe by a DIFFERENT,
 --         already-established mechanism, not a gap.
 --
---   NOTE (review round 6): the "World.Save.Types" positional entity
+--   NOTE: the "World.Save.Types" positional entity
 --   snapshots (@BuildingInstanceSnapshot@ / @UnitInstanceSnapshot@) do
 --   NOT qualify as leaves, even though @currentSaveVersion@ governs them
 --   in the legacy bridge. They directly carry mutable @ItemInstance@
@@ -70,7 +70,7 @@
 --   "World.Save.Component.Page" (world edits / designations / ground
 --   items), and "World.Save.Component.Entities" (unit-sim / craft-bills /
 --   power-nodes, plus the frozen building/unit instance DTOs and their
---   nested item / stat-modifier / wound / scar records — review round 6).
+--   nested item / stat-modifier / wound / scar records).
 module World.Save.Component.Types
     ( ComponentPhase(..)
     , ComponentError(..)
