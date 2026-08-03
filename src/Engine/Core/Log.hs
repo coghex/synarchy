@@ -10,9 +10,7 @@ module Engine.Core.Log
   -- * Category management
   , enableCategory
   , disableCategory
-  , setCategoryLevel
   , isEnabled
-  , getEnabledCategories
   , parseCategory
 
   -- * Core logging functions
@@ -28,13 +26,10 @@ module Engine.Core.Log
   -- * Structured logging
   , logDebugS
   , logInfoS
-  , logWarnS
   , logErrorS
 
   -- * Exception integration
   , logAndThrow
-  , logException
-  , traceLog
 
   -- * Types
   , LogLevel(..)
@@ -44,7 +39,6 @@ module Engine.Core.Log
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Time.Clock as Clock
 import Data.IORef (newIORef, readIORef, atomicModifyIORef')
@@ -90,11 +84,6 @@ shutdownLogger LoggerState{..} =
     LogToHandle h → hFlush h
     LogToCallback _ → return ()
 
-setCategoryLevel ∷ LoggerState → LogCategory → LogLevel → IO ()
-setCategoryLevel LoggerState{..} cat level =
-  atomicModifyIORef' lsCategoryLevels $ \cats →
-    (Map.insert cat level cats, ())
-
 enableCategory ∷ LoggerState → LogCategory → IO ()
 enableCategory LoggerState{..} cat =
   atomicModifyIORef' lsDebugEnabled $ \cats →
@@ -118,11 +107,6 @@ isEnabled LoggerState{..} cat level = do
       categoryLevels ← readIORef lsCategoryLevels
       let effectiveMin = Map.findWithDefault globalMin cat categoryLevels
       return $ level ≥ effectiveMin
-
-getEnabledCategories ∷ LoggerState → IO [(LogCategory, LogLevel)]
-getEnabledCategories LoggerState{..} = do
-  cats ← readIORef lsCategoryLevels
-  return $ Map.toList cats
 
 -- | The external source location a log entry should be attributed to.
 --
@@ -248,10 +232,6 @@ logInfoS ∷ (HasCallStack, MonadIO m)
          ⇒ LoggerState → LogCategory → Text → [(Text, Text)] → m ()
 logInfoS ls cat msg fields = logMessage ls LevelInfo cat msg (Map.fromList fields)
 
-logWarnS ∷ (HasCallStack, MonadIO m)
-         ⇒ LoggerState → LogCategory → Text → [(Text, Text)] → m ()
-logWarnS ls cat msg fields = logMessage ls LevelWarn cat msg (Map.fromList fields)
-
 logErrorS ∷ (HasCallStack, MonadIO m)
           ⇒ LoggerState → LogCategory → Text → [(Text, Text)] → m ()
 logErrorS ls cat msg fields = logMessage ls LevelError cat msg (Map.fromList fields)
@@ -265,24 +245,3 @@ logAndThrow ∷ (HasCallStack, MonadIO m, MonadError EngineException m)
 logAndThrow ls cat exType msg = do
   logError ls cat msg
   throwError $ EngineException exType msg mkErrorContext
-
-logException ∷ (HasCallStack, MonadIO m)
-             ⇒ LoggerState
-             → LogCategory
-             → EngineException
-             → m ()
-logException ls cat ex =
-  logErrorS ls cat ("Exception caught: " <> T.pack (show ex)) []
-
--- | Log entry and exit of a function, including the return value
-traceLog ∷ (HasCallStack, MonadIO m, Show a)
-         ⇒ LoggerState
-         → LogCategory
-         → Text  -- ^ Function name
-         → m a
-         → m a
-traceLog ls cat funcName action = do
-  logDebug ls cat $ "→ " <> funcName
-  result ← action
-  logDebug ls cat $ "← " <> funcName <> " = " <> T.pack (show result)
-  return result
