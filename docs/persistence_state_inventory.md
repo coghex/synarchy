@@ -134,7 +134,6 @@ classified in their own sections (§2, §3/§4, §5) rather than here.
 |---|---|---|---|---|---|
 | `timingState` | global | Exclude | — | frame counters/timing, reset at boot | none yet |
 | `graphicsState` | global | Exclude | — | entire Vulkan device/swapchain/pipeline/buffer state; rebuilt at boot. Individual GPU handles are not separately inventoried — they are not gameplay state and none are ever save-file candidates. | none yet |
-| `assetConfig` | global | Exclude | — | rebuilt at boot | none yet |
 | `sceneManager` | global | Exclude | — | scene graph, rebuilt by UI/world render setup each session | none yet |
 
 ## 3. `WorldManager` / `WorldState` (`src/World/State/Types.hs`)

@@ -446,7 +446,6 @@ data EngineEnv = EngineEnv
 data EngineState = EngineState
   { timingState      ∷ TimingState
   , graphicsState    ∷ GraphicsState
-  , assetConfig      ∷ AssetConfig
   , sceneManager     ∷ SceneManager
   }
 

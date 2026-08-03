@@ -56,10 +56,10 @@ notions of "the live field set."
 **Out of scope**, per the issue's own boundary (see §6/§7 for how this
 is expected to change later, without changing it here):
 
-- `EngineState` (`src/Engine/Core/State.hs:421`, nested under
+- `EngineState` (`src/Engine/Core/State.hs:446`, nested under
   `engineStateRef`) is **not** inventoried field-by-field here. It is a
   single, already-documented invariant (§3) — main-render-thread-private
-  — and its own fields (`timingState`/`graphicsState`/`assetConfig`/
+  — and its own fields (`timingState`/`graphicsState`/
   `sceneManager`) are pure rendering/timing/scene mechanics, not a
   capability-ownership question distinct from "the main render thread
   owns all of it." `docs/persistence_state_inventory.md` §2 already
@@ -268,10 +268,10 @@ language joiner.
 `engineStateRef ∷ IORef EngineState` is the one `EngineEnv` field this
 document treats specially, per issue #876 requirement 5.
 
-`EngineState` (`src/Engine/Core/State.hs:421-426`) carries the fully
+`EngineState` (`src/Engine/Core/State.hs:446-450`) carries the fully
 main-render-thread-private mutable state: `TimingState`,
 `GraphicsState` (every Vulkan handle, the GLFW window, the scene
-render pipeline state), `AssetConfig`, and `SceneManager`. Its own
+render pipeline state), and `SceneManager`. Its own
 doc comment states the invariant directly: *"only the main render
 thread reads or writes this — worker threads run in plain IO and
 cannot reach it. Any state that must cross the thread boundary lives
