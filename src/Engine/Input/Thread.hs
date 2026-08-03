@@ -5,12 +5,15 @@
 --   file stays a thin thread-loop entrypoint:
 --
 --     * Queue draining + top-level per-event routing lives in
---       'Engine.Input.Thread.Dispatch' (re-exported here).
+--       'Engine.Input.Thread.Dispatch'; its 'processInputs' and
+--       'processInput' entrypoints are re-exported here.
 --     * Per-domain dispatch lives in 'Engine.Input.Thread.Keyboard',
 --       'Engine.Input.Thread.Char', 'Engine.Input.Thread.Mouse', and
---       'Engine.Input.Thread.Scroll'.
+--       'Engine.Input.Thread.Scroll', reached only through 'Dispatch'
+--       — none of those modules are re-exported.
 --
---   Both are re-exported here so the public API is unchanged.
+--   'startInputThread' and 'runInputLoop' are defined in this facade
+--   itself, not re-exported from elsewhere.
 module Engine.Input.Thread
   ( startInputThread
   , runInputLoop
