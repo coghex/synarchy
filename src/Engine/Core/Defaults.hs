@@ -6,7 +6,6 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Types
 import Engine.Core.State
-import Engine.Asset.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Config
 import Engine.Graphics.Window.Types
@@ -90,6 +89,5 @@ defaultEngineState = EngineState
     , previewTexture         = Nothing
     , zoomAtlasTexture       = Nothing
     }
-  , assetConfig      = AssetConfig 100 True True
   , sceneManager     = createSceneManager
   }
