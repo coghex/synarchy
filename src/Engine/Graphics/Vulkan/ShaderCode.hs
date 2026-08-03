@@ -11,19 +11,26 @@ module Engine.Graphics.Vulkan.ShaderCode
     ) where
 
 import UPrelude
-import Vulkan.Utils.ShaderQQ.GLSL.Glslang (compileShaderQ, glsl, vert, frag)
+import Vulkan.Utils.ShaderQQ.GLSL.Glslang (compileShaderQ, glsl, frag)
 import qualified Data.ByteString as BS
 -- The two bindless limits the fragment shaders below share with the
--- Haskell renderer. `[vert|`/`[frag|` cannot interpolate, so the shaders
--- that need these are written as `$(compileShaderQ … [glsl| … |])` and
--- splice them in as `${name}` — which is also why they have to live in a
--- separate module (Template Haskell's stage restriction). #975.
+-- Haskell renderer. The plain `[vert|`/`[frag|` quoters cannot interpolate,
+-- so every shader that needs a Haskell value is written as
+-- `$(compileShaderQ … [glsl| … |])` and splices it in as `${name}` — which
+-- is also why such a value has to live in a separate module (Template
+-- Haskell's stage restriction). #975.
 import Engine.Graphics.Vulkan.Texture.Limits
   (maxBindlessTextures, handleSlotTableSize)
+-- The uniform block declaration, likewise interpolated rather than
+-- restated: every shader below that reads the UBO splices `${uboGlslBlock}`
+-- and therefore sees the SAME member list as the Haskell record, which is
+-- generated from the same definition. Before #1072 four shaders spelled the
+-- block out and three of them were two members behind.
+import Engine.Graphics.Vulkan.Uniform.Layout (uboGlslBlock)
 
 -- | Font vertex shader (instanced rendering, world camera / NDC)
 fontVertexShaderCode ∷ BS.ByteString
-fontVertexShaderCode = [vert|
+fontVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
     #version 450
 
     layout(location = 0) in vec2 inPosition;
@@ -33,20 +40,7 @@ fontVertexShaderCode = [vert|
     layout(location = 4) in vec4 glyphUV;
     layout(location = 5) in vec4 glyphColor;
 
-    layout(set = 0, binding = 0) uniform UniformBufferObject {
-        mat4 model;
-        mat4 view;
-        mat4 proj;
-        mat4 uiView;
-        mat4 uiProj;
-        float brightness;
-        float screenW;
-        float screenH;
-        float pixelSnap;
-        float sunAngle;
-        float ambientLight;
-        float cameraFacing;
-    } ubo;
+    ${uboGlslBlock}
 
     layout(location = 0) out vec2 fragTexCoord;
     layout(location = 1) out vec4 fragColor;
@@ -69,13 +63,13 @@ fontVertexShaderCode = [vert|
         fragColor = glyphColor;
         fragBrightness = ubo.brightness;
     }
-|]
+|])
 
 -- | Bindless vertex shader (world camera) with face map support
 -- Pixel snap: shifts all vertices uniformly by removing the fractional
 -- pixel offset, so quads translate rigidly without distortion
 bindlessVertexShaderCode ∷ BS.ByteString
-bindlessVertexShaderCode = [vert|
+bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
 
@@ -87,22 +81,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 5) in uint inRenderFlags;
     layout(location = 6) in uint inWorldUV;
 
-    layout(set = 0, binding = 0) uniform UniformBufferObject {
-        mat4 model;
-        mat4 view;
-        mat4 proj;
-        mat4 uiView;
-        mat4 uiProj;
-        float brightness;
-        float screenW;
-        float screenH;
-        float pixelSnap;
-        float sunAngle;
-        float ambientLight;
-        float cameraFacing;
-        float defaultFaceMapSlot;
-        float worldCircumferenceTiles;
-    } ubo;
+    ${uboGlslBlock}
 
     layout(location = 0) out vec2 fragTexCoord;
     layout(location = 1) out vec4 fragColor;
@@ -159,7 +138,7 @@ bindlessVertexShaderCode = [vert|
         fragRenderFlags = inRenderFlags;
         fragDefaultFaceMapSlot = int(ubo.defaultFaceMapSlot);
     }
-|]
+|])
 
 -- | Bindless fragment shader with face-map directional lighting
 -- Used for world-space rendering (tiles, scene sprites)
@@ -303,7 +282,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
 -- NO pixel snap — UI vertices are already in integer pixel coordinates,
 -- and the orthographic projection maps them 1:1 to screen pixels.
 bindlessUIVertexShaderCode ∷ BS.ByteString
-bindlessUIVertexShaderCode = [vert|
+bindlessUIVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
 
@@ -313,20 +292,7 @@ bindlessUIVertexShaderCode = [vert|
     layout(location = 3) in float inTexIndex;
     layout(location = 4) in float inFaceMapIndex;
 
-    layout(set = 0, binding = 0) uniform UniformBufferObject {
-        mat4 model;
-        mat4 view;
-        mat4 proj;
-        mat4 uiView;
-        mat4 uiProj;
-        float brightness;
-        float screenW;
-        float screenH;
-        float pixelSnap;
-        float sunAngle;
-        float ambientLight;
-        float cameraFacing;
-    } ubo;
+    ${uboGlslBlock}
 
     layout(location = 0) out vec2 fragTexCoord;
     layout(location = 1) out vec4 fragColor;
@@ -340,7 +306,7 @@ bindlessUIVertexShaderCode = [vert|
         fragTexIndex = int(inTexIndex);
         fragBrightness = ubo.brightness;
     }
-|]
+|])
 
 -- | Bindless UI fragment shader — no face-map lighting, UI is unaffected by day/night
 bindlessUIFragmentShaderCode ∷ BS.ByteString
@@ -379,7 +345,7 @@ bindlessUIFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
 -- | Font UI vertex shader (uses UI projection matrix)
 -- NO pixel snap — same reasoning as bindlessUIVertexShaderCode.
 fontUIVertexShaderCode ∷ BS.ByteString
-fontUIVertexShaderCode = [vert|
+fontUIVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
     #version 450
 
     layout(location = 0) in vec2 inPosition;
@@ -389,20 +355,7 @@ fontUIVertexShaderCode = [vert|
     layout(location = 4) in vec4 glyphUV;
     layout(location = 5) in vec4 glyphColor;
 
-    layout(set = 0, binding = 0) uniform UniformBufferObject {
-        mat4 model;
-        mat4 view;
-        mat4 proj;
-        mat4 uiView;
-        mat4 uiProj;
-        float brightness;
-        float screenW;
-        float screenH;
-        float pixelSnap;
-        float sunAngle;
-        float ambientLight;
-        float cameraFacing;
-    } ubo;
+    ${uboGlslBlock}
 
     layout(location = 0) out vec2 fragTexCoord;
     layout(location = 1) out vec4 fragColor;
@@ -417,7 +370,7 @@ fontUIVertexShaderCode = [vert|
         fragColor = glyphColor;
         fragBrightness = ubo.brightness;
     }
-|]
+|])
 
 -- | Font SDF fragment shader (signed distance field rendering)
 fontSDFFragmentShaderCode ∷ BS.ByteString
