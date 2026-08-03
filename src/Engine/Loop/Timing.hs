@@ -65,25 +65,25 @@ updateFrameTiming = do
   -- Measure actual time after sleep (single call)
   actualNow ← liftIO getCurTime
   let actualDt = actualNow - lastFrameTime timing
-      newFrameCount = frameCount timing + 1
-      newAccum = frameTimeAccum timing + actualDt
-  
+      newWindowFrames = fpsWindowFrames timing + 1
+      newWindowElapsed = fpsWindowElapsed timing + actualDt
+
   -- Log FPS every second
-  when (newAccum ≥ 1.0) $ do
-    let fps = fromIntegral newFrameCount / newAccum ∷ Double
-        avgFrameTime = (newAccum * 1000.0) / fromIntegral newFrameCount
+  when (newWindowElapsed ≥ 1.0) $ do
+    let fps = fromIntegral newWindowFrames / newWindowElapsed ∷ Double
+        avgFrameTime = (newWindowElapsed * 1000.0) / fromIntegral newWindowFrames
     liftIO $ writeIORef (fpsRef env) fps
     logDebugSM CatGraphics "Performance"
       [("fps", T.pack $ printf "%.1f" fps)
       ,("avg_frame_ms", T.pack $ printf "%.2f" avgFrameTime)]
   
-  -- Update timing state (single write)
+  -- Update timing state (single write). The FPS sampling window resets
+  -- once it reaches a second; deltaTime/lastFrameTime carry every frame.
   put $! state { timingState = timing
-    { currentTime = actualNow
-    , deltaTime = actualDt
+    { deltaTime = actualDt
     , lastFrameTime = actualNow
-    , frameCount = if newAccum ≥ 1.0 then 0 else newFrameCount
-    , frameTimeAccum = if newAccum ≥ 1.0 then 0.0 else newAccum
+    , fpsWindowFrames = if newWindowElapsed ≥ 1.0 then 0 else newWindowFrames
+    , fpsWindowElapsed = if newWindowElapsed ≥ 1.0 then 0.0 else newWindowElapsed
     }}
 
 -- | Get current time as Double

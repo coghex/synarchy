@@ -48,12 +48,10 @@ defaultWindowConfig vc = WindowConfig
 defaultEngineState ∷ EngineState
 defaultEngineState = EngineState
   { timingState = TimingState
-    { frameCount       = 0
-    , currentTime      = 0.0
+    { fpsWindowFrames  = 0
     , deltaTime        = 0.0
-    , frameTimeAccum   = 0.0
+    , fpsWindowElapsed = 0.0
     , lastFrameTime    = 0.0
-    , targetFPS        = 60.0
     }
   , graphicsState    = GraphicsState
     { glfwWindow             = Nothing

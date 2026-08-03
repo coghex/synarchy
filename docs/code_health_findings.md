@@ -401,22 +401,32 @@ without opening a second file.
 Fix: delete `AssetConfig` and `EngineState.assetConfig`, or implement it.
 
 ### [#964] CH-19. `TimingState` is five-sixths write-only, and `targetFPS` is a lie
-Only `deltaTime` is read outside `Engine/Loop/Timing.hs`. `frameCount`,
-`currentTime`, `frameTimeAccum`, `lastFrameTime`, and `targetFPS` have zero
-external readers.
+Only `deltaTime` is read outside `Engine/Loop/Timing.hs`. The other five
+fields have zero *external* readers.
 
-`targetFPS = 60.0` (set in `Engine.Core.Defaults`) is read by **nothing** —
-the real frame cap comes from `VideoConfig`'s `vcVSync`/`vcFrameLimit`. A
-field named `targetFPS` sitting in the engine's timing state is the first
-place anyone will go to change the frame rate, and changing it does nothing.
+**Correction (2026-08-02):** an earlier version of this entry treated "no
+external reader" as "dead" and proposed making all five fields local. That was
+wrong — `frameCount`, `frameTimeAccum`, and `lastFrameTime` are read back on
+the *next* call to `updateFrameTiming`, so they are cross-frame state that a
+local binding cannot hold. Only two of the five were genuinely unused.
 
-`frameCount` is also misnamed: it resets to 0 every second
-(`Engine/Loop/Timing.hs:85`), so it is "frames since the last FPS sample", not
-a frame count — and it is typed `Word64` for a value that never exceeds a few
-hundred.
+The finding stands in its narrower form. `targetFPS = 60.0` (set in
+`Engine.Core.Defaults`) was read by **nothing** — the real frame cap comes from
+`VideoConfig`'s `vcVSync`/`vcFrameLimit`. A field named `targetFPS` sitting in
+the engine's timing state is the first place anyone will go to change the frame
+rate, and changing it did nothing. `currentTime` was written every frame and
+never read, always holding the same value as `lastFrameTime`.
 
-Fix: make the five fields local to the timing computation; delete or rename
-`targetFPS` and `frameCount`.
+`frameCount` was also misnamed: it resets to 0 every second, so it is "frames
+since the last FPS sample", not a frame count — and it is typed `Word64` for a
+value that never exceeds a few hundred. `frameTimeAccum` is that same window's
+elapsed duration, not accumulated engine time.
+
+Fixed by #964: `currentTime` and `targetFPS` deleted; `frameCount` and
+`frameTimeAccum` renamed to `fpsWindowFrames`/`fpsWindowElapsed`; a haddock on
+`TimingState` now records that the window fields reset every second and that
+pacing belongs to `VideoConfig`. The oversized `Word64` was left alone
+deliberately — retyping was outside that issue's scope.
 
 ### [#965] CH-20. `Engine.Input.Thread`'s module haddock describes an API it doesn't expose
 The header says the #787 split moved logic into `Dispatch` plus the four
