@@ -341,7 +341,7 @@ end
 -----------------------------------------------------------
 function unitAi.init(scriptId)
     engine.logInfo("Unit AI initializing...")
-    unitAiSave.register(unitAi, aiState)
+    unitAiSave.register(aiState)
     locations.register(unitAi, aiState)
 end
 
@@ -376,43 +376,34 @@ local function scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
     return cleared
 end
 
--- Broadcast from the engine once a save has finished loading (#195). The
--- Lua blob is a global singleton, clobbered wholesale by the C2-compat
--- apply() adapter (issue #761/#763 — see unit_ai.lua's module header)
--- with save-time state for every unit the save contained. Since issue
--- #763 (save-overhaul C2), a load REPLACES THE COMPLETE SESSION: there is
--- no more "other live page" concept to preserve (#191's off-page
--- preservation is gone along with the merge-based load path it protected)
--- — survUnitIds/survBuildingIds now name every unit/building in the whole
--- new session, not just one loaded page's slice.
+-- Broadcast from the engine once a save has finished loading (#195).
+-- Since issue #900 the restore itself is per-entity: aiState already
+-- holds exactly the rows the payload carried for units present in the
+-- restored session, dropped-with-a-diagnostic otherwise (see
+-- unit_ai_save.lua's apply). The pre-load snapshot/restore dance this
+-- function used to run (`_preLoadState`, #195/#191) is retired along
+-- with it, and so is its off-page-preservation branch — #763 replaced
+-- the merge-based load path that made "another live page" a thing, so
+-- survUnitIds/survBuildingIds name every unit/building in the whole new
+-- session.
 --
--- We still rebuild aiState defensively as:
---   * survivor (now: every live unit) → its restored (blob) state;
---   * any OTHER entry (dead code in normal operation post-#763, since
---     nothing outside the survivor set can exist right after a publish —
---     kept only as a defensive no-op rather than assuming the invariant
---     always holds) → its pre-load state, IF that unit id still somehow
---     exists live;
---   * everything else (orphans, dead, gone-before-save) → dropped.
--- Nested refs are then scrubbed on every survivor entry against the
--- survivor set.
+-- What remains here is the reconcile that apply-time ownership can't do:
+--   * the ORPHAN PRUNE — the engine load path can still drop an entity
+--     after the Lua restore (an unregistered def), so a row whose unit
+--     isn't a survivor is dropped rather than left to be inherited by a
+--     later id reuse;
+--   * the NESTED-REF SCRUB on every surviving row, whose targets are
+--     other entities that may not have survived.
 function unitAi.onSaveLoaded(survUnitIds, survBuildingIds)
     local survUnitSet, survBuildingSet = {}, {}
     for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
     for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
 
-    local pre = unitAi._preLoadState or {}
-    unitAi._preLoadState = nil
-    local blob = aiState   -- current contents = the just-restored blob
+    local blob = aiState   -- current contents = the just-restored rows
 
     local rebuilt = {}
     for uid in pairs(survUnitSet) do
         if blob[uid] ~= nil then rebuilt[uid] = blob[uid] end
-    end
-    for uid, s in pairs(pre) do
-        if not survUnitSet[uid] and unit.exists(uid) then
-            rebuilt[uid] = s          -- live off-page unit: keep current state
-        end
     end
 
     -- Swap into the singleton in place (preserve table identity).

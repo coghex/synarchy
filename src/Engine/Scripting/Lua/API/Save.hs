@@ -812,8 +812,15 @@ continueLoad env logger requestId saveName descriptors = do
                 -- save_modules.prepareLoad to supply each currently-
                 -- required module's own empty-state default instead of
                 -- hard-failing on "missing".
+                -- issue #900: the restored session's entity context,
+                -- computed ONCE here and used for two things — handed to
+                -- prepareLoad so each component's apply() can resolve its
+                -- rows' ownership (it is stashed for the later applyAll),
+                -- and reused below for the reference-edge diagnostics
+                -- that were previously its only consumer.
+                let known = knownEntitiesFromSaveData resolvedSaveData
                 prepared ← prepareLuaLoad logger requestId luaComponents
-                                          isMigratedLegacyBaseline
+                                          isMigratedLegacyBaseline known
                 case prepared of
                   Left err → do
                     Lua.liftIO $ do
@@ -831,8 +838,7 @@ continueLoad env logger requestId saveName descriptors = do
                         -- reference contract — see
                         -- "World.Save.Integrity"'s haddock) — logged as
                         -- diagnostics only (requirement 16).
-                        let known = knownEntitiesFromSaveData resolvedSaveData
-                            edges = [ LuaRefEdge c k i o p pg
+                        let edges = [ LuaRefEdge c k i o p pg
                                     | (c, k, i, o, p, pg) ← luaRefs ]
                             -- componentVersions (issue #764):
                             -- 'descriptors' is this SAME load's

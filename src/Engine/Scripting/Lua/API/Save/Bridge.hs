@@ -17,9 +17,13 @@ module Engine.Scripting.Lua.API.Save.Bridge
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
+import World.Page.Types (WorldPageId(..))
+import World.Save.Integrity (KnownEntities(..))
 
 -- | Pop the Lua error message at the top of the stack and log it
 --   via the engine logger. Used by every save_modules.* bridge call
@@ -269,6 +273,50 @@ pushComponentsArray xs = do
         Lua.setfield (-2) "payload"
         Lua.rawseti (-2) i
 
+-- | Push @save_modules.prepareLoad@'s @restoredEntities@ argument
+--   (issue #900): the entity context of the session being loaded, so each
+--   Lua component's @apply()@ can resolve its rows' ownership instead of
+--   clobbering its whole singleton and reconciling afterward.
+--
+--   Shape — keyed by the same reference-KIND vocabulary the
+--   @references()@ hooks and 'World.Save.Integrity' already speak, so a
+--   component names the set it resolves against with the same string it
+--   already tags its edges with:
+--
+-- > { unit     = { [uid] = true, ... },
+-- >   building = { [bid] = true, ... },
+-- >   unitPage = { [uid] = "<page id>", ... } }
+--
+--   @unit@/@building@ are SESSION-GLOBAL id sets — 'UnitId'/'BuildingId'
+--   are single-counter allocators for the whole session, which is why
+--   rows stay keyed by the global id and are never re-keyed per page.
+--   @unitPage@ exists for the one thing that global id can't answer: a
+--   nested reference to a PER-PAGE allocator (a craft bill, a ground
+--   item) is only meaningful relative to its owning unit's page, so a
+--   component resolving one during apply looks the page up here rather
+--   than guessing session-wide — the same @keUnitPage@ indirection
+--   'World.Save.Integrity.luaEdgeResolves' already uses for those kinds.
+pushRestoredEntities ∷ KnownEntities → Lua.LuaE Lua.Exception ()
+pushRestoredEntities ke = do
+    Lua.newtable
+    pushIdSet (keUnits ke)
+    Lua.setfield (-2) "unit"
+    pushIdSet (keBuildings ke)
+    Lua.setfield (-2) "building"
+    pushUnitPages (keUnitPage ke)
+    Lua.setfield (-2) "unitPage"
+  where
+    pushIdSet s = do
+        Lua.newtable
+        forM_ (HS.toList s) $ \i → do
+            Lua.pushboolean True
+            Lua.rawseti (-2) (fromIntegral i)
+    pushUnitPages m = do
+        Lua.newtable
+        forM_ (HM.toList m) $ \(uid, WorldPageId pid) → do
+            Lua.pushstring (TE.encodeUtf8 pid)
+            Lua.rawseti (-2) (fromIntegral uid)
+
 readErrorStringField ∷ Lua.LuaE Lua.Exception (Maybe Text)
 readErrorStringField = do
     ty ← Lua.ltype (-1)
@@ -345,14 +393,26 @@ readReferenceEdgeField = do
 --   real entity sets. A malformed entry in that array degrades to being
 --   dropped (best-effort diagnostics only; this never gates the load —
 --   see "World.Save.Integrity"'s haddock).
+--   The 'KnownEntities' argument (issue #900) is the restored session's
+--   own entity context, pushed as @prepareLoad@'s fourth argument and
+--   stashed there for the LATER @applyAll@ call — see
+--   'pushRestoredEntities'. It rides along with the prepare rather than
+--   the apply because the two are separated by a world-thread staging
+--   round trip ('Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'
+--   is reached via a @LuaLoadStaged@ message carrying only a request id),
+--   and @save_modules@ already spans exactly that gap for the prepared
+--   payloads and the request id itself. So no new carrier — Haskell-side
+--   or otherwise — has to exist for it.
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)] → Bool
+    → KnownEntities
     → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text, Maybe Text)])
-prepareLuaLoad logger requestId components isMigratingLegacyBaseline = do
-    ok ← callSaveModules1 logger "prepareLoad" 3
+prepareLuaLoad logger requestId components isMigratingLegacyBaseline known = do
+    ok ← callSaveModules1 logger "prepareLoad" 4
             (pushComponentsArray components
                 ≫ Lua.pushinteger (fromIntegral requestId)
-                ≫ Lua.pushboolean isMigratingLegacyBaseline)
+                ≫ Lua.pushboolean isMigratingLegacyBaseline
+                ≫ pushRestoredEntities known)
     if not ok
       then return (Left "save_modules.prepareLoad() could not be called \
                          \(see engine log)")

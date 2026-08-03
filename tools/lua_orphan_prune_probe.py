@@ -13,12 +13,14 @@ Issue #763 (save-overhaul C2) replaced the incrementally-merging load path
 this reconcile was originally built against: a load now REPLACES THE
 COMPLETE SESSION, so `onSaveLoaded`'s survivor lists always name every
 unit/building in the whole new session — there is no more "off-page"
-subset. Its defensive off-page-preservation branch (part (ii) below) is
-therefore dead code in normal operation now (kept only so a direct,
-non-engine call with a partial survivor set — the shape this test still
-exercises — still degrades safely); the destroy-before-save leak (parts
-1-5) and the nested-ref scrub on survivors (part (i)) remain exactly as
-live as before. Separately, #763 also changed a MISSING GAMEPLAY
+subset. Issue #900 then retired the off-page-preservation branch (and the
+`_preLoadState` snapshot it read) outright, replacing it with per-entity
+application: each row is resolved against the restored session's own
+entity set at apply time, and a row whose owner is absent is dropped with
+a diagnostic. Part (ii) below now covers THAT contract against the real
+unit_ai registration; the destroy-before-save leak (parts 1-5) and the
+nested-ref scrub on survivors (part (i)) remain exactly as live as
+before. Separately, #763 also changed a MISSING GAMEPLAY
 DEFINITION (unlike a destroyed unit, which is simply absent from the
 save) from "silently pruned" to "rejects the whole load, old session
 untouched" — that scenario is covered by
@@ -290,16 +292,27 @@ def main() -> int:
             else:
                 print("PASS: stale nested references scrubbed, survivor kept")
 
-        # (ii) Off-page state must NOT be rolled back by an older save, and a
-        # stale blob id must NOT be kept. This drives the REAL apply path
-        # (the registered component's apply() -- issue #761), not just
-        # onSaveLoaded:
+        # (ii) Per-entity apply (issue #900). The registered component's
+        # apply() now resolves EACH ROW against the restored session's own
+        # entity set instead of clobbering the singleton wholesale and
+        # reconciling afterward. This drives the REAL apply path, against
+        # the REAL unit_ai registration in a real engine -- the generic
+        # mechanism itself is covered by the "per-entity component
+        # application" hspec cases, which run in a bare Lua VM that cannot
+        # load unit_ai at all.
         #   * mark B's live state (probeMarker),
-        #   * run apply() with STALE data (B without the marker + a fake dead
-        #     id) -- it snapshots pre-load, clobbers, loads stale,
-        #   * onSaveLoaded with B as NON-survivor (i.e. B is "off-page").
-        # Expect: B keeps its pre-load marker (not the stale data's copy), and
-        # the fake dead id from the stale data is dropped.
+        #   * apply() a payload carrying B plus a fake DEAD id, with an
+        #     entity context naming B but NOT the dead id.
+        # Expect: the dead id's row is DROPPED rather than applied, B holds
+        # exactly the payload's row, and the pre-load marker is gone --
+        # per-entity does not mean merge-into-live, which is what stops a
+        # reused id from inheriting the previous session's state.
+        #
+        # This replaces the pre-#900 off-page-preservation case: that
+        # branch tested `_preLoadState`, which is retired. #763 had already
+        # made it dead code in normal operation (a load replaces the
+        # complete session), and its guarantee is now carried by apply-time
+        # ownership instead.
         DEAD = 998877
         if ok:
             send(args.port,
@@ -310,30 +323,37 @@ def main() -> int:
                  "local reg=sm.registry.unit_ai; "
                  f"local stale={{[{b}]={{currentAction='idle'}},"
                  f"[{DEAD}]={{currentAction='attack'}}}}; "
-                 "reg.apply(reg.decode(reg.version, stale)); return 'ok'",
+                 f"reg.apply(reg.decode(reg.version, stale), "
+                 f"{{unit={{[{b}]=true}}, building={{}}}}); return 'ok'",
                  expect_result=False)
-            # B is live but NOT a loaded-page survivor → treated as off-page.
-            send(args.port, f"{ai}.onSaveLoaded({{}}, {{}}); return 'ok'",
-                 expect_result=False)
-            mk = send(args.port, f"local s={ai}.getState({b}); "
-                 f"return s and tostring(s.probeMarker) or 'NOSTATE'")
             dead = send(args.port, f"local s={ai}.getState({DEAD}); "
                  f"return s and 'present' or 'nil'")
+            act = send(args.port, f"local s={ai}.getState({b}); "
+                 f"return s and tostring(s.currentAction) or 'NOSTATE'")
+            mk = send(args.port, f"local s={ai}.getState({b}); "
+                 f"return s and tostring(s.probeMarker) or 'NOSTATE'")
             be = exists(args.port, b)
-            print(f"Blob-restore reconcile: B.probeMarker -> {mk}, "
-                  f"dead-id state -> {dead}, B alive -> {'yes' if be else 'no'}")
-            if mk != "777":
-                print("FAIL: live off-page unit's state was rolled back to the "
-                      "save blob (lost pre-load state, review)")
+            print(f"Per-entity apply: dead-id state -> {dead}, "
+                  f"B.currentAction -> {act}, B.probeMarker -> {mk}, "
+                  f"B alive -> {'yes' if be else 'no'}")
+            if dead != "nil":
+                print("FAIL: a row whose unit is absent from the restored "
+                      "session was applied instead of dropped")
                 ok = False
-            elif dead != "nil":
-                print("FAIL: a stale blob id with no live entity was kept")
+            elif act != "idle":
+                print("FAIL: the present unit's own row was not applied")
+                ok = False
+            elif mk != "nil":
+                print("FAIL: a pre-load field survived the apply -- per-entity "
+                      "application must still leave EXACTLY the payload's rows, "
+                      "or a reused id inherits the previous session's state")
                 ok = False
             elif not be:
-                print("FAIL: reconcile unexpectedly destroyed the unit")
+                print("FAIL: apply unexpectedly destroyed the unit")
                 ok = False
             else:
-                print("PASS: off-page pre-load state preserved, stale blob id dropped")
+                print("PASS: absent-owner row dropped, present unit's row "
+                      "applied exactly")
     finally:
         quit_engine(args.port, proc)
         try:

@@ -243,11 +243,12 @@ local function snapshotUnitState(s)
     return copy
 end
 
--- Register the "unit_ai" persistent save component. `unitAi` is the
--- orchestrator singleton (so apply() can stash `_preLoadState` onto it
--- for the #195/#191 onSaveLoaded reconcile); `aiState` is
--- scripts.unit_ai_core's shared per-unit state table.
-function M.register(unitAi, aiState)
+-- Register the "unit_ai" persistent save component. `aiState` is
+-- scripts.unit_ai_core's shared per-unit state table, applied into IN
+-- PLACE (issue #900) -- the orchestrator singleton itself is no longer
+-- passed, since the only thing apply() ever wanted from it was somewhere
+-- to stash the retired `_preLoadState` snapshot.
+function M.register(aiState)
     -- Persistent save component (issue #761, save-overhaul B3): persist
     -- aiState (knownWaterSources, commandedTask, currentAction,
     -- source-drink phase, search-spiral progress, etc.). Without this,
@@ -347,27 +348,24 @@ function M.register(unitAi, aiState)
         end,
         validate = validateUnitAiData,
         references = refsMod.references,
-        -- Temporary C2 compatibility adapter (issue #761, requirement 15):
-        -- clobber aiState wholesale from the decoded payload, exactly like
-        -- the pre-#761 deserializer body. unitAi.onSaveLoaded is the
-        -- #195/#191 off-page-preservation reconciliation that runs AFTER
-        -- the engine-side restore — kept as-is rather than replaced by
-        -- C2's eventual real per-page component model; the canonical
-        -- decode/validate/apply split above is already separate from it.
-        apply = function(data)
-            -- Snapshot the pre-load singleton BEFORE clobbering. The
-            -- payload holds save-time state for ALL pages, but a load
-            -- should only touch the loaded page; onSaveLoaded uses this
-            -- snapshot to restore still-live OFF-PAGE units' CURRENT
-            -- state instead of the payload's stale copy (#195, #191).
-            unitAi._preLoadState = {}
-            for k, v in pairs(aiState) do unitAi._preLoadState[k] = v end
-            -- Replace in-place so the package.loaded singleton sees it.
-            -- Unwraps every reference field back to a bare number so
-            -- aiState's LIVE in-memory shape (read by every OTHER
-            -- module) never changes -- only the bytes on disk do.
-            for k in pairs(aiState) do aiState[k] = nil end
-            for k, v in pairs(refsMod.unwrapAiState(data)) do aiState[k] = v end
+        -- Per-entity application (issue #900). Each per-unit row is
+        -- applied against the restored session's own unit set rather
+        -- than the singleton being replaced wholesale: a row whose unit
+        -- is absent is dropped with a diagnostic, its siblings apply
+        -- normally, and aiState ends up holding EXACTLY the applicable
+        -- rows (see applyEntityRows for why "exactly" matters against
+        -- session-global id reuse). `entities` is nil for a contextless
+        -- apply -- including applyAll's own rollback pass, which must
+        -- restore the OLD session's rows verbatim.
+        --
+        -- unwrapAiState turns every reference field back into a bare
+        -- number first, so aiState's LIVE in-memory shape (read by every
+        -- OTHER module) never changes -- only the bytes on disk do. The
+        -- table is mutated in place: consumers hold direct references to
+        -- it and rebinding would orphan every one of them.
+        apply = function(data, entities)
+            saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
+                entities, { kind = "unit", component = "unit_ai" })
         end,
     })
 end
