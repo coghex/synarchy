@@ -149,22 +149,27 @@ runStartupHandshake mode env = do
 --   sprite/text changes, destroys) must not run against the
 --   freshly-published session.
 --
---   The first attempt at this fix only READ 'captureLocked' as a
---   point-in-time pre-check, skipping this tick's work when locked —
---   but this thread was not a real 'Engine.Save.Barrier.SaveOwner' at
---   all, so nothing ever waited for it: the barrier could reach the
---   snapshot boundary and publish in the gap between the check and the
---   camera/message work it gated, exactly the race a real owner
---   (Unit/Building/Combat/Simulation, see e.g. 'Unit.Thread') never has
---   — those threads' own per-tick 'acknowledgeCurrent' calls are what
---   'waitForOwners' blocks on before the barrier is ever allowed to
---   reach the snapshot boundary in the first place. Adding 'SaveRender'
---   as a genuine owner (acknowledged unconditionally below, mirroring
---   'Unit.Thread'\'s "check locked, do unlocked work if not locked,
---   always ack" shape) closes the window structurally instead of by
---   timing: the publish literally cannot happen until this thread has
---   already acknowledged the end of its own last unlocked tick, so its
---   camera/message work can never be concurrent with the ref swap.
+--   Merely READING 'captureLocked' and skipping the tick when it is
+--   held would not be enough. A thread that only reads the lock is not
+--   an 'Engine.Save.Barrier.SaveOwner', so the barrier has nothing to
+--   wait for on its behalf. Registering 'SaveRender' in the load
+--   transaction's owner set is what makes the barrier wait for this
+--   thread at all: 'Engine.Save.Barrier.waitForOwners' returns only
+--   once every owner in that set has acknowledged the required
+--   quiescence passes, and the transaction moves on to the snapshot
+--   boundary and the publish only after it returns. That is why the
+--   'acknowledgeCurrent' below is UNCONDITIONAL — it is this thread's
+--   half of that handshake — and why the function has the same "check
+--   locked, do unlocked work if not locked, always ack" shape every
+--   other owner uses (Unit/Building/Combat/Simulation, see e.g.
+--   'Unit.Thread').
+--
+--   What owner participation establishes is that WAIT, not mutual
+--   exclusion. Acknowledgment and the transaction's later move to the
+--   snapshot boundary are separate steps, so this thread can observe
+--   the lock clear and begin another unlocked tick in between. It is
+--   the per-tick 'captureLocked' read below, not the handshake, that
+--   makes ticks starting after the boundary skip their gated work.
 --
 --   EVERY load-capable mode acknowledges 'SaveRender', headless
 --   included: 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'
