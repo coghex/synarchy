@@ -27,10 +27,8 @@ module Engine.Core.Log.Monad
   , logErrorFor
   , logDebugSFor
   , logInfoSFor
-  , logWarnSFor
   , logErrorSFor
   , logAndThrowFor
-  , withTimingFor
     -- * Monad integration
   , getLogger
   , logDebugM
@@ -39,16 +37,12 @@ module Engine.Core.Log.Monad
   , logErrorM
   , logDebugSM
   , logInfoSM
-  , logWarnSM
   , logErrorSM
   , logAndThrowM
-  , withTiming
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import GHC.Stack (HasCallStack)
-import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Control.Monad.Reader.Class (MonadReader)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Error.Class (MonadError)
@@ -95,12 +89,6 @@ logInfoSFor cap cat msg fields = do
   logger ← getLoggerFor cap
   logInfoS logger cat msg fields
 
-logWarnSFor ∷ (HasCallStack, MonadIO m)
-            ⇒ CoreCapability → LogCategory → Text → [(Text, Text)] → m ()
-logWarnSFor cap cat msg fields = do
-  logger ← getLoggerFor cap
-  logWarnS logger cat msg fields
-
 logErrorSFor ∷ (HasCallStack, MonadIO m)
              ⇒ CoreCapability → LogCategory → Text → [(Text, Text)] → m ()
 logErrorSFor cap cat msg fields = do
@@ -112,17 +100,6 @@ logAndThrowFor ∷ (HasCallStack, MonadIO m, MonadError EngineException m)
 logAndThrowFor cap cat exType msg = do
   logger ← getLoggerFor cap
   logAndThrow logger cat exType msg
-
-{-# INLINE withTimingFor #-}
-withTimingFor ∷ MonadIO m ⇒ CoreCapability → LogCategory → Text → m a → m a
-withTimingFor cap cat label action = do
-  start ← liftIO getCurrentTime
-  result ← action
-  end ← liftIO getCurrentTime
-  let durationMs = realToFrac (diffUTCTime end start * 1000) ∷ Double
-  when (durationMs > 1.0) $  -- Only log if > 1ms
-    logDebugSFor cap cat label [("duration_ms", T.pack $ show durationMs)]
-  return result
 
 -- Monad integration (EngineEnv-carried convenience wrappers) -------------
 
@@ -153,10 +130,6 @@ logInfoSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m)
           ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logInfoSM cat msg fields = asks toCoreCapability ⌦ \cap → logInfoSFor cap cat msg fields
 
-logWarnSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m)
-          ⇒ LogCategory → Text → [(Text, Text)] → m ()
-logWarnSM cat msg fields = asks toCoreCapability ⌦ \cap → logWarnSFor cap cat msg fields
-
 logErrorSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m)
            ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logErrorSM cat msg fields = asks toCoreCapability ⌦ \cap → logErrorSFor cap cat msg fields
@@ -167,8 +140,3 @@ logAndThrowM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m, MonadError E
              → Text
              → m a
 logAndThrowM cat exType msg = asks toCoreCapability ⌦ \cap → logAndThrowFor cap cat exType msg
-
-{-# INLINE withTiming #-}
-withTiming ∷ (MonadIO m, MonadReader EngineEnv m)
-           ⇒ LogCategory → Text → m a → m a
-withTiming cat label action = asks toCoreCapability ⌦ \cap → withTimingFor cap cat label action

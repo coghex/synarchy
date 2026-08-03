@@ -262,11 +262,20 @@ constructors that have consumers.
 
 ### [#943] CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad`
 Exported, documented, zero call sites: `traceLog`, `logException`,
-`getEnabledCategories`, `setCategoryLevel`, `logDebugS`, `logWarnS`,
-`withTiming`, `withTimingFor`, `logAndThrowFor`.
+`getEnabledCategories`, `setCategoryLevel`, plus two closed wrapper chains —
+`withTiming`→`withTimingFor`, and `logWarnSM`→`logWarnSFor`→`logWarnS`. Each
+chain is internally connected but externally unreachable, so it had to be
+removed whole rather than one name at a time.
 
-`withTiming`/`withTimingFor`/`logAndThrowFor` are notable — they are #889
-capability-migration primitives that no consumer was ever narrowed onto.
+Two names in the original list were wrong and must NOT be removed:
+`logDebugS` is live through `logDebugSFor`/`logDebugSM`, and `logAndThrowFor`
+is live through `logAndThrowM` — both have production consumers across
+rendering, asset, window, and loop error paths. `withTiming`/`withTimingFor`
+are genuinely dead #889 capability-migration primitives that no consumer was
+ever narrowed onto.
+
+Resolved in #943 by removing the four standalone helpers and the two dead
+chains, keeping the live structured-debug and exception paths intact.
 
 ### [#944] CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim
 `Engine/Core/Log.hs:169-223`. The two functions are identical across 27 lines
