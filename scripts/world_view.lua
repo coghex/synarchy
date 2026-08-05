@@ -305,6 +305,12 @@ function worldView.createWorld()
         seed       = seed,
         worldSize  = worldSize,
         plateCount = plateCount,
+        -- The player's Create World name (#1105), forwarded EXACTLY as
+        -- generation.lua captured it — no default, no trim, no synthesis.
+        -- The engine owns normalization: mkWorldIdentity strips and
+        -- treats blank/whitespace-only as no identity, so a nil here is
+        -- indistinguishable from the four-argument world.init form.
+        worldName  = wp.worldName,
         structural = worldView.structuralTextures,
         -- materials and vegetation textures sent via sendTexturesToWorld
     })
