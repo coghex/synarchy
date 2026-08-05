@@ -6,12 +6,14 @@ module World.State.Types
     , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
+    , pageLanguageProvenance
     , CursorSnapshot(..)
     , LoadPhase(..)
     ) where
 
 import UPrelude
-import Data.IORef (IORef, newIORef, atomicModifyIORef')
+import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
+import Language.Generated.Types (LanguageProvenance)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -280,6 +282,23 @@ emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
     }
+
+-- | The page-scoped language-provenance query (#1092 requirement 5):
+--   which generated language named this page, and under which
+--   generator version — enough for later work to rebuild the profile
+--   ('Language.Generated.Profile.generateProfile') without reaching
+--   into save internals. Seed and version come back as ONE value, so a
+--   caller can never see half a provenance.
+--
+--   'Nothing' for every case that genuinely has no language: a missing
+--   page, an unnamed page (an arena, a 4-argument @world.init@), a
+--   custom-named page, and a page restored from a save written before
+--   provenance was recorded. Nothing is inferred for any of them.
+pageLanguageProvenance
+    ∷ WorldManager → WorldPageId → IO (Maybe LanguageProvenance)
+pageLanguageProvenance wm pid = case lookup pid (wmWorlds wm) of
+    Nothing → pure Nothing
+    Just ws → (⌦ wiLanguage) ⊚ readIORef (wsIdentityRef ws)
 
 -- | Snapshot of the cursor selection state, used to detect changes
 --   and avoid re-sending HUD info every frame.

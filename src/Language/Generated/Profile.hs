@@ -16,17 +16,25 @@ import qualified Data.Text as T
 import Language.Generated.Types
 import Language.Generated.Hash
 
--- | Generate a profile for an explicit version. Only version 1 is
---   defined (#710 requirement 2) — an unsupported version is a
---   descriptive failure, never silently treated as version 1.
+-- | Generate a profile for an explicit version. Dispatch is per
+--   VERSION, never by comparison with 'currentGeneratorVersion'
+--   (#1092 requirement 4): a world records the version that named it,
+--   and must stay reconstructible after the current version advances.
+--   A version that never existed is a descriptive failure, never
+--   silently treated as version 1.
 generateProfile ∷ GeneratorVersion → LangSeed → Either GeneratorError Profile
-generateProfile ver seed
-    | generatorVersionInt ver ≡ generatorVersionInt currentGeneratorVersion =
-        Right (buildProfileV1 seed)
-    | otherwise = Left (UnsupportedGeneratorVersion (generatorVersionInt ver))
+generateProfile ver seed = case generatorVersionInt ver of
+    1 → Right (buildProfileV1 seed)
+    v → Left (UnsupportedGeneratorVersion v)
 
 -- | The version-1 profile generator. Total: every drawn range is
 --   nonempty by construction, so this never needs to fail.
+--
+--   Its stamped 'profVersion' is the LITERAL 'GeneratorVersion' 1, not
+--   'currentGeneratorVersion' (#1092): 'Language.Generated.Root'
+--   feeds @profVersion@ into its per-concept seed, so stamping the
+--   mutable constant would silently re-render every reconstructed v1
+--   root the moment the current version advanced.
 buildProfileV1 ∷ LangSeed → Profile
 buildProfileV1 seed@(LangSeed s0) =
     let -- Domain-separated from root generation (Language.Generated.Root
@@ -70,7 +78,7 @@ buildProfileV1 seed@(LangSeed s0) =
             | otherwise                               = JoinHyphen
 
     in Profile
-        { profVersion        = currentGeneratorVersion
+        { profVersion        = GeneratorVersion 1
         , profSeed           = seed
         , profConsonants     = consonants
         , profVowels         = vowels

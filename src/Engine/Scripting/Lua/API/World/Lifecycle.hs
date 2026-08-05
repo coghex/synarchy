@@ -2,6 +2,7 @@
 module Engine.Scripting.Lua.API.World.Lifecycle
     ( worldInitFn
     , worldGetIdentityFn
+    , worldGetLanguageProvenanceFn
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -28,6 +29,8 @@ import Engine.Core.State (EngineEnv, luaQueue, activeWorldStateFrom)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
+import Language.Generated.Types
+    ( LanguageProvenance(..), GeneratorVersion(..), langSeedText )
 import World.Generate.Config
     (minimumWorldSize, normalizePlateCount, normalizeWorldSize)
 import World.Plate (defaultPlatesFor)
@@ -105,6 +108,38 @@ worldGetIdentityFn env = do
             forM_ (wiGloss ident) $ \g → do
                 Lua.pushstring (TE.encodeUtf8 g)
                 Lua.setfield (-2) "gloss"
+        Nothing → Lua.pushnil
+    return 1
+
+-- | world.getLanguageProvenance(pageId) → { seed, version } | nil
+--   Read-only query for which generated language named a page, and
+--   under which generator version (#1092) — enough to rebuild that
+--   language's profile without reaching into save internals. Returns
+--   nil for every page that genuinely has no language: a missing page,
+--   an unnamed one, a CUSTOM-named one (a player-entered name has no
+--   inferred meaning, #708 principle 7), and one restored from a save
+--   written before provenance was recorded.
+--
+--   @seed@ is a DECIMAL STRING, not a number: a language seed is an
+--   unsigned 64-bit value, and Lua's integer is signed 64-bit while
+--   its number is a double, so either would silently mangle the top of
+--   the range. @version@ is a small integer and is pushed as one.
+worldGetLanguageProvenanceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetLanguageProvenanceFn env = do
+    pageIdArg ← Lua.tostring 1
+    mProv ← Lua.liftIO $ case pageIdArg of
+        Just pageIdBS → do
+            mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+            pageLanguageProvenance mgr
+                (WorldPageId (TE.decodeUtf8Lenient pageIdBS))
+        Nothing → pure Nothing
+    case mProv of
+        Just prov → do
+            Lua.newtable
+            Lua.pushstring (TE.encodeUtf8 (langSeedText (lpSeed prov)))
+            Lua.setfield (-2) "seed"
+            Lua.pushinteger (fromIntegral (generatorVersionInt (lpVersion prov)))
+            Lua.setfield (-2) "version"
         Nothing → Lua.pushnil
     return 1
 
