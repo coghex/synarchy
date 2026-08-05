@@ -22,7 +22,7 @@ import qualified Data.Text as T
 import Language.Semantic.Types
 import Language.Semantic.English (renderGloss)
 import Language.Generated.Types
-import Language.Generated.Profile (buildProfileV1)
+import Language.Generated.Profile (generateProfile)
 import Language.Generated.Root (assignRoots)
 import Language.Generated.Render (renderNative, nativeRenderErrorText)
 import Language.Generated.Signature (profileSignature)
@@ -57,17 +57,26 @@ data SeedReport = SeedReport
     , srRootCollisions   ∷ !Int
     } deriving (Show, Eq)
 
--- | Build one seed's full report: its profile, profile signature,
---   native + English renderings of the canonical expression set, and
---   the count of concept-root collisions remaining after resolution
---   over @cat@'s complete concept catalogue. That count should always
---   be 0 — collision resolution is supposed to eliminate every
---   collision — so it is the diagnostic 'countDuplicateRoots' pins to
---   zero for @tools/language_report.py --check@.
-buildSeedReport ∷ Catalogue → Word64 → SeedReport
-buildSeedReport cat rawSeed =
-    let prof = buildProfileV1 (LangSeed rawSeed)
-        roots = assignRoots prof (conceptIds cat)
+-- | Build one seed's full report at an EXPLICIT generator version: its
+--   profile, profile signature, native + English renderings of the
+--   canonical expression set, and the count of concept-root collisions
+--   remaining after resolution over @cat@'s complete concept catalogue.
+--   That count should always be 0 — collision resolution is supposed to
+--   eliminate every collision — so it is the diagnostic
+--   'countDuplicateRoots' pins to zero for
+--   @tools/language_report.py --check@.
+--
+--   The version is a parameter and construction goes through the real
+--   'generateProfile' dispatcher (#1094 requirement 9): hardcoding a
+--   single version's builder here while the JSON header reported
+--   'currentGeneratorVersion' would mislabel every profile the moment
+--   the current version advanced. An unsupported version fails
+--   descriptively rather than silently falling back.
+buildSeedReport ∷ Catalogue → GeneratorVersion → Word64
+                → Either GeneratorError SeedReport
+buildSeedReport cat ver rawSeed = do
+    prof ← generateProfile ver (LangSeed rawSeed)
+    let roots = assignRoots prof (conceptIds cat)
         renderOne (label, expr) = CanonicalRendering
             { crForm = label
             , crNative = either (Left ∘ nativeRenderErrorText) Right
@@ -75,7 +84,7 @@ buildSeedReport cat rawSeed =
             , crGloss = either (Left ∘ renderErrorText) Right
                                 (renderGloss cat expr)
             }
-    in SeedReport
+    pure SeedReport
         { srSeed = rawSeed
         , srProfile = prof
         , srProfileSignature = profileSignature prof
