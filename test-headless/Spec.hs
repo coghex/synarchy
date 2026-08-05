@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
+import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.TimeLocal as TimeLocal
@@ -222,6 +223,11 @@ main = hspec $ do
     -- cross-talk) inside the shared-worlds engine above.
     aroundAll withHeadlessEngine $
         describe "autosave engine guards (#913)" AutosaveGuards.spec
+    -- Own engine: the live transfer API (#1085) WRITES real units,
+    -- buildings and items into the manager refs to exercise all four
+    -- mutation paths, which would corrupt the shared-worlds engine
+    -- above (same precedent as World identity / autosave guards).
+    aroundAll withHeadlessEngine UnitTransferApi.spec
     -- Own engine (not the shared-worlds one above): needs a real
     -- pixel hit-test against loaded tile data (renderWorldCursorQuads),
     -- so it generates its own cheap private w8 page rather than sharing

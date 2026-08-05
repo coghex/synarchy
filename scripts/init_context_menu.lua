@@ -27,22 +27,22 @@ function M.tryBuildingMenu(x, y)
     -- activity the way Contents does.
     local hasStation = ops and #ops > 0
 
-    -- Transfer (#1014): resolved through A1's own eligibility query
-    -- (unit.transferReceiverInfo) rather than the hasStorage check
-    -- above, so a future change to Unit.Transfer.receiverEligible
-    -- (e.g. an additional precondition) flows through without a UI
-    -- change here — a Built station with zero storage capacity
-    -- (hasStation but not hasStorage, "Bills" only) is exactly the
-    -- case that query must ALSO refuse. transferSession.resolveSource
-    -- returns nil for any selection that isn't exactly one
-    -- player-commandable unit (#1014 review requirement 4: zero or
-    -- multiple selected sources both omit the entry, never a silent
-    -- pick).
+    -- Transfer (#1014, #1085): resolved through the contract's own
+    -- eligibility query (unit.transferEndpointInfo) rather than the
+    -- hasStorage check above, so a future change to
+    -- Unit.Transfer.endpointEligible (e.g. an additional precondition)
+    -- flows through without a UI change here — a Built station with
+    -- zero storage capacity (hasStation but not hasStorage, "Bills"
+    -- only) is exactly the case that query must ALSO refuse.
+    -- transferSession.resolveSource returns nil for any selection that
+    -- isn't exactly one player-commandable unit (#1014 review
+    -- requirement 4: zero or multiple selected sources both omit the
+    -- entry, never a silent pick).
     local transferSession = require("scripts.transfer_session")
     local source = transferSession.resolveSource(unit.getSelected())
-    local receiverInfo = source
-        and unit.transferReceiverInfo("building", hitBid)
-    local hasTransfer = receiverInfo and receiverInfo.eligible
+    local endpointInfo = source
+        and unit.transferEndpointInfo({ kind = "building", id = hitBid })
+    local hasTransfer = endpointInfo and endpointInfo.eligible
 
     if not (hasStorage or hasStation or hasTransfer) then return false end
 
@@ -154,18 +154,22 @@ function M.tryUnitMenu(x, y)
             end,
         })
     end
-    -- Transfer (#1014): the target itself is the receiver here (e.g.
-    -- the technomule), resolved through A1's own eligibility query
-    -- (unit.transferReceiverInfo) rather than a def-name check, so
-    -- this isn't hardcoded to the technomule. transferSession.resolveSource
-    -- excludes the target from a would-be source (self-transfer) and
-    -- requires exactly one selected, player-commandable unit.
+    -- Transfer (#1014, #1085): the target itself is the destination
+    -- endpoint here, resolved through the contract's own eligibility
+    -- query (unit.transferEndpointInfo) rather than a def-name check.
+    -- A2 deleted the transfer_receiver data marker, so this row is now
+    -- offered for EVERY distinct player-commandable unit (acolytes and
+    -- debug units included), not only the technomule — an intentional,
+    -- player-visible widening, because faction eligibility is what
+    -- replaced the marker. transferSession.resolveSource excludes the
+    -- target from a would-be source (self-transfer) and requires
+    -- exactly one selected, player-commandable unit.
     do
         local transferSession = require("scripts.transfer_session")
         local source = transferSession.resolveSource(selectedUids, targetUid)
-        local receiverInfo = source
-            and unit.transferReceiverInfo("unit", targetUid)
-        if receiverInfo and receiverInfo.eligible then
+        local endpointInfo = source
+            and unit.transferEndpointInfo({ kind = "unit", id = targetUid })
+        if endpointInfo and endpointInfo.eligible then
             table.insert(items, { label = "Transfer",
                 callback = function()
                     transferSession.create(source, "unit", targetUid)
