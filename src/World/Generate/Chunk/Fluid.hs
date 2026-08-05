@@ -507,17 +507,17 @@ smoothIslandColumns terr fluid = runST $ do
     finalFluid ← V.unsafeFreeze mFluid
     pure (finalTerr, finalFluid)
 
--- | Merge a river-flat surface rule into surface-map computation.
--- For River fluid, surface = fluid surface (hides terrain protrusions).
--- For other fluid types, surface = max(terrain, fluid).
--- Same rule lives in Sim/Thread.hs::writeDirtyFluids (sim writeback)
--- and World/Edit/Apply.hs::applyEdit (player edits). ChunkLoading
--- uses mkSurfaceMap's output directly — no re-derivation.
+-- | Render-surface map for a generated chunk: the river-flat rule
+-- ('renderedSurfaceZ') applied per column.
+--
+-- The rule itself lives in 'World.Fluid.Types.renderedSurfaceZ' and is
+-- written there ONCE (#1112); the sim writeback
+-- ('Sim.Thread.emitWorldDirtyFluids') and every player-edit path
+-- ('World.Edit.Apply') call the same function. Note that the chunk-load
+-- seeding paths in 'World.Load.Stage' and 'World.Thread.Command.Init'
+-- do re-touch this map with a type-agnostic @max@ against the fluid
+-- surface; that pass is idempotent under this rule and makes no
+-- River-versus-other decision of its own.
 mkSurfaceMap ∷ VU.Vector Int → V.Vector (Maybe FluidCell) → VU.Vector Int
 mkSurfaceMap terrain fluid =
-    VU.imap (\idx surfZ →
-        case fluid V.! idx of
-            Just fc | fcType fc ≡ River → fcSurface fc
-            Just fc                     → max surfZ (fcSurface fc)
-            Nothing                     → surfZ
-      ) terrain
+    VU.imap (\idx surfZ → renderedSurfaceZ surfZ (fluid V.! idx)) terrain

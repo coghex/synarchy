@@ -757,9 +757,12 @@ def check_surface_inconsistent(grid: dict[tuple[int, int], dict[str, Any]],
       - Other fluid (Ocean/Lake/Lava): surfaceZ == max(terrainZ, fluidSurf).
       - Dry tiles: surfaceZ == terrainZ.
 
-    This rule lives in `World/Generate/Chunk.hs::mkSurfaceMap` and is
-    repeated in `Sim/Thread.hs` and the chunk-load seeding paths;
-    keep them in sync if you change one.
+    The rule has ONE definition in the engine (#1112):
+    `World/Fluid/Types.hs::renderedSurfaceZ`. Generation
+    (`World/Generate/Chunk/Fluid.hs::mkSurfaceMap`), the sim writeback
+    (`Sim/Thread.hs::emitWorldDirtyFluids`) and every player-edit path
+    (`World/Edit/Apply.hs`) call it rather than restating it, so this
+    check only needs to track that one function.
     """
     for tile in grid.values():
         if tile.get("beyondGlacier"):
