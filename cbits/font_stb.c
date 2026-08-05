@@ -43,6 +43,17 @@ int stb_init_font(const unsigned char* font_data, stbtt_fontinfo* font) {
 void stb_get_font_vmetrics(const stbtt_fontinfo* font, int* ascent, int* descent, int* lineGap) {
     stbtt_GetFontVMetrics(font, ascent, descent, lineGap);
 }
+
+// Does the font's cmap actually map this codepoint?
+//
+// Every other stb entry point here takes a codepoint and resolves it
+// through stbtt_FindGlyphIndex internally, which yields glyph index 0
+// (.notdef) for a codepoint the font does not cover — so rendering alone
+// cannot tell coverage from a font's own "missing" box. This asks the
+// question directly.
+int stb_has_codepoint(const stbtt_fontinfo* font, int codepoint) {
+    return stbtt_FindGlyphIndex(font, codepoint) != 0;
+}
 // get glyph metrics
 void stb_get_glyph_metrics(stbtt_fontinfo* font, int codepoint, float scale,
                            int* width, int* height, 

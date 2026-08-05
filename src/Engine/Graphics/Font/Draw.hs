@@ -11,6 +11,7 @@ module Engine.Graphics.Font.Draw
 
 import UPrelude
 import Engine.Graphics.Font.Data
+import Engine.Graphics.Font.Fallback (resolveGlyph)
 import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
@@ -21,7 +22,6 @@ import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode
                                          , fontUIVertexShaderCode)
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import qualified Data.ByteString as BS
-import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import qualified Data.Text as T
@@ -48,14 +48,17 @@ layoutText atlas desiredSize startX startY screenW screenH text color =
     pixelToNdcY py = 1.0 - (py / screenH) * 2.0
     pixelToNdcW pw = (pw / screenW) * 2.0
     pixelToNdcH ph = (ph / screenH) * 2.0
+    -- 'resolveGlyph' yields the fallback mark for a character the atlas
+    -- cannot draw, so it advances and paints instead of vanishing;
+    -- 'Nothing' is now only the deliberately blank characters (#1097).
     layoutChar scaleFactor (currentX, acc) char =
-        case Map.lookup char (faGlyphData atlas) of
+        case resolveGlyph atlas char of
             Nothing → (currentX, acc)
             Just glyphInfo →
                 let (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
                     (u0, v0, u1, v1) = giUVRect glyphInfo
-                    
+
                     -- Apply scale to sizes and positions
                     scaledBearingX = bearingX * scaleFactor
                     scaledBearingY = bearingY * scaleFactor
@@ -332,14 +335,16 @@ layoutTextUI atlas desiredSize startX startY text color =
         result = V.fromList (reverse instances)
     in result
   where
+    -- Same resolution as the world pass above: the two must agree with
+    -- each other and with 'calculateTextWidth' (#1097).
     layoutChar scaleFactor (currentX, acc) char =
-        case Map.lookup char (faGlyphData atlas) of
+        case resolveGlyph atlas char of
             Nothing → (currentX, acc)
             Just glyphInfo →
                 let (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
                     (u0, v0, u1, v1) = giUVRect glyphInfo
-                    
+
                     -- Apply scale to positions and sizes
                     scaledBearingX = bearingX * scaleFactor
                     scaledBearingY = bearingY * scaleFactor
