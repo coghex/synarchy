@@ -12,6 +12,7 @@ module Building.Types
     , materialsSatisfied
     , footprintDist
     , footprintDistAt
+    , footprintDistBetween
     , footprintTiles
     , buildingsOnPage
     , buildingsOnPages
@@ -253,15 +254,29 @@ footprintDist inst =
 
 -- | 'footprintDist' over a bare anchor + tile size, for callers that
 --   hold a projection of a building rather than the instance itself
---   (Unit.Transfer's receiver view). Splitting it out keeps ONE
+--   (Unit.Transfer's endpoint views). Splitting it out keeps ONE
 --   footprint-distance implementation — a second copy could drift from
 --   the measure craft.executeAt and the Store menu already use.
+--
+--   A single tile IS a 1x1 footprint, so this is 'footprintDistBetween'
+--   with the caller's tile as the second rectangle rather than a
+--   separate measure.
 footprintDistAt ∷ (Int, Int) → (Int, Int) → (Int, Int) → Int
-footprintDistAt (ax, ay) (w, h) (ux, uy) =
-    let bx = ax + w - 1
-        by = ay + h - 1
-        dx = maximum [ax - ux, 0, ux - bx]
-        dy = maximum [ay - uy, 0, uy - by]
+footprintDistAt anchor size tile = footprintDistBetween anchor size tile (1, 1)
+
+-- | Minimum Chebyshev distance between two footprint RECTANGLES:
+--   0 = overlapping, 1 = adjacent (incl. diagonals). Generalizes
+--   'footprintDistAt' for #1085's building↔building transfers, where
+--   neither endpoint is a single tile and both may be multi-tile of
+--   unequal size.
+footprintDistBetween ∷ (Int, Int) → (Int, Int) → (Int, Int) → (Int, Int) → Int
+footprintDistBetween (ax, ay) (aw, ah) (bx, by) (bw, bh) =
+    let axHi = ax + aw - 1
+        ayHi = ay + ah - 1
+        bxHi = bx + bw - 1
+        byHi = by + bh - 1
+        dx = maximum [ax - bxHi, 0, bx - axHi]
+        dy = maximum [ay - byHi, 0, by - ayHi]
     in max dx dy
 
 currentActivity ∷ Double → BuildingInstance → BuildingDef → BuildingActivity

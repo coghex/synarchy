@@ -10,11 +10,6 @@ units:
     max_speed: 3.5
     # No equipment_class — no equipment UI; it IS the cargo.
 
-    # It IS the cargo, so a player-managed transfer (#1000) may put
-    # items back INTO it — the first unit receiver, and the reason the
-    # eligibility rule is a data marker rather than a name comparison.
-    transfer_receiver: true
-
     eager_stats: true
     stats:
       # Calibrated against the carrying-capacity formula

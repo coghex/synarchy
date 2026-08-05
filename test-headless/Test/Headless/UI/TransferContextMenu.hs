@@ -9,7 +9,7 @@
 --   exactly the real production code any caller's @require@ would),
 --   but no live world/units/buildings — the handful of world-facing
 --   globals a scenario needs ('building.hitTestAt',
---   'unit.transferReceiverInfo', 'unit.getSelected', ...) are stubbed
+--   'unit.transferEndpointInfo', 'unit.getSelected', ...) are stubbed
 --   per test, mirroring how SelectTileZ stubs 'world.pickTile'. This
 --   proves the WIRING (menu construction, session creation) rather
 --   than re-deriving A1's own eligibility policy, which
@@ -21,17 +21,25 @@ module Test.Headless.UI.TransferContextMenu (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (bracket)
 import Data.Aeson (FromJSON(..), decode, withObject, (.:))
+import qualified Data.Map.Strict as Map
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
-import Data.IORef (newIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Unit.Direction (Direction(..))
+import Unit.Faction (Faction(..))
+import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
+import World.Page.Types (WorldPageId(..))
 
 spec ∷ SpecWith EngineEnv
 spec = describe "Transfer context menu" $ do
@@ -40,7 +48,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 501 "built" 200 [] <> selectedStub [7]
-                    <> receiverInfoStub "building" 501 True "Cargo Hold")
+                    <> endpointInfoStub "building" 501 True "Cargo Hold")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
@@ -51,7 +59,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 502 "under_construction" 200 [] <> selectedStub [7]
-                    <> receiverInfoStub "building" 502 False "")
+                    <> endpointInfoStub "building" 502 False "")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "false"
 
@@ -59,7 +67,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 503 "built" 0 ["smelt"] <> selectedStub [7]
-                    <> receiverInfoStub "building" 503 False "")
+                    <> endpointInfoStub "building" 503 False "")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
@@ -70,7 +78,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 504 "built" 200 [] <> selectedStub []
-                    <> receiverInfoStub "building" 504 True "Cargo Hold")
+                    <> endpointInfoStub "building" 504 True "Cargo Hold")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
@@ -81,7 +89,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 505 "built" 200 [] <> selectedStub [7, 8]
-                    <> receiverInfoStub "building" 505 True "Cargo Hold")
+                    <> endpointInfoStub "building" 505 True "Cargo Hold")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
@@ -98,7 +106,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 506 "built" 200 [] <> selectedStub [7]
-                    <> receiverInfoStub "building" 506 False "")
+                    <> endpointInfoStub "building" 506 False "")
             claimed1 ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed1 `shouldBe` "true"
             labels1 ← capturedLabels ls
@@ -107,7 +115,7 @@ spec = describe "Transfer context menu" $ do
 
             -- Same capacity, same activity -- only the query's answer
             -- flips, and now Transfer appears.
-            run ls (receiverInfoStub "building" 506 True "Cargo Hold")
+            run ls (endpointInfoStub "building" 506 True "Cargo Hold")
             claimed2 ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed2 `shouldBe` "true"
             labels2 ← capturedLabels ls
@@ -118,7 +126,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (unitTargetStub 99 <> selectedStub [7]
-                    <> receiverInfoStub "unit" 99 True "Technomule")
+                    <> endpointInfoStub "unit" 99 True "Technomule")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
@@ -130,7 +138,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (unitTargetStub 42 <> selectedStub [7]
-                    <> receiverInfoStub "unit" 42 False "")
+                    <> endpointInfoStub "unit" 42 False "")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
@@ -141,51 +149,77 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (unitTargetStub 99 <> selectedStub [99]
-                    <> receiverInfoStub "unit" 99 True "Technomule")
+                    <> endpointInfoStub "unit" 99 True "Technomule")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
             labels `shouldNotSatisfy` T.isInfixOf "Transfer"
 
+        -- #1085 §9's deliberate widening, proved against the REAL
+        -- engine query and REAL faction data rather than a Boolean
+        -- stub: 'liveEndpointInfo' puts unit.transferEndpointInfo back,
+        -- and 'withLiveUnits' installs live instances the projection
+        -- reads uiFactionId out of.
+        it "an ordinary player acolyte target -> Transfer appears (A2 widening)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 4242 <> selectedStub [7] <> liveEndpointInfo)
+            withLiveUnits env [(UnitId 4242, liveUnit FactionPlayer)] $ do
+                claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+                claimed `shouldBe` "true"
+                labels ← capturedLabels ls
+                labels `shouldSatisfy` T.isInfixOf "Transfer"
+
+        it "a non-player-commandable target -> Transfer does not appear (A2 widening)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 4243 <> selectedStub [7] <> liveEndpointInfo)
+            withLiveUnits env [(UnitId 4243, liveUnit FactionWildlife)] $ do
+                claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+                claimed `shouldBe` "true"
+                labels ← capturedLabels ls
+                labels `shouldSatisfy` T.isInfixOf "Info"
+                labels `shouldNotSatisfy` T.isInfixOf "Transfer"
+
     describe "session creation (scripts/transfer_session.lua)" $ do
-        it "selecting Transfer creates a session with the exact source/receiver identities" $ \env → do
+        it "selecting Transfer creates a session with the exact endpoint identities" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 507 "built" 200 [] <> selectedStub [7]
-                    <> receiverInfoStub "building" 507 True "Cargo Hold")
+                    <> endpointInfoStub "building" 507 True "Cargo Hold")
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
             invoke ← evalDebug ls "_G.__transferCallback(); return 'ok'"
             invoke `shouldNotSatisfy` isLuaError
             r ← evalDebug ls "return require('scripts.transfer_session').get()"
             sess ← decodeOr r
-            spSourceUid sess `shouldBe` 7
-            spReceiverKind sess `shouldBe` "building"
-            spReceiverId sess `shouldBe` 507
-            spReceiverDisplayName sess `shouldBe` "Cargo Hold"
-            spContractOperation sess `shouldBe` "unit_to_building_storage"
+            spSourceKind sess `shouldBe` "unit"
+            spSourceId sess `shouldBe` 7
+            spDestinationKind sess `shouldBe` "building"
+            spDestinationId sess `shouldBe` 507
+            spDestinationDisplayName sess `shouldBe` "Cargo Hold"
             spContractState sess `shouldBe` "queued"
 
         it "is reusable independent of the context-menu callback (requirement 8)" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            run ls (receiverInfoStub "unit" 99 True "Technomule")
+            run ls (endpointInfoStub "unit" 99 True "Technomule")
             -- Calls transfer_session.create directly -- no
             -- init_context_menu, no tryUnitMenu, no click simulation.
             r ← evalDebug ls
                 "local s = require('scripts.transfer_session').create(7, 'unit', 99); return s"
             sess ← decodeOr r
-            spSourceUid sess `shouldBe` 7
-            spReceiverKind sess `shouldBe` "unit"
-            spReceiverId sess `shouldBe` 99
-            spContractOperation sess `shouldBe` "unit_to_unit_inventory"
+            spSourceKind sess `shouldBe` "unit"
+            spSourceId sess `shouldBe` 7
+            spDestinationKind sess `shouldBe` "unit"
+            spDestinationId sess `shouldBe` 99
 
         it "a stale/missing receiver yields no session and mutates nothing" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            -- No unit.transferReceiverInfo stub for id 999 -> the
+            -- No unit.transferEndpointInfo stub for id 999 -> the
             -- shared base stub returns nil for any unrecognised id
-            -- (see receiverInfoStub / baseSetupLua's default).
+            -- (see endpointInfoStub / baseSetupLua's default).
             run ls
                 "unit.commitTransfer = function() error('B1 must never commit a transfer') end;"
             before ← evalDebug ls "return require('scripts.transfer_session').get()"
@@ -200,29 +234,92 @@ spec = describe "Transfer context menu" $ do
         it "an ineligible receiver yields no session" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            run ls (receiverInfoStub "building" 508 False "")
+            run ls (endpointInfoStub "building" 508 False "")
             r ← evalDebug ls
                 "local s, reason = require('scripts.transfer_session').create(7, 'building', 508); return reason"
             r `shouldBe` "\"receiver_ineligible\""
             after ← evalDebug ls "return require('scripts.transfer_session').get()"
             after `shouldBe` "null"
 
-        it "the operation/state identity is resolved from the live contract, not a hardcoded string (#1014 review round 1)" $ \env → do
+        it "the endpoint-kind/state identity is validated against the live contract by MEMBERSHIP (#1085 §11)" $ \env → do
+            -- #1014 round 1 read operations[1]/states[1] POSITIONALLY
+            -- because the contract was three flat arrays. A2 removed the
+            -- operation concept and publishes endpointKinds as a named
+            -- SET, so a contract that reorders or drops an array
+            -- position must not change what a session records -- only
+            -- membership may.
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            run ls (receiverInfoStub "building" 509 True "Cargo Hold")
+            run ls (endpointInfoStub "building" 509 True "Cargo Hold")
+            run ls (T.concat
+                [ "unit.transferContract = function() return { "
+                , "reasons = {'receiver_ineligible','receiver_missing',"
+                , "'source_missing'}, "
+                -- 'queued' deliberately LAST, and the kinds are a set.
+                , "states = {'failed','completed','queued'}, "
+                , "endpointKinds = { building = true, unit = true } } end;"
+                ])
             r ← evalDebug ls
                 "local s = require('scripts.transfer_session').create(7, 'building', 509); return s"
             sess ← decodeOr r
-            spContractOperation sess `shouldBe` "unit_to_building_storage"
+            spDestinationKind sess `shouldBe` "building"
             spContractState sess `shouldBe` "queued"
+
+        it "a DESTINATION kind the live contract does not advertise fails cleanly" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (endpointInfoStub "building" 513 True "Cargo Hold")
+            run ls (T.concat
+                [ "unit.transferContract = function() return { "
+                , "reasons = {'receiver_ineligible','receiver_missing',"
+                , "'source_missing'}, states = {'queued'}, "
+                , "endpointKinds = { unit = true } } end;"
+                ])
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session').create(7, 'building', 513); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "a SOURCE kind the live contract does not advertise fails cleanly too" $ \env → do
+            -- The inverse of the case above. B1's gesture always makes
+            -- the source a unit, but "always a unit" is still an id this
+            -- module NAMES, so it goes through the same membership gate
+            -- as everything else -- a contract that dropped 'unit' must
+            -- not still mint a session whose source kind no engine verb
+            -- recognises, even though the DESTINATION kind resolves.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (endpointInfoStub "building" 514 True "Cargo Hold")
+            run ls (T.concat
+                [ "unit.transferContract = function() return { "
+                , "reasons = {'receiver_ineligible','receiver_missing',"
+                , "'source_missing'}, states = {'queued'}, "
+                , "endpointKinds = { building = true } } end;"
+                ])
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session').create(7, 'building', 514); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "records the source kind RESOLVED from the contract, not a literal" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (endpointInfoStub "building" 515 True "Cargo Hold")
+            r ← evalDebug ls
+                "local s = require('scripts.transfer_session').create(7, 'building', 515); return s"
+            sess ← decodeOr r
+            spSourceKind sess `shouldBe` "unit"
+            spDestinationKind sess `shouldBe` "building"
 
         it "an unavailable live contract fails session creation cleanly, no session" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            run ls (receiverInfoStub "building" 510 True "Cargo Hold")
-            -- Simulate a malformed/unavailable contract -- resolveContractIdentity
-            -- must refuse to fall back to a guessed operation/state string.
+            run ls (endpointInfoStub "building" 510 True "Cargo Hold")
+            -- Simulate a malformed/unavailable contract -- the resolve*
+            -- helpers must refuse to fall back to a guessed
+            -- endpoint-kind/state string.
             run ls "unit.transferContract = function() return nil end;"
             r ← evalDebug ls
                 "local s, reason = require('scripts.transfer_session').create(7, 'building', 510); return reason"
@@ -233,15 +330,15 @@ spec = describe "Transfer context menu" $ do
         it "a reason id missing from the live contract is reported as contract_unavailable, not the unverified string (#1014 review round 2)" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            -- No unit.transferReceiverInfo stub for id 512 -> M.create's
+            -- No unit.transferEndpointInfo stub for id 512 -> M.create's
             -- receiver-missing branch fires, and would normally report
             -- resolveReason("receiver_missing"). Simulate a contract
             -- that has DRIFTED and no longer advertises that reason id.
             run ls (T.concat
                 [ "unit.transferContract = function() return { "
                 , "reasons = {'source_missing'}, "
-                , "operations = {'unit_to_building_storage','unit_to_unit_inventory'}, "
-                , "states = {'queued'} } end;"
+                , "states = {'queued'}, "
+                , "endpointKinds = { unit = true, building = true } } end;"
                 ])
             r ← evalDebug ls
                 "local s, reason = require('scripts.transfer_session').create(7, 'building', 512); return reason"
@@ -250,7 +347,7 @@ spec = describe "Transfer context menu" $ do
         it "Exit to Menu clears a pending session (#1014 review round 1: the save-load reset hook alone misses this path)" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
-            run ls (receiverInfoStub "building" 511 True "Cargo Hold")
+            run ls (endpointInfoStub "building" 511 True "Cargo Hold")
             -- world.destroyAll is real and engine-wide: this suite's
             -- worldgen specs share ONE memoized world across the whole
             -- surrounding `aroundAll` block (Test.Headless.Harness.
@@ -312,7 +409,7 @@ isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t
 -- (mirrors SelectTileZ's @_G.__infoCallback@). Also stubs
 -- faction.isPlayerCommandable/canAttack to the fixed vocabulary every
 -- scenario below uses ("player" = commandable), and gives
--- unit.transferReceiverInfo/unit.exists/unit.getInfo/unit.getFaction
+-- unit.transferEndpointInfo/unit.exists/unit.getInfo/unit.getFaction
 -- safe defaults a per-test stub then overrides for the ids it cares
 -- about.
 baseSetupLua ∷ Text
@@ -335,7 +432,10 @@ baseSetupLua = T.concat
     , "unit.getFaction = function(uid) return 'player' end; "
     , "unit.getWounds = function(uid) return {} end; "
     , "unit.getKnowledge = function(uid, k) return false end; "
-    , "unit.transferReceiverInfo = function(kind, id) return nil end; "
+    -- Captured BEFORE the stub replaces it, so the widening cases
+    -- below can put the REAL engine query back (see liveEndpointInfo).
+    , "_G.__realTransferEndpointInfo = unit.transferEndpointInfo; "
+    , "unit.transferEndpointInfo = function(ep) return nil end; "
     ]
 
 -- | @unit.getSelected()@ returning exactly this fixed uid list.
@@ -343,16 +443,17 @@ selectedStub ∷ [Int] → Text
 selectedStub uids = "unit.getSelected = function() return {"
     <> T.intercalate "," (map (T.pack . show) uids) <> "} end; "
 
--- | @unit.transferReceiverInfo(kind, id)@ answering ONLY for this one
--- (kind, id) pair -- every other pair falls through to
--- baseSetupLua's default nil, matching a genuinely stale/missing
--- target.
-receiverInfoStub ∷ Text → Int → Bool → Text → Text
-receiverInfoStub kind rid eligible displayName = T.concat
-    [ "unit.transferReceiverInfo = function(k, id) "
-    , "  if k == '", kind, "' and id == ", T.pack (show rid), " then "
+-- | @unit.transferEndpointInfo({ kind, id })@ answering ONLY for this
+-- one endpoint -- every other endpoint falls through to baseSetupLua's
+-- default nil, matching a genuinely stale/missing target.
+endpointInfoStub ∷ Text → Int → Bool → Text → Text
+endpointInfoStub kind rid eligible displayName = T.concat
+    [ "unit.transferEndpointInfo = function(ep) "
+    , "  if ep and ep.kind == '", kind, "' and ep.id == "
+    , T.pack (show rid), " then "
     , "    return { eligible = ", if eligible then "true" else "false"
-    , ", displayName = '", displayName, "', page = 'p', gridX = 10, gridY = 20 } "
+    , ", displayName = '", displayName, "', page = 'p', gridX = 10, gridY = 20"
+    , ", capacity = 200, storedWeight = 0, contents = {} } "
     , "  end; return nil end; "
     ]
 
@@ -372,6 +473,48 @@ unitTargetStub ∷ Int → Text
 unitTargetStub uid = "unit.hitTestAt = function(x, y) return "
     <> T.pack (show uid) <> " end; "
 
+-- | Put the REAL @unit.transferEndpointInfo@ back after baseSetupLua
+-- stubbed it out, so a case can exercise the engine's own
+-- faction-derived eligibility instead of a Boolean stub (#1085 §9).
+liveEndpointInfo ∷ Text
+liveEndpointInfo = "unit.transferEndpointInfo = _G.__realTransferEndpointInfo; "
+
+-- | A live unit of the given faction. Only 'uiFactionId' matters to
+-- the endpoint projection's eligibility rule; with no matching entry
+-- in @umDefs@ the display name falls back to the prettified def name,
+-- which is exactly what a real unmapped unit would report.
+liveUnit ∷ Faction → UnitInstance
+liveUnit f = UnitInstance
+    { uiDefName = "acolyte", uiName = "", uiPage = WorldPageId "ctx_menu_page"
+    , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
+    , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0
+    , uiRealZ = 0, uiFacing = DirS
+    , uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
+    , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
+    , uiStats = HM.singleton "carrying_capacity" 100
+    , uiModifiers = HM.empty, uiSkills = HM.empty
+    , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
+    , uiAccessories = [], uiFactionId = f, uiWounds = []
+    , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
+    , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
+    , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
+    , uiClimbDest = Nothing, uiTrailState = Nothing
+    }
+
+-- | Install live unit instances for the duration of one case and
+-- RESTORE the manager afterwards. This spec shares its engine with the
+-- worldgen block (Spec.hs), so a mutation it left behind would leak
+-- into every later spec.
+withLiveUnits ∷ EngineEnv → [(UnitId, UnitInstance)] → IO α → IO α
+withLiveUnits env insts = bracket acquire (writeIORef ref) . const
+  where
+    ref = unitManagerRef env
+    acquire = do
+        saved ← readIORef ref
+        writeIORef ref saved
+            { umInstances = HM.union (HM.fromList insts) (umInstances saved) }
+        pure saved
+
 -- | The joined labels string captured by the spy above, or "" if
 -- contextMenu.show was never called (the menu didn't open at all).
 capturedLabels ∷ LuaBackendState → IO Text
@@ -381,23 +524,29 @@ capturedLabels ls = evalDebug ls
 -- * Decoded probe shape
 
 data SessionProbe = SessionProbe
-    { spSourceUid           ∷ Int
-    , spReceiverKind        ∷ Text
-    , spReceiverId          ∷ Int
-    , spReceiverDisplayName ∷ Text
-    , spContractOperation   ∷ Text
-    , spContractState       ∷ Text
+    { spSourceKind             ∷ Text
+    , spSourceId               ∷ Int
+    , spDestinationKind        ∷ Text
+    , spDestinationId          ∷ Int
+    , spDestinationDisplayName ∷ Text
+    , spContractState          ∷ Text
     } deriving (Show, Eq)
 
+-- | #1085 replaced the sourceUid / receiverKind / receiverId triple
+-- with NAMED endpoints on both sides, and deleted the session's
+-- @contract.operation@ (direction is derived from the endpoint pair,
+-- so there is no independent operation left to record).
 instance FromJSON SessionProbe where
     parseJSON = withObject "SessionProbe" $ \o → do
-        contractObj ← o .: "contract"
+        sourceObj      ← o .: "source"
+        destinationObj ← o .: "destination"
+        contractObj    ← o .: "contract"
         SessionProbe
-            <$> o .: "sourceUid"
-            <*> o .: "receiverKind"
-            <*> o .: "receiverId"
-            <*> o .: "receiverDisplayName"
-            <*> contractObj .: "operation"
+            <$> sourceObj .: "kind"
+            <*> sourceObj .: "id"
+            <*> destinationObj .: "kind"
+            <*> destinationObj .: "id"
+            <*> o .: "destinationDisplayName"
             <*> contractObj .: "state"
 
 decodeOr ∷ FromJSON a ⇒ Text → IO a

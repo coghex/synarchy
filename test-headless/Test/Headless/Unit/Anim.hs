@@ -36,7 +36,6 @@ mkDef stateAnims = UnitDef
     , udNaturalResistance  = defaultNaturalResistance
     , udNaturalWeapon      = Nothing
     , udModifiers          = []
-    , udTransferReceiver   = False
     }
 
 spec ∷ Spec

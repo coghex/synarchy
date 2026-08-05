@@ -18,9 +18,12 @@ import World.Chunk.Types (LoadedChunk(..), ChunkCoord, chunkSize)
 import World.Magma.Types (VolcanoCtx)
 import World.Magma.Init (discoverChunkLava)
 
--- | Cheap predicate: is there any surface lava in this chunk? Equal
---   to @isJust . lcMagma@ — relies on chunk-gen having populated the
---   overlay via 'discoverChunkLava'.
+-- | Cheap predicate: does this chunk carry a magma overlay? Equal to
+--   @isJust . lcMagma@ — relies on chunk-gen having populated the
+--   overlay via 'discoverChunkLava'. Since the pool rework that means
+--   BASALT CAPS (sub-water breaches), not visible surface lava, which
+--   lives in the global 'gtWorldLavaPools' table; callers wanting
+--   "any lava here?" must OR that table in separately.
 hasAnyLavaQuick ∷ LoadedChunk → Bool
 hasAnyLavaQuick = isJust . lcMagma
 
