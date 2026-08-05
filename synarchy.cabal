@@ -555,6 +555,7 @@ library
                      Language.Semantic.English
                      Language.Generated.Types
                      Language.Generated.Hash
+                     Language.Generated.Onset
                      Language.Generated.Profile
                      Language.Generated.Root
                      Language.Generated.Render
