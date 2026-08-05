@@ -170,9 +170,9 @@ composeFluidMap params coord terrainMap =
                            then Just (FluidCell Lake lkSurf)
                            else Nothing
 
-    -- Surface lava now comes from the pool table above; the magma
-    -- overlay's moSurface is no longer populated (caps only), so no
-    -- per-chunk overlay pass remains.
+    -- Surface lava comes entirely from the pool table above; the
+    -- magma overlay carries basalt caps only, so no per-chunk overlay
+    -- pass remains.
     in waterFluid
 
 -- | Per-tile water surface from the global lake + river tables,
@@ -324,8 +324,7 @@ mergeRimCaps mo rim
     | HM.null rim = mo
     | otherwise = Just $ case mo of
         Nothing → MagmaOverlay
-            { moSurface   = HM.empty
-            , moBasaltCap = rim
+            { moBasaltCap = rim
             , moRevealed  = HM.empty
             }
         Just o → o { moBasaltCap =
