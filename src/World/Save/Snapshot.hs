@@ -52,6 +52,7 @@ import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
+import Building.Knowledge (ContainerKnowledge)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -137,6 +138,11 @@ data PageSnapshot = PageSnapshot
     , pgsChopDesignations ∷ !ChopDesignations
     , pgsCraftBills   ∷ !CraftBills
     , pgsPowerNodes   ∷ !PowerNodes
+    , pgsContainerKnowledge ∷ !ContainerKnowledge
+      -- ^ #1087: the player's last-known view of each container's
+      --   contents on this page. Its remembered 'ItemInstance's are
+      --   HISTORICAL OBSERVATIONS, deliberately absent from
+      --   'allItemInstanceIds' below — see that function's note.
     , pgsTillDesignations ∷ !TillDesignations
     , pgsCropPlots    ∷ !CropPlots
     , pgsPlantDesignations ∷ !PlantDesignations
@@ -304,6 +310,20 @@ flattenItemInstanceIds i =
 --   unit inventory/equipped/accessories, and building storage/
 --   materials-delivered — the full scope 'nextItemInstanceIdRef' (#67)
 --   governs. Recurses into 'iiContents' via 'flattenItemInstanceIds'.
+--
+--   'pgsContainerKnowledge' (#1087) is deliberately NOT walked here,
+--   and must never be added: its remembered instances are historical
+--   OBSERVATIONS of items that live (or lived) somewhere else in this
+--   very list, not additional live entities. Folding them in would
+--   report every remembered item as a duplicate live id, and — worse —
+--   would make staleness itself invalid, since the whole feature
+--   depends on a remembered id staying meaningful after the live item
+--   has moved, changed, or ceased to exist. Same reasoning excludes
+--   them from the allocator bound ('itemAllocatorErrors'), the
+--   duplicate check ('duplicateItemIdErrors'), and live @item_instance@
+--   reference resolution in "World.Save.Integrity". Their DEF NAMES
+--   remain ordinary content references, validated by
+--   'World.Save.Types.missingItemDefReferences' like any other.
 allItemInstanceIds ∷ SessionSnapshot → [Word64]
 allItemInstanceIds snap = concatMap pageItemIds (HM.elems (snapPages snap))
   where

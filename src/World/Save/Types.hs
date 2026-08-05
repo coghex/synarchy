@@ -68,6 +68,7 @@ import World.Mine.Types (MineDesignations)
 import World.Construct.Types
     (ConstructDesignations, ConstructDesignation(..), ConstructTarget(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
+import Building.Knowledge (ContainerKnowledge(..), ContainerRecord(..))
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -105,7 +106,7 @@ saveMagic = 0x53595241
 --   ("World.Save.Envelope", "docs/persistence_contract.md"). Per-bump
 --   history up to v91: "docs/history/savedata_version_changelog.md".
 currentSaveVersion ∷ Int
-currentSaveVersion = 91
+currentSaveVersion = 92
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -301,6 +302,21 @@ data WorldPageSave = WorldPageSave
         --   Like the other designation layers, restored straight into
         --   wsPlantDesignationsRef; markers re-render from the stored
         --   z. Appended for save v78.
+    , wpsContainerKnowledge ∷ !ContainerKnowledge
+        -- ^ The player's remembered view of each container's contents
+        --   on this page (#1087, epic #1013): last-known items + their
+        --   derived weight + when observed, keyed by BuildingId.
+        --   Restored straight into wsContainerKnowledgeRef, after
+        --   scrubbing any record whose building is absent from
+        --   wpsBuildings — a demolished cargo's lingering memory is a
+        --   tolerated, non-blocking diagnostic (the same contract
+        --   wpsCraftBills' dangling station gets), never a load
+        --   failure. Deliberately NOT restored verbatim like bills: a
+        --   bill is a live job the player can still see and cancel,
+        --   whereas a memory of a container that no longer exists has
+        --   no surface at all and nothing would ever clear it.
+        --   Capacity is never stored — it is always read live from the
+        --   def. Appended for save v92.
     , wpsIdentity ∷ !(Maybe WorldIdentity)
         -- ^ Player-facing identity (#707): display name + optional
         --   gloss. Lives HERE — on the page's saved state — rather than
@@ -788,6 +804,8 @@ missingItemDefReferences itemDefs pages = concatMap pageRefs pages
         [ concatMap (buildingRefs pid) (HM.elems (bsnInstances (wpsBuildings w)))
         , concatMap (unitRefs pid) (HM.elems (usnInstances (wpsUnits w)))
         , concatMap (groundRefs pid) (HM.elems (gisItems (wpsGroundItems w)))
+        , concatMap (knowledgeRefs pid)
+              (HM.elems (ckRecords (wpsContainerKnowledge w)))
         ]
     buildingRefs pid b = concat
         [ concatMap (itemRefs pid "building storage") (bisStorage b)
@@ -800,6 +818,14 @@ missingItemDefReferences itemDefs pages = concatMap pageRefs pages
         , concatMap (itemRefs pid "unit accessories") (uisAccessories u)
         ]
     groundRefs pid gi = itemRefs pid "ground item" (giInst gi)
+    -- #1087: a REMEMBERED item's def name is still an ordinary persisted
+    -- content reference and follows this same contract — only its
+    -- INSTANCE ID is exempt from live-entity treatment (see
+    -- 'World.Save.Snapshot.allItemInstanceIds'). A save whose remembered
+    -- contents name a deregistered item def is rejected exactly like one
+    -- whose live storage does.
+    knowledgeRefs pid r =
+        concatMap (itemRefs pid "container knowledge") (crItems r)
     itemRefs pid src inst =
         [ MissingItemDefRef src pid (iiInstanceId i) (iiDefName i)
         | i ← flattenItemInstances inst

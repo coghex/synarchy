@@ -296,12 +296,13 @@ generateChunk registry catalog params coord =
         -- (used below for the lava-shell safety net only).
         chunkIsOceanicHere = chunkOrNeighborOceanic params coord
 
-        -- Pure-function lava overlay: which surface tiles in this
+        -- Pure-function magma overlay: which surface tiles in this
         -- chunk have a chamber or chute breaking through? Per-tile
-        -- decision: above water → lava cell in @moSurface@; sub-sea
-        -- → basalt cap entry in @moBasaltCap@ (terrain raised +
-        -- matBasalt at top so the ocean fills above instead of a
-        -- black gap, or the cap stays exposed as a basalt outcrop
+        -- decision: a dry above-water breach contributes nothing here
+        -- (the global pool table places that lava); sub-sea or
+        -- sub-lake/river → basalt cap entry in @moBasaltCap@ (terrain
+        -- raised + matBasalt at top so the water fills above instead
+        -- of a black gap, or the cap stays exposed as a basalt outcrop
         -- in inland sub-sea pockets).
         magmaOverlayBase = discoverChunkLava (wgpVolcanoCtx params) coord
                                           rawTerrainSurfaceMap

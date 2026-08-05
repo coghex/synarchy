@@ -88,6 +88,8 @@ import World.Plant.Types (PlantDesignation(..))
 import Craft.Bills (emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..))
 import Power.Types (emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..), PowerRole(..))
 import Building.Types (BuildingId(..))
+import Building.Knowledge
+    (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
 import Unit.Types (UnitId(..), Wound(..), Scar(..), StatModifier(..))
 import Unit.Sim.Types (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..))
 import Unit.Direction (Direction(..))
@@ -192,6 +194,22 @@ richBills = CraftBills
         , cbTarget = 0, cbOutputItem = "steel_bar" }
     , cbsNextId = 2 }
 
+-- | #1087: a POPULATED container-knowledge record, so this session's
+--   round trip proves the remembered view really persists rather than
+--   only proving an empty map survives. The remembered instance ids are
+--   deliberately DISTINCT from every live one in this session (900/950/
+--   960/970/980/990 are the live ones) — that is what a historical
+--   observation looks like once the real item has moved on, and it also
+--   demonstrates that these ids are exempt from the session's
+--   duplicate-live-id and allocator checks by construction.
+richKnowledge ∷ ContainerKnowledge
+richKnowledge = ContainerKnowledge $ HM.singleton (BuildingId 1)
+    ContainerRecord
+        { crItems        = [richItem 800]
+        , crStoredWeight = 1.35
+        , crRevealedAt   = 49000.25
+        }
+
 richNodes ∷ PowerNodes
 richNodes = PowerNodes
     { pnsNodes = HM.singleton (PowerNodeId 1) PowerNode
@@ -235,6 +253,7 @@ richPage = PageSnapshot
     , pgsTillDesignations = HM.singleton (9, 10) (TillDesignation 0)
     , pgsCropPlots    = HM.singleton (11, 12) (CropPlot (FloraId 3) 5 0.9)
     , pgsPlantDesignations = HM.singleton (13, 14) (PlantDesignation 0 (FloraId 3))
+    , pgsContainerKnowledge = richKnowledge
     , pgsIdentity     = Just (WorldIdentity "Aldermoor Deep"
                                   (Just "the deep home")
                                   (Just richProvenance))
@@ -280,6 +299,7 @@ minimalPage2 = PageSnapshot
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
     , pgsPlantDesignations = HM.empty
+    , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = customIdentity
     }
 

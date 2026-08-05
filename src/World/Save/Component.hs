@@ -55,6 +55,7 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Component.Knowledge
 import World.Save.Integrity
     (IntegrityError(..), sessionIntegrityErrors, integrityErrorCap)
 
@@ -105,6 +106,12 @@ saveComponentRegistry =
         (\ver d snap → onPages snap (applyCraftBills ver d))
     , registerComponent powerNodesCodec
         (\ver d snap → onPages snap (applyPowerNodes ver d))
+      -- #1087: the one OPTIONAL entry. Absent ⇒ every page keeps
+      -- 'blankPageSnapshot''s empty knowledge map (every container
+      -- never-inspected), which is what lets every pre-#1087 baseline in
+      -- docs/save_compat/manifest.json keep loading.
+    , registerComponent containerKnowledgeCodec
+        (\ver d snap → onPages snap (applyContainerKnowledge ver d))
     ]
   where
     onPages snap f = (\pages → snap { snapPages = pages }) ⊚ f (snapPages snap)
@@ -114,8 +121,12 @@ saveComponentRegistry =
 componentKnownIds ∷ HS.HashSet ComponentId
 componentKnownIds = HS.fromList (map rcId saveComponentRegistry)
 
--- | The ids this reader hard-requires (every gameplay component is
---   required — none is safely defaultable, requirement 7).
+-- | The ids this reader hard-requires. Every gameplay component was
+--   required until #1087 (requirement 7's "none is safely defaultable"),
+--   which added @"container-knowledge"@ as the one genuine exception:
+--   it post-dates every tracked compatibility baseline, and an absent
+--   payload has an honest, non-guessing meaning ("no container has ever
+--   been inspected") rather than a fabricated one.
 componentRequiredIds ∷ HS.HashSet ComponentId
 componentRequiredIds =
     HS.fromList [ rcId c | c ← saveComponentRegistry, rcRequired c ]

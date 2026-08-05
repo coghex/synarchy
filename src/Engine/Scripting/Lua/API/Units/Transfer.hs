@@ -43,6 +43,7 @@ import Building.Types
     (BuildingId(..), BuildingActivity(..), BuildingDef(..)
     , BuildingInstance(..), BuildingManager(..), currentActivity
     , footprintDistAt)
+import Building.Knowledge.Live (containerObserver, revealContainerForUnit)
 import Item.Types (ItemInstance(..), ItemManager, itemTotalWeight)
 import World.Page.Types (WorldPageId(..))
 import Engine.Scripting.Lua.API.Units.Inventory (insertAt)
@@ -312,7 +313,24 @@ commitToBuilding env req bid = do
                             Left r    → (bm, Left r)
                             Right bm' → (bm', Right ())
                     case stored of
-                        Right () → pure (Right item)
+                        Right () → do
+                            -- #1087: the commit landed, so the player
+                            -- now knows what is in there. Fired here
+                            -- (not at 'unitCommitTransferFn') so the
+                            -- rollback branch below can never reach it,
+                            -- and so the record snapshots the FINAL
+                            -- post-commit storage. Gated on the source
+                            -- unit being player-commandable by the same
+                            -- one helper every other reveal uses.
+                            void $ revealContainerForUnit
+                                (containerObserver
+                                    (toBuildingCapability env)
+                                    (toWorldSimCapability env)
+                                    (toContentRegistriesCapability env))
+                                (ucUnitManagerRef
+                                    (toUnitCombatCapability env))
+                                uid bid
+                            pure (Right item)
                         Left r   → do
                             -- All-or-nothing: put it back where it was.
                             atomicModifyIORef'

@@ -34,12 +34,21 @@ module Language.Generated.Types
     , PluralMarking(..)
     , PossessiveMarking(..)
     , JoinStyle(..)
+    , OnsetRelation(..)
+    , emptyOnsetRelation
+    , onsetPairs
+    , onsetPairCount
+    , onsetPairText
+    , YRole(..)
+    , profileYRole
+    , yRoleText
     , Profile(..)
     , GeneratorError(..)
     , generatorErrorText
     ) where
 
 import UPrelude
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
@@ -75,7 +84,7 @@ newtype GeneratorVersion = GeneratorVersion { generatorVersionInt ∷ Int }
 --   'supportedGeneratorVersions': advancing this must never make an
 --   older world's recorded version unconstructible.
 currentGeneratorVersion ∷ GeneratorVersion
-currentGeneratorVersion = GeneratorVersion 1
+currentGeneratorVersion = GeneratorVersion 2
 
 -- | Every version 'Language.Generated.Profile.generateProfile' can
 --   build a profile for — historical versions included, since a save
@@ -85,7 +94,7 @@ currentGeneratorVersion = GeneratorVersion 1
 --   "Test.Headless.Language.Generated" pins the two together (every
 --   entry builds, and no other version does).
 supportedGeneratorVersions ∷ [GeneratorVersion]
-supportedGeneratorVersions = [GeneratorVersion 1]
+supportedGeneratorVersions = [GeneratorVersion 1, GeneratorVersion 2]
 
 -- | Which generated language produced a piece of rendered text, and
 --   under which generator (#1092). Seed and version are ONE value, so
@@ -139,6 +148,72 @@ data PossessiveMarking = PossessiveMarking
 data JoinStyle = JoinCompact | JoinHyphen
     deriving (Show, Eq)
 
+-- | Which ORDERED consonant pairs a profile admits as a two-consonant
+--   syllable onset (#1094 requirement 3). Carried by the profile
+--   itself rather than recomputed from 'profSeed' at query time, so
+--   the relation is ordinary style state: it participates in
+--   'Language.Generated.Signature.profileSignature' and in report
+--   introspection exactly like the inventories do.
+--
+--   Version 1 carries 'emptyOnsetRelation' — its @CCV@ rendering draws
+--   both consonants independently and must stay byte-identical
+--   (#1094 requirement 1) — so an empty relation is what "this profile
+--   constrains nothing" means, NOT "this profile has no answer". The
+--   query ('Language.Generated.Onset.admissibleOnset') is total for
+--   every constructible profile of every version.
+newtype OnsetRelation = OnsetRelation { onsetPairSet ∷ S.Set (Char, Char) }
+    deriving (Show, Eq)
+
+emptyOnsetRelation ∷ OnsetRelation
+emptyOnsetRelation = OnsetRelation S.empty
+
+-- | The admitted ordered pairs in a canonical ascending order — the
+--   representation the renderer indexes into and the signature hashes,
+--   so neither depends on construction order.
+onsetPairs ∷ OnsetRelation → [(Char, Char)]
+onsetPairs = S.toAscList ∘ onsetPairSet
+
+onsetPairCount ∷ OnsetRelation → Int
+onsetPairCount = S.size ∘ onsetPairSet
+
+-- | The admitted pairs as one canonical text, each pair contributing
+--   exactly two characters. Fixed-width entries make the concatenation
+--   unambiguous, so it can be hashed directly without a separator.
+onsetPairText ∷ OnsetRelation → Text
+onsetPairText r = T.pack (concat [ [a, b] | (a, b) ← onsetPairs r ])
+
+-- | The role a profile gives the letter @y@ (#1094 requirement 6).
+--   Exactly three states — a version-2 profile always places @y@ in at
+--   least one inventory, so "neither" is deliberately unrepresentable
+--   here and surfaces as 'Nothing' for profiles (version 1) that never
+--   made the choice.
+data YRole = YConsonantOnly | YVowelOnly | YBothRoles
+    deriving (Show, Eq)
+
+-- | Read a profile's @y@ role back off its inventories, which are the
+--   authority: requirement 6's table IS inventory membership, so the
+--   role is derived rather than stored and the two can never disagree.
+--   'Nothing' means @y@ is in neither inventory, which only a version-1
+--   profile (whose consonant subset may simply not have drawn it) can
+--   produce.
+profileYRole ∷ Profile → Maybe YRole
+profileYRole p = case (isCons, isVow) of
+    (True,  True)  → Just YBothRoles
+    (True,  False) → Just YConsonantOnly
+    (False, True)  → Just YVowelOnly
+    (False, False) → Nothing
+  where
+    isCons = 'y' `elem` profConsonants p
+    isVow  = 'y' `elem` profVowels p
+
+-- | A profile's @y@ role as report text.
+yRoleText ∷ Profile → Text
+yRoleText p = case profileYRole p of
+    Just YConsonantOnly → "consonant"
+    Just YVowelOnly     → "vowel"
+    Just YBothRoles     → "both"
+    Nothing             → "none"
+
 -- | A generated language's naming style — bounded for proper-name
 --   rendering only (#710 requirement 4): enough to fix a phonology and
 --   a handful of compounding/marking rules, nothing resembling general
@@ -155,6 +230,7 @@ data Profile = Profile
     , profPossessive     ∷ !PossessiveMarking
     , profPlural         ∷ !PluralMarking
     , profJoin           ∷ !JoinStyle
+    , profOnset          ∷ !OnsetRelation
     } deriving (Show, Eq)
 
 -- | Why a profile could not be generated for a requested version.

@@ -270,10 +270,13 @@ dropping the in-progress stamp.
   into components, but Lua state still the pre-#761 opaque blob map) IS
   a declared compatibility baseline (`b2-split-haskell-lua-state`,
   requirement 3): `World.Save.Envelope.decodeB2SessionEnvelope`
-  recognizes an envelope shaped exactly `{metadata, every Haskell
-  gameplay component, "lua-state"}` (every descriptor required, at its
-  genuine historical version — the same exact-shape precision B1's own
-  fallback uses) and reuses `assembleSnapshot` UNCHANGED for the
+  recognizes an envelope shaped exactly `{metadata, every REQUIRED
+  Haskell gameplay component, "lua-state"}` (every descriptor required,
+  at its genuine historical version — the same exact-shape precision
+  B1's own fallback uses). "Required" rather than "known" since #1087:
+  an OPTIONAL component post-dates that baseline by construction, so
+  folding one into this exact-set comparison would make every real B2
+  fixture stop being recognized the moment such a component shipped. and reuses `assembleSnapshot` UNCHANGED for the
   Haskell side, since it's already the modern per-component registry.
   The opaque `"lua-state"` blob (the documented pre-#761
   `sdLuaModules`/`snapLuaModules` shape, a cereal-encoded `HashMap Text
@@ -310,6 +313,22 @@ dropping the in-progress stamp.
   `currentSaveVersion` mismatch behavior) without partially modifying
   the live session — this is the same publish-after-validate rule from
   §1 applied to the format layer specifically.
+- **A NEW component may be declared OPTIONAL** when a save predating it
+  has an honest, non-guessing default — the reader then treats an
+  ABSENT payload as that default instead of failing the load. #1087's
+  `container-knowledge` (the player's last-known container contents) is
+  the first and, so far, only one: every tracked baseline legitimately
+  lacks it, and "absent" means exactly "no container has ever been
+  inspected", which is true rather than invented. This is a narrow
+  exception to the rule above, not a general escape hatch — the
+  decision is made ONCE, from `ccRequired`, in
+  `World.Save.Component.Types.registerComponent`, and only the
+  MANIFEST-level absence is tolerated: a component that IS declared but
+  whose payload is malformed, truncated, or at an unsupported version
+  still fails exactly as a required one would. A second optional
+  component has to justify itself against
+  `Test.Headless.World.Save.Components`' explicit required/optional
+  split assertion.
 - **Unknown optional components** (an id present in a save's manifest
   that this build does not recognize, and which the writer itself
   marked optional) must never be silently discarded on the next save to

@@ -41,6 +41,10 @@ registerBuildingAPI env = do
   registerLuaFunction "getStorage"          (buildingGetStorageFn env)
   registerLuaFunction "getStorageCapacity"  (buildingGetStorageCapacityFn env)
   registerLuaFunction "getStorageWeight"    (buildingGetStorageWeightFn env)
+  registerLuaFunction "getContainerKnowledge"
+                                            (buildingGetContainerKnowledgeFn env)
+  registerLuaFunction "refreshContainerKnowledge"
+                                            (buildingRefreshContainerKnowledgeFn env)
   registerLuaFunction "getOperations"       (buildingGetOperationsFn env)
   registerLuaFunction "findStation"         (buildingFindStationFn env)
   Lua.setglobal (Lua.Name "building")

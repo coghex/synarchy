@@ -5,6 +5,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Engine.Asset.Types (GlyphInfo)
 import Engine.Asset.Handle
+import Engine.Graphics.Font.Repertoire (FontKey)
 import Vulkan.Core10
 
 -- | Complete font atlas texture with glyph metadata
@@ -76,7 +77,12 @@ instance Storable GlyphInstance where
 data FontCache = FontCache
     { fcFonts       ∷ Map.Map FontHandle FontAtlas        -- ^ Loaded font atlases
     , fcNextHandle  ∷ Word32                              -- ^ Next available handle ID
-    , fcPathCache   ∷ Map.Map (FilePath, Int) FontHandle  -- ^ (path, size) → handle lookup
+      -- | Atlas identity → handle. Keyed by 'FontKey' rather than
+      --   @(path, size)@ so two repertoire policies for one font path
+      --   can never hand back each other's atlas (#1098). Both the
+      --   engine-side load and the Lua-side dedup derive the key with
+      --   'Engine.Graphics.Font.Repertoire.sdfFontKey'.
+    , fcPathCache   ∷ Map.Map FontKey FontHandle
       -- | @(font, codepoint)@ pairs whose missing-glyph diagnostic has
       --   already been emitted. Text layout runs every frame, so the
       --   diagnostic is deduplicated here rather than logged per
