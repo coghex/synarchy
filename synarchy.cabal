@@ -232,6 +232,7 @@ library
                      Engine.Graphics.Font.Atlas
                      Engine.Graphics.Font.Data
                      Engine.Graphics.Font.Draw
+                     Engine.Graphics.Font.Fallback
                      Engine.Graphics.Font.Load
                      Engine.Graphics.Font.SDF
                      Engine.Graphics.Font.Upload
@@ -1086,6 +1087,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
                    Test.Headless.Graphics.UniformLayout
+                   Test.Headless.Graphics.FontFallback
                    Test.Headless.Construct.Corners
                    Test.Headless.Construct.Footprint
                    Test.Headless.Craft.Execute

@@ -23,6 +23,8 @@ import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts, GlyphInstance(..))
 import Engine.Graphics.Font.Draw (layoutTextUI)
+import Engine.Graphics.Font.Fallback
+  (takeUnreportedMissingGlyphs, missingGlyphMessage)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Scene.Base (LayerId(..))
@@ -236,6 +238,14 @@ renderElementData mgr fontCache layerId elem absX absY clip =
                         color = (cr, cg, cb, ca)
                         size = utsSize style
                         rawInstances = layoutTextUI atlas size absX absY text color
+                    -- Report characters this font cannot draw, once per
+                    -- (font, codepoint) across every text path (#1097).
+                    cacheRef ← asks (rcFontCacheRef . toRenderCapability)
+                    missing ← liftIO $ takeUnreportedMissingGlyphs
+                                           cacheRef fontHandle atlas text
+                    forM_ missing $ \c →
+                        logDebugM CatFont (missingGlyphMessage fontHandle c)
+                    let
                         -- #747: clip each glyph quad independently — a
                         -- glyph straddling the clip boundary shows only
                         -- its visible slice, and a glyph fully outside

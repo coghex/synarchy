@@ -19,6 +19,8 @@ import Engine.Scene.Batch.Visibility (isUILayer)
 import Engine.Asset.Handle (FontHandle)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutText, layoutTextUI)
+import Engine.Graphics.Font.Fallback
+  (takeUnreportedMissingGlyphs, missingGlyphMessage)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Core.Monad
 import Engine.Core.Capability.Render
@@ -55,6 +57,14 @@ collectTextBatches graph screenW screenH = do
                                         Nothing → 32
                                         Just s → s
                           isUI = isUILayer layerId
+                      -- Say once per (font, codepoint) that this text
+                      -- contains something the atlas cannot draw; the
+                      -- claim is shared with every other text path so a
+                      -- pair is reported once, not once per frame (#1097).
+                      missing ← liftIO $ takeUnreportedMissingGlyphs
+                                             cacheRef fontHandle atlas text
+                      forM_ missing $ \c →
+                          logDebugM CatFont (missingGlyphMessage fontHandle c)
                       let instances = if isUI
                                       then layoutTextUI atlas size x y text color
                                       else layoutText atlas size x y screenW screenH text color

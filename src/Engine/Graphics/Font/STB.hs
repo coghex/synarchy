@@ -10,6 +10,7 @@ module Engine.Graphics.Font.STB
     , getSTBFontMetrics
     , renderSTBGlyphSDF
     , scaleForPixelHeight
+    , hasSTBCodepoint
     ) where
 
 import UPrelude
@@ -40,6 +41,9 @@ foreign import ccall "stb_init_font"
 
 foreign import ccall "stb_get_font_vmetrics"
     c_stb_get_font_vmetrics ∷ Ptr STBFontInfo → Ptr CInt → Ptr CInt → Ptr CInt → IO ()
+
+foreign import ccall "stb_has_codepoint"
+    c_stb_has_codepoint ∷ Ptr STBFontInfo → CInt → IO CInt
 
 foreign import ccall "stb_get_glyph_metrics"
     c_stb_get_glyph_metrics ∷ Ptr STBFontInfo → CInt → CFloat 
@@ -121,6 +125,17 @@ getSTBFontMetrics font scale = do
                        , fromIntegral descent * scale
                        , fromIntegral lineGap * scale
                        )
+
+-- | Does the font's cmap cover this character?
+--
+--   Needed because every rendering entry point below resolves an
+--   uncovered codepoint to glyph 0 (.notdef) and happily rasterizes
+--   whatever that glyph contains, so a successful render is no evidence
+--   the font actually has the character (#1097).
+hasSTBCodepoint ∷ STBFont → Char → IO Bool
+hasSTBCodepoint font char = do
+    covered ← c_stb_has_codepoint (stbFontInfo font) (fromIntegral $ ord char)
+    return (covered ≢ 0)
 
 -- | Get glyph metrics
 getSTBGlyphMetrics ∷ STBFont → Char → Float → IO (Int, Int, Int, Int, Float)
