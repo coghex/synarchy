@@ -15,6 +15,7 @@ import UPrelude
 import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
 import Language.Generated.Types (LanguageProvenance)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
@@ -35,6 +36,8 @@ import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
+import Building.Types (BuildingId)
+import Building.Knowledge (ContainerKnowledge, emptyContainerKnowledge)
 import Power.Types (PowerNodes, emptyPowerNodes)
 import Blood.Types (BloodStore, BloodTextureId, emptyBloodStore, defaultBloodTextureCap)
 import Engine.Asset.Handle (TextureHandle)
@@ -151,6 +154,35 @@ data WorldState = WorldState
       --   craft bills, no world-thread side effects, so the power.*
       --   verbs mutate it directly with atomicModifyIORef'. Persisted in
       --   saves (wpsPowerNodes, v73).
+    , wsContainerKnowledgeRef ∷ IORef ContainerKnowledge
+      -- ^ The player's remembered view of what each container on this
+      --   page holds (#1087, epic #1013): last-known contents + their
+      --   derived weight + when it was observed, keyed by BuildingId.
+      --   PLAYER-GLOBAL, never per-unit (epic decision 2) and never
+      --   live — the live truth is biStorage on the building itself,
+      --   and this deliberately goes stale until an interaction reveals
+      --   it again (see Building.Knowledge). Lives here, not on
+      --   EngineEnv: it is per-page gameplay state, exactly like craft
+      --   bills and power nodes, so a destroyed or replaced page takes
+      --   its memories with it. Written by the reveal triggers in
+      --   Building.Knowledge.Live from the Lua thread with
+      --   atomicModifyIORef' (like craft bills, it has no world-thread
+      --   side effects). Persisted in saves (wpsContainerKnowledge) as
+      --   its own optional "container-knowledge" component.
+    , wsPendingContainerSeedsRef ∷ IORef (HS.HashSet BuildingId)
+      -- ^ Containers on this page that were PLACED this session and
+      --   have not yet reached Built (#1087). Only the instant-built
+      --   storage class ever lands here: a worker-built one seeds from
+      --   its own build-progress crossing, while a zero-build-work def
+      --   reaches Built on currentActivity's time-based arm, which no
+      --   tick otherwise observes. The building drain re-evaluates each
+      --   entry every tick and seeds the known-empty record the moment
+      --   the transition actually happens (see Building.Knowledge.Live).
+      --   Deliberately NOT persisted, and NOT derivable: it is precisely
+      --   "the player watched THIS one go up in THIS session", which is
+      --   what keeps a loaded already-built container from masquerading
+      --   as a new construction event. A restored page starts with an
+      --   empty set, exactly right — nothing in it was just placed.
     , wsTillDesignationsRef ∷ IORef TillDesignations
       -- ^ Till-designation set (#333): tile (gx, gy) → designation
       --   (surface z; see World.Till.Types). Written by the world
@@ -239,6 +271,8 @@ emptyWorldState = do
     wsChopDesignationsRef ← newIORef HM.empty
     wsCraftBillsRef ← newIORef emptyCraftBills
     wsPowerNodesRef ← newIORef emptyPowerNodes
+    wsContainerKnowledgeRef ← newIORef emptyContainerKnowledge
+    wsPendingContainerSeedsRef ← newIORef HS.empty
     wsTillDesignationsRef ← newIORef HM.empty
     wsCropPlotsRef ← newIORef emptyCropPlots
     wsPlantDesignationsRef ← newIORef HM.empty
@@ -256,7 +290,9 @@ emptyWorldState = do
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
                         wsChopDesignationsRef wsCraftBillsRef
-                        wsPowerNodesRef wsTillDesignationsRef
+                        wsPowerNodesRef wsContainerKnowledgeRef
+                        wsPendingContainerSeedsRef
+                        wsTillDesignationsRef
                         wsCropPlotsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
                         wsIdentityRef

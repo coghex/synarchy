@@ -34,6 +34,15 @@ canonHash p = foldl' mix 0xcbf29ce484222325 (scalarFields <> shapeFields)
         , textSeed (pmAffix (profPossessive p))
         , textSeed (plmAffix (profPlural p))
         , joinStyleCode (profJoin p)
+        -- The admissible-onset relation is style-bearing state (#1094
+        -- requirement 3), so it is hashed like any other style field —
+        -- otherwise the report's distinct-signature count would call
+        -- two languages with different phonotactics the same style.
+        -- The count is mixed alongside the canonical text for the same
+        -- reason the shape list carries a leading length below: it
+        -- keeps a pair set distinct from any prefix of itself.
+        , fromIntegral (onsetPairCount (profOnset p))
+        , textSeed (onsetPairText (profOnset p))
         ]
 
     -- Each shape is mixed in as its OWN element rather than

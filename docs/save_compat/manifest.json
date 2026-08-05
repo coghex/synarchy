@@ -729,6 +729,98 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/g1-language-provenance.expected.json"
         }
       ]
+    },
+    {
+      "id": "h1-container-knowledge",
+      "description": "Container knowledge (issue #1087, epic #1013): the new OPTIONAL 'container-knowledge' component, carrying the player's last-known view of each container's contents. This baseline tracks a REAL current-format session written by the live engine with a NON-EMPTY knowledge payload, so the new shape has its own compatibility coverage; every baseline above legitimately lacks the component entirely, which is exactly requirement 9's absent-optional case and decodes to 'every container never-inspected'.",
+      "declaredAt": "2026-08-04",
+      "declaredByIssue": 1087,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "no migration needed: 'container-knowledge' is OPTIONAL, so every baseline above decodes with the component ABSENT and every container never-inspected (World.Save.Component.Page.blankPageSnapshot's empty default) -- never known-empty, and never inferred from live storage",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "h1-container-knowledge-session",
+          "path": "test-headless/data/save-compat/h1-container-knowledge.bin",
+          "kind": "complete-session",
+          "sha256": "652658da0d0199e38c965e490f5af12af69f09632e96b54d26fa928ea6c9024a",
+          "sizeBytes": 480260,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 8, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.addItem({uid}, 'bandage'); return unit.depositToCargo({uid}, {bid}, 'bandage'); return building.getContainerKnowledge({bid}).state == 'known', then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/h1-container-knowledge.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

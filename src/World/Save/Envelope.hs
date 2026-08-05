@@ -440,13 +440,24 @@ luaStateComponentVersion ∷ Word32
 luaStateComponentVersion = 1
 
 -- | The exact #760-era ("B2") component-id set: "metadata" plus every
---   Haskell gameplay component plus the single opaque "lua-state" blob.
---   Hoisted to top level so 'decodeB2StructureAndMetadata'
---   and 'foreignOptionalComponentIds' share the one definition rather than
---   risk two copies drifting apart.
+--   REQUIRED Haskell gameplay component plus the single opaque
+--   "lua-state" blob. Hoisted to top level so
+--   'decodeB2StructureAndMetadata' and 'foreignOptionalComponentIds'
+--   share the one definition rather than risk two copies drifting apart.
+--
+--   Derived from 'componentRequiredIds', NOT 'componentKnownIds'
+--   (#1087): a genuine #760 envelope carries exactly the components that
+--   existed and were required then, and every OPTIONAL component this
+--   build knows post-dates that baseline by construction (an optional
+--   component is precisely one a historical save is allowed to lack —
+--   see "World.Save.Component.Knowledge"). Folding an optional id into
+--   this EXACT-set comparison would make every real B2 fixture stop
+--   being recognized as B2-shaped the moment such a component shipped,
+--   silently downgrading a working migration into the modern path's
+--   "unknown required component lua-state" error.
 b2Ids ∷ HS.HashSet ComponentId
 b2Ids = HS.insert metadataComponentId
-            (HS.insert luaStateComponentId componentKnownIds)
+            (HS.insert luaStateComponentId componentRequiredIds)
 
 -- | Shared structural step for the "B2" (#760-era) fallback: an
 --   envelope whose component set is EXACTLY the modern Haskell registry

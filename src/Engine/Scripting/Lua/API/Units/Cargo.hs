@@ -15,6 +15,9 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
+import Building.Knowledge.Live
+    (ContainerObserver, containerObserver, revealContainerForUnit)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -27,6 +30,12 @@ import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..), Bu
 import Item.Types (itemMatches, itemTotalWeight)
 import Engine.Scripting.Lua.API.Units.Inventory (popFirstByNameIx, insertAt, popFirstWhereIx)
 
+-- | #1087: the narrow live view a container-knowledge reveal needs,
+--   projected from this module's existing capability records.
+observerFor ∷ EngineEnv → ContainerObserver
+observerFor env = containerObserver
+    (toBuildingCapability env) (toWorldSimCapability env)
+    (toContentRegistriesCapability env)
 
 -- | unit.transferItemToBuilding(uid, bid, defName) → bool. Atomic
 --   move of one ItemInstance from the unit's inventory to the
@@ -171,6 +180,12 @@ unitTransferItemToUnitFn env = do
 --   the instance are preserved exactly. No adjacency check — that
 --   lives in the Lua caller (AI walks the unit close first; the
 --   right-click menu only enables when the unit is adjacent).
+--
+--   #1087: a SUCCESSFUL deposit by a player-commandable unit also
+--   reveals the container's contents to the player, so the AI's own
+--   hauling keeps the remembered view current. A refusal (no room, no
+--   matching item) or a rolled-back deposit reveals nothing — the call
+--   below is reached only on the committed path.
 unitDepositToCargoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDepositToCargoFn env = do
     uidArg  ← Lua.tointeger 1
@@ -265,6 +280,10 @@ unitDepositToCargoFn env = do
                                     <> T.pack (show nU)
                                     <> " also vanished — "
                                     <> defName <> " lost"
+                        when ok $ Lua.liftIO $ void $
+                            revealContainerForUnit (observerFor env)
+                                (ucUnitManagerRef (toUnitCombatCapability env))
+                                uid bid
                         Lua.pushboolean ok
                         return 1
         _ → do
@@ -277,6 +296,9 @@ unitDepositToCargoFn env = do
 --   carrying-capacity — units can hold above their cap (with stat
 --   penalties handled elsewhere). Adjacency check lives in the Lua
 --   caller, same as deposit.
+--
+--   #1087: like deposit, a SUCCESSFUL withdrawal by a player-commandable
+--   unit reveals the container's remaining contents.
 unitWithdrawFromCargoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitWithdrawFromCargoFn env = do
     uidArg  ← Lua.tointeger 1
@@ -345,6 +367,10 @@ unitWithdrawFromCargoFn env = do
                                 <> T.pack (show nB)
                                 <> " also vanished — "
                                 <> defName <> " lost"
+                    when ok $ Lua.liftIO $ void $
+                        revealContainerForUnit (observerFor env)
+                                (ucUnitManagerRef (toUnitCombatCapability env))
+                                uid bid
                     Lua.pushboolean ok
                     return 1
         _ → do

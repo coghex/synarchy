@@ -81,6 +81,8 @@ import World.Save.Component.Entities (BillQueueDTOv1(..), CraftBillDTOv1(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
+import Building.Knowledge
+    (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
 
 hexDecode ∷ String → BS.ByteString
 hexDecode = BS.pack . go
@@ -761,6 +763,47 @@ spec = do
                     (wiName <$> pgsIdentity p) `shouldBe` Just "Legacy World"
                     (wiGloss =≪ pgsIdentity p) `shouldBe` Just "an old gloss"
                     (wiLanguage =≪ pgsIdentity p) `shouldBe` Nothing
+
+    -- #1087: "container-knowledge" is the FIRST optional gameplay
+    -- component, so this pair covers both sides of what that means for
+    -- compatibility — an older tracked baseline that legitimately lacks
+    -- it, and the new baseline that carries a genuinely POPULATED one.
+    -- The second is what stops the tracked fixture from silently
+    -- regressing to the empty default it would still decode as (the
+    -- exact way #915's first fixture revision went wrong).
+    describe "container knowledge across baselines (issue #1087)" $ do
+        let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            withFixture path k = do
+                bytes ← BS.readFile path
+                case decodeSessionEnvelope luaNames luaNames bytes of
+                    Left err → expectationFailure
+                        (path <> " did not decode: " <> T.unpack err)
+                    Right (_, snap, _, _) → k
+                        [ pgsContainerKnowledge p
+                        | p ← HM.elems (snapPages snap) ]
+
+        it "a tracked baseline written BEFORE the component existed \
+           \decodes with every page's knowledge empty -- every container \
+           \never-inspected, nothing inferred from live storage" $
+            withFixture
+                "test-headless/data/save-compat/g1-language-provenance.bin" $
+                \ks → do
+                    ks `shouldNotBe` []
+                    ks `shouldSatisfy` all (≡ emptyContainerKnowledge)
+
+        it "the tracked current-version baseline carries a genuinely \
+           \NON-EMPTY knowledge payload, with a remembered item -- so \
+           \this coverage can never silently decay into the same empty \
+           \default the pre-#1087 baselines already prove" $
+            withFixture
+                "test-headless/data/save-compat/h1-container-knowledge.bin" $
+                \ks → do
+                    let records = concatMap (HM.elems ∘ ckRecords) ks
+                    length records `shouldSatisfy` (> 0)
+                    concatMap crItems records `shouldSatisfy` (not ∘ null)
+                    map iiDefName (concatMap crItems records)
+                        `shouldBe` ["bandage"]
+                    map crStoredWeight records `shouldSatisfy` all (> 0)
 
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
         it "refuses to migrate a legacy envelope carrying an extra \
