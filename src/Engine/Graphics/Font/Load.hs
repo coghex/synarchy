@@ -7,8 +7,14 @@ import Data.IORef (readIORef, atomicModifyIORef', IORef)
 import Engine.Asset.Handle (FontHandle)
 import Engine.Graphics.Font.Atlas (generateFontAtlas)
 import Engine.Graphics.Font.Data
-import Engine.Graphics.Font.SDF (generateSDFFontAtlas, sdfBaseSize)
+import Engine.Graphics.Font.Repertoire
+  (bitmapFontKey, repertoireForFont, repertoireSize, sdfFontKey)
+import Engine.Graphics.Font.SDF
+  (generateSDFFontAtlas, sdfAtlasErrorMessage, sdfBaseSize)
 import Engine.Graphics.Font.Upload (uploadFontAtlasToGPU)
+import Vulkan.Core10
+  ( PhysicalDeviceProperties(..), PhysicalDeviceLimits(..)
+  , getPhysicalDeviceProperties )
 import Engine.Core.Log.Monad (logDebugSM, logWarnM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..), loggerRef)
@@ -28,7 +34,7 @@ loadFont requestedHandle fontPath fontSize = do
     cacheRef ← asks (rcFontCacheRef . toRenderCapability)
     cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
-    case Map.lookup (fontPath, fontSize) (fcPathCache cache) of
+    case Map.lookup (bitmapFontKey fontPath fontSize) (fcPathCache cache) of
         Just handle → do
             logWarnM CatFont $ "Font already loaded: " <> T.pack (show fontPath)
             return handle
@@ -60,7 +66,8 @@ loadFont requestedHandle fontPath fontSize = do
 
             liftIO $ atomicModifyIORef' cacheRef $ \c → ((c
                 { fcFonts = Map.insert handle newAtlas (fcFonts c)
-                , fcPathCache = Map.insert (fontPath, fontSize) handle (fcPathCache c) }
+                , fcPathCache = Map.insert (bitmapFontKey fontPath fontSize)
+                                           handle (fcPathCache c) }
                 ), ())
 
             return handle
@@ -71,14 +78,14 @@ loadSDFFont requestedHandle fontPath = do
     logDebugSM CatFont "SDF Font atlas generation started"
         [("path", T.pack fontPath)
         ,("base_size", T.pack $ show sdfBaseSize)
-        ,("char_range", "' ' to '~'")]
+        ,("requested_chars", T.pack $ show $ repertoireSize
+                                           $ repertoireForFont fontPath)]
 
     cacheRef ← asks (rcFontCacheRef . toRenderCapability)
     cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
 
-    -- SDF fonts use size = -1 as cache key sentinel
-    case Map.lookup (fontPath, -1) (fcPathCache cache) of
+    case Map.lookup (sdfFontKey fontPath) (fcPathCache cache) of
         Just existingHandle → do
             logDebugSM CatFont "SDF Font already loaded, reusing atlas"
                 [("path", T.pack fontPath)
@@ -104,9 +111,17 @@ loadNewSDFFont requestedHandle fontPath cacheRef gs = do
                       "Font descriptor layout not initialized"
         Just layout → return layout
 
+    maxDimension ← maxAtlasDimension gs
+
     loggerRef' ← asks loggerRef
     logger ← liftIO $ readIORef loggerRef'
-    atlas ← liftIO $ generateSDFFontAtlas logger fontPath
+    result ← liftIO $ generateSDFFontAtlas logger fontPath
+                                           (repertoireForFont fontPath)
+                                           maxDimension
+    atlas ← case result of
+        Left err → logAndThrowM CatFont (ExGraphics FontError)
+                       (sdfAtlasErrorMessage err)
+        Right generated → return generated
 
     logDebugSM CatFont "SDF Atlas texture dimensions"
         [("width", T.pack $ show $ faAtlasWidth atlas)
@@ -122,7 +137,21 @@ loadNewSDFFont requestedHandle fontPath cacheRef gs = do
 
     liftIO $ atomicModifyIORef' cacheRef $ \c → ((c
         { fcFonts = Map.insert requestedHandle newAtlas (fcFonts c)
-        , fcPathCache = Map.insert (fontPath, -1) requestedHandle (fcPathCache c) }
+        , fcPathCache = Map.insert (sdfFontKey fontPath)
+                                   requestedHandle (fcPathCache c) }
         ), ())
 
     return requestedHandle
+
+-- | The device's @maxImageDimension2D@, which bounds what the packing
+--   planner may choose. Queried rather than assumed: a plan that
+--   overruns it would fail at image creation, after the CPU bitmap has
+--   already been allocated.
+maxAtlasDimension ∷ GraphicsState → EngineM σ Int
+maxAtlasDimension gs = case vulkanPDevice gs of
+    Nothing → logAndThrowM CatFont (ExGraphics VulkanDeviceLost)
+                  "No physical device to query maxImageDimension2D"
+    Just pDevice → do
+        PhysicalDeviceProperties { limits = deviceLimits } ←
+            liftIO $ getPhysicalDeviceProperties pDevice
+        return $ fromIntegral $ maxImageDimension2D deviceLimits
