@@ -24,7 +24,7 @@ WORLDGEN_GLOBS = [
     # terrain/material/fluid/ice/ore layers, and must not trigger the gate.
     "src/World/Generate*", "src/World/Geology*", "src/World/Hydrology*",
     "src/World/Fluid*", "src/World/Flora*", "src/World/Weather*",
-    "src/World/Ocean*", "src/World/River*", "src/World/Magma*",
+    "src/World/Ocean*", "src/World/Magma*",
     "src/World/Material*", "src/World/Plate*", "src/World/Chunk*",
     "src/World/Region*", "src/World/Tile/*", "src/World/Vegetation*",
     "src/World/Grid.hs", "src/World/Scale.hs", "src/World/Constants.hs",
@@ -57,7 +57,6 @@ def self_test() -> int:
         ("worldgen", ["src/World/Generate.hs"], True),
         ("worldgen", ["src/World/Fluids.hs"], True),
         ("worldgen", ["src/World/Plate.hs"], True),
-        ("worldgen", ["src/World/River/Graph.hs"], True),
         ("worldgen", ["src/World/Magma/Pool.hs"], True),
         ("worldgen", ["src/World/Material/Id.hs"], True),
         ("worldgen", ["src/World/Weather.hs"], True),

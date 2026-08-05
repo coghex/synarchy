@@ -107,7 +107,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [ ] CH-76. Envelope compat is named after the epic's internal phase letters
 - [ ] CH-77. `LuaComponentSpec` is a bare 4-tuple
 - [ ] CH-78. `Envelope.hs` is 860 lines beside an `Envelope/` directory
-- [ ] CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current
+- [x] CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current — [#1108]
 - [ ] CH-80. "River" logic lives in four unrelated namespaces
 - [ ] CH-81. `World.Fluids` and `World.Fluid.*` differ by one letter
 - [ ] CH-82. The per-tile fluid-surface fold is written five times in one file
@@ -1688,28 +1688,40 @@ save concern, there is no rule saying whether it lives in `X.hs`,
 `World/Weather` (1332), `World/ZoomMap` (1018) plus the top-level `World/*.hs`.
 The fluid surface is the densest and, as suspected, holds the most gaps.
 
-### CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current
+### [#1108] CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current
 `src/World/River/Graph.hs` (257 lines) — `RiverGraph`, `RiverRoute`,
-`RiverNode`, `buildRiverGraph`, `classifyMouth` — is listed in
+`RiverNode`, `buildRiverGraph`, `classifyMouth` — was listed in
 `synarchy.cabal` and **imported by no production module**.
 
-**Correction (2026-07-25):** an earlier version of this entry claimed it was
-untested. That was wrong — `test-headless/` does exercise `classifyMouth` and
-`RiverGraph`, so the "exposed for tests" comment is honest and the module has
-real coverage. `buildRiverGraph` has no reference anywhere.
+**Correction (2026-08-05):** the 2026-07-25 correction to this entry claimed
+`test-headless/` exercised both `classifyMouth` and `RiverGraph`. Only the
+first was true. `Spec.hs`'s `RiverGraph` is the test module's own qualified
+import alias, not the type; `test-headless/Test/Headless/River/Graph.hs`
+imported exactly `SinkType(..)` and `classifyMouth`. Seven of the nine exports
+— `RiverGraph`, `RiverRoute`, `RiverNodeId`, `RiverNode`, `NodeKind`,
+`buildRiverGraph`, `emptyRiverGraph` — had no reference outside the module
+itself.
 
-The finding stands in its narrower form: a fully-built, tested model that no
-production code path uses, kept compiling indefinitely.
+The finding stood in its narrower form: a fully-built model that no production
+code path used, one classification function of it tested, kept compiling
+indefinitely.
 
-Its design brief, `docs/river_rework.md` (450 lines), opens "This document
-describes a new river runtime model for Synarchy" and describes the current
-system as the thing to be replaced — with no status marker saying the work
-stopped. `docs/history/README.md` explicitly moved it *up* out of the history
-folder as "design reference, not a superseded audit", so a reader is told it is
-live.
+Its design brief, then at `docs/river_rework.md` (450 lines), opened "This
+document describes a new river runtime model for Synarchy" and described the
+current system as the thing to be replaced — with no status marker saying the
+work stopped. `docs/history/README.md` explicitly moved it *up* out of the history
+folder as "design reference, not a superseded audit", so a reader was told it
+was live.
 
-Decide and record: adopt, or archive the doc to `docs/history/` and delete the
-module. Right now it is a third river model competing with the four in CH-80.
+Resolved in #1108 by archiving rather than adopting: the brief moved to
+`docs/history/river_rework.md` under a status marker stating it was not
+adopted, `docs/history/README.md` now says the same, and the module, its test
+module, their `synarchy.cabal` entries, the `Spec.hs` registration, and the
+`src/World/River*` mapping in `tools/ci_expensive_gates.py` are all gone.
+Nothing imported the module, so worldgen output is unchanged by construction.
+Adopting the redesign instead would have been a worldgen rework needing its own
+epic. CH-80 and CH-90 were out of scope there and still name the module as it
+stood at their sweep.
 
 ### CH-80. "River" logic lives in four unrelated namespaces
 | Path | Role |
@@ -3179,13 +3191,13 @@ resolve against the current `Blood/Types.hs`.)
 | `expedition_gameplay_loop.md` | — none — (has its own status *section*) |
 | `asset_generation.md` | — none — |
 | `player_manual.md` | — none — |
-| `river_rework.md` | — none — (CH-79: abandoned design) |
+| `history/river_rework.md` | **Status:** Not adopted, archived 2026-08-05 ✓ (CH-79 / #1108) |
 
 The project already has the right convention —
 `texture_infrastructure.md`'s `**Status:** Pre-implementation, written
-2026-05-24` is exactly the marker `river_rework.md` needs to stop reading as a
-live plan (CH-79). It just isn't applied uniformly, and where it is applied it
-isn't maintained.
+2026-05-24` is the model `history/river_rework.md` was given in #1108 to stop
+it reading as a live plan (CH-79). It just isn't applied uniformly, and where
+it is applied it isn't maintained.
 
 Proposal: require one status line on every `docs/*.md` — one of
 *Authoritative* / *Pre-implementation* / *Implemented (see §X)* / *Superseded* —

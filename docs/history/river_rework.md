@@ -1,5 +1,17 @@
 # River Rework
 
+**Status: Not adopted — archived 2026-08-05 (issue #1108).** The decision not
+to build this design, and to archive the brief instead, was taken in #1108;
+that issue also deleted its partial realisation, `src/World/River/Graph.hs`.
+This is a historical design document, kept for provenance: nothing below
+describes how rivers work today, and the "current system" it proposes to
+replace is still the shipped one. For the river work that did land on that
+shipped model, see #221 (inland river sources) and #223 (bed depth).
+
+Everything from here down is the brief as written on 2026-06-25, unedited.
+
+---
+
 This document describes a new river runtime model for Synarchy.
 
 It is **not** a roadmap or implementation schedule. It is a design brief for a new system: what it owns, how it relates to world generation, how it interacts with the simulator, and how it should behave at chunk boundaries.
