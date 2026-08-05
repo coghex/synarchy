@@ -15,7 +15,7 @@ import World.Fluid.Internal (wrapChunkCoordU)
 import World.Magma.Types
     ( MagmaSource(..)
     , VolcanoCtx(..)
-    , MagmaOverlay(..)
+    , MagmaOverlay
     )
 import World.Magma.Field (mantleZ)
 import World.Magma.Shape (pointInShape)
@@ -56,11 +56,10 @@ sourceContains ctx gx gy z i =
         ws = vcWorldSize ctx
     in any (pointInShape ws gx gy z) (msShapes s)
 
--- | The only function the rest of the engine should call. Future
---   precedence layers (cooled basalt, sim writes, dig reveal) are
---   inserted here without touching call sites.
+-- | The only function the rest of the engine should call. The overlay
+--   currently contributes no precedence of its own, so this is exactly
+--   'lavaAt'; it keeps the overlay parameter so future precedence
+--   layers (cooled basalt, sim writes, dig reveal) are inserted here
+--   without touching call sites.
 effectiveLavaAt ∷ MagmaOverlay → VolcanoCtx → Int → Int → Int → Bool
-effectiveLavaAt overlay ctx gx gy z =
-    case HM.lookup (gx, gy) (moSurface overlay) of
-        Just _  → True
-        Nothing → lavaAt ctx gx gy z
+effectiveLavaAt _overlay ctx gx gy z = lavaAt ctx gx gy z

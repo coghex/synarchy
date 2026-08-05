@@ -359,8 +359,7 @@ discoverChunkLava ctx coord surfaceMap waterSurfMap =
     in if HM.null capMap
        then Nothing
        else Just MagmaOverlay
-            { moSurface   = HM.empty
-            , moBasaltCap = capMap
+            { moBasaltCap = capMap
             , moRevealed  = HM.empty
             }
 

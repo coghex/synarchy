@@ -121,10 +121,12 @@ data LoadedChunk = LoadedChunk
       --   wet iff z ≤ lcWaterTableMap[ly*chunkSize+lx]. Computed by
       --   World.Hydrology.WaterTable, see DESIGN.md in that folder.
     , lcMagma      ∷ !(Maybe MagmaOverlay)
-      -- ^ Sparse lava overlay produced by 'discoverChunkLava' at chunk
+      -- ^ Sparse magma overlay produced by 'discoverChunkLava' at chunk
       --   gen. Nothing in nearly every chunk; when present, the
-      --   overlay's moSurface map drives lava placement in
-      --   composeFluidMap (highest priority above water + ice).
+      --   overlay's moBasaltCap map seals sub-water breaches by raising
+      --   terrain and stamping basalt. Visible surface lava is placed
+      --   by composeFluidMap from the global lava-pool table, not from
+      --   this overlay.
     , lcStructures ∷ !ChunkStructures
       -- ^ Per-chunk structure overlay (floors/walls/posts/ceilings),
       --   built by replaying this chunk's WeSetStructure edits. Keyed
