@@ -56,6 +56,8 @@ module Building.Knowledge.Live
     , revealContainer
     , revealContainerForUnit
     , seedBuiltContainer
+    , markPendingSeed
+    , sweepPendingSeeds
     , forgetContainerEverywhere
     , forgetAllContainers
     , readContainerKnowledge
@@ -63,13 +65,15 @@ module Building.Knowledge.Live
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Building (BuildingCapability(..))
 import Engine.Core.Capability.ContentRegistries (ContentRegistriesCapability(..))
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import Building.Knowledge
 import Building.Types
-    (BuildingId(..), BuildingInstance(..), BuildingManager(..))
+    ( BuildingActivity(..), BuildingId(..)
+    , BuildingInstance(..), BuildingManager(..), currentActivity )
 import Item.Types (ItemInstance, ItemManager)
 import Unit.Faction (isPlayerCommandable)
 import Unit.Types (UnitId, UnitInstance(..), UnitManager(..))
@@ -180,6 +184,53 @@ seedBuiltContainer co bid = do
                     Just _  → (k, False)
                     Nothing → (recordObservation itemMgr now bid storage k, True)
 
+-- | Remember that THIS SESSION just placed an instant-built container
+--   ('Building.Knowledge.SeedWhenBuilt') that has not reached Built
+--   yet, so 'sweepPendingSeeds' can watch for the transition. No-ops
+--   when the building or its page is gone.
+markPendingSeed ∷ ContainerObserver → BuildingId → IO ()
+markPendingSeed co bid = do
+    mPage ← containerPage co bid
+    forM_ mPage $ \(ws, _) →
+        atomicModifyIORef' (wsPendingContainerSeedsRef ws) $ \pending →
+            (HS.insert bid pending, ())
+
+-- | Seed every pending container whose Built transition has now
+--   actually happened, on every live page. Driven once per building
+--   drain (i.e. per unit tick).
+--
+--   Re-evaluates 'currentActivity' rather than storing a precomputed
+--   deadline, so this can never disagree with the one function that
+--   decides whether a building is Built. An entry whose building has
+--   vanished is dropped; one still 'Appearing' is kept for next tick.
+--
+--   The set it walks is exactly "containers this session placed and
+--   has not finished watching" — never every already-built container —
+--   which is what stops a LOADED one from being seeded as though the
+--   player had just watched it go up.
+sweepPendingSeeds ∷ ContainerObserver → IO ()
+sweepPendingSeeds co = do
+    wm  ← readIORef (coWorlds co)
+    bm  ← readIORef (coBuildings co)
+    now ← readIORef (coGameTime co)
+    forM_ (wmWorlds wm) $ \(_, ws) → do
+        pending ← readIORef (wsPendingContainerSeedsRef ws)
+        unless (HS.null pending) $ do
+            let verdict bid = do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    def  ← HM.lookup (biDefName inst) (bmDefs bm)
+                    pure (currentActivity now inst def ≡ Built)
+                classify bid = case verdict bid of
+                    Nothing    → (False, False)  -- gone: drop, don't seed
+                    Just True  → (False, True)   -- Built: seed, then drop
+                    Just False → (True,  False)  -- still Appearing: keep
+                results = [ (bid, classify bid) | bid ← HS.toList pending ]
+                keep    = HS.fromList [ b | (b, (k, _)) ← results, k ]
+                ready   = [ b | (b, (_, r)) ← results, r ]
+            forM_ ready (seedBuiltContainer co)
+            atomicModifyIORef' (wsPendingContainerSeedsRef ws) $ \live →
+                (HS.intersection live keep, ())
+
 -- | Demolition: drop this container's record. Applied to EVERY live
 --   page rather than the building's own, because the caller
 --   ('Building.Thread.Command') has already removed the instance by the
@@ -194,9 +245,13 @@ seedBuiltContainer co bid = do
 forgetContainerEverywhere ∷ IORef WorldManager → BuildingId → IO ()
 forgetContainerEverywhere worldsRef bid = do
     wm ← readIORef worldsRef
-    forM_ (wmWorlds wm) $ \(_, ws) →
+    forM_ (wmWorlds wm) $ \(_, ws) → do
         atomicModifyIORef' (wsContainerKnowledgeRef ws) $ \k →
             (forgetContainer bid k, ())
+        -- A container demolished mid-appear must also stop being
+        -- watched, or the sweep would carry a dead id forever.
+        atomicModifyIORef' (wsPendingContainerSeedsRef ws) $ \pending →
+            (HS.delete bid pending, ())
 
 -- | Every page forgets every container. The clear-all counterpart of
 --   'forgetContainerEverywhere' (queue-ordered teardown, #58): with no
@@ -205,9 +260,11 @@ forgetContainerEverywhere worldsRef bid = do
 forgetAllContainers ∷ IORef WorldManager → IO ()
 forgetAllContainers worldsRef = do
     wm ← readIORef worldsRef
-    forM_ (wmWorlds wm) $ \(_, ws) →
+    forM_ (wmWorlds wm) $ \(_, ws) → do
         atomicModifyIORef' (wsContainerKnowledgeRef ws) $ \_ →
             (emptyContainerKnowledge, ())
+        atomicModifyIORef' (wsPendingContainerSeedsRef ws) $ \_ →
+            (HS.empty, ())
 
 -- | The record the player currently holds for @bid@, resolved through
 --   the container's OWN page. 'Nothing' distinguishes "no such

@@ -1236,6 +1236,31 @@ def test_orphan_check_is_skipped_when_fixture_dir_does_not_exist() -> None:
                f"expected no orphan violation, got {violations}")
 
 
+def test_render_setup_lua_survives_lua_table_braces() -> None:
+    """#1087 (PR review round 2): --setup-lua statements were rendered
+    with str.format, which treats ORDINARY Lua table braces as format
+    fields -- so a perfectly valid statement containing a table raised
+    KeyError before the engine ever saw it. Only the two documented
+    placeholders may be substituted."""
+    table_stmt = ("local t = {bandage = 1, [2] = 'x'}; "
+                  "return unit.depositToCargo({uid}, {bid}, 'bandage')")
+    rendered = sca.render_setup_lua(table_stmt, 7, 3)
+    expect(rendered == ("local t = {bandage = 1, [2] = 'x'}; "
+                        "return unit.depositToCargo(3, 7, 'bandage')"),
+           f"the table literal survives verbatim and only {{bid}}/{{uid}} "
+           f"are substituted, got {rendered!r}")
+
+    nested = sca.render_setup_lua("return f({a = {b = 1}})", 1, 2)
+    expect(nested == "return f({a = {b = 1}})",
+           f"a statement with NO placeholders is returned unchanged, "
+           f"got {nested!r}")
+
+    unspawned = sca.render_setup_lua("return g({bid}, {uid})", None, None)
+    expect(unspawned == "return g(nil, nil)",
+           f"an unspawned side substitutes the Lua literal nil, never the "
+           f"Python string 'None', got {unspawned!r}")
+
+
 def test_real_manifest_passes_the_audit() -> None:
     print("the real, checked-in manifest currently passes (regression guard)")
     manifest = sca.load_manifest()
@@ -1315,6 +1340,7 @@ def main() -> int:
         test_detects_orphaned_fixture_file,
         test_no_orphan_violation_when_every_file_is_referenced,
         test_orphan_check_is_skipped_when_fixture_dir_does_not_exist,
+        test_render_setup_lua_survives_lua_table_braces,
         test_real_manifest_passes_the_audit,
         test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes,
     ]:

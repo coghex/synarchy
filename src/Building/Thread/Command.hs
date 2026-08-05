@@ -24,8 +24,8 @@ import World.State.Types (WorldManager(..))
 import Building.Types
 import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
 import Building.Knowledge.Live
-    (containerObserver, forgetAllContainers, forgetContainerEverywhere
-    , seedBuiltContainer)
+    ( containerObserver, forgetAllContainers, forgetContainerEverywhere
+    , markPendingSeed, sweepPendingSeeds )
 import Building.Command.Types (BuildingCommand(..))
 
 -- | Drain the building command queue in one pass. Called from the
@@ -35,17 +35,25 @@ import Building.Command.Types (BuildingCommand(..))
 --
 --   Takes the content-registries view as well since #1087: an
 --   instant-built storage building seeds its container-knowledge record
---   at placement, and weighing that observation needs the item defs.
+--   when it reaches Built, and weighing that observation needs the item
+--   defs.
 processAllBuildingCommands ∷ IORef LoggerState → WorldSimCapability
                            → ContentRegistriesCapability
                            → BuildingCapability → IO ()
 processAllBuildingCommands logRef sim reg bld = do
-    mCmd ← Q.tryReadQueue (bcBuildingQueue bld)
-    case mCmd of
-        Just cmd → do
-            handleBuildingCommand logRef sim reg bld cmd
-            processAllBuildingCommands logRef sim reg bld
-        Nothing → return ()
+    drain
+    -- #1087: after the queue is empty, give every container THIS
+    -- SESSION placed and is still watching a chance to have reached
+    -- Built. Scoped to that session-local set, never to every
+    -- already-built container, so a loaded one is never seeded as
+    -- though the player had just watched it go up.
+    sweepPendingSeeds (containerObserver bld sim reg)
+  where
+    drain = do
+        mCmd ← Q.tryReadQueue (bcBuildingQueue bld)
+        case mCmd of
+            Just cmd → handleBuildingCommand logRef sim reg bld cmd >> drain
+            Nothing  → return ()
 
 handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
                       → ContentRegistriesCapability → BuildingCapability
@@ -90,18 +98,19 @@ handleBuildingCommand logRef sim reg bld
             atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
                 (bm' { bmInstances = HM.insert bid inst (bmInstances bm') }, ())
             -- #1087: an INSTANT-BUILT storage building (bdBuildWork ==
-            -- 0) reaches Built with no construction work to observe —
-            -- nothing ever calls building.addBuildProgress for it, and
-            -- no tick revisits it — so placement IS its completion
-            -- event and it seeds known-empty here. A WORKER-BUILT one
-            -- (SeedAtBuildCompletion) is deliberately untouched: it is
-            -- created at zero progress and seeds only when its progress
-            -- actually crosses bdBuildWork. Load never replays a
-            -- BuildingSpawn (World.Load.Publish installs the manager
-            -- directly), so a restored already-built container cannot
-            -- reach this.
-            when (seedTriggerFor def ≡ SeedAtSpawn) $
-                void $ seedBuiltContainer (containerObserver bld sim reg) bid
+            -- 0) reaches Built on currentActivity's TIME-BASED arm —
+            -- immediately when it declares no appearing animation, or
+            -- once that animation's duration has elapsed. Nothing calls
+            -- building.addBuildProgress for it, so the transition is
+            -- watched from HERE: the drain's own sweep below re-checks
+            -- each marked container every tick and seeds the moment it
+            -- genuinely flips. Seeding at placement outright would be
+            -- wrong for an animated def, which is still Appearing then.
+            -- A WORKER-BUILT one (SeedAtBuildCompletion) is untouched:
+            -- it is created at zero progress and seeds from its own
+            -- progress crossing.
+            when (seedTriggerFor def ≡ SeedWhenBuilt) $
+                markPendingSeed (containerObserver bld sim reg) bid
 
 handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →

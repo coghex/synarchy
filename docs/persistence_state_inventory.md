@@ -198,6 +198,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsChopDesignationsRef` | Persist exactly | — | `wpsChopDesignations` | `tools/chop_probe.py` |
 | `wsCraftBillsRef` | Persist exactly | — | `wpsCraftBills` | `tools/craft_bill_probe.py` |
 | `wsPowerNodesRef` | Persist exactly | — | `wpsPowerNodes` | `tools/power_probe.py` |
+| `wsPendingContainerSeedsRef` | Exclude | — | #1087: the containers THIS SESSION placed that have not yet reached `Built` — the watch list the building drain re-checks each tick so an instant-built (`bdBuildWork == 0`) storage building seeds known-empty at its real transition rather than at placement. Session-local BY DESIGN: a restored page must start with it empty, which is exactly what stops a loaded already-built container from masquerading as a new construction event. Emptied by demolition/clear-all. | `Test.Headless.Building.Knowledge` (`--match "Container knowledge"`) |
 | `wsContainerKnowledgeRef` | Persist exactly | — | `wpsContainerKnowledge` (#1087: the player's last-known view of each container's contents — page-scoped and PLAYER-GLOBAL, never per-unit; its remembered `ItemInstance`s are historical observations, deliberately excluded from `allItemInstanceIds` and live `item_instance` resolution) | `Test.Headless.Building.Knowledge` (`--match "Container knowledge"`) |
 | `wsTillDesignationsRef` | Persist exactly | — | `wpsTillDesignations` | `tools/till_probe.py` |
 | `wsCropPlotsRef` | Persist exactly | — | `wpsCropPlots` | `tools/crop_probe.py` |

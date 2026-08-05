@@ -19,6 +19,7 @@ import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.Vector as V
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Building.Knowledge
 import Building.Knowledge.Live
@@ -31,7 +32,9 @@ import Item.Types
 import Structure.Palette (emptyTexPalette)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
-import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
+import Unit.Types
+    (Animation(..), UnitId(..), UnitInstance(..), UnitManager(..)
+    , emptyUnitManager)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component (componentKnownIds)
@@ -82,6 +85,20 @@ shedDef = (bareDef "shed") { bdBuildWork = 60, bdStorageCapacity = 0 }
 instantCargoDef ∷ BuildingDef
 instantCargoDef = (bareDef "drop_pod")
     { bdBuildWork = 0, bdStorageCapacity = 150 }
+
+-- | The same zero-work class, but with a real appearing animation — so
+--   'currentActivity' reports @Appearing@ for its duration (4 frames at
+--   2 fps = 2 game-seconds) before flipping to @Built@. Seeding at
+--   PLACEMENT would be wrong for this one; the drain's sweep has to
+--   wait for the genuine transition.
+animatedCargoDef ∷ BuildingDef
+animatedCargoDef = (bareDef "unfolding_pod")
+    { bdBuildWork = 0, bdStorageCapacity = 150
+    , bdStateAnims = HM.singleton "appearing" "unfold"
+    , bdAnimations = HM.singleton "unfold" Animation
+        { aFps = 2, aLoop = False, aFlip = False
+        , aFrames = Map.singleton DirS (V.replicate 4 (TextureHandle 0)) }
+    }
 
 bareDef ∷ Text → BuildingDef
 bareDef name = BuildingDef
@@ -217,6 +234,17 @@ newScene = do
         , scUnits = unitsRef
         , scBuildings = buildingsRef
         , scPageA = wsA, scPageB = wsB, scTime = timeRef
+        }
+
+-- | Register an extra def + instance on page B, spawned at game-time 0
+--   (matching 'newScene''s clock start), the way a real placement
+--   would leave it.
+placeInstant ∷ Scene → BuildingId → Text → BuildingDef → IO ()
+placeInstant sc bid name def = do
+    writeIORef (scTime sc) 0
+    modifyIORef' (scBuildings sc) $ \bm → bm
+        { bmDefs = HM.insert name def (bmDefs bm)
+        , bmInstances = HM.insert bid (mkBuilding pageB name []) (bmInstances bm)
         }
 
 -- | Overwrite the container's LIVE storage without any reveal — the
@@ -417,25 +445,77 @@ spec = describe "Container knowledge" $ do
                 seedTriggerFor cargoDef `shouldBe` SeedAtBuildCompletion
 
             it "an INSTANT-BUILT storage def (no build work at all) \
-               \seeds at placement -- otherwise nothing would ever \
-               \observe its transition to Built" $
-                seedTriggerFor instantCargoDef `shouldBe` SeedAtSpawn
+               \seeds when it reaches Built -- otherwise nothing would \
+               \ever observe that transition" $ do
+                seedTriggerFor instantCargoDef `shouldBe` SeedWhenBuilt
+                seedTriggerFor animatedCargoDef `shouldBe` SeedWhenBuilt
 
             it "a def with no storage never seeds at all" $ do
                 seedTriggerFor shedDef `shouldBe` NeverSeed
                 seedTriggerFor (bareDef "portal") `shouldBe` NeverSeed
 
-            it "the instant-built container really does become \
-               \known-empty through the same seeding call its \
-               \placement makes" $ do
+            it "an instant-built container with NO appearing animation \
+               \is already Built at placement, so the very first sweep \
+               \seeds it" $ do
                 sc ← newScene
-                modifyIORef' (scBuildings sc) $ \bm → bm
-                    { bmDefs = HM.insert "drop_pod" instantCargoDef (bmDefs bm)
-                    , bmInstances = HM.insert (BuildingId 7)
-                        (mkBuilding pageB "drop_pod" []) (bmInstances bm) }
-                seedBuiltContainer (scObserver sc) (BuildingId 7)
-                    `shouldReturn` True
+                placeInstant sc (BuildingId 7) "drop_pod" instantCargoDef
+                markPendingSeed (scObserver sc) (BuildingId 7)
+                sweepPendingSeeds (scObserver sc)
                 stateOf sc (BuildingId 7) `shouldReturn` KnownEmpty
+
+            it "an ANIMATED instant-built container is still Appearing \
+               \at placement: it is NOT seeded until its appear \
+               \animation has actually elapsed" $ do
+                sc ← newScene
+                placeInstant sc (BuildingId 8) "unfolding_pod" animatedCargoDef
+                markPendingSeed (scObserver sc) (BuildingId 8)
+                -- t = 0 of a 2-second (4 frames @ 2 fps) appear anim.
+                sweepPendingSeeds (scObserver sc)
+                stateOf sc (BuildingId 8) `shouldReturn` NeverInspected
+                writeIORef (scTime sc) 1.5
+                sweepPendingSeeds (scObserver sc)
+                stateOf sc (BuildingId 8) `shouldReturn` NeverInspected
+                -- Past the animation: the transition finally happens.
+                writeIORef (scTime sc) 2.5
+                sweepPendingSeeds (scObserver sc)
+                stateOf sc (BuildingId 8) `shouldReturn` KnownEmpty
+
+            it "the watch list is session-local: a page whose pending \
+               \set is empty -- exactly what a LOAD produces -- never \
+               \seeds its already-Built containers, so a restored \
+               \container cannot masquerade as new construction" $ do
+                sc ← newScene
+                placeInstant sc (BuildingId 9) "drop_pod" instantCargoDef
+                writeIORef (scTime sc) 10000   -- long since Built
+                sweepPendingSeeds (scObserver sc)
+                stateOf sc (BuildingId 9) `shouldReturn` NeverInspected
+
+            it "a container demolished mid-appear stops being watched, \
+               \rather than being carried forever" $ do
+                sc ← newScene
+                placeInstant sc (BuildingId 8) "unfolding_pod" animatedCargoDef
+                markPendingSeed (scObserver sc) (BuildingId 8)
+                forgetContainerEverywhere (coWorlds (scObserver sc))
+                                          (BuildingId 8)
+                (HS.member (BuildingId 8)
+                    <$> readIORef (wsPendingContainerSeedsRef (scPageB sc)))
+                    `shouldReturn` False
+                writeIORef (scTime sc) 2.5
+                sweepPendingSeeds (scObserver sc)
+                stateOf sc (BuildingId 8) `shouldReturn` NeverInspected
+
+            it "a sweep never re-seeds a container that already has a \
+               \real observation" $ do
+                sc ← newScene
+                placeInstant sc (BuildingId 7) "drop_pod" instantCargoDef
+                setStorage sc (BuildingId 7) [kitAt 100 70]
+                _ ← revealContainer (scObserver sc) (BuildingId 7)
+                before ← lookupContainer (BuildingId 7)
+                    <$> knowledgeOn (scPageB sc)
+                markPendingSeed (scObserver sc) (BuildingId 7)
+                sweepPendingSeeds (scObserver sc)
+                (lookupContainer (BuildingId 7) <$> knowledgeOn (scPageB sc))
+                    `shouldReturn` before
 
         it "seeding never overwrites an existing observation, so a \
            \re-crossed completion threshold cannot erase what the \

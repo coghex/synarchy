@@ -152,21 +152,24 @@ data SeedTrigger
       --   @building.addBuildProgress@'s crossing of that threshold —
       --   deliberately NOT at spawn, which would fire while the thing
       --   is still a construction site.
-    | SeedAtSpawn
+    | SeedWhenBuilt
       -- ^ INSTANT-BUILT (@bdBuildWork == 0@, the portal/solar-panel
-      --   shape): there is no construction work at all, so the
-      --   time-based arm carries it to Built with nothing to observe
-      --   the transition — no tick ever revisits the building, and the
-      --   progress verb is never called for it. Placement IS the
-      --   completion event for this class, so it seeds there. (The
-      --   appearing animation is a visual flourish over an
-      --   already-decided outcome, not construction: the container is
-      --   empty either way, and any deposit during it reveals on its
-      --   own.) Safe against load, which rebuilds
-      --   'Building.Types.BuildingManager' directly in
-      --   "World.Load.Publish" and never replays a @BuildingSpawn@ — so
-      --   restoring an already-built container cannot masquerade as a
-      --   new construction event.
+      --   shape): there is no construction work at all, so
+      --   'Building.Types.currentActivity' carries it to Built on the
+      --   TIME-BASED arm — once its appearing animation's duration has
+      --   elapsed, or immediately when it declares none. Nothing calls
+      --   the progress verb for this class, so the transition is
+      --   observed instead by the building drain, which re-evaluates
+      --   'Building.Types.currentActivity' each tick for the containers
+      --   THIS SESSION placed
+      --   ('World.State.Types.wsPendingContainerSeedsRef') and seeds the
+      --   moment it actually flips. Seeding at placement instead would
+      --   be wrong for an animated def, which is still @Appearing@
+      --   then. Scoping the sweep to that session-local set is what
+      --   keeps a LOADED already-built container from masquerading as a
+      --   new construction event: a restored page's pending set is
+      --   empty, and load never replays a @BuildingSpawn@ anyway
+      --   ("World.Load.Publish" installs the manager directly).
     | NeverSeed
       -- ^ No storage at all: nothing to remember, ever.
     deriving (Show, Eq)
@@ -175,7 +178,7 @@ seedTriggerFor ∷ BuildingDef → SeedTrigger
 seedTriggerFor def
     | bdStorageCapacity def ≤ 0 = NeverSeed
     | bdBuildWork def > 0       = SeedAtBuildCompletion
-    | otherwise                 = SeedAtSpawn
+    | otherwise                 = SeedWhenBuilt
 
 lookupContainer ∷ BuildingId → ContainerKnowledge → Maybe ContainerRecord
 lookupContainer bid = HM.lookup bid ∘ ckRecords

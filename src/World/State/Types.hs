@@ -15,6 +15,7 @@ import UPrelude
 import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
 import Language.Generated.Types (LanguageProvenance)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
@@ -35,6 +36,7 @@ import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
+import Building.Types (BuildingId)
 import Building.Knowledge (ContainerKnowledge, emptyContainerKnowledge)
 import Power.Types (PowerNodes, emptyPowerNodes)
 import Blood.Types (BloodStore, BloodTextureId, emptyBloodStore, defaultBloodTextureCap)
@@ -167,6 +169,20 @@ data WorldState = WorldState
       --   atomicModifyIORef' (like craft bills, it has no world-thread
       --   side effects). Persisted in saves (wpsContainerKnowledge) as
       --   its own optional "container-knowledge" component.
+    , wsPendingContainerSeedsRef ∷ IORef (HS.HashSet BuildingId)
+      -- ^ Containers on this page that were PLACED this session and
+      --   have not yet reached Built (#1087). Only the instant-built
+      --   storage class ever lands here: a worker-built one seeds from
+      --   its own build-progress crossing, while a zero-build-work def
+      --   reaches Built on currentActivity's time-based arm, which no
+      --   tick otherwise observes. The building drain re-evaluates each
+      --   entry every tick and seeds the known-empty record the moment
+      --   the transition actually happens (see Building.Knowledge.Live).
+      --   Deliberately NOT persisted, and NOT derivable: it is precisely
+      --   "the player watched THIS one go up in THIS session", which is
+      --   what keeps a loaded already-built container from masquerading
+      --   as a new construction event. A restored page starts with an
+      --   empty set, exactly right — nothing in it was just placed.
     , wsTillDesignationsRef ∷ IORef TillDesignations
       -- ^ Till-designation set (#333): tile (gx, gy) → designation
       --   (surface z; see World.Till.Types). Written by the world
@@ -256,6 +272,7 @@ emptyWorldState = do
     wsCraftBillsRef ← newIORef emptyCraftBills
     wsPowerNodesRef ← newIORef emptyPowerNodes
     wsContainerKnowledgeRef ← newIORef emptyContainerKnowledge
+    wsPendingContainerSeedsRef ← newIORef HS.empty
     wsTillDesignationsRef ← newIORef HM.empty
     wsCropPlotsRef ← newIORef emptyCropPlots
     wsPlantDesignationsRef ← newIORef HM.empty
@@ -274,6 +291,7 @@ emptyWorldState = do
                         wsConstructDesignationsRef wsFloraHarvestsRef
                         wsChopDesignationsRef wsCraftBillsRef
                         wsPowerNodesRef wsContainerKnowledgeRef
+                        wsPendingContainerSeedsRef
                         wsTillDesignationsRef
                         wsCropPlotsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef

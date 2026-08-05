@@ -1258,6 +1258,23 @@ def _bootstrap_gen_defs(send, port: int) -> None:
         send(port, f"engine.loadLocationYaml('{path}'); return 'ok'")
 
 
+def render_setup_lua(stmt: str, bid, uid) -> str:
+    """Substitute ONLY the two documented placeholders into a
+    --setup-lua statement.
+
+    Deliberately NOT str.format: Lua statements routinely contain
+    ordinary braces (`{1, 2}`, `for k, v in pairs(t) do end`, a table
+    constructor of any kind), and str.format reads every one of those as
+    a format field -- raising KeyError/ValueError on a perfectly valid
+    statement, or worse, silently consuming it. A plain two-token
+    replace has no such surface. An unspawned side substitutes the Lua
+    literal `nil`, so a statement referencing it fails loudly in Lua
+    rather than interpolating the Python string "None"."""
+    return (stmt
+            .replace("{bid}", "nil" if bid is None else str(bid))
+            .replace("{uid}", "nil" if uid is None else str(uid)))
+
+
 def generate_current_format_session(
         port: int, page_id: str, seed: int, world_size: int, plate_count: int,
         spawn_building: str, spawn_unit: str, out_path: Path,
@@ -1346,8 +1363,7 @@ def generate_current_format_session(
                     f"unit.spawn('{spawn_unit}') at ({ux},{uy}) rejected: {r!r}")
 
         for stmt in (setup_lua or []):
-            rendered = stmt.format(bid=bid if spawn_building else "nil",
-                                    uid=uid if spawn_unit else "nil")
+            rendered = render_setup_lua(stmt, bid, uid)
             reply = send(port, rendered).strip()
             if (reply.startswith("error") or reply.startswith("Error")
                     or reply in ("false", "nil", '"false"', '"nil"')):
