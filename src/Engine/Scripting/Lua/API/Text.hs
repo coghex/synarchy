@@ -13,6 +13,7 @@ import Engine.Asset.Manager (updateFontState, generateFontHandle)
 import Engine.Asset.Handle (FontHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
+import Engine.Graphics.Font.Repertoire (sdfFontKey)
 import Engine.Graphics.Font.Fallback
   (takeUnreportedMissingGlyphs, missingGlyphMessage)
 import Engine.Graphics.Font.Util (calculateTextWidthScaled)
@@ -41,8 +42,12 @@ loadFontFn env backendState = do
         
         -- Check if font is already cached
         fontCache ← readIORef (rvFontCacheRef (toRenderViewCapability env))
-        let cacheKey = (pathStr, -1)  -- -1 for SDF fonts
-        
+        -- The same derivation the engine-side load uses, so this
+        -- short-circuit cannot return a handle whose atlas was
+        -- generated for a different repertoire (#1098).
+        let cacheKey = sdfFontKey pathStr
+
+
         case Map.lookup cacheKey (fcPathCache fontCache) of
           Just existingHandle → do
             -- Font already loaded, return existing handle

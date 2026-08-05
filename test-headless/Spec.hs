@@ -78,6 +78,7 @@ import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
+import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Craft.Execute as CraftExecute
@@ -293,6 +294,7 @@ main = hspec $ do
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec
+    describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
     describe "Craft.Execute" CraftExecute.spec

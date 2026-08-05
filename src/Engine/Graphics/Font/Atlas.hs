@@ -13,6 +13,8 @@ import Engine.Graphics.Font.Fallback
 import Engine.Graphics.Font.STB
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import Control.Monad (foldM)
+import Data.List (minimumBy)
+import Data.Ord (comparing)
 
 -- * Baked glyphs
 
@@ -133,10 +135,29 @@ data AtlasLayout = AtlasLayout
   , alFallbackIdx ∷ Int  -- ^ Cell the fallback mark occupies
   }
 
--- | Size the grid. The cell dimensions come from the packed glyphs
---   alone, and the row count reserves ONE extra cell for the fallback
---   mark — with the baked range that lands in space the last row already
---   had, so no glyph moves and the atlas does not grow (#1097).
+-- | The largest glyph in the set, floored at 1 so an all-blank set
+--   still describes a real extent.
+atlasMaxGlyph ∷ [BakedGlyph] → (Int, Int)
+atlasMaxGlyph glyphs =
+    ( maximum (1 : map bgWidth glyphs)
+    , maximum (1 : map bgHeight glyphs) )
+
+-- | The uniform cell those glyphs force: the largest of them plus one
+--   pixel of gutter on each side, so no glyph bleeds into a
+--   neighbour's UV rect.
+atlasCellSize ∷ [BakedGlyph] → (Int, Int)
+atlasCellSize glyphs =
+    let (maxWidth, maxHeight) = atlasMaxGlyph glyphs
+    in (maxWidth + 2, maxHeight + 2)
+
+-- | Size the grid at a fixed 16 columns. The cell dimensions come from
+--   the packed glyphs alone, and the row count reserves ONE extra cell
+--   for the fallback mark — with the baked range that lands in space
+--   the last row already had, so no glyph moves and the atlas does not
+--   grow (#1097).
+--
+--   Used by 'generateFontAtlas' only. The SDF path picks its column
+--   count with 'planAtlasLayout' instead (#1098).
 atlasLayout ∷ [BakedGlyph] → AtlasLayout
 atlasLayout glyphs = AtlasLayout
     { alCharsPerRow = charsPerRow
@@ -151,11 +172,96 @@ atlasLayout glyphs = AtlasLayout
   where
     charsPerRow = 16
     numChars = length glyphs
-    maxWidth = maximum (1 : map bgWidth glyphs)
-    maxHeight = maximum (1 : map bgHeight glyphs)
-    cellWidth = maxWidth + 2
-    cellHeight = maxHeight + 2
+    (maxWidth, maxHeight) = atlasMaxGlyph glyphs
+    (cellWidth, cellHeight) = atlasCellSize glyphs
     numRows = (numChars + 1 + charsPerRow - 1) `div` charsPerRow
+
+-- * Deterministic grid selection (#1098)
+
+-- | One candidate uniform grid.
+data AtlasPlan = AtlasPlan
+  { apColumns     ∷ Int
+  , apRows        ∷ Int
+  , apCellWidth   ∷ Int
+  , apCellHeight  ∷ Int
+  , apAtlasWidth  ∷ Int
+  , apAtlasHeight ∷ Int
+  } deriving (Eq, Show)
+
+-- | What the plan costs in texture memory. The atlas is uploaded as
+--   @FORMAT_R8_UNORM@, one byte per texel, so area IS the payload.
+atlasPayloadBytes ∷ AtlasPlan → Int
+atlasPayloadBytes plan = apAtlasWidth plan * apAtlasHeight plan
+
+-- | Choose the column count for @glyphCount@ glyphs of the given cell
+--   size, subject to a device @maxImageDimension2D@.
+--
+--   Every column count from 1 through @glyphCount@ is evaluated, the
+--   ones whose power-of-two dimensions exceed the device limit are
+--   discarded, and the cheapest R8 payload wins. Ties go to the smaller
+--   longest side, then to the smaller column count — and since the
+--   candidates are indexed BY column count that last step is always
+--   decisive, so the choice is a total order over a fixed candidate
+--   list and cannot depend on evaluation order.
+--
+--   The grid holds one cell more than there are glyphs: the fallback
+--   mark occupies a cell of its own (#1097).
+--
+--   'Nothing' means either an empty glyph set or no feasible candidate;
+--   the caller distinguishes them, since it is the one that knows which
+--   font and which repertoire produced the set.
+planAtlasGrid ∷ Int → Int → Int → Int → Maybe AtlasPlan
+planAtlasGrid glyphCount cellWidth cellHeight maxDimension
+    | glyphCount ≤ 0 = Nothing
+    | otherwise      = case feasible of
+        []    → Nothing
+        plans → Just (minimumBy (comparing rank) plans)
+  where
+    cells = glyphCount + 1
+    candidate columns = AtlasPlan
+        { apColumns     = columns
+        , apRows        = rows
+        , apCellWidth   = cellWidth
+        , apCellHeight  = cellHeight
+        , apAtlasWidth  = nextPowerOf2 (columns * cellWidth)
+        , apAtlasHeight = nextPowerOf2 (rows * cellHeight)
+        }
+      where rows = (cells + columns - 1) `div` columns
+    feasible =
+        [ plan
+        | columns ← [1 .. glyphCount]
+        , let plan = candidate columns
+        , apAtlasWidth plan ≤ maxDimension
+        , apAtlasHeight plan ≤ maxDimension
+        ]
+    rank plan = ( atlasPayloadBytes plan
+                , max (apAtlasWidth plan) (apAtlasHeight plan)
+                , apColumns plan )
+
+-- | 'planAtlasGrid' applied to a real glyph set, as an 'AtlasLayout'
+--   'packGlyphsSTBWithMetrics' can consume.
+--
+--   The cell size is derived from the SUPPLIED glyphs — the ones the
+--   font actually draws — because a character the font has no glyph for
+--   has no extent to measure.
+planAtlasLayout ∷ [BakedGlyph] → Int → Maybe AtlasLayout
+planAtlasLayout glyphs maxDimension
+    | null glyphs = Nothing
+    | otherwise   = toLayout ⊚ planAtlasGrid (length glyphs)
+                                             cellWidth cellHeight maxDimension
+  where
+    (maxWidth, maxHeight) = atlasMaxGlyph glyphs
+    (cellWidth, cellHeight) = atlasCellSize glyphs
+    toLayout plan = AtlasLayout
+        { alCharsPerRow = apColumns plan
+        , alCellWidth   = apCellWidth plan
+        , alCellHeight  = apCellHeight plan
+        , alMaxWidth    = maxWidth
+        , alMaxHeight   = maxHeight
+        , alAtlasWidth  = apAtlasWidth plan
+        , alAtlasHeight = apAtlasHeight plan
+        , alFallbackIdx = length glyphs
+        }
 
 -- | Pack glyphs into atlas bitmap, producing glyph metadata map.
 --   Uses metrics stored before font was freed.
