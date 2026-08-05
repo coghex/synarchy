@@ -730,7 +730,11 @@ echo 'return world.getInitProgress()' | nc -w 2 localhost 9008
 # The optional identity (#707) is display text, immutable per page,
 # persisted in saves, independent of pageId and save-slot name;
 # world.getIdentity(pageId) reads it; engine.listSaves() exposes
-# worldName/worldGloss.
+# worldName/worldGloss. A name supplied here is a CUSTOM name and has
+# NO language provenance (#1092) — world.getLanguageProvenance(pageId)
+# returns nil for it, and { seed = "<decimal string>", version = N }
+# only for an identity built through the generated-name path (the seed
+# is a STRING: a Word64 has no lossless Lua number).
 echo 'world.init("test", 42, 256, 5)' | nc -w 2 localhost 9008
 # Block until done (preferred; timeout in seconds)…
 echo 'return world.waitForInit(300)' | nc -w 300 localhost 9008
@@ -853,7 +857,8 @@ before touching each area:
   `world.markLocationContentsSpawnedById(id[, pageId])`. The
   coordinate-addressed `hasSpawnedLocationContents`/
   `markLocationContentsSpawned` remain compatibility wrappers resolving
-  to the chunk's first instance. Persistence: `world-pages` v2, with a
+  to the chunk's first instance. Persistence: `world-pages` (v3 since
+  #1092; #911 introduced its v2), with a
   frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
   against the location registry at the load path's content-validation
   stage (`resolveLegacyLocations`) before publication. Gates: hspec

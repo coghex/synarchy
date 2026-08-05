@@ -61,9 +61,18 @@ import World.Save.Types
 import Location.Types (emptyLocationRegistry)
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
-import World.Save.Component.Page (fromWorldGenParamsDTOv1)
-import World.Generate.Types (WorldGenParams(..))
-import World.Page.Types (WorldPageId(..))
+import World.Save.Component.Page
+    ( fromWorldGenParamsDTOv1, toWorldGenParamsDTOv1, toWorldGenParamsDTO
+    , PageCoreDTO(..), WorldPagesDTO(..), PageCoreDTOv1(..)
+    , WorldPagesDTOv1(..), PageCoreDTOv2(..), WorldPagesDTOv2(..)
+    , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
+    , LanguageProvenanceDTO(..), basePageSnapshots
+    , migrateWorldPagesV1, migrateWorldPagesV2 )
+import World.Render.Zoom.Types (ZoomMapMode(..))
+import Language.Generated.Types
+    (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..))
@@ -662,6 +671,97 @@ spec = do
                                                   \allocator" . ceMessage) errs
                                     `shouldBe` True
 
+    -- #1092: world-pages became v3 when WorldIdentity gained its
+    -- optional language provenance. Every HISTORICAL shape must decode
+    -- with that provenance ABSENT (#915's precedent) while carrying its
+    -- name and gloss across byte-exact — a world named before
+    -- provenance was recorded genuinely has no recoverable language,
+    -- and inventing one would attach a false etymology to a real world.
+    describe "language provenance across historical page shapes \
+             \(issue #1092)" $ do
+        let identityOf pages pid =
+                pgsIdentity =≪ HM.lookup (WorldPageId pid) (wpBase pages)
+            -- Decode the REAL tracked B1 bytes, optionally adjust the
+            -- single page they carry, migrate, and hand the resulting
+            -- PageSnapshot to the assertion.
+            withMigratedV90 meta adjust k =
+                case decodeSessionV90 (extractSessionPayload fixtureBytes) of
+                    Left err → expectationFailure (show err)
+                    Right sd →
+                        let sd' = sd { sd90Worlds = map adjust (sd90Worlds sd) }
+                        in case migrateSessionV90 meta sd' of
+                            Left errs →
+                                expectationFailure (show (map ceMessage errs))
+                            Right snap →
+                                case HM.lookup (WorldPageId "main_world")
+                                         (snapPages snap) of
+                                    Nothing → expectationFailure
+                                        "expected the main_world page"
+                                    Just p  → k p
+
+        it "a frozen v1 page core decodes its identity with NO language \
+           \provenance" $ do
+            let dto = WorldPagesDTOv1 [legacyPageCoreV1]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv1 of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let ident = identityOf (migrateWorldPagesV1 dto') "legacy_page"
+                    (wiName <$> ident) `shouldBe` Just "Legacy World"
+                    (wiGloss =≪ ident) `shouldBe` Just "an old gloss"
+                    (wiLanguage =≪ ident) `shouldBe` Nothing
+
+        it "a frozen v2 page core decodes its identity with NO language \
+           \provenance" $ do
+            let dto = WorldPagesDTOv2 [legacyPageCoreV2]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv2 of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let ident = identityOf (migrateWorldPagesV2 dto') "legacy_page"
+                    (wiName <$> ident) `shouldBe` Just "Legacy World"
+                    (wiGloss =≪ ident) `shouldBe` Just "an old gloss"
+                    (wiLanguage =≪ ident) `shouldBe` Nothing
+
+        it "the CURRENT v3 page core round-trips a present provenance -- \
+           \so the two absences above are a real decode outcome, not a \
+           \field that is always Nothing" $ do
+            let dto = WorldPagesDTO [currentPageCore]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let ident = identityOf (basePageSnapshots dto') "legacy_page"
+                    (wiName <$> ident) `shouldBe` Just "Legacy World"
+                    (wiLanguage =≪ ident) `shouldBe`
+                        Just (LanguageProvenance (LangSeed 0xABCDEF0123456789)
+                                  (GeneratorVersion 1))
+
+        it "the real, tracked B1 (v90) fixture's own page carries NO \
+           \identity at all, and migrates that way" $
+            -- The premise for the mutation below: this fixture predates
+            -- #707, so its page identity is genuinely absent -- asserting
+            -- provenance on it as-is would prove nothing about the
+            -- migration, only about an empty field.
+            withMigratedV90 minimalSaveMetadataForExtra id $
+                \p → pgsIdentity p `shouldBe` Nothing
+
+        it "a v90 page carrying a legacy identity migrates with its name \
+           \and gloss exact and NO language provenance" $
+            -- Same mutate-the-real-fixture style the duplicate-page and
+            -- malformed-bill checks above use: the bytes are real B1
+            -- bytes, with one frozen field set to the case under test.
+            -- The manifest metadata must name the same world, or the
+            -- migration's own metadata/gameplay agreement check (#766
+            -- requirement 12) rejects the session before identity ever
+            -- reaches a snapshot.
+            withMigratedV90
+                    minimalSaveMetadataForExtra
+                        { smWorldName = Just "Legacy World"
+                        , smWorldGloss = Just "an old gloss" }
+                    (\p → p { wp90Identity = Just legacyIdentityDTO }) $
+                \p → do
+                    (wiName <$> pgsIdentity p) `shouldBe` Just "Legacy World"
+                    (wiGloss =≪ pgsIdentity p) `shouldBe` Just "an old gloss"
+                    (wiLanguage =≪ pgsIdentity p) `shouldBe` Nothing
+
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
         it "refuses to migrate a legacy envelope carrying an extra \
            \optional component beyond {metadata, session}, rather than \
@@ -1018,6 +1118,49 @@ replaceB2LuaStateSpec bytes = replaceB2ComponentSpec bytes (ComponentId "lua-sta
 --   the frozen v90 DTO test above), used by the requirement-9 tests: they
 --   are not testing requirement 12's metadata-agreement check, so must
 --   not trip over it.
+-- | #1092 fixtures: the same page core in each of the three page-core
+--   shapes, differing ONLY in identity. The pre-#1092 shapes carry the
+--   frozen name/gloss-only identity; the current one carries a
+--   provenance-bearing identity whose seed is above @2^63-1@, which a
+--   narrowed carrier would mangle.
+legacyIdentityDTO ∷ WorldIdentityDTOv1
+legacyIdentityDTO = WorldIdentityDTOv1 "Legacy World" (Just "an old gloss")
+
+legacyPageCoreV1 ∷ PageCoreDTOv1
+legacyPageCoreV1 = PageCoreDTOv1
+    { pc1PageId     = WorldPageId "legacy_page"
+    , pc1GenParams  = toWorldGenParamsDTOv1 defaultWorldGenParams
+    , pc1CameraX    = 1, pc1CameraY = 2
+    , pc1TimeHour   = 12, pc1TimeMinute = 30
+    , pc1DateYear   = 1, pc1DateMonth = 2, pc1DateDay = 3
+    , pc1MapMode    = ZMDefault
+    , pc1Identity   = Just legacyIdentityDTO
+    }
+
+legacyPageCoreV2 ∷ PageCoreDTOv2
+legacyPageCoreV2 = PageCoreDTOv2
+    { pc2PageId     = WorldPageId "legacy_page"
+    , pc2GenParams  = toWorldGenParamsDTO defaultWorldGenParams
+    , pc2CameraX    = 1, pc2CameraY = 2
+    , pc2TimeHour   = 12, pc2TimeMinute = 30
+    , pc2DateYear   = 1, pc2DateMonth = 2, pc2DateDay = 3
+    , pc2MapMode    = ZMDefault
+    , pc2Identity   = Just legacyIdentityDTO
+    }
+
+currentPageCore ∷ PageCoreDTO
+currentPageCore = PageCoreDTO
+    { pcPageId     = WorldPageId "legacy_page"
+    , pcGenParams  = toWorldGenParamsDTO defaultWorldGenParams
+    , pcCameraX    = 1, pcCameraY = 2
+    , pcTimeHour   = 12, pcTimeMinute = 30
+    , pcDateYear   = 1, pcDateMonth = 2, pcDateDay = 3
+    , pcMapMode    = ZMDefault
+    , pcIdentity   = Just (WorldIdentityDTO "Legacy World" (Just "an old gloss")
+                               (Just (LanguageProvenanceDTO
+                                          0xABCDEF0123456789 1)))
+    }
+
 minimalSaveMetadataForExtra ∷ SaveMetadata
 minimalSaveMetadataForExtra = SaveMetadata
     { smName = "extra-test", smSeed = 42, smWorldSize = 128, smPlateCount = 10

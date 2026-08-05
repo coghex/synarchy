@@ -63,7 +63,9 @@ import World.Save.Types
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
     , SaveData(..), WorldPageSave(..) )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
-import World.Page.Types (WorldPageId(..), WorldIdentity(..))
+import World.Page.Types (WorldPageId(..), WorldIdentity(..), mkWorldIdentity)
+import Language.Generated.Types
+    (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -233,11 +235,28 @@ richPage = PageSnapshot
     , pgsTillDesignations = HM.singleton (9, 10) (TillDesignation 0)
     , pgsCropPlots    = HM.singleton (11, 12) (CropPlot (FloraId 3) 5 0.9)
     , pgsPlantDesignations = HM.singleton (13, 14) (PlantDesignation 0 (FloraId 3))
-    , pgsIdentity     = Just (WorldIdentity "Aldermoor Deep" (Just "the deep home"))
+    , pgsIdentity     = Just (WorldIdentity "Aldermoor Deep"
+                                  (Just "the deep home")
+                                  (Just richProvenance))
     }
 
+-- | The rich page's language provenance (#1092): a GENERATED identity,
+--   so this session's round trip carries a NON-absent provenance. An
+--   all-@Nothing@ session could not tell a correctly-persisted
+--   provenance from a dropped one. The seed is above @2^63-1@
+--   deliberately — a carrier that narrowed the range would show up here
+--   rather than in a value that happens to fit in 63 bits.
+richProvenance ∷ LanguageProvenance
+richProvenance = LanguageProvenance
+    { lpSeed = LangSeed 0x8FEEDFACECAFEB0B, lpVersion = GeneratorVersion 1 }
+
 -- | A second, minimal page -- proves multi-page independence (a stable
---   identity + distinct per-page camera/gen-params, requirement 4).
+--   identity + distinct per-page camera/gen-params, requirement 4),
+--   and (#1092) the CUSTOM-name case beside the rich page's generated
+--   one: a player-entered name with NO language, which must come back
+--   with its provenance still absent rather than acquiring an inferred
+--   one. Built through 'mkWorldIdentity' itself, so the case really is
+--   the production custom-name path.
 minimalPage2 ∷ PageSnapshot
 minimalPage2 = PageSnapshot
     { pgsPageId       = page2
@@ -261,8 +280,17 @@ minimalPage2 = PageSnapshot
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
     , pgsPlantDesignations = HM.empty
-    , pgsIdentity     = Nothing
+    , pgsIdentity     = customIdentity
     }
+
+customIdentity ∷ Maybe WorldIdentity
+customIdentity = mkWorldIdentity (Just "Player's Own Name") Nothing
+
+pageIdentityOf ∷ SessionSnapshot → WorldPageId → Maybe WorldIdentity
+pageIdentityOf snap pid = pgsIdentity =≪ HM.lookup pid (snapPages snap)
+
+identityLanguage ∷ SessionSnapshot → WorldPageId → Maybe LanguageProvenance
+identityLanguage snap pid = wiLanguage =≪ pageIdentityOf snap pid
 
 richGlobals ∷ SessionGlobals
 richGlobals = SessionGlobals
@@ -336,6 +364,17 @@ spec = do
                     snap `shouldBe` representativeSnapshot
                     isMigrated `shouldBe` False
                     luaComponents `shouldMatchList` syntheticLuaComponents
+                    -- Stated explicitly as well as through the derived
+                    -- Eq above (#1092): the generated page's language
+                    -- provenance comes back intact, while the
+                    -- custom-named page's stays absent. Naming both
+                    -- here keeps the two cases legible if the
+                    -- fixtures ever drift.
+                    identityLanguage snap page1
+                        `shouldBe` Just richProvenance
+                    identityLanguage snap page2 `shouldBe` Nothing
+                    (wiName <$> pageIdentityOf snap page2)
+                        `shouldBe` (wiName <$> customIdentity)
 
     describe "repeated-cycle stability (pure, requirement 9)" $ do
         it "three successive encode -> decode -> re-encode cycles never \

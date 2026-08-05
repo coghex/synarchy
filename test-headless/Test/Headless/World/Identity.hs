@@ -36,6 +36,10 @@ import Engine.Core.State (EngineEnv(..))
 import Test.Headless.Harness
     (sendWorldCommand, waitForWorldInit)
 import World.Types
+import Language.Generated.Types
+    ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..)
+    , langSeedText )
+import Language.Generated.Profile (generateProfile)
 import World.Save.Serialize (loadWorld, sanitizeSaveName)
 import World.Load.Stage (stageSession, renderStageError)
 import World.Load.Publish (publishStagedSession)
@@ -47,16 +51,36 @@ import Power.Types
 
 -- The primary page's display name deliberately contains '/' and ".."
 -- — text 'sanitizeSaveName' rejects outright — to prove identity text
--- is display text, not a filename (see the save/load item below).
+-- is display text, not a filename (see the save/load item below). It
+-- is a CUSTOM name, so it carries no language provenance (#1092).
 namedIdent ∷ WorldIdentity
-namedIdent = WorldIdentity "Fjord / Upper.. Reach" (Just "the high fjord")
+namedIdent =
+    WorldIdentity "Fjord / Upper.. Reach" (Just "the high fjord") Nothing
 
 -- A page literally named "main_world" saved as a SECONDARY page —
 -- issue #763 removed the old active-page-remap-to-main_world behavior
 -- entirely, so this no longer "collides" with anything; it just proves
 -- staging preserves an arbitrary saved id (including this one) verbatim.
 colliderIdent ∷ WorldIdentity
-colliderIdent = WorldIdentity "Collider" Nothing
+colliderIdent = WorldIdentity "Collider" Nothing Nothing
+
+-- The provenance of the generated identity below (#1092). The seed is
+-- deliberately ABOVE 2^63-1: a signed 64-bit or floating-point carrier
+-- would mangle it, so anything that round-trips this value really is
+-- carrying the full Word64 range.
+testProvenance ∷ LanguageProvenance
+testProvenance = LanguageProvenance
+    { lpSeed = LangSeed 0xF0E1D2C3B4A59687, lpVersion = GeneratorVersion 1 }
+
+-- A GENERATED identity: rendered name + gloss PLUS the language that
+-- produced them. Built through the generated-name construction path,
+-- which is the only way provenance is ever attached.
+generatedIdent ∷ WorldIdentity
+generatedIdent = case mkGeneratedWorldIdentity
+                        (Just "Vashenkoro") (Just "the salt reach")
+                        testProvenance of
+    Just i  → i
+    Nothing → error "generatedIdent: normalization rejected a valid name"
 
 spec ∷ SpecWith EngineEnv
 spec = do
@@ -78,20 +102,22 @@ spec = do
 
         it "trims leading/trailing whitespace from the name" $ \_env →
             mkWorldIdentity (Just " Northreach ") Nothing
-                `shouldBe` Just (WorldIdentity "Northreach" Nothing)
+                `shouldBe` Just (WorldIdentity "Northreach" Nothing Nothing)
 
         it "preserves interior whitespace, punctuation, and case" $ \_env →
             mkWorldIdentity (Just "  North reach, the 2nd  ") Nothing
-                `shouldBe` Just (WorldIdentity "North reach, the 2nd" Nothing)
+                `shouldBe`
+                Just (WorldIdentity "North reach, the 2nd" Nothing Nothing)
 
         it "trims the gloss and keeps it optional" $ \_env → do
             mkWorldIdentity (Just "Northreach") (Just " the cold place ")
                 `shouldBe`
-                Just (WorldIdentity "Northreach" (Just "the cold place"))
+                Just (WorldIdentity "Northreach" (Just "the cold place")
+                          Nothing)
             mkWorldIdentity (Just "Northreach") (Just "   ")
-                `shouldBe` Just (WorldIdentity "Northreach" Nothing)
+                `shouldBe` Just (WorldIdentity "Northreach" Nothing Nothing)
             mkWorldIdentity (Just "Northreach") Nothing
-                `shouldBe` Just (WorldIdentity "Northreach" Nothing)
+                `shouldBe` Just (WorldIdentity "Northreach" Nothing Nothing)
 
     describe "identity is display text, not a save name" $ do
         it "accepts text sanitizeSaveName rejects ('/' and '..')" $ \_env → do
@@ -101,7 +127,56 @@ spec = do
             sanitizeSaveName "a..b" `shouldSatisfy` isLeft
             -- …and stored verbatim as display names.
             mkWorldIdentity (Just "Fjord / Upper.. Reach") Nothing
-                `shouldBe` Just (WorldIdentity "Fjord / Upper.. Reach" Nothing)
+                `shouldBe`
+                Just (WorldIdentity "Fjord / Upper.. Reach" Nothing Nothing)
+
+    describe "language provenance (#1092)" $ do
+        it "the custom-name path never attaches provenance" $ \_env → do
+            -- Every mkWorldIdentity result above already asserts this
+            -- structurally; stated once as its own contract, since #708
+            -- principle 7 is what forbids inferring a language for a
+            -- player-entered name.
+            (wiLanguage ⌫ mkWorldIdentity (Just "Northreach") Nothing)
+                `shouldBe` Nothing
+            (wiLanguage ⌫ mkWorldIdentity (Just " Northreach ")
+                              (Just "the cold place"))
+                `shouldBe` Nothing
+
+        it "the generated-name path attaches exactly the supplied \
+           \provenance, with identical normalization" $ \_env → do
+            mkGeneratedWorldIdentity (Just "  Vashenkoro  ")
+                    (Just "  the salt reach ") testProvenance
+                `shouldBe` Just (WorldIdentity "Vashenkoro"
+                                     (Just "the salt reach")
+                                     (Just testProvenance))
+            -- A name that isn't a name is still no identity, provenance
+            -- or not — provenance can never conjure one into existence.
+            mkGeneratedWorldIdentity (Just "  ") (Just "g") testProvenance
+                `shouldBe` Nothing
+            mkGeneratedWorldIdentity Nothing Nothing testProvenance
+                `shouldBe` Nothing
+
+        it "a recovered provenance rebuilds the SAME profile the seed \
+           \originally produced" $ \_env → do
+            -- Requirement 1's whole point: the recorded pair is enough
+            -- to reconstruct the language, not merely to display it.
+            let recovered = wiLanguage generatedIdent
+            recovered `shouldBe` Just testProvenance
+            case recovered of
+                Nothing → expectationFailure "expected provenance"
+                Just p  →
+                    generateProfile (lpVersion p) (lpSeed p)
+                        `shouldBe` generateProfile (lpVersion testProvenance)
+                                       (lpSeed testProvenance)
+
+        it "a seed above 2^63-1 survives the text carrier exactly" $ \_env → do
+            -- The Lua/JSON surface can't carry an unsigned 64-bit value
+            -- as a number, so it carries decimal text; this is what
+            -- proves that carrier is lossless at the top of the range.
+            langSeedText (LangSeed maxBound)
+                `shouldBe` T.pack (show (maxBound ∷ Word64))
+            langSeedText (lpSeed testProvenance)
+                `shouldBe` "17357386176853808775"
 
     describe "serialization" $ do
         it "round-trips named, glossed, and absent identities" $ \_env → do
@@ -112,6 +187,14 @@ spec = do
             roundTrip (Just colliderIdent)
                 `shouldBe` Right (Just colliderIdent)
             roundTrip Nothing `shouldBe` Right Nothing
+
+        it "round-trips a generated identity's provenance, seed and \
+           \version together" $ \_env → do
+            let roundTrip ∷ Maybe WorldIdentity
+                          → Either String (Maybe WorldIdentity)
+                roundTrip = S.decode . S.encode
+            roundTrip (Just generatedIdent)
+                `shouldBe` Right (Just generatedIdent)
 
     describe "page creation" $ do
         it "WorldInit with an identity creates a named page" $ \env → do
@@ -128,6 +211,33 @@ spec = do
             ws ← waitForWorldInit env (WorldPageId "id_unnamed_w8") 120
             ident ← readIORef (wsIdentityRef ws)
             ident `shouldBe` Nothing
+
+        it "WorldInit with a GENERATED identity keeps its language \
+           \provenance on the live page (#1092)" $ \env → do
+            sendWorldCommand env
+                (WorldInit (WorldPageId "id_generated_w8") 27 8 3
+                           (Just generatedIdent))
+            ws ← waitForWorldInit env (WorldPageId "id_generated_w8") 120
+            ident ← readIORef (wsIdentityRef ws)
+            ident `shouldBe` Just generatedIdent
+
+    describe "language-provenance query (#1092 requirement 5)" $ do
+        -- Runs after page creation above, against those same live pages.
+        it "reports a generated page's seed and version as one value" $
+            \env → do
+                mgr ← readIORef (worldManagerRef env)
+                pageLanguageProvenance mgr (WorldPageId "id_generated_w8")
+                    `shouldReturn` Just testProvenance
+
+        it "reports nothing for a custom-named, an unnamed, or a \
+           \nonexistent page — never an inferred language" $ \env → do
+            mgr ← readIORef (worldManagerRef env)
+            pageLanguageProvenance mgr (WorldPageId "id_named_w8")
+                `shouldReturn` Nothing
+            pageLanguageProvenance mgr (WorldPageId "id_unnamed_w8")
+                `shouldReturn` Nothing
+            pageLanguageProvenance mgr (WorldPageId "id_no_such_page")
+                `shouldReturn` Nothing
 
     describe "save/load mapping" $ do
         -- One story, in order: save a multi-page world whose active page
@@ -178,6 +288,16 @@ spec = do
             sdActivePage sdA `shouldBe` WorldPageId "id_named_w8"
             pageIdentity sdA "id_named_w8" `shouldBe` Just namedIdent
             pageIdentity sdA "main_world" `shouldBe` Just colliderIdent
+            -- #1092: the generated page created above rides along in
+            -- this same save (WorldSave captures every live page), so
+            -- one round trip proves both halves of the contract — a
+            -- GENERATED identity keeps its provenance, and the custom
+            -- ones above keep their ABSENT provenance rather than
+            -- acquiring an inferred one.
+            pageIdentity sdA "id_generated_w8" `shouldBe` Just generatedIdent
+            (wiLanguage ⌫ pageIdentity sdA "id_generated_w8")
+                `shouldBe` Just testProvenance
+            (wiLanguage ⌫ pageIdentity sdA "id_named_w8") `shouldBe` Nothing
             -- Save-slot name, world name, and gloss are three distinct
             -- things (requirement 10/12): smName is the slot, and the
             -- world's name is text no save slot could even be called.
@@ -205,6 +325,17 @@ spec = do
                 [WorldPageId "main_world"]
             stagedIdentity staged "id_named_w8" `shouldReturn` Just namedIdent
             stagedIdentity staged "main_world" `shouldReturn` Just colliderIdent
+            -- …and the recovered provenance still rebuilds the same
+            -- profile, which is what makes it worth persisting (#1092).
+            stagedGenerated ← stagedIdentity staged "id_generated_w8"
+            stagedGenerated `shouldBe` Just generatedIdent
+            case wiLanguage ⌫ stagedGenerated of
+                Nothing → expectationFailure
+                    "staged generated page lost its language provenance"
+                Just p  →
+                    generateProfile (lpVersion p) (lpSeed p)
+                        `shouldBe` generateProfile (lpVersion testProvenance)
+                                       (lpSeed testProvenance)
 
     -- Round 9 review (issue #763): 'World.Load.Stage.stagePage' used to
     -- call 'Craft.Bills.pruneToStations'/'Power.Types.pruneToBuildings'

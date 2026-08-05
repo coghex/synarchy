@@ -30,6 +30,8 @@ import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Compat.SessionV90
+import Language.Generated.Types
+    (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
 import World.Save.Integrity (integrityErrorCap)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
@@ -238,11 +240,17 @@ minimalSaveDataV90 = SaveDataV90
 
 -- | A page carrying a distinctive seed + identity + one building, one
 --   unit, one sim state — enough that a round trip that dropped a slice
---   would be observable.
+--   would be observable. Its identity is a GENERATED one (#1092), so a
+--   dropped or miswired language provenance is observable here too;
+--   the seed is above @2^63-1@ deliberately, to catch a carrier that
+--   narrows the range.
 richPage ∷ WorldPageId → PageSnapshot
 richPage pid = (minimalPage pid)
     { pgsGenParams = canon (defaultWorldGenParams { wgpSeed = 123456 })
-    , pgsIdentity  = Just (WorldIdentity "Rich World" (Just "a gloss"))
+    , pgsIdentity  = Just (WorldIdentity "Rich World" (Just "a gloss")
+                               (Just (LanguageProvenance
+                                          (LangSeed 0xC3A5F00DDEADBEEF)
+                                          (GeneratorVersion 1))))
     , pgsBuildings = BuildingSnapshot
         { bsnInstances = HM.singleton (BuildingId 1) (minimalBuildingInstance [])
         , bsnNextId = 10 }
@@ -501,7 +509,7 @@ spec = do
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))
             check (ccEncode coreSessionCodec)   (ccDecode coreSessionCodec 1)
-            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 2)
+            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 3)
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
             check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
@@ -514,7 +522,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 2
+            ccVersion worldPagesCodec `shouldBe` 3
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -644,7 +652,7 @@ spec = do
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \
            \requirement 10)" $
-            case ccDecode worldPagesCodec 2 (ccEncode worldPagesCodec richSnapshot) of
+            case ccDecode worldPagesCodec 3 (ccEncode worldPagesCodec richSnapshot) of
                 Right wp →
                     [ wgpSeed (pgsGenParams p)
                     | p ← maybeToList (HM.lookup page1 (wpBase wp)) ]
@@ -1056,7 +1064,15 @@ spec = do
                     -- is empty) is what makes the comparison against the
                     -- current snapshot shape meaningful rather than
                     -- vacuous.
-                    resolveFixturePages snap `shouldBe` richSnapshot
+                    -- They also predate #1092, so their identities come
+                    -- back with language provenance ABSENT, never
+                    -- inferred -- which is why the expectation strips it
+                    -- from the current in-memory snapshot rather than the
+                    -- fixture being re-cut. This is requirement 3 proven
+                    -- against REAL historical bytes.
+                    resolveFixturePages snap
+                        `shouldBe` withoutLanguageProvenance richSnapshot
+                    languageProvenanceOf snap page1 `shouldBe` Nothing
                     isMigrated `shouldBe` False
 
     -- | Issue #766 (save-overhaul C4) completes what #760's acceptance
@@ -1359,6 +1375,23 @@ resolveFixturePages snap = snap
     resolvePage p = p
         { pgsGenParams =
             resolveLegacyLocationParams emptyLocationRegistry (pgsGenParams p) }
+
+-- | The expectation for a fixture whose bytes predate #1092: identical
+--   to the live snapshot except that no identity carries language
+--   provenance. Written as a transformation of the SAME expected value
+--   (rather than a second hand-maintained fixture) so a drop anywhere
+--   ELSE in the page still fails the comparison.
+withoutLanguageProvenance ∷ SessionSnapshot → SessionSnapshot
+withoutLanguageProvenance snap = snap
+    { snapPages = HM.map stripPage (snapPages snap) }
+  where
+    stripPage p = p
+        { pgsIdentity = (\i → i { wiLanguage = Nothing }) <$> pgsIdentity p }
+
+languageProvenanceOf
+    ∷ SessionSnapshot → WorldPageId → Maybe LanguageProvenance
+languageProvenanceOf snap pid =
+    wiLanguage =≪ (pgsIdentity =≪ HM.lookup pid (snapPages snap))
 
 isLeftC ∷ Either ComponentError a → Bool
 isLeftC (Left _) = True
