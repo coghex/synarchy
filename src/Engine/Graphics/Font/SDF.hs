@@ -4,8 +4,11 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Engine.Asset.Handle
-import Engine.Graphics.Font.Atlas (nextPowerOf2, packGlyphsSTBWithMetrics)
+import Engine.Graphics.Font.Atlas
+    ( AtlasLayout(..), BakedGlyph(..), atlasLayout, glyphIsCovered
+    , packGlyphsSTBWithMetrics )
 import Engine.Graphics.Font.Data
+import Engine.Graphics.Font.Fallback (fallbackMark, isIntentionallyEmpty)
 import Engine.Graphics.Font.STB
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 
@@ -33,39 +36,41 @@ generateSDFFontAtlas logger fontPath = do
             (ascent, descent, lineGap) ← getSTBFontMetrics font scale
 
             let chars = [' '..'~']
-                numChars = length chars
 
-            glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
+            glyphs ← forM (zip chars [0..]) $ \(c, idx ∷ Int) → do
+                inCmap ← hasSTBCodepoint font c
                 result ← renderSTBGlyphSDF font c scale sdfPadding
                 (_, _, _, _, advance) ← getSTBGlyphMetrics font c scale
-                case result of
+                (w, h, xoff, yoff, pixels) ← case result of
                     Nothing → do
-                        when (c `notElem` [' ', '\n', '\t', '\r']) $
+                        when (not $ isIntentionallyEmpty c) $
                             logWarn logger CatFont $ "Failed to rasterize SDF glyph: '" <> T.singleton c <> "'"
-                        return (0, 0, 0, 0, [], advance)
-                    Just (w, h, xoff, yoff, pixels) → do
+                        return (0, 0, 0, 0, [])
+                    Just glyph@(w, h, _, _, _) → do
                         when (idx < 3) $
                             logDebug logger CatFont $ "SDF Glyph: char='" <> T.singleton c <> "' "
                                 <> "size=" <> T.pack (show w) <> "x" <> T.pack (show h)
                                 <> " (includes " <> T.pack (show sdfPadding) <> "px padding)"
-                        return (w, h, xoff, yoff, pixels, advance)
+                        return glyph
+                return $ BakedGlyph
+                    { bgChar = c, bgWidth = w, bgHeight = h
+                    , bgBearingX = xoff, bgBearingY = yoff
+                    , bgPixels = pixels, bgAdvance = advance
+                    , bgCovered = glyphIsCovered c inCmap w h }
 
             freeSTBFont font
 
-            let charsPerRow = 16
-                maxWidth = maximum $ map (\(w,_,_,_,_,_) → w) glyphDataWithMetrics
-                maxHeight = maximum $ map (\(_,h,_,_,_,_) → h) glyphDataWithMetrics
-                cellWidth = maxWidth + 2
-                cellHeight = maxHeight + 2
-                atlasWidth = nextPowerOf2 (charsPerRow * cellWidth)
-                numRows = (numChars + charsPerRow - 1) `div` charsPerRow
-                atlasHeight = nextPowerOf2 (numRows * cellHeight)
+            let layout = atlasLayout glyphs
+                -- The mark carries the same distance-field ramp the
+                -- glyphs around it do, so it thresholds the same way.
+                mark = fallbackMark sdfBaseSize sdfPadding
+                                    (alMaxWidth layout) (alMaxHeight layout)
 
-            logDebug logger CatFont $ "SDF Atlas size: " <> T.pack (show atlasWidth)
-                                    <> "x" <> T.pack (show atlasHeight)
+            logDebug logger CatFont $ "SDF Atlas size: " <> T.pack (show (alAtlasWidth layout))
+                                    <> "x" <> T.pack (show (alAtlasHeight layout))
 
-            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight
-                                         charsPerRow cellWidth cellHeight glyphDataWithMetrics chars
+            (atlasBitmap, glyphMap, fallbackInfo) ←
+                packGlyphsSTBWithMetrics layout mark glyphs
 
             logDebug logger CatFont $ "SDF Atlas generated with "
                                     <> T.pack (show $ Map.size glyphMap) <> " glyphs"
@@ -73,8 +78,9 @@ generateSDFFontAtlas logger fontPath = do
             return $ FontAtlas
                 { faTexture = TextureHandle 0
                 , faGlyphData = glyphMap
-                , faAtlasWidth = atlasWidth
-                , faAtlasHeight = atlasHeight
+                , faFallbackGlyph = fallbackInfo
+                , faAtlasWidth = alAtlasWidth layout
+                , faAtlasHeight = alAtlasHeight layout
                 , faFontSize = sdfBaseSize
                 , faLineHeight = ascent - descent + lineGap
                 , faBaseline = ascent
