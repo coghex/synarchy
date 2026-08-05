@@ -99,7 +99,9 @@ _CONSTANT_RE = re.compile(
 _LOOSE_CONSTANT_RE = re.compile(r"^mat[A-Z][A-Za-z0-9_']*")
 
 # The type signatures above each group (`matGranite, matDiorite ∷
-# MaterialId`), which open a `mat<Upper>` line but declare nothing.
+# MaterialId`), which open a `mat<Upper>` declaration but declare no
+# value. Applied per DECLARATION, not per line — see
+# `split_top_level_declarations` for why that distinction matters.
 _SIGNATURE_RE = re.compile(
     r"^mat[A-Z][A-Za-z0-9_']*(?:[ \t]*,[ \t]*mat[A-Z][A-Za-z0-9_']*)*"
     r"[ \t]*(?:∷|::)")
@@ -268,34 +270,83 @@ def strip_haskell_comments(text: str) -> str:
     return "".join(out)
 
 
+def split_top_level_declarations(line: str) -> list[str]:
+    """Split one top-level source line into its declarations.
+
+    Haskell's layout rule means two top-level declarations share a line
+    only when a `;` separates them, so `matFoo ∷ MaterialId; matFoo =
+    MaterialId 1` is ONE line carrying TWO declarations. Treating the
+    line as a single unit lets the binding hide behind the signature —
+    the signature pattern matches the head of the line and the real
+    declaration after the `;` is never examined.
+
+    A `;` inside a string or character literal is not a separator, and
+    neither is one nested in brackets (an explicit `let { a = 1; b = 2 }`
+    block is a single top-level declaration)."""
+    segments: list[str] = []
+    start = 0
+    depth = 0
+    in_string = False
+    in_char = False
+    i, n = 0, len(line)
+    while i < n:
+        ch = line[i]
+        if in_string or in_char:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if (in_string and ch == '"') or (in_char and ch == "'"):
+                in_string = in_char = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "'" and not (i and (line[i - 1].isalnum()
+                                       or line[i - 1] in "_'")):
+            in_char = True
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == ";" and depth == 0:
+            segments.append(line[start:i])
+            start = i + 1
+        i += 1
+    segments.append(line[start:])
+    return segments
+
+
 def parse_constants(text: str) -> tuple[list[Constant], list[str]]:
     """Every `mat<Name> = MaterialId <n>` binding, plus structural problems.
 
-    Every top-level line opening a `mat<Upper>` name is accounted for: it
-    is a constant, a type signature, or an unreadable binding this audit
-    refuses to skip."""
+    Every top-level DECLARATION opening a `mat<Upper>` name is accounted
+    for: it is a constant, a type signature, or an unreadable binding
+    this audit refuses to skip."""
     constants: list[Constant] = []
     problems: list[str] = []
     for lineno, raw in enumerate(
             strip_haskell_comments(text).splitlines(), start=1):
-        if _LOOSE_CONSTANT_RE.match(raw) is None:
+        if raw[:1].isspace() or not raw.strip():
+            # Indented lines are continuations or local bindings.
             continue
-        if _SIGNATURE_RE.match(raw) is not None:
-            continue
-        match = _CONSTANT_RE.match(raw)
-        if match is None:
-            problems.append(
-                f"src/World/Material.hs:{lineno}: cannot read material "
-                f"constant {raw.strip()!r} — this audit only understands "
-                "`mat<Name> = MaterialId <n>` on a single line. Keep that "
-                "form, or teach the audit the new one; it must not be "
-                "skipped")
-            continue
-        identifier, digits = match.group(1), match.group(2)
-        constants.append(Constant(identifier=identifier,
-                                  name=snake_case(identifier[len("mat"):]),
-                                  mat_id=int(digits),
-                                  line=lineno))
+        for segment in split_top_level_declarations(raw):
+            decl = segment.strip()
+            if _LOOSE_CONSTANT_RE.match(decl) is None:
+                continue
+            if _SIGNATURE_RE.match(decl) is not None:
+                continue
+            match = _CONSTANT_RE.match(decl)
+            if match is None:
+                problems.append(
+                    f"src/World/Material.hs:{lineno}: cannot read material "
+                    f"constant {decl!r} — this audit only understands "
+                    "`mat<Name> = MaterialId <n>` as a single declaration. "
+                    "Keep that form, or teach the audit the new one; it must "
+                    "not be skipped")
+                continue
+            identifier, digits = match.group(1), match.group(2)
+            constants.append(Constant(identifier=identifier,
+                                      name=snake_case(identifier[len("mat"):]),
+                                      mat_id=int(digits),
+                                      line=lineno))
     return constants, problems
 
 
@@ -750,7 +801,35 @@ def _self_test() -> list[str]:
                              "    in matSchist\n",
                  _CLEAN_CATALOGUE)
 
-    # 3b. The comment scanner must not misread code AS a comment, which
+    # 3b. `;` puts two top-level declarations on one line: a binding must
+    #     not be able to hide behind a signature sharing its line.
+    expect_fail("Haskell-only constant behind a same-line signature",
+                _HS_CLEAN + "matSchist ∷ MaterialId; matSchist = MaterialId 43\n",
+                _CLEAN_CATALOGUE, "`matSchist` = MaterialId 43")
+    for needle in ("`matSchist` = MaterialId 43", "`matGneiss` = MaterialId 44"):
+        expect_fail(f"two bindings on one line ({needle})",
+                    _HS_CLEAN + "matSchist = MaterialId 43; "
+                                "matGneiss = MaterialId 44\n",
+                    _CLEAN_CATALOGUE, needle)
+    expect_fail("unreadable binding behind a same-line signature",
+                _HS_CLEAN + "matSchist ∷ MaterialId; matSchist = MaterialId (43)\n",
+                _CLEAN_CATALOGUE, "cannot read material constant")
+    expect_clean("signature and matching binding sharing a line",
+                 _HS_CLEAN.replace(
+                     "matGranite, matDiorite ∷ MaterialId\n"
+                     "matGranite = MaterialId 1\n",
+                     "matDiorite ∷ MaterialId\n"
+                     "matGranite ∷ MaterialId; matGranite = MaterialId 1\n"),
+                 _CLEAN_CATALOGUE)
+    expect_clean("a `;` inside a string literal is not a separator",
+                 _HS_CLEAN + "someDoc ∷ Text\n"
+                             "someDoc = \"; matBogus = MaterialId 9\"\n",
+                 _CLEAN_CATALOGUE)
+    expect_clean("a `;` nested in brackets is not a separator",
+                 _HS_CLEAN + "someHelper = let { a = 1; b = 2 } in a + b\n",
+                 _CLEAN_CATALOGUE)
+
+    # 3c. The comment scanner must not misread code AS a comment, which
     #     would blank real constants out of the compared set.
     expect_fail("`{-` inside a string literal does not blank what follows",
                 "someDoc ∷ Text\nsomeDoc = \"a {- b\"\n" + _HS_CLEAN
