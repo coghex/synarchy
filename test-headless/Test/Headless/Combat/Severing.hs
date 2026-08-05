@@ -33,8 +33,7 @@ def = UnitDef
         , bp "l_finger"(Just "l_hand")
         ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = []
-    , udTransferReceiver = False }
+    , udNaturalWeapon = Nothing, udModifiers = [] }
   where
     bp pid par = BodyPart
         { bpId = pid, bpName = pid, bpParent = par, bpVital = False

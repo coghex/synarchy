@@ -21,6 +21,7 @@ module Engine.Scripting.Lua.API.Keybinds
   ) where
 
 import UPrelude
+import Engine.Scripting.Lua.Util (isDenseArray)
 import qualified HsLua as Lua
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as TE
@@ -63,21 +64,6 @@ pushBindings bindings = do
             Lua.rawseti (-2) i
         Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 action))
 
--- | Count every entry in a Lua table (array part *and* associative part)
---   by full traversal. Reads only key/value *presence*, never converting
---   a key (lua_tostring on a numeric key mutates it in place and breaks
---   the following lua_next).
-tableEntryCount ∷ Lua.StackIndex → Lua.LuaE Lua.Exception Int
-tableEntryCount idx = do
-    Lua.pushvalue idx   -- work on a copy so a relative index stays stable
-    Lua.pushnil         -- first key
-    let loop c = do
-          more ← Lua.next (-2)
-          if not more
-            then Lua.pop 1 >> return c   -- pop the table copy; done
-            else Lua.pop 1 >> loop (c + 1)  -- pop value, keep key for next
-    loop (0 ∷ Int)
-
 -- | Strictly read a Lua string array at the given stack index into
 --   @[Text]@. Returns 'Nothing' (caller rejects the whole call) if the
 --   argument is not a table, is not a pure sequence (any non-array /
@@ -97,9 +83,9 @@ readKeyList idx = do
       then return Nothing
       else do
         n     ← Lua.rawlen idx
-        total ← tableEntryCount idx
-        if total ≠ fromIntegral n
-          then return Nothing   -- associative / mixed table → reject
+        dense ← isDenseArray idx
+        if not dense
+          then return Nothing   -- sparse / associative / mixed → reject
           else do
             let go i acc
                   | i > fromIntegral n = return (Just (reverse acc))

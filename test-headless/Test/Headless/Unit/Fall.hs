@@ -61,8 +61,7 @@ acolyteDef bps = UnitDef
     , udStartingEquipment = HM.empty, udStartingAccessories = []
     , udBodyParts = bps
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = []
-    , udTransferReceiver = False }
+    , udNaturalWeapon = Nothing, udModifiers = [] }
 
 -- A unit instance carrying the given wounds, at the given body mass.
 -- Constitution pinned at 1.0 and every wound freshly inflicted

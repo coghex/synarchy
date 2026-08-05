@@ -169,6 +169,16 @@ pushItemInstance inst itemMgr = do
     -- internal state in the row key (#67A).
     Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
     Lua.setfield (-2) "contentsKey"
+    -- True carried mass (empty case + fill + nested contents) so a
+    -- stocked kit / filled canteen reads its real weight and two kits
+    -- with diverged contents differ visibly (#67A). Pushed
+    -- UNCONDITIONALLY (#1085): itemTotalWeight has an answer for an
+    -- item whose def doesn't resolve too, and the transfer endpoint
+    -- query needs a weight on every listed instance, not only the
+    -- def-resolvable ones. The def-DERIVED fields below stay
+    -- conditional, as they must.
+    Lua.pushnumber (Lua.Number (realToFrac (itemTotalWeight itemMgr inst)))
+    Lua.setfield (-2) "weight"
     -- Instance sharpness, not the def's base — combat wear dulls the
     -- worn weapon (iiSharpness), and the inventory/loadout tooltip
     -- must show the live value, mirroring unit.getInventory.
@@ -215,11 +225,6 @@ pushItemInstance inst itemMgr = do
             Lua.setfield (-2) "make"
             Lua.pushstring (TE.encodeUtf8 (idMaterial iDef))
             Lua.setfield (-2) "material"
-            -- True carried mass (empty case + fill + nested contents) so a
-            -- stocked kit / filled canteen reads its real weight and two
-            -- kits with diverged contents differ visibly (#67A).
-            Lua.pushnumber (Lua.Number (realToFrac (itemTotalWeight itemMgr inst)))
-            Lua.setfield (-2) "weight"
             let TextureHandle texInt = idTexture iDef
             Lua.pushinteger (fromIntegral texInt)
             Lua.setfield (-2) "iconTex"

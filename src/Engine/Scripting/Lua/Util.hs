@@ -2,6 +2,8 @@ module Engine.Scripting.Lua.Util
   ( isValidRef
   , broadcastToModules
   , nowSeconds
+  , tableEntryCount
+  , isDenseArray
   ) where
 
 import UPrelude
@@ -17,6 +19,39 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 isValidRef ∷ Lua.Reference → Bool
 isValidRef (Lua.Reference n) = n ≠ fromIntegral Lua.refnil
 isValidRef Lua.RefNil        = False
+
+-- | Count every entry in a Lua table (array part *and* associative
+--   part) by full traversal. Reads only key/value *presence*, never
+--   converting a key (lua_tostring on a numeric key mutates it in place
+--   and breaks the following lua_next).
+tableEntryCount ∷ Lua.StackIndex → Lua.LuaE Lua.Exception Int
+tableEntryCount idx = do
+    Lua.pushvalue idx   -- work on a copy so a relative index stays stable
+    Lua.pushnil         -- first key
+    let loop c = do
+          more ← Lua.next (-2)
+          if not more
+            then Lua.pop 1 >> return c   -- pop the table copy; done
+            else Lua.pop 1 >> loop (c + 1)  -- pop value, keep key for next
+    loop (0 ∷ Int)
+
+-- | Is the table at this index a DENSE one-based array — no holes, no
+--   associative keys?
+--
+--   'Lua.rawlen' alone cannot answer this: it returns a *border*, so a
+--   sparse @{ [1] = a, [3] = b }@ may report length 1 (silently hiding
+--   @b@ from a @1..n@ loop) or 3, depending on the table's internals.
+--   Comparing the border against the true entry count rejects both
+--   shapes deterministically, and also catches a stray associative key
+--   (@{ "W", x = 1 }@).
+--
+--   The caller is expected to treat False as a malformed ARGUMENT
+--   rather than silently processing a prefix.
+isDenseArray ∷ Lua.StackIndex → Lua.LuaE Lua.Exception Bool
+isDenseArray idx = do
+    n     ← Lua.rawlen idx
+    total ← tableEntryCount idx
+    pure (total ≡ fromIntegral n)
 
 -- | Wall-clock seconds since the POSIX epoch. The tick scheduler must
 --   use this, not 'utctDayTime' — day time wraps to 0 at UTC midnight,
