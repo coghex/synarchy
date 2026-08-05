@@ -25,7 +25,7 @@ import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Save.Component.Page
     ( PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
-    , migrateWorldPagesV1, toWorldGenParamsDTOv1, WorldIdentityDTO(..) )
+    , migrateWorldPagesV1, toWorldGenParamsDTOv1, WorldIdentityDTOv1(..) )
 import World.Save.Snapshot (PageSnapshot(..))
 
 -- * Fixtures — two ruin-shaped defs. "ruin" is 5x5 (margin 6); "camp"
@@ -354,7 +354,7 @@ spec = describe "Location instance identity" $ do
                 , pc1DateMonth  = 2
                 , pc1DateDay    = 3
                 , pc1MapMode    = ZMDefault
-                , pc1Identity   = Just (WorldIdentityDTO "Terra" Nothing)
+                , pc1Identity   = Just (WorldIdentityDTOv1 "Terra" Nothing)
                 }
             -- Go through real bytes, not just the in-memory record: the
             -- point of a frozen v1 DTO is that its ENCODING still decodes.

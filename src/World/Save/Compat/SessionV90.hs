@@ -107,7 +107,7 @@ import World.Save.Component.Session
     ( TexPaletteDTO(..), fromTexPaletteDTO, validateTexPalette )
 import World.Save.Component.Page
     ( WorldGenParamsDTOv1
-    , WorldIdentityDTO(..), WorldEditDTO(..), MineDesignationDTO(..)
+    , WorldIdentityDTOv1(..), WorldEditDTO(..), MineDesignationDTO(..)
     , ConstructDesignationDTO(..), ChopDesignationDTO(..)
     , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)
     , GroundItemsDTO(..), SpoilPileDTO(..)
@@ -192,7 +192,11 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90TillDesignations ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
     , wp90CropPlots    ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
     , wp90PlantDesignations ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
-    , wp90Identity     ∷ !(Maybe WorldIdentityDTO)
+    , wp90Identity     ∷ !(Maybe WorldIdentityDTOv1)
+        -- ^ v90 bytes predate #1092's language provenance, so this is
+        --   the FROZEN pre-provenance identity shape; the migration
+        --   below carries its name/gloss across and leaves provenance
+        --   absent, never inferred.
     } deriving (Show, Generic, Serialize)
 
 -- | Frozen mirror of the v90 'World.Save.Types.SaveMetadata': unlike
