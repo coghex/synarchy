@@ -77,23 +77,36 @@ CATALOGUE_EXTENSIONS = (".yaml", ".yml")
 # the exemption from being a wildcard: `matAir` moving off 0 still fails.
 EXEMPT_CONSTANTS = {"matAir": 0}
 
+# Comments are removed before any of these run (see
+# `strip_haskell_comments`), so none of them has to model Haskell comment
+# syntax itself — a trailing `-- why`, a `{- note -}` wedged between the
+# name and the `=`, or a pragma all reduce to whitespace first.
+#
 # A top-level constant definition. Anchored at column 0 (a top-level
-# Haskell binding) so the multi-name type signatures above each group
-# (`matGranite, matDiorite, matGabbro ∷ MaterialId`) cannot match, and a
-# trailing `--` line comment is allowed: `matFoo = MaterialId 200 -- why`
-# is valid Haskell, and a regex demanding end-of-line after the digits
-# would silently drop the constant instead of reporting it.
+# Haskell binding), which is also what keeps the module's indented
+# where/let bindings out of it.
 _CONSTANT_RE = re.compile(
-    r"^(mat[A-Z][A-Za-z0-9_']*)[ \t]*=[ \t]*MaterialId[ \t]+(\d+)"
-    r"[ \t]*(?:--.*)?$")
+    r"^(mat[A-Z][A-Za-z0-9_']*)[ \t]*=[ \t]*MaterialId[ \t]+(\d+)[ \t]*$")
 
-# Any top-level `mat<Upper>… =` binding, whatever its right-hand side.
-# One this reader cannot parse (`MaterialId (200)`, a hex literal, an
-# RHS on the next line, a trailing block comment) is a HARD failure
-# rather than a silent omission -- silently skipping is exactly how a
-# one-sided constant would slip past. `mat[A-Z]` is what keeps the
-# module's other top-level bindings (`materialIdByName`) out of it.
-_LOOSE_CONSTANT_RE = re.compile(r"^(mat[A-Z][A-Za-z0-9_']*)[ \t]*=")
+# Any line opening a top-level `mat<Upper>` binding, whatever follows.
+# One this reader cannot parse (`MaterialId (200)`, a hex literal, an RHS
+# on the next line, trailing junk) is a HARD failure naming the line
+# rather than a silent omission — silently skipping is exactly how a
+# one-sided constant would slip past. Deliberately NOT anchored on the
+# `=`: a binding whose `=` sits on a later line must be caught too.
+# `mat[A-Z]` keeps the module's other top-level bindings
+# (`materialIdByName`) out of it.
+_LOOSE_CONSTANT_RE = re.compile(r"^mat[A-Z][A-Za-z0-9_']*")
+
+# The type signatures above each group (`matGranite, matDiorite ∷
+# MaterialId`), which open a `mat<Upper>` line but declare nothing.
+_SIGNATURE_RE = re.compile(
+    r"^mat[A-Z][A-Za-z0-9_']*(?:[ \t]*,[ \t]*mat[A-Z][A-Za-z0-9_']*)*"
+    r"[ \t]*(?:∷|::)")
+
+# Haskell's symbol characters. A run of dashes followed by one of these
+# is an operator (`-->`), not the start of a comment.
+_SYMBOL_CHARS = set("!#$%&*+./<=>?@\\^|-~:")
 
 # A YAML list item (`  - id: 70`) and a plain `key: value` line.
 _ITEM_RE = re.compile(r"^([ \t]*)-[ \t]*(.*)$")
@@ -163,20 +176,120 @@ def unquote(value: str) -> str:
     return value
 
 
+def strip_haskell_comments(text: str) -> str:
+    """Blank out Haskell comments, preserving every line break and column.
+
+    Chasing comment forms in the constant regex itself is a losing game —
+    a trailing `-- why`, a `{- note -}` between the name and the `=`, or a
+    pragma each need their own special case, and the one that gets missed
+    silently DROPS a constant instead of reporting it. Removing comments
+    up front collapses all of them into whitespace, so the patterns below
+    only ever see code. Line and column positions are preserved so
+    reported line numbers still point at the real source.
+
+    Nested `{- {- -} -}` blocks, string and character literals, and the
+    identifier-trailing apostrophe (`matFoo'`, which must NOT open a
+    character literal) are handled — a `{-` inside a string would
+    otherwise blank out the constants that follow it."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    depth = 0
+    in_line_comment = False
+    in_string = False
+    in_char = False
+
+    def blank(ch: str) -> str:
+        return "\n" if ch == "\n" else " "
+
+    while i < n:
+        ch = text[i]
+        pair = text[i:i + 2]
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+                out.append(ch)
+            else:
+                out.append(" ")
+            i += 1
+        elif depth:
+            if pair == "{-":
+                depth += 1
+                out.append("  ")
+                i += 2
+            elif pair == "-}":
+                depth -= 1
+                out.append("  ")
+                i += 2
+            else:
+                out.append(blank(ch))
+                i += 1
+        elif in_string or in_char:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if in_string and ch == '"':
+                in_string = False
+            elif in_char and ch == "'":
+                in_char = False
+            i += 1
+        elif pair == "{-":
+            depth = 1
+            out.append("  ")
+            i += 2
+        elif pair == "--":
+            run = i
+            while run < n and text[run] == "-":
+                run += 1
+            following = text[run:run + 1]
+            if following and following in _SYMBOL_CHARS:
+                # A dash run followed by a symbol char is an operator.
+                out.append(text[i:run])
+                i = run
+            else:
+                in_line_comment = True
+                out.append(" " * (run - i))
+                i = run
+        elif ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+        elif ch == "'" and not (i and (text[i - 1].isalnum()
+                                       or text[i - 1] in "_'")):
+            # A leading apostrophe opens a character literal; one that
+            # follows an identifier character is part of the name.
+            in_char = True
+            out.append(ch)
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def parse_constants(text: str) -> tuple[list[Constant], list[str]]:
-    """Every `mat* = MaterialId n` binding, plus structural problems."""
+    """Every `mat<Name> = MaterialId <n>` binding, plus structural problems.
+
+    Every top-level line opening a `mat<Upper>` name is accounted for: it
+    is a constant, a type signature, or an unreadable binding this audit
+    refuses to skip."""
     constants: list[Constant] = []
     problems: list[str] = []
-    for lineno, raw in enumerate(text.splitlines(), start=1):
+    for lineno, raw in enumerate(
+            strip_haskell_comments(text).splitlines(), start=1):
+        if _LOOSE_CONSTANT_RE.match(raw) is None:
+            continue
+        if _SIGNATURE_RE.match(raw) is not None:
+            continue
         match = _CONSTANT_RE.match(raw)
         if match is None:
-            if _LOOSE_CONSTANT_RE.match(raw) is not None:
-                problems.append(
-                    f"src/World/Material.hs:{lineno}: cannot read material "
-                    f"constant {raw.strip()!r} — this audit only understands "
-                    "`mat<Name> = MaterialId <n>` on one line (a trailing "
-                    "`--` comment is fine). Keep that form, or teach the "
-                    "audit the new one; it must not be skipped")
+            problems.append(
+                f"src/World/Material.hs:{lineno}: cannot read material "
+                f"constant {raw.strip()!r} — this audit only understands "
+                "`mat<Name> = MaterialId <n>` on a single line. Keep that "
+                "form, or teach the audit the new one; it must not be "
+                "skipped")
             continue
         identifier, digits = match.group(1), match.group(2)
         constants.append(Constant(identifier=identifier,
@@ -591,33 +704,75 @@ def _self_test() -> list[str]:
                  ("b.yaml", _YAML_CLEAN_B)],
                 "catalogue `schist` id 43")
 
-    # 3a. A one-sided constant must not be able to hide behind a trailing
-    #     Haskell comment, and a binding shape this reader cannot parse
-    #     must fail loudly rather than be dropped — either way the audit
-    #     would otherwise pass with a genuinely unmatched constant present.
-    expect_fail("Haskell-only constant with a trailing comment",
-                _HS_CLEAN + "matSchist ∷ MaterialId\n"
-                            "matSchist = MaterialId 43 -- metamorphic\n",
-                _CLEAN_CATALOGUE, "`matSchist` = MaterialId 43")
-    expect_clean("trailing comment on a matching constant",
-                 _HS_CLEAN.replace("matGranite = MaterialId 1",
-                                   "matGranite = MaterialId 1  -- the classic"),
+    # 3a. A one-sided constant must not be able to hide behind ANY comment
+    #     placement, and a binding shape this reader cannot parse must
+    #     fail loudly rather than be dropped — either way the audit would
+    #     otherwise pass with a genuinely unmatched constant present.
+    for label, binding in (
+            ("trailing line comment",
+             "matSchist = MaterialId 43 -- metamorphic\n"),
+            ("trailing block comment",
+             "matSchist = MaterialId 43 {- metamorphic -}\n"),
+            ("block comment before the `=`",
+             "matSchist {- metamorphic -} = MaterialId 43\n"),
+            ("block comment after the `=`",
+             "matSchist = {- metamorphic -} MaterialId 43\n"),
+            ("nested block comment",
+             "matSchist {- a {- b -} c -} = MaterialId 43\n")):
+        expect_fail(f"Haskell-only constant, {label}",
+                    _HS_CLEAN + "matSchist ∷ MaterialId\n" + binding,
+                    _CLEAN_CATALOGUE, "`matSchist` = MaterialId 43")
+    expect_clean("comments around a matching constant",
+                 _HS_CLEAN.replace(
+                     "matGranite = MaterialId 1",
+                     "matGranite {- classic -} = MaterialId 1  -- the classic"),
                  _CLEAN_CATALOGUE)
     for label, binding in (
             ("parenthesised literal", "matSchist = MaterialId (43)\n"),
             ("hex literal", "matSchist = MaterialId 0x2b\n"),
             ("right-hand side on the next line",
              "matSchist =\n    MaterialId 43\n"),
-            ("trailing block comment",
-             "matSchist = MaterialId 43 {- metamorphic -}\n")):
+            ("`=` pushed to a later line by a multi-line block comment",
+             "matSchist {- a\n  note -} = MaterialId 43\n"),
+            ("trailing junk", "matSchist = MaterialId 43 forty_three\n")):
         expect_fail(f"unreadable binding: {label}", _HS_CLEAN + binding,
                     _CLEAN_CATALOGUE, "cannot read material constant")
-    # ...while the module's other top-level `mat`-prefixed bindings are
-    # not constants and must not be mistaken for unreadable ones.
-    expect_clean("non-constant `mat` binding ignored",
+    # ...while the module's other top-level `mat`-prefixed bindings, its
+    # grouped type signatures, and its indented local bindings are not
+    # constants and must not be mistaken for unreadable ones.
+    expect_clean("non-constant top-level `mat` binding ignored",
                  _HS_CLEAN + "materialIdByName (MaterialRegistry vec _) name =\n"
                              "    HM.lookup name vec\n",
                  _CLEAN_CATALOGUE)
+    expect_clean("indented local binding ignored",
+                 _HS_CLEAN + "someHelper reg =\n"
+                             "    let matSchist = MaterialId 43\n"
+                             "    in matSchist\n",
+                 _CLEAN_CATALOGUE)
+
+    # 3b. The comment scanner must not misread code AS a comment, which
+    #     would blank real constants out of the compared set.
+    expect_fail("`{-` inside a string literal does not blank what follows",
+                "someDoc ∷ Text\nsomeDoc = \"a {- b\"\n" + _HS_CLEAN
+                + "matSchist = MaterialId 43\n",
+                _CLEAN_CATALOGUE, "`matSchist` = MaterialId 43")
+    expect_fail("a dash-run operator is not a comment",
+                _HS_CLEAN.replace(
+                    "matGranite = MaterialId 1",
+                    "step a = a --> a\nmatGranite = MaterialId 1"),
+                [("a.yaml", _YAML_CLEAN.replace("- id: 1", "- id: 9")),
+                 ("b.yaml", _YAML_CLEAN_B)],
+                "catalogue id 9")
+    # An identifier's trailing apostrophe must not open a character
+    # literal — that would swallow everything after it, silently dropping
+    # the constants that follow. Both one-sided constants must report.
+    _primed = (_HS_CLEAN + "matSchist', matGneiss ∷ MaterialId\n"
+                           "matSchist' = MaterialId 43\n"
+                           "matGneiss = MaterialId 44\n")
+    for needle in ("`matSchist'` = MaterialId 43",
+                   "`matGneiss` = MaterialId 44"):
+        expect_fail("an identifier's trailing apostrophe is not a char "
+                    f"literal ({needle})", _primed, _CLEAN_CATALOGUE, needle)
 
     # 4. Collisions on one side, which would otherwise mask a one-sided
     #    addition once the dictionaries overwrite each other.
