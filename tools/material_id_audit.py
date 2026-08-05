@@ -79,9 +79,21 @@ EXEMPT_CONSTANTS = {"matAir": 0}
 
 # A top-level constant definition. Anchored at column 0 (a top-level
 # Haskell binding) so the multi-name type signatures above each group
-# (`matGranite, matDiorite, matGabbro ∷ MaterialId`) cannot match.
+# (`matGranite, matDiorite, matGabbro ∷ MaterialId`) cannot match, and a
+# trailing `--` line comment is allowed: `matFoo = MaterialId 200 -- why`
+# is valid Haskell, and a regex demanding end-of-line after the digits
+# would silently drop the constant instead of reporting it.
 _CONSTANT_RE = re.compile(
-    r"^(mat[A-Za-z0-9_']*)[ \t]*=[ \t]*MaterialId[ \t]+(\d+)[ \t]*$")
+    r"^(mat[A-Z][A-Za-z0-9_']*)[ \t]*=[ \t]*MaterialId[ \t]+(\d+)"
+    r"[ \t]*(?:--.*)?$")
+
+# Any top-level `mat<Upper>… =` binding, whatever its right-hand side.
+# One this reader cannot parse (`MaterialId (200)`, a hex literal, an
+# RHS on the next line, a trailing block comment) is a HARD failure
+# rather than a silent omission -- silently skipping is exactly how a
+# one-sided constant would slip past. `mat[A-Z]` is what keeps the
+# module's other top-level bindings (`materialIdByName`) out of it.
+_LOOSE_CONSTANT_RE = re.compile(r"^(mat[A-Z][A-Za-z0-9_']*)[ \t]*=")
 
 # A YAML list item (`  - id: 70`) and a plain `key: value` line.
 _ITEM_RE = re.compile(r"^([ \t]*)-[ \t]*(.*)$")
@@ -158,16 +170,17 @@ def parse_constants(text: str) -> tuple[list[Constant], list[str]]:
     for lineno, raw in enumerate(text.splitlines(), start=1):
         match = _CONSTANT_RE.match(raw)
         if match is None:
+            if _LOOSE_CONSTANT_RE.match(raw) is not None:
+                problems.append(
+                    f"src/World/Material.hs:{lineno}: cannot read material "
+                    f"constant {raw.strip()!r} — this audit only understands "
+                    "`mat<Name> = MaterialId <n>` on one line (a trailing "
+                    "`--` comment is fine). Keep that form, or teach the "
+                    "audit the new one; it must not be skipped")
             continue
         identifier, digits = match.group(1), match.group(2)
-        stem = identifier[len("mat"):]
-        if not stem:
-            problems.append(
-                f"src/World/Material.hs:{lineno}: constant `{identifier}` has "
-                "no name after the `mat` prefix")
-            continue
         constants.append(Constant(identifier=identifier,
-                                  name=snake_case(stem),
+                                  name=snake_case(identifier[len("mat"):]),
                                   mat_id=int(digits),
                                   line=lineno))
     return constants, problems
@@ -577,6 +590,34 @@ def _self_test() -> list[str]:
                 [("a.yaml", _YAML_CLEAN + "  - id: 43\n    name: schist\n"),
                  ("b.yaml", _YAML_CLEAN_B)],
                 "catalogue `schist` id 43")
+
+    # 3a. A one-sided constant must not be able to hide behind a trailing
+    #     Haskell comment, and a binding shape this reader cannot parse
+    #     must fail loudly rather than be dropped — either way the audit
+    #     would otherwise pass with a genuinely unmatched constant present.
+    expect_fail("Haskell-only constant with a trailing comment",
+                _HS_CLEAN + "matSchist ∷ MaterialId\n"
+                            "matSchist = MaterialId 43 -- metamorphic\n",
+                _CLEAN_CATALOGUE, "`matSchist` = MaterialId 43")
+    expect_clean("trailing comment on a matching constant",
+                 _HS_CLEAN.replace("matGranite = MaterialId 1",
+                                   "matGranite = MaterialId 1  -- the classic"),
+                 _CLEAN_CATALOGUE)
+    for label, binding in (
+            ("parenthesised literal", "matSchist = MaterialId (43)\n"),
+            ("hex literal", "matSchist = MaterialId 0x2b\n"),
+            ("right-hand side on the next line",
+             "matSchist =\n    MaterialId 43\n"),
+            ("trailing block comment",
+             "matSchist = MaterialId 43 {- metamorphic -}\n")):
+        expect_fail(f"unreadable binding: {label}", _HS_CLEAN + binding,
+                    _CLEAN_CATALOGUE, "cannot read material constant")
+    # ...while the module's other top-level `mat`-prefixed bindings are
+    # not constants and must not be mistaken for unreadable ones.
+    expect_clean("non-constant `mat` binding ignored",
+                 _HS_CLEAN + "materialIdByName (MaterialRegistry vec _) name =\n"
+                             "    HM.lookup name vec\n",
+                 _CLEAN_CATALOGUE)
 
     # 4. Collisions on one side, which would otherwise mask a one-sided
     #    addition once the dictionaries overwrite each other.
