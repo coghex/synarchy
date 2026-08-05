@@ -46,6 +46,11 @@ the live code and the agent memory notes instead.
   (`ccVersion`/`cdVersion`), which is what replaced it and is what actually
   gates a load today.
 
-The active river design brief (partially realised in
-`src/World/River/Graph.hs`) was moved up to `docs/river_rework.md`, not
-here — it is design reference, not a superseded audit.
+- **`river_rework.md`** — design brief for a river runtime model owning river
+  geometry in a persistent graph with the simulator owning live water
+  (2026-06-25, moved down from `docs/` on 2026-08-05). **NOT ADOPTED** —
+  issue #1108 recorded the decision to archive rather than build it, and
+  deleted the partial realisation it referred to (`src/World/River/Graph.hs`,
+  which no production module ever imported). Rivers still work the way the
+  brief proposed to replace; the river work that actually shipped on that
+  model is #221 and #223.
