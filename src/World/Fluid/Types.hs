@@ -8,6 +8,7 @@ module World.Fluid.Types
     , emptyIceMap
     , IceLevelGrid(..)
     , emptyIceLevelGrid
+    , renderedSurfaceZ
     ) where
 
 import UPrelude
@@ -34,6 +35,36 @@ data FluidCell = FluidCell
     } deriving (Show, Eq)
 instance NFData FluidCell where
     rnf (FluidCell t s) = rnf t `seq` rnf s
+
+-- | THE rendered-surface rule (#1112): given a column's terrain top z
+--   and whatever fluid cell sits over it, the z the column's surface
+--   renders at.
+--
+--   River renders FLAT at the fluid surface, deliberately hiding a
+--   terrain protrusion above it — the carved channel is allowed bumps
+--   and the water plane must not break over them. Every other fluid
+--   type renders at @max terrain fluid@; a dry column renders at its
+--   terrain top.
+--
+--   This is the ONLY place the River-versus-other decision is written.
+--   Callers: 'World.Generate.Chunk.Fluid.mkSurfaceMap' (generation),
+--   'Sim.Thread.emitWorldDirtyFluids' (sim writeback), and
+--   'World.Edit.Apply' (@WeDeleteTile@, @WeAddTile@, @WeSetFluidTile@,
+--   @WeSetFluidSnapshot@, @recomputeColumnSurface@). Hand-written
+--   copies used to disagree: the dig and carve paths applied a bare
+--   @max@, so digging a River tile whose terrain protrudes above the
+--   water rendered the protrusion, and a chunk-eviction replay wrote
+--   that divergence back every time.
+--
+--   The terrain argument must be the TERRAIN top
+--   (@lcTerrainSurfaceMap@), never a previously rendered surface —
+--   feeding back a rendered value keeps a superseded fluid cell's
+--   height alive.
+renderedSurfaceZ ∷ Int → Maybe FluidCell → Int
+renderedSurfaceZ terrainZ Nothing = terrainZ
+renderedSurfaceZ terrainZ (Just fc)
+    | fcType fc ≡ River = fcSurface fc
+    | otherwise         = max terrainZ (fcSurface fc)
 
 -- | Ice deposition mode.
 data IceMode = BasinIce   -- ^ Flat sheet filling a valley/basin

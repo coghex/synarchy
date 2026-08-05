@@ -23,7 +23,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import Structure.Types (StructurePieceData(..))
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..), renderedSurfaceZ)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Generate.Coordinates (globalToChunk)
 import World.Material.Id (MaterialId(..))
@@ -74,9 +74,12 @@ applyEdit (WeDeleteTile gx gy) lc
                        Nothing | newTopZ ≤ wt        →
                            Just (FluidCell Lake wt)
                        _                             → Nothing
-                   newSurface = case newFluid of
-                       Just fc → max newTopZ (fcSurface fc)
-                       Nothing → newTopZ
+                   -- Digging preserves an existing fluid cell
+                   -- unconditionally, so a River tile whose terrain
+                   -- protrudes above the water can still protrude after
+                   -- the dig — the shared rule keeps rendering it flat,
+                   -- exactly as generation and the sim writeback do.
+                   newSurface = renderedSurfaceZ newTopZ newFluid
                in lc
                    { lcTiles             = lcTiles lc V.// [(idx, col')]
                    , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, newSurface)]
@@ -131,9 +134,13 @@ applyEdit (WeAddTile gx gy mat) lc
                    newFluid = case curFluid of
                        Just fc | newTopZ ≥ fcSurface fc → Nothing
                        _                                → curFluid
-                   newSurface = case newFluid of
-                       Just fc → max newTopZ (fcSurface fc)
-                       Nothing → newTopZ
+                   -- The guard directly above displaces any fluid the
+                   -- fill reaches, so surviving fluid necessarily has
+                   -- newTopZ < fcSurface — River and non-River both
+                   -- collapse to fcSurface here. Routed through the
+                   -- shared rule anyway so the decision stays in one
+                   -- place rather than being re-derived (#1112).
+                   newSurface = renderedSurfaceZ newTopZ newFluid
                in lc
                    { lcTiles             = lcTiles lc V.// [(idx, col')]
                    , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, newSurface)]
@@ -148,13 +155,11 @@ applyEdit (WeSetFluidTile gx gy ft) lc
             surfZ      = lcTerrainSurfaceMap lc VU.! idx
             newSurface = surfZ + 1
             cell       = FluidCell { fcType = ft, fcSurface = newSurface }
-            oldTop     = lcSurfaceMap lc VU.! idx
-            -- River renders flat at fcSurface to hide protrusions; other
-            -- fluid types use max(terrain/old, fluid). Mirrors the rule in
-            -- World.Generate.Chunk.Fluid.mkSurfaceMap and Sim.Thread.
-            renderedSurf = case ft of
-                River → newSurface
-                _     → max oldTop newSurface
+            -- Against the TERRAIN top, not the old rendered surface:
+            -- this edit REPLACES the column's fluid cell, so folding in
+            -- the height the superseded cell used to render at would
+            -- keep a stale surface alive.
+            renderedSurf = renderedSurfaceZ surfZ (Just cell)
         in lc
             { lcFluidMap   = lcFluidMap lc V.// [(idx, Just cell)]
             , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, renderedSurf)]
@@ -165,9 +170,8 @@ applyEdit (WeSetFluidSnapshot gx gy ft surface) lc
     | otherwise =
         let idx = columnIdx gx gy
             cell = FluidCell { fcType = ft, fcSurface = surface }
-            renderedSurf = case ft of
-                River → surface
-                _     → max (lcTerrainSurfaceMap lc VU.! idx) surface
+            renderedSurf =
+                renderedSurfaceZ (lcTerrainSurfaceMap lc VU.! idx) (Just cell)
         in lc { lcFluidMap = lcFluidMap lc V.// [(idx, Just cell)]
               , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, renderedSurf)] }
 
@@ -302,9 +306,12 @@ dropFloraAt lx ly fcd = FloraChunkData
 -- | After a WeSetCell write, re-derive the column's surface state: trim
 --   trailing air so the top cell is solid (matches generator output and
 --   anything that reads the column top directly), then set the chunk's
---   terrain-surface (topmost non-air z) and rendered-surface (max with
---   any fluid) maps for this column. The top-of-column edits maintain
---   these inline; WeSetCell is the only caller that needs the rescan.
+--   terrain-surface (topmost non-air z) and rendered-surface maps for
+--   this column. The rendered surface comes from the shared
+--   'renderedSurfaceZ' rule, so carving terrain up past a River surface
+--   still renders the flat water plane (#1112). The top-of-column edits
+--   maintain these inline; WeSetCell is the only caller that needs the
+--   rescan.
 recomputeColumnSurface ∷ Int → ColumnTiles → LoadedChunk → LoadedChunk
 recomputeColumnSurface idx col lc =
     let start = ctStartZ col
@@ -318,9 +325,7 @@ recomputeColumnSurface idx col lc =
                   }
         terrainTopZ = start + hi               -- start - 1 when fully air
         curFluid    = lcFluidMap lc V.! idx
-        newSurface  = case curFluid of
-            Just fc → max terrainTopZ (fcSurface fc)
-            Nothing → terrainTopZ
+        newSurface  = renderedSurfaceZ terrainTopZ curFluid
     in lc
         { lcTiles             = lcTiles lc V.// [(idx, col')]
         , lcTerrainSurfaceMap = lcTerrainSurfaceMap lc VU.// [(idx, terrainTopZ)]

@@ -26,7 +26,7 @@ import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerStat
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Page.Types (WorldPageId(..))
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..), renderedSurfaceZ)
 import World.Command.Types (WorldCommand(..), FluidWriteback(..)
                            , FluidWritebackBatch(..))
 import Sim.Command.Types (SimCommand(..))
@@ -379,15 +379,11 @@ emitWorldDirtyFluids env pid sws mAck = do
                             then deriveFluidMap scs
                             else scsFluid scs
                         newTerrain = scsTerrain scs
-                        -- River fluid renders as a flat plane: surface
-                        -- comes directly from the fluid; other fluid sits
-                        -- at max(terrain, surface). Must match the rule in
-                        -- World/Generate/Chunk.hs and ChunkLoading.hs.
+                        -- The rendered-surface rule (river renders flat)
+                        -- has ONE definition, shared with generation and
+                        -- the edit-replay paths: World.Fluid.Types.
                         newSurf = VU.imap (\idx terrZ →
-                            case newFluid V.! idx of
-                                Just fc | fcType fc ≡ River → fcSurface fc
-                                Just fc → max terrZ (fcSurface fc)
-                                Nothing → terrZ
+                            renderedSurfaceZ terrZ (newFluid V.! idx)
                             ) newTerrain
                     in Just (FluidWriteback cc newFluid newTerrain newSurf
                                             (scsSideDeco scs))
