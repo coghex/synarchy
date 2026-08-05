@@ -74,6 +74,24 @@ gothicGaps, gothicCurlyQuotes ∷ [Char]
 gothicGaps = "/:;<=>[\\]^`{|}~"
 gothicCurlyQuotes = ['\x2018', '\x2019', '\x201C', '\x201D']
 
+-- | Requested non-ASCII characters @shell.ttf@ supplies. The last three
+--   are the ones @arcade.ttf@ does NOT have, so the two fonts cannot
+--   both be satisfied by the same wrong answer.
+shellSuppliedNonAscii ∷ [Char]
+shellSuppliedNonAscii =
+  [ '\x00E9'  -- é  LATIN SMALL LETTER E WITH ACUTE
+  , '\x0141'  -- Ł  LATIN CAPITAL LETTER L WITH STROKE
+  , '\x2026'  -- …  HORIZONTAL ELLIPSIS
+  , '\x2010'  -- ‐  HYPHEN
+  , '\x2032'  -- ′  PRIME
+  , '\x2033'  -- ″  DOUBLE PRIME
+  ]
+
+-- | Requested Latin Extended-A characters @shell.ttf@ does not map —
+--   a sample of its 39 gaps, including the first and the last.
+shellMissingSample ∷ [Char]
+shellMissingSample = ['\x010A', '\x0128', '\x014B', '\x017F']
+
 -- | A generous device limit, well above anything the tracked fonts
 --   need. Real devices report at least 4096 for @maxImageDimension2D@.
 roomyLimit ∷ Int
@@ -159,6 +177,8 @@ spec = do
                             (repertoireChars printableAscii)
     gothicWide ← runIO $ generateOrFail gothicPath
                             (repertoireChars (repertoireForFont gothicPath))
+    shellWide ← runIO $ generateOrFail shellPath
+                            (repertoireChars (repertoireForFont shellPath))
 
     describe "canonical repertoires" $ do
         it "sorts and deduplicates whatever order it is handed" $ do
@@ -273,6 +293,51 @@ spec = do
                     -- is not satisfiable by the .notdef layout.
                     (w84 * h84) `shouldSatisfy` (< w99 * h99)
                 _ → expectationFailure "no feasible grid for gothic"
+
+        it "intersects shell's own cmap, which differs from arcade's" $ do
+            -- The third shipped font, generated for real. Its Latin
+            -- Extended-A coverage is patchier than arcade's while it
+            -- supplies three punctuation marks arcade lacks, so the two
+            -- atlases cannot both be right by accident.
+            Map.size (faGlyphData shellWide) `shouldBe` 291
+            forM_ shellSuppliedNonAscii $ \c → do
+                Map.member c (faGlyphData shellWide) `shouldBe` True
+                isMissingGlyph shellWide c `shouldBe` False
+                calculateTextWidthScaled shellWide 48 [c] `shouldSatisfy` (> 0)
+            forM_ shellMissingSample $ \c → do
+                Map.member c (faGlyphData shellWide) `shouldBe` False
+                resolveGlyph shellWide c
+                    `shouldBe` Just (faFallbackGlyph shellWide)
+            -- The three arcade lacks and shell has, and vice versa.
+            forM_ arcadeMissing $ \c →
+                Map.member c (faGlyphData shellWide) `shouldBe` True
+            Map.member '\x0141' (faGlyphData arcadeWide) `shouldBe` True
+            Map.member '\x010A' (faGlyphData arcadeWide) `shouldBe` True
+            -- And it lands on the grid the rule selects for 291 glyphs.
+            let glyphs = Map.elems (faGlyphData shellWide)
+                cellW = round (maximum (map (fst . giSize) glyphs)) + 2 ∷ Int
+                cellH = round (maximum (map (snd . giSize) glyphs)) + 2 ∷ Int
+            case oracleColumnsAndSize 291 cellW cellH roomyLimit of
+                Just (_, w, h) →
+                    (faAtlasWidth shellWide, faAtlasHeight shellWide)
+                        `shouldBe` (w, h)
+                Nothing → expectationFailure "no feasible grid for shell"
+
+        it "reports shell's coverage as the PR evidence records it" $ do
+            (logger, entriesRef) ← capturingLogger
+            _ ← generateSDFFontAtlas logger shellPath extendedLatin roomyLimit
+            entries ← readIORef entriesRef
+            case entries of
+                [entry] → do
+                    let msg = T.unpack (leMessage entry)
+                    msg `shouldSatisfy` (shellPath `isInfixOf`)
+                    msg `shouldSatisfy` ("requested=330" `isInfixOf`)
+                    msg `shouldSatisfy` ("supplied=291" `isInfixOf`)
+                    msg `shouldSatisfy` ("missing=39" `isInfixOf`)
+                    msg `shouldSatisfy` ("[U+010A U+010B" `isInfixOf`)
+                    msg `shouldSatisfy` ("U+017F]" `isInfixOf`)
+                other → expectationFailure $
+                    "expected one coverage entry, got " ⧺ show (length other)
 
         it "publishes a mapped glyph that draws nothing, with its advance" $ do
             -- U+00A0 NO-BREAK SPACE: arcade.ttf maps it and gives it a
