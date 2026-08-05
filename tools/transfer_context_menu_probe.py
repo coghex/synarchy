@@ -148,14 +148,6 @@ def tile_surface(port: int, x: int, y: int):
     return z, parts[2] in ("null", "nil")
 
 
-def find_dry_anchor(port: int, candidates):
-    for gx, gy in candidates:
-        info = tile_surface(port, gx, gy)
-        if info is not None and info[1]:
-            return gx, gy, info[0]
-    return None
-
-
 def _candidate_grid(step: int, extent: int):
     pts = [(dx, dy) for dx in range(-extent, extent + 1, step)
                      for dy in range(-extent, extent + 1, step)]
@@ -163,26 +155,94 @@ def _candidate_grid(step: int, extent: int):
     return pts
 
 
-# Five DISJOINT interleaved candidate lists (building / mule / acolyte /
-# second acolyte / wildlife) so no two fixtures can ever land on the
-# same tile, and a
-# wide step (4 tiles) keeps the mule's tile well clear of the building's
-# own footprint (the #1014 determinism requirement above). Real
-# (unseeded) worldgen can put a river/coastline right across a chunk
-# straddling the origin (observed live while building this probe — most
-# of a 25-tile-extent grid came back "river" for one run's world), so
-# this searches a wide extent (up to 35 tiles from origin, comfortably
-# inside a "Medium" 128-tile world) rather than a tight one.
-_ALL_CANDIDATES = _candidate_grid(4, 35)
-CANDIDATES_BUILDING = _ALL_CANDIDATES[0::5]
-CANDIDATES_MULE = _ALL_CANDIDATES[1::5]
-CANDIDATES_ACOLYTE = _ALL_CANDIDATES[2::5]
-CANDIDATES_ACOLYTE2 = _ALL_CANDIDATES[3::5]
-CANDIDATES_WILDLIFE = _ALL_CANDIDATES[4::5]
+# How far from the origin 'allocate_dry_anchors' will look for land,
+# nearest-to-origin first. 60 tiles is bounded by two things: the
+# ±4-chunk region main() loads (chunks are 16 tiles, so tiles -64..79
+# are resolvable) and world.getAreaFluid's documented max radius of 64.
+# The 4-tile step inside '_candidate_grid' is what keeps each unit's
+# tile clear of the building's own footprint -- the #1014 determinism
+# requirement above.
+SEARCH_RADIUS = 60
+
+
+CHUNK_TILES = 16
+
+
+def _search_centres(rings: int = 2, spacing: int = 2 * SEARCH_RADIUS):
+    """Origin first, then square rings outward.
+
+    A default world is 128 CHUNKS across (`scripts/world_manager.lua`),
+    i.e. ~2048 tiles, so the radius-60 box around the origin is a ~3%
+    sliver of it -- "all ocean here" says nothing about the world. Two
+    runs while building #1085's scenarios came up with all 14641 tiles
+    of that box fluid, which is the probe failing to look rather than
+    the world lacking land."""
+    pts = [(0, 0)]
+    for r in range(1, rings + 1):
+        d = r * spacing
+        pts += [(d, 0), (-d, 0), (0, d), (0, -d),
+                (d, d), (-d, -d), (d, -d), (-d, d)]
+    return pts
+
+
+def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
+                          radius: int = SEARCH_RADIUS):
+    """Take `n` DISTINCT dry tiles, each at least `min_sep` tiles from
+    every tile already taken, out of ONE shared candidate list.
+
+    Deliberately not n disjoint slices of that list (#1085): slicing
+    gives each fixture only 1/n of the pool. Every fixture draws from
+    all of it and the separation filter is what keeps them apart, which
+    also satisfies #1014's determinism requirement that no unit stands
+    on the building's footprint (`tryBuildingMenu` is tried before
+    `tryUnitMenu`). `min_sep` is deliberately much wider than one
+    footprint: every fixture WANDERS, and neighbours that drift into
+    each other end up with overlapping sprites, which is what made a
+    4-tile spacing route right-clicks to the wrong unit.
+
+    Searches outward from the origin (see `_search_centres`), loading
+    each centre's chunks first, and uses ONE bulk `world.getAreaFluid`
+    call per centre to eliminate wet tiles -- a per-tile scan of this
+    many candidates would be thousands of round trips."""
+    span = radius // CHUNK_TILES + 1
+    offsets = _candidate_grid(4, radius)
+    for ox, oy in _search_centres():
+        ccx, ccy = ox // CHUNK_TILES, oy // CHUNK_TILES
+        send(port, f"return world.loadChunksInRegion({ccx - span}, "
+                   f"{ccy - span}, {ccx + span}, {ccy + span})")
+        send(port, "return world.waitForChunks(90)", timeout=95.0)
+        wet = set()
+        got = send_json(port,
+                        f"return world.getAreaFluid({ox}, {oy}, {radius})",
+                        timeout=30.0)
+        if isinstance(got, list):
+            for cell in got:
+                if isinstance(cell, dict) and "x" in cell and "y" in cell:
+                    wet.add((int(cell["x"]), int(cell["y"])))
+        picked: list = []
+        for dx, dy in offsets:
+            gx, gy = ox + dx, oy + dy
+            if (gx, gy) in wet:
+                continue
+            if any(max(abs(gx - tx), abs(gy - ty)) < min_sep
+                   for tx, ty in picked):
+                continue
+            # Confirm against the tile itself: getAreaFluid says nothing
+            # about a tile whose chunk never loaded.
+            info = tile_surface(port, gx, gy)
+            if info is None or not info[1]:
+                continue
+            picked.append((gx, gy))
+            if len(picked) == n:
+                return picked
+        print(f"  (no usable land around {(ox, oy)}: {len(wet)} of "
+              f"{len(offsets)} candidate tiles are fluid, "
+              f"{len(picked)} dry site(s) found)")
+    return None
 
 
 def center_on_tile(port: int, target_gx: int, target_gy: int,
-                    screen_x: int, screen_y: int, tries: int = 6):
+                    screen_x: int, screen_y: int, tries: int = 8):
     """camera.goToTile centers the CAMERA on (gx, gy), but the tile that
     actually resolves under a given screen pixel is off by a few tiles
     in practice (isometric projection + that tile's own terrain
@@ -196,8 +256,14 @@ def center_on_tile(port: int, target_gx: int, target_gy: int,
     resolved = None
     for _ in range(tries):
         send(port, f"camera.goToTile({gx}, {gy}); return 'ok'")
-        time.sleep(0.4)
-        picked = send_json(port, f"return {{world.pickTile({screen_x}, {screen_y})}}")
+        # POLL rather than assume one fixed sleep is enough: the camera
+        # needs a frame or two to settle and the tile under the cursor
+        # has to be rendered before world.pickTile answers at all. A
+        # single 0.4 s wait returned nil for every try on one run
+        # (observed live), which failed the scenario for a reason that
+        # had nothing to do with the behaviour under test.
+        picked = poll_until(5.0, lambda: send_json(
+            port, f"return {{world.pickTile({screen_x}, {screen_y})}}") or None)
         if not picked:
             continue
         resolved = (picked[0], picked[1])
@@ -208,6 +274,30 @@ def center_on_tile(port: int, target_gx: int, target_gy: int,
     return resolved
 
 
+def set_paused(port: int, on: bool) -> None:
+    send(port, f"engine.setPaused({'true' if on else 'false'}); return 'ok'")
+    time.sleep(0.3)
+
+
+def centre_and_freeze(port: int, gx: int, gy: int, sx: int, sy: int):
+    """Centre the camera on a tile, then freeze the simulation.
+
+    Both halves are needed and they conflict: `world.pickTile` answers
+    nil while the simulation is PAUSED (so the camera convergence loop
+    must run unpaused), but units WANDER while it runs -- over the
+    several minutes these scenarios take, fixtures drift into each other
+    and a unit standing under a neighbour's sprite simply cannot be
+    clicked, which `locate_unit_pixel`'s hitTestAt confirmation then
+    (correctly) reports as "could not locate". Unpausing only for the
+    convergence loop gives both: a few seconds of drift instead of
+    minutes, and everything held still for the locate-and-click that
+    follows."""
+    set_paused(port, False)
+    resolved = center_on_tile(port, gx, gy, sx, sy)
+    set_paused(port, True)
+    return resolved
+
+
 def _hit_test_in_rect_has(port: int, uid: int, x1: int, y1: int,
                            x2: int, y2: int) -> bool:
     raw = send(port, f"return unit.hitTestInRect({x1}, {y1}, {x2}, {y2})")
@@ -215,15 +305,33 @@ def _hit_test_in_rect_has(port: int, uid: int, x1: int, y1: int,
     return str(uid) in ids
 
 
+def _hit_test_at_is(port: int, uid: int, x: int, y: int) -> bool:
+    """Does a click at this pixel resolve to exactly `uid`? This is the
+    SAME single-target hit test the right-click router uses, so it is
+    the only question that predicts where the menu will actually go."""
+    raw = send(port, f"return unit.hitTestAt({x}, {y})").strip().strip('"')
+    if raw in ("", "nil", "null"):
+        return False
+    try:
+        return int(float(raw)) == uid
+    except ValueError:
+        return False
+
+
 def locate_unit_pixel(port: int, uid: int, w: int, h: int,
                        max_steps: int = 14):
     """Bisect unit.hitTestInRect down to the small screen-pixel box
-    containing `uid`'s sprite quad, returning its centre pixel (or None
-    if not found on screen at all) -- the same technique validated in
-    tools/location_embark_probe.py's locate_unit_pixel. A single
-    unit.hitTestAt(cx0, cy0) at the tile-converged screen centre only
-    lands on a unit's own (much smaller, sub-tile) sprite quad by
-    coincidence."""
+    containing `uid`'s sprite quad, then CONFIRM the resulting pixel
+    against unit.hitTestAt -- the same technique validated in
+    tools/location_embark_probe.py's locate_unit_pixel, plus the
+    confirmation pass #1085 needed. A single unit.hitTestAt(cx0, cy0) at
+    the tile-converged screen centre only lands on a unit's own (much
+    smaller, sub-tile) sprite quad by coincidence, but the bisection
+    alone is not enough either: hitTestInRect answers "is uid ANYWHERE
+    in this rect", so with several units milling around, the box's
+    centre pixel can sit on a neighbour's overlapping sprite and the
+    right-click then routes somewhere else entirely (observed live --
+    a self-transfer scenario that quietly hit the wrong acolyte)."""
     x1, y1, x2, y2 = 0, 0, w, h
     if not _hit_test_in_rect_has(port, uid, x1, y1, x2, y2):
         return None
@@ -239,7 +347,16 @@ def locate_unit_pixel(port: int, uid: int, w: int, h: int,
                 break
         else:
             break
-    return (x1 + x2) // 2, (y1 + y2) // 2
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    if _hit_test_at_is(port, uid, cx, cy):
+        return cx, cy
+    for r in range(1, 7):
+        d = r * 3
+        for dx, dy in ((0, -d), (0, d), (-d, 0), (d, 0),
+                       (-d, -d), (d, -d), (-d, d), (d, d)):
+            if _hit_test_at_is(port, uid, cx + dx, cy + dy):
+                return cx + dx, cy + dy
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -276,14 +393,48 @@ def close_menu(port: int) -> None:
     time.sleep(0.2)
 
 
-def right_click_unit(port: int, uid: int, gx: int, gy: int,
-                      fb_w: int, fb_h: int, scenario: str):
-    """Centre on the unit's tile, bisect to its own sprite pixel, and
-    right-click it. Returns True when the unit menu really opened."""
+def locate_building_pixel(port: int, bid: int, cx: int, cy: int,
+                           step: int = 6, rings: int = 8):
+    """The tile CENTRE pixel is not guaranteed to land on a building's
+    own clickable quad (sprites are anchored to the diamond bottom and
+    the tile's terrain height shifts them), so search outward from it
+    until `building.hitTestAt` actually reports `bid` -- the same
+    "locate the real target, never trust a computed coordinate" rule
+    `locate_unit_pixel` follows for units."""
+    def hits(x: int, y: int) -> bool:
+        raw = send(port, f"return building.hitTestAt({x}, {y})")
+        return raw.strip().strip('"') not in ("", "nil", "null") \
+            and int(float(raw)) == bid
+
+    if hits(cx, cy):
+        return cx, cy
+    for r in range(1, rings + 1):
+        d = r * step
+        for dx, dy in ((0, -d), (0, d), (-d, 0), (d, 0),
+                       (-d, -d), (d, -d), (-d, d), (d, d)):
+            if hits(cx + dx, cy + dy):
+                return cx + dx, cy + dy
+    return None
+
+
+def right_click_unit(port: int, uid: int, fb_w: int, fb_h: int,
+                      scenario: str):
+    """Centre on the unit's LIVE tile (never its spawn tile -- wildlife
+    and acolytes both wander, and by the last scenario a squirrel can be
+    tens of tiles from where it was spawned), bisect to its own sprite
+    pixel, and right-click it. Returns True when the unit menu really
+    opened."""
+    info = send_json(port, f"return unit.getInfo({uid})")
+    if not check(f"{scenario}: unit still exists", isinstance(info, dict),
+                 f"got {info!r}"):
+        return False
+    gx, gy = int(info.get("gridX", 0)), int(info.get("gridY", 0))
     cx0, cy0 = fb_w // 2, fb_h // 2
-    resolved = center_on_tile(port, gx, gy, cx0, cy0)
-    check(f"{scenario}: camera resolves the unit's tile area",
-          resolved == (gx, gy), f"got {resolved!r}")
+    resolved = centre_and_freeze(port, gx, gy, cx0, cy0)
+    near = resolved is not None \
+        and max(abs(resolved[0] - gx), abs(resolved[1] - gy)) <= 2
+    check(f"{scenario}: camera centres near the unit's live tile", near,
+          f"got {resolved!r} for live tile {(gx, gy)!r}")
     time.sleep(0.3)
     pixel = locate_unit_pixel(port, uid, fb_w, fb_h)
     if not check(f"{scenario}: located the unit's own screen pixel",
@@ -337,30 +488,16 @@ def main() -> int:
     n = send(port, f"return engine.loadBuildingYaml('{TEST_BUILDING_YAML}')")
     check("probe building def loaded", float(n) == 1.0, f"got {n!r}")
 
-    print("  (scanning nearby terrain for dry anchor sites)")
-    n_queued = send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)")
-    n_remaining = send(port, "return world.waitForChunks(60)", timeout=65.0)
-    print(f"  (chunks queued={n_queued!r}, remaining after wait={n_remaining!r})")
-
-    anchors = {
-        "storage building": find_dry_anchor(port, CANDIDATES_BUILDING),
-        "technomule": find_dry_anchor(port, CANDIDATES_MULE),
-        "acolyte": find_dry_anchor(port, CANDIDATES_ACOLYTE),
-        "second acolyte": find_dry_anchor(port, CANDIDATES_ACOLYTE2),
-        "wildlife unit": find_dry_anchor(port, CANDIDATES_WILDLIFE),
-    }
-    if any(a is None for a in anchors.values()):
-        sample = CANDIDATES_BUILDING[0]
-        print(f"  (debug) sample tile_surface{sample}: {tile_surface(port, *sample)!r}")
-    for label, anchor in anchors.items():
-        if not check(f"found a dry site for the {label}", anchor is not None):
-            quit_engine(port, proc)
-            return 1
-    bax, bay, _ = anchors["storage building"]
-    max_, may_, _ = anchors["technomule"]
-    aax, aay, _ = anchors["acolyte"]
-    a2x, a2y, _ = anchors["second acolyte"]
-    wax, way, _ = anchors["wildlife unit"]
+    print("  (scanning terrain outward from the origin for dry anchor sites)")
+    sites = allocate_dry_anchors(port, 5)
+    if not check("found five separated dry sites for the fixtures",
+                 sites is not None):
+        quit_engine(port, proc)
+        return 1
+    (bax, bay), (max_, may_), (aax, aay), (a2x, a2y), (wax, way) = sites
+    print(f"  (fixture sites: building={(bax, bay)} mule={(max_, may_)} "
+          f"acolyte={(aax, aay)} acolyte2={(a2x, a2y)} "
+          f"wildlife={(wax, way)})")
 
     # -- Spawn source unit, destinations.
     uid_raw = send(port, f"return unit.spawn('acolyte', {aax}, {aay}, nil, 'player')")
@@ -399,6 +536,12 @@ def main() -> int:
           and eligible.get("storedWeight") == 0.0,
           f"got {eligible!r}")
 
+    # Freeze between scenarios so no fixture wanders while the probe
+    # works; `centre_and_freeze` lifts it only for each camera move.
+    # `unit.setFrozen` is deliberately NOT used: it only stops the
+    # render-side update, so a "frozen" unit keeps walking.
+    set_paused(port, True)
+
     send(port, f"return unit.select({uid})")
     selected = send(port, "return unit.getSelected()")
     check("acolyte selected", str(uid) in selected, f"got {selected!r}")
@@ -408,11 +551,18 @@ def main() -> int:
     # ------------------------------------------------------------------
     print("== building receiver ==")
     cx0, cy0 = fb_w // 2, fb_h // 2
-    resolved_b = center_on_tile(port, bax, bay, cx0, cy0)
+    resolved_b = centre_and_freeze(port, bax, bay, cx0, cy0)
     check("camera resolves the building's own tile", resolved_b == (bax, bay),
           f"got {resolved_b!r}")
+    bpixel = locate_building_pixel(port, bid, cx0, cy0)
+    if not check("located the storage building's own screen pixel",
+                 bpixel is not None):
+        quit_engine(port, proc)
+        return 1
+    bpx, bpy = bpixel
 
-    right_click_and_check_routing(port, cx0, cy0, "context_menu_building", "building")
+    right_click_and_check_routing(port, bpx, bpy, "context_menu_building",
+                                  "building")
 
     contents_row = find_widget(port, "Contents")
     check("building menu: 'Contents' still appears (requirement 7 regression)",
@@ -447,7 +597,7 @@ def main() -> int:
     # Scenario 2: right-click the technomule.
     # ------------------------------------------------------------------
     print("== unit destination (technomule) ==")
-    if not right_click_unit(port, mule_uid, max_, may_, fb_w, fb_h, "technomule"):
+    if not right_click_unit(port, mule_uid, fb_w, fb_h, "technomule"):
         quit_engine(port, proc)
         return 1
 
@@ -483,7 +633,7 @@ def main() -> int:
     # Scenario 3: #1085 section 9's widening -- a SECOND player acolyte.
     # ------------------------------------------------------------------
     print("== unit destination (a second player acolyte, A2 widening) ==")
-    if not right_click_unit(port, acolyte2_uid, a2x, a2y, fb_w, fb_h, "acolyte"):
+    if not right_click_unit(port, acolyte2_uid, fb_w, fb_h, "acolyte"):
         quit_engine(port, proc)
         return 1
     check("acolyte menu: 'Info' appears", bool(find_widget(port, "Info")))
@@ -508,7 +658,7 @@ def main() -> int:
     # Scenario 4: the two exclusions that must survive the widening.
     # ------------------------------------------------------------------
     print("== exclusions (self-transfer, non-commandable) ==")
-    if right_click_unit(port, uid, aax, aay, fb_w, fb_h, "self"):
+    if right_click_unit(port, uid, fb_w, fb_h, "self"):
         check("self menu: 'Info' appears", bool(find_widget(port, "Info")))
         check("self menu: 'Transfer' is ABSENT (no self-transfer)",
               find_widget(port, "Transfer") is None)
@@ -517,7 +667,7 @@ def main() -> int:
               self_session in (None, "null"), f"got {self_session!r}")
     close_menu(port)
 
-    if right_click_unit(port, wild_uid, wax, way, fb_w, fb_h, "wildlife"):
+    if right_click_unit(port, wild_uid, fb_w, fb_h, "wildlife"):
         check("wildlife menu: 'Info' appears", bool(find_widget(port, "Info")))
         check("wildlife menu: 'Transfer' is ABSENT (not player-commandable)",
               find_widget(port, "Transfer") is None)
