@@ -5,7 +5,9 @@
 --   (engine.loadBuildingYaml), Buildings.Spawn covers spawn/destroy/
 --   placement/ghost preview, Buildings.Progress covers the spawn-
 --   roster countdown and construction progress/activity, Buildings.
---   Materials covers material need/delivery and storage, Buildings.
+--   Materials covers material need/delivery and storage,
+--   Buildings.Knowledge covers the player's remembered view of a
+--   container's contents (#1087), Buildings.
 --   Query covers info/operations/station lookup/listing, and
 --   Buildings.Selection covers hit-testing and selection.
 module Engine.Scripting.Lua.API.Buildings
@@ -17,6 +19,8 @@ module Engine.Scripting.Lua.API.Buildings
     , module Engine.Scripting.Lua.API.Buildings.Progress
       -- * Materials + storage
     , module Engine.Scripting.Lua.API.Buildings.Materials
+      -- * Remembered (last-known) container contents
+    , module Engine.Scripting.Lua.API.Buildings.Knowledge
       -- * Info / operations / station / listing queries
     , module Engine.Scripting.Lua.API.Buildings.Query
       -- * Hit-test + selection
@@ -27,5 +31,6 @@ import Engine.Scripting.Lua.API.Buildings.Yaml
 import Engine.Scripting.Lua.API.Buildings.Spawn
 import Engine.Scripting.Lua.API.Buildings.Progress
 import Engine.Scripting.Lua.API.Buildings.Materials
+import Engine.Scripting.Lua.API.Buildings.Knowledge
 import Engine.Scripting.Lua.API.Buildings.Query
 import Engine.Scripting.Lua.API.Buildings.Selection

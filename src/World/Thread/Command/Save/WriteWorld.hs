@@ -154,6 +154,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 plantDesigs ← readIORef (wsPlantDesignationsRef ws)
                                 craftBills ← readIORef (wsCraftBillsRef ws)
                                 powerNodes ← readIORef (wsPowerNodesRef ws)
+                                containerKnowledge ← readIORef
+                                    (wsContainerKnowledgeRef ws)
                                 identity  ← readIORef (wsIdentityRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
                                 let buildings = toBuildingSnapshot pid bm
@@ -188,6 +190,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     , pgsChopDesignations = chopDesigs
                                     , pgsCraftBills  = craftBills
                                     , pgsPowerNodes  = powerNodes
+                                    , pgsContainerKnowledge = containerKnowledge
                                     , pgsTillDesignations = tillDesigs
                                     , pgsCropPlots   = cropPlots
                                     , pgsPlantDesignations = plantDesigs

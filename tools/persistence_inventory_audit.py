@@ -391,12 +391,19 @@ SAVE_COMPONENTS_HEADING = "Save components"
 # The Haskell `saveComponentRegistry` list of `registerComponent <codec>`.
 COMPONENT_REGISTRY_LIST_FILE = "src/World/Save/Component.hs"
 # Where the codecs named in that list are defined (each built via
-# `<codec> = serializeCodec <componentIdIdent> ...`).
-COMPONENT_CODEC_FILES = (
-    "src/World/Save/Component/Session.hs",
-    "src/World/Save/Component/Page.hs",
-    "src/World/Save/Component/Entities.hs",
-)
+# `<codec> = serializeCodec <componentIdIdent> ...`). GLOBBED, not a
+# hand-maintained file list: a component added in a NEW file under the
+# same directory (the convention every existing component follows) was
+# otherwise invisible to this audit entirely -- `derive_registered_
+# component_ids` simply never resolved its codec and silently dropped
+# it from the registered set, so its missing `### Save components` row
+# went unreported. Mirrors tools/save_compat_audit.py's identical fix,
+# and `derive_registered_component_ids` now ALSO raises when a
+# registered codec cannot be resolved anywhere, so a component defined
+# somewhere else entirely still fails loudly instead of vanishing.
+COMPONENT_CODEC_FILES = tuple(
+    str(p.relative_to(REPO_ROOT))
+    for p in sorted((REPO_ROOT / "src/World/Save/Component").glob("*.hs")))
 # Where `<componentIdIdent> = ComponentId "<literal>"` bindings live.
 COMPONENT_ID_TYPES_FILE = "src/World/Save/Component/Types.hs"
 # Where the envelope wires in any non-gameplay-registry component
@@ -1388,10 +1395,21 @@ def derive_registered_component_ids(
                     rf"ccId\s*=\s*(\w+)",
                     codec_source, re.S)
             if m is None:
-                continue
+                raise ValueError(
+                    f"saveComponentRegistry registers '{codec}', but no "
+                    f"`{codec} = serializeCodec ...` or `{codec} = "
+                    f"ComponentCodec {{ ccId = ... }}` definition was found "
+                    f"in any of {COMPONENT_CODEC_FILES} -- a component "
+                    f"declared in a file this scan never looked at would "
+                    f"otherwise be silently absent from the registered set, "
+                    f"taking its required `### Save components` row with it")
             lit = id_by_ident.get(m.group(1))
-            if lit is not None:
-                registered.add(lit)
+            if lit is None:
+                raise ValueError(
+                    f"codec '{codec}' names component id identifier "
+                    f"'{m.group(1)}', which has no `= ComponentId \"...\"` "
+                    f"binding in {COMPONENT_ID_TYPES_FILE}")
+            registered.add(lit)
     for ident in ENVELOPE_SPEC_ID_RE.findall(envelope_source):
         lit = id_by_ident.get(ident)
         if lit is not None:

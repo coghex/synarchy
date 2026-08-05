@@ -137,6 +137,7 @@ import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
+import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
@@ -344,6 +345,7 @@ main = hspec $ do
     LocationBounds.spec
     LocationDiscovery.spec
     UnitFaction.spec
+    ContainerKnowledge.spec
     LocationInstance.spec
     LocationLootDeterminism.spec
     LocationMapIcons.spec

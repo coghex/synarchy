@@ -59,6 +59,7 @@ import Power.Types
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Direction (Direction(..))
+import Building.Knowledge (emptyContainerKnowledge)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -91,6 +92,7 @@ minimalPage pid = PageSnapshot
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
     , pgsPlantDesignations = HM.empty
+    , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
     }
 

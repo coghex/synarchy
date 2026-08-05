@@ -3216,6 +3216,33 @@ def test_derive_registered_ids_traces_real_membership_not_literals():
            f"unregistered ghost-comp, got {ids}")
 
 
+def test_derive_registered_ids_refuses_an_unresolvable_registered_codec():
+    """#1087 (PR review round 1): COMPONENT_CODEC_FILES used to be a
+    hand-maintained 3-file tuple, so a component declared in a NEW file
+    under the same directory resolved to nothing and was SILENTLY dropped
+    from the registered set -- taking its required `### Save components`
+    row with it, with no violation reported anywhere. The file list is
+    now globbed, and an unresolvable codec fails loudly instead of being
+    skipped, so even a component defined somewhere else entirely cannot
+    vanish."""
+    from persistence_inventory_audit import (  # type: ignore
+        derive_registered_component_ids)
+    registry_with_unknown_codec = (
+        SYNTHETIC_REGISTRY_LIST.replace(
+            "]", "    , registerComponent codecInAnotherFile\n    ]"))
+    try:
+        derive_registered_component_ids(
+            registry_with_unknown_codec, SYNTHETIC_CODEC_SOURCE,
+            SYNTHETIC_ID_TYPES, SYNTHETIC_ENVELOPE)
+    except ValueError as e:
+        expect("codecInAnotherFile" in str(e),
+               f"the raised error names the unresolvable codec, got {e}")
+    else:
+        expect(False,
+               "a registered codec with no discoverable definition must "
+               "raise, not be silently skipped")
+
+
 def test_derive_registered_ids_excludes_defined_but_unregistered_and_audit_flags_it():
     """The exact round-4 gap: an id literal defined + documented persistent
     but NOT wired into saveComponentRegistry must be flagged."""
@@ -3409,6 +3436,7 @@ def main() -> int:
         test_coverage_map_check_flags_missing_lua_module_row,
         test_coverage_map_check_reset_owners_need_no_row,
         test_derive_registered_ids_traces_real_membership_not_literals,
+        test_derive_registered_ids_refuses_an_unresolvable_registered_codec,
         test_derive_registered_ids_excludes_defined_but_unregistered_and_audit_flags_it,
     ]
 
