@@ -117,6 +117,7 @@ module World.Save.Component.Page
     , toGroundItemDTO
     , fromGroundItemDTO
     , basePageSnapshots
+    , blankPageSnapshot
     , applyWorldEdits
     , applyWorldActivity
     , validatePages
@@ -132,6 +133,7 @@ import qualified Data.Serialize as S
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
+import Building.Knowledge (emptyContainerKnowledge)
 import Power.Types (emptyPowerNodes)
 import World.Save.Component.WorldGen
     ( WorldGenParamsDTO(..), toWorldGenParamsDTO, fromWorldGenParamsDTO
@@ -801,6 +803,14 @@ blankPageSnapshot pid params =
         , pgsChopDesignations = HM.empty
         , pgsCraftBills   = emptyCraftBills
         , pgsPowerNodes   = emptyPowerNodes
+          -- #1087: the ONE default that is genuinely reached in a
+          -- successful load. @"container-knowledge"@ is the first
+          -- OPTIONAL gameplay component, so a save written before it
+          -- existed carries no such payload at all and every page keeps
+          -- this empty map — which is exactly right: every container in
+          -- a pre-#1087 session is never-inspected, never known-empty,
+          -- and never inferred from its live contents.
+        , pgsContainerKnowledge = emptyContainerKnowledge
         , pgsTillDesignations = HM.empty
         , pgsCropPlots    = emptyCropPlots
         , pgsPlantDesignations = HM.empty

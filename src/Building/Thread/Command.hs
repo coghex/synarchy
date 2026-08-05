@@ -20,6 +20,7 @@ import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import World.State.Types (WorldManager(..))
 import Building.Types
+import Building.Knowledge.Live (forgetAllContainers, forgetContainerEverywhere)
 import Building.Command.Types (BuildingCommand(..))
 
 -- | Drain the building command queue in one pass. Called from the
@@ -78,15 +79,21 @@ handleBuildingCommand logRef sim bld
             atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
                 (bm' { bmInstances = HM.insert bid inst (bmInstances bm') }, ())
 
-handleBuildingCommand _ _ bld (BuildingDestroy bid) =
+handleBuildingCommand _ sim bld (BuildingDestroy bid) = do
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         let cleared = if bmSelected bm ≡ Just bid
                       then Nothing
                       else bmSelected bm
         in (bm { bmInstances = HM.delete bid (bmInstances bm)
                , bmSelected  = cleared }, ())
+    -- #1087: demolishing a container drops the player's memory of it,
+    -- so nothing can later inherit that record — and so the container
+    -- reads as never-inspected again rather than as a permanently
+    -- stale ghost with no surface to clear it.
+    forgetContainerEverywhere (wsWorldManagerRef sim) bid
 
-handleBuildingCommand _ _ bld BuildingClearAll =
+handleBuildingCommand _ sim bld BuildingClearAll = do
     -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())
+    forgetAllContainers (wsWorldManagerRef sim)

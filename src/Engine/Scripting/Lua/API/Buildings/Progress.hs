@@ -12,8 +12,11 @@ module Engine.Scripting.Lua.API.Buildings.Progress
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
+import Engine.Core.Capability.UnitCombat (toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
+import Building.Knowledge.Live (containerObserver, seedBuiltContainer)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -148,6 +151,20 @@ buildingGetBuildRequiredFn env = do
 -- | building.addBuildProgress(bid, delta) → Float (new progress) | nil.
 --   Clamps the result at [0, ∞). Currently called by the Lua
 --   construction tick once per frame with delta = R(workers) * dt.
+--
+--   #1087: this is also where a storage-capable building's knowledge
+--   record is SEEDED as known-empty — the player watched it go up, so
+--   reporting a freshly finished cargo hold as never-inspected would be
+--   wrong. The trigger is the FIRST crossing of the completion
+--   threshold ('Building.Types.currentActivity''s worker-driven arm:
+--   'biBuildProgress' reaching 'bdBuildWork'), deliberately NOT
+--   @BuildingSpawn@, which creates a worker-built building at zero
+--   progress — and deliberately not anything a LOAD can re-trigger, so
+--   restoring an already-built container never masquerades as a new
+--   construction event. 'Building.Knowledge.Live.seedBuiltContainer'
+--   additionally refuses to overwrite an existing record, so a later
+--   re-crossing (progress driven back down and up again) cannot erase a
+--   real observation.
 buildingAddBuildProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingAddBuildProgressFn env = do
     idArg    ← Lua.tointeger 1
@@ -156,14 +173,32 @@ buildingAddBuildProgressFn env = do
         (Just n, Just (Lua.Number d)) → do
             let bid   = BuildingId (fromIntegral n)
                 delta = realToFrac d ∷ Float
-            mNew ← Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
+            (mNew, justCompleted) ← Lua.liftIO $
+                atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
-                    Nothing → (bm, Nothing)
+                    Nothing → (bm, (Nothing, False))
                     Just inst →
                         let newProg = max 0 (biBuildProgress inst + delta)
                             inst'   = inst { biBuildProgress = newProg }
+                            -- The same two facts currentActivity reads:
+                            -- a worker-driven def (bdBuildWork > 0) is
+                            -- Built exactly once progress reaches it.
+                            crossed = case HM.lookup (biDefName inst) (bmDefs bm) of
+                                Nothing  → False
+                                Just def →
+                                    bdBuildWork def > 0
+                                      ∧ bdStorageCapacity def > 0
+                                      ∧ biBuildProgress inst < bdBuildWork def
+                                      ∧ newProg ≥ bdBuildWork def
                         in (bm { bmInstances = HM.insert bid inst' (bmInstances bm) }
-                           , Just newProg)
+                           , (Just newProg, crossed))
+            when justCompleted $ Lua.liftIO $ void $
+                seedBuiltContainer
+                    (containerObserver (toBuildingCapability env)
+                                       (toUnitCombatCapability env)
+                                       (toWorldSimCapability env)
+                                       (toContentRegistriesCapability env))
+                    bid
             case mNew of
                 Just p → do
                     Lua.pushnumber (Lua.Number (realToFrac p))

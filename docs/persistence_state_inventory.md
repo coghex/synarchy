@@ -198,6 +198,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsChopDesignationsRef` | Persist exactly | — | `wpsChopDesignations` | `tools/chop_probe.py` |
 | `wsCraftBillsRef` | Persist exactly | — | `wpsCraftBills` | `tools/craft_bill_probe.py` |
 | `wsPowerNodesRef` | Persist exactly | — | `wpsPowerNodes` | `tools/power_probe.py` |
+| `wsContainerKnowledgeRef` | Persist exactly | — | `wpsContainerKnowledge` (#1087: the player's last-known view of each container's contents — page-scoped and PLAYER-GLOBAL, never per-unit; its remembered `ItemInstance`s are historical observations, deliberately excluded from `allItemInstanceIds` and live `item_instance` resolution) | `Test.Headless.Building.Knowledge` (`--match "Container knowledge"`) |
 | `wsTillDesignationsRef` | Persist exactly | — | `wpsTillDesignations` | `tools/till_probe.py` |
 | `wsCropPlotsRef` | Persist exactly | — | `wpsCropPlots` | `tools/crop_probe.py` |
 | `wsPlantDesignationsRef` | Persist exactly | — | `wpsPlantDesignations` | `tools/plant_probe.py` |
@@ -297,6 +298,7 @@ prior fields (no cross-page ordering requirement):
 | `wpsChopDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/chop_probe.py` |
 | `wpsCraftBills` | Persist exactly | referenced station building must already be restored (`wpsBuildings`) | `cbStation`/`cbClaimant` absent from the whole session are tolerated (#758); either resolving on a DIFFERENT page than the bill is hard-rejected by `World.Save.Integrity.sessionIntegrityErrors` (#764) | `tools/craft_bill_probe.py`, `Test.Headless.World.Save.Integrity` |
 | `wpsPowerNodes` | Persist exactly | referenced host building must already be restored (`wpsBuildings`) | `pnBuilding` absent from the whole session is tolerated (#758); resolving on a DIFFERENT page than the node is hard-rejected by `World.Save.Integrity.sessionIntegrityErrors` (#764) | `tools/power_probe.py`, `Test.Headless.World.Save.Integrity` |
+| `wpsContainerKnowledge` | Persist exactly | referenced container building must already be restored (`wpsBuildings`) | a record whose `BuildingId` is absent from the page is a tolerated, non-blocking diagnostic SCRUBBED at load (`World.Load.Stage`), never a failure — unlike a bill/node, a memory of a vanished container has no player-facing surface that could ever clear it. Remembered item DEF NAMES follow the ordinary missing-item-definition contract (`missingItemDefReferences`); remembered INSTANCE IDS are exempt from the allocator/duplicate/live-reference checks by design (#1087) | `Test.Headless.Building.Knowledge` (`--match "Container knowledge"`) |
 | `wpsTillDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/till_probe.py` |
 | `wpsCropPlots` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | `tools/crop_probe.py` |
 | `wpsPlantDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/plant_probe.py` |

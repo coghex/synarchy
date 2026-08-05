@@ -58,6 +58,7 @@ import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits)
 import Craft.Bills (emptyCraftBills)
 import Power.Types (emptyPowerNodes)
+import Building.Knowledge (emptyContainerKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -104,6 +105,7 @@ minimalPage gp = PageSnapshot
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
     , pgsPlantDesignations = HM.empty
+    , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
     }
 

@@ -458,7 +458,8 @@ class _Args:
             # the save -- for state a spawn verb never writes directly
             # (a per-unit location memory is INGESTED by the unit-AI
             # tick once the unit stands in a discovery halo).
-            spawn_unit_at="0,0", settle_seconds=0.0, require_lua=None)
+            spawn_unit_at="0,0", settle_seconds=0.0, setup_lua=None,
+            require_lua=None)
         defaults.update(kwargs)
         self.__dict__.update(defaults)
 
@@ -849,7 +850,13 @@ let knownAll = HS.insert metadataComponentId
                  (HS.insert (ComponentId "lua.unit_ai")
                     (HS.insert (ComponentId "lua.building_spawn") componentKnownIds))
     writeVariant ts outPath =
-      case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion knownAll knownAll bytes of
+      -- Structural re-encode only: knownAll widens what may APPEAR,
+      -- while the reader-required set stays EMPTY. Reusing knownAll for
+      -- both would demand that this already-tracked fixture carry every
+      -- component the current build knows about -- including any
+      -- OPTIONAL one added after the fixture was captured (#1087's
+      -- container-knowledge), which by definition it does not.
+      case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion knownAll HS.empty bytes of
         Left e -> putStrLn ("SETUP_FAILED: decode: " ++ show e)
         Right decoded ->
           case S.decode

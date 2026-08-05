@@ -122,6 +122,8 @@ Usage:
       --summary test-headless/data/save-compat/my-fixture.expected.json \\
       --seed 42 --world-size 8 --plate-count 3 \\
       --spawn-building cargo_hold_S --spawn-unit acolyte \\
+      --setup-lua "return unit.addItem({uid}, 'bandage')" \\
+      --setup-lua "return unit.depositToCargo({uid}, {bid}, 'bandage')" \\
       --description "..." --migration-target current \\
       --migrated-by "..." --components '[...]'
 
@@ -1261,6 +1263,7 @@ def generate_current_format_session(
         spawn_building: str, spawn_unit: str, out_path: Path,
         spawn_unit_at: tuple[int, int] = (0, 0),
         settle_seconds: float = 0.0,
+        setup_lua: list[str] | None = None,
         require_lua: str | None = None) -> None:
     """Boot a REAL headless engine (isolated resource root -- see
     _make_isolated_gen_root), init a world, optionally spawn ONE building
@@ -1270,6 +1273,18 @@ def generate_current_format_session(
     the real World.Save.Storage/Envelope.Codec production path (the
     exact same one an ordinary player save takes), not a hand-built or
     spliced value. Raises GenerationError on any rejected step.
+
+    @setup_lua@ statements run after the spawns and before the settle,
+    each sent as one debug-console line with `{bid}`/`{uid}` substituted
+    for the ids the spawns above actually returned. Some state is
+    written by neither a spawn verb nor a tick, but only by a real
+    player/AI ACTION -- #1087's container knowledge is revealed by a
+    completed storage interaction, never by proximity -- and a fixture
+    that cannot stage that action can only ever capture the feature's
+    empty default. A statement whose reply starts with a Lua error, or
+    which is literally `false`/`nil`, fails generation: silently
+    proceeding would produce exactly the hollow fixture this exists to
+    prevent.
 
     This can only ever produce a fixture at the CURRENT wire format -- a
     live engine never writes a historical shape (see this module's own
@@ -1314,6 +1329,7 @@ def generate_current_format_session(
         # unit.spawn/building.spawn return the new entity's id (a
         # non-negative integer, as a string) on success, not a boolean --
         # mirrors tools/multiworld_save_probe.py's as_int/bid<0 convention.
+        bid = uid = None
         if spawn_building:
             r = send(port, f"return building.spawn('{spawn_building}', 0, 0)")
             bid = as_int(r)
@@ -1328,6 +1344,16 @@ def generate_current_format_session(
             if uid is None or uid < 0:
                 raise GenerationError(
                     f"unit.spawn('{spawn_unit}') at ({ux},{uy}) rejected: {r!r}")
+
+        for stmt in (setup_lua or []):
+            rendered = stmt.format(bid=bid if spawn_building else "nil",
+                                    uid=uid if spawn_unit else "nil")
+            reply = send(port, rendered).strip()
+            if (reply.startswith("error") or reply.startswith("Error")
+                    or reply in ("false", "nil", '"false"', '"nil"')):
+                raise GenerationError(
+                    f"--setup-lua statement {rendered!r} did not succeed: "
+                    f"{reply!r}")
 
         # Some state is not written by a spawn verb at all -- it is
         # ACQUIRED by a tick once the entity is in the right place (#915's
@@ -1548,7 +1574,13 @@ bytes <- BS.readFile "{fixture_path}"
 let knownAll = HS.insert metadataComponentId
                  (HS.insert (ComponentId "lua.unit_ai")
                     (HS.insert (ComponentId "lua.building_spawn") componentKnownIds))
-in case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion knownAll knownAll bytes of
+-- Structural re-encode only: knownAll widens what may APPEAR, while
+-- the reader-required set stays EMPTY. Reusing knownAll for both would
+-- demand that whatever fixture is being normalized carry every
+-- component the current build knows about -- including any OPTIONAL one
+-- added after the fixture was captured (#1087's container-knowledge),
+-- which by definition it need not.
+in case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion knownAll HS.empty bytes of
      Left e -> putStrLn ("NORMALIZE_FAILED: decode: " ++ show e)
      Right decoded ->
        case S.decode
@@ -1856,7 +1888,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             world_size=args.world_size, plate_count=args.plate_count,
             spawn_building=args.spawn_building, spawn_unit=args.spawn_unit,
             out_path=fixture_path, spawn_unit_at=_parse_tile(args.spawn_unit_at),
-            settle_seconds=args.settle_seconds, require_lua=args.require_lua)
+            settle_seconds=args.settle_seconds, setup_lua=args.setup_lua,
+            require_lua=args.require_lua)
     except GenerationError as e:
         # Round-16 review: generate_current_format_session no longer
         # ONLY writes fixture_path as an untouchable-if-failed last step
@@ -1890,6 +1923,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
                if args.spawn_building else "")
             + (f", unit.spawn('{args.spawn_unit}', {args.spawn_unit_at}, "
                f"0, 'player')" if args.spawn_unit else "")
+            + (f", then " + "; ".join(args.setup_lua)
+               if args.setup_lua else "")
             + (f", settled {args.settle_seconds}s"
                if args.settle_seconds else "")
             + (f" and held until `{args.require_lua}`"
@@ -2017,6 +2052,17 @@ def main() -> int:
                           "engine + Lua ticks run between the spawns and "
                           "engine.saveWorld, for state that is acquired by "
                           "a tick rather than written by a spawn verb")
+    ap.add_argument("--setup-lua", action="append", default=None,
+                     metavar="STMT",
+                     help="--generate-session only, repeatable: a "
+                          "single-line Lua statement run after the spawns "
+                          "and before the settle, with {bid}/{uid} "
+                          "substituted for the spawned ids. For state a "
+                          "real ACTION writes rather than a spawn verb or "
+                          "a tick (e.g. #1087's container knowledge, "
+                          "revealed only by a completed storage "
+                          "interaction). A statement that errors or "
+                          "returns false/nil fails generation")
     ap.add_argument("--require-lua", default=None, metavar="EXPR",
                      help="--generate-session only: a single-line Lua "
                           "expression that must evaluate to true before "
