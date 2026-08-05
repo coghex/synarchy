@@ -80,6 +80,55 @@ spec = describe "Generated language names" $ do
                 Left e  → generatorErrorText e `shouldSatisfy` T.isInfixOf "2"
                 Right _ → expectationFailure "expected UnsupportedGeneratorVersion"
 
+        -- #1092 requirement 4: a save records the version that named its
+        -- world, so every DEFINED version must stay constructible after
+        -- the current one advances. These pin the dispatcher to explicit
+        -- versions rather than to whatever 'currentGeneratorVersion'
+        -- happens to be — the defect that made a version bump silently
+        -- orphan every existing world.
+        it "builds a profile for every supported version, independently \
+           \of which one is current" $
+            forM_ supportedGeneratorVersions $ \ver →
+                case generateProfile ver (LangSeed 7) of
+                    Left e  → expectationFailure
+                        (show ver <> ": " <> T.unpack (generatorErrorText e))
+                    Right p → profVersion p `shouldBe` ver
+
+        it "stamps a v1 profile with the LITERAL version 1, not the \
+           \current-version constant" $ do
+            -- Language.Generated.Root feeds profVersion into its
+            -- per-concept seed, so stamping the mutable constant would
+            -- re-render every reconstructed v1 root the moment the
+            -- current version advanced.
+            profVersion (buildProfileV1 (LangSeed 7))
+                `shouldBe` GeneratorVersion 1
+            case generateProfile (GeneratorVersion 1) (LangSeed 7) of
+                Left e  → expectationFailure (T.unpack (generatorErrorText e))
+                Right p → profVersion p `shouldBe` GeneratorVersion 1
+
+        it "the supported-version list matches what the dispatcher \
+           \actually builds, in both directions" $ do
+            -- Neither list can drift silently: every declared version
+            -- builds (above), and no version outside the declared set
+            -- does. The scan covers the plausible neighbourhood,
+            -- including 0 and a negative.
+            currentGeneratorVersion `shouldSatisfy`
+                (`elem` supportedGeneratorVersions)
+            forM_ [(-1) .. 10] $ \v → do
+                let ver = GeneratorVersion v
+                    built = generateProfile ver (LangSeed 7)
+                if ver `elem` supportedGeneratorVersions
+                    then built `shouldSatisfy` isRight'
+                    else built `shouldBe` Left (UnsupportedGeneratorVersion v)
+
+        it "the unsupported-version message enumerates every supported \
+           \version, not just the current one" $ do
+            let msg = generatorErrorText (UnsupportedGeneratorVersion 99)
+            forM_ supportedGeneratorVersions $ \ver →
+                msg `shouldSatisfy`
+                    T.isInfixOf (T.pack (show (generatorVersionInt ver)))
+            msg `shouldNotSatisfy` T.isInfixOf "only version"
+
         it "different seeds usually produce different profile signatures (requirement 14)" $ do
             let sigs = map (profileSignature ∘ buildProfileV1 ∘ LangSeed) [0 .. 49]
             length (nub sigs) `shouldSatisfy` (≥ 48)

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Generated-language profiles (#710): the native-rendering layer of
 --   the world-naming arc (#708), built on top of #709's language-
 --   independent semantic meanings. A 'Profile' is a small, deterministic
@@ -21,8 +21,11 @@
 --   inputs produce byte-identical output on any supported platform.
 module Language.Generated.Types
     ( LangSeed(..)
+    , langSeedText
     , GeneratorVersion(..)
     , currentGeneratorVersion
+    , supportedGeneratorVersions
+    , LanguageProvenance(..)
     , CompoundOrder(..)
     , GenitiveOrder(..)
     , Segment(..)
@@ -38,22 +41,60 @@ module Language.Generated.Types
 
 import UPrelude
 import qualified Data.Text as T
+import Data.Serialize (Serialize)
+import GHC.Generics (Generic)
 
 -- | The explicit 64-bit seed a language is generated from (#710
 --   requirement 1). Distinct from any world-generation seed — a
 --   language seed has no relationship to terrain/plate seeds.
+--
+--   'Serialize' is derived from the underlying 'Word64' so a world's
+--   language provenance can ride into a save (#1092).
 newtype LangSeed = LangSeed { langSeedWord ∷ Word64 }
     deriving (Show, Eq)
+    deriving newtype (Serialize)
 
--- | The generator algorithm's version. Only version 1 is defined; a
---   future breaking change to profile/root/rendering behavior adds a
---   new version rather than silently changing version 1's output
---   (#710 requirements 2 and 15).
+-- | A seed's decimal text, for surfaces that cannot carry an unsigned
+--   64-bit integer losslessly (#1092): a Lua integer is SIGNED 64-bit
+--   and a Lua number is a double, so a seed above @2^63-1@ would come
+--   back negative (or rounded) through either. Text is exact for the
+--   whole 'Word64' range.
+langSeedText ∷ LangSeed → Text
+langSeedText (LangSeed s) = T.pack (show s)
+
+-- | The generator algorithm's version. A future breaking change to
+--   profile/root/rendering behavior adds a new version rather than
+--   silently changing an existing version's output (#710 requirements
+--   2 and 15) — which is what lets a world named by an older generator
+--   still be explained after the current version advances (#1092).
 newtype GeneratorVersion = GeneratorVersion { generatorVersionInt ∷ Int }
     deriving (Show, Eq)
+    deriving newtype (Serialize)
 
+-- | The version new languages are generated at. Distinct from
+--   'supportedGeneratorVersions': advancing this must never make an
+--   older world's recorded version unconstructible.
 currentGeneratorVersion ∷ GeneratorVersion
 currentGeneratorVersion = GeneratorVersion 1
+
+-- | Every version 'Language.Generated.Profile.generateProfile' can
+--   build a profile for — historical versions included, since a save
+--   may carry any of them (#1092 requirement 4). The dispatcher itself
+--   is the implementation authority; this list is what error text and
+--   callers enumerate from, and
+--   "Test.Headless.Language.Generated" pins the two together (every
+--   entry builds, and no other version does).
+supportedGeneratorVersions ∷ [GeneratorVersion]
+supportedGeneratorVersions = [GeneratorVersion 1]
+
+-- | Which generated language produced a piece of rendered text, and
+--   under which generator (#1092). Seed and version are ONE value, so
+--   they can never be half-present: a profile is reconstructible from
+--   both together or from neither.
+data LanguageProvenance = LanguageProvenance
+    { lpSeed    ∷ !LangSeed          -- ^ The language's seed.
+    , lpVersion ∷ !GeneratorVersion  -- ^ The generator that rendered it.
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Ordering for the two compound forms (@Modifier@, @Of@): which side
 --   is written first.
@@ -123,5 +164,11 @@ data GeneratorError = UnsupportedGeneratorVersion Int
 generatorErrorText ∷ GeneratorError → Text
 generatorErrorText (UnsupportedGeneratorVersion v) =
     "unsupported language-generator version " <> T.pack (show v)
-    <> " (only version " <> T.pack (show (generatorVersionInt currentGeneratorVersion))
-    <> " is supported)"
+    <> " (supported: " <> supported <> ")"
+  where
+    -- Enumerates every DEFINED version, not just the current one: once
+    -- historical versions coexist (#1092 requirement 4), naming only
+    -- the current one would mislabel a perfectly constructible version
+    -- as the sole supported one.
+    supported = T.intercalate ", "
+        [ T.pack (show (generatorVersionInt g)) | g ← supportedGeneratorVersions ]
