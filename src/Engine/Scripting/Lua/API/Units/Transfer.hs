@@ -81,6 +81,7 @@ import Building.Types
 import Item.Types (ItemInstance(..), ItemManager, itemTotalWeight)
 import World.Page.Types (WorldPageId(..))
 import Engine.Scripting.Lua.API.Equipment.Render (pushItemInstance)
+import Engine.Scripting.Lua.Util (isDenseArray)
 import Engine.Scripting.Lua.API.Units.Inventory (insertAt)
 import Engine.Scripting.Lua.API.Units.List (prettifyDefName)
 
@@ -241,22 +242,33 @@ readEndpointField idx name = do
 --   kept SIGNED: a zero or negative value is a per-item
 --   @instance_unspecified@ refusal the policy reports, NOT a parse
 --   failure and never a 'Word64' that wrapped.
+--
+--   The table must be a DENSE one-based array. 'Lua.rawlen' returns a
+--   *border*, not a count, so a sparse @{ [1] = a, [3] = b }@ can report
+--   length 1 — a plain @1..n@ loop would then move @a@, silently drop
+--   @b@, and emit no outcome for it, breaking the contract that
+--   @accepted = true@ carries exactly one outcome per requested item.
+--   Which of the two lengths a given hole layout reports is a detail of
+--   the table's internals, so this rejects the whole shape as a
+--   malformed ARGUMENT rather than processing a prefix.
 readItemsField ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe [TransferItemRef])
 readItemsField idx = do
     _  ← Lua.getfield idx "items"
     ty ← Lua.ltype (-1)
     r  ← if ty ≢ Lua.TypeTable then pure Nothing else do
-            n ← Lua.rawlen (-1)
-            let go i acc
-                  | i > fromIntegral n = pure (Just (reverse acc))
-                  | otherwise = do
-                      _    ← Lua.rawgeti (-1) i
-                      mRef ← readItemRefAt (-1)
-                      Lua.pop 1
-                      case mRef of
-                          Nothing  → pure Nothing
-                          Just ref → go (i + 1) (ref : acc)
-            go 1 []
+            dense ← isDenseArray (-1)
+            if not dense then pure Nothing else do
+                n ← Lua.rawlen (-1)
+                let go i acc
+                      | i > fromIntegral n = pure (Just (reverse acc))
+                      | otherwise = do
+                          _    ← Lua.rawgeti (-1) i
+                          mRef ← readItemRefAt (-1)
+                          Lua.pop 1
+                          case mRef of
+                              Nothing  → pure Nothing
+                              Just ref → go (i + 1) (ref : acc)
+                go 1 []
     Lua.pop 1
     pure r
 

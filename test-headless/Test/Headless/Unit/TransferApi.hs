@@ -354,6 +354,44 @@ spec = describe "Unit transfer Lua API" $ do
                 "return _G.__fmt(unit.checkTransfer({ source = { kind = 'unit', id = '1' }, destination = { kind = 'building', id = 7 }, items = {} }))"
             r9 `shouldBe` q "nil"
 
+        it "rejects a SPARSE items table instead of silently dropping entries" $ \env → do
+            -- rawlen returns a BORDER, not a count: { [1] = a, [3] = b }
+            -- can report length 1, and a plain 1..n loop would then move
+            -- `a`, drop `b` and emit no outcome for it — breaking the
+            -- contract that accepted = true carries exactly one outcome
+            -- per requested item. Which length a hole layout reports is
+            -- a table-internals detail, so the shape is rejected whole.
+            resetWorld env [mkItem "ration" 101 0.5, mkItem "ration" 103 0.5]
+                           [] [] []
+            ls ← newBareLuaBackend env
+            let sparse = "[1] = " <> itemLit 101 "ration"
+                       <> ", [3] = " <> itemLit 103 "ration"
+            r ← check ls (req "unit" 1 "building" 7 sparse)
+            r `shouldBe` q "nil"
+            -- ...and it moved nothing on the way to saying so.
+            r2 ← commit ls (req "unit" 1 "building" 7 sparse)
+            r2 `shouldBe` q "nil"
+            src ← unitLoose env acolyteUid
+            dst ← buildingLoose env holdBid
+            src `shouldBe` [(101, "ration"), (103, "ration")]
+            dst `shouldBe` []
+
+        it "rejects an items table carrying a stray associative key" $ \env → do
+            resetWorld env [mkItem "ration" 101 0.5] [] [] []
+            ls ← newBareLuaBackend env
+            r ← check ls (req "unit" 1 "building" 7
+                             (itemLit 101 "ration" <> ", extra = 1"))
+            r `shouldBe` q "nil"
+
+        it "still accepts a dense array of any length" $ \env → do
+            let inv = [mkItem "ration" (fromIntegral i) 0.5 | i ← [101 .. 103 ∷ Int]]
+            resetWorld env inv [] [] []
+            ls ← newBareLuaBackend env
+            let dense = T.intercalate ", " [itemLit i "ration" | i ← [101 .. 103]]
+            r ← check ls (req "unit" 1 "building" 7 dense)
+            r `shouldBe` q ("all|101:ration:queued 102:ration:queued"
+                             <> " 103:ration:queued")
+
         it "keeps an argument error distinct from a policy refusal" $ \env → do
             resetWorld env [] [] [] []
             ls ← newBareLuaBackend env
