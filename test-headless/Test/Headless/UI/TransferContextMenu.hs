@@ -265,7 +265,7 @@ spec = describe "Transfer context menu" $ do
             spDestinationKind sess `shouldBe` "building"
             spContractState sess `shouldBe` "queued"
 
-        it "an endpoint kind the live contract does not advertise fails cleanly" $ \env → do
+        it "a DESTINATION kind the live contract does not advertise fails cleanly" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (endpointInfoStub "building" 513 True "Cargo Hold")
@@ -280,6 +280,38 @@ spec = describe "Transfer context menu" $ do
             r `shouldBe` "\"contract_unavailable\""
             after ← evalDebug ls "return require('scripts.transfer_session').get()"
             after `shouldBe` "null"
+
+        it "a SOURCE kind the live contract does not advertise fails cleanly too" $ \env → do
+            -- The inverse of the case above. B1's gesture always makes
+            -- the source a unit, but "always a unit" is still an id this
+            -- module NAMES, so it goes through the same membership gate
+            -- as everything else -- a contract that dropped 'unit' must
+            -- not still mint a session whose source kind no engine verb
+            -- recognises, even though the DESTINATION kind resolves.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (endpointInfoStub "building" 514 True "Cargo Hold")
+            run ls (T.concat
+                [ "unit.transferContract = function() return { "
+                , "reasons = {'receiver_ineligible','receiver_missing',"
+                , "'source_missing'}, states = {'queued'}, "
+                , "endpointKinds = { building = true } } end;"
+                ])
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session').create(7, 'building', 514); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "records the source kind RESOLVED from the contract, not a literal" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (endpointInfoStub "building" 515 True "Cargo Hold")
+            r ← evalDebug ls
+                "local s = require('scripts.transfer_session').create(7, 'building', 515); return s"
+            sess ← decodeOr r
+            spSourceKind sess `shouldBe` "unit"
+            spDestinationKind sess `shouldBe` "building"
 
         it "an unavailable live contract fails session creation cleanly, no session" $ \env → do
             ls ← newBareLuaBackend env

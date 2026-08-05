@@ -63,6 +63,11 @@ local REASON_CONTRACT_UNAVAILABLE = "contract_unavailable"
 -- not care how the engine orders its enums.
 local STATE_QUEUED = "queued"
 
+-- The endpoint kinds this module names. B1's gesture always makes the
+-- source a unit; the destination kind is whatever the caller targeted.
+local KIND_UNIT = "unit"
+local KIND_BUILDING = "building"
+
 local function containsValue(list, v)
     for _, x in ipairs(list or {}) do
         if x == v then return true end
@@ -122,7 +127,7 @@ local function checkVocabulary()
             .. "' missing from unit.transferContract() -- drifted "
             .. "from Unit.Transfer's vocabulary")
     end
-    for _, kind in ipairs({ "unit", "building" }) do
+    for _, kind in ipairs({ KIND_UNIT, KIND_BUILDING }) do
         if not resolveEndpointKind(kind) then
             engine.logWarn("transfer_session: endpoint kind '" .. kind
                 .. "' missing from unit.transferContract() -- drifted "
@@ -190,9 +195,17 @@ function M.create(sourceUid, kind, destinationId)
         return nil, resolveReason(REASON_RECEIVER_INELIGIBLE) or REASON_CONTRACT_UNAVAILABLE
     end
 
+    -- BOTH endpoint kinds are resolved by membership, not just the
+    -- destination: B1's gesture always makes the source a unit, but
+    -- "always a unit" is still an id this module names, and naming an
+    -- id the live contract does not advertise is exactly what the
+    -- membership rule exists to prevent. A contract that dropped
+    -- 'unit' would otherwise still mint a session whose source kind no
+    -- engine verb recognises.
+    local sourceKind = resolveEndpointKind(KIND_UNIT)
     local destinationKind = resolveEndpointKind(kind)
     local state = resolveState(STATE_QUEUED)
-    if not (destinationKind and state) then
+    if not (sourceKind and destinationKind and state) then
         engine.emitEventForUnit("unit_warning",
             "Cannot transfer: internal contract error", sourceUid)
         return nil, REASON_CONTRACT_UNAVAILABLE
@@ -210,7 +223,7 @@ function M.create(sourceUid, kind, destinationId)
         -- because the direction IS the pair. A source endpoint is
         -- always a unit for B1's gesture; C1/C3 widen which gestures
         -- can produce one, not what a session records.
-        source                 = { kind = "unit", id = sourceUid },
+        source                 = { kind = sourceKind, id = sourceUid },
         destination            = { kind = destinationKind,
                                     id   = destinationId },
         destinationDisplayName = info.displayName,
