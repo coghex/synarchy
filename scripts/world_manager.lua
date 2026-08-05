@@ -107,6 +107,12 @@ function worldManager.createWorld(params)
     local seed       = params.seed or 42
     local worldSize  = params.worldSize or 128
     local plateCount = params.plateCount or 10
+    -- Deliberately NO `or` default (#1105): the player's world name is
+    -- forwarded verbatim, and its absence must stay absent. Normalization
+    -- belongs to the engine (mkWorldIdentity strips, and treats a blank or
+    -- whitespace-only name as no identity at all), so nothing here trims,
+    -- defaults, or synthesizes a name.
+    local worldName  = params.worldName
 
     engine.logInfo("Creating world: " .. worldId
         .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")
@@ -139,7 +145,12 @@ function worldManager.createWorld(params)
     -- Send init command with seed and world size
     -- This queues the WorldInit command; the world state will exist
     -- once the world thread processes it.
-    world.init(worldId, seed, worldSize, plateCount)
+    -- A nil worldName leaves argument 5 nil, which world.init reads
+    -- identically to the four-argument form — arena, debug, and console
+    -- callers are unaffected (#708 acceptance criterion 7). The gloss
+    -- (argument 6) stays unsupplied: the dummy name generator has no
+    -- concept of one.
+    world.init(worldId, seed, worldSize, plateCount, worldName)
 
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)
