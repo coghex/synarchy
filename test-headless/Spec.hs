@@ -110,7 +110,6 @@ import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
-import qualified Test.Headless.River.Graph as RiverGraph
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
@@ -326,7 +325,6 @@ main = hspec $ do
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
-    describe "River.Graph" RiverGraph.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec
     describe "World.Render.FrontWallLift" FrontWallLift.spec
     describe "World.Render.SideFace" RenderSideFace.spec

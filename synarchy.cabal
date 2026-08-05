@@ -748,7 +748,6 @@ library
                      World.Hydrology.River.Tributary
                      World.Hydrology.River.Carving
                      World.Hydrology.River.Common
-                     World.River.Graph
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation
@@ -1128,7 +1127,6 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
-                   Test.Headless.River.Graph
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
