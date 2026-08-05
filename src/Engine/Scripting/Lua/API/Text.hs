@@ -13,6 +13,8 @@ import Engine.Asset.Manager (updateFontState, generateFontHandle)
 import Engine.Asset.Handle (FontHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
+import Engine.Graphics.Font.Fallback
+  (takeUnreportedMissingGlyphs, missingGlyphMessage)
 import Engine.Graphics.Font.Util (calculateTextWidthScaled)
 import Engine.Core.State (EngineEnv, loggerRef, luaToEngineQueue)
 import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
@@ -136,11 +138,24 @@ getTextWidthFn env = do
       (Just fh, Just textBS, Just size) → do
           width ← Lua.liftIO $ do
               let fontHandle = FontHandle (fromIntegral fh)
-                  textStr = T.unpack $ TE.decodeUtf8Lenient textBS
-              fontCache ← readIORef (rvFontCacheRef (toRenderViewCapability env))
+                  text = TE.decodeUtf8Lenient textBS
+                  textStr = T.unpack text
+                  cacheRef = rvFontCacheRef (toRenderViewCapability env)
+              fontCache ← readIORef cacheRef
               case Map.lookup fontHandle (fcFonts fontCache) of
                   Nothing → return 0.0
-                  Just atlas → return $ calculateTextWidthScaled atlas (realToFrac size) textStr
+                  Just atlas → do
+                      -- Measurement reports missing characters too, out
+                      -- of the same once-per-(font, codepoint) claim the
+                      -- render paths use (#1097).
+                      missing ← takeUnreportedMissingGlyphs
+                                    cacheRef fontHandle atlas text
+                      unless (null missing) $ do
+                          logger ← readIORef (loggerRef env)
+                          forM_ missing $ \c →
+                              logDebug logger CatFont
+                                  (missingGlyphMessage fontHandle c)
+                      return $ calculateTextWidthScaled atlas (realToFrac size) textStr
           Lua.pushnumber (Lua.Number width)
       _ → Lua.pushnumber (Lua.Number 0)
   return 1

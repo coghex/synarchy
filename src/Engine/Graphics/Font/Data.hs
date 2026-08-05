@@ -2,6 +2,7 @@ module Engine.Graphics.Font.Data where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Engine.Asset.Types (GlyphInfo)
 import Engine.Asset.Handle
 import Vulkan.Core10
@@ -9,7 +10,16 @@ import Vulkan.Core10
 -- | Complete font atlas texture with glyph metadata
 data FontAtlas = FontAtlas
   { faTexture   ∷ TextureHandle
+    -- | Only characters the source font actually draws. A character the
+    --   font does not cover is deliberately ABSENT here rather than
+    --   present with the font's own .notdef metrics, so that
+    --   "Engine.Graphics.Font.Fallback" resolves it to 'faFallbackGlyph'
+    --   (#1097).
   , faGlyphData ∷ Map.Map Char GlyphInfo
+    -- | The synthesized missing-glyph mark. Generated from atlas
+    --   geometry rather than taken from the font, so it is present in
+    --   every atlas no matter how narrow the font's coverage is.
+  , faFallbackGlyph ∷ GlyphInfo
   , faAtlasWidth  ∷ Int
   , faAtlasHeight ∷ Int
   , faFontSize    ∷ Int
@@ -67,6 +77,13 @@ data FontCache = FontCache
     { fcFonts       ∷ Map.Map FontHandle FontAtlas        -- ^ Loaded font atlases
     , fcNextHandle  ∷ Word32                              -- ^ Next available handle ID
     , fcPathCache   ∷ Map.Map (FilePath, Int) FontHandle  -- ^ (path, size) → handle lookup
+      -- | @(font, codepoint)@ pairs whose missing-glyph diagnostic has
+      --   already been emitted. Text layout runs every frame, so the
+      --   diagnostic is deduplicated here rather than logged per
+      --   occurrence — one shared set, claimed atomically, so
+      --   measurement, world layout and UI layout together report a
+      --   given pair exactly once (#1097).
+    , fcMissingReported ∷ Set.Set (FontHandle, Char)
     } deriving (Show)
 
 -- | Initial empty font cache
@@ -75,4 +92,5 @@ defaultFontCache = FontCache
     { fcFonts = Map.empty
     , fcNextHandle = 1
     , fcPathCache = Map.empty
+    , fcMissingReported = Set.empty
     }
