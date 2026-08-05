@@ -34,7 +34,7 @@ module Engine.Graphics.Font.Repertoire
 
 import UPrelude
 import qualified Data.Set as Set
-import System.FilePath (takeFileName)
+import System.FilePath (splitDirectories)
 
 -- * Canonical repertoires
 
@@ -105,20 +105,31 @@ extendedLatin = canonicalRepertoire $ concat
 asciiWithCurlyQuotes ∷ Repertoire
 asciiWithCurlyQuotes = canonicalRepertoire (asciiChars ⧺ curlyQuotes)
 
--- | The internal registry. Keyed by file name rather than the whole
---   path so the policy survives a resource-root-prefixed or absolute
---   path; the three tracked fonts are the only names with a policy of
---   their own, and every other font keeps 'printableAscii'.
+-- | The internal registry. Only the three tracked fonts have a policy
+--   of their own; every other font path keeps 'printableAscii'.
 --
 --   @gothic.ttf@ is the outlier: its cmap carries 84 codepoints, so
 --   asking it for extended Latin would report an enormous miss list
 --   without gaining a single glyph.
 repertoireForFont ∷ FilePath → Repertoire
-repertoireForFont path = case takeFileName path of
-    "arcade.ttf" → extendedLatin
-    "shell.ttf"  → extendedLatin
-    "gothic.ttf" → asciiWithCurlyQuotes
-    _            → printableAscii
+repertoireForFont path = case trackedFontName path of
+    Just "arcade.ttf" → extendedLatin
+    Just "shell.ttf"  → extendedLatin
+    Just "gothic.ttf" → asciiWithCurlyQuotes
+    _                 → printableAscii
+
+-- | The file name of a path naming a font in the tracked
+--   @assets\/fonts@ directory, whatever it is prefixed with.
+--
+--   Matching the trailing three components rather than the whole path
+--   keeps the policy attached to the shipped asset through a
+--   resource-root-prefixed or absolute path, while an unrelated font
+--   that merely shares a basename — @mods\/gothic.ttf@ — stays on
+--   'printableAscii', as the policy contract requires.
+trackedFontName ∷ FilePath → Maybe FilePath
+trackedFontName path = case reverse (splitDirectories path) of
+    (name : "fonts" : "assets" : _) → Just name
+    _                               → Nothing
 
 -- * Atlas identity
 

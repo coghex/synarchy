@@ -26,7 +26,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Engine.Asset.Handle
 import Engine.Graphics.Font.Atlas
-    ( AtlasLayout(..), BakedGlyph(..), atlasCellSize, glyphIsCovered
+    ( AtlasLayout(..), BakedGlyph(..), atlasCellSize
     , packGlyphsSTBWithMetrics, planAtlasLayout )
 import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.Fallback (codepointHex, fallbackMark)
@@ -174,9 +174,13 @@ generateSDFFontAtlas logger fontPath repertoire maxDimension = do
             { bgChar = c, bgWidth = w, bgHeight = h
             , bgBearingX = xoff, bgBearingY = yoff
             , bgPixels = pixels, bgAdvance = advance
-            -- Cmap membership is settled above; what remains is whether
-            -- the glyph drew anything, which still decides publication.
-            , bgCovered = glyphIsCovered c True w h }
+            -- Coverage is settled by the cmap alone. Every glyph here
+            -- came through that filter, so it is published even when it
+            -- drew nothing: a mapped blank — U+00A0 in arcade.ttf, say
+            -- — carries a real advance, and withholding it would swap
+            -- that advance for the fallback mark's and paint a box
+            -- where the font asked for a gap.
+            , bgCovered = True }
 
     buildAtlas layout glyphs ascent descent lineGap = do
         -- The mark carries the same distance-field ramp the

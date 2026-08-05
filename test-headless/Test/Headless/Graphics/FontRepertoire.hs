@@ -188,6 +188,19 @@ spec = do
             repertoireForFont "../assets/fonts/gothic.ttf"
                 `shouldBe` asciiWithCurlyQuotes
 
+        it "leaves an unrelated font sharing a basename on ASCII" $ do
+            -- The policy belongs to the tracked asset, not to the name:
+            -- a font that merely happens to be called gothic.ttf must
+            -- not inherit gothic's curly-quote repertoire.
+            repertoireForFont "mods/gothic.ttf" `shouldBe` printableAscii
+            repertoireForFont "arcade.ttf" `shouldBe` printableAscii
+            repertoireForFont "assets/fonts/mods/shell.ttf"
+                `shouldBe` printableAscii
+            repertoireForFont "/opt/other/fonts/arcade.ttf"
+                `shouldBe` printableAscii
+            -- …and the keys follow, so no aliasing in the cache either.
+            sdfFontKey "mods/gothic.ttf" `shouldNotBe` sdfFontKey gothicPath
+
     describe "cmap presence is not rasterization" $ do
         it "reports SPACE as supplied even though it rasterizes to nothing" $ do
             logger ← quietLogger
@@ -260,6 +273,27 @@ spec = do
                     -- is not satisfiable by the .notdef layout.
                     (w84 * h84) `shouldSatisfy` (< w99 * h99)
                 _ → expectationFailure "no feasible grid for gothic"
+
+        it "publishes a mapped glyph that draws nothing, with its advance" $ do
+            -- U+00A0 NO-BREAK SPACE: arcade.ttf maps it and gives it a
+            -- real advance, but it has no outline, so stb rasterizes
+            -- nothing. Coverage is the cmap's answer alone — gating on
+            -- the raster would swap that advance for the fallback
+            -- mark's and paint a box where the font asked for a gap.
+            --
+            -- It is reachable only through an explicit repertoire: the
+            -- shipped Latin-1 request starts at U+00A1.
+            ('\x00A0' `elem` repertoireChars extendedLatin) `shouldBe` False
+            atlas ← generateOrFail arcadePath ['\x00A0', 'A']
+            Map.member '\x00A0' (faGlyphData atlas) `shouldBe` True
+            isMissingGlyph atlas '\x00A0' `shouldBe` False
+            resolveGlyph atlas '\x00A0'
+                `shouldNotBe` Just (faFallbackGlyph atlas)
+            fmap giAdvance (Map.lookup '\x00A0' (faGlyphData atlas))
+                `shouldSatisfy` maybe False (> 0)
+            -- It draws nothing, which is the whole point.
+            fmap giSize (Map.lookup '\x00A0' (faGlyphData atlas))
+                `shouldBe` Just (0, 0)
 
         it "produces the same canonical intersection every time" $ do
             again ← generateOrFail arcadePath
