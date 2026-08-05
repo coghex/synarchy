@@ -37,7 +37,8 @@ import Engine.Graphics.Font.Fallback
   ( FallbackMark(..), fallbackMark, fallbackOnEdge, isIntentionallyEmpty
   , isMissingGlyph, missingGlyphMessage, missingGlyphs, resolveGlyph
   , takeUnreportedMissingGlyphs )
-import Engine.Graphics.Font.SDF (generateSDFFontAtlas)
+import Engine.Graphics.Font.Repertoire (printableAscii)
+import Engine.Graphics.Font.SDF (generateSDFFontAtlas, sdfAtlasErrorMessage)
 import Engine.Graphics.Font.Util (calculateTextWidthScaled)
 
 -- | The fifteen printable ASCII characters gothic.ttf's cmap does not
@@ -168,6 +169,23 @@ legacyLayoutWorld atlas desiredSize startX startY screenW screenH text color =
 quietLogger ∷ IO LoggerState
 quietLogger = initLogger defaultLogConfig { lcEnableByDefault = False }
 
+-- | A generous device limit, so the packing planner (#1098) is never
+--   the reason a fixture fails to build.
+roomyLimit ∷ Int
+roomyLimit = 16384
+
+-- | The printable-ASCII atlas this module has always tested. Since
+--   #1098 the repertoire is a parameter, so it is named explicitly
+--   rather than assumed.
+asciiAtlas ∷ FilePath → IO FontAtlas
+asciiAtlas path = do
+    logger ← quietLogger
+    result ← generateSDFFontAtlas logger path printableAscii roomyLimit
+    case result of
+        Left err → error $ "atlas generation failed: "
+                             ⧺ T.unpack (sdfAtlasErrorMessage err)
+        Right atlas → return atlas
+
 -- | The pen position the layout reached, read off the trailing glyph:
 --   its quad sits at @penX + bearingX * scale@.
 penAfter ∷ FontAtlas → Float → Text → Char → Float
@@ -209,12 +227,8 @@ spec ∷ Spec
 spec = do
     -- Two real atlases, generated once and shared. Both go through the
     -- production generator; no GPU is involved.
-    completeAtlas ← runIO $ do
-        logger ← quietLogger
-        generateSDFFontAtlas logger completeFontPath
-    narrowAtlas ← runIO $ do
-        logger ← quietLogger
-        generateSDFFontAtlas logger narrowFontPath
+    completeAtlas ← runIO $ asciiAtlas completeFontPath
+    narrowAtlas ← runIO $ asciiAtlas narrowFontPath
 
     describe "resolution" $ do
         let atlas = syntheticAtlas "AB "
@@ -331,14 +345,25 @@ spec = do
                     uvOverlaps gi (faFallbackGlyph atlas) `shouldBe` False
 
         it "does not grow the atlas to make room for the mark" $ do
-            -- The pre-#1097 grid, recomputed from the published glyphs:
-            -- reserving the mark's cell must not have changed it.
+            -- The grid, recomputed from the published glyphs: reserving
+            -- the mark's cell must not have needed a row of its own.
+            -- Since #1098 the column count is chosen rather than fixed
+            -- at 16, so the expectation is the cheapest power-of-two
+            -- grid that holds one cell per glyph plus the mark's —
+            -- written out here rather than taken from the planner.
             let glyphs = Map.elems (faGlyphData completeAtlas)
-                maxW = round (maximum (map (fst . giSize) glyphs)) ∷ Int
-                maxH = round (maximum (map (snd . giSize) glyphs)) ∷ Int
-                rows = (length bakedRange + 15) `div` 16
-            faAtlasWidth completeAtlas `shouldBe` nextPowerOf2 (16 * (maxW + 2))
-            faAtlasHeight completeAtlas `shouldBe` nextPowerOf2 (rows * (maxH + 2))
+                cellW = round (maximum (map (fst . giSize) glyphs)) + 2 ∷ Int
+                cellH = round (maximum (map (snd . giSize) glyphs)) + 2 ∷ Int
+                cells = length bakedRange + 1
+                grids = [ (w * h, max w h, cols, w, h)
+                        | cols ← [1 .. length bakedRange]
+                        , let rows = (cells + cols - 1) `div` cols
+                              w = nextPowerOf2 (cols * cellW)
+                              h = nextPowerOf2 (rows * cellH)
+                        , w ≤ roomyLimit, h ≤ roomyLimit ]
+                (_, _, _, expectW, expectH) = minimum grids
+            faAtlasWidth completeAtlas `shouldBe` expectW
+            faAtlasHeight completeAtlas `shouldBe` expectH
 
         it "publishes space in both atlases, with its own advance" $
             forM_ [completeAtlas, narrowAtlas] $ \atlas → do

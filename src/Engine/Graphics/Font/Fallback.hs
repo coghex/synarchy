@@ -21,6 +21,7 @@ module Engine.Graphics.Font.Fallback
     -- * Once-per-pair diagnostics
   , takeUnreportedMissingGlyphs
   , missingGlyphMessage
+  , codepointHex
     -- * The synthesized mark
   , FallbackMark(..)
   , fallbackMark
@@ -103,6 +104,9 @@ missingGlyphMessage fontH char =
     "Missing glyph, drawing fallback mark: font=" <> T.pack (show fontH)
       <> " codepoint=U+" <> codepointHex char
 
+-- | A codepoint in @XXXX@ form, at least four digits — the tail of the
+--   @U+XXXX@ spelling both the per-pair diagnostic and the atlas
+--   coverage report (#1098) use.
 codepointHex ∷ Char → Text
 codepointHex c =
     let digits = map toUpper (showHex (ord c) "")

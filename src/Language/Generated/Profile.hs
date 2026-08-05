@@ -9,12 +9,14 @@
 module Language.Generated.Profile
     ( generateProfile
     , buildProfileV1
+    , buildProfileV2
     ) where
 
 import UPrelude
 import qualified Data.Text as T
 import Language.Generated.Types
 import Language.Generated.Hash
+import Language.Generated.Onset (buildOnsetRelation)
 
 -- | Generate a profile for an explicit version. Dispatch is per
 --   VERSION, never by comparison with 'currentGeneratorVersion'
@@ -25,6 +27,7 @@ import Language.Generated.Hash
 generateProfile ∷ GeneratorVersion → LangSeed → Either GeneratorError Profile
 generateProfile ver seed = case generatorVersionInt ver of
     1 → Right (buildProfileV1 seed)
+    2 → Right (buildProfileV2 seed)
     v → Left (UnsupportedGeneratorVersion v)
 
 -- | The version-1 profile generator. Total: every drawn range is
@@ -89,7 +92,114 @@ buildProfileV1 seed@(LangSeed s0) =
         , profPossessive     = PossessiveMarking genitiveOrder possAffix
         , profPlural         = PluralMarking pluralAffix
         , profJoin           = joinStyle
+        -- Version 1 constrains nothing: its CCV rendering draws both
+        -- consonants independently and must stay byte-identical
+        -- (#1094 requirement 1). An empty relation is exactly what
+        -- makes Language.Generated.Root take the historical path.
+        , profOnset          = emptyOnsetRelation
         }
+
+-- | The version-2 profile generator (#1094). Same style vocabulary as
+--   version 1, plus the two things this version exists for:
+--
+--   * an admissible two-consonant onset relation, which @CCV@ rendering
+--     selects from directly (requirements 3-5);
+--   * a deterministic role for @y@ — consonant-only, vowel-only, or
+--     both — reflected in actual inventory membership, never merely in
+--     the pools drawn from (requirement 6).
+--
+--   Like 'buildProfileV1' this stamps a LITERAL 'GeneratorVersion', not
+--   'currentGeneratorVersion': 'Language.Generated.Root' mixes
+--   @profVersion@ into its per-concept seed, so a version-3 bump must
+--   not re-render version-2 roots.
+--
+--   The draws shared with version 1 are deliberately REPEATED here
+--   rather than factored into a shared helper. Each version's body is
+--   frozen output (#710 requirement 15, #1092 requirement 4): a shared
+--   helper is a live edge between them, down which a later version's
+--   tweak silently re-renders every older world's names.
+buildProfileV2 ∷ LangSeed → Profile
+buildProfileV2 seed@(LangSeed s0) =
+    let baseSeed = fmix64 (s0 `xor` 0xA5A5A5A5A5A5A5A5)
+
+        consSeed   = draw baseSeed 1
+        vowSeed    = draw baseSeed 2
+        shapeSeed  = draw baseSeed 3
+        sylSeed    = draw baseSeed 4
+        orderSeed  = draw baseSeed 5
+        possSeed   = draw baseSeed 6
+        pluralSeed = draw baseSeed 7
+        joinSeed   = draw baseSeed 8
+        yRoleSeed  = draw baseSeed 9
+        onsetSeed  = draw baseSeed 10
+
+        yRole = case wordInRange (draw yRoleSeed 0) 0 2 of
+            0 → YConsonantOnly
+            1 → YVowelOnly
+            _ → YBothRoles
+        yIsConsonant = yRole ≢ YVowelOnly
+        yIsVowel     = yRole ≢ YConsonantOnly
+
+        -- 'y' is placed into the inventory it has a role in, rather than
+        -- merely left in the pool to be drawn or missed: requirement 6's
+        -- role table IS inventory membership, so a "consonant-only y"
+        -- profile whose shuffle happened not to select y would be a
+        -- fourth, forbidden "neither" state.
+        consCount = wordInRange (draw consSeed 0) minConsonants maxConsonants
+        consDrawn = take (if yIsConsonant then consCount - 1 else consCount)
+                          (shuffleBy consSeed 1 consonantPoolNoY)
+        consonants
+            | yIsConsonant = insertAt (pickIndex (draw consSeed 100)
+                                                  (length consDrawn + 1))
+                                       'y' consDrawn
+            | otherwise    = consDrawn
+
+        vowCount = wordInRange (draw vowSeed 0) minVowels maxVowels
+        vowDrawn = take (if yIsVowel then vowCount - 1 else vowCount)
+                         (shuffleBy vowSeed 1 vowelPool)
+        vowels
+            | yIsVowel  = insertAt (pickIndex (draw vowSeed 100)
+                                               (length vowDrawn + 1))
+                                    'y' vowDrawn
+            | otherwise = vowDrawn
+
+        shapeCount = wordInRange (draw shapeSeed 0) minShapes maxShapes
+        shapes = take shapeCount (shuffleBy shapeSeed 1 syllableShapePool)
+
+        minSyll = wordInRange (draw sylSeed 0) 1 2
+        maxSyll = minSyll + wordInRange (draw sylSeed 1) 0 1
+
+        compoundOrder
+            | wordInRange (draw orderSeed 0) 0 1 ≡ 0 = ModifierFirst
+            | otherwise                               = HeadFirst
+        genitiveOrder
+            | wordInRange (draw orderSeed 1) 0 1 ≡ 0 = OwnerFirst
+            | otherwise                               = HeadFirstGenitive
+
+        possAffix   = genAffix possSeed consonants vowels True
+        pluralAffix = genAffix pluralSeed consonants vowels False
+
+        joinStyle
+            | wordInRange (draw joinSeed 0) 0 1 ≡ 0 = JoinCompact
+            | otherwise                               = JoinHyphen
+
+    in Profile
+        { profVersion        = GeneratorVersion 2
+        , profSeed           = seed
+        , profConsonants     = consonants
+        , profVowels         = vowels
+        , profSyllableShapes = shapes
+        , profMinSyllables   = minSyll
+        , profMaxSyllables   = maxSyll
+        , profCompoundOrder  = compoundOrder
+        , profPossessive     = PossessiveMarking genitiveOrder possAffix
+        , profPlural         = PluralMarking pluralAffix
+        , profJoin           = joinStyle
+        , profOnset          = buildOnsetRelation onsetSeed consonants
+        }
+
+insertAt ∷ Int → α → [α] → [α]
+insertAt i x xs = take i xs <> (x : drop i xs)
 
 -- | A short affix (1-2 letters, alternating consonant/vowel so it stays
 --   pronounceable) appended directly to a root. Possessive affixes may
@@ -117,6 +227,13 @@ genAffix seed cons vow allowApostrophe =
 -- needing to truncate generated output.
 consonantPool ∷ [Char]
 consonantPool = "bcdfghjklmnprstvwyz"
+
+-- | Version 2's consonant pool: 'consonantPool' without @y@, which that
+--   version places explicitly according to its drawn 'YRole' rather
+--   than leaving to the shuffle. Version 1 keeps the historical pool
+--   above, where @y@ is consonant-only and may simply not be drawn.
+consonantPoolNoY ∷ [Char]
+consonantPoolNoY = "bcdfghjklmnprstvwz"
 
 vowelPool ∷ [Char]
 vowelPool = "aeiou"

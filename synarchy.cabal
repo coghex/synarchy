@@ -234,6 +234,7 @@ library
                      Engine.Graphics.Font.Draw
                      Engine.Graphics.Font.Fallback
                      Engine.Graphics.Font.Load
+                     Engine.Graphics.Font.Repertoire
                      Engine.Graphics.Font.SDF
                      Engine.Graphics.Font.Upload
                      Engine.Graphics.Font.Util
@@ -557,6 +558,7 @@ library
                      Language.Semantic.English
                      Language.Generated.Types
                      Language.Generated.Hash
+                     Language.Generated.Onset
                      Language.Generated.Profile
                      Language.Generated.Root
                      Language.Generated.Render
@@ -1092,6 +1094,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.Screenshot
                    Test.Headless.Graphics.UniformLayout
                    Test.Headless.Graphics.FontFallback
+                   Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners
                    Test.Headless.Construct.Footprint
                    Test.Headless.Craft.Execute
