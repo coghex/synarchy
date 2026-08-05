@@ -18,6 +18,7 @@ import Data.Aeson (Value, object, (.=), encode)
 import Language.Semantic.Types (catVersion, conceptCount, catalogueErrorText)
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Generated.Types
+import Language.Generated.Onset (onsetTotalPairs)
 import Language.Generated.Report
 
 runLanguageReport ∷ (Word64, Word64) → IO ()
@@ -32,17 +33,25 @@ runLanguageReport (loSeed, hiSeed) = do
       hPutStrLn stderr $ "language-report: catalogue version "
           ⧺ show (catVersion cat) ⧺ " (" ⧺ show (conceptCount cat)
           ⧺ " concepts)"
-      let reports = [ buildSeedReport cat s | s ← [loSeed .. hiSeed] ]
-          topJSON = object
-              [ "generatorVersion" .= generatorVersionInt currentGeneratorVersion
-              , "catalogueVersion" .= catVersion cat
-              , "conceptCount"     .= conceptCount cat
-              , "seeds"            .= map seedReportJSON reports
-              ]
-      BL.putStr (encode topJSON)
-      BL.putStr "\n"
-      hFlush stdout
-      hPutStrLn stderr $ "language-report: done (" ⧺ show (length reports) ⧺ " seeds)"
+      -- Reports are built at the CURRENT generator version through the
+      -- real dispatcher (#1094 requirement 9), so the header version
+      -- and the profiles below it can never disagree.
+      case mapM (buildSeedReport cat currentGeneratorVersion)
+                [loSeed .. hiSeed] of
+        Left err → do
+          hPutStrLn stderr $ T.unpack (generatorErrorText err)
+          exitFailure
+        Right reports → do
+          let topJSON = object
+                  [ "generatorVersion" .= generatorVersionInt currentGeneratorVersion
+                  , "catalogueVersion" .= catVersion cat
+                  , "conceptCount"     .= conceptCount cat
+                  , "seeds"            .= map seedReportJSON reports
+                  ]
+          BL.putStr (encode topJSON)
+          BL.putStr "\n"
+          hFlush stdout
+          hPutStrLn stderr $ "language-report: done (" ⧺ show (length reports) ⧺ " seeds)"
 
 seedReportJSON ∷ SeedReport → Value
 seedReportJSON sr = object
@@ -53,10 +62,18 @@ seedReportJSON sr = object
     , "rootCollisions"   .= srRootCollisions sr
     ]
 
+-- | Everything @tools/language_report.py --check@ needs to EVALUATE the
+--   #1094 gates itself, not just print them: the two inventories decide
+--   which visible glyphs are consonant- and vowel-capable, @yRole@ and
+--   @onsetPairs@ are the style state under test, and the density is
+--   emitted as the two integer counts requirement 4 compares rather
+--   than as a rounded percentage.
 profileJSON ∷ Profile → Value
 profileJSON p = object
-    [ "consonants"      .= T.pack (profConsonants p)
+    [ "version"         .= generatorVersionInt (profVersion p)
+    , "consonants"      .= T.pack (profConsonants p)
     , "vowels"          .= T.pack (profVowels p)
+    , "yRole"           .= yRoleText p
     , "syllableShapes"  .= map shapeText (profSyllableShapes p)
     , "minSyllables"    .= profMinSyllables p
     , "maxSyllables"    .= profMaxSyllables p
@@ -65,11 +82,15 @@ profileJSON p = object
     , "possessiveAffix" .= pmAffix (profPossessive p)
     , "pluralAffix"     .= plmAffix (profPlural p)
     , "joinStyle"       .= T.pack (show (profJoin p))
+    , "onsetPairs"      .= map pairText (onsetPairs (profOnset p))
+    , "onsetAdmissible" .= onsetPairCount (profOnset p)
+    , "onsetTotal"      .= onsetTotalPairs p
     ]
   where
     shapeText = T.pack ∘ map segChar ∘ shapeSegments
     segChar ConsonantSlot = 'C'
     segChar VowelSlot     = 'V'
+    pairText (a, b) = T.pack [a, b]
 
 renderingJSON ∷ CanonicalRendering → Value
 renderingJSON cr = object

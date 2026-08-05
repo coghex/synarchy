@@ -79,6 +79,7 @@ import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..), MoveTarget(..), Pose(..), UnitActivity(..))
 import Unit.Direction (Direction(..))
+import Building.Knowledge (emptyContainerKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -138,6 +139,7 @@ minimalPage pid = PageSnapshot
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
     , pgsPlantDesignations = HM.empty
+    , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
     }
 
@@ -457,6 +459,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsTillDesignations = HM.empty
     , wpsCropPlots    = emptyCropPlots
     , wpsPlantDesignations = HM.empty
+    , wpsContainerKnowledge = emptyContainerKnowledge
     , wpsIdentity     = Nothing
     }
 
@@ -499,9 +502,15 @@ spec = do
                 b = stubComponent (ComponentId "b") [ComponentId "a"]
             isLeft (dependencyOrder [a, b]) `shouldBe` True
 
-        it "every gameplay component is required (none safely defaultable, \
-           \requirement 7)" $
-            all rcRequired saveComponentRegistry `shouldBe` True
+        it "every gameplay component is required EXCEPT the single \
+           \deliberately-optional one -- requirement 7's rule, plus its \
+           \one documented exception (#1087's container-knowledge, which \
+           \post-dates every tracked compatibility baseline and whose \
+           \absence has an honest meaning: no container has ever been \
+           \inspected). A SECOND optional component has to be justified \
+           \here rather than slip in unnoticed" $
+            [ rcId c | c ← saveComponentRegistry, not (rcRequired c) ]
+                `shouldBe` [containerKnowledgeComponentId]
 
     describe "per-component codecs" $ do
         it "each component round-trips its own slice of the snapshot" $ do
@@ -826,7 +835,8 @@ spec = do
                                    , unitsComponentId, unitSimComponentId
                                    , craftBillsComponentId, powerNodesComponentId
                                    , worldEditsComponentId, worldActivityComponentId
-                                   , texPaletteComponentId ]
+                                   , texPaletteComponentId
+                                   , containerKnowledgeComponentId ]
                     ids `shouldMatchList` expected
                     (ComponentId "session" `elem` ids) `shouldBe` False
 

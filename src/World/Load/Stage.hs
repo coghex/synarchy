@@ -54,7 +54,8 @@ import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
-import Building.Types (BuildingManager(..), BuildingId, BuildingDef)
+import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
+import Building.Knowledge (prunedContainerIds, retainContainers)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
@@ -260,6 +261,31 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- nodes #763 requires to be restored.
     writeIORef (wsCraftBillsRef worldState) (wpsCraftBills wps)
     writeIORef (wsPowerNodesRef worldState) (wpsPowerNodes wps)
+
+    -- #1087: container knowledge is the ONE page-scoped layer that is
+    -- deliberately NOT restored verbatim. A bill or node whose building
+    -- is gone stays visible and cancellable, so keeping it is the
+    -- player-facing right answer; a MEMORY of a container that no
+    -- longer exists has no surface at all and nothing would ever clear
+    -- it, so it is scrubbed here against this page's own restored
+    -- building set. That is a tolerated, non-blocking DIAGNOSTIC — a
+    -- demolished cargo's lingering memory is gameplay, not corruption
+    -- (the same judgement "World.Save.Integrity" applies to a dangling
+    -- reference) — never a load failure, so it is logged and dropped
+    -- rather than reported.
+    let liveBuildings = HM.keysSet (bsnInstances (wpsBuildings wps))
+        staleKnowledge = prunedContainerIds liveBuildings
+                             (wpsContainerKnowledge wps)
+    unless (null staleKnowledge) $
+        logInfo logger CatWorld $
+            "Save load: dropping " <> T.pack (show (length staleKnowledge))
+            <> " container-knowledge record(s) on page "
+            <> unWorldPageId pid <> " whose building no longer exists ("
+            <> T.intercalate ", "
+                   [ T.pack (show (unBuildingId b)) | b ← staleKnowledge ]
+            <> ")"
+    writeIORef (wsContainerKnowledgeRef worldState)
+        (retainContainers liveBuildings (wpsContainerKnowledge wps))
 
     (simSeeds, locStamps, mCamera, mZoomAtlas, mPreview) ←
       if isArenaParams params

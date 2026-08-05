@@ -50,6 +50,7 @@ import Unit.Types
     , UnitInstance(..), UnitManager(..), defaultNaturalResistance
     , emptyUnitManager )
 import World.Page.Types (WorldPageId(..))
+import World.State.Types (WorldManager(..), emptyWorldState)
 
 -- * Fixture ids
 
@@ -172,6 +173,16 @@ mkBuilding defName (ax, ay) (w, h) stored = BuildingInstance
 resetWorld ∷ EngineEnv → [ItemInstance] → [ItemInstance] → [ItemInstance]
            → [ItemInstance] → IO ()
 resetWorld env acolyteInv acolyteWorn holdStorage depotStorage = do
+    -- A REAL page, because the #1087 container-knowledge store hangs off
+    -- the WorldState the building's own biPage resolves to: without one
+    -- registered, both revealContainerForUnit and
+    -- building.getContainerKnowledge answer "no such page" and the
+    -- reveal assertions below would pass vacuously. emptyWorldState is
+    -- in-memory, so this costs no worldgen (the technique
+    -- Test.Headless.Building.Knowledge's own scene uses).
+    ws ← emptyWorldState
+    writeIORef (worldManagerRef env) WorldManager
+        { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     writeIORef (itemManagerRef env) emptyItemManager
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.fromList
@@ -731,6 +742,60 @@ spec = describe "Unit transfer Lua API" $ do
                            , (203, "steel_bar") ]
             dst ← unitLoose env acolyteUid
             dst `shouldBe` []
+
+        -- A3 (#1087) reveals a container's contents to the player when
+        -- one of their units interacts with it, and hooked the strict
+        -- transfer path alongside depositToCargo/withdrawFromCargo. That
+        -- hook lived inside the unit->building function A2 replaced, so
+        -- nothing but these cases stops a later rewrite dropping it.
+        it "a successful deposit reveals the container's contents (#1087)" $ \env → do
+            resetWorld env [mkItem "ration" 101 0.5] [] [] []
+            ls ← newBareLuaBackend env
+            before ← evalDebug ls
+                "local k = building.getContainerKnowledge(7); return k and k.state or 'nil'"
+            before `shouldBe` q "unknown"
+            r ← commit ls (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            r `shouldBe` q "all|101:ration:completed"
+            after ← evalDebug ls $ T.concat
+                [ "local k = building.getContainerKnowledge(7); "
+                , "return tostring(k.state) .. '|' .. tostring(#k.items) "
+                , ".. '|' .. tostring(k.items[1] and k.items[1].instanceId)" ]
+            after `shouldBe` q "known|1|101"
+
+        it "a successful WITHDRAWAL reveals it too (#1087 covers both directions)" $ \env → do
+            resetWorld env [] [] [mkItem "ration" 201 0.5, mkItem "rope" 202 1.0] []
+            ls ← newBareLuaBackend env
+            r ← commit ls (req "building" 7 "unit" 1 (itemLit 201 "ration"))
+            r `shouldBe` q "all|201:ration:completed"
+            -- Snapshots the FINAL post-commit storage: the withdrawn
+            -- ration is gone, the rope remains.
+            after ← evalDebug ls $ T.concat
+                [ "local k = building.getContainerKnowledge(7); "
+                , "return tostring(k.state) .. '|' .. tostring(#k.items) "
+                , ".. '|' .. tostring(k.items[1] and k.items[1].instanceId)" ]
+            after `shouldBe` q "known|1|202"
+
+        it "a REFUSED transfer reveals nothing" $ \env → do
+            -- The reveal is on the success branch only, so a refusal
+            -- (and the rollback behind it) leaves the record untouched.
+            resetWorld env [mkItem "anvil" 101 500.0] [] [] []
+            ls ← newBareLuaBackend env
+            r ← commit ls (req "unit" 1 "building" 7 (itemLit 101 "anvil"))
+            r `shouldBe` q "none|101:anvil:failed:receiver_full"
+            after ← evalDebug ls
+                "local k = building.getContainerKnowledge(7); return k and k.state or 'nil'"
+            after `shouldBe` q "unknown"
+
+        it "a non-commandable unit's transfer reveals nothing" $ \env → do
+            -- revealContainerForUnit gates on the ACTING unit, so a
+            -- wolf rummaging teaches the player nothing.
+            resetWorld env [] [] [mkItem "ration" 201 0.5] []
+            ls ← newBareLuaBackend env
+            r ← commit ls (req "building" 7 "unit" 3 (itemLit 201 "ration"))
+            r `shouldBe` q "none|201:ration:failed:receiver_ineligible"
+            after ← evalDebug ls
+                "local k = building.getContainerKnowledge(7); return k and k.state or 'nil'"
+            after `shouldBe` q "unknown"
 
         it "mutates nothing at all from checkTransfer" $ \env → do
             resetWorld env [mkItem "ration" 101 0.5, mkItem "steel_bar" 102 2.5]

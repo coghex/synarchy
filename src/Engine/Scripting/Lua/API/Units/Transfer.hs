@@ -78,6 +78,7 @@ import Building.Types
     (BuildingId(..), BuildingActivity(..), BuildingDef(..)
     , BuildingInstance(..), BuildingManager(..), currentActivity
     , footprintDistBetween)
+import Building.Knowledge.Live (containerObserver, revealContainerForUnit)
 import Item.Types (ItemInstance(..), ItemManager, itemTotalWeight)
 import World.Page.Types (WorldPageId(..))
 import Engine.Scripting.Lua.API.Equipment.Render (pushItemInstance)
@@ -406,8 +407,39 @@ commitOneLive env from to ref = case (from, to) of
         commitBuildingToBuilding env a b ref
     (EndpointUnit a, EndpointBuilding b) →
         commitCross env from to (popUnit a) (pushBuilding b) ref
+            ⌦ revealAfter env a b
     (EndpointBuilding a, EndpointUnit b) →
         commitCross env from to (popBuilding a) (pushUnit b) ref
+            ⌦ revealAfter env b a
+
+-- | #1087: a successful transfer between a player unit and a building
+--   container teaches the player what is in there.
+--
+--   Fires only on the Right branch, so the rollback can never reach it,
+--   and only AFTER the push committed, so the record snapshots the
+--   FINAL post-commit storage — the two properties A3 established for
+--   'depositToCargo'. It runs per successfully moved ITEM, which is
+--   what keeps a PARTIAL batch honest: the record reflects the state
+--   the last item that actually landed left behind.
+--
+--   Both unit↔building directions reveal, matching A3's own coverage:
+--   it already reveals on 'withdrawFromCargo' as well as
+--   'depositToCargo', and only hooked the deposit direction of the
+--   strict path because A2 is what makes a building SOURCE expressible
+--   at all. Building↔building deliberately does not: there is no
+--   acting unit, and 'revealContainerForUnit' is gated on one.
+revealAfter ∷ EngineEnv → UnitId → BuildingId
+            → Either TransferFailure ItemInstance
+            → IO (Either TransferFailure ItemInstance)
+revealAfter env uid bid outcome = do
+    case outcome of
+        Right _ → void $ revealContainerForUnit
+            (containerObserver (toBuildingCapability env)
+                               (toWorldSimCapability env)
+                               (toContentRegistriesCapability env))
+            (ucUnitManagerRef (toUnitCombatCapability env)) uid bid
+        Left _  → pure ()
+    pure outcome
 
 -- | Unit → unit. Both inventories live in the SAME manager ref, so
 --   revalidation and both writes happen inside one

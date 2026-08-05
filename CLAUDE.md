@@ -1123,9 +1123,14 @@ anything beyond appending requires a `currentSaveVersion` bump.
   (`World.Save.Envelope`): FNV-1a-checksummed manifest + independently
   versioned components (`core-session`, `world-pages`, `world-edits`,
   `world-activity`, `buildings`, `units`, `unit-sim`, `craft-bills`,
-  `power-nodes`, `texture-palette`, `metadata`, plus dynamic
+  `power-nodes`, `texture-palette`, `metadata`, the one OPTIONAL
+  `container-knowledge` (#1087), plus dynamic
   `lua.<module>` components). Registry:
-  `World.Save.Component.saveComponentRegistry`. Component evolution =
+  `World.Save.Component.saveComponentRegistry`. Every gameplay
+  component is REQUIRED except `container-knowledge`, whose absence has
+  an honest default ("no container has ever been inspected") — see
+  `docs/persistence_contract.md` §5 before declaring a second one.
+  Component evolution =
   per-component schema version bumps + explicit migrations from frozen
   vN DTOs — NOT a global save-version bump. `currentSaveVersion`
   (`src/World/Save/Types.hs`) now versions only the transitional

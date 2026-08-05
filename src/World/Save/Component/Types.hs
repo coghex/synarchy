@@ -95,6 +95,7 @@ module World.Save.Component.Types
     , unitSimComponentId
     , craftBillsComponentId
     , powerNodesComponentId
+    , containerKnowledgeComponentId
     ) where
 
 import UPrelude
@@ -196,6 +197,18 @@ data RegisteredComponent = RegisteredComponent
 --   component's contribution folded in (or the assembly errors it found —
 --   e.g. a page-set mismatch). Requiring the fold here is the structural
 --   guarantee that registration and assembly cannot diverge.
+--
+--   An OPTIONAL component (@ccRequired = False@, first used by #1087's
+--   @"container-knowledge"@) that is entirely ABSENT from the envelope
+--   contributes nothing and reports nothing: its decode pass is empty
+--   and its fold is skipped, leaving whatever default the foundational
+--   components already installed. That is decided HERE, once, from
+--   'ccRequired' — not per component — so "optional" can never mean two
+--   different things in two places. Note the distinction the
+--   'componentAbsent' guard draws: absence is checked at the MANIFEST
+--   level, so a component that IS declared but whose payload is
+--   malformed, truncated, or encoded at an unsupported version still
+--   fails exactly as a required one would.
 registerComponent
     ∷ ComponentCodec a
     → (Word32 → a → SessionSnapshot → Either [ComponentError] SessionSnapshot)
@@ -207,11 +220,27 @@ registerComponent cc fold = RegisteredComponent
     , rcRequired     = ccRequired cc
     , rcDeps         = ccDeps cc
     , rcEncode       = ccEncode cc
-    , rcDecodeErrors = \de → either id (const []) (decodeComponentValue cc de)
-    , rcApply        = \de snap → do
-        a ← decodeComponentValue cc de
-        fold (encodedVersionOf cc de) a snap
+    , rcDecodeErrors = \de →
+        if optionalAndAbsent de then []
+        else either id (const []) (decodeComponentValue cc de)
+    , rcApply        = \de snap →
+        if optionalAndAbsent de then Right snap
+        else do
+            a ← decodeComponentValue cc de
+            fold (encodedVersionOf cc de) a snap
     }
+  where
+    optionalAndAbsent de =
+        not (ccRequired cc) ∧ componentAbsent (ccId cc) de
+
+-- | Is this component entirely absent from the decoded envelope? Both
+--   halves must be missing — a descriptor with no payload (or vice
+--   versa) is a malformed envelope, not an absent optional component,
+--   and must keep reporting as the failure it is.
+componentAbsent ∷ ComponentId → DecodedEnvelope → Bool
+componentAbsent cid de =
+    isNothing (findDescriptor cid (deManifest de))
+      ∧ not (HM.member cid (dePayloads de))
 
 -- | The component's ACTUAL encoded version, read from the decoded
 --   manifest descriptor (present whenever the component decoded), falling
@@ -364,3 +393,11 @@ craftBillsComponentId  ∷ ComponentId
 craftBillsComponentId  = ComponentId "craft-bills"
 powerNodesComponentId  ∷ ComponentId
 powerNodesComponentId  = ComponentId "power-nodes"
+
+-- | #1087: the player's last-known container contents. The one
+--   OPTIONAL gameplay component — see
+--   "World.Save.Component.Knowledge"'s header for why a baseline that
+--   predates the feature must be allowed to carry no payload at all,
+--   and what an absent payload means.
+containerKnowledgeComponentId ∷ ComponentId
+containerKnowledgeComponentId = ComponentId "container-knowledge"

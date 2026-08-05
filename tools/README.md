@@ -165,25 +165,55 @@ that forgets to rebaseline fails CI.
 ## Language report
 
 ### `language_report.py`
-Report/check tool (#710) for the generated-language native-name
+Report/check tool (#710, #1094) for the generated-language native-name
 renderer (`Language.Generated.*`) — not a `*_probe.py`, so it needs no
 `tools/ci_probes.py` registration. Drives the production Haskell
 generator through the engine's `--language-report` boot mode (pure
 computation, no graphical engine, headless simulation, or world
 generation) over a seed range and reports profile diversity, canonical
 native-name renderings alongside their #709 English glosses, root
-collisions, duplicate-name counts, output-length distribution, and
-ASCII/length/capitalization/punctuation contract violations.
+collisions, duplicate-name counts, output-length distribution,
+ASCII/length/capitalization/punctuation contract violations, and
+#1094's per-profile admissible two-consonant onset sets and `y` roles.
 
 ```bash
 # Human-readable report
 python3 tools/language_report.py --seeds 0:255
 
-# Check mode: exits nonzero on any root collision, contract violation,
-# fewer than 240 distinct profile signatures across 256 seeds, or
-# fewer than 95% distinct native names across the canonical sample
+# Check mode: the enforced quality gate (#1094 requirement 10)
 python3 tools/language_report.py --seeds 0:255 --check
 ```
+
+`--check` splits into two kinds of assertion:
+
+- **Structural gates**, enforced for any seed range: zero root
+  collisions, zero output-contract violations, no name duplicated
+  within a single language, every version-2 profile's admissible-onset
+  count inside the inclusive 25-45% band of its own `n*(n-1)` ordered
+  pairs (integer arithmetic, never a rounded percentage), no empty
+  version-2 relation, every word-initial two-consonant onset accepted
+  by that profile's own exported relation, no identical-consonant
+  onset, a 3-character minimum name length, a 22-character structural
+  maximum, and profiles whose stamped version matches the report
+  header.
+- **Pinned regression gates**, measured from the current generator at
+  the canonical `--seeds 0:255` sample and skipped (loudly) for any
+  other range: exact distinct-signature and distinct-name counts
+  (each also floored at the historical 240/256 and 95% ratios),
+  the exact maximum name length, the average within ±0.5, the
+  cross-seed shared-pair onset-diversity rule, and the presence of
+  consonant-only, vowel-only, and dual-role `y` profiles. These are
+  pins to update deliberately alongside a generator change, not
+  invariants — nothing forbids two independently generated languages
+  from coincidentally sharing a short string.
+
+Word-initial onset scoping: rendered roots are flat text with no
+per-character slot provenance, so the onset gates look only at the
+name's first two glyphs and the first two after each `-` join, and only
+when both are consonant-capable and neither is vowel-capable in that
+profile (a dual-role `y` in a vowel slot would otherwise look like a
+cluster member). Interior adjacencies come from syllable and compound
+concatenation, which #1094 assigns to L1c.
 
 Exit codes: 0 pass, 1 check failure, 2 bad invocation.
 

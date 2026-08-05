@@ -83,8 +83,30 @@ buildSyllables prof baseSeed n step =
         (rest, step2) = buildSyllables prof baseSeed (n - 1) step1
     in (syll <> rest, step2)
 
+-- | Render one syllable.
+--
+--   A shape whose first two slots are both consonants (@CCV@ is the
+--   only one in the catalogue) is an in-syllable two-consonant ONSET.
+--   From version 2 on, that onset is selected as a WHOLE PAIR from the
+--   profile's admissible-onset relation with a single indexed draw
+--   (#1094 requirement 5) — not two independent consonant draws, and
+--   with no rejection sampling, retry, search, or backtracking
+--   anywhere. Selection is therefore bounded-time and deterministic,
+--   and an identical-consonant onset is impossible because the relation
+--   is irreflexive.
+--
+--   Version 1 carries an empty relation, so it falls through to the
+--   historical independent-draw path below and stays byte-identical
+--   (#1094 requirement 1). The two consumed steps match the two
+--   consonant slots, keeping every later slot's draw where it was.
 renderShape ∷ Profile → Word64 → SyllableShape → Int → (Text, Int)
-renderShape prof baseSeed shape step0 = go (shapeSegments shape) step0 ""
+renderShape prof baseSeed shape step0 = case shapeSegments shape of
+    (ConsonantSlot : ConsonantSlot : rest)
+        | pairs@(_ : _) ← onsetPairs (profOnset prof) →
+            let (a, b) = pairs !! pickIndex (draw baseSeed step0) (length pairs)
+                (tl, step') = go rest (step0 + 2) ""
+            in (T.pack [a, b] <> tl, step')
+    segs → go segs step0 ""
   where
     go [] step acc = (acc, step)
     go (ConsonantSlot : rest) step acc =
