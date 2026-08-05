@@ -13,9 +13,9 @@ import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
-import Engine.Core.Capability.UnitCombat (toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
+import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
 import Building.Knowledge.Live (containerObserver, seedBuiltContainer)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -161,7 +161,11 @@ buildingGetBuildRequiredFn env = do
 --   @BuildingSpawn@, which creates a worker-built building at zero
 --   progress — and deliberately not anything a LOAD can re-trigger, so
 --   restoring an already-built container never masquerades as a new
---   construction event. 'Building.Knowledge.Live.seedBuiltContainer'
+--   construction event. This arm covers exactly
+--   'Building.Knowledge.SeedAtBuildCompletion' defs; the INSTANT-BUILT
+--   class ('Building.Knowledge.SeedAtSpawn', which never calls this
+--   verb at all) is seeded by "Building.Thread.Command" at placement.
+--   'Building.Knowledge.Live.seedBuiltContainer'
 --   additionally refuses to overwrite an existing record, so a later
 --   re-crossing (progress driven back down and up again) cannot erase a
 --   real observation.
@@ -186,8 +190,7 @@ buildingAddBuildProgressFn env = do
                             crossed = case HM.lookup (biDefName inst) (bmDefs bm) of
                                 Nothing  → False
                                 Just def →
-                                    bdBuildWork def > 0
-                                      ∧ bdStorageCapacity def > 0
+                                    seedTriggerFor def ≡ SeedAtBuildCompletion
                                       ∧ biBuildProgress inst < bdBuildWork def
                                       ∧ newProg ≥ bdBuildWork def
                         in (bm { bmInstances = HM.insert bid inst' (bmInstances bm) }
@@ -195,7 +198,6 @@ buildingAddBuildProgressFn env = do
             when justCompleted $ Lua.liftIO $ void $
                 seedBuiltContainer
                     (containerObserver (toBuildingCapability env)
-                                       (toUnitCombatCapability env)
                                        (toWorldSimCapability env)
                                        (toContentRegistriesCapability env))
                     bid

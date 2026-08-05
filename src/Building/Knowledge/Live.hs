@@ -5,16 +5,17 @@
 --   "World.State.Types"' import graph, which would otherwise cycle
 --   through the capability records this one projects from).
 --
---   Every reveal below takes a 'ContainerObserver' — the five live
+--   Every reveal below takes a 'ContainerObserver' — the four live
 --   containers a reveal actually needs, read out of the relevant
 --   capability records by 'containerObserver'. That is the same shape
 --   "Unit.Transfer"'s @LiveState@ already uses, and it has two payoffs:
 --   no consumer of this module gains unrestricted
 --   'Engine.Core.State.EngineEnv' access
 --   (@tools/engine_env_capability_audit.py@), and every trigger below is
---   exercisable from hspec against five freshly-made 'IORef's with no
---   engine boot at all. The two DEMOLITION helpers take the
---   world-manager ref alone, since that is genuinely all they touch.
+--   exercisable from hspec against four freshly-made 'IORef's with no
+--   engine boot at all. The unit-gated reveal takes the unit roster as
+--   its own argument, and the two DEMOLITION helpers take the
+--   world-manager ref alone — each asking for exactly what it touches.
 --
 --   __What reveals contents__ (epic decision 2: an INTERACTION, never
 --   proximity). Every one of them lands here:
@@ -65,7 +66,6 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Building (BuildingCapability(..))
 import Engine.Core.Capability.ContentRegistries (ContentRegistriesCapability(..))
-import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..))
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import Building.Knowledge
 import Building.Types
@@ -80,7 +80,6 @@ import World.State.Types (WorldManager(..), WorldState(..))
 --   it is projected from.
 data ContainerObserver = ContainerObserver
     { coBuildings ∷ !(IORef BuildingManager)
-    , coUnits     ∷ !(IORef UnitManager)
     , coWorlds    ∷ !(IORef WorldManager)
       -- ^ How a container's own page is resolved to the 'WorldState'
       --   that owns its knowledge record.
@@ -92,11 +91,10 @@ data ContainerObserver = ContainerObserver
     }
 
 containerObserver
-    ∷ BuildingCapability → UnitCombatCapability → WorldSimCapability
-    → ContentRegistriesCapability → ContainerObserver
-containerObserver bld uc sim reg = ContainerObserver
+    ∷ BuildingCapability → WorldSimCapability → ContentRegistriesCapability
+    → ContainerObserver
+containerObserver bld sim reg = ContainerObserver
     { coBuildings = bcBuildingManagerRef bld
-    , coUnits     = ucUnitManagerRef uc
     , coWorlds    = wsWorldManagerRef sim
     , coItems     = crItemManagerRef reg
     , coGameTime  = wsGameTimeRef sim
@@ -145,10 +143,14 @@ revealContainer co bid = do
 --   contents change underneath it.
 --
 --   Returns 'True' only when a reveal actually happened.
+--   Takes the unit-manager ref as a SEPARATE argument rather than a
+--   fifth 'ContainerObserver' field: it is the only reveal with an
+--   acting unit at all, and the seeding trigger in
+--   "Building.Thread.Command" genuinely has no unit roster to hand.
 revealContainerForUnit
-    ∷ ContainerObserver → UnitId → BuildingId → IO Bool
-revealContainerForUnit co uid bid = do
-    um ← readIORef (coUnits co)
+    ∷ ContainerObserver → IORef UnitManager → UnitId → BuildingId → IO Bool
+revealContainerForUnit co unitsRef uid bid = do
+    um ← readIORef unitsRef
     let commandable = maybe False (isPlayerCommandable ∘ uiFactionId)
                             (HM.lookup uid (umInstances um))
     if commandable then revealContainer co bid else pure False

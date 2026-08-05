@@ -325,9 +325,10 @@ commitToBuilding env req bid = do
                             void $ revealContainerForUnit
                                 (containerObserver
                                     (toBuildingCapability env)
-                                    (toUnitCombatCapability env)
                                     (toWorldSimCapability env)
                                     (toContentRegistriesCapability env))
+                                (ucUnitManagerRef
+                                    (toUnitCombatCapability env))
                                 uid bid
                             pure (Right item)
                         Left r   → do

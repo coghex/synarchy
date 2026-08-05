@@ -75,6 +75,14 @@ cargoDef = (bareDef "cargo_hold_S")
 shedDef ∷ BuildingDef
 shedDef = (bareDef "shed") { bdBuildWork = 60, bdStorageCapacity = 0 }
 
+-- | A storage def with NO construction work (the portal / solar-panel
+--   shape): 'Building.Types.currentActivity' carries it to Built on the
+--   time-based arm, so nothing ever calls @building.addBuildProgress@
+--   for it and placement is its completion event.
+instantCargoDef ∷ BuildingDef
+instantCargoDef = (bareDef "drop_pod")
+    { bdBuildWork = 0, bdStorageCapacity = 150 }
+
 bareDef ∷ Text → BuildingDef
 bareDef name = BuildingDef
     { bdName            = name
@@ -176,6 +184,7 @@ bareItemDef name w = ItemDef
 --   factions.
 data Scene = Scene
     { scObserver  ∷ ContainerObserver
+    , scUnits     ∷ IORef UnitManager
     , scBuildings ∷ IORef BuildingManager
     , scPageA     ∷ WorldState
     , scPageB     ∷ WorldState
@@ -203,8 +212,9 @@ newScene = do
     timeRef  ← newIORef 1000.0
     pure Scene
         { scObserver = ContainerObserver
-            { coBuildings = buildingsRef, coUnits = unitsRef
-            , coWorlds = worldsRef, coItems = itemsRef, coGameTime = timeRef }
+            { coBuildings = buildingsRef, coWorlds = worldsRef
+            , coItems = itemsRef, coGameTime = timeRef }
+        , scUnits = unitsRef
         , scBuildings = buildingsRef
         , scPageA = wsA, scPageB = wsB, scTime = timeRef
         }
@@ -336,14 +346,14 @@ spec = describe "Container knowledge" $ do
            \refreshes the record (the AI deposit/withdraw path)" $ do
             sc ← newScene
             setStorage sc cargoBid [kitAt 100 70]
-            revealContainerForUnit (scObserver sc) scoutUid cargoBid
+            revealContainerForUnit (scObserver sc) (scUnits sc) scoutUid cargoBid
                 `shouldReturn` True
             stateOf sc cargoBid `shouldReturn` KnownContents
 
         it "a DEBUG-faction unit counts too -- the gate is \
            \isPlayerCommandable, not a hand-rolled player-tag test" $ do
             sc ← newScene
-            revealContainerForUnit (scObserver sc) debugUid cargoBid
+            revealContainerForUnit (scObserver sc) (scUnits sc) debugUid cargoBid
                 `shouldReturn` True
             stateOf sc cargoBid `shouldReturn` KnownEmpty
 
@@ -352,7 +362,7 @@ spec = describe "Container knowledge" $ do
            \and the record still does not exist" $ do
             sc ← newScene
             setStorage sc cargoBid [kitAt 100 70]
-            revealContainerForUnit (scObserver sc) wildlifeUid cargoBid
+            revealContainerForUnit (scObserver sc) (scUnits sc) wildlifeUid cargoBid
                 `shouldReturn` False
             stateOf sc cargoBid `shouldReturn` NeverInspected
 
@@ -365,14 +375,14 @@ spec = describe "Container knowledge" $ do
             before ← recordOf sc cargoBid
             setStorage sc cargoBid []
             writeIORef (scTime sc) 9999
-            revealContainerForUnit (scObserver sc) wildlifeUid cargoBid
+            revealContainerForUnit (scObserver sc) (scUnits sc) wildlifeUid cargoBid
                 `shouldReturn` False
             recordOf sc cargoBid `shouldReturn` before
 
         it "an unknown acting unit reveals nothing (no faction, no \
            \reveal) rather than defaulting to commandable" $ do
             sc ← newScene
-            revealContainerForUnit (scObserver sc) (UnitId 99) cargoBid
+            revealContainerForUnit (scObserver sc) (scUnits sc) (UnitId 99) cargoBid
                 `shouldReturn` False
             stateOf sc cargoBid `shouldReturn` NeverInspected
 
@@ -393,6 +403,39 @@ spec = describe "Container knowledge" $ do
             sc ← newScene
             seedBuiltContainer (scObserver sc) cargoBid `shouldReturn` True
             stateOf sc cargoBid `shouldReturn` KnownEmpty
+
+        -- currentActivity has TWO arms, and "the first transition to
+        -- Built" happens at a different MOMENT in each. seedTriggerFor
+        -- is the one classifier both call sites read, so these three
+        -- cases pin which def seeds where. Without the SeedAtSpawn arm
+        -- an instant-built storage building would stay never-inspected
+        -- forever: nothing ever calls building.addBuildProgress for it
+        -- and no tick revisits it.
+        describe "which def seeds, and when" $ do
+            it "a WORKER-BUILT storage def seeds at its build-progress \
+               \crossing, never at placement" $
+                seedTriggerFor cargoDef `shouldBe` SeedAtBuildCompletion
+
+            it "an INSTANT-BUILT storage def (no build work at all) \
+               \seeds at placement -- otherwise nothing would ever \
+               \observe its transition to Built" $
+                seedTriggerFor instantCargoDef `shouldBe` SeedAtSpawn
+
+            it "a def with no storage never seeds at all" $ do
+                seedTriggerFor shedDef `shouldBe` NeverSeed
+                seedTriggerFor (bareDef "portal") `shouldBe` NeverSeed
+
+            it "the instant-built container really does become \
+               \known-empty through the same seeding call its \
+               \placement makes" $ do
+                sc ← newScene
+                modifyIORef' (scBuildings sc) $ \bm → bm
+                    { bmDefs = HM.insert "drop_pod" instantCargoDef (bmDefs bm)
+                    , bmInstances = HM.insert (BuildingId 7)
+                        (mkBuilding pageB "drop_pod" []) (bmInstances bm) }
+                seedBuiltContainer (scObserver sc) (BuildingId 7)
+                    `shouldReturn` True
+                stateOf sc (BuildingId 7) `shouldReturn` KnownEmpty
 
         it "seeding never overwrites an existing observation, so a \
            \re-crossed completion threshold cannot erase what the \
@@ -418,7 +461,7 @@ spec = describe "Container knowledge" $ do
            \proximity is not an interaction (epic decision 2)" $ do
             sc ← newScene
             setStorage sc cargoBid [kitAt 100 70]
-            modifyIORef' (coUnits (scObserver sc)) $ \um → um
+            modifyIORef' (scUnits sc) $ \um → um
                 { umInstances = HM.adjust (\u → u { uiGridX = 0, uiGridY = 0 })
                                           scoutUid (umInstances um) }
             stateOf sc cargoBid `shouldReturn` NeverInspected

@@ -1,8 +1,9 @@
 {-# LANGUAGE Strict #-}
 -- | The building command drain. Narrowed to the @units-buildings-combat@
 --   building half (#896, epic #537): it takes 'BuildingCapability' plus
---   the two strictly narrower values it needs (the shared logger and
---   the world/sim view) rather than an 'Engine.Core.State.EngineEnv',
+--   the strictly narrower values it needs (the shared logger, the
+--   world/sim view and — since #1087 — the content registries) rather
+--   than an 'Engine.Core.State.EngineEnv',
 --   so its only caller — "Unit.Thread", which runs this drain on the
 --   unit thread because there is no building thread
 --   ('docs/engineenv_capability_inventory.md' §2.2) — no longer hands
@@ -13,6 +14,7 @@ module Building.Thread.Command
 
 import UPrelude
 import Engine.Core.Capability.Building (BuildingCapability(..))
+import Engine.Core.Capability.ContentRegistries (ContentRegistriesCapability)
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
@@ -20,26 +22,35 @@ import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import World.State.Types (WorldManager(..))
 import Building.Types
-import Building.Knowledge.Live (forgetAllContainers, forgetContainerEverywhere)
+import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
+import Building.Knowledge.Live
+    (containerObserver, forgetAllContainers, forgetContainerEverywhere
+    , seedBuiltContainer)
 import Building.Command.Types (BuildingCommand(..))
 
 -- | Drain the building command queue in one pass. Called from the
 --   unit thread's tick so we don't need a dedicated building thread —
 --   buildings don't have per-tick logic, just point-in-time spawns
 --   and destroys.
+--
+--   Takes the content-registries view as well since #1087: an
+--   instant-built storage building seeds its container-knowledge record
+--   at placement, and weighing that observation needs the item defs.
 processAllBuildingCommands ∷ IORef LoggerState → WorldSimCapability
+                           → ContentRegistriesCapability
                            → BuildingCapability → IO ()
-processAllBuildingCommands logRef sim bld = do
+processAllBuildingCommands logRef sim reg bld = do
     mCmd ← Q.tryReadQueue (bcBuildingQueue bld)
     case mCmd of
         Just cmd → do
-            handleBuildingCommand logRef sim bld cmd
-            processAllBuildingCommands logRef sim bld
+            handleBuildingCommand logRef sim reg bld cmd
+            processAllBuildingCommands logRef sim reg bld
         Nothing → return ()
 
 handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
-                      → BuildingCapability → BuildingCommand → IO ()
-handleBuildingCommand logRef sim bld
+                      → ContentRegistriesCapability → BuildingCapability
+                      → BuildingCommand → IO ()
+handleBuildingCommand logRef sim reg bld
                       (BuildingSpawn bid defName gx gy gz pageId) = do
     bm ← readIORef (bcBuildingManagerRef bld)
     -- Drop the spawn if its world is gone — a spawn queued before
@@ -78,8 +89,21 @@ handleBuildingCommand logRef sim bld
                     }
             atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
                 (bm' { bmInstances = HM.insert bid inst (bmInstances bm') }, ())
+            -- #1087: an INSTANT-BUILT storage building (bdBuildWork ==
+            -- 0) reaches Built with no construction work to observe —
+            -- nothing ever calls building.addBuildProgress for it, and
+            -- no tick revisits it — so placement IS its completion
+            -- event and it seeds known-empty here. A WORKER-BUILT one
+            -- (SeedAtBuildCompletion) is deliberately untouched: it is
+            -- created at zero progress and seeds only when its progress
+            -- actually crosses bdBuildWork. Load never replays a
+            -- BuildingSpawn (World.Load.Publish installs the manager
+            -- directly), so a restored already-built container cannot
+            -- reach this.
+            when (seedTriggerFor def ≡ SeedAtSpawn) $
+                void $ seedBuiltContainer (containerObserver bld sim reg) bid
 
-handleBuildingCommand _ sim bld (BuildingDestroy bid) = do
+handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         let cleared = if bmSelected bm ≡ Just bid
                       then Nothing
@@ -92,7 +116,7 @@ handleBuildingCommand _ sim bld (BuildingDestroy bid) = do
     -- stale ghost with no surface to clear it.
     forgetContainerEverywhere (wsWorldManagerRef sim) bid
 
-handleBuildingCommand _ sim bld BuildingClearAll = do
+handleBuildingCommand _ sim _ bld BuildingClearAll = do
     -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())

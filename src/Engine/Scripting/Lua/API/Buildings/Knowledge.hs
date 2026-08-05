@@ -18,7 +18,6 @@ import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
-import Engine.Core.Capability.UnitCombat (toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -127,8 +126,8 @@ buildingRefreshContainerKnowledgeFn env = do
 
 observerFor ∷ EngineEnv → ContainerObserver
 observerFor env = containerObserver
-    (toBuildingCapability env) (toUnitCombatCapability env)
-    (toWorldSimCapability env) (toContentRegistriesCapability env)
+    (toBuildingCapability env) (toWorldSimCapability env)
+    (toContentRegistriesCapability env)
 
 pushTextField ∷ Lua.Name → Text → Lua.LuaE Lua.Exception ()
 pushTextField key val = do

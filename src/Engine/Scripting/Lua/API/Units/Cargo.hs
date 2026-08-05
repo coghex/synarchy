@@ -34,8 +34,8 @@ import Engine.Scripting.Lua.API.Units.Inventory (popFirstByNameIx, insertAt, pop
 --   projected from this module's existing capability records.
 observerFor ∷ EngineEnv → ContainerObserver
 observerFor env = containerObserver
-    (toBuildingCapability env) (toUnitCombatCapability env)
-    (toWorldSimCapability env) (toContentRegistriesCapability env)
+    (toBuildingCapability env) (toWorldSimCapability env)
+    (toContentRegistriesCapability env)
 
 -- | unit.transferItemToBuilding(uid, bid, defName) → bool. Atomic
 --   move of one ItemInstance from the unit's inventory to the
@@ -281,7 +281,9 @@ unitDepositToCargoFn env = do
                                     <> " also vanished — "
                                     <> defName <> " lost"
                         when ok $ Lua.liftIO $ void $
-                            revealContainerForUnit (observerFor env) uid bid
+                            revealContainerForUnit (observerFor env)
+                                (ucUnitManagerRef (toUnitCombatCapability env))
+                                uid bid
                         Lua.pushboolean ok
                         return 1
         _ → do
@@ -366,7 +368,9 @@ unitWithdrawFromCargoFn env = do
                                 <> " also vanished — "
                                 <> defName <> " lost"
                     when ok $ Lua.liftIO $ void $
-                        revealContainerForUnit (observerFor env) uid bid
+                        revealContainerForUnit (observerFor env)
+                                (ucUnitManagerRef (toUnitCombatCapability env))
+                                uid bid
                     Lua.pushboolean ok
                     return 1
         _ → do

@@ -51,6 +51,8 @@ module Building.Knowledge
     ( ContainerRecord(..)
     , ContainerKnowledge(..)
     , ContainerKnowledgeState(..)
+    , SeedTrigger(..)
+    , seedTriggerFor
     , emptyContainerKnowledge
     , containerKnowledgeStateId
     , lookupContainer
@@ -69,7 +71,7 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Building.Types (BuildingId(..))
+import Building.Types (BuildingId(..), BuildingDef(..))
 import Item.Types (ItemInstance, ItemManager, itemTotalWeight)
 
 -- | One container's remembered contents, exactly as they were at the
@@ -132,6 +134,48 @@ containerKnowledgeStateId ∷ ContainerKnowledgeState → Text
 containerKnowledgeStateId NeverInspected = "unknown"
 containerKnowledgeStateId KnownEmpty     = "empty"
 containerKnowledgeStateId KnownContents  = "known"
+
+-- | WHEN a storage-capable building's record is seeded as known-empty —
+--   requirement 2's "a storage building the player has just finished
+--   constructing"; they watched it go up, so reporting it as
+--   never-inspected would be wrong.
+--
+--   'Building.Types.currentActivity' has two arms, and the "first
+--   transition to Built" they describe happens at a different MOMENT in
+--   each. This classifier is the one place that mapping lives, so the
+--   two call sites can never disagree about which def seeds where.
+data SeedTrigger
+    = SeedAtBuildCompletion
+      -- ^ WORKER-BUILT (@bdBuildWork > 0@): the building is created at
+      --   zero progress and only becomes Built when 'biBuildProgress'
+      --   reaches 'bdBuildWork'. Seeded by
+      --   @building.addBuildProgress@'s crossing of that threshold —
+      --   deliberately NOT at spawn, which would fire while the thing
+      --   is still a construction site.
+    | SeedAtSpawn
+      -- ^ INSTANT-BUILT (@bdBuildWork == 0@, the portal/solar-panel
+      --   shape): there is no construction work at all, so the
+      --   time-based arm carries it to Built with nothing to observe
+      --   the transition — no tick ever revisits the building, and the
+      --   progress verb is never called for it. Placement IS the
+      --   completion event for this class, so it seeds there. (The
+      --   appearing animation is a visual flourish over an
+      --   already-decided outcome, not construction: the container is
+      --   empty either way, and any deposit during it reveals on its
+      --   own.) Safe against load, which rebuilds
+      --   'Building.Types.BuildingManager' directly in
+      --   "World.Load.Publish" and never replays a @BuildingSpawn@ — so
+      --   restoring an already-built container cannot masquerade as a
+      --   new construction event.
+    | NeverSeed
+      -- ^ No storage at all: nothing to remember, ever.
+    deriving (Show, Eq)
+
+seedTriggerFor ∷ BuildingDef → SeedTrigger
+seedTriggerFor def
+    | bdStorageCapacity def ≤ 0 = NeverSeed
+    | bdBuildWork def > 0       = SeedAtBuildCompletion
+    | otherwise                 = SeedAtSpawn
 
 lookupContainer ∷ BuildingId → ContainerKnowledge → Maybe ContainerRecord
 lookupContainer bid = HM.lookup bid ∘ ckRecords
