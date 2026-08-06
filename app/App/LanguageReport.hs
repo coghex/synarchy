@@ -85,6 +85,12 @@ profileJSON p = object
     , "onsetPairs"      .= map pairText (onsetPairs (profOnset p))
     , "onsetAdmissible" .= onsetPairCount (profOnset p)
     , "onsetTotal"      .= onsetTotalPairs p
+    -- #1095's per-language boundary phonology, emitted for the same
+    -- reason the onset relation is: it is style state the report's
+    -- diversity metrics must be able to see, and the checker's own
+    -- diagnostics name the rule a language actually chose.
+    , "boundaryRule"     .= boundaryRuleText (profBoundary p)
+    , "boundarySegments" .= boundarySegmentText (profBoundary p)
     ]
   where
     shapeText = T.pack ∘ map segChar ∘ shapeSegments

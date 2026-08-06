@@ -42,6 +42,11 @@ module Language.Generated.Types
     , YRole(..)
     , profileYRole
     , yRoleText
+    , BoundaryRule(..)
+    , BoundaryRepair(..)
+    , BoundaryPolicy(..)
+    , boundaryRuleText
+    , boundarySegmentText
     , Profile(..)
     , GeneratorError(..)
     , generatorErrorText
@@ -84,7 +89,7 @@ newtype GeneratorVersion = GeneratorVersion { generatorVersionInt ∷ Int }
 --   'supportedGeneratorVersions': advancing this must never make an
 --   older world's recorded version unconstructible.
 currentGeneratorVersion ∷ GeneratorVersion
-currentGeneratorVersion = GeneratorVersion 2
+currentGeneratorVersion = GeneratorVersion 3
 
 -- | Every version 'Language.Generated.Profile.generateProfile' can
 --   build a profile for — historical versions included, since a save
@@ -94,7 +99,8 @@ currentGeneratorVersion = GeneratorVersion 2
 --   "Test.Headless.Language.Generated" pins the two together (every
 --   entry builds, and no other version does).
 supportedGeneratorVersions ∷ [GeneratorVersion]
-supportedGeneratorVersions = [GeneratorVersion 1, GeneratorVersion 2]
+supportedGeneratorVersions =
+    [GeneratorVersion 1, GeneratorVersion 2, GeneratorVersion 3]
 
 -- | Which generated language produced a piece of rendered text, and
 --   under which generator (#1092). Seed and version are ONE value, so
@@ -214,6 +220,66 @@ yRoleText p = case profileYRole p of
     Just YBothRoles     → "both"
     Nothing             → "none"
 
+-- | Which repair a language applies when a morpheme boundary is not
+--   admissible (#1095 requirement 1). Every repair is an INSERTION or a
+--   right-morpheme edit — never a change to the left morpheme — which is
+--   what makes #710 requirement 9's "the bare root is always a prefix"
+--   guarantee survive boundary phonology at the affix sites.
+data BoundaryRule
+    = BoundaryEpenthetic
+      -- ^ Insert the language's own fixed epenthetic segment.
+    | BoundaryHarmonic
+      -- ^ Assimilation across the boundary: the inserted vowel copies
+      --   the left morpheme's own final nucleus (the segment before its
+      --   closing consonant) when that is a vowel, and falls back to the
+      --   fixed epenthetic vowel when it is not.
+    | BoundarySimplifying
+      -- ^ Cluster simplification: drop the right morpheme's initial
+      --   segment when that both leaves it nonempty and resolves the
+      --   boundary, else fall back to epenthesis.
+    deriving (Show, Eq)
+
+-- | One language's boundary-repair parameters. The two linking
+--   consonants are always DISTINCT, which is what makes a linker
+--   guaranteed to differ from the segment it is separating (see
+--   'Language.Generated.Boundary.joinMorphemes').
+data BoundaryRepair = BoundaryRepair
+    { brRule       ∷ !BoundaryRule
+    , brEpenthetic ∷ !Char  -- ^ Epenthetic vowel, from 'profVowels'.
+    , brLinker     ∷ !Char  -- ^ Linking consonant, from 'profConsonants'.
+    , brLinkerAlt  ∷ !Char  -- ^ A second, distinct linking consonant.
+    } deriving (Show, Eq)
+
+-- | How a generated language mediates a morpheme boundary (#1095).
+--
+--   'BoundaryUnmediated' is what "this version predates boundary
+--   phonology" means — versions 1 and 2 concatenate morphemes raw and
+--   must stay byte-identical (#710 requirement 15, #1092 requirement 4),
+--   exactly as 'emptyOnsetRelation' means "this version constrains no
+--   onset". The mediation query
+--   ('Language.Generated.Boundary.joinMorphemes') is total for every
+--   constructible profile of every version.
+data BoundaryPolicy
+    = BoundaryUnmediated
+    | BoundaryMediated !BoundaryRepair
+    deriving (Show, Eq)
+
+-- | A policy's rule as report text.
+boundaryRuleText ∷ BoundaryPolicy → Text
+boundaryRuleText BoundaryUnmediated = "unmediated"
+boundaryRuleText (BoundaryMediated rep) = case brRule rep of
+    BoundaryEpenthetic   → "epenthetic"
+    BoundaryHarmonic     → "harmonic"
+    BoundarySimplifying  → "simplifying"
+
+-- | A policy's chosen segments as one canonical text, so the signature
+--   can hash them and the report can print them. Empty for an
+--   unmediated policy, which carries no segments at all.
+boundarySegmentText ∷ BoundaryPolicy → Text
+boundarySegmentText BoundaryUnmediated = ""
+boundarySegmentText (BoundaryMediated rep) =
+    T.pack [brEpenthetic rep, brLinker rep, brLinkerAlt rep]
+
 -- | A generated language's naming style — bounded for proper-name
 --   rendering only (#710 requirement 4): enough to fix a phonology and
 --   a handful of compounding/marking rules, nothing resembling general
@@ -231,6 +297,7 @@ data Profile = Profile
     , profPlural         ∷ !PluralMarking
     , profJoin           ∷ !JoinStyle
     , profOnset          ∷ !OnsetRelation
+    , profBoundary       ∷ !BoundaryPolicy
     } deriving (Show, Eq)
 
 -- | Why a profile could not be generated for a requested version.

@@ -18,6 +18,7 @@ import qualified Data.Text as T
 import Language.Semantic.Types (ConceptId(..))
 import Language.Generated.Types
 import Language.Generated.Hash
+import Language.Generated.Boundary (joinSyllables)
 
 -- | Assign every concept in @ids@ a stable, unique native root under
 --   @prof@. Concepts are processed in ascending 'ConceptId' order — the
@@ -63,17 +64,28 @@ generateRoot prof cid attempt =
 minNativeWordLength ∷ Int
 minNativeWordLength = 3
 
+-- | Top up a root that came out below the floor with whole extra
+--   syllables — one of #1095's four boundary sites, so the appended
+--   material meets the existing text through the same mediation every
+--   other join uses (raw concatenation for versions 1-2, which must stay
+--   byte-identical).
 ensureMinLength ∷ Profile → Word64 → Text → Int → Text
 ensureMinLength prof baseSeed raw step
     | T.length raw ≥ minNativeWordLength = raw
     | otherwise =
         let (extra, step') = buildSyllables prof baseSeed 1 step
-        in ensureMinLength prof baseSeed (raw <> extra) step'
+        in ensureMinLength prof baseSeed (joinSyllables prof raw extra) step'
 
 -- | Render @n@ syllables starting at Rng @step@, returning the text and
 --   the next unused step (so callers can keep drawing from the same
 --   deterministic sequence, e.g. 'ensureMinLength' topping up a root
 --   that came out too short).
+--
+--   Syllables meet through 'joinSyllables', which mediates ONLY a
+--   junction that would produce a triple: repairing this join for
+--   cluster admissibility as well would rewrite every root the profile's
+--   own shapes produce, but leaving it raw would let a bare root carry a
+--   triple no later morpheme join could remove (#1095 requirement 3).
 buildSyllables ∷ Profile → Word64 → Int → Int → (Text, Int)
 buildSyllables _ _ 0 step = ("", step)
 buildSyllables prof baseSeed n step =
@@ -81,7 +93,7 @@ buildSyllables prof baseSeed n step =
         shape = shapes !! pickIndex (draw baseSeed step) (length shapes)
         (syll, step1) = renderShape prof baseSeed shape (step + 1)
         (rest, step2) = buildSyllables prof baseSeed (n - 1) step1
-    in (syll <> rest, step2)
+    in (joinSyllables prof syll rest, step2)
 
 -- | Render one syllable.
 --
@@ -99,21 +111,31 @@ buildSyllables prof baseSeed n step =
 --   historical independent-draw path below and stays byte-identical
 --   (#1094 requirement 1). The two consumed steps match the two
 --   consonant slots, keeping every later slot's draw where it was.
+--
+--   Slots are appended through 'joinSyllables' rather than concatenated,
+--   for a reason that is easy to miss: a dual-role @y@ (#1094 requirement
+--   6) sits in BOTH inventories, so a @CVC@ syllable can draw it into
+--   all three slots and render @yyy@ — a triple inside ONE syllable,
+--   with no join anywhere near it. Mediating the slot appends is what
+--   makes "every piece handed to a morpheme join is itself triple-free"
+--   true, which is the induction the whole no-triple guarantee rests on.
+--   The guard cannot fire at slots 0-1 (a run needs three), so a word's
+--   opening two-consonant onset is never disturbed.
 renderShape ∷ Profile → Word64 → SyllableShape → Int → (Text, Int)
 renderShape prof baseSeed shape step0 = case shapeSegments shape of
     (ConsonantSlot : ConsonantSlot : rest)
         | pairs@(_ : _) ← onsetPairs (profOnset prof) →
             let (a, b) = pairs !! pickIndex (draw baseSeed step0) (length pairs)
                 (tl, step') = go rest (step0 + 2) ""
-            in (T.pack [a, b] <> tl, step')
+            in (joinSyllables prof (T.pack [a, b]) tl, step')
     segs → go segs step0 ""
   where
     go [] step acc = (acc, step)
     go (ConsonantSlot : rest) step acc =
         let cs = profConsonants prof
             c = cs !! pickIndex (draw baseSeed step) (length cs)
-        in go rest (step + 1) (acc <> T.singleton c)
+        in go rest (step + 1) (joinSyllables prof acc (T.singleton c))
     go (VowelSlot : rest) step acc =
         let vs = profVowels prof
             v = vs !! pickIndex (draw baseSeed step) (length vs)
-        in go rest (step + 1) (acc <> T.singleton v)
+        in go rest (step + 1) (joinSyllables prof acc (T.singleton v))
