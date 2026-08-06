@@ -18,7 +18,7 @@ import qualified Data.Text as T
 import Language.Semantic.Types (ConceptId(..))
 import Language.Generated.Types
 import Language.Generated.Hash
-import Language.Generated.Boundary (joinSyllables)
+import Language.Generated.Boundary (joinMorphemes, joinSyllables)
 
 -- | Assign every concept in @ids@ a stable, unique native root under
 --   @prof@. Concepts are processed in ascending 'ConceptId' order — the
@@ -65,16 +65,23 @@ minNativeWordLength ∷ Int
 minNativeWordLength = 3
 
 -- | Top up a root that came out below the floor with whole extra
---   syllables — one of #1095's four boundary sites, so the appended
---   material meets the existing text through the same mediation every
---   other join uses (raw concatenation for versions 1-2, which must stay
---   byte-identical).
+--   syllables — one of #1095's four NAMED boundary sites, so the
+--   appended material meets the existing text through 'joinMorphemes':
+--   the full repair, consulting #1094's admissibility relation, not the
+--   triple-only guard the root's own interior syllable joins use. A
+--   short @ab@ root meeting an @sa@ top-up would otherwise keep the
+--   @bs@ cluster that language rejects.
+--
+--   The loop still terminates: a repair either inserts a segment or
+--   trims the top-up's initial one while leaving it nonempty, so the
+--   result is strictly longer than @raw@ every time. Versions 1-2 carry
+--   no policy and concatenate raw, so their output stays byte-identical.
 ensureMinLength ∷ Profile → Word64 → Text → Int → Text
 ensureMinLength prof baseSeed raw step
     | T.length raw ≥ minNativeWordLength = raw
     | otherwise =
         let (extra, step') = buildSyllables prof baseSeed 1 step
-        in ensureMinLength prof baseSeed (joinSyllables prof raw extra) step'
+        in ensureMinLength prof baseSeed (joinMorphemes prof raw extra) step'
 
 -- | Render @n@ syllables starting at Rng @step@, returning the text and
 --   the next unused step (so callers can keep drawing from the same

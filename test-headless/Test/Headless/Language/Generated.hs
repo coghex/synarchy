@@ -140,6 +140,33 @@ tripleProneRoot policy = (boundaryFixture BoundaryEpenthetic)
     , profBoundary       = policy
     }
 
+-- | A version-3 profile every one of whose raw roots is exactly two
+--   characters, so EVERY root goes through 'ensureMinLength''s top-up —
+--   the fourth of #1095's named boundaries. Both a vowel-final @VC@ and
+--   a consonant-initial @CV@ syllable are reachable, so the top-up
+--   really can present the existing text with an inadmissible consonant
+--   cluster rather than only with a potential triple.
+topUpFixture ∷ BoundaryPolicy → Profile
+topUpFixture policy = (boundaryFixture BoundaryEpenthetic)
+    { profSyllableShapes = [ SyllableShape [VowelSlot, ConsonantSlot]
+                           , SyllableShape [ConsonantSlot, VowelSlot] ]
+    , profMinSyllables   = 1
+    , profMaxSyllables   = 1
+    , profBoundary       = policy
+    }
+
+-- | Whether the two glyphs at a root's top-up junction (the raw root is
+--   two characters, so index 1 meets index 2) form a two-consonant
+--   cluster this profile's own relation rejects.
+illegalTopUpCluster ∷ Profile → Text → Bool
+illegalTopUpCluster prof r = case T.unpack r of
+    (_ : a : b : _) →
+        a ≢ b
+        ∧ consonantCapable prof a ∧ consonantCapable prof b
+        ∧ not (vowelCapable prof a) ∧ not (vowelCapable prof b)
+        ∧ not (admissibleOnset prof a b)
+    _ → False
+
 -- | The 3-32/ASCII/capitalization/punctuation contract every rendered
 --   native word must satisfy (#710 requirement 6), pinned as a concrete
 --   predicate rather than left implicit.
@@ -755,6 +782,28 @@ spec = describe "Generated language names" $ do
             filter hasTripleRun raw `shouldSatisfy` not ∘ null
             filter hasTripleRun mediated `shouldBe` []
 
+    describe "min-length top-up is a full morpheme boundary (#1095)" $ do
+        it "repairs an inadmissible cluster there, not merely a triple" $ do
+            -- The top-up is one of the issue's four NAMED sites, so it
+            -- consults the admissibility relation like the affix and
+            -- compound joins do — the root's own interior syllable joins
+            -- are the only place the weaker triple-only guard applies.
+            -- The unmediated twin proves the fixture really presents
+            -- illegal clusters rather than passing vacuously.
+            let ids = take 60 (conceptIds prodCat)
+                rootsOf p = [ generateRoot p c attempt
+                            | c ← ids, attempt ← [0 .. 4 ∷ Int] ]
+                rawProf = topUpFixture BoundaryUnmediated
+            filter (illegalTopUpCluster rawProf) (rootsOf rawProf)
+                `shouldSatisfy` not ∘ null
+            forM_ [BoundaryEpenthetic, BoundaryHarmonic, BoundarySimplifying] $ \rule → do
+                let prof = topUpFixture (profBoundary (boundaryFixture rule))
+                    roots = rootsOf prof
+                roots `shouldSatisfy` not ∘ null
+                filter (illegalTopUpCluster prof) roots `shouldBe` []
+                filter ((< minNativeWordLength) ∘ T.length) roots `shouldBe` []
+                filter hasTripleRun roots `shouldBe` []
+
     describe "grammatical marking survives boundary repair (#1095)" $ do
         it "keeps the bare root a prefix and the mark nonempty, for \
            \every version-3 language" $ do
@@ -936,8 +985,8 @@ spec = describe "Generated language names" $ do
             , Right "Hovlenefolentysoce", Right "Nytivyvcehybycov" ]
 
         it "seed 1" $ nativeRenderingsV3 1 `shouldBe`
-            [ Right "Tyh", Right "Fyn-ytap", Right "Azpat-put"
-            , Right "Byg-angyzny", Right "Ubpugub-yftyk" ]
+            [ Right "Tyh", Right "Fyn-ytap", Right "Azapat-put"
+            , Right "Byg-anagyzny", Right "Ubupugub-yftyk" ]
 
         it "seed 42" $ nativeRenderingsV3 42 `shouldBe`
             [ Right "Yokvya", Right "Tabvib-gigbi", Right "Vaktok-bkivra"
