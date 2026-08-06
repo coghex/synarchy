@@ -55,6 +55,7 @@ import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.World.RenderedSurface as RenderedSurface
+import qualified Test.Headless.World.IslandColumns as IslandColumns
 import qualified Test.Headless.Combat.Damage as CombatDamage
 import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffectiveness
 import qualified Test.Headless.Combat.Severing as CombatSevering
@@ -279,6 +280,7 @@ main = hspec $ do
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
     describe "rendered fluid surface rule (#1112)" RenderedSurface.spec
+    describe "dry island-column fluid smoothing (#1131)" IslandColumns.spec
     WorldLocationDiscovery.spec
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "WorldGen.SoilShed" SoilShed.spec
