@@ -73,7 +73,7 @@ import World.Fluid.River.Identify.BedDepth
     (computeBedDepth, maxBedDepth, computeCarveDelta)
 import World.Fluid.River.Identify.Breakthrough (addBreakthroughs)
 import World.Fluid.River.Identify.ChunkIndex
-    (buildCarveDeltaIndex, buildRiverChunkIndex)
+    (buildRiverCarveDeltaIndex, buildRiverChunkIndex)
 import World.Fluid.River.Identify.Components
     ( extendRiverChains, clampCentreSurfaces, clampLateralSurfaces
     , expandWidth, depthFromRadius, cullByLength, labelRiverComponents
@@ -258,8 +258,8 @@ traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         -- coastal mountains.
         carveDelta = computeCarveDelta worldTiles terrain
                                        isRiverTileB bedDepth surfZL
-        carveByChunk = buildCarveDeltaIndex worldSize half isRiverTileB
-                                            carveDelta
+        carveByChunk = buildRiverCarveDeltaIndex worldSize half isRiverTileB
+                                                 carveDelta
 
     in if nComps ≡ 0
        then emptyWorldRivers
