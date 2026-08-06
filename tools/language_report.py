@@ -136,7 +136,7 @@ PIN_MAX_LENGTH = 21
 # small drop is bound forms shortening the dependent slot of whichever
 # canonical expressions happened to select one. Observational — the hard
 # gate is the 3-32 output contract.
-PIN_AVG_LENGTH = 9.8016
+PIN_AVG_LENGTH = 9.7969
 AVG_LENGTH_TOLERANCE = 0.5
 
 # Hard floors, kept no weaker than the ratios this checker enforced

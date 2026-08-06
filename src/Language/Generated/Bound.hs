@@ -20,10 +20,9 @@
 --     is the only shape 'boundCandidate' can produce.
 --   * __One notion of legality.__ A candidate's internal consonant
 --     clusters are judged by #1094's own exported
---     'Language.Generated.Onset.admissibleOnset' relation, over exactly
---     the adjacencies #1095's boundary repair asks about (the shared
---     'Language.Generated.Onset.consonantOnly' scoping). No second
---     legality predicate exists here.
+--     'Language.Generated.Onset.admissibleOnset' relation — over every
+--     adjacent pair of CONSONANT-CAPABLE characters, a dual-role @y@
+--     included. No second legality predicate exists here.
 --   * __Selection is ranked, not traversed.__ Concepts are visited in
 --     ascending @('boundSeed', 'ConceptId')@ order. The seed is
 --     domain-separated from root generation and the concept id breaks
@@ -65,7 +64,7 @@ import qualified Data.Text as T
 import Language.Semantic.Types (ConceptId(..))
 import Language.Generated.Types
 import Language.Generated.Hash
-import Language.Generated.Onset (admissibleOnset, consonantOnly)
+import Language.Generated.Onset (admissibleOnset, consonantCapable)
 
 -- | One language's complete concept→morpheme assignment: the free root
 --   every concept has, plus the bound form the few selected concepts
@@ -202,14 +201,24 @@ boundFormLegal prof free bound =
   where
     asciiLetter c = isAsciiUpper c ∨ isAsciiLower c
 
--- | Whether every consonant cluster INSIDE a bound form is admissible
---   under this profile's own exported relation (#1096 requirement 4).
+-- | Whether every adjacent pair of CONSONANT-CAPABLE visible characters
+--   inside a bound form is accepted by this profile's own exported
+--   relation (#1096 requirement 4).
 --
---   Scoped by the shared 'consonantOnly' rule, so this asks
---   'admissibleOnset' about exactly the adjacencies #1095's boundary
---   repair asks it about — a dual-role @y@ is not treated as a cluster
---   member in either place. Identical adjacent consonants are rejected
---   by the relation itself (it is irreflexive), so a doubled consonant
+--   "Consonant-capable" is the scoping the requirement names, and it is
+--   deliberately WIDER than #1095's boundary repair, which asks about
+--   consonant-ONLY pairs. A dual-role @y@ (#1094 requirement 6) is
+--   consonant-capable, so a @by@ adjacency inside a candidate is
+--   validated here even though the same adjacency at a morpheme
+--   boundary would not be treated as a cluster. The two are not in
+--   tension: this is a candidate FILTER, free to be conservative
+--   because a rejected candidate only costs one concept its bound form,
+--   whereas the boundary rule REWRITES text and must not disturb an
+--   adjacency whose slot provenance it cannot know.
+--
+--   No second legality predicate is introduced: the verdict is always
+--   'admissibleOnset''s. Identical adjacent consonants are rejected by
+--   the relation itself (it is irreflexive), so a doubled consonant
 --   makes a candidate inadmissible and the ladder simply moves on; that
 --   costs a candidate, never a doubled letter in completed output,
 --   which comes from the free head root and from morphemes this
@@ -218,8 +227,10 @@ boundFormAdmissible ∷ Profile → Text → Bool
 boundFormAdmissible prof bound = all ok (T.zip bound (T.drop 1 bound))
   where
     ok (a, b)
-        | consonantOnly prof a ∧ consonantOnly prof b = admissibleOnset prof a b
-        | otherwise                                    = True
+        | consonantCapable prof a ∧ consonantCapable prof b
+        = admissibleOnset prof a b
+        | otherwise
+        = True
 
 -- | How many accepted bound forms collide, case-insensitively, with
 --   another concept's free form or with another accepted bound form

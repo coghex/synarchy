@@ -189,6 +189,19 @@ boundFixture compound genitive = (boundaryFixture BoundaryEpenthetic)
     , profPlural        = PluralMarking "h"
     }
 
+-- | A version-4 fixture whose @y@ is BOTH a consonant and a vowel, with
+--   a relation that admits @by@ and not @ky@ — so the two adjacencies
+--   #1096 requirement 4's "consonant-capable" scoping brings into range
+--   have different answers, and a test can tell the wider scoping from
+--   #1095's consonant-only one rather than only observing that both
+--   pass.
+dualRoleBoundFixture ∷ Profile
+dualRoleBoundFixture = (boundFixture ModifierFirst OwnerFirst)
+    { profConsonants = "bhky"
+    , profVowels     = "aey"
+    , profOnset      = OnsetRelation (S.fromList [('b', 'h'), ('b', 'y')])
+    }
+
 -- | The fixture's assignment: one concept with a bound form, one
 --   without. @HEAD@ has none, so it doubles as the "a concept with no
 --   bound form uses its free form in every slot" case.
@@ -1122,6 +1135,34 @@ spec = describe "Generated language names" $ do
             boundFormAdmissible fx "kabh" `shouldBe` True   -- 'bh' admitted
             boundFormAdmissible fx "kabs" `shouldBe` False  -- 'bs' is not
             boundFormAdmissible fx "kabb" `shouldBe` False  -- irreflexive
+
+        it "validates a pair involving a dual-role 'y', which a \
+           \consonant-ONLY scoping would have skipped" $ do
+            -- Requirement 4 says CONSONANT-CAPABLE, and a dual-role 'y'
+            -- (#1094 requirement 6) is exactly that. This is where the
+            -- filter is deliberately WIDER than #1095's boundary rule,
+            -- which asks about consonant-only pairs because it rewrites
+            -- text whose slot provenance it cannot know.
+            boundFormAdmissible dualRoleBoundFixture "by" `shouldBe` True
+            boundFormAdmissible dualRoleBoundFixture "ky" `shouldBe` False
+            boundFormAdmissible dualRoleBoundFixture "yb" `shouldBe` False
+
+            -- And it is load bearing on real languages, not only on a
+            -- fixture: candidates exist that this scoping rejects and a
+            -- consonant-only one would have let through.
+            let narrowOnly p c = consonantCapable p c ∧ not (vowelCapable p c)
+                narrowAdmissible p t = and
+                    [ not (narrowOnly p a ∧ narrowOnly p b)
+                      ∨ admissibleOnset p a b
+                    | (a, b) ← T.zip t (T.drop 1 t) ]
+                divergent =
+                    [ (profSeed p, c, cand)
+                    | (p, lr) ← take 64 v4Assignments
+                    , (c, r) ← M.toList (lrFree lr)
+                    , cand ← boundCandidates p c r
+                    , narrowAdmissible p cand
+                    , not (boundFormAdmissible p cand) ]
+            divergent `shouldSatisfy` not ∘ null
 
         it "has zero free/free and zero bound-related collisions \
            \(requirement 5)" $ do
