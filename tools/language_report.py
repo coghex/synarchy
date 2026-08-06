@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generated-language report (#710, #1094, #1095) — quality/regression
-tool for the native-name generator (`Language.Generated.*`), not a
-bug-gating probe.
+"""Generated-language report (#710, #1094, #1095, #1096) —
+quality/regression tool for the native-name generator
+(`Language.Generated.*`), not a bug-gating probe.
 
 Drives the production Haskell generator directly through the engine's
 `--language-report` dispatch mode (`cabal run exe:synarchy --
@@ -11,14 +11,21 @@ generation) and reports on/validates its JSON output: profile
 diversity, canonical native-name renderings alongside their English
 glosses, root collisions, duplicate names, output-length distribution,
 contract (ASCII/length/capitalization/punctuation) violations, #1094's
-two-consonant-onset and `y`-role contracts, and #1095's triple-letter-run
-guarantee and per-language boundary phonology. No generation logic is
-reimplemented here — only inspection of the Haskell generator's real
-output.
+two-consonant-onset and `y`-role contracts, #1095's triple-letter-run
+guarantee and per-language boundary phonology, and #1096's bound
+morphemes. No generation logic is reimplemented here — only inspection
+of the Haskell generator's real output.
+
+That last clause is why #1096's admissibility verdict arrives as a
+per-record `admissible` BOOLEAN computed by the Haskell side rather than
+being recomputed here: the admissibility relation is generation logic.
+The prefix rule and both collision totals ARE directly checkable from
+the exposed strings and counts, so only that one signal crosses as a
+verdict.
 
 `--check` is the enforced 256-seed quality gate (#1094 requirement 10,
-#1095 acceptance). It splits into two kinds of assertion, and the
-distinction matters:
+#1095 and #1096 acceptance). It splits into two kinds of assertion, and
+the distinction matters:
 
 * Structural gates hold for ANY seed range and are always enforced —
   zero root collisions, zero contract violations, zero triple-letter
@@ -26,15 +33,31 @@ distinction matters:
   every word-initial two-consonant onset admissible under that profile's
   own exported relation, no identical-consonant onset, every
   boundary-phonology-era profile declaring a real boundary rule, no
-  duplicate name within a single language, and the 3-character minimum.
+  duplicate name within a single language, the 3-character minimum, and
+  #1096's bound-form rules (at most eight per language, every stored
+  form a nonempty strictly-shorter prefix retaining a visible letter,
+  zero inadmissible forms, zero bound-related collisions, at least one
+  visible free-to-bound shortening across the sample, and no bound form
+  at all below the version that introduced them).
 * Pinned gates are REGRESSION PINS measured from the current generator
   at the canonical `--seeds 0:255` sample: exact distinct-signature,
   total-name and distinct-name counts, the maximum and average name
-  length, the cross-seed onset-diversity ratio, and the presence of all
-  three `y` roles. Nothing forbids two independently generated languages
-  from coincidentally sharing a short string, so these are pins to be
-  updated deliberately alongside a generator change, not invariants.
-  They are skipped (loudly) for any other seed range.
+  length, the cross-seed onset-diversity ratio, the presence of all
+  three `y` roles, and the presence of both compound and both genitive
+  orderings. Nothing forbids two independently generated languages from
+  coincidentally sharing a short string, so these are pins to be updated
+  deliberately alongside a generator change, not invariants. They are
+  skipped (loudly) for any other seed range.
+
+#1096's bound-slot renderings are accumulated SEPARATELY from the
+canonical `renderings` array and never enter the distinct-name,
+profile-signature, or pinned length-distribution populations. Those
+gates are ratios and exact counts measured against the canonical
+sample; folding tens of thousands of extra names into their
+denominators would let a real regression hide behind added volume. The
+new names are still subject to every zero-gated structural check
+(output contract, 3-32 length, triple runs, word-initial onsets), where
+extra population can only ever find more defects, never mask one.
 
 Doubled letters are REPORTED, never gated. #1095 requires them to remain
 legal at a comparable rate rather than to hit a threshold, and the
@@ -91,16 +114,29 @@ MIN_LENGTH_FLOOR = 3
 # epenthesis can never push the tail past the ceiling.
 STRUCTURAL_MAX_LENGTH = 27
 
+# #1096 requirement 2's per-language cap on bound morphemes.
+MAX_BOUND_FORMS = 8
+
+# #1096: the first generator version whose languages form bound
+# morphemes. Below it a language has none at all and every dependent
+# slot renders with the free form, which is what keeps versions 1-3's
+# pinned goldens byte-identical.
+BOUND_FORM_VERSION = 4
+
 # --- Pinned gates (the canonical 0:255 sample only) -------------------
 
 PINNED_RANGE = (0, 255)
-PINNED_VERSION = 3
+PINNED_VERSION = 4
 
 PIN_DISTINCT_SIGNATURES = 256
 PIN_TOTAL_NAMES = 1280
 PIN_DISTINCT_NAMES = 1280
 PIN_MAX_LENGTH = 21
-PIN_AVG_LENGTH = 9.9422
+# Measured at generator version 4. The version-3 figure was 9.9422; the
+# small drop is bound forms shortening the dependent slot of whichever
+# canonical expressions happened to select one. Observational — the hard
+# gate is the 3-32 output contract.
+PIN_AVG_LENGTH = 9.8016
 AVG_LENGTH_TOLERANCE = 0.5
 
 # Hard floors, kept no weaker than the ratios this checker enforced
@@ -225,6 +261,30 @@ def word_initial_onsets(name, profile):
     return found
 
 
+def bound_form_violations(free, bound):
+    """Why a stored bound form breaks #1096 requirement 3's shape rules,
+    or [] when it does not.
+
+    "Differs from the free form only by deleting terminal characters" is
+    exactly "nonempty strict prefix, strictly shorter", so that is what
+    is checked rather than a separate edit-distance notion. Admissibility
+    is NOT checked here — it is generation logic, and arrives as the
+    Haskell-computed `admissible` flag instead.
+    """
+    if not isinstance(free, str) or not isinstance(bound, str):
+        return ["missing"]
+    reasons = []
+    if not bound:
+        reasons.append("empty")
+    if len(bound) >= len(free):
+        reasons.append("not-shorter")
+    if not free.startswith(bound):
+        reasons.append("not-a-prefix")
+    if not any(c.isascii() and c.isalpha() for c in bound):
+        reasons.append("no-visible-letter")
+    return reasons
+
+
 def self_test():
     """Prove the detectors this tool gates on actually fire. Runs no
     generator, so it stays a fast, dependency-free check that a green
@@ -262,6 +322,27 @@ def self_test():
     # uses (Language.Generated.Onset.onsetDensityBounds).
     expect("density_bounds(30)", density_bounds(30), (8, 13))
     expect("density_bounds(132)", density_bounds(132), (33, 59))
+
+    # #1096's bound-form shape rules, so "zero prefix violations" is
+    # evidence the detector FIRES on a bad form rather than evidence it
+    # cannot see one.
+    expect("bound 'kara'/'kar'", bound_form_violations("kara", "kar"), [])
+    expect("bound 'kara'/'k'", bound_form_violations("kara", "k"), [])
+    expect("bound 'kara'/''", bound_form_violations("kara", ""),
+           ["empty", "no-visible-letter"])
+    expect("bound 'kara'/'kara'", bound_form_violations("kara", "kara"),
+           ["not-shorter"])
+    expect("bound 'kara'/'karas'", bound_form_violations("kara", "karas"),
+           ["not-shorter", "not-a-prefix"])
+    # Stem substitution and internal deletion are exactly what the
+    # strict-prefix rule exists to exclude.
+    expect("bound 'kara'/'kor'", bound_form_violations("kara", "kor"),
+           ["not-a-prefix"])
+    expect("bound 'karad'/'krd'", bound_form_violations("karad", "krd"),
+           ["not-a-prefix"])
+    expect("bound 'kara'/'-'", bound_form_violations("kara", "-"),
+           ["not-a-prefix", "no-visible-letter"])
+    expect("bound None", bound_form_violations("kara", None), ["missing"])
 
     for f in failures:
         print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
@@ -321,6 +402,10 @@ def main():
               f"{' ...' if len(p['onsetPairs']) > 12 else ''}")
         print(f"    boundaryRule={p['boundaryRule']} "
               f"segments={p['boundarySegments']!r}")
+        bfs = s["boundForms"]
+        print(f"    bound forms ({len(bfs)}/{MAX_BOUND_FORMS}): "
+              + (", ".join(f"{b['concept']} {b['free']}->{b['bound']}"
+                            for b in bfs) or "none"))
     print()
 
     print("canonical renderings (representative seeds), native (English gloss):")
@@ -337,6 +422,22 @@ def main():
     print(f"root collisions per language ({len(seeds)} seeds):")
     for s in seeds:
         print(f"  seed {s['seed']}: {s['rootCollisions']} collision(s)")
+    print()
+
+    print("bound-slot renderings (representative seeds), "
+          "the same concept bare and in each dependent slot:")
+    for s in representative:
+        print(f"  seed {s['seed']}:")
+        by_concept = {}
+        for r in s["boundRenderings"]:
+            by_concept.setdefault(r["concept"], []).append(r)
+        for concept, rows in list(by_concept.items())[:3]:
+            rendered = "  ".join(
+                f"{r['slot']}={r['native']}" + ("*" if r["shortened"] else "")
+                for r in rows)
+            print(f"    {concept:<12} {rendered}")
+    print("  (* = the completed name is visibly different from the same "
+          "expression rendered with free forms only)")
     print()
 
     # Aggregate stats over every requested seed, not just the
@@ -371,6 +472,67 @@ def main():
             if count > 1:
                 within_seed_duplicates.append((s["seed"], name, count))
 
+    # --- #1096: bound morphemes ---------------------------------------
+    # Accumulated in their OWN containers. The canonical arrays above
+    # feed ratio and exact-count pins; these feed zero-gated structural
+    # checks only, so the two populations must not be mixed.
+    bound_over_cap = []
+    bound_shape_failures = []
+    bound_inadmissible = []
+    bound_before_version = []
+    bound_collisions_total = 0
+    bound_form_total = 0
+    bound_shortenings = 0
+    bound_violations = []
+    bound_triple_runs = []
+    bare_slot_mismatches = []
+    bound_lengths = []
+    for s in seeds:
+        p = s["profile"]
+        forms = s["boundForms"]
+        bound_form_total += len(forms)
+        bound_collisions_total += s["boundCollisions"]
+        if len(forms) > MAX_BOUND_FORMS:
+            bound_over_cap.append((s["seed"], len(forms)))
+        # A version predating bound morphology must have none at all:
+        # that is what keeps its pinned goldens byte-identical.
+        if p["version"] < BOUND_FORM_VERSION and forms:
+            bound_before_version.append((s["seed"], p["version"], len(forms)))
+        free_of = {}
+        for b in forms:
+            free_of[b["concept"]] = b["free"]
+            reasons = bound_form_violations(b["free"], b["bound"])
+            if reasons:
+                bound_shape_failures.append(
+                    (s["seed"], b["concept"], b["free"], b["bound"], reasons))
+            if not b["admissible"]:
+                bound_inadmissible.append(
+                    (s["seed"], b["concept"], b["bound"]))
+        for r in s["boundRenderings"]:
+            name = r["native"]
+            if r["shortened"]:
+                bound_shortenings += 1
+            reasons = contract_violations(name)
+            if reasons:
+                bound_violations.append(
+                    (s["seed"], r["concept"], r["slot"], name, reasons))
+            if name is None:
+                continue
+            bound_lengths.append(len(name))
+            for run in letter_runs(name, 3):
+                bound_triple_runs.append(
+                    (s["seed"], r["concept"], r["slot"], name, run))
+            # Requirement 6's first row: Bare has no dependent slot, so
+            # it is always the free form. Compared case-insensitively
+            # because rendering capitalizes the initial — that is the
+            # only difference this tool asserts, and it reimplements no
+            # generation logic to do it.
+            if r["slot"] == "bare":
+                free = free_of.get(r["concept"])
+                if free is not None and name.lower() != free.lower():
+                    bare_slot_mismatches.append(
+                        (s["seed"], r["concept"], name, free))
+
     name_counts = Counter(n for n in all_names if n is not None)
     distinct_names = set(name_counts)
     total_names = len(all_names)
@@ -386,12 +548,20 @@ def main():
     y_role_counts = Counter()
     version_counts = Counter()
     boundary_rule_counts = Counter()
+    # #1096 requirement 6: profile-specific compound/genitive ordering
+    # changes only the final display order, never which slot is
+    # dependent — so the sample has to actually contain both directions
+    # for that claim to have been exercised at all.
+    compound_orders = Counter()
+    genitive_orders = Counter()
     unmediated_profiles = []
     for s in seeds:
         p = s["profile"]
         version_counts[p["version"]] += 1
         y_role_counts[p["yRole"]] += 1
         boundary_rule_counts[p["boundaryRule"]] += 1
+        compound_orders[p["compoundOrder"]] += 1
+        genitive_orders[p["genitiveOrder"]] += 1
         # #1095: a version that has boundary phonology must actually
         # carry a policy. An "unmediated" profile there would silently
         # render every join raw while every other gate still passed.
@@ -411,8 +581,14 @@ def main():
                                       band_lo, band_hi))
 
     # --- #1094: word-initial onsets against the exported relation -----
-    # Version 2 only: version 1 renders CCV unconstrained by design and
+    # Version 2 onward: version 1 renders CCV unconstrained by design and
     # its pinned goldens include an identical-consonant onset.
+    #
+    # #1096's bound-slot names are included here. Both gates below are
+    # zero-gated rather than ratios, so extra population can only find
+    # more defects, and the property genuinely must hold for them: a
+    # bound form is a PREFIX of its free root, so a name beginning with
+    # one begins with exactly the two glyphs the free root began with.
     onsets_checked = 0
     identical_onsets = []
     inadmissible_onsets = []
@@ -421,16 +597,18 @@ def main():
         if p["version"] == 1:
             continue
         admissible_set = set(p["onsetPairs"])
-        for r in s["renderings"]:
-            name = r["native"]
+        labelled = ([(r["form"], r["native"]) for r in s["renderings"]]
+                    + [(f"{r['concept']}/{r['slot']}", r["native"])
+                       for r in s["boundRenderings"]])
+        for (label, name) in labelled:
             if name is None:
                 continue
             for (pos, a, b) in word_initial_onsets(name, p):
                 onsets_checked += 1
                 if a == b:
-                    identical_onsets.append((s["seed"], r["form"], name, a + b))
+                    identical_onsets.append((s["seed"], label, name, a + b))
                 if a + b not in admissible_set:
-                    inadmissible_onsets.append((s["seed"], r["form"], name,
+                    inadmissible_onsets.append((s["seed"], label, name,
                                                  a + b, pos))
 
     # --- #1094: cross-seed shared-pair diversity ----------------------
@@ -506,6 +684,45 @@ def main():
           f"inventories): {len(qualifying)}, disagreeing across profiles: "
           f"{len(disagreeing)} ({diversity_ratio * 100:.1f}%)")
 
+    # --- #1096 summary -------------------------------------------------
+    bound_counts = Counter(len(s["boundForms"]) for s in seeds)
+    print(f"bound forms per language (cap {MAX_BOUND_FORMS}): "
+          f"{', '.join(f'{k} form(s)={v} language(s)' for k, v in sorted(bound_counts.items()))}"
+          f"; {bound_form_total} total")
+    print(f"free/free root collisions: {total_collisions}")
+    print(f"bound-related collisions (bound vs any free form or another "
+          f"bound form): {bound_collisions_total}")
+    print(f"stored bound forms failing the prefix/shape rules: "
+          f"{len(bound_shape_failures)}")
+    for (seed, concept, free, bound, reasons) in bound_shape_failures[:20]:
+        print(f"  seed={seed} {concept} {free!r}->{bound!r} "
+              f"reasons={','.join(reasons)}")
+    print(f"stored bound forms rejected by their own profile's "
+          f"admissibility relation: {len(bound_inadmissible)}")
+    for (seed, concept, bound) in bound_inadmissible[:20]:
+        print(f"  seed={seed} {concept} {bound!r}")
+    print(f"visible free-to-bound shortenings in completed output: "
+          f"{bound_shortenings} / {len(bound_lengths)} bound-slot rendering(s)")
+    if bound_lengths:
+        print(f"bound-slot output length distribution: min={min(bound_lengths)} "
+              f"max={max(bound_lengths)} "
+              f"avg={sum(bound_lengths) / len(bound_lengths):.4f}")
+    print(f"bound-slot contract violations: {len(bound_violations)}")
+    for (seed, concept, slot, name, reasons) in bound_violations[:20]:
+        print(f"  seed={seed} {concept}/{slot} name={name!r} "
+              f"reasons={','.join(reasons)}")
+    print(f"bound-slot triple-letter runs: {len(bound_triple_runs)}")
+    for (seed, concept, slot, name, run) in bound_triple_runs[:20]:
+        print(f"  seed={seed} {concept}/{slot} name={name!r} run={run!r}")
+    print(f"Bare renderings disagreeing with the concept's free form: "
+          f"{len(bare_slot_mismatches)}")
+    for (seed, concept, name, free) in bare_slot_mismatches[:20]:
+        print(f"  seed={seed} {concept} bare={name!r} free={free!r}")
+    print(f"compound orders: "
+          f"{', '.join(f'{k}={v}' for k, v in sorted(compound_orders.items()))}")
+    print(f"genitive orders: "
+          f"{', '.join(f'{k}={v}' for k, v in sorted(genitive_orders.items()))}")
+
     if not args.check:
         return 0
 
@@ -564,6 +781,65 @@ def main():
                  f"architecture's structural maximum of {STRUCTURAL_MAX_LENGTH}")
     else:
         fail("no canonical names were rendered")
+
+    # --- #1096: bound morphemes (structural, every seed range) --------
+
+    if bound_over_cap:
+        fail(f"{len(bound_over_cap)} language(s) hold more than "
+             f"{MAX_BOUND_FORMS} bound forms (first: seed "
+             f"{bound_over_cap[0][0]} with {bound_over_cap[0][1]})")
+
+    if bound_before_version:
+        first = bound_before_version[0]
+        fail(f"{len(bound_before_version)} profile(s) below generator version "
+             f"{BOUND_FORM_VERSION} carry bound forms, which would re-render "
+             f"a historical language's dependent slots (first: seed "
+             f"{first[0]} at version {first[1]})")
+
+    if bound_shape_failures:
+        first = bound_shape_failures[0]
+        fail(f"{len(bound_shape_failures)} stored bound form(s) are not a "
+             f"nonempty strictly-shorter prefix retaining a visible letter "
+             f"(first: seed {first[0]} {first[1]} {first[2]!r}->{first[3]!r} "
+             f"{','.join(first[4])})")
+
+    if bound_inadmissible:
+        first = bound_inadmissible[0]
+        fail(f"{len(bound_inadmissible)} stored bound form(s) are rejected by "
+             f"their own profile's admissibility relation (first: seed "
+             f"{first[0]} {first[1]} {first[2]!r})")
+
+    if bound_collisions_total != 0:
+        fail(f"{bound_collisions_total} bound-related collision(s): a bound "
+             f"form equals another concept's free form or another accepted "
+             f"bound form")
+
+    if bound_violations:
+        fail(f"{len(bound_violations)} bound-slot name(s) violate the output "
+             f"contract")
+
+    if bound_triple_runs:
+        first = bound_triple_runs[0]
+        fail(f"{len(bound_triple_runs)} triple-letter run(s) in bound-slot "
+             f"output (first: seed {first[0]} {first[3]!r} run {first[4]!r})")
+
+    if bare_slot_mismatches:
+        first = bare_slot_mismatches[0]
+        fail(f"{len(bare_slot_mismatches)} Bare rendering(s) do not use the "
+             f"concept's free form (first: seed {first[0]} {first[1]} "
+             f"bare={first[2]!r} free={first[3]!r})")
+
+    # A generator that quietly stopped shortening anything would still
+    # satisfy every rule above — they are all "no bad form exists".
+    if generator_version >= BOUND_FORM_VERSION:
+        if bound_form_total == 0:
+            fail(f"generator version {generator_version} produced no bound "
+                 f"forms at all across {len(seeds)} language(s)")
+        if bound_shortenings == 0:
+            fail("no visible free-to-bound shortening occurs anywhere in the "
+                 "sample, so bound forms change no completed name")
+        if not bound_lengths:
+            fail("no bound-slot names were rendered")
 
     mismatched_versions = [v for v in version_counts if v != generator_version]
     if mismatched_versions:
@@ -629,6 +905,18 @@ def main():
         missing_roles = [r for r in REQUIRED_Y_ROLES if y_role_counts[r] == 0]
         if missing_roles:
             fail(f"no profile assigns 'y' the role(s) {', '.join(missing_roles)}")
+
+        # #1096 requirement 6's "both available ordering directions":
+        # with only one direction present, the claim that ordering
+        # changes display order and not slot assignment is untested.
+        if len(compound_orders) < 2:
+            fail(f"the canonical sample uses only compound ordering(s) "
+                 f"{sorted(compound_orders)}, so the bound-form slot matrix "
+                 f"is exercised in one direction only")
+        if len(genitive_orders) < 2:
+            fail(f"the canonical sample uses only genitive ordering(s) "
+                 f"{sorted(genitive_orders)}, so the possessive slot is "
+                 f"exercised in one direction only")
 
     if ok:
         print("CHECK OK")

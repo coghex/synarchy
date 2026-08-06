@@ -165,7 +165,7 @@ that forgets to rebaseline fails CI.
 ## Language report
 
 ### `language_report.py`
-Report/check tool (#710, #1094, #1095) for the generated-language
+Report/check tool (#710, #1094, #1095, #1096) for the generated-language
 native-name renderer (`Language.Generated.*`) — not a `*_probe.py`, so it
 needs no `tools/ci_probes.py` registration. Drives the production Haskell
 generator through the engine's `--language-report` boot mode (pure
@@ -174,20 +174,34 @@ generation) over a seed range and reports profile diversity, canonical
 native-name renderings alongside their #709 English glosses, root
 collisions, duplicate-name counts, output-length distribution,
 ASCII/length/capitalization/punctuation contract violations, #1094's
-per-profile admissible two-consonant onset sets and `y` roles, and
-#1095's triple-letter runs, doubled-letter rate, and per-language
-boundary-repair rules.
+per-profile admissible two-consonant onset sets and `y` roles, #1095's
+triple-letter runs, doubled-letter rate, and per-language boundary-repair
+rules, and #1096's per-language bound morphemes (each selected concept's
+free and bound form, both collision totals, and every selected concept
+rendered bare and in each dependent slot).
 
 ```bash
 # Human-readable report
 python3 tools/language_report.py --seeds 0:255
 
-# Check mode: the enforced quality gate (#1094 requirement 10, #1095 acceptance)
+# Check mode: the enforced quality gate (#1094 requirement 10, #1095/#1096 acceptance)
 python3 tools/language_report.py --seeds 0:255 --check
 
 # Detector self-test: boots no generator, proves the gates can fire
 python3 tools/language_report.py --self-test
 ```
+
+The tool reimplements no generation logic. That is why #1096's
+admissibility verdict arrives as a Haskell-computed per-record boolean
+rather than being recomputed in Python — the admissibility relation *is*
+generation logic — while the prefix rule and both collision totals are
+checked here directly from the exposed strings and counts.
+
+#1096's bound-slot renderings are accumulated separately from the
+canonical `renderings` array and never enter the distinct-name,
+profile-signature, or pinned length-distribution populations, so added
+sample volume cannot move a gate's denominator. They are still subject to
+every zero-gated structural check.
 
 `--check` splits into two kinds of assertion:
 
@@ -201,14 +215,23 @@ python3 tools/language_report.py --self-test
   onset, zero triple-letter runs, a real boundary rule on every
   profile at or above the boundary-phonology generator version, a
   3-character minimum name length, a 27-character structural maximum,
-  and profiles whose stamped version matches the report header.
+  profiles whose stamped version matches the report header, and #1096's
+  bound-form rules — at most eight per language, every stored form a
+  nonempty strictly-shorter prefix retaining a visible letter, zero
+  forms rejected by their own profile's admissibility relation, zero
+  bound-related collisions, every `Bare` rendering equal to its
+  concept's free form, no bound form at all below the version that
+  introduced them, and at least one visible free-to-bound shortening
+  reaching completed output.
 - **Pinned regression gates**, measured from the current generator at
   the canonical `--seeds 0:255` sample and skipped (loudly) for any
   other range: exact distinct-signature, total-name and distinct-name
   counts (the latter two also floored at the historical 240/256 and
   95% ratios), the exact maximum name length, the average within ±0.5,
-  the cross-seed shared-pair onset-diversity rule, and the presence of
-  consonant-only, vowel-only, and dual-role `y` profiles. These are
+  the cross-seed shared-pair onset-diversity rule, the presence of
+  consonant-only, vowel-only, and dual-role `y` profiles, and the
+  presence of both compound and both genitive ordering directions
+  (without which #1096's slot matrix is exercised one-sided). These are
   pins to update deliberately alongside a generator change, not
   invariants — nothing forbids two independently generated languages
   from coincidentally sharing a short string.
@@ -652,7 +675,7 @@ tools/
 ├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
-├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095)
+├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
