@@ -43,6 +43,15 @@ canonHash p = foldl' mix 0xcbf29ce484222325 (scalarFields <> shapeFields)
         -- keeps a pair set distinct from any prefix of itself.
         , fromIntegral (onsetPairCount (profOnset p))
         , textSeed (onsetPairText (profOnset p))
+        -- The boundary policy is style-bearing state too (#1095
+        -- requirement 1 — the mediation is per-language, not universal),
+        -- so it is hashed like the rest. Rule and segments are separate
+        -- elements: the segment text is empty for an unmediated policy,
+        -- which would otherwise make every historical profile's boundary
+        -- contribution indistinguishable from a mediated one that
+        -- happened to hash to the same value.
+        , boundaryRuleCode (profBoundary p)
+        , textSeed (boundarySegmentText (profBoundary p))
         ]
 
     -- Each shape is mixed in as its OWN element rather than
@@ -71,3 +80,10 @@ canonHash p = foldl' mix 0xcbf29ce484222325 (scalarFields <> shapeFields)
     joinStyleCode ∷ JoinStyle → Word64
     joinStyleCode JoinCompact = 0
     joinStyleCode JoinHyphen  = 1
+
+    boundaryRuleCode ∷ BoundaryPolicy → Word64
+    boundaryRuleCode BoundaryUnmediated = 0
+    boundaryRuleCode (BoundaryMediated rep) = case brRule rep of
+        BoundaryEpenthetic  → 1
+        BoundaryHarmonic    → 2
+        BoundarySimplifying → 3

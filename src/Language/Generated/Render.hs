@@ -21,6 +21,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Language.Semantic.Types
 import Language.Generated.Types
+import Language.Generated.Boundary (joinMorphemes)
 
 -- | Why a 'NameExpr' could not be natively rendered.
 newtype NativeRenderError = NativeUnknownConcept ConceptId
@@ -72,12 +73,28 @@ applyNumber _    Singular r = r
 applyNumber prof Plural   r = applyPluralMark prof r
 
 applyPluralMark ∷ Profile → Text → Text
-applyPluralMark prof r = r <> plmAffix (profPlural prof)
+applyPluralMark prof r = affixMark prof r (plmAffix (profPlural prof))
 
 -- | Apply possessive marking to an owner's root. The bare root is
 --   always a prefix of the result, same guarantee as 'applyPluralMark'.
 applyPossessiveMark ∷ Profile → Text → Text
-applyPossessiveMark prof r = r <> pmAffix (profPossessive prof)
+applyPossessiveMark prof r = affixMark prof r (pmAffix (profPossessive prof))
+
+-- | Attach a grammatical affix to a root through #1095's boundary
+--   phonology.
+--
+--   A possessive affix that leads with its own apostrophe already
+--   separates the two morphemes' letters, so it is appended unchanged —
+--   the apostrophe survives exactly once, and no letters face each other
+--   across the boundary for a repair to mediate. Every other affix meets
+--   the root's final letter directly and goes through 'joinMorphemes',
+--   which never touches the LEFT side: the bare root therefore stays a
+--   prefix of the marked form, and a repair can only insert a linking
+--   segment or trim the affix's own initial one — never erase the mark.
+affixMark ∷ Profile → Text → Text → Text
+affixMark prof r affix = case T.uncons affix of
+    Just ('\'', _) → r <> affix
+    _              → joinMorphemes prof r affix
 
 -- | Order a (modifier-slot, head-slot) pair per 'profCompoundOrder' and
 --   join them per 'profJoin'.
@@ -95,9 +112,17 @@ orderGenitive prof ownerRoot headRoot =
         OwnerFirst        → joinWords prof ownerMarked headRoot
         HeadFirstGenitive → joinWords prof headRoot ownerMarked
 
+-- | Join two compound elements per 'profJoin'.
+--
+--   A compact join puts the two elements' letters in direct contact, so
+--   it is mediated by #1095's boundary phonology. A hyphen join does not:
+--   the separator is itself the boundary marker, it is preserved exactly
+--   once, and no letter run can span it (three contiguous LETTERS is what
+--   a triple run means, so @a-a@ is not one). Boundary rules apply around
+--   a separator, never by removing it — nothing here can delete a hyphen.
 joinWords ∷ Profile → Text → Text → Text
 joinWords prof a b = case profJoin prof of
-    JoinCompact → a <> b
+    JoinCompact → joinMorphemes prof a b
     JoinHyphen  → a <> "-" <> b
 
 capitalizeWord ∷ Text → Text

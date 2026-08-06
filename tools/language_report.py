@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generated-language report (#710, #1094) — quality/regression tool for
-the native-name generator (`Language.Generated.*`), not a bug-gating
-probe.
+"""Generated-language report (#710, #1094, #1095) — quality/regression
+tool for the native-name generator (`Language.Generated.*`), not a
+bug-gating probe.
 
 Drives the production Haskell generator directly through the engine's
 `--language-report` dispatch mode (`cabal run exe:synarchy --
@@ -10,32 +10,47 @@ never touches the graphical engine, headless simulation, or world
 generation) and reports on/validates its JSON output: profile
 diversity, canonical native-name renderings alongside their English
 glosses, root collisions, duplicate names, output-length distribution,
-contract (ASCII/length/capitalization/punctuation) violations, and
-#1094's two-consonant-onset and `y`-role contracts. No generation logic
-is reimplemented here — only inspection of the Haskell generator's real
+contract (ASCII/length/capitalization/punctuation) violations, #1094's
+two-consonant-onset and `y`-role contracts, and #1095's triple-letter-run
+guarantee and per-language boundary phonology. No generation logic is
+reimplemented here — only inspection of the Haskell generator's real
 output.
 
-`--check` is the enforced 256-seed quality gate (#1094 requirement 10).
-It splits into two kinds of assertion, and the distinction matters:
+`--check` is the enforced 256-seed quality gate (#1094 requirement 10,
+#1095 acceptance). It splits into two kinds of assertion, and the
+distinction matters:
 
 * Structural gates hold for ANY seed range and are always enforced —
-  zero root collisions, zero contract violations, every profile's
-  admissible-onset density inside the 25-45% band, every word-initial
-  two-consonant onset admissible under that profile's own exported
-  relation, no identical-consonant onset, no duplicate name within a
-  single language, and the 3-character minimum.
+  zero root collisions, zero contract violations, zero triple-letter
+  runs, every profile's admissible-onset density inside the 25-45% band,
+  every word-initial two-consonant onset admissible under that profile's
+  own exported relation, no identical-consonant onset, every
+  boundary-phonology-era profile declaring a real boundary rule, no
+  duplicate name within a single language, and the 3-character minimum.
 * Pinned gates are REGRESSION PINS measured from the current generator
-  at the canonical `--seeds 0:255` sample: exact distinct-signature and
-  distinct-name counts, the maximum and average name length, the
-  cross-seed onset-diversity ratio, and the presence of all three `y`
-  roles. Nothing forbids two independently generated languages from
-  coincidentally sharing a short string, so these are pins to be
+  at the canonical `--seeds 0:255` sample: exact distinct-signature,
+  total-name and distinct-name counts, the maximum and average name
+  length, the cross-seed onset-diversity ratio, and the presence of all
+  three `y` roles. Nothing forbids two independently generated languages
+  from coincidentally sharing a short string, so these are pins to be
   updated deliberately alongside a generator change, not invariants.
   They are skipped (loudly) for any other seed range.
+
+Doubled letters are REPORTED, never gated. #1095 requires them to remain
+legal at a comparable rate rather than to hit a threshold, and the
+enforceable form of that lives in the hspec suite as a fixture whose
+in-morpheme double survives every join — a population percentage here
+would be an arbitrary number nobody could justify moving.
 
 Usage:
   python3 tools/language_report.py --seeds 0:255
   python3 tools/language_report.py --seeds 0:255 --check
+  python3 tools/language_report.py --self-test
+
+`--self-test` boots no generator: it exercises the detectors themselves
+against known-good and known-bad strings, so "zero triple-letter runs"
+is evidence that the gate FIRES on a triple rather than evidence that it
+cannot see one.
 
 Exit codes: 0 pass, 1 check failure, 2 bad invocation.
 """
@@ -69,19 +84,23 @@ DENSITY_HI_PCT = 45
 MIN_LENGTH_FLOOR = 3
 
 # The architecture's structural maximum: a root is at most 3 syllables
-# of a 3-segment shape (9), plus a possessive affix of at most 3, plus
-# one join character, plus a second root of at most 9.
-STRUCTURAL_MAX_LENGTH = 22
+# of a 3-segment shape (9) plus one #1095 boundary segment at each of its
+# 2 syllable joins (11); an affixed root adds one boundary segment and a
+# possessive affix of at most 3 (15); a compound adds one join character
+# and a second root (27). Well inside the 3-32 output contract, so
+# epenthesis can never push the tail past the ceiling.
+STRUCTURAL_MAX_LENGTH = 27
 
 # --- Pinned gates (the canonical 0:255 sample only) -------------------
 
 PINNED_RANGE = (0, 255)
-PINNED_VERSION = 2
+PINNED_VERSION = 3
 
 PIN_DISTINCT_SIGNATURES = 256
+PIN_TOTAL_NAMES = 1280
 PIN_DISTINCT_NAMES = 1280
-PIN_MAX_LENGTH = 19
-PIN_AVG_LENGTH = 9.7375
+PIN_MAX_LENGTH = 21
+PIN_AVG_LENGTH = 9.9422
 AVG_LENGTH_TOLERANCE = 0.5
 
 # Hard floors, kept no weaker than the ratios this checker enforced
@@ -97,6 +116,12 @@ DISTINCT_NAME_RATIO = 0.95
 SHARED_PAIR_MIN_PROFILES = 8
 
 REQUIRED_Y_ROLES = ("consonant", "vowel", "both")
+
+# #1095: the first generator version whose profiles mediate morpheme
+# boundaries. Versions below it join raw and are frozen that way, so
+# "unmediated" is correct for them and a defect at or above it.
+BOUNDARY_PHONOLOGY_VERSION = 3
+UNMEDIATED_BOUNDARY = "unmediated"
 
 
 def run_report(lo, hi):
@@ -126,6 +151,22 @@ def contract_violations(name):
     if not CONTRACT_RE.match(name):
         reasons.append("character-or-capitalization")
     return reasons
+
+
+def letter_runs(name, length):
+    """Every run of `length` contiguous ASCII letters in `name` that are
+    the same letter ignoring case (#1095 requirement 3).
+
+    Case is folded because rendering capitalizes the first letter last,
+    so `Aaa` is a triple; punctuation is not a letter, so a hyphen join's
+    `a-a` and an apostrophe affix's `h'h` interrupt a run rather than
+    forming one.
+    """
+    folded = name.lower()
+    return [folded[i:i + length]
+            for i in range(len(folded) - length + 1)
+            if folded[i].isascii() and folded[i].isalpha()
+            and len(set(folded[i:i + length])) == 1]
 
 
 def parse_seeds(raw):
@@ -184,13 +225,67 @@ def word_initial_onsets(name, profile):
     return found
 
 
+def self_test():
+    """Prove the detectors this tool gates on actually fire. Runs no
+    generator, so it stays a fast, dependency-free check that a green
+    `--check` means "no defect found", not "no defect detectable"."""
+    failures = []
+
+    def expect(label, got, want):
+        if got != want:
+            failures.append(f"{label}: got {got!r}, want {want!r}")
+
+    # #1095 triples: found case-insensitively, interrupted by punctuation.
+    for name in ("aaa", "Aaa", "aAa", "kaaan", "Zoccce", "wwwi"):
+        expect(f"triple in {name!r}", bool(letter_runs(name, 3)), True)
+    for name in ("a-aa", "aa-a", "h'hh", "abba", "Kobbha", "ab", ""):
+        expect(f"triple in {name!r}", bool(letter_runs(name, 3)), False)
+    # A quadruple contains two overlapping triples; the count is what the
+    # gate reports, so pin it rather than only its truthiness.
+    expect("runs in 'aaaa'", len(letter_runs("aaaa", 3)), 2)
+    # Doubles are reported, never gated — but the same helper finds them.
+    for name in ("abba", "Kobbha", "a-aa"):
+        expect(f"double in {name!r}", bool(letter_runs(name, 2)), True)
+    expect("double in 'Kaved'", bool(letter_runs("Kaved", 2)), False)
+
+    # The pre-existing output contract, so a rewrite here cannot quietly
+    # stop rejecting what it always rejected.
+    expect("contract 'Kara'", contract_violations("Kara"), [])
+    expect("contract \"Kara'b\"", contract_violations("Kara'b"), [])
+    expect("contract 'Kara-bo'", contract_violations("Kara-bo"), [])
+    for bad in ("kara", "Ka", "Kara--bo", "-Kara", "Kara-", "Kar3"):
+        if not contract_violations(bad):
+            failures.append(f"contract {bad!r}: accepted, want rejected")
+    expect("contract None", contract_violations(None), ["missing"])
+
+    # The #1094 density band, in the integer arithmetic the Haskell side
+    # uses (Language.Generated.Onset.onsetDensityBounds).
+    expect("density_bounds(30)", density_bounds(30), (8, 13))
+    expect("density_bounds(132)", density_bounds(132), (33, 59))
+
+    for f in failures:
+        print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
+    if failures:
+        return 1
+    print("SELF-TEST OK")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--seeds", required=True, help="inclusive LO:HI seed range")
+    ap.add_argument("--seeds", help="inclusive LO:HI seed range")
     ap.add_argument("--check", action="store_true",
-                     help="enforce the #1094 quality gate, exit nonzero on failure")
+                     help="enforce the #1094/#1095 quality gate, exit nonzero on failure")
+    ap.add_argument("--self-test", action="store_true",
+                     help="check this tool's own detectors and exit; boots no generator")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
+    if args.seeds is None:
+        print("--seeds LO:HI is required (or --self-test)", file=sys.stderr)
+        return 2
 
     seeds_range = parse_seeds(args.seeds)
     if seeds_range is None:
@@ -224,6 +319,8 @@ def main():
         print(f"    admissible onsets={p['onsetAdmissible']}/{p['onsetTotal']} "
               f"({pct:.1f}%): {' '.join(p['onsetPairs'][:12])}"
               f"{' ...' if len(p['onsetPairs']) > 12 else ''}")
+        print(f"    boundaryRule={p['boundaryRule']} "
+              f"segments={p['boundarySegments']!r}")
     print()
 
     print("canonical renderings (representative seeds), native (English gloss):")
@@ -252,6 +349,8 @@ def main():
     lengths = []
     name_seeds = {}
     within_seed_duplicates = []
+    triple_runs = []
+    names_with_double = 0
     for s in seeds:
         this_seed = Counter()
         for r in s["renderings"]:
@@ -261,6 +360,10 @@ def main():
                 lengths.append(len(name))
                 name_seeds.setdefault(name, []).append(s["seed"])
                 this_seed[name] += 1
+                for run in letter_runs(name, 3):
+                    triple_runs.append((s["seed"], r["form"], name, run))
+                if letter_runs(name, 2):
+                    names_with_double += 1
             reasons = contract_violations(name)
             if reasons:
                 violations.append((s["seed"], r["form"], name, reasons))
@@ -282,10 +385,19 @@ def main():
     empty_relations = []
     y_role_counts = Counter()
     version_counts = Counter()
+    boundary_rule_counts = Counter()
+    unmediated_profiles = []
     for s in seeds:
         p = s["profile"]
         version_counts[p["version"]] += 1
         y_role_counts[p["yRole"]] += 1
+        boundary_rule_counts[p["boundaryRule"]] += 1
+        # #1095: a version that has boundary phonology must actually
+        # carry a policy. An "unmediated" profile there would silently
+        # render every join raw while every other gate still passed.
+        if (p["version"] >= BOUNDARY_PHONOLOGY_VERSION
+                and p["boundaryRule"] == UNMEDIATED_BOUNDARY):
+            unmediated_profiles.append(s["seed"])
         admissible, total_pairs = p["onsetAdmissible"], p["onsetTotal"]
         # Version 1 deliberately constrains nothing (#1094 requirement
         # 1): its relation is empty and the density band does not apply.
@@ -362,6 +474,17 @@ def main():
     print(f"contract violations: {len(violations)}")
     for (seed, form, name, reasons) in violations[:20]:
         print(f"  seed={seed} form={form} name={name!r} reasons={','.join(reasons)}")
+    # #1095: triples are gated to zero; doubles are evidence only — they
+    # must remain legal at a comparable rate, never be suppressed.
+    print(f"triple-letter runs: {len(triple_runs)}")
+    for (seed, form, name, run) in triple_runs[:20]:
+        print(f"  seed={seed} form={form} name={name!r} run={run!r}")
+    if all_names:
+        print(f"names containing a doubled letter: {names_with_double} / "
+              f"{len(all_names)} "
+              f"({100 * names_with_double / len(all_names):.1f}%)")
+    print(f"boundary rules: "
+          f"{', '.join(f'{k}={v}' for k, v in sorted(boundary_rule_counts.items()))}")
     print(f"profiles by generator version: "
           f"{', '.join(f'v{v}={c}' for v, c in sorted(version_counts.items()))}")
     print(f"y roles: {', '.join(f'{k}={y_role_counts[k]}' for k in REQUIRED_Y_ROLES)}"
@@ -401,6 +524,16 @@ def main():
 
     if violations:
         fail(f"{len(violations)} name(s) violate the output contract")
+
+    if triple_runs:
+        first = triple_runs[0]
+        fail(f"{len(triple_runs)} triple-letter run(s) in rendered output "
+             f"(first: seed {first[0]} {first[2]!r} run {first[3]!r})")
+
+    if unmediated_profiles:
+        fail(f"{len(unmediated_profiles)} profile(s) at generator version "
+             f">= {BOUNDARY_PHONOLOGY_VERSION} declare no boundary rule "
+             f"(first: seed {unmediated_profiles[0]})")
 
     if within_seed_duplicates:
         fail(f"{len(within_seed_duplicates)} canonical name(s) duplicated within a "
@@ -460,6 +593,13 @@ def main():
         elif len(signatures) != PIN_DISTINCT_SIGNATURES:
             fail(f"distinct profile signatures {len(signatures)} != pinned "
                  f"{PIN_DISTINCT_SIGNATURES}")
+
+        # The issue's "1280/1280 distinct names" pins BOTH halves of the
+        # ratio: a generator that rendered fewer names would otherwise
+        # satisfy a distinct-count pin by shrinking the sample.
+        if total_names != PIN_TOTAL_NAMES:
+            fail(f"total canonical names {total_names} != pinned "
+                 f"{PIN_TOTAL_NAMES}")
 
         name_floor = math.ceil(total_names * DISTINCT_NAME_RATIO)
         if len(distinct_names) < name_floor:

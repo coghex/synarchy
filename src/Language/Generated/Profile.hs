@@ -10,6 +10,7 @@ module Language.Generated.Profile
     ( generateProfile
     , buildProfileV1
     , buildProfileV2
+    , buildProfileV3
     ) where
 
 import UPrelude
@@ -17,6 +18,7 @@ import qualified Data.Text as T
 import Language.Generated.Types
 import Language.Generated.Hash
 import Language.Generated.Onset (buildOnsetRelation)
+import Language.Generated.Boundary (buildBoundaryPolicy)
 
 -- | Generate a profile for an explicit version. Dispatch is per
 --   VERSION, never by comparison with 'currentGeneratorVersion'
@@ -28,6 +30,7 @@ generateProfile ∷ GeneratorVersion → LangSeed → Either GeneratorError Prof
 generateProfile ver seed = case generatorVersionInt ver of
     1 → Right (buildProfileV1 seed)
     2 → Right (buildProfileV2 seed)
+    3 → Right (buildProfileV3 seed)
     v → Left (UnsupportedGeneratorVersion v)
 
 -- | The version-1 profile generator. Total: every drawn range is
@@ -97,6 +100,9 @@ buildProfileV1 seed@(LangSeed s0) =
         -- (#1094 requirement 1). An empty relation is exactly what
         -- makes Language.Generated.Root take the historical path.
         , profOnset          = emptyOnsetRelation
+        -- Same reasoning for boundaries (#1095): version 1 joins every
+        -- morpheme raw and must keep doing so.
+        , profBoundary       = BoundaryUnmediated
         }
 
 -- | The version-2 profile generator (#1094). Same style vocabulary as
@@ -196,6 +202,104 @@ buildProfileV2 seed@(LangSeed s0) =
         , profPlural         = PluralMarking pluralAffix
         , profJoin           = joinStyle
         , profOnset          = buildOnsetRelation onsetSeed consonants
+        -- Version 2 still joins morphemes raw (#1095 arrived in version
+        -- 3), and its pinned goldens include the triple 'Zoccce-payi'g'
+        -- inherited from version 1's own CCV path.
+        , profBoundary       = BoundaryUnmediated
+        }
+
+-- | The version-3 profile generator (#1095). Same style vocabulary as
+--   version 2, plus the one thing this version exists for: a
+--   'BoundaryPolicy', so every morpheme join is mediated instead of
+--   being a bare concatenation.
+--
+--   Like its predecessors this stamps a LITERAL 'GeneratorVersion' and
+--   deliberately REPEATS the draws it shares with them rather than
+--   factoring them into a helper — each version's body is frozen output
+--   (#710 requirement 15, #1092 requirement 4), and a shared helper is a
+--   live edge down which a later version's tweak silently re-renders
+--   every older world's names.
+--
+--   The boundary draw is appended at a FRESH step index rather than
+--   inserted among the existing ones, so a version-3 profile keeps
+--   version 2's inventories, shapes, orders, affixes, join style, and
+--   onset relation for the same seed; the boundary phonology is the only
+--   difference between the two versions' output.
+buildProfileV3 ∷ LangSeed → Profile
+buildProfileV3 seed@(LangSeed s0) =
+    let baseSeed = fmix64 (s0 `xor` 0xA5A5A5A5A5A5A5A5)
+
+        consSeed     = draw baseSeed 1
+        vowSeed      = draw baseSeed 2
+        shapeSeed    = draw baseSeed 3
+        sylSeed      = draw baseSeed 4
+        orderSeed    = draw baseSeed 5
+        possSeed     = draw baseSeed 6
+        pluralSeed   = draw baseSeed 7
+        joinSeed     = draw baseSeed 8
+        yRoleSeed    = draw baseSeed 9
+        onsetSeed    = draw baseSeed 10
+        boundarySeed = draw baseSeed 11
+
+        yRole = case wordInRange (draw yRoleSeed 0) 0 2 of
+            0 → YConsonantOnly
+            1 → YVowelOnly
+            _ → YBothRoles
+        yIsConsonant = yRole ≢ YVowelOnly
+        yIsVowel     = yRole ≢ YConsonantOnly
+
+        consCount = wordInRange (draw consSeed 0) minConsonants maxConsonants
+        consDrawn = take (if yIsConsonant then consCount - 1 else consCount)
+                          (shuffleBy consSeed 1 consonantPoolNoY)
+        consonants
+            | yIsConsonant = insertAt (pickIndex (draw consSeed 100)
+                                                  (length consDrawn + 1))
+                                       'y' consDrawn
+            | otherwise    = consDrawn
+
+        vowCount = wordInRange (draw vowSeed 0) minVowels maxVowels
+        vowDrawn = take (if yIsVowel then vowCount - 1 else vowCount)
+                         (shuffleBy vowSeed 1 vowelPool)
+        vowels
+            | yIsVowel  = insertAt (pickIndex (draw vowSeed 100)
+                                               (length vowDrawn + 1))
+                                    'y' vowDrawn
+            | otherwise = vowDrawn
+
+        shapeCount = wordInRange (draw shapeSeed 0) minShapes maxShapes
+        shapes = take shapeCount (shuffleBy shapeSeed 1 syllableShapePool)
+
+        minSyll = wordInRange (draw sylSeed 0) 1 2
+        maxSyll = minSyll + wordInRange (draw sylSeed 1) 0 1
+
+        compoundOrder
+            | wordInRange (draw orderSeed 0) 0 1 ≡ 0 = ModifierFirst
+            | otherwise                               = HeadFirst
+        genitiveOrder
+            | wordInRange (draw orderSeed 1) 0 1 ≡ 0 = OwnerFirst
+            | otherwise                               = HeadFirstGenitive
+
+        possAffix   = genAffix possSeed consonants vowels True
+        pluralAffix = genAffix pluralSeed consonants vowels False
+
+        joinStyle
+            | wordInRange (draw joinSeed 0) 0 1 ≡ 0 = JoinCompact
+            | otherwise                               = JoinHyphen
+
+    in Profile
+        { profVersion        = GeneratorVersion 3
+        , profSeed           = seed
+        , profConsonants     = consonants
+        , profVowels         = vowels
+        , profSyllableShapes = shapes
+        , profMinSyllables   = minSyll
+        , profMaxSyllables   = maxSyll
+        , profCompoundOrder  = compoundOrder
+        , profPossessive     = PossessiveMarking genitiveOrder possAffix
+        , profPlural         = PluralMarking pluralAffix
+        , profJoin           = joinStyle
+        , profOnset          = buildOnsetRelation onsetSeed consonants
+        , profBoundary       = buildBoundaryPolicy boundarySeed consonants vowels
         }
 
 insertAt ∷ Int → α → [α] → [α]
