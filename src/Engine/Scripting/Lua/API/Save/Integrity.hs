@@ -6,8 +6,7 @@
 --   permanent full-access exception
 --   (@docs\/engineenv_capability_inventory.md@ §6.1).
 module Engine.Scripting.Lua.API.Save.Integrity
-    ( flattenItemInstanceIds'
-    , knownEntitiesFromSaveData
+    ( knownEntitiesFromSaveData
     ) where
 
 import UPrelude
@@ -15,7 +14,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Building.Types (BuildingId(..))
 import Craft.Bills (CraftBills(..), BillId(..))
-import Item.Ground (GroundItems(..), GroundItem(..))
+import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Location.Instance
     (LocationInstance(..), LocationInstanceId(..), instancesToList)
@@ -24,17 +23,8 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Save.Integrity (KnownEntities(..))
 import World.Save.Types
     ( SaveData(..), WorldPageSave(..)
-    , BuildingSnapshot(..), BuildingInstanceSnapshot(..)
-    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
-
--- | Every item-instance id reachable from one 'ItemInstance', including
---   ones nested (recursively) in 'iiContents' — mirrors
---   "World.Save.Snapshot"'s 'World.Save.Snapshot.allItemInstanceIds',
---   just over the legacy 'SaveData'/'WorldPageSave' shape this module
---   still works with rather than a 'World.Save.Snapshot.SessionSnapshot'.
-flattenItemInstanceIds' ∷ ItemInstance → [Word64]
-flattenItemInstanceIds' i =
-    iiInstanceId i : concatMap flattenItemInstanceIds' (iiContents i)
+    , BuildingSnapshot(..), UnitSnapshot(..)
+    , ItemWalkOrder(..), pageItemContainers, flattenItemInstances )
 
 -- | The known-entity id sets (issue #764, save-overhaul C3) every
 --   Lua-declared reference is cross-validated against — see
@@ -78,16 +68,14 @@ knownEntitiesFromSaveData sd = KnownEntities
     }
   where
     pages = sdWorlds sd
+    -- The save system's single item walk (#1090), over the legacy
+    -- 'SaveData'/'WorldPageSave' page shape this module still works
+    -- with rather than a 'World.Save.Snapshot.SessionSnapshot' — the
+    -- same enumeration 'World.Save.Snapshot.allItemInstanceIds' and
+    -- 'World.Save.Types.missingItemDefReferences' walk.
     pageItemIds w =
-        concatMap (flattenItemInstanceIds' . giInst)
-                  (HM.elems (gisItems (wpsGroundItems w)))
-        ⧺ concatMap unitItemIds (HM.elems (usnInstances (wpsUnits w)))
-        ⧺ concatMap buildingItemIds (HM.elems (bsnInstances (wpsBuildings w)))
-    unitItemIds u =
-        concatMap flattenItemInstanceIds' (uisInventory u)
-        ⧺ concatMap flattenItemInstanceIds' (HM.elems (uisEquipped u))
-        ⧺ concatMap flattenItemInstanceIds' (uisAccessories u)
-    buildingItemIds b =
-        concatMap (concatMap flattenItemInstanceIds')
-                  (HM.elems (bisMaterialsDelivered b))
-        ⧺ concatMap flattenItemInstanceIds' (bisStorage b)
+        [ iiInstanceId i
+        | (_, insts) ← pageItemContainers ItemsGroundFirst
+                           wpsGroundItems wpsUnits wpsBuildings w
+        , inst ← insts
+        , i    ← flattenItemInstances inst ]

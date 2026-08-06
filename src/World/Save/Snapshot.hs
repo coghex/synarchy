@@ -60,15 +60,15 @@ import World.Plant.Types (PlantDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.CropPlot (CropPlots)
-import Item.Ground (GroundItems(..), GroundItem(..))
+import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Engine.Graphics.Camera (CameraFacing)
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState)
 import World.Save.Types
-    ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
-    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
+    ( BuildingSnapshot(..), UnitSnapshot(..)
+    , ItemWalkOrder(..), pageItemContainers, flattenItemInstances )
 
 -- | Genuinely global, once-per-session values, gathered by the caller
 --   before any page is captured. Kept as its own record (rather than
@@ -296,20 +296,18 @@ orphanedUnitSimStateErrors snap =
     , uid ← HM.keys (pgsUnitSimStates page)
     , not (HM.member uid (usnInstances (pgsUnits page))) ]
 
--- | Every id reachable from one 'ItemInstance', including its own AND
---   every id nested (recursively) in 'iiContents' — a first-aid kit's
---   own kit-in-kit contents (#760: the previous version only
---   ever looked at each container's OUTER id, so a nested item's id
---   colliding with the allocator or with another item elsewhere in the
---   session went undetected).
-flattenItemInstanceIds ∷ ItemInstance → [Word64]
-flattenItemInstanceIds i =
-    iiInstanceId i : concatMap flattenItemInstanceIds (iiContents i)
-
 -- | Every item-instance id across the whole session: ground items,
 --   unit inventory/equipped/accessories, and building storage/
 --   materials-delivered — the full scope 'nextItemInstanceIdRef' (#67)
---   governs. Recurses into 'iiContents' via 'flattenItemInstanceIds'.
+--   governs. Enumerates the containers via
+--   'World.Save.Types.pageItemContainers' and recurses into
+--   'iiContents' via 'World.Save.Types.flattenItemInstances' — the
+--   save system's single item walk (#1090), shared with
+--   'Engine.Scripting.Lua.API.Save.Integrity.knownEntitiesFromSaveData'
+--   and 'World.Save.Types.missingItemDefReferences'. #760: a nested
+--   item's id colliding with the allocator, or with another item
+--   elsewhere in the session, must be caught too — the pre-#760
+--   version only ever looked at each container's OUTER id.
 --
 --   'pgsContainerKnowledge' (#1087) is deliberately NOT walked here,
 --   and must never be added: its remembered instances are historical
@@ -325,22 +323,13 @@ flattenItemInstanceIds i =
 --   remain ordinary content references, validated by
 --   'World.Save.Types.missingItemDefReferences' like any other.
 allItemInstanceIds ∷ SessionSnapshot → [Word64]
-allItemInstanceIds snap = concatMap pageItemIds (HM.elems (snapPages snap))
-  where
-    pageItemIds page =
-        concatMap (flattenItemInstanceIds ∘ giInst)
-                  (HM.elems (gisItems (pgsGroundItems page)))
-        ⧺ concatMap unitItemIds (HM.elems (usnInstances (pgsUnits page)))
-        ⧺ concatMap buildingItemIds
-              (HM.elems (bsnInstances (pgsBuildings page)))
-    unitItemIds u =
-        concatMap flattenItemInstanceIds (uisInventory u)
-        ⧺ concatMap flattenItemInstanceIds (HM.elems (uisEquipped u))
-        ⧺ concatMap flattenItemInstanceIds (uisAccessories u)
-    buildingItemIds b =
-        concatMap (concatMap flattenItemInstanceIds)
-                  (HM.elems (bisMaterialsDelivered b))
-        ⧺ concatMap flattenItemInstanceIds (bisStorage b)
+allItemInstanceIds snap =
+    [ iiInstanceId i
+    | page       ← HM.elems (snapPages snap)
+    , (_, insts) ← pageItemContainers ItemsGroundFirst
+                       pgsGroundItems pgsUnits pgsBuildings page
+    , inst ← insts
+    , i    ← flattenItemInstances inst ]
 
 itemAllocatorErrors ∷ SessionSnapshot → [SnapshotError]
 itemAllocatorErrors snap =

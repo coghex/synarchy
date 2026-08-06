@@ -17,6 +17,9 @@ module World.Save.Types
     , UnitInstanceSnapshot(..)
     , toUnitSnapshot
     , fromUnitSnapshot
+    , flattenItemInstances
+    , ItemWalkOrder(..)
+    , pageItemContainers
     , MissingDefRef(..)
     , renderMissingDefRef
     , missingDefReferences
@@ -427,6 +430,11 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
     , bisBuildProgress ∷ !Float
     , bisMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstance])
     , bisStorage           ∷ ![ItemInstance]
+      -- ^ An item container added here must also be listed in
+      --   'buildingItemContainers' — the record definition and the DTO
+      --   codec fail loudly if missed, but the id/def-name validators
+      --   walk containers by enumeration and would silently stop
+      --   seeing it (#1090).
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Build a snapshot from a live BuildingManager, restricted to the world
@@ -545,7 +553,9 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       --   future addition must go after this field; bump again if so.
     , uisAccessories ∷ ![ItemInstance]
       -- ^ v10: items worn off the silhouette (robes, goggles, rings…).
-      --   Order preserved.
+      --   Order preserved. An item container added to this record must
+      --   also be listed in 'unitItemContainers' — see
+      --   'bisStorage''s note (#1090).
     , uisFactionId   ∷ !Text
       -- ^ v16: spawn-time-only faction tag (no def-level default).
       --   Deliberately stays 'Text' on the wire even though the runtime
@@ -760,6 +770,102 @@ missingDefReferences buildingDefs unitDefs pages = concatMap pageRefs pages
         | (uid, u) ← HM.toList (usnInstances us)
         , not (HS.member (uisDefName u) unitDefs) ]
 
+-- Shared item-instance enumeration (#1090) ---------------------------
+
+-- | One 'ItemInstance' plus every item nested (recursively) in its
+--   'iiContents' — a first-aid kit's own kit-in-kit contents.
+--
+--   THE recursive item walk of the save system (#1090). It used to be
+--   written out three times, once per consumer; all three now go
+--   through this one definition, together with 'pageItemContainers'
+--   below: 'World.Save.Snapshot.allItemInstanceIds' (the id-allocator
+--   and duplicate-id checks),
+--   'Engine.Scripting.Lua.API.Save.Integrity.knownEntitiesFromSaveData'
+--   (the load-time known-entity set), and 'missingItemDefReferences'.
+flattenItemInstances ∷ ItemInstance → [ItemInstance]
+flattenItemInstances i = i : concatMap flattenItemInstances (iiContents i)
+
+-- | The order 'pageItemContainers' visits a page's containers in.
+--
+--   The three pre-#1090 enumerations were written with two opposite
+--   conventions, and the order is observable in the lists two of them
+--   produce ('World.Save.Snapshot.itemAllocatorErrors', the
+--   'MissingItemDefRef' list), so unification keeps both orders rather
+--   than imposing a new one on either. What is shared — and what makes
+--   a newly added container reach every consumer from a single edit —
+--   is the CONTAINER SET, not the order.
+data ItemWalkOrder
+    = ItemsGroundFirst
+      -- ^ ground items → units → buildings, a building's
+      --   materials-delivered before its storage.
+    | ItemsBuildingsFirst
+      -- ^ buildings → units → ground items, a building's storage
+      --   before its materials-delivered.
+    deriving (Show, Eq)
+
+-- | Every item container on one saved unit, each tagged with the source
+--   label 'MissingItemDefRef' reports for it.
+--
+--   THE place 'UnitInstanceSnapshot''s item-bearing fields are
+--   enumerated: a container added to that record and listed here is
+--   seen by every 'pageItemContainers' consumer, with no second or
+--   third site to remember (#1090).
+unitItemContainers ∷ UnitInstanceSnapshot → [(Text, [ItemInstance])]
+unitItemContainers u =
+    [ ("unit inventory",   uisInventory u)
+    , ("unit equipped",    HM.elems (uisEquipped u))
+    , ("unit accessories", uisAccessories u) ]
+
+-- | Every item container on one saved building, each tagged with its
+--   source label — 'unitItemContainers''s contract, for
+--   'BuildingInstanceSnapshot'.
+buildingItemContainers ∷ BuildingInstanceSnapshot → [(Text, [ItemInstance])]
+buildingItemContainers b =
+    [ ("building materials delivered"
+      , concat (HM.elems (bisMaterialsDelivered b)))
+    , ("building storage", bisStorage b) ]
+
+-- | Every item container on one saved page: ground items, each unit's
+--   inventory/equipped/accessories, each building's
+--   materials-delivered/storage.
+--
+--   Parameterised over the three page projections rather than over a
+--   page type, because the item-bearing fields of the two page shapes
+--   have identical types — 'WorldPageSave''s @wps*@ and
+--   'World.Save.Snapshot.PageSnapshot''s @pgs*@ — so one enumeration
+--   serves both without any adaptation between them.
+--
+--   'wpsContainerKnowledge' (#1087) is deliberately NOT a container
+--   here and must not become one: its remembered instances are
+--   historical OBSERVATIONS of items living (or once living)
+--   elsewhere in this very enumeration, not additional live entities —
+--   see 'World.Save.Snapshot.allItemInstanceIds' for the full
+--   reasoning. Only 'missingItemDefReferences' looks at them, and it
+--   does so separately, because a remembered item's DEF NAME is still
+--   an ordinary content reference.
+pageItemContainers
+    ∷ ItemWalkOrder
+    → (page → GroundItems)
+    → (page → UnitSnapshot)
+    → (page → BuildingSnapshot)
+    → page
+    → [(Text, [ItemInstance])]
+pageItemContainers order groundOf unitsOf buildingsOf page = case order of
+    ItemsGroundFirst    → groundCs ⧺ unitCs ⧺ buildingCs
+    ItemsBuildingsFirst → buildingCs ⧺ unitCs ⧺ groundCs
+  where
+    groundCs = [ ( "ground item"
+                 , map giInst (HM.elems (gisItems (groundOf page))) ) ]
+    unitCs   = concatMap unitItemContainers
+                   (HM.elems (usnInstances (unitsOf page)))
+    -- One definition of a building's containers, read in whichever
+    -- direction the caller's historical order needs.
+    buildingCs = concatMap (slotOrder ∘ buildingItemContainers)
+                     (HM.elems (bsnInstances (buildingsOf page)))
+    slotOrder = case order of
+        ItemsGroundFirst    → id
+        ItemsBuildingsFirst → reverse
+
 -- Item / recipe / construct-target def-name validation (#760) --------
 
 -- | A saved 'ItemInstance' (anywhere in the save — building storage/
@@ -784,11 +890,6 @@ renderMissingItemDefRef r =
            \definition '" <> midrDefName r <> "'"
   where unWorldPageId (WorldPageId t) = t
 
--- | One 'ItemInstance' plus every item nested (recursively) in its
---   'iiContents' (mirrors 'World.Save.Snapshot.flattenItemInstanceIds').
-flattenItemInstances ∷ ItemInstance → [ItemInstance]
-flattenItemInstances i = i : concatMap flattenItemInstances (iiContents i)
-
 -- | Every saved item instance — across ground items, unit inventory/
 --   equipped/accessories, and building storage/materials-delivered,
 --   recursively through nested contents — whose def name is absent
@@ -801,23 +902,13 @@ missingItemDefReferences
 missingItemDefReferences itemDefs pages = concatMap pageRefs pages
   where
     pageRefs (pid, w) = concat
-        [ concatMap (buildingRefs pid) (HM.elems (bsnInstances (wpsBuildings w)))
-        , concatMap (unitRefs pid) (HM.elems (usnInstances (wpsUnits w)))
-        , concatMap (groundRefs pid) (HM.elems (gisItems (wpsGroundItems w)))
+        [ concat [ itemRefs pid src inst
+                 | (src, insts) ← pageItemContainers ItemsBuildingsFirst
+                       wpsGroundItems wpsUnits wpsBuildings w
+                 , inst ← insts ]
         , concatMap (knowledgeRefs pid)
               (HM.elems (ckRecords (wpsContainerKnowledge w)))
         ]
-    buildingRefs pid b = concat
-        [ concatMap (itemRefs pid "building storage") (bisStorage b)
-        , concatMap (itemRefs pid "building materials delivered")
-              (concat (HM.elems (bisMaterialsDelivered b)))
-        ]
-    unitRefs pid u = concat
-        [ concatMap (itemRefs pid "unit inventory") (uisInventory u)
-        , concatMap (itemRefs pid "unit equipped") (HM.elems (uisEquipped u))
-        , concatMap (itemRefs pid "unit accessories") (uisAccessories u)
-        ]
-    groundRefs pid gi = itemRefs pid "ground item" (giInst gi)
     -- #1087: a REMEMBERED item's def name is still an ordinary persisted
     -- content reference and follows this same contract — only its
     -- INSTANCE ID is exempt from live-entity treatment (see
