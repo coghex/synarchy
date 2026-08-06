@@ -560,6 +560,7 @@ library
                      Language.Generated.Hash
                      Language.Generated.Onset
                      Language.Generated.Boundary
+                     Language.Generated.Bound
                      Language.Generated.Profile
                      Language.Generated.Root
                      Language.Generated.Render

@@ -11,6 +11,7 @@ module Language.Generated.Profile
     , buildProfileV1
     , buildProfileV2
     , buildProfileV3
+    , buildProfileV4
     ) where
 
 import UPrelude
@@ -31,6 +32,7 @@ generateProfile ver seed = case generatorVersionInt ver of
     1 → Right (buildProfileV1 seed)
     2 → Right (buildProfileV2 seed)
     3 → Right (buildProfileV3 seed)
+    4 → Right (buildProfileV4 seed)
     v → Left (UnsupportedGeneratorVersion v)
 
 -- | The version-1 profile generator. Total: every drawn range is
@@ -288,6 +290,103 @@ buildProfileV3 seed@(LangSeed s0) =
 
     in Profile
         { profVersion        = GeneratorVersion 3
+        , profSeed           = seed
+        , profConsonants     = consonants
+        , profVowels         = vowels
+        , profSyllableShapes = shapes
+        , profMinSyllables   = minSyll
+        , profMaxSyllables   = maxSyll
+        , profCompoundOrder  = compoundOrder
+        , profPossessive     = PossessiveMarking genitiveOrder possAffix
+        , profPlural         = PluralMarking pluralAffix
+        , profJoin           = joinStyle
+        , profOnset          = buildOnsetRelation onsetSeed consonants
+        , profBoundary       = buildBoundaryPolicy boundarySeed consonants vowels
+        }
+
+-- | The version-4 profile generator (#1096). Structurally IDENTICAL to
+--   version 3 — same inventories, shapes, orders, affixes, join style,
+--   onset relation, and boundary policy for the same seed — because the
+--   thing this version exists for is not a profile field at all.
+--
+--   Bound morphology (#1096) lives in the concept→morpheme assignment
+--   ('Language.Generated.Bound'), which reads the version off the
+--   profile it is handed. So version 4's ONLY profile-level difference
+--   is its stamped version, and that difference is load bearing twice
+--   over: 'Language.Generated.Root' mixes @profVersion@ into its
+--   per-concept seed (so version 4's free roots are its own, not
+--   version 3's), and 'Language.Generated.Bound.formsBoundMorphemes'
+--   reads it to decide whether the language has bound forms at all.
+--
+--   The draws are REPEATED here rather than shared with
+--   'buildProfileV3' for the reason every version before it repeated
+--   them: each version's body is frozen output (#710 requirement 15,
+--   #1092 requirement 4), and a shared helper is a live edge down which
+--   a later version's tweak silently re-renders every older world's
+--   names.
+buildProfileV4 ∷ LangSeed → Profile
+buildProfileV4 seed@(LangSeed s0) =
+    let baseSeed = fmix64 (s0 `xor` 0xA5A5A5A5A5A5A5A5)
+
+        consSeed     = draw baseSeed 1
+        vowSeed      = draw baseSeed 2
+        shapeSeed    = draw baseSeed 3
+        sylSeed      = draw baseSeed 4
+        orderSeed    = draw baseSeed 5
+        possSeed     = draw baseSeed 6
+        pluralSeed   = draw baseSeed 7
+        joinSeed     = draw baseSeed 8
+        yRoleSeed    = draw baseSeed 9
+        onsetSeed    = draw baseSeed 10
+        boundarySeed = draw baseSeed 11
+
+        yRole = case wordInRange (draw yRoleSeed 0) 0 2 of
+            0 → YConsonantOnly
+            1 → YVowelOnly
+            _ → YBothRoles
+        yIsConsonant = yRole ≢ YVowelOnly
+        yIsVowel     = yRole ≢ YConsonantOnly
+
+        consCount = wordInRange (draw consSeed 0) minConsonants maxConsonants
+        consDrawn = take (if yIsConsonant then consCount - 1 else consCount)
+                          (shuffleBy consSeed 1 consonantPoolNoY)
+        consonants
+            | yIsConsonant = insertAt (pickIndex (draw consSeed 100)
+                                                  (length consDrawn + 1))
+                                       'y' consDrawn
+            | otherwise    = consDrawn
+
+        vowCount = wordInRange (draw vowSeed 0) minVowels maxVowels
+        vowDrawn = take (if yIsVowel then vowCount - 1 else vowCount)
+                         (shuffleBy vowSeed 1 vowelPool)
+        vowels
+            | yIsVowel  = insertAt (pickIndex (draw vowSeed 100)
+                                               (length vowDrawn + 1))
+                                    'y' vowDrawn
+            | otherwise = vowDrawn
+
+        shapeCount = wordInRange (draw shapeSeed 0) minShapes maxShapes
+        shapes = take shapeCount (shuffleBy shapeSeed 1 syllableShapePool)
+
+        minSyll = wordInRange (draw sylSeed 0) 1 2
+        maxSyll = minSyll + wordInRange (draw sylSeed 1) 0 1
+
+        compoundOrder
+            | wordInRange (draw orderSeed 0) 0 1 ≡ 0 = ModifierFirst
+            | otherwise                               = HeadFirst
+        genitiveOrder
+            | wordInRange (draw orderSeed 1) 0 1 ≡ 0 = OwnerFirst
+            | otherwise                               = HeadFirstGenitive
+
+        possAffix   = genAffix possSeed consonants vowels True
+        pluralAffix = genAffix pluralSeed consonants vowels False
+
+        joinStyle
+            | wordInRange (draw joinSeed 0) 0 1 ≡ 0 = JoinCompact
+            | otherwise                               = JoinHyphen
+
+    in Profile
+        { profVersion        = GeneratorVersion 4
         , profSeed           = seed
         , profConsonants     = consonants
         , profVowels         = vowels

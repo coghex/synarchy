@@ -68,7 +68,7 @@ import Data.Char (toLower, isAsciiUpper, isAsciiLower)
 import qualified Data.Text as T
 import Language.Generated.Types
 import Language.Generated.Hash
-import Language.Generated.Onset (admissibleOnset, consonantCapable, vowelCapable)
+import Language.Generated.Onset (admissibleOnset, consonantOnly, vowelCapable)
 
 -- | Build one language's boundary policy from its own inventories.
 --   Deterministic in @(seed, inventories)@ alone, so repeated
@@ -185,10 +185,10 @@ needsRepair scope prof left right = case scope of
   where
     l = T.last left
     r = T.head right
-    -- "Unambiguously a consonant": a dual-role 'y' (#1094 requirement 6)
-    -- sits in both inventories, and a flat rendered root carries no slot
-    -- provenance, so a pair involving one is not treated as a cluster —
-    -- the same scoping the onset gates already use.
+    -- "Unambiguously a consonant" — the shared
+    -- 'Language.Generated.Onset.consonantOnly' scoping, so this and
+    -- #1096's bound-form legality ask the admissibility relation about
+    -- exactly the same adjacencies.
     bothConsonantal = consonantOnly prof l ∧ consonantOnly prof r
 
 -- | Apply the language's repair. Cluster simplification is a MORPHEME
@@ -258,9 +258,6 @@ linkerFor prof rep left right
         = brLinker rep
         | otherwise
         = brLinkerAlt rep
-
-consonantOnly ∷ Profile → Char → Bool
-consonantOnly prof c = consonantCapable prof c ∧ not (vowelCapable prof c)
 
 sameLetter ∷ Char → Char → Bool
 sameLetter a b = toLower a ≡ toLower b

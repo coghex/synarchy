@@ -15,7 +15,8 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import qualified Data.ByteString.Lazy.Char8 as BL
 import qualified Data.Text as T
 import Data.Aeson (Value, object, (.=), encode)
-import Language.Semantic.Types (catVersion, conceptCount, catalogueErrorText)
+import Language.Semantic.Types (ConceptId(..), catVersion, conceptCount,
+                                 catalogueErrorText)
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Generated.Types
 import Language.Generated.Onset (onsetTotalPairs)
@@ -60,6 +61,14 @@ seedReportJSON sr = object
     , "profile"          .= profileJSON (srProfile sr)
     , "renderings"        .= map renderingJSON (srRenderings sr)
     , "rootCollisions"   .= srRootCollisions sr
+    -- #1096's bound-form dataset, kept as its OWN arrays beside
+    -- "renderings" rather than merged into it: the checker's
+    -- distinct-name, profile-signature, and pinned length gates are
+    -- measured against the canonical population, and mixing these in
+    -- would move those denominators.
+    , "boundForms"        .= map boundFormJSON (srBoundForms sr)
+    , "boundCollisions"   .= srBoundCollisions sr
+    , "boundRenderings"   .= map boundRenderingJSON (srBoundRenderings sr)
     ]
 
 -- | Everything @tools/language_report.py --check@ needs to EVALUATE the
@@ -105,4 +114,27 @@ renderingJSON cr = object
     , "nativeError" .= either Just (const Nothing) (crNative cr)
     , "gloss"       .= either (const Nothing) Just (crGloss cr)
     , "glossError"  .= either Just (const Nothing) (crGloss cr)
+    ]
+
+-- | One selected concept's free and bound morphemes. @admissible@ is
+--   the Haskell-computed verdict of #1094's exported relation — the one
+--   bound-form signal the Python checker cannot derive from the exposed
+--   strings without reimplementing generation logic. The prefix and
+--   collision rules it evaluates itself from @free@/@bound@ and the two
+--   collision totals.
+boundFormJSON ∷ BoundFormRecord → Value
+boundFormJSON bf = object
+    [ "concept"    .= conceptIdText (bfConcept bf)
+    , "free"       .= bfFree bf
+    , "bound"      .= bfBound bf
+    , "admissible" .= bfAdmissible bf
+    ]
+
+boundRenderingJSON ∷ BoundSlotRendering → Value
+boundRenderingJSON bsr = object
+    [ "concept"     .= conceptIdText (bsrConcept bsr)
+    , "slot"        .= bsrSlot bsr
+    , "native"      .= either (const Nothing) Just (bsrNative bsr)
+    , "nativeError" .= either Just (const Nothing) (bsrNative bsr)
+    , "shortened"   .= bsrShortened bsr
     ]

@@ -7,6 +7,7 @@
 module Language.Generated.Root
     ( generateRoot
     , assignRoots
+    , assignLanguageRoots
     , minNativeWordLength
     ) where
 
@@ -19,6 +20,7 @@ import Language.Semantic.Types (ConceptId(..))
 import Language.Generated.Types
 import Language.Generated.Hash
 import Language.Generated.Boundary (joinMorphemes, joinSyllables)
+import Language.Generated.Bound (LanguageRoots(..), assignBoundForms)
 
 -- | Assign every concept in @ids@ a stable, unique native root under
 --   @prof@. Concepts are processed in ascending 'ConceptId' order — the
@@ -45,6 +47,21 @@ assignRoots prof ids = foldl' place M.empty (sort ids)
         in if S.member (T.toLower candidate) usedLower
            then resolve cid (attempt + 1) usedLower
            else candidate
+
+-- | A language's COMPLETE morpheme assignment: every concept's free
+--   root, plus the bound form the few concepts #1096 selects
+--   additionally get.
+--
+--   Bound-form selection is layered strictly ON TOP of 'assignRoots' —
+--   it reads the finished free-root map and never influences it, so a
+--   bound-form collision can no more reroll a free root than it can
+--   change the catalogue. For any version below
+--   'Language.Generated.Bound.boundFormVersion' the bound map is empty
+--   and this is exactly 'assignRoots' in a wrapper.
+assignLanguageRoots ∷ Profile → [ConceptId] → LanguageRoots
+assignLanguageRoots prof ids =
+    let free = assignRoots prof ids
+    in LanguageRoots { lrFree = free, lrBound = assignBoundForms prof free }
 
 -- | The native root generated for one concept at one retry attempt.
 --   Attempt 0 is the first candidate every caller sees before any

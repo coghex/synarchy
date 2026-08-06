@@ -39,6 +39,7 @@ module Language.Generated.Onset
     , admissibleOnset
     , consonantCapable
     , vowelCapable
+    , consonantOnly
     , onsetTotalPairs
     , onsetDensityBounds
     , onsetDensityOk
@@ -141,3 +142,18 @@ consonantCapable prof c = c `elem` profConsonants prof
 --   dual-role @y@ is ever both (requirement 6).
 vowelCapable ∷ Profile → Char → Bool
 vowelCapable prof c = c `elem` profVowels prof
+
+-- | Whether a visible glyph is UNAMBIGUOUSLY a consonant in this
+--   profile — consonant-capable and not also vowel-capable.
+--
+--   THE one definition of "this adjacency is a consonant cluster",
+--   shared by #1095's boundary repair
+--   ('Language.Generated.Boundary') and #1096's bound-form legality
+--   ('Language.Generated.Bound'). A dual-role @y@ (requirement 6) sits
+--   in both inventories and a rendered root is flat text with no slot
+--   provenance, so a pair involving one is deliberately NOT treated as
+--   a cluster; keeping that scoping in one place is what stops two
+--   consumers of 'admissibleOnset' from disagreeing about which
+--   adjacencies the relation is even being asked about.
+consonantOnly ∷ Profile → Char → Bool
+consonantOnly prof c = consonantCapable prof c ∧ not (vowelCapable prof c)
