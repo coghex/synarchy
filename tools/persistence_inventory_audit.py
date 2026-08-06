@@ -391,7 +391,8 @@ SAVE_COMPONENTS_HEADING = "Save components"
 # The Haskell `saveComponentRegistry` list of `registerComponent <codec>`.
 COMPONENT_REGISTRY_LIST_FILE = "src/World/Save/Component.hs"
 # Where the codecs named in that list are defined (each built via
-# `<codec> = serializeCodec <componentIdIdent> ...`). GLOBBED, not a
+# `<codec> = componentCodec ComponentSpec { csComponent = <ident>, ... }`).
+# GLOBBED, not a
 # hand-maintained file list: a component added in a NEW file under the
 # same directory (the convention every existing component follows) was
 # otherwise invisible to this audit entirely -- `derive_registered_
@@ -1365,9 +1366,9 @@ def derive_registered_component_ids(
     The trace:
       1. `saveComponentRegistry = [ registerComponent <codec> ... ]`
          names the registered codecs (Component.hs).
-      2. each `<codec> = serializeCodec <idIdent> ...` (or a
-         `ComponentCodec { ccId = <idIdent> ...}`) names its component
-         id identifier (Session/Page/Entities.hs).
+      2. each `<codec> = componentCodec ComponentSpec { csComponent =
+         <idIdent>, ... }` names its component id identifier
+         (Session/Page/Entities/Knowledge.hs).
       3. `<idIdent> = ComponentId "<literal>"` resolves it to the on-disk
          literal (Types.hs).
     The envelope additionally registers components as direct spec tuples
@@ -1386,23 +1387,20 @@ def derive_registered_component_ids(
     if block_m:
         for codec in REGISTER_COMPONENT_RE.findall(block_m.group(1)):
             m = re.search(
-                rf"{re.escape(codec)}\s*=\s*serializeCodec\s+(\w+)",
-                codec_source)
-            if m is None:
-                # Fall back to a hand-built `ComponentCodec { ccId = ... }`.
-                m = re.search(
-                    rf"{re.escape(codec)}\s*=\s*ComponentCodec\b.*?"
-                    rf"ccId\s*=\s*(\w+)",
-                    codec_source, re.S)
+                rf"{re.escape(codec)}\s*=\s*componentCodec\s+ComponentSpec\b"
+                rf"\s*\{{[^{{}}]*?csComponent\s*=\s*(\w+)",
+                codec_source, re.S)
             if m is None:
                 raise ValueError(
                     f"saveComponentRegistry registers '{codec}', but no "
-                    f"`{codec} = serializeCodec ...` or `{codec} = "
-                    f"ComponentCodec {{ ccId = ... }}` definition was found "
-                    f"in any of {COMPONENT_CODEC_FILES} -- a component "
-                    f"declared in a file this scan never looked at would "
-                    f"otherwise be silently absent from the registered set, "
-                    f"taking its required `### Save components` row with it")
+                    f"`{codec} = componentCodec ComponentSpec {{ csComponent "
+                    f"= ... }}` definition was found in any of "
+                    f"{COMPONENT_CODEC_FILES} -- a component declared in a "
+                    f"file this scan never looked at, or one that hand-rolls "
+                    f"the 'ComponentCodec' record instead of going through "
+                    f"the shared construction (issue #1093), would otherwise "
+                    f"be silently absent from the registered set, taking its "
+                    f"required `### Save components` row with it")
             lit = id_by_ident.get(m.group(1))
             if lit is None:
                 raise ValueError(

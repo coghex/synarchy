@@ -125,11 +125,9 @@ module World.Save.Component.Page
     ) where
 
 import UPrelude
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.Text as T
-import qualified Data.Serialize as S
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
@@ -624,37 +622,26 @@ data WorldPages = WorldPages
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
     } deriving (Show)
 
--- | Hand-rolled codec (mirrors 'World.Save.Component.Entities.unitSimCodec'
---   — 'serializeCodec' has no real multi-version dispatch) now that
---   @world-pages@ needs historical migrations. Encoding always writes
---   the current v3 shape; v2 payloads decode through
---   'migrateWorldPagesV2' (#1092) and v1 through 'migrateWorldPagesV1'
---   (#911).
+-- | Encoding always writes the current v3 shape; v2 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV2' (#1092) and
+--   v1 through 'migrateWorldPagesV1' (#911). Issue #1093: this used to
+--   be a hand-rolled 'ComponentCodec' because the shared helper had no
+--   real multi-version dispatch — 'componentCodec' now expresses it,
+--   with each accepted version declared exactly once.
 worldPagesCodec ∷ ComponentCodec WorldPages
-worldPagesCodec = ComponentCodec
-    { ccId        = worldPagesComponentId
-    , ccVersion   = 3
-    , ccInputVers = [1, 2, 3]
-    , ccRequired  = True
-    , ccDeps      = []
-    , ccEncode    = \snap →
-        S.encode (WorldPagesDTO (map toPageCore (orderedPages snap)))
-    , ccDecode    = \v bytes → case v of
-        3 → decodeInto v (basePageSnapshots ∷ WorldPagesDTO → WorldPages) bytes
-        2 → decodeInto v migrateWorldPagesV2 bytes
-        1 → decodeInto v migrateWorldPagesV1 bytes
-        _ → Left (ComponentError worldPagesComponentId v DecodePhase
-                    "unsupported schema version (reader supports v1, v2, v3)")
-    , ccValidate  = validatePages
+worldPagesCodec = componentCodec ComponentSpec
+    { csComponent     = worldPagesComponentId
+    , csVersion       = 3
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = \snap →
+        WorldPagesDTO (map toPageCore (orderedPages snap))
+    , csDecode        = basePageSnapshots
+    , csOlderVersions = [ atVersion 2 migrateWorldPagesV2
+                        , atVersion 1 migrateWorldPagesV1 ]
+    , csValidate      = validatePages
     }
   where
-    decodeInto ∷ Serialize d
-               ⇒ Word32 → (d → WorldPages) → BS.ByteString
-               → Either ComponentError WorldPages
-    decodeInto v build bytes = case S.decode bytes of
-        Left err → Left (ComponentError worldPagesComponentId v DecodePhase
-                           ("malformed payload: " <> T.pack err))
-        Right d  → Right (build d)
     toPageCore p = PageCoreDTO
         { pcPageId     = pgsPageId p
         , pcGenParams  = toWorldGenParamsDTO (pgsGenParams p)
@@ -828,12 +815,18 @@ newtype WorldEditsDTO = WorldEditsDTO { wedPages ∷ [PageEditsDTO] }
     deriving newtype (Show, Serialize)
 
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
-worldEditsCodec = serializeCodec
-    worldEditsComponentId 1 True [worldPagesComponentId]
-    (\snap → WorldEditsDTO
+worldEditsCodec = componentCodec ComponentSpec
+    { csComponent     = worldEditsComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId]
+    , csEncode        = \snap → WorldEditsDTO
         [ PageEditsDTO (pgsPageId p) (toEditsDTO (pgsEdits p))
-        | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
 
 applyWorldEdits
     ∷ Word32 → WorldEditsDTO → HM.HashMap WorldPageId PageSnapshot
@@ -881,10 +874,17 @@ validateWorldActivity (WorldActivityDTO slices) =
     ]
 
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
-worldActivityCodec = serializeCodec
-    worldActivityComponentId 1 True [worldPagesComponentId]
-    (\snap → WorldActivityDTO (map toActivity (orderedPages snap)))
-    (\_ d → Right d) validateWorldActivity
+worldActivityCodec = componentCodec ComponentSpec
+    { csComponent     = worldActivityComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId]
+    , csEncode        = \snap →
+        WorldActivityDTO (map toActivity (orderedPages snap))
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = validateWorldActivity
+    }
   where
     toActivity p = PageActivityDTO
         { padPageId        = pgsPageId p

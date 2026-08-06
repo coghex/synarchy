@@ -178,8 +178,8 @@ COMPONENT_REGISTRY_SOURCE_PATH = (
     REPO_ROOT / "src" / "World" / "Save" / "Component.hs")
 
 # Every source file that MIGHT declare a Haskell-owned gameplay
-# component's ComponentId literal and/or its ComponentCodec
-# (serializeCodec or a hand-rolled multi-version record) -- see
+# component's ComponentId literal and/or its ComponentCodec (built
+# through `componentCodec ComponentSpec { ... }`) -- see
 # real_component_registry(). Round-16 review: previously a hand-
 # maintained fixed list of exactly 4 files, so a brand-new component
 # added in a NEW file under this same directory (the established
@@ -233,16 +233,148 @@ SESSION_COMPONENT_VERSION_RE = re.compile(
     r"^sessionComponentVersion\s*=\s*(\d+)", re.MULTILINE)
 COMPONENT_ID_LITERAL_RE = re.compile(
     r"(\w+)\s*=\s*ComponentId\s*\"([^\"]+)\"")
-SERIALIZE_CODEC_RE = re.compile(
-    r"(\w+)\s*=\s*serializeCodec\s*\n?\s*(\w+)\s+(\d+)\s+(True|False)")
-RECORD_CODEC_RE = re.compile(
-    r"(\w+)\s*=\s*ComponentCodec\s*\n\s*\{\s*ccId\s*=\s*(\w+)\s*\n\s*,\s*"
-    r"ccVersion\s*=\s*(\d+)\s*\n\s*,\s*"
-    r"ccInputVers\s*=\s*\[([^\]]*)\]\s*\n\s*,\s*ccRequired\s*=\s*(True|False)")
+# Issue #1093: EVERY gameplay codec is now built by the one shared
+# construction, `<codec> = componentCodec ComponentSpec { ... }`, whose
+# accepted-version set is the current `csVersion` plus one `atVersion <n>`
+# entry per older version in `csOlderVersions`. The previous pair of
+# regexes (positional `serializeCodec <id> <ver> <True|False>` and a
+# hand-rolled `ComponentCodec { ccId = ... }` record) are both gone with
+# the syntax they parsed -- a codec written either old way is no longer
+# discovered here, and real_component_registry()'s cross-check against
+# saveComponentRegistry then fails LOUDLY naming it, rather than this
+# tool silently reporting it as an undiscovered component.
+#
+# Parsed by lexing the record block (brace-depth match + top-level field
+# split), NOT by one big ordered regex: field ORDER and line breaks are
+# then irrelevant, and a spec missing a field this audit needs raises
+# instead of silently matching into the NEXT codec's fields.
+COMPONENT_SPEC_HEAD_RE = re.compile(
+    r"(\w+)\s*=\s*componentCodec\s+ComponentSpec\b")
+AT_VERSION_RE = re.compile(r"\batVersion\s+(\d+)\b")
 LUA_MODULE_VERSION_RE = re.compile(r"\bversion\s*=\s*(\d+)")
 LUA_MODULE_INPUT_VERSIONS_RE = re.compile(
     r"\binputVersions\s*=\s*\{([^}]*)\}")
 LUA_MODULE_REQUIRED_RE = re.compile(r"\brequired\s*=\s*(true|false)")
+
+
+def strip_haskell_line_comments(text: str) -> str:
+    """Blank out `--` line comments so a comment's punctuation can never
+    be read as record structure. Safe for these files: they spell every
+    operator in Unicode (→/⇒/∷), so `--` only ever starts a comment."""
+    return "\n".join(re.sub(r"--.*$", "", line) for line in text.splitlines())
+
+
+def _record_block(text: str, open_index: int) -> str:
+    """The contents of the record block whose opening `{` is at
+    `open_index`, matched by brace depth (so a nested record update is
+    handled) and skipping string literals. Raises rather than guessing
+    if the block is unterminated or carries a `{- -}` comment this
+    simple lexer cannot account for."""
+    depth = 0
+    i = open_index
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < len(text) and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if text.startswith("{-", i):
+            raise ValueError(
+                "a ComponentSpec record block contains a `{- -}` block "
+                "comment, which this lexer deliberately refuses to guess "
+                "past -- use `--` line comments inside a spec, or teach "
+                "this parser about block comments")
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_index + 1:i]
+        i += 1
+    raise ValueError(
+        "unterminated ComponentSpec record block -- the `{` at offset "
+        f"{open_index} never closes")
+
+
+def _split_top_level_fields(block: str) -> list[str]:
+    """Split a record block's contents on the `,` separators at nesting
+    depth 0, so a field whose value is a list/tuple/nested record stays
+    in one piece."""
+    fields: list[str] = []
+    depth = 0
+    start = 0
+    i = 0
+    while i < len(block):
+        ch = block[i]
+        if ch == '"':
+            i += 1
+            while i < len(block) and block[i] != '"':
+                i += 2 if block[i] == "\\" else 1
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            fields.append(block[start:i])
+            start = i + 1
+        i += 1
+    fields.append(block[start:])
+    return [f for f in (f.strip() for f in fields) if f]
+
+
+def discover_component_specs(text: str, where: str = "<source>") -> list[dict]:
+    """Every `<codec> = componentCodec ComponentSpec { ... }` declaration
+    in one Haskell source, as
+    {codec, componentIdIdent, currentVersion, inputVersions, required}.
+
+    `inputVersions` is derived exactly the way
+    'World.Save.Component.Types.componentCodec' derives `ccInputVers` --
+    the current `csVersion` plus each `csOlderVersions` entry's
+    `atVersion <n>`, sorted ascending -- so this audit reads the SAME
+    single declaration the reader dispatches on rather than a separately
+    parsed list that could disagree with it (issue #1093)."""
+    clean = strip_haskell_line_comments(text)
+    specs: list[dict] = []
+    for head in COMPONENT_SPEC_HEAD_RE.finditer(clean):
+        codec = head.group(1)
+        brace = re.match(r"\s*\{", clean[head.end():])
+        if brace is None:
+            raise ValueError(
+                f"{where}: `{codec} = componentCodec ComponentSpec` is not "
+                f"followed by a `{{ ... }}` record block")
+        block = _record_block(clean, head.end() + brace.end() - 1)
+        values: dict[str, str] = {}
+        for field in _split_top_level_fields(block):
+            m = re.match(r"(\w+)\s*=\s*(.*)", field, re.S)
+            if m:
+                values[m.group(1)] = m.group(2).strip()
+        missing = [f for f in ("csComponent", "csVersion", "csRequired",
+                               "csOlderVersions") if f not in values]
+        if missing:
+            raise ValueError(
+                f"{where}: codec '{codec}' is built by componentCodec but "
+                f"its ComponentSpec has no {', '.join(missing)} field -- did "
+                f"the spec's field names change without updating this audit?")
+        if not re.fullmatch(r"\d+", values["csVersion"]):
+            raise ValueError(
+                f"{where}: codec '{codec}' has a non-literal csVersion "
+                f"({values['csVersion']!r}); this audit needs the real "
+                f"schema version, not an expression")
+        if values["csRequired"] not in ("True", "False"):
+            raise ValueError(
+                f"{where}: codec '{codec}' has a non-literal csRequired "
+                f"({values['csRequired']!r})")
+        current = int(values["csVersion"])
+        older = [int(v) for v in AT_VERSION_RE.findall(values["csOlderVersions"])]
+        specs.append({
+            "codec": codec,
+            "componentIdIdent": values["csComponent"],
+            "currentVersion": current,
+            "inputVersions": sorted({current} | set(older)),
+            "required": values["csRequired"] == "True"})
+    return specs
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict:
@@ -506,29 +638,19 @@ def real_component_registry() -> dict[str, dict]:
     discovered_codec_names: set[str] = set()
     for path in HASKELL_COMPONENT_SOURCE_PATHS:
         text = path.read_text(encoding="utf-8")
-        for codec_name, cid_ident, ver, req in SERIALIZE_CODEC_RE.findall(text):
-            sid = id_literals.get(cid_ident)
+        for spec in discover_component_specs(text, str(path)):
+            sid = id_literals.get(spec["componentIdIdent"])
             if sid is None:
                 raise ValueError(
-                    f"{path}: serializeCodec references unknown component "
-                    f"id identifier '{cid_ident}' -- did a ComponentId "
-                    f"binding get renamed without updating this parser?")
-            discovered_codec_names.add(codec_name)
+                    f"{path}: componentCodec references unknown component "
+                    f"id identifier '{spec['componentIdIdent']}' -- did a "
+                    f"ComponentId binding get renamed without updating this "
+                    f"parser?")
+            discovered_codec_names.add(spec["codec"])
             registry[sid] = {
-                "currentVersion": int(ver), "inputVersions": [int(ver)],
-                "required": req == "True"}
-        for codec_name, cid_ident, ver, vers_str, req in RECORD_CODEC_RE.findall(text):
-            sid = id_literals.get(cid_ident)
-            if sid is None:
-                raise ValueError(
-                    f"{path}: hand-rolled ComponentCodec references unknown "
-                    f"component id identifier '{cid_ident}'")
-            input_versions = [int(v.strip()) for v in vers_str.split(",")
-                               if v.strip()]
-            discovered_codec_names.add(codec_name)
-            registry[sid] = {
-                "currentVersion": int(ver), "inputVersions": input_versions,
-                "required": req == "True"}
+                "currentVersion": spec["currentVersion"],
+                "inputVersions": spec["inputVersions"],
+                "required": spec["required"]}
 
     # Round-16 review: cross-check against the ONE authoritative list --
     # World.Save.Component.saveComponentRegistry's own entries -- rather
@@ -557,11 +679,13 @@ def real_component_registry() -> dict[str, dict]:
             f"saveComponentRegistry references "
             f"{', '.join(missing_codec_names)}, but no matching codec "
             f"definition was found anywhere under "
-            f"{HASKELL_COMPONENT_SOURCE_PATHS[0].parent} -- a component "
-            f"registered from a module this scan never looked at (or a "
-            f"renamed/typo'd codec binding) would otherwise be silently "
-            f"absent from the ENTIRE real_component_registry() with no "
-            f"error at all")
+            f"{HASKELL_COMPONENT_SOURCE_PATHS[0].parent} in the expected "
+            f"`<codec> = componentCodec ComponentSpec {{ ... }}` form -- a "
+            f"component registered from a module this scan never looked at, "
+            f"a renamed/typo'd codec binding, or a codec that hand-rolls the "
+            f"'ComponentCodec' record instead of going through the shared "
+            f"construction (issue #1093) would otherwise be silently absent "
+            f"from the ENTIRE real_component_registry() with no error at all")
 
     discovered_lua_modules = discover_lua_save_modules()
     if not discovered_lua_modules:

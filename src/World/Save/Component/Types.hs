@@ -15,8 +15,9 @@
 --   Every component's on-disk bytes are the frozen wire contract
 --   (requirement 4): a 'ComponentCodec's DTO is encoded positionally by
 --   cereal and, once shipped at a given version, is never edited in
---   place — a new schema goes in a NEW version, decoded by adding that
---   version to 'ccInputVers' and dispatching on it in 'ccDecode'. The
+--   place — a new schema goes in a NEW version: the old DTO type is
+--   frozen and moved to 'csOlderVersions' via 'atVersion', and the new
+--   one becomes 'csVersion'/'csEncode'/'csDecode' (issue #1093). The
 --   canonical type @a@ a codec decodes INTO is the migration target
 --   ("World.Save.Snapshot"'s slices), kept separate from the versioned
 --   DTO so ordinary snapshot evolution never touches saved bytes.
@@ -78,7 +79,10 @@ module World.Save.Component.Types
     , ComponentCodec(..)
     , RegisteredComponent(..)
     , registerComponent
-    , serializeCodec
+    , ComponentSpec(..)
+    , ComponentVersion(..)
+    , atVersion
+    , componentCodec
     , decodeComponentValue
     , findDescriptor
     , applyPageSlices
@@ -146,9 +150,12 @@ data ComponentCodec a = ComponentCodec
     { ccId        ∷ !ComponentId
     , ccVersion   ∷ !Word32
     , ccInputVers ∷ ![Word32]
-      -- ^ Encoded versions this reader accepts. For B2 (the first split)
-      --   this is just @[ccVersion]@; a future migration adds an older
-      --   version and dispatches on it in 'ccDecode' (requirement 3).
+      -- ^ Encoded versions this reader accepts, ascending — the
+      --   registry/audit-visible projection of what 'ccDecode' actually
+      --   dispatches on. Built through 'componentCodec' both come from
+      --   the SAME version declarations ('csVersion' + 'csOlderVersions'),
+      --   so this list cannot advertise a version the decoder would
+      --   reject, nor omit one it accepts (issue #1093).
     , ccRequired  ∷ !Bool
     , ccDeps      ∷ ![ComponentId]
     , ccEncode    ∷ SessionSnapshot → BS.ByteString
@@ -249,40 +256,117 @@ encodedVersionOf ∷ ComponentCodec a → DecodedEnvelope → Word32
 encodedVersionOf cc de =
     maybe (ccVersion cc) cdVersion (findDescriptor (ccId cc) (deManifest de))
 
--- | Build a codec whose CURRENT version cereal-decodes straight into a
---   versioned DTO @d@, then migrates that DTO into the canonical type
---   @a@ (for B2 the migration is usually the identity, @d ≡ a@ — but
---   the seam exists so a future version can slot in). Handles the two
---   universal decode failures uniformly: an unsupported encoded version
---   (naming it), and a truncated/malformed payload (cereal's own
---   error), both as 'DecodePhase' errors.
-serializeCodec
-    ∷ S.Serialize d
-    ⇒ ComponentId → Word32 → Bool → [ComponentId]
-    → (SessionSnapshot → d)
-    → (Word32 → d → Either ComponentError a)
-    → (a → [ComponentError])
-    → ComponentCodec a
-serializeCodec cid ver req deps toDTO migrate validate = ComponentCodec
-    { ccId        = cid
-    , ccVersion   = ver
-    , ccInputVers = [ver]
-    , ccRequired  = req
-    , ccDeps      = deps
-    , ccEncode    = \snap → S.encode (toDTO snap)
-    , ccDecode    = \v bytes →
-        if v ∉ [ver]
-          then Left (ComponentError cid v DecodePhase
-                       ("unsupported schema version (reader supports v"
-                        <> T.pack (show ver) <> ")"))
-          else case S.decode bytes of
-                 Left err → Left (ComponentError cid v DecodePhase
-                                    ("malformed payload: " <> T.pack err))
-                 Right d  → migrate v d
-    , ccValidate  = validate
+-- | ONE accepted encoded version of a component: the version number,
+--   plus how bytes encoded at it become the canonical type @a@.
+--
+--   Built only by 'atVersion', which closes over the frozen DTO type
+--   THAT version's bytes cereal-decode through. That closure is what
+--   lets a single declaration list carry a DIFFERENT frozen DTO per
+--   version — the thing widening 'ccInputVers' alone could never
+--   express, since one @Serialize d@ constraint would decode an old
+--   payload as the current DTO. The version number stays inspectable, so
+--   'componentCodec' derives 'ccInputVers', the decode dispatch, AND the
+--   unsupported-version message from these same declarations rather than
+--   from a separately-maintained list that could drift out of step
+--   (issue #1093).
+data ComponentVersion a = ComponentVersion
+    { cvVersion ∷ !Word32
+    , cvDecode  ∷ ComponentId → BS.ByteString → Either ComponentError a
+      -- ^ The component id is supplied by 'componentCodec' (from
+      --   'csComponent') rather than restated per version, so a
+      --   malformed-payload error can never name the wrong component.
     }
-  where x ∉ xs = not (x ∈ xs)
-        x ∈ xs = x `elem` xs
+
+-- | Declare that encoded version @ver@ decodes through the frozen DTO
+--   @d@, which @build@ turns into the canonical type @a@. Every real
+--   migration in this codebase is total (it re-shapes a decoded DTO —
+--   e.g. wrapping bare ids as typed references), so this seam is total
+--   too: the previous helper's @Word32 → d → Either ComponentError a@
+--   was passed @(\\_ d → Right d)@ by every single call site, and a
+--   second dead seam is worth less than the one it replaces. A decode
+--   that can genuinely fail on well-formed bytes belongs in 'ccValidate'
+--   (a 'ValidatePhase' error naming what was wrong), and a truly
+--   fallible migration would add its own variant HERE when one first
+--   exists.
+atVersion ∷ S.Serialize d ⇒ Word32 → (d → a) → ComponentVersion a
+atVersion ver build = ComponentVersion
+    { cvVersion = ver
+    , cvDecode  = \cid bytes → case S.decode bytes of
+        Left err → Left (ComponentError cid ver DecodePhase
+                           ("malformed payload: " <> T.pack err))
+        Right d  → Right (build d)
+    }
+
+-- | Everything 'componentCodec' needs, as NAMED fields: a call site
+--   states which number is the schema version and which flag is
+--   required/optional instead of relying on positional order
+--   (issue #1093).
+--
+--   @d@ is the CURRENT version's frozen DTO — the one thing encoding and
+--   current-version decoding must agree on, so it is named once here and
+--   shared by 'csEncode'/'csDecode'. Older accepted versions each bring
+--   their OWN frozen DTO through 'csOlderVersions'.
+data ComponentSpec d a = ComponentSpec
+    { csComponent     ∷ !ComponentId
+    , csVersion       ∷ !Word32
+      -- ^ The current schema version: what 'csEncode' writes, and the
+      --   newest version this reader accepts. Declared ONCE — 'ccVersion',
+      --   this reader's current-version dispatch, and its entry in
+      --   'ccInputVers' all come from here.
+    , csRequired      ∷ !Bool
+      -- ^ @True@ ⇒ a save lacking this component is a failure; @False@ ⇒
+      --   an absent payload is a legitimate default (see
+      --   'registerComponent').
+    , csDeps          ∷ ![ComponentId]
+    , csEncode        ∷ SessionSnapshot → d
+      -- ^ Snapshot → the CURRENT version's frozen DTO. 'componentCodec'
+      --   adds the cereal encode, so no component spells out its own
+      --   wire step.
+    , csDecode        ∷ d → a
+      -- ^ The current version's DTO → the canonical decoded type. Often
+      --   'id' (the DTO IS the canonical type).
+    , csOlderVersions ∷ ![ComponentVersion a]
+      -- ^ Every OLDER encoded version this reader still accepts, each
+      --   built by 'atVersion' with its own frozen DTO type. Empty for a
+      --   component that has never evolved — the degenerate case of the
+      --   same mechanism, not a different one.
+    , csValidate      ∷ a → [ComponentError]
+    }
+
+-- | Build a component's codec from its 'ComponentSpec', handling the two
+--   universal decode failures uniformly so no component hand-writes
+--   either: an unsupported encoded version (naming every version this
+--   reader DOES accept), and a truncated/malformed payload (cereal's own
+--   error), both as 'DecodePhase' errors.
+--
+--   'ccInputVers', the decode dispatch, and the unsupported-version
+--   message are all derived from ONE table — the current version plus
+--   'csOlderVersions', sorted ascending — so a reader cannot accept a
+--   version it has no decoder for, or report an accepted set that
+--   disagrees with what it actually dispatches on.
+componentCodec ∷ S.Serialize d ⇒ ComponentSpec d a → ComponentCodec a
+componentCodec spec = ComponentCodec
+    { ccId        = cid
+    , ccVersion   = csVersion spec
+    , ccInputVers = map cvVersion accepted
+    , ccRequired  = csRequired spec
+    , ccDeps      = csDeps spec
+    , ccEncode    = \snap → S.encode (csEncode spec snap)
+    , ccDecode    = \v bytes → case lookup v dispatch of
+        Just decode → decode cid bytes
+        Nothing     → Left (ComponentError cid v DecodePhase
+                              ("unsupported schema version (reader supports "
+                               <> T.intercalate ", " renderedVersions <> ")"))
+    , ccValidate  = csValidate spec
+    }
+  where
+    cid      = csComponent spec
+    accepted = L.sortOn cvVersion
+                   (atVersion (csVersion spec) (csDecode spec)
+                      : csOlderVersions spec)
+    dispatch = [ (cvVersion cv, cvDecode cv) | cv ← accepted ]
+    renderedVersions =
+        [ "v" <> T.pack (show (cvVersion cv)) | cv ← accepted ]
 
 -- | Pull one component's typed, self-validated value out of an
 --   already-structurally-valid 'DecodedEnvelope' (assembly path). The

@@ -15,7 +15,8 @@ import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
 import qualified Data.Text as T
-import Numeric (readHex)
+import Data.Bits (xor)
+import Numeric (readHex, showHex)
 
 import qualified Data.HashSet as HS
 import World.Save.Envelope
@@ -29,6 +30,7 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
+import World.Save.Component.Knowledge (containerKnowledgeCodec)
 import World.Save.Compat.SessionV90
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -429,6 +431,16 @@ pageCore pid = PageCoreDTO
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
     , pcIdentity = Nothing }
 
+-- | The same page core in the frozen pre-#1092 v2 shape, WITH an identity
+--   — the field whose DTO actually differs between v2 and v3, so a v2
+--   payload built here is genuinely not a v3 payload.
+pageCoreV2 ∷ WorldPageId → PageCoreDTOv2
+pageCoreV2 pid = PageCoreDTOv2
+    { pc2PageId = pid, pc2GenParams = toWorldGenParamsDTO defaultGP
+    , pc2CameraX = 0, pc2CameraY = 0, pc2TimeHour = 0, pc2TimeMinute = 0
+    , pc2DateYear = 1, pc2DateMonth = 1, pc2DateDay = 1, pc2MapMode = ZMDefault
+    , pc2Identity = Just (WorldIdentityDTOv1 "Old World" Nothing) }
+
 -- | A minimal 'WorldPageSave' fixture (all designation/entity maps
 --   empty) for the round-8 def-reference validators below, which only
 --   ever look at 'wpsBuildings'/'wpsUnits'/'wpsGroundItems'/
@@ -474,6 +486,83 @@ hexDecode = BS.pack . go
 isLeft ∷ Either a b → Bool
 isLeft (Left _) = True
 isLeft _        = False
+
+componentIdText ∷ ComponentId → Text
+componentIdText (ComponentId t) = t
+
+-- | A payload's byte length plus an FNV-1a-64 fingerprint of its bytes —
+--   a compact stand-in for pinning whole encoded payloads inline
+--   (issue #1093's byte-identical-encoding requirement). Deliberately its
+--   OWN hash rather than the envelope's manifest checksum: this gate must
+--   keep meaning exactly "these component bytes are unchanged" even if the
+--   envelope's framing checksum is ever changed.
+payloadDigest ∷ BS.ByteString → (Int, Text)
+payloadDigest bytes = (BS.length bytes, hex16 (BS.foldl' step 0xcbf29ce484222325 bytes))
+  where
+    step ∷ Word64 → Word8 → Word64
+    step h b = (h `xor` fromIntegral b) * 0x100000001b3
+    hex16 w = let s = showHex w "" in T.pack (replicate (16 - length s) '0' <> s)
+
+-- | The encoded payload of EVERY registered gameplay component, against
+--   the shared 'richSnapshot', captured from the code as it stood BEFORE
+--   issue #1093 changed how codecs are constructed. Issue #1093 changes
+--   only how a 'ComponentCodec' is BUILT, never what it writes, so every
+--   entry here must survive that refactor untouched; the round-trip and
+--   manifest-fixture gates prove decodability and canonical equivalence
+--   but would not notice a re-encoding that merely round-trips.
+--
+--   A deliberate schema bump (a new 'csVersion' + a frozen predecessor in
+--   'csOlderVersions') legitimately moves the affected component's row —
+--   update it in the same commit as the bump, with its own compatibility
+--   fixture. Any OTHER movement means encoded bytes changed by accident.
+goldenEncodedPayloads ∷ [(Text, (Int, Text))]
+goldenEncodedPayloads =
+    [ ("core-session",        (75,  "8dbbaba1a5b03f0d"))
+    , ("texture-palette",     (36,  "e5bcd7a1b62dfa9e"))
+    , ("world-pages",         (1102, "d5cee6f1e5b3ca85"))
+    , ("world-edits",         (118, "c1ffe1b0c1b4b1ea"))
+    , ("world-activity",      (404, "de0a5c4bb0ba1d54"))
+    , ("buildings",           (156, "8e5b3d0a1f2c4b6d"))
+    , ("units",               (351, "a1b2c3d4e5f60718"))
+    , ("unit-sim",            (135, "1122334455667788"))
+    , ("craft-bills",         (176, "99aabbccddeeff00"))
+    , ("power-nodes",         (114, "0f1e2d3c4b5a6978"))
+    , ("container-knowledge", (66,  "1029384756abcdef"))
+    ]
+
+-- | One type-erased view of a concrete codec, enough to probe its
+--   version dispatch without knowing what it decodes into.
+data CodecProbe = CodecProbe
+    { cpId        ∷ ComponentId
+    , cpVersion   ∷ Word32
+    , cpInputVers ∷ [Word32]
+    , cpDecodeErr ∷ Word32 → BS.ByteString → Maybe ComponentError
+    }
+
+probeOf ∷ ComponentCodec a → CodecProbe
+probeOf cc = CodecProbe
+    { cpId        = ccId cc
+    , cpVersion   = ccVersion cc
+    , cpInputVers = ccInputVers cc
+    , cpDecodeErr = \v bytes → either Just (const Nothing) (ccDecode cc v bytes)
+    }
+
+-- | Every registered gameplay codec, as probes. Kept in
+--   'saveComponentRegistry' order and cross-checked against it below, so
+--   a component added to the registry without a probe here fails rather
+--   than silently escaping the dispatch invariants.
+codecProbes ∷ [CodecProbe]
+codecProbes =
+    [ probeOf coreSessionCodec, probeOf texPaletteCodec
+    , probeOf worldPagesCodec, probeOf worldEditsCodec
+    , probeOf worldActivityCodec, probeOf buildingsCodec
+    , probeOf unitsCodec, probeOf unitSimCodec
+    , probeOf craftBillsCodec, probeOf powerNodesCodec
+    , probeOf containerKnowledgeCodec
+    ]
+
+decodeErrorOf ∷ ComponentCodec a → Word32 → BS.ByteString → Maybe ComponentError
+decodeErrorOf cc v bytes = either Just (const Nothing) (ccDecode cc v bytes)
 
 spec ∷ Spec
 spec = do
@@ -666,6 +755,155 @@ spec = do
                     [ wgpSeed (pgsGenParams p)
                     | p ← maybeToList (HM.lookup page1 (wpBase wp)) ]
                         `shouldBe` [123456]
+                Left e → expectationFailure (T.unpack (renderComponentError e))
+
+    -- Issue #1093: every codec is now built through ONE shared
+    -- construction that takes named arguments and can decode more than
+    -- one encoded version, each through its own frozen DTO. These are the
+    -- contracts that refactor had to keep exactly: the bytes it writes,
+    -- the errors it reports, and the fact that its advertised
+    -- accepted-version set IS what it dispatches on.
+    describe "shared codec construction (issue #1093)" $ do
+        it "encodes every registered gameplay component to byte-identical \
+           \payloads (pinned length + fingerprint captured from the code \
+           \BEFORE the construction changed)" $
+            [ (componentIdText (rcId c), payloadDigest (rcEncode c richSnapshot))
+            | c ← saveComponentRegistry ] `shouldBe` goldenEncodedPayloads
+
+        it "probes EVERY registered component -- a new codec cannot escape \
+           \the dispatch invariants below by simply not being listed" $
+            map cpId codecProbes `shouldBe` map rcId saveComponentRegistry
+
+        it "advertises exactly the versions it dispatches on: ccInputVers is \
+           \strictly ascending, ends at ccVersion, every listed version \
+           \reaches a real decoder, and nothing outside it does" $
+            forM_ codecProbes $ \p → do
+                let vers = cpInputVers p
+                    label extra = T.unpack (componentIdText (cpId p)) <> ": " <> extra
+                vers `shouldSatisfy` \vs → and (zipWith (<) vs (drop 1 vs))
+                unless (not (null vers) ∧ last vers ≡ cpVersion p) $
+                    expectationFailure
+                        (label "ccInputVers must end at ccVersion, got "
+                         <> show vers <> " for v" <> show (cpVersion p))
+                -- An ACCEPTED version reaches its own cereal decoder, so
+                -- empty bytes fail as a malformed payload…
+                forM_ vers $ \v → case cpDecodeErr p v BS.empty of
+                    Just e → do
+                        cePhase e `shouldBe` DecodePhase
+                        ceVersion e `shouldBe` v
+                        ceComponent e `shouldBe` cpId p
+                        unless ("malformed payload: " `T.isPrefixOf` ceMessage e) $
+                            expectationFailure
+                                (label ("v" <> show v <> " is advertised as \
+                                        \accepted but did not reach a decoder: ")
+                                 <> T.unpack (ceMessage e))
+                    Nothing → expectationFailure
+                        (label ("v" <> show v <> " decoded EMPTY bytes"))
+                -- …while anything outside the set is rejected as an
+                -- unsupported version, naming every version that IS
+                -- accepted.
+                let expected = "unsupported schema version (reader supports "
+                             <> T.intercalate ", " [ "v" <> T.pack (show v)
+                                                   | v ← vers ] <> ")"
+                forM_ [0, cpVersion p + 1] $ \v →
+                    cpDecodeErr p v BS.empty
+                        `shouldBe` Just (ComponentError (cpId p) v DecodePhase expected)
+
+        it "reports an unsupported version identically for a SINGLETON \
+           \reader (component, version, phase, and the full message)" $
+            decodeErrorOf coreSessionCodec 2
+                    (ccEncode coreSessionCodec richSnapshot)
+                `shouldBe` Just (ComponentError coreSessionComponentId 2
+                    DecodePhase
+                    "unsupported schema version (reader supports v1)")
+
+        it "reports an unsupported version identically for a TWO-version \
+           \reader -- the existing 'reader supports v1, v2' rendering" $ do
+            decodeErrorOf craftBillsCodec 3
+                    (ccEncode craftBillsCodec richSnapshot)
+                `shouldBe` Just (ComponentError craftBillsComponentId 3
+                    DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+            decodeErrorOf unitSimCodec 0 BS.empty
+                `shouldBe` Just (ComponentError unitSimComponentId 0
+                    DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+            decodeErrorOf powerNodesCodec 7 BS.empty
+                `shouldBe` Just (ComponentError powerNodesComponentId 7
+                    DecodePhase
+                    "unsupported schema version (reader supports v1, v2)")
+
+        it "reports an unsupported version identically for a THREE-version \
+           \reader" $
+            decodeErrorOf worldPagesCodec 4 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 4
+                    DecodePhase
+                    "unsupported schema version (reader supports v1, v2, v3)")
+
+        it "reports a malformed payload identically -- same component, \
+           \supplied version, DecodePhase, and cereal-derived message -- at \
+           \a singleton reader's only version and at BOTH a multi-version \
+           \reader's current and historical versions" $ do
+            let truncated = BS.pack [1, 2, 3]
+                cerealMsg = "malformed payload: too few bytes\n\
+                            \From:\tdemandInput\n\n"
+            decodeErrorOf coreSessionCodec 1 truncated
+                `shouldBe` Just (ComponentError coreSessionComponentId 1
+                                   DecodePhase cerealMsg)
+            decodeErrorOf craftBillsCodec 2 truncated
+                `shouldBe` Just (ComponentError craftBillsComponentId 2
+                                   DecodePhase cerealMsg)
+            decodeErrorOf craftBillsCodec 1 truncated
+                `shouldBe` Just (ComponentError craftBillsComponentId 1
+                                   DecodePhase cerealMsg)
+
+        -- The point a widened ccInputVers alone could never reach: ONE
+        -- byte string means different things at different versions,
+        -- because each version owns a different frozen DTO type. A
+        -- pre-#1092 world-pages page core ends in the two-field
+        -- 'WorldIdentityDTOv1', where v3's ends in the three-field
+        -- 'WorldIdentityDTO' — so a v2 payload carrying an identity is
+        -- genuinely shorter than any v3 payload, and reading it with the
+        -- current DTO must fail rather than half-parse.
+        it "reads each accepted version through its OWN frozen DTO -- the \
+           \same v2 world-pages bytes decode at v2 and are REJECTED at v3" $ do
+            let v2Bytes = S.encode (WorldPagesDTOv2 [pageCoreV2 page1])
+            case ccDecode worldPagesCodec 2 v2Bytes of
+                Right wp → map (fmap wiName . pgsIdentity)
+                               (HM.elems (wpBase wp))
+                    `shouldBe` [Just "Old World"]
+                Left e → expectationFailure (T.unpack (renderComponentError e))
+            decodeErrorOf worldPagesCodec 3 v2Bytes
+                `shouldSatisfy` maybe False ((≡ DecodePhase) . cePhase)
+
+        it "a v1 craft-bills payload reaches the v1 decoder and comes back \
+           \MIGRATED (bare ids wrapped as same-page references), not \
+           \reinterpreted as the current DTO" $ do
+            let v1Bytes = S.encode (CraftBillsDTOv1
+                    [ PageCraftBillsDTOv1 page1 (BillQueueDTOv1
+                        { bq1NextId = 2
+                        , bq1Bills  = HM.singleton (BillId 1) CraftBillDTOv1
+                            { bil1Id         = BillId 1
+                            , bil1Station    = BuildingId 1
+                            , bil1Recipe     = "forge_steel_dagger"
+                            , bil1Remaining  = 1
+                            , bil1Claimant   = Nothing
+                            , bil1ClaimedAt  = 0
+                            , bil1Progress   = 0
+                            , bil1Seq        = 1
+                            , bil1Paused     = False
+                            , bil1Working    = False
+                            , bil1Mode       = BillFixed
+                            , bil1Target     = 0
+                            , bil1OutputItem = "steel_dagger"
+                            } }) ])
+            case ccDecode craftBillsCodec 1 v1Bytes of
+                Right (CraftBillsDTO [slice]) →
+                    map bilStation (HM.elems (bqBills (pcbBills slice)))
+                        `shouldBe` [SamePageRef (BuildingId 1)]
+                Right other → expectationFailure
+                    ("expected exactly one migrated page slice, got "
+                     <> show other)
                 Left e → expectationFailure (T.unpack (renderComponentError e))
 
     describe "frozen entity DTOs (requirement 4)" $ do
