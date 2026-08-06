@@ -63,7 +63,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Chunk.Types (chunkSize)
 import World.Ocean.Types (OceanMap)
 import World.Fluid.Lake.Identify.ChunkIndex
-    (buildChunkIndex, buildLakeCarveIndex)
+    (buildLakeChunkIndex, buildLakeCarveIndex)
 import World.Fluid.Lake.Identify.Components
     (LakeWithId(..), buildLakes, dropOldId, labelComponents)
 import World.Fluid.Lake.Identify.Flood (priorityFlood)
@@ -151,7 +151,7 @@ identifyWorldLakes worldSize oceanMap terrain =
         -- thread the renumbering — Lake's public fields don't carry
         -- it).
         finalLakes = V.map dropOldId kept
-        byChunk    = buildChunkIndex worldTiles idMap labels
+        byChunk    = buildLakeChunkIndex worldTiles idMap labels
         carveByChunk = buildLakeCarveIndex worldTiles terrain finalLakes
                                            byChunk
     in if V.null finalLakes
