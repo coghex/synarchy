@@ -15,7 +15,6 @@ import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
 import qualified Data.Text as T
-import Data.Bits (xor)
 import Numeric (readHex, showHex)
 
 import qualified Data.HashSet as HS
@@ -503,32 +502,58 @@ payloadDigest bytes = (BS.length bytes, hex16 (BS.foldl' step 0xcbf29ce484222325
     step h b = (h `xor` fromIntegral b) * 0x100000001b3
     hex16 w = let s = showHex w "" in T.pack (replicate (16 - length s) '0' <> s)
 
--- | The encoded payload of EVERY registered gameplay component, against
---   the shared 'richSnapshot', captured from the code as it stood BEFORE
---   issue #1093 changed how codecs are constructed. Issue #1093 changes
---   only how a 'ComponentCodec' is BUILT, never what it writes, so every
---   entry here must survive that refactor untouched; the round-trip and
---   manifest-fixture gates prove decodability and canonical equivalence
---   but would not notice a re-encoding that merely round-trips.
+-- | The encoded payload of EVERY registered gameplay component, captured
+--   from the code as it stood BEFORE issue #1093 changed how codecs are
+--   constructed. That change is entirely about how a 'ComponentCodec' is
+--   BUILT, never about what it writes, so every entry here had to survive
+--   it untouched — the round-trip and manifest-fixture gates prove
+--   decodability and canonical equivalence, but neither would notice a
+--   re-encoding that merely round-trips.
 --
---   A deliberate schema bump (a new 'csVersion' + a frozen predecessor in
---   'csOlderVersions') legitimately moves the affected component's row —
---   update it in the same commit as the bump, with its own compatibility
---   fixture. Any OTHER movement means encoded bytes changed by accident.
-goldenEncodedPayloads ∷ [(Text, (Int, Text))]
-goldenEncodedPayloads =
-    [ ("core-session",        (75,  "8dbbaba1a5b03f0d"))
-    , ("texture-palette",     (36,  "e5bcd7a1b62dfa9e"))
-    , ("world-pages",         (1102, "d5cee6f1e5b3ca85"))
-    , ("world-edits",         (118, "c1ffe1b0c1b4b1ea"))
-    , ("world-activity",      (404, "de0a5c4bb0ba1d54"))
-    , ("buildings",           (156, "8e5b3d0a1f2c4b6d"))
-    , ("units",               (351, "a1b2c3d4e5f60718"))
-    , ("unit-sim",            (135, "1122334455667788"))
-    , ("craft-bills",         (176, "99aabbccddeeff00"))
-    , ("power-nodes",         (114, "0f1e2d3c4b5a6978"))
-    , ("container-knowledge", (66,  "1029384756abcdef"))
+--   Pinned against BOTH shared snapshots: 'richSnapshot' (two pages,
+--   populated entities/edits/climate) and 'fullSnapshot' (the one that
+--   also populates craft bills, power nodes, ground items, designations),
+--   so no component's row is the degenerate encoding of an empty slice.
+--
+--   A deliberate schema bump (a new 'csVersion' plus its frozen
+--   predecessor in 'csOlderVersions') legitimately moves the affected
+--   component's rows — update them in the same commit as the bump, with
+--   that component's own compatibility fixture. Any OTHER movement means
+--   encoded bytes changed by accident.
+goldenRichPayloads ∷ [(Text, (Int, Text))]
+goldenRichPayloads =
+    [ ("core-session",        (85,   "74d3010096cbbe2b"))
+    , ("texture-palette",     (16,   "88201fb960ff6465"))
+    , ("world-pages",         (1289, "7b86411a57c4dd80"))
+    , ("world-edits",         (50,   "1ed7627acac89064"))
+    , ("world-activity",      (194,  "251087e70708d624"))
+    , ("buildings",           (151,  "3dafc93879ea3b82"))
+    , ("units",               (249,  "fc6ed2ffd1c79265"))
+    , ("unit-sim",            (123,  "81797b8874157310"))
+    , ("craft-bills",         (58,   "beec8f6ff4c58c26"))
+    , ("power-nodes",         (58,   "beec8f6ff4c58c26"))
+    , ("container-knowledge", (50,   "1ed7627acac89064"))
     ]
+
+goldenFullPayloads ∷ [(Text, (Int, Text))]
+goldenFullPayloads =
+    [ ("core-session",        (85,  "0641eeed95100f9a"))
+    , ("texture-palette",     (16,  "88201fb960ff6465"))
+    , ("world-pages",         (674, "6a873da3692b0a6f"))
+    , ("world-edits",         (70,  "814069e34515f996"))
+    , ("world-activity",      (332, "0292cc7e9c1053e3"))
+    , ("buildings",           (130, "2b6c80ab8c216329"))
+    , ("units",               (228, "4b3dd9531385aafc"))
+    , ("unit-sim",            (102, "2977ea9721e11313"))
+    , ("craft-bills",         (125, "687f006dbc839e32"))
+    , ("power-nodes",         (58,  "0cadd98f962a6b12"))
+    , ("container-knowledge", (29,  "1a075ce50a1643b1"))
+    ]
+
+encodedPayloadDigests ∷ SessionSnapshot → [(Text, (Int, Text))]
+encodedPayloadDigests snap =
+    [ (componentIdText (rcId c), payloadDigest (rcEncode c snap))
+    | c ← saveComponentRegistry ]
 
 -- | One type-erased view of a concrete codec, enough to probe its
 --   version dispatch without knowing what it decodes into.
@@ -544,7 +569,7 @@ probeOf cc = CodecProbe
     { cpId        = ccId cc
     , cpVersion   = ccVersion cc
     , cpInputVers = ccInputVers cc
-    , cpDecodeErr = \v bytes → either Just (const Nothing) (ccDecode cc v bytes)
+    , cpDecodeErr = decodeErrorOf cc
     }
 
 -- | Every registered gameplay codec, as probes. Kept in
@@ -766,9 +791,9 @@ spec = do
     describe "shared codec construction (issue #1093)" $ do
         it "encodes every registered gameplay component to byte-identical \
            \payloads (pinned length + fingerprint captured from the code \
-           \BEFORE the construction changed)" $
-            [ (componentIdText (rcId c), payloadDigest (rcEncode c richSnapshot))
-            | c ← saveComponentRegistry ] `shouldBe` goldenEncodedPayloads
+           \BEFORE the construction changed)" $ do
+            encodedPayloadDigests richSnapshot `shouldBe` goldenRichPayloads
+            encodedPayloadDigests fullSnapshot `shouldBe` goldenFullPayloads
 
         it "probes EVERY registered component -- a new codec cannot escape \
            \the dispatch invariants below by simply not being listed" $
@@ -893,7 +918,7 @@ spec = do
                             , bil1Seq        = 1
                             , bil1Paused     = False
                             , bil1Working    = False
-                            , bil1Mode       = BillFixed
+                            , bil1Mode       = FixedCount
                             , bil1Target     = 0
                             , bil1OutputItem = "steel_dagger"
                             } }) ])
