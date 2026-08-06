@@ -21,6 +21,7 @@ module World.Generate.Chunk.Fluid
 
 import UPrelude
 import Control.Monad.ST (runST)
+import Data.List (group, sort)
 import Data.STRef (newSTRef, readSTRef, modifySTRef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
@@ -468,22 +469,30 @@ smoothIslandColumns terr fluid = runST $ do
                     Nothing → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
-                            t  = terr VU.! idx
+                        -- Terrain is read from the SAME mutable vector
+                        -- the smoothing writes to, so this loop has one
+                        -- source of truth per map and no reader has to
+                        -- reconstruct why an immutable read stayed
+                        -- correct across passes (#1131).
+                        t  ← VUM.read mTerr idx
                         ms ← sequence
                                 [ neighborSurf (lx - 1) ly
                                 , neighborSurf (lx + 1) ly
                                 , neighborSurf lx       (ly - 1)
                                 , neighborSurf lx       (ly + 1)
                                 ]
+                        -- A surface qualifies when it occurs in at
+                        -- least three of the ≤ 4 valid cardinal
+                        -- neighbors. With at most four samples no
+                        -- second value can also reach three, so the
+                        -- first qualifying group is the only one —
+                        -- 'group' needs the 'sort' because equal
+                        -- surfaces need not be adjacent in the sample
+                        -- order.
                         let ns = [ s | Just s ← ms ]
-                            countBy z = length (filter (≡ z) ns)
-                            uniques = foldr
-                                (\z acc → if z `elem` acc then acc else z : acc)
-                                [] ns
-                            hits = [ (z, countBy z) | z ← uniques ]
-                            candidate = case filter ((≥ 3) . snd) hits of
-                                ((z, _):_) → Just z
-                                []         → Nothing
+                            candidate = listToMaybe
+                                [ z | zs@(z : _) ← group (sort ns)
+                                    , length zs ≥ 3 ]
                         case candidate of
                             Just s
                               | t > s ∧ t ≤ s + maxColumnPeek → do
