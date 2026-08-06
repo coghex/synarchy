@@ -156,7 +156,6 @@ import World.Save.Component.Page
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 import World.Save.Component.Types
 import World.Save.Reference (SamePageRef(..))
-import qualified Data.Serialize as S
 
 orderedPages ∷ SessionSnapshot → [PageSnapshot]
 orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
@@ -241,13 +240,19 @@ newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
 -- @bsnNextId@ from the GLOBAL building-id allocator that @"core-session"@
 -- installs, so it must fold first (requirement 9).
 buildingsCodec ∷ ComponentCodec BuildingsDTO
-buildingsCodec = serializeCodec
-    buildingsComponentId 1 True [worldPagesComponentId, coreSessionComponentId]
-    (\snap → BuildingsDTO
+buildingsCodec = componentCodec ComponentSpec
+    { csComponent     = buildingsComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId, coreSessionComponentId]
+    , csEncode        = \snap → BuildingsDTO
         [ PageBuildingsDTO (pgsPageId p)
               (HM.map toBuildingInstanceDTO (bsnInstances (pgsBuildings p)))
-        | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
 
 -- | Reconstruct each page's 'BuildingSnapshot' from its instance slice,
 --   filling @bsnNextId@ from the ONE global building-id allocator
@@ -474,13 +479,19 @@ newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
 -- Depends on @"core-session"@ too, for the global unit-id allocator
 -- (@usnNextId@), same reasoning as @"buildings"@ above.
 unitsCodec ∷ ComponentCodec UnitsDTO
-unitsCodec = serializeCodec
-    unitsComponentId 1 True [worldPagesComponentId, coreSessionComponentId]
-    (\snap → UnitsDTO
+unitsCodec = componentCodec ComponentSpec
+    { csComponent     = unitsComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId, coreSessionComponentId]
+    , csEncode        = \snap → UnitsDTO
         [ PageUnitsDTO (pgsPageId p)
               (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
-        | p ← orderedPages snap ])
-    (\_ d → Right d) (const [])
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
 
 applyUnits
     ∷ Word32 → Word32 → UnitsDTO → HM.HashMap WorldPageId PageSnapshot
@@ -655,33 +666,24 @@ migratePageSimDTOv1 d = PageSimDTO
 migrateUnitSimDTOv1 ∷ UnitSimDTOv1 → UnitSimDTO
 migrateUnitSimDTOv1 (UnitSimDTOv1 ps) = UnitSimDTO (map migratePageSimDTOv1 ps)
 
--- | Issue #764 (save-overhaul C3): hand-rolled
---   'ComponentCodec' (mirrors 'craftBillsCodec'/'powerNodesCodec' —
---   'serializeCodec' has no real multi-version dispatch) now that this
---   component needs v1→v2 migration too.
+-- | Issue #764 (save-overhaul C3): the current schema is v2 (typed
+--   'SamePageRef' sim-state keys); v1 decodes through its own frozen
+--   'UnitSimDTOv1' via 'migrateUnitSimDTOv1'. Issue #1093: previously
+--   hand-rolled because the shared helper had no real multi-version
+--   dispatch.
 unitSimCodec ∷ ComponentCodec UnitSimDTO
-unitSimCodec = ComponentCodec
-    { ccId        = unitSimComponentId
-    , ccVersion   = 2
-    , ccInputVers = [1, 2]
-    , ccRequired  = True
-    , ccDeps      = [worldPagesComponentId, unitsComponentId]
-    , ccEncode    = \snap → S.encode (UnitSimDTO
+unitSimCodec = componentCodec ComponentSpec
+    { csComponent     = unitSimComponentId
+    , csVersion       = 2
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId, unitsComponentId]
+    , csEncode        = \snap → UnitSimDTO
         [ PageSimDTO (pgsPageId p)
             (HM.mapKeys SamePageRef (HM.map toUnitSimStateDTO (pgsUnitSimStates p)))
-        | p ← orderedPages snap ])
-    , ccDecode    = \v bytes → case v of
-        2 → case S.decode bytes of
-              Left err → Left (ComponentError unitSimComponentId v
-                                 DecodePhase ("malformed payload: " <> T.pack err))
-              Right d  → Right d
-        1 → case S.decode bytes of
-              Left err → Left (ComponentError unitSimComponentId v
-                                 DecodePhase ("malformed payload: " <> T.pack err))
-              Right (d ∷ UnitSimDTOv1) → Right (migrateUnitSimDTOv1 d)
-        _ → Left (ComponentError unitSimComponentId v DecodePhase
-                    "unsupported schema version (reader supports v1, v2)")
-    , ccValidate  = const []
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = [ atVersion 1 migrateUnitSimDTOv1 ]
+    , csValidate      = const []
     }
 
 applyUnitSim
@@ -909,37 +911,27 @@ validateCraftBills (CraftBillsDTO slices) = concat
       ]
     ]
 
--- | Issue #764 (save-overhaul C3): the current schema is v2
---   (typed 'SamePageRef' station/claimant, see 'CraftBillDTO'). A
---   hand-rolled 'ComponentCodec' rather than 'serializeCodec' — that
---   helper only ever accepted its own current version, with no real
---   multi-version dispatch wired up despite the seam being documented
---   ("World.Save.Component.Types"'s @ccInputVers@ haddock); this is the
---   first component to actually need it. v1 decodes via
---   'migrateCraftBillsDTOv1'; encoding always writes the current v2
---   shape.
+-- | Issue #764 (save-overhaul C3): the current schema is v2 (typed
+--   'SamePageRef' station/claimant, see 'CraftBillDTO'); v1 decodes
+--   through its own frozen 'CraftBillsDTOv1' via
+--   'migrateCraftBillsDTOv1', and encoding always writes the current v2
+--   shape. This was the FIRST component to actually need multi-version
+--   decode, and hand-rolled the whole record because 'componentCodec's
+--   predecessor only ever accepted its own current version; issue #1093
+--   gave the shared construction that dispatch, so this is expressed
+--   through it again.
 craftBillsCodec ∷ ComponentCodec CraftBillsDTO
-craftBillsCodec = ComponentCodec
-    { ccId        = craftBillsComponentId
-    , ccVersion   = 2
-    , ccInputVers = [1, 2]
-    , ccRequired  = True
-    , ccDeps      = [worldPagesComponentId, buildingsComponentId]
-    , ccEncode    = \snap → S.encode (CraftBillsDTO
+craftBillsCodec = componentCodec ComponentSpec
+    { csComponent     = craftBillsComponentId
+    , csVersion       = 2
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId, buildingsComponentId]
+    , csEncode        = \snap → CraftBillsDTO
         [ PageCraftBillsDTO (pgsPageId p) (toBillQueueDTO (pgsCraftBills p))
-        | p ← orderedPages snap ])
-    , ccDecode    = \v bytes → case v of
-        2 → case S.decode bytes of
-              Left err → Left (ComponentError craftBillsComponentId v
-                                 DecodePhase ("malformed payload: " <> T.pack err))
-              Right d  → Right d
-        1 → case S.decode bytes of
-              Left err → Left (ComponentError craftBillsComponentId v
-                                 DecodePhase ("malformed payload: " <> T.pack err))
-              Right (d ∷ CraftBillsDTOv1) → Right (migrateCraftBillsDTOv1 d)
-        _ → Left (ComponentError craftBillsComponentId v DecodePhase
-                    "unsupported schema version (reader supports v1, v2)")
-    , ccValidate  = validateCraftBills
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = [ atVersion 1 migrateCraftBillsDTOv1 ]
+    , csValidate      = validateCraftBills
     }
 
 applyCraftBills
@@ -1103,32 +1095,21 @@ validatePowerNodes (PowerNodesDTO slices) = concat
       ]
     ]
 
--- | Same reasoning as 'craftBillsCodec': hand-rolled for real
---   multi-version decode. Current schema is v2 (typed 'SamePageRef'
---   host building, see 'PowerNodeDTO'); v1 decodes via
---   'migratePowerNodesDTOv1'.
+-- | Same reasoning as 'craftBillsCodec'. Current schema is v2 (typed
+--   'SamePageRef' host building, see 'PowerNodeDTO'); v1 decodes through
+--   its own frozen 'PowerNodesDTOv1' via 'migratePowerNodesDTOv1'.
 powerNodesCodec ∷ ComponentCodec PowerNodesDTO
-powerNodesCodec = ComponentCodec
-    { ccId        = powerNodesComponentId
-    , ccVersion   = 2
-    , ccInputVers = [1, 2]
-    , ccRequired  = True
-    , ccDeps      = [worldPagesComponentId, buildingsComponentId]
-    , ccEncode    = \snap → S.encode (PowerNodesDTO
+powerNodesCodec = componentCodec ComponentSpec
+    { csComponent     = powerNodesComponentId
+    , csVersion       = 2
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId, buildingsComponentId]
+    , csEncode        = \snap → PowerNodesDTO
         [ PagePowerNodesDTO (pgsPageId p) (toNodeRegistryDTO (pgsPowerNodes p))
-        | p ← orderedPages snap ])
-    , ccDecode    = \v bytes → case v of
-        2 → case S.decode bytes of
-              Left err → Left (ComponentError powerNodesComponentId v
-                                 DecodePhase ("malformed payload: " <> T.pack err))
-              Right d  → Right d
-        1 → case S.decode bytes of
-              Left err → Left (ComponentError powerNodesComponentId v
-                                 DecodePhase ("malformed payload: " <> T.pack err))
-              Right (d ∷ PowerNodesDTOv1) → Right (migratePowerNodesDTOv1 d)
-        _ → Left (ComponentError powerNodesComponentId v DecodePhase
-                    "unsupported schema version (reader supports v1, v2)")
-    , ccValidate  = validatePowerNodes
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = [ atVersion 1 migratePowerNodesDTOv1 ]
+    , csValidate      = validatePowerNodes
     }
 
 applyPowerNodes

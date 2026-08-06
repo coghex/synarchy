@@ -79,7 +79,6 @@ module World.Save.Compat.SessionV90
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
@@ -95,7 +94,8 @@ import World.Tool.Types (ToolMode)
 
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
-    ( ComponentError(..), ComponentPhase(..), coreSessionComponentId )
+    ( ComponentError(..), ComponentPhase(..), coreSessionComponentId
+    , ComponentVersion(..), atVersion )
 import World.Save.Component
     ( metadataErrors, capComponentErrors )
 import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
@@ -248,12 +248,15 @@ data SaveDataV90 = SaveDataV90
 
 -- | Decode the raw @"session"@ component payload as the frozen v90 DTO,
 --   naming the failing phase/version the same way every other
---   component's decode does (requirement 6).
+--   component's decode does (requirement 6) — literally so since #1093:
+--   this reuses 'atVersion', the same single accepted-version decoder the
+--   registry's codecs are built from, rather than restating its
+--   malformed-payload error. The retired @"session"@ component itself is
+--   still not a registry 'ComponentCodec' (it has exactly one ever
+--   version and no live encoder), so only the decode step is shared.
 decodeSessionV90 ∷ BS.ByteString → Either ComponentError SaveDataV90
-decodeSessionV90 bytes = case S.decode bytes of
-    Left err → Left (ComponentError sessionComponentId sessionComponentVersion
-                        DecodePhase ("malformed payload: " <> T.pack err))
-    Right d  → Right d
+decodeSessionV90 =
+    cvDecode (atVersion sessionComponentVersion id) sessionComponentId
 
 -- | Migrate a decoded v90 session into the current, fully-validated
 --   'SessionSnapshot' — steps 2-4 of the compatibility contract (issue
