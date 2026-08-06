@@ -3,11 +3,13 @@
 -- | Per-chunk indexing for the river-identification pipeline: buckets
 --   the finalized per-tile river data (bitmask, surface z, width,
 --   carve delta) into per-'ChunkCoord' vectors so chunk generation can
---   look up its slice in O(1). Called once from
+--   look up its slice in O(1) ('buildRiverChunkIndex' for the bitmask,
+--   surface z and width; 'buildRiverCarveDeltaIndex' for the carve
+--   delta). Called once from
 --   'World.Fluid.River.Identify.traceRivers'. See that module's header
 --   comment for the full pipeline overview.
 module World.Fluid.River.Identify.ChunkIndex
-    ( buildCarveDeltaIndex
+    ( buildRiverCarveDeltaIndex
     , buildRiverChunkIndex
     ) where
 
@@ -23,13 +25,13 @@ import World.Fluid.River.Types (RiverChunkEntry(..))
 -- | Bucket the per-tile carve delta into per-chunk vectors so chunk
 --   gen can look up its slice in O(1). Only chunks that touch a river
 --   appear in the output map.
-buildCarveDeltaIndex
+buildRiverCarveDeltaIndex
     ∷ Int                  -- ^ worldSize
     → Int                  -- ^ half
     → VU.Vector Bool       -- ^ isRiverTile
     → VU.Vector Int        -- ^ per-tile carve delta
     → HM.HashMap ChunkCoord (VU.Vector Int)
-buildCarveDeltaIndex worldSize half isRiverTile carveDelta =
+buildRiverCarveDeltaIndex worldSize half isRiverTile carveDelta =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
         chunkArea  = chunkSize * chunkSize

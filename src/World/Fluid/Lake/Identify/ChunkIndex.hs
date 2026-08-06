@@ -2,14 +2,14 @@
 
 -- | Per-chunk indexing for the lake-identification pipeline: buckets
 --   the finalized per-lake tile data into per-'ChunkCoord' bitmasks
---   ('buildChunkIndex') and derives the carve-delta vectors that pull
---   a clamped coastal basin's above-sea-level tiles down to sub-sea
---   ('buildLakeCarveIndex'). Called once from
+--   ('buildLakeChunkIndex') and derives the carve-delta vectors that
+--   pull a clamped coastal basin's above-sea-level tiles down to
+--   sub-sea ('buildLakeCarveIndex'). Called once from
 --   'World.Fluid.Lake.Identify.identifyWorldLakes'. See that module's
 --   header comment for the full pipeline overview.
 module World.Fluid.Lake.Identify.ChunkIndex
     ( buildLakeCarveIndex
-    , buildChunkIndex
+    , buildLakeChunkIndex
     ) where
 
 import UPrelude
@@ -70,12 +70,12 @@ buildLakeCarveIndex worldTiles terrain finalLakes lakesByChunk =
 -- | For every chunk that overlaps a kept lake, build a bitmask of
 --   which chunk-local tiles belong to that lake. Chunks with no
 --   lakes are omitted from the output map.
-buildChunkIndex
+buildLakeChunkIndex
     ∷ Int                -- ^ worldTiles
     → VU.Vector Int      -- ^ old label → new lake id (-1 = dropped)
     → VU.Vector Int      -- ^ labels
     → HM.HashMap ChunkCoord (V.Vector LakeChunkEntry)
-buildChunkIndex worldTiles idMap labels =
+buildLakeChunkIndex worldTiles idMap labels =
     let half      = worldTiles `div` 2
         chunkArea = chunkSize * chunkSize
         nTiles    = worldTiles * worldTiles
