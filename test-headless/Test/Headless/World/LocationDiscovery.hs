@@ -25,8 +25,8 @@ import Engine.Load.Status (beginLoad, failLoad)
 import Engine.PlayerEvent (PlayerEvent(..))
 import Engine.PlayerEvent.Emit (readEventLog)
 import Location.Types
-    ( LocationDef(..), LocationRegistry, emptyLocationRegistry
-    , registerLocation
+    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    , emptyLocationRegistry, registerLocation
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
@@ -42,6 +42,18 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState)
 import World.Thread.Discovery (tickLocationDiscovery)
 import World.Thread.Time (tickWorldTime)
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 
 -- * Fixtures — same ruin shape as Test.Headless.Location.Discovery:
 --   anchor (8,8), physical bounds (6,6)..(10,10), margin-6 expanded
@@ -53,7 +65,7 @@ registry1 = registerLocation LocationDef
     , ldBuilder = "room_small", ldAnchor = [], ldMaxCount = 0
     , ldMinSpacing = 0, ldContents = []
     , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6
-    , ldMapIcons = Nothing
+    , ldMapIcons = Nothing, ldNaming = testNaming
     } emptyLocationRegistry
 
 overlay1 ∷ LocationOverlay
@@ -94,7 +106,7 @@ newPage env pageId = do
 pageParams ∷ WorldGenParams
 pageParams = defaultWorldGenParams
     { wgpLocationOverlay   = overlay1
-    , wgpLocationInstances = buildLocationInstances registry1 overlay1
+    , wgpLocationInstances = buildLocationInstances Nothing registry1 overlay1
     }
 
 -- | Each placed location's lifecycle on a page, in instance-id order —

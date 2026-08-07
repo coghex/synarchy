@@ -7,9 +7,9 @@
 --   #890 (epic #537) so the location-def registry was reached only
 --   through 'ContentRegistriesCapability'. #911 removed even that: every
 --   value these queries report — definition id, anchor, bounds, margin,
---   display name, lifecycle, content-spawn flag — is stored on the
---   placed-location INSTANCE, so nothing here consults the registry at
---   all any more. The remaining 'EngineEnv' parameter is purely the
+--   display name and gloss, lifecycle, content-spawn flag — is stored
+--   on the placed-location INSTANCE, so nothing here consults the
+--   registry at all any more. The remaining 'EngineEnv' parameter is purely the
 --   opaque token the not-yet-narrowed @world-sim-render-handoff@
 --   page-lookup services ('activeWorldState', 'worldStateByPage')
 --   demand — this module dereferences no 'EngineEnv' field itself
@@ -84,8 +84,13 @@ instancesForPage env mPage =
 --       instance_id,       -- the stable per-page instance id (#911)
 --       lifecycle,         -- "unknown" | "hinted" | "discovered"
 --                          --   | "active" | "cleared" | "depleted"
---       name,              -- display name (placeholder from the def's
---                          --   label; #708 wiring is future work)
+--       name,              -- display name: rendered in the page's own
+--                          --   generated language (#1101) when it has
+--                          --   one, else the def's label
+--       gloss,             -- OMITTED unless `name` is generated: its
+--                          --   English reading (#1101), from the same
+--                          --   name expression. Mirrors
+--                          --   world.getIdentity's optional gloss.
 --       contents_spawned } -- one-time content-spawn flag (#90)
 --
 --   #911 EXTENDED this table; it did not repurpose anything. `id` still
@@ -215,6 +220,13 @@ pushInstanceTable inst = do
     Lua.setfield (-2) "lifecycle"
     Lua.pushstring (TE.encodeUtf8 (liDisplayName inst))
     Lua.setfield (-2) "name"
+    -- #1101: the English gloss of a name generated in the page's own
+    -- language. OMITTED (not a Lua nil value) when absent, mirroring
+    -- world.getIdentity's optional `gloss` — its absence means the name
+    -- is a definition label, which has no meaning to explain.
+    forM_ (liGloss inst) $ \g → do
+        Lua.pushstring (TE.encodeUtf8 g)
+        Lua.setfield (-2) "gloss"
     Lua.pushboolean (isDiscoveredLifecycle (liLifecycle inst))
     Lua.setfield (-2) "discovered"
     Lua.pushboolean (liContentsSpawned inst)

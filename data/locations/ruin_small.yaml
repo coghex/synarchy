@@ -29,6 +29,27 @@ locations:
     # by before a unit is considered "near" the ruin.
     bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }
     discovery_margin: 6
+    # Naming scheme (#1101). Each placed instance is named in its
+    # world's own generated language (epic #708) as one
+    # modifier + head compound drawn deterministically from these two
+    # pools by the instance's stable id. The ids are #709 concept ids
+    # from data/language/concepts.yaml — heads need a `singular` form,
+    # modifiers a `modifier` form — and every one of them is validated
+    # when this file loads: an unknown id or a missing form rejects the
+    # whole file rather than silently falling back to `label` (which is
+    # what a world with NO language legitimately uses).
+    #
+    # Which concepts a location may draw on is DATA, deliberately: the
+    # engine has no mapping from `type: ruin` to a concept set, so a new
+    # location kind is authored here rather than coded. These are the
+    # abandoned-structure readings of the catalogue's place-domain heads,
+    # with modifiers spanning ruin, decay, and the elements that outlast
+    # a building.
+    naming:
+      heads: [KEEP, TOWER, HAVEN, SANCTUARY, GATE, THRESHOLD, HOLLOW,
+              CAVERN, HEARTH, WALL, SPIRE, THRONE]
+      modifiers: [ASH, STONE, IRON, SAND, RUIN, SILENCE, SORROW, FROST,
+                  SHADOW, HOLLOW, BONE, OATH]
     # Paired zoom-map annotation textures (#781): 'undiscovered' shows
     # while wgpLocationDiscovered hasn't recorded this placement yet,
     # 'discovered' once a player-faction unit has approached it (#780).

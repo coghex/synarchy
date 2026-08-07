@@ -18,6 +18,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
+import Data.Char (isDigit)
 import Data.IORef (readIORef)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
@@ -26,23 +27,41 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.State (EngineEnv, luaQueue, activeWorldStateFrom)
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import Language.Generated.Types
-    ( LanguageProvenance(..), GeneratorVersion(..), langSeedText )
+    ( LanguageProvenance(..), GeneratorVersion(..), LangSeed(..)
+    , GeneratorError(..), generatorErrorText, currentGeneratorVersion
+    , supportedGeneratorVersions, langSeedText )
 import World.Generate.Config
     (minimumWorldSize, normalizePlateCount, normalizeWorldSize)
 import World.Plate (defaultPlatesFor)
 
 -- | world.init(pageId, seed, worldSizeInChunks, plateCount
---             [, displayName[, gloss]])
+--             [, displayName[, gloss[, languageSeed[, languageVersion]]]])
 --   The optional trailing arguments (#707) give the page a player-facing
 --   identity: a display name plus an optional English gloss. They are
 --   display TEXT (spaces/punctuation welcome, no save-name rules); each
 --   is trimmed of leading/trailing whitespace and an omitted, nil, or
 --   whitespace-only display name creates an unnamed page (discarding any
 --   gloss). Read it back with world.getIdentity(pageId).
+--
+--   @languageSeed@ (#1101) declares that the supplied name/gloss were
+--   RENDERED from a generated language, recording that language's #1092
+--   provenance on the page — which is what lets the page's placed
+--   locations be named in the same language ("Location.Naming"). It is
+--   a DECIMAL STRING for the same reason 'world.getLanguageProvenance'
+--   returns one: a language seed is an unsigned 64-bit value and Lua
+--   carries neither a @Word64@ integer nor an exact double for the top
+--   of that range. @languageVersion@ is the generator version, defaulting
+--   to the current one.
+--
+--   Provenance is only ever attached to a name the caller states came
+--   from that language, and it is never inferred: with no display name
+--   there is no identity to attach it to, and a malformed seed or an
+--   unconstructible version is refused with a warning, leaving an
+--   ordinary custom-named page (#708 principle 7).
 worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitFn env = do
     pageIdArg ← Lua.tostring 1
@@ -51,14 +70,36 @@ worldInitFn env = do
     platesArg ← Lua.tointeger 4
     nameArg   ← Lua.tostring 5
     glossArg  ← Lua.tostring 6
+    langArg   ← Lua.tostring 7
+    langVerArg ← Lua.tointeger 8
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
-                identity = mkWorldIdentity (TE.decodeUtf8Lenient ⊚ nameArg)
-                                           (TE.decodeUtf8Lenient ⊚ glossArg)
+                mName  = TE.decodeUtf8Lenient ⊚ nameArg
+                mGloss = TE.decodeUtf8Lenient ⊚ glossArg
+            mProv ← case TE.decodeUtf8Lenient ⊚ langArg of
+                Nothing  → pure Nothing
+                Just raw → do
+                    logger ← readIORef (ccLoggerRef (toCoreCapability env))
+                    parseProvenance logger raw
+                        (fromIntegral ⊚ langVerArg)
+            let identity = case mProv of
+                    Just prov → mkGeneratedWorldIdentity mName mGloss prov
+                    Nothing   → mkWorldIdentity mName mGloss
                 rawSize = maybe 64 fromIntegral sizeArg
+            -- A provenance the caller DID supply, parsed fine, and that
+            -- still went nowhere because there is no name for it to
+            -- describe. Silently dropping it would leave the page's
+            -- locations unnamed with nothing to explain why.
+            when (isJust mProv ∧ isNothing identity) $ do
+                logger ← readIORef (ccLoggerRef (toCoreCapability env))
+                logWarn logger CatWorld
+                    "world.init ignoring language provenance: no display \
+                    \name was supplied, so the page has no identity to \
+                    \record it on."
+            let
                 size = normalizeWorldSize rawSize
                 -- Plate count scales with worldSize when caller
                 -- doesn't supply one — fixes the "10 plates for any
@@ -82,6 +123,43 @@ worldInitFn env = do
         Nothing → pure ()
 
     return 0
+
+-- | Parse @world.init@'s optional language-provenance arguments (#1101).
+--   'Nothing' — with a warning naming what was wrong — for a seed that
+--   is not a plain unsigned decimal in 'Word64' range, or a generator
+--   version this build cannot construct a profile for. Refusing is the
+--   point: a page whose recorded language cannot be rebuilt would name
+--   its locations in some OTHER language, which is worse than naming
+--   them from their definition labels.
+parseProvenance
+    ∷ LoggerState → Text → Maybe Int → IO (Maybe LanguageProvenance)
+parseProvenance logger raw mVer = case mSeed of
+    Nothing → refuse
+        "language seed must be an unsigned decimal integer below 2^64"
+    Just s
+        | ver `elem` supportedGeneratorVersions →
+            pure $ Just LanguageProvenance
+                { lpSeed = LangSeed (fromInteger s), lpVersion = ver }
+        | otherwise → refuse
+            (generatorErrorText (UnsupportedGeneratorVersion
+                                    (generatorVersionInt ver)))
+  where
+    trimmed = T.strip raw
+    -- Parsed as an 'Integer' and range-checked, never as a 'Word64':
+    -- 'fromInteger' at that type wraps silently, so an out-of-range seed
+    -- would otherwise become a DIFFERENT, perfectly valid language. The
+    -- digit guard is what keeps 'Read' from accepting "0x10" / "-1".
+    mSeed = case reads (T.unpack trimmed) ∷ [(Integer, String)] of
+        [(n, "")] | not (T.null trimmed)
+                  , T.all isDigit trimmed
+                  , n ≤ toInteger (maxBound ∷ Word64) → Just n
+        _ → Nothing
+    ver = maybe currentGeneratorVersion GeneratorVersion mVer
+    refuse why = do
+        logWarn logger CatWorld $
+            "world.init ignoring language provenance (" <> why
+            <> "); the page keeps its custom name with no language."
+        pure Nothing
 
 -- | world.getIdentity(pageId) → { name, gloss? } | nil
 --   Read-only query for a page's player-facing identity (#707). Returns

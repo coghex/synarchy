@@ -190,6 +190,7 @@ DENSE_BODY = (
     "    min_spacing: 1\n"
     "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
     "    discovery_margin: 6\n"
+    "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
     "    contents: []\n"
 )
 
@@ -210,6 +211,7 @@ THIN_BODY = (
     "    min_spacing: 5\n"
     "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
     "    discovery_margin: 6\n"
+    "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
     "    contents: []\n"
 )
 

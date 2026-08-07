@@ -539,6 +539,7 @@ library
                      Engine.Scripting.Lua.API.Blood
                      Location.Types
                      Location.Bounds
+                     Location.Naming
                      Location.Instance
                      Location.Overlay.Types
                      Location.Overlay
@@ -1152,6 +1153,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Faction
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
+                   Test.Headless.Location.Naming
                    Test.Headless.Location.LootDeterminism
                    Test.Headless.Location.MapIcons
                    Test.Headless.Tutorial.Definitions

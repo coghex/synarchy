@@ -726,15 +726,23 @@ echo 'return world.getInitProgress()' | nc -w 2 localhost 9008
 ### World generation workflow
 
 ```bash
-# world.init(pageId, seed, worldSize, plateCount[, displayName[, gloss]])
+# world.init(pageId, seed, worldSize, plateCount
+#           [, displayName[, gloss[, languageSeed[, languageVersion]]]])
 # The optional identity (#707) is display text, immutable per page,
 # persisted in saves, independent of pageId and save-slot name;
 # world.getIdentity(pageId) reads it; engine.listSaves() exposes
-# worldName/worldGloss. A name supplied here is a CUSTOM name and has
-# NO language provenance (#1092) — world.getLanguageProvenance(pageId)
-# returns nil for it, and { seed = "<decimal string>", version = N }
-# only for an identity built through the generated-name path (the seed
-# is a STRING: a Word64 has no lossless Lua number).
+# worldName/worldGloss. A name supplied with no languageSeed is a
+# CUSTOM name and has NO language provenance (#1092) —
+# world.getLanguageProvenance(pageId) returns nil for it, and
+# { seed = "<decimal string>", version = N } only for an identity built
+# through the generated-name path (the seed is a STRING: a Word64 has
+# no lossless Lua number). languageSeed (#1101) is that path: it states
+# that displayName/gloss were RENDERED from that language, and is what
+# makes the page's placed locations named in the same one. It is a
+# decimal string; languageVersion defaults to the current generator.
+# Provenance is never inferred: with no displayName there is no
+# identity to attach it to, and a malformed seed or an unconstructible
+# version is refused with a warning, leaving an ordinary custom name.
 echo 'world.init("test", 42, 256, 5)' | nc -w 2 localhost 9008
 # Block until done (preferred; timeout in seconds)…
 echo 'return world.waitForInit(300)' | nc -w 300 localhost 9008
@@ -839,8 +847,8 @@ before touching each area:
   deterministic overlay's `overlayToList` order — never at stamp time,
   never from hashmap order — so ids survive save/load and chunk
   eviction. It stores its definition id, anchor, resolved absolute
-  bounds (#777), discovery margin, display name (placeholder from the
-  def's `label`; #708 wiring is separate), one-time content-spawn flag
+  bounds (#777), discovery margin, display name AND optional English
+  gloss (#1101 — see below), one-time content-spawn flag
   (#90), and lifecycle `unknown → hinted → discovered → active →
   cleared → depleted`. Consumers read the STORED values, never
   re-derive them from the live registry. `wgpLocationStamped` stays
@@ -857,12 +865,32 @@ before touching each area:
   `world.markLocationContentsSpawnedById(id[, pageId])`. The
   coordinate-addressed `hasSpawnedLocationContents`/
   `markLocationContentsSpawned` remain compatibility wrappers resolving
-  to the chunk's first instance. Persistence: `world-pages` (v3 since
-  #1092; #911 introduced its v2), with a
+  to the chunk's first instance. Persistence: `world-pages` (v4 since
+  #1101; v3 since #1092; #911 introduced its v2), with a
   frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
   against the location registry at the load path's content-validation
   stage (`resolveLegacyLocations`) before publication. Gates: hspec
   `--match "Location instance identity"`, `location_content_probe.py`.
+- **Location naming (#1101)** — a placed instance's `name` is rendered
+  in its PAGE's own generated language, resolved from the identity's
+  #1092 provenance, and its `gloss` is the same `NameExpr`'s English
+  reading. Which concepts a location may draw on is DATA
+  (`ldNaming`: two ordered, nonempty `heads`/`modifiers` concept-id
+  pools on the definition, validated against `data/language/concepts.yaml`
+  when the file loads — an unknown id or a missing lexical form rejects
+  the whole file rather than degrading to `ldLabel`); the engine has no
+  `ldType`→concept mapping. The expression is always
+  `Modifier modifier head`, chosen deterministically from the
+  instance's own stable `liId` (plus the language seed/version and the
+  def id), never from hashmap order. Names are WRITE-ONCE (#708
+  principle 5): rendered at instance creation
+  (`Location.Instance.newLocationInstance`, the only writer) and read
+  thereafter — no load, migration, or definition edit re-derives one, so
+  a location placed before this landed keeps its label forever. A page
+  with NO provenance (a custom-named world, a pre-#1092 save) falls back
+  to `ldLabel` with the `gloss` key ABSENT; absence is never papered
+  over by inventing a language. Gate: hspec `--match "Location naming"`,
+  plus `location_content_probe.py` phase 5.
 - **Location discovery (#780)** — a one-way lifecycle promotion to
   `discovered`, fired when a `uiFactionId == "player"` unit enters the
   instance's `discovery_margin` halo; ticks for EVERY loaded page,

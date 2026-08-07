@@ -73,6 +73,10 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..), mkWorldIdentity)
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
+import Location.Bounds (AbsBounds(..))
+import Location.Instance
+    ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    , LocationLifecycle(..) )
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -233,7 +237,13 @@ richNodes = PowerNodes
 richPage ∷ PageSnapshot
 richPage = PageSnapshot
     { pgsPageId       = page1
-    , pgsGenParams    = canon defaultWorldGenParams { wgpSeed = 424242 }
+    , pgsGenParams    = canon defaultWorldGenParams
+                          { wgpSeed = 424242
+                          -- #1101: a placed location named in this
+                          -- page's own language, gloss and all. An
+                          -- empty instance table could not tell a
+                          -- persisted gloss from a dropped one.
+                          , wgpLocationInstances = richLocationInstances }
     , pgsCameraX      = 12.5
     , pgsCameraY      = 7.5
     , pgsTimeHour     = 14
@@ -275,6 +285,42 @@ richPage = PageSnapshot
 richProvenance ∷ LanguageProvenance
 richProvenance = LanguageProvenance
     { lpSeed = LangSeed 0x8FEEDFACECAFEB0B, lpVersion = GeneratorVersion 1 }
+
+-- | The rich page's placed locations (#1101): one named in the page's
+--   own language WITH a gloss, and one 'ldLabel' fallback with none —
+--   so the round trip proves the gloss is carried when present AND left
+--   absent when it is not, rather than defaulted either way.
+richLocationInstances ∷ LocationInstances
+richLocationInstances = LocationInstances
+    { lisNextId        = 3
+    , lisById          = HM.fromList
+        [ (LocationInstanceId 1, LocationInstance
+            { liId              = LocationInstanceId 1
+            , liDefId           = "ruin_small"
+            , liChunk           = ChunkCoord 2 3
+            , liAnchor          = (80, 112)
+            , liBounds          = AbsBounds 78 110 82 114
+            , liDiscoveryMargin = 6
+            , liDisplayName     = "Vashenkoro"
+            , liGloss           = Just "Ashen Keep"
+            , liLifecycle       = LifecycleDiscovered
+            , liContentsSpawned = True
+            })
+        , (LocationInstanceId 2, LocationInstance
+            { liId              = LocationInstanceId 2
+            , liDefId           = "ruin_small"
+            , liChunk           = ChunkCoord 5 5
+            , liAnchor          = (176, 176)
+            , liBounds          = AbsBounds 174 174 178 178
+            , liDiscoveryMargin = 6
+            , liDisplayName     = "Small Ruin"
+            , liGloss           = Nothing
+            , liLifecycle       = LifecycleUnknown
+            , liContentsSpawned = False
+            })
+        ]
+    , lisPendingLegacy = Nothing
+    }
 
 -- | A second, minimal page -- proves multi-page independence (a stable
 --   identity + distinct per-page camera/gen-params, requirement 4),

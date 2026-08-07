@@ -38,10 +38,16 @@
 --   rather than re-deriving them from the live registry, so a
 --   definition edited later never silently reshapes a placed instance.
 --
---   /Display name./ Populated with the definition's 'ldLabel' as a
---   placeholder. Wiring it to the language\/naming system (#708) is
---   deliberately NOT part of #911 — the field exists so that work has
---   somewhere to write.
+--   /Display name./ Rendered in the world's own generated language
+--   (#1101) when the page has one, from the definition's authored
+--   concept pools ('Location.Types.ldNaming') and the instance's own
+--   id — see "Location.Naming". A page with NO language provenance
+--   (#1092: a custom-named world, or one saved before provenance was
+--   recorded) falls back to the definition's 'ldLabel' with no gloss.
+--   Both are written ONCE, when the instance is created, and read
+--   thereafter: a location named under one generator version keeps that
+--   name forever (#708 principle 5), so nothing on the load or
+--   migration path re-derives either field.
 module Location.Instance
     ( -- * Identity
       LocationInstanceId(..)
@@ -87,6 +93,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Location.Bounds (AbsBounds, translateBounds)
+import Location.Naming (LocationNamer, nameLocationInstance)
 import Location.Overlay.Types (LocationOverlay, overlayToList)
 import Location.Types (LocationDef(..), LocationRegistry, lookupLocation)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
@@ -204,8 +211,16 @@ data LocationInstance = LocationInstance
     , liDiscoveryMargin ∷ !Int
       -- ^ the definition's discovery halo (#780), resolved at creation
     , liDisplayName     ∷ !Text
-      -- ^ placeholder from the definition's 'ldLabel' (#708 wiring is
-      --   explicitly out of scope for #911)
+      -- ^ the instance's name, rendered ONCE at creation: native text
+      --   in the page's own language (#1101) when it has one, else the
+      --   definition's 'ldLabel'. Never re-derived (see the module
+      --   haddock).
+    , liGloss           ∷ !(Maybe Text)
+      -- ^ the English gloss of 'liDisplayName', from the SAME name
+      --   expression that rendered it (#1101 requirement 5), mirroring
+      --   'World.Page.Types.wiGloss'. 'Nothing' exactly when
+      --   'liDisplayName' is an 'ldLabel' fallback — a label is not a
+      --   generated name and has no meaning to explain.
     , liLifecycle       ∷ !LocationLifecycle
     , liContentsSpawned ∷ !Bool
       -- ^ one-time content-spawn flag (#90), now per INSTANCE. Stays
@@ -254,12 +269,19 @@ locationAnchorTile (ChunkCoord cx cy) =
     let half = chunkSize `div` 2
     in (cx * chunkSize + half, cy * chunkSize + half)
 
--- | A fresh, undiscovered instance with its geometry and display name
---   resolved from @def@.
+-- | A fresh, undiscovered instance with its geometry resolved from
+--   @def@ and its name rendered from @namer@ — the page's language
+--   (#1101), or 'Nothing' for a page that has none, which names it
+--   @def@'s 'ldLabel' with no gloss.
+--
+--   This is the ONLY place either name field is ever written.
 newLocationInstance
-    ∷ LocationInstanceId → ChunkCoord → LocationDef → LocationInstance
-newLocationInstance iid coord def =
-    let anchor = locationAnchorTile coord
+    ∷ Maybe LocationNamer → LocationInstanceId → ChunkCoord → LocationDef
+    → LocationInstance
+newLocationInstance namer iid coord def =
+    let anchor         = locationAnchorTile coord
+        (name, gloss)  = nameLocationInstance namer def
+                            (unLocationInstanceId iid)
     in LocationInstance
         { liId              = iid
         , liDefId           = ldId def
@@ -267,7 +289,8 @@ newLocationInstance iid coord def =
         , liAnchor          = anchor
         , liBounds          = translateBounds anchor (ldBounds def)
         , liDiscoveryMargin = ldDiscoveryMargin def
-        , liDisplayName     = ldLabel def
+        , liDisplayName     = name
+        , liGloss           = gloss
         , liLifecycle       = LifecycleUnknown
         , liContentsSpawned = False
         }
@@ -310,8 +333,10 @@ locationInstanceBounds = map liBounds . instancesToList
 --   loaded. (That tolerance is defensive only: the overlay is computed
 --   FROM the registered defs at world init, and the load path rejects a
 --   save naming an unregistered location def before this ever runs.)
-buildLocationInstances ∷ LocationRegistry → LocationOverlay → LocationInstances
-buildLocationInstances registry overlay = LocationInstances
+buildLocationInstances
+    ∷ Maybe LocationNamer → LocationRegistry → LocationOverlay
+    → LocationInstances
+buildLocationInstances namer registry overlay = LocationInstances
     { lisNextId        = firstLocationInstanceId + length entries
     , lisById          = HM.fromList [ (liId i, i) | Just i ← map mk entries ]
     , lisPendingLegacy = Nothing
@@ -319,7 +344,7 @@ buildLocationInstances registry overlay = LocationInstances
   where
     entries = zip [firstLocationInstanceId ..] (overlayToList overlay)
     mk (n, (coord, lid)) =
-        newLocationInstance (LocationInstanceId n) coord
+        newLocationInstance namer (LocationInstanceId n) coord
             <$> lookupLocation lid registry
 
 -- | Add one instance under a freshly allocated id. The engine's own
@@ -327,11 +352,11 @@ buildLocationInstances registry overlay = LocationInstances
 --   later feature (or a test building two instances in one chunk) adds
 --   through without reaching into 'lisNextId' by hand.
 allocateLocationInstance
-    ∷ ChunkCoord → LocationDef → LocationInstances
+    ∷ Maybe LocationNamer → ChunkCoord → LocationDef → LocationInstances
     → (LocationInstanceId, LocationInstances)
-allocateLocationInstance coord def lis =
+allocateLocationInstance namer coord def lis =
     let iid  = LocationInstanceId (lisNextId lis)
-        inst = newLocationInstance iid coord def
+        inst = newLocationInstance namer iid coord def
     in ( iid
        , lis { lisNextId = lisNextId lis + 1
              , lisById   = HM.insert iid inst (lisById lis)
@@ -384,10 +409,18 @@ pendingLegacyFlags discovered spawned = emptyLocationInstances
 --   onto the instance occupying it. A marker naming a chunk with no
 --   overlay entry identifies no placed instance and is discarded.
 --
---   Idempotent and total: a table with nothing pending (a v2 payload, a
---   freshly placed world, or an already-resolved one) is returned
---   untouched, so this can never overwrite stored instance state with
---   values re-derived from a definition edited since placement.
+--   Idempotent and total: a table with nothing pending (a payload from
+--   any version that carries instances, a freshly placed world, or an
+--   already-resolved one) is returned untouched, so this can never
+--   overwrite stored instance state with values re-derived from a
+--   definition edited since placement.
+--
+--   Reconstructed instances are named from 'ldLabel' with NO gloss
+--   (#1101 requirement 7): this path runs only for a pre-#911 payload,
+--   which predates language provenance entirely, so there is no
+--   language to name them in and one must never be invented. Every
+--   later payload carries its instances — and their already-rendered
+--   names — and never reaches this function at all.
 resolveLegacyLocationInstances
     ∷ LocationRegistry → LocationOverlay → LocationInstances
     → LocationInstances
@@ -395,7 +428,7 @@ resolveLegacyLocationInstances registry overlay lis =
     case lisPendingLegacy lis of
         Nothing → lis
         Just flags →
-            let base = buildLocationInstances registry overlay
+            let base = buildLocationInstances Nothing registry overlay
             in base { lisById = HM.map (applyFlags flags) (lisById base) }
   where
     applyFlags flags inst = inst

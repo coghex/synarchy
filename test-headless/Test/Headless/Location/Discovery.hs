@@ -17,8 +17,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Location.Types
-    ( LocationDef(..), LocationRegistry, emptyLocationRegistry
-    , registerLocation
+    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    , emptyLocationRegistry, registerLocation
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Bounds (RelBounds(..))
@@ -31,6 +31,18 @@ import Location.Instance
 import Unit.Faction (Faction(..), allFactions, factionTag)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 
 -- * Fixtures — one ruin-shaped def (5x5 physical footprint, margin 6),
 --   placed at chunk (0,0): anchor tile (8,8), physical AbsBounds
@@ -49,6 +61,7 @@ locDef lid = LocationDef
     , ldBounds          = RelBounds (-2) (-2) 2 2
     , ldDiscoveryMargin = 6
     , ldMapIcons        = Nothing
+    , ldNaming          = testNaming
     }
 
 registry1 ∷ LocationRegistry
@@ -67,14 +80,14 @@ loc1Id = LocationInstanceId 1
 
 -- | The instance table every scenario below runs against (#911).
 instances1 ∷ LocationInstances
-instances1 = buildLocationInstances registry1 overlay1
+instances1 = buildLocationInstances Nothing registry1 overlay1
 
 -- | 'instances1' with loc1 already at the given lifecycle state.
 instancesAt ∷ LocationLifecycle → LocationInstances
 instancesAt l = fromMaybe instances1 (setLocationLifecycle loc1Id l instances1)
 
 seamInstances ∷ LocationInstances
-seamInstances = buildLocationInstances registry1 seamOverlay
+seamInstances = buildLocationInstances Nothing registry1 seamOverlay
 
 hit1 ∷ DiscoveryHit Int
 hit1 = DiscoveryHit loc1Id loc1Coord (8, 8) "Small Ruin" 1

@@ -25,8 +25,8 @@ import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Asset.YamlLocations (LocationYamlDef(..), LocationYamlFile(..))
 import Location.Types
-    ( LocationDef(..), LocationRegistry, emptyLocationRegistry
-    , registerLocation, locationIconTextureName
+    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    , emptyLocationRegistry, registerLocation, locationIconTextureName
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
@@ -42,6 +42,18 @@ import World.Render.Zoom.Icons
     , makeLocationIconQuads
     )
 import Test.Headless.Location.Bounds (decodeDef, rejectedNaming)
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 
 -- * Fixtures
 
@@ -60,6 +72,7 @@ locDef lid icons = LocationDef
     , ldBounds          = RelBounds (-2) (-2) 2 2
     , ldDiscoveryMargin = 6
     , ldMapIcons        = icons
+    , ldNaming          = testNaming
     }
 
 undiscoveredTex, discoveredTex, fallbackTex ∷ TextureHandle
@@ -110,7 +123,7 @@ paramsWith overlay discovered = defaultWorldGenParams
                  , HS.member (liChunk i) discovered ]
     }
   where
-    base = buildLocationInstances registryForQuads overlay
+    base = buildLocationInstances Nothing registryForQuads overlay
     promote iid lis =
         fromMaybe lis (setLocationLifecycle iid LifecycleDiscovered lis)
 
@@ -128,7 +141,7 @@ spec = describe "Location map icons" $ do
     describe "map_icons YAML schema (#781)" $ do
         it "parses a valid undiscovered/discovered pair" $
             case decodeDef
-                    "{ id: t, builder: b, discovery_margin: 6,\
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                     \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                     \  map_icons: { undiscovered: a.png, discovered: b.png } }" of
                 Left err → expectationFailure err
@@ -136,28 +149,28 @@ spec = describe "Location map icons" $ do
 
         it "no map_icons block parses as Nothing (no annotation)" $
             case decodeDef
-                    "{ id: t, builder: b, discovery_margin: 6,\
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                     \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }" of
                 Left err → expectationFailure err
                 Right def → lydMapIcons def `shouldBe` Nothing
 
         it "rejects a map_icons block missing 'discovered', naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  map_icons: { undiscovered: a.png } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a map_icons block missing 'undiscovered', naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  map_icons: { discovered: b.png } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a non-object map_icons value, naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  map_icons: nope }"
                 `shouldSatisfy` rejectedNaming "t"

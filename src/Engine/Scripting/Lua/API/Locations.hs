@@ -25,11 +25,14 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlLocations
+import Language.Semantic.Types (ConceptId(..), catalogueErrorText)
+import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Location.Naming (locationNamingErrors)
 import Location.Types
 import Location.Bounds (RelBounds(..))
 
@@ -61,51 +64,79 @@ loadLocationYamlFn core regs env backendState = do
             count ← Lua.liftIO $ do
                 logger ← getLoggerFor core
                 defs ← loadLocationYaml logger filePath
-                let (lteq, _) = lbsMsgQueues backendState
-                total ← foldM (\acc d → do
-                    -- Register + queue the def's paired zoom-map icon
-                    -- textures (#781), if it declares any. Named via
-                    -- 'locationIconTextureName' so 'World.Render.Zoom.
-                    -- Icons' can look them back up by the same
-                    -- convention at render time.
-                    forM_ (lydMapIcons d) $ \(undiscPath, discPath) → do
-                        undiscResolved ← resolveTexturePath env
-                            "Location map icon" missingLocationIconTexture
-                            (T.unpack undiscPath)
-                        discResolved ← resolveTexturePath env
-                            "Location map icon" missingLocationIconTexture
-                            (T.unpack discPath)
-                        void $ loadAndRegister env backendState lteq
-                            (locationIconTextureName (lydId d) False)
-                            undiscResolved
-                        void $ loadAndRegister env backendState lteq
-                            (locationIconTextureName (lydId d) True)
-                            discResolved
-                    let def = LocationDef
-                            { ldId         = lydId d
-                            , ldLabel      = if T.null (lydLabel d)
-                                             then lydId d else lydLabel d
-                            , ldType       = lydType d
-                            , ldBuilder    = lydBuilder d
-                            , ldAnchor     = lydAnchor d
-                            , ldMaxCount   = lydMaxCount d
-                            , ldMinSpacing = lydMinSpacing d
-                            , ldContents   = map toContent (lydContents d)
-                            , ldBounds     = toBounds (lydBounds d)
-                            , ldDiscoveryMargin = lydDiscoveryMargin d
-                            , ldMapIcons   = lydMapIcons d
-                            }
-                    atomicModifyIORef' (crLocationDefsRef regs) $ \reg →
-                        (registerLocation def reg, ())
-                    return (acc + 1)
-                    ) (0 ∷ Int) defs
-                logInfo logger CatAsset $
-                    "loadLocationYaml: loaded " <> T.pack (show total)
-                    <> " locations from " <> T.pack filePath
-                return total
+                -- #1101: every definition's authored naming scheme is
+                -- checked against the concept catalogue BEFORE anything
+                -- is registered, so a bad scheme rejects the whole file
+                -- (the same all-or-nothing outcome 'loadYamlList' gives
+                -- a parse failure) instead of registering a location
+                -- whose names would silently fall back to its label in
+                -- every world forever.
+                namingErrs ← if null defs then pure [] else do
+                    eCat ← loadCatalogue conceptCataloguePath
+                    pure $ case eCat of
+                        Left err → [ "concept catalogue "
+                                     <> T.pack conceptCataloguePath
+                                     <> " could not be loaded, so location "
+                                     <> "naming schemes cannot be validated: "
+                                     <> catalogueErrorText err ]
+                        Right cat → concatMap (locationNamingErrors cat . toDef)
+                                              defs
+                case namingErrs of
+                  (_:_) → do
+                    forM_ namingErrs $ \e → logWarn logger CatAsset $
+                        "loadLocationYaml: rejected " <> T.pack filePath
+                        <> ": " <> e
+                    return (0 ∷ Int)
+                  [] → do
+                    let (lteq, _) = lbsMsgQueues backendState
+                    total ← foldM (\acc d → do
+                        -- Register + queue the def's paired zoom-map icon
+                        -- textures (#781), if it declares any. Named via
+                        -- 'locationIconTextureName' so 'World.Render.Zoom.
+                        -- Icons' can look them back up by the same
+                        -- convention at render time.
+                        forM_ (lydMapIcons d) $ \(undiscPath, discPath) → do
+                            undiscResolved ← resolveTexturePath env
+                                "Location map icon" missingLocationIconTexture
+                                (T.unpack undiscPath)
+                            discResolved ← resolveTexturePath env
+                                "Location map icon" missingLocationIconTexture
+                                (T.unpack discPath)
+                            void $ loadAndRegister env backendState lteq
+                                (locationIconTextureName (lydId d) False)
+                                undiscResolved
+                            void $ loadAndRegister env backendState lteq
+                                (locationIconTextureName (lydId d) True)
+                                discResolved
+                        atomicModifyIORef' (crLocationDefsRef regs) $ \reg →
+                            (registerLocation (toDef d) reg, ())
+                        return (acc + 1)
+                        ) (0 ∷ Int) defs
+                    logInfo logger CatAsset $
+                        "loadLocationYaml: loaded " <> T.pack (show total)
+                        <> " locations from " <> T.pack filePath
+                    return total
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
   where
+    toDef d = LocationDef
+        { ldId         = lydId d
+        , ldLabel      = if T.null (lydLabel d) then lydId d else lydLabel d
+        , ldType       = lydType d
+        , ldBuilder    = lydBuilder d
+        , ldAnchor     = lydAnchor d
+        , ldMaxCount   = lydMaxCount d
+        , ldMinSpacing = lydMinSpacing d
+        , ldContents   = map toContent (lydContents d)
+        , ldBounds     = toBounds (lydBounds d)
+        , ldDiscoveryMargin = lydDiscoveryMargin d
+        , ldMapIcons   = lydMapIcons d
+        , ldNaming     = toNaming (lydNaming d)
+        }
+    toNaming n = LocationNaming
+        { lnHeads     = map ConceptId (lynHeads n)
+        , lnModifiers = map ConceptId (lynModifiers n)
+        }
     toContent c = LocationContent
         { lconKind     = lycKind c
         , lconId       = lycId c

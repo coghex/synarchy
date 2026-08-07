@@ -29,7 +29,8 @@ import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
 import Location.Types
-    (LocationDef(..), emptyLocationRegistry, registerLocation)
+    ( LocationDef(..), LocationNaming(..), emptyLocationRegistry
+    , registerLocation )
 import Location.Instance
     ( LocationInstance(..), LocationLifecycle(..)
     , buildLocationInstances, instancesToList )
@@ -38,6 +39,18 @@ import Location.Overlay
     ( computeLocationOverlay, computeLocationPlacement, LocationPlacement(..)
     , PlacementOutcome(..), chunkMetricsAt, ChunkMetrics(..) )
 import Test.Headless.Location.Bounds (decodeDef, rejectedNaming, isRight')
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 -- chunkSeamChebyshev comes in via World.Types (World.Chunk.Types, #423)
 
 spec ∷ SpecWith EngineEnv
@@ -145,7 +158,7 @@ spec = do
                 , ldBuilder = "noop", ldAnchor = anchors
                 , ldMaxCount = 8, ldMinSpacing = 3, ldContents = []
                 , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6
-                , ldMapIcons = Nothing }
+                , ldMapIcons = Nothing, ldNaming = testNaming }
             flatDef = mkDef "flat_test"     ["flat"]
             mtnDef  = mkDef "mountain_test" ["mountain"]
             -- A chunk's anchor tile — mirrors Location.Instance's
@@ -254,7 +267,7 @@ spec = do
                 p = defaultWorldGenParams
                         { wgpLocationStamped = HS.singleton coord
                         , wgpLocationInstances =
-                            buildLocationInstances registry overlay
+                            buildLocationInstances Nothing registry overlay
                         }
             HS.member coord (wgpLocationStamped p) `shouldBe` True
             map liContentsSpawned
@@ -437,7 +450,7 @@ spec = do
                 -- coverage with no parallel construction path.
                 let registry = registerLocation flatDef emptyLocationRegistry
                     insts = instancesToList
-                                (buildLocationInstances registry (lpOverlay wetPlacement))
+                                (buildLocationInstances Nothing registry (lpOverlay wetPlacement))
                 case insts of
                     [i] → do
                         liDefId i `shouldBe` "flat_test"
@@ -458,7 +471,7 @@ spec = do
                 let coord = ChunkCoord 5 (-3)
                     registry = registerLocation flatDef emptyLocationRegistry
                     insts = instancesToList
-                                (buildLocationInstances registry
+                                (buildLocationInstances Nothing registry
                                     (HM.singleton coord ("flat_test" ∷ Text)))
                 map liChunk insts `shouldBe` [coord]
                 map liAnchor insts `shouldBe` [chunkCentre coord]
@@ -475,7 +488,7 @@ spec = do
         -- runs them.
         describe "anchor vocabulary (#801)" $ do
             let anchorDef anchorYaml =
-                    "{ id: t, builder: b, discovery_margin: 6,\
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                     \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                     \  anchor: " <> anchorYaml <> " }"
 

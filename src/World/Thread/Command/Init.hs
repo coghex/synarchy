@@ -39,8 +39,12 @@ import World.Generate.Constants (chunkLoadRadius)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
+import Language.Generated.Types (generatorErrorText)
+import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Types (catalogueErrorText)
 import Location.Types (allLocations)
 import Location.Instance (buildLocationInstances)
+import Location.Naming (LocationNamer, mkLocationNamer)
 import Location.Overlay ( computeLocationPlacement, LocationPlacement(..)
                         , PlacementOutcome(..) )
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
@@ -205,6 +209,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- Empty (and skipped) when no defs are loaded — the common
     -- headless-dump path stays byte-identical and zero-cost.
     locRegistry ← readIORef (crLocationDefsRef (toContentRegistriesCapability env))
+    -- #1101: each placed location's name is rendered in THIS page's own
+    -- generated language, resolved from the identity's #1092 provenance
+    -- recorded a few lines above. A page with no provenance (a
+    -- custom-named world, an unnamed one) genuinely has no language and
+    -- gets 'Nothing' — its locations keep their definition labels.
+    namer ← resolveLocationNamer logger identity
     let locDefs = allLocations locRegistry
         placement = computeLocationPlacement seed worldSize plates oceanMap oceanDist
                       (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
@@ -214,8 +224,10 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             -- Instance ids (#911) are allocated HERE, at placement time,
             -- from the deterministic overlay's canonical order — not at
             -- stamp time — so an id is stable across save/load and
-            -- across chunk eviction/reload.
-            , wgpLocationInstances = buildLocationInstances locRegistry overlay
+            -- across chunk eviction/reload. Names (#1101) are rendered
+            -- from those same ids, once, and never re-derived.
+            , wgpLocationInstances =
+                buildLocationInstances namer locRegistry overlay
             }
     _ ← evaluate (force (wgpLocationOverlay params))
     _ ← evaluate (force (wgpLocationInstances params))
@@ -345,6 +357,38 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         <> T.pack (show totalInitialChunks) <> " chunks, "
         <> "surface at z=" <> T.pack (show surfaceElev)
         <> ": " <> unWorldPageId pageId
+
+-- | The namer this page's placed locations are named through (#1101),
+--   or 'Nothing' when the page has no language to name them in.
+--
+--   'Nothing' is the ordinary, expected result for every page whose
+--   identity carries no #1092 provenance — a custom-named world, an
+--   unnamed one, an arena — and is silent. The two ways a page that
+--   DOES declare a language can still end up unnamed are both logged:
+--   a catalogue that will not load, and a provenance naming a generator
+--   version this build cannot construct. Neither substitutes another
+--   language; the locations fall back to their definition labels, which
+--   is what "this world has no language" already means everywhere else.
+resolveLocationNamer
+    ∷ LoggerState → Maybe WorldIdentity → IO (Maybe LocationNamer)
+resolveLocationNamer logger identity = case wiLanguage =≪ identity of
+    Nothing   → pure Nothing
+    Just prov → do
+        eCat ← loadCatalogue conceptCataloguePath
+        case eCat of
+            Left cErr → do
+                logWarn logger CatWorld $
+                    "Location naming disabled for this world: concept "
+                    <> "catalogue " <> T.pack conceptCataloguePath
+                    <> " could not be loaded: " <> catalogueErrorText cErr
+                pure Nothing
+            Right cat → case mkLocationNamer cat prov of
+                Left gErr → do
+                    logWarn logger CatWorld $
+                        "Location naming disabled for this world: "
+                        <> generatorErrorText gErr
+                    pure Nothing
+                Right namer → pure (Just namer)
 
 handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldInitArenaCommand env logger pageId = do
