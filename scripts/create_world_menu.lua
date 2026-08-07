@@ -14,6 +14,7 @@ local textbox        = require("scripts.ui.textbox")
 local scrollbar      = require("scripts.ui.scrollbar")
 local sprite         = require("scripts.ui.sprite")
 local settingsTab    = require("scripts.create_world.settings_tab")
+local nameSuggest    = require("scripts.create_world.name_suggest")
 local advancedTab    = require("scripts.create_world.advanced_tab")
 local generalTab     = require("scripts.create_world.general_tab")
 local timelineTab    = require("scripts.create_world.timeline_tab")
@@ -389,10 +390,20 @@ function createWorldMenu.createUI(opts)
     -- input (its raw filter text is discarded back to the selected
     -- option on destroy), so it needs the same preservation.
     local dropdownSnap = nil
+    -- #1106: the World Name's MEANING — its gloss, the language that
+    -- rendered it, and where the reroll sequence stands — which no
+    -- widget knows about. It must be captured before destroyOwned() for
+    -- the same reason the text is: tearing the controls down unfocuses
+    -- them, and an unsubmitted Seed edit submitting on the way out
+    -- re-suggests the name in a whole new language. Restoring only the
+    -- text afterwards would leave the old name wearing the new
+    -- language's gloss and provenance.
+    local suggestionSnap = nil
     if preserveState then
         textboxSnap = textbox.snapshotPage(createWorldMenu.page)
         randboxSnap = randbox.snapshotPage(createWorldMenu.page)
         dropdownSnap = dropdown.snapshotPage(createWorldMenu.page)
+        suggestionSnap = nameSuggest.snapshot(createWorldMenu.pending)
     end
 
     createWorldMenu.destroyOwned()
@@ -586,6 +597,11 @@ function createWorldMenu.createUI(opts)
         textbox.restoreAll(textboxSnap)
         randbox.restoreAll(randboxSnap)
         dropdown.restoreAll(dropdownSnap)
+        -- LAST: restoreAll's own onChange fires reconcile against
+        -- whatever the pending table happens to hold mid-rebuild, so
+        -- the meaning is put back after every control has settled.
+        nameSuggest.restore(createWorldMenu.pending, suggestionSnap)
+        if settingsTab.refreshGloss then settingsTab.refreshGloss() end
     end
 
     createWorldMenu.uiCreated = true

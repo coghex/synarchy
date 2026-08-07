@@ -55,6 +55,10 @@ end
 
 local function apply(pending, sug, seedNum, nextOrdinal)
     pending.worldName          = sug.name
+    -- The text this suggestion actually rendered, kept beside the name
+    -- so `reconcile` can tell whether the field still holds it. Not a
+    -- substitute for `nameSuggested` -- see reconcile for why both.
+    pending.nameSuggestedText  = sug.name
     pending.nameGloss          = sug.gloss
     pending.nameLanguageSeed   = sug.language and sug.language.seed or nil
     pending.nameLanguageVersion = sug.language and sug.language.version or nil
@@ -98,11 +102,18 @@ function nameSuggest.reseed(pending, seedNum)
     local changed = pending.nameSeedNum ~= seedNum
     pending.nameSeedNum = seedNum
     if not changed then return nil end
+
+    -- The sequence restarts on EVERY genuine seed change, whether or not
+    -- the current name is still a suggestion. The ordinal indexes one
+    -- language's sequence, so carrying it into a new language would drop
+    -- the next dice press partway into a language the player has never
+    -- heard a word of -- the opposite of "changing the seed gives a
+    -- fresh suggestion". A manual name is still left untouched below.
+    pending.nameOrdinal = 0
     if not pending.nameSuggested then return nil end
 
     local previousName  = pending.worldName
     local previousGloss = pending.nameGloss
-    pending.nameOrdinal = 0
     for _ = 1, MAX_RESEED_TRIES do
         local name = nameSuggest.suggest(pending, seedNum)
         if not name then return nil end
@@ -124,6 +135,7 @@ end
 -- typing continues the sequence rather than replaying it.
 function nameSuggest.clear(pending)
     pending.nameSuggested       = false
+    pending.nameSuggestedText   = nil
     pending.nameGloss           = nil
     pending.nameLanguageSeed    = nil
     pending.nameLanguageVersion = nil
@@ -134,6 +146,60 @@ function nameSuggest.reset(pending)
     nameSuggest.clear(pending)
     pending.nameOrdinal = nil
     pending.nameSeedNum = nil
+end
+
+-- Reconcile the recorded suggestion against the text the control now
+-- holds, whoever put it there. Returns whether the name is still a
+-- suggestion afterwards.
+--
+-- `clear` covers the player; this covers the other direction. A
+-- PROGRAMMATIC set can put text in the field that a different
+-- suggestion produced -- a resize teardown unfocuses an unsubmitted
+-- seed edit, which re-suggests, and the rebuild's restoreAll then puts
+-- the pre-teardown name back over the new suggestion's gloss and
+-- provenance. Pairing a name with another expression's meaning would
+-- persist an etymology that name never had, so the pairing is checked
+-- rather than assumed.
+--
+-- This does NOT replace `clear` as the manual-edit rule: retyping the
+-- suggested text by hand still clears, because the first keystroke of
+-- that retyping already did.
+function nameSuggest.reconcile(pending, text)
+    pending.worldName = text
+    if pending.nameSuggested and text ~= pending.nameSuggestedText then
+        nameSuggest.clear(pending)
+    end
+    return pending.nameSuggested == true
+end
+
+-- The complete suggestion tuple, for a caller that destroys and
+-- recreates the controls around it (a responsive rebuild). The widgets'
+-- own snapshot carries text, cursor, and focus; this carries the
+-- meaning, the language, and the sequence position, which no widget
+-- knows about.
+function nameSuggest.snapshot(pending)
+    return {
+        worldName       = pending.worldName,
+        suggestedText   = pending.nameSuggestedText,
+        gloss           = pending.nameGloss,
+        languageSeed    = pending.nameLanguageSeed,
+        languageVersion = pending.nameLanguageVersion,
+        suggested       = pending.nameSuggested,
+        ordinal         = pending.nameOrdinal,
+        seedNum         = pending.nameSeedNum,
+    }
+end
+
+function nameSuggest.restore(pending, snap)
+    if not snap then return end
+    pending.worldName           = snap.worldName
+    pending.nameSuggestedText   = snap.suggestedText
+    pending.nameGloss           = snap.gloss
+    pending.nameLanguageSeed    = snap.languageSeed
+    pending.nameLanguageVersion = snap.languageVersion
+    pending.nameSuggested       = snap.suggested
+    pending.nameOrdinal         = snap.ordinal
+    pending.nameSeedNum         = snap.seedNum
 end
 
 -----------------------------------------------------------

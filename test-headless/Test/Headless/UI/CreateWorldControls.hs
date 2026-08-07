@@ -103,6 +103,11 @@ runsOk = runsWith handoffPrelude
 runsSuggest ∷ Text → Expectation
 runsSuggest = runsWith suggestPrelude
 
+-- | 'runsOk' against the REAL @scripts/ui/randbox.lua@ over a synthetic
+--   text-buffer backend, for the keystroke handlers themselves.
+runsRandbox ∷ Text → Expectation
+runsRandbox = runsWith randboxPrelude
+
 runsWith ∷ Text → Text → Expectation
 runsWith prelude chunkText = do
     result ← Lua.run @Lua.Exception $ do
@@ -205,6 +210,74 @@ suggestPrelude = lns
     , "           logDebug = function() end }"
     , "nameSuggest = require('scripts.create_world.name_suggest')"
     , "function newPending() return { worldName = '', seed = '' } end"
+    ]
+
+-- | A synthetic text-buffer backend for the REAL randbox module.
+--
+--   Every UI verb randbox reaches for is a no-op by default (the
+--   metatable), with only the text-input model implemented for real:
+--   handles, buffers, cursors, and focus. That is exactly the state the
+--   keystroke handlers manipulate, so a chunk can press Backspace at
+--   offset 0 and observe what randbox reported — which is the whole
+--   question here, and one the state module cannot answer because it
+--   never sees the buffer.
+randboxPrelude ∷ Text
+randboxPrelude = lns
+    [ "local buffers, cursors, focused, nextHandle = {}, {}, nil, 1"
+    , "local function newHandle()"
+    , "  local h = nextHandle; nextHandle = h + 1"
+    , "  buffers[h] = ''; cursors[h] = 0; return h"
+    , "end"
+    , "UI = setmetatable({}, { __index = function() return function() end end })"
+    , "UI.newBox = function() return newHandle() end"
+    , "UI.newText = function() return newHandle() end"
+    , "UI.newSprite = function() return newHandle() end"
+    , "UI.setTextInput = function(h, t) buffers[h] = t or ''"
+    , "  cursors[h] = #buffers[h] end"
+    , "UI.getTextInput = function(h) return buffers[h] or '' end"
+    , "UI.setCursor = function(h, p) cursors[h] = p end"
+    , "UI.getCursor = function(h) return cursors[h] or 0 end"
+    , "UI.setFocus = function(h) focused = h end"
+    , "UI.clearFocus = function() focused = nil end"
+    , "UI.hasFocus = function(h) return focused == h end"
+    , "UI.insertChar = function(h, c)"
+    , "  local t, p = buffers[h] or '', cursors[h] or 0"
+    , "  buffers[h] = t:sub(1, p) .. c .. t:sub(p + 1); cursors[h] = p + 1"
+    , "end"
+    , "UI.deleteBackward = function(h)"
+    , "  local t, p = buffers[h] or '', cursors[h] or 0"
+    , "  if p > 0 then"
+    , "    buffers[h] = t:sub(1, p - 1) .. t:sub(p + 1); cursors[h] = p - 1"
+    , "  end"
+    , "end"
+    , "UI.deleteForward = function(h)"
+    , "  local t, p = buffers[h] or '', cursors[h] or 0"
+    , "  if p < #t then buffers[h] = t:sub(1, p) .. t:sub(p + 2) end"
+    , "end"
+    , "engine = {"
+    , "  loadTexture = function() return 1 end,"
+    , "  getTextWidth = function() return 0 end,"
+    , "  getUIScale = function() return 1 end,"
+    , "  logDebug = function() end, logInfo = function() end,"
+    , "  logWarn = function() end,"
+    , "}"
+    , "package.loaded['scripts.ui.box_textures'] ="
+    , "  { load = function() return {} end }"
+    , "randbox = require('scripts.ui.randbox')"
+    , "randbox.init()"
+    -- One NAME randbox holding a suggestion, focused for editing, with
+    -- every user-edit report recorded.
+    , "edits = {}"
+    , "function newNameBox(text)"
+    , "  local id = randbox.new{"
+    , "    name = 'world_name', page = 1, font = 1,"
+    , "    randType = randbox.Type.NAME, default = text,"
+    , "    autoGenerate = false,"
+    , "    onUserEdit = function(v) edits[#edits + 1] = v end,"
+    , "  }"
+    , "  randbox.focus(id)"
+    , "  return id"
+    , "end"
     ]
 
 spec ∷ Spec
@@ -494,6 +567,115 @@ spec = do
                 , "assert(p.nameOrdinal == nil)"
                 , "assert(p.nameSeedNum == nil)"
                 , "assert(not nameSuggest.isSuggested(p))"
+                ]
+
+        -- Review round 1: the ordinal indexes ONE language's sequence.
+        -- Carrying it into a new language would drop the next dice press
+        -- partway into a language the player has never heard a word of,
+        -- so the reset happens on every changed seed — including one
+        -- that reached here past a manual edit, which takes the early
+        -- return before any re-suggestion.
+        it "restarts the sequence even when the name is manual" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.clear(p)"
+                , "assert(nameSuggest.reseed(p, 22) == nil)"
+                , "assert(p.nameOrdinal == 0, tostring(p.nameOrdinal))"
+                , "assert(nameSuggest.suggest(p, 22) == 'N22_0',"
+                , "       'dice landed mid-sequence: ' .. tostring(p.worldName))"
+                ]
+
+        -- Review round 1: a name can only wear the meaning of the
+        -- suggestion that rendered it. reconcile is the guard for
+        -- PROGRAMMATIC sets, which onUserEdit cannot see.
+        it "drops a meaning that belongs to a different suggestion" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "assert(nameSuggest.reconcile(p, p.worldName),"
+                , "       'the suggestion disowned its own text')"
+                , "assert(nameSuggest.gloss(p) == 'G11_0')"
+                , "assert(nameSuggest.reconcile(p, 'Something Else') == false)"
+                , "assert(p.worldName == 'Something Else', p.worldName)"
+                , "assert(nameSuggest.gloss(p) == nil,"
+                , "       'kept another expression\\'s gloss')"
+                , "local _, seed = nameSuggest.identity(p)"
+                , "assert(seed == nil, 'kept another language\\'s provenance')"
+                ]
+
+        -- Review round 1, the flow that made reconcile necessary: a
+        -- resize with an unsubmitted seed edit. Teardown submits the
+        -- seed (re-suggesting in a NEW language), then the widget
+        -- restore puts the old name back. Snapshotting the meaning
+        -- alongside is what keeps the pair honest.
+        it "survives a rebuild that submits a pending seed edit" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "local snap = nameSuggest.snapshot(p)"
+                , "local shownName = p.worldName"
+                -- Teardown: the seed control unfocuses into a new seed.
+                , "nameSuggest.reseed(p, 22)"
+                , "assert(p.worldName ~= shownName, 'reseed did nothing')"
+                -- Rebuild: restoreAll puts the old text back, and the
+                -- name control's onChange reconciles against it.
+                , "nameSuggest.reconcile(p, shownName)"
+                , "assert(nameSuggest.gloss(p) == nil,"
+                , "       'paired the old name with the new language')"
+                -- Then the meaning snapshot is restored.
+                , "nameSuggest.restore(p, snap)"
+                , "assert(p.worldName == shownName, p.worldName)"
+                , "assert(nameSuggest.gloss(p) == 'G11_0', tostring(p.nameGloss))"
+                , "local _, seed = nameSuggest.identity(p)"
+                , "assert(seed == '11000', tostring(seed))"
+                , "assert(p.nameSeedNum == 11, tostring(p.nameSeedNum))"
+                ]
+
+    -- Review round 1: a keystroke that leaves the buffer untouched is
+    -- not an edit. Reporting one would strip a suggested name's gloss
+    -- and provenance while the name on screen never changed, so
+    -- generating it would persist it as though the player had typed it.
+    describe "randbox user-edit reporting (#1106)" $ do
+        it "stays silent on a backspace at the start of the field" $
+            runsRandbox $ lns
+                [ "local id = newNameBox('Karadun')"
+                , "randbox.setCursor(id, 0)"
+                , "assert(randbox.onBackspace())"
+                , "assert(#edits == 0, 'reported ' .. tostring(edits[1]))"
+                , "assert(randbox.getValue(id) == 'Karadun',"
+                , "       randbox.getValue(id))"
+                ]
+
+        it "stays silent on a delete at the end of the field" $
+            runsRandbox $ lns
+                [ "local id = newNameBox('Karadun')"
+                , "randbox.setCursor(id, 7)"
+                , "assert(randbox.onDelete())"
+                , "assert(#edits == 0, 'reported ' .. tostring(edits[1]))"
+                , "assert(randbox.getValue(id) == 'Karadun',"
+                , "       randbox.getValue(id))"
+                ]
+
+        it "reports a keystroke that does change the text" $
+            runsRandbox $ lns
+                [ "local id = newNameBox('Karadun')"
+                , "randbox.setCursor(id, 7)"
+                , "assert(randbox.onBackspace())"
+                , "assert(randbox.onCharInput('x'))"
+                , "assert(#edits == 2, tostring(#edits))"
+                , "assert(edits[1] == 'Karadu', edits[1])"
+                , "assert(edits[2] == 'Karadux', edits[2])"
+                ]
+
+        -- A rejected character is consumed but changes nothing, so it
+        -- is not an edit either.
+        it "stays silent on a rejected character" $
+            runsRandbox $ lns
+                [ "local id = newNameBox('Karadun')"
+                , "assert(randbox.onCharInput('7'))"
+                , "assert(#edits == 0, 'reported ' .. tostring(edits[1]))"
                 ]
 
     -- The Create World screen and generation.lua must normalize the

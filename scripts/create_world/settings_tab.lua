@@ -263,8 +263,13 @@ function settingsTab.create(params)
             refreshGloss()
             return value
         end,
+        -- Fires for programmatic sets too (a rebuild's restoreAll, the
+        -- reseed path below), so it reconciles rather than assumes: a
+        -- name that is not the one the recorded suggestion rendered
+        -- cannot keep that suggestion's gloss and provenance.
         onChange  = function(value, id, name)
-            pending.worldName = value
+            nameSuggest.reconcile(pending, value)
+            refreshGloss()
         end,
         -- The moment the player takes over the field, the name stops
         -- being the language's: gloss and provenance go immediately

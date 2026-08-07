@@ -586,10 +586,18 @@ end
 -- from the three handlers that change text in response to a keystroke —
 -- never from setValue, restoreAll, or randomize, which are the widget
 -- acting on someone else's behalf.
-local function notifyUserEdit(id)
+--
+-- `before` is the buffer as it stood BEFORE the keystroke, and a
+-- keystroke that left it untouched is not an edit: backspace at the
+-- start and delete at the end are ordinary no-ops, and reporting them
+-- would strip a suggested name's gloss and provenance while the name on
+-- screen never changed.
+local function notifyUserEdit(id, before)
     local rb = randboxes[id]
     if not rb or not rb.onUserEdit then return end
-    rb.onUserEdit(UI.getTextInput(rb.boxId) or "", id, rb.name)
+    local after = UI.getTextInput(rb.boxId) or ""
+    if after == before then return end
+    rb.onUserEdit(after, id, rb.name)
 end
 
 function randbox.onCharInput(char)
@@ -609,7 +617,7 @@ function randbox.onCharInput(char)
 
     UI.insertChar(rb.boxId, char)
     randbox.updateDisplay(id)
-    notifyUserEdit(id)
+    notifyUserEdit(id, text)
     return true
 end
 
@@ -618,9 +626,10 @@ function randbox.onBackspace()
     if not id then return false end
     local rb = randboxes[id]
 
+    local before = UI.getTextInput(rb.boxId) or ""
     UI.deleteBackward(rb.boxId)
     randbox.updateDisplay(id)
-    notifyUserEdit(id)
+    notifyUserEdit(id, before)
     return true
 end
 
@@ -629,9 +638,10 @@ function randbox.onDelete()
     if not id then return false end
     local rb = randboxes[id]
 
+    local before = UI.getTextInput(rb.boxId) or ""
     UI.deleteForward(rb.boxId)
     randbox.updateDisplay(id)
-    notifyUserEdit(id)
+    notifyUserEdit(id, before)
     return true
 end
 
