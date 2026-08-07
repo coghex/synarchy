@@ -483,7 +483,14 @@ def self_test():
                        ("uppercase in the interior",  "K\u00C1ra"),
                        ("letter outside the repertoire", "Kar\u00E6"),
                        ("trailing mark",  "K\u00E1-"),
-                       ("leading mark",   "-K\u00E1ra")):
+                       ("leading mark",   "-K\u00E1ra"),
+                       # Two DIFFERENT marks side by side. The "''"/"--"
+                       # substring test above cannot see these, so they
+                       # rest entirely on the regex — and are mirrored in
+                       # the Hspec predicate's own table for the same
+                       # reason.
+                       ("hyphen then apostrophe", "K-'ara"),
+                       ("apostrophe then hyphen", "K'-ara")):
         if not contract_violations(bad):
             failures.append(f"contract {label} {bad!r}: accepted, "
                             f"want rejected")

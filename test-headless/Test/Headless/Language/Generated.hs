@@ -258,6 +258,15 @@ asFreeRoot c lr = freeRootsOnly $ case M.lookup c (lrBound lr) of
 --   #1100's extended repertoire), pinned as a concrete predicate rather
 --   than left implicit.
 --
+--   Structurally EQUIVALENT to @tools/language_report.py@'s
+--   @CONTRACT_RE@ — @^[UPPER][lower]*(?:['-][lower]+)*\$@ — rather than
+--   a looser set of separate conditions. It used to check the initial,
+--   the final character, the admitted character set and repeated marks
+--   independently, which let through three shapes the regex rejects: an
+--   uppercase letter in the INTERIOR (@KAra@), and two DIFFERENT marks
+--   side by side (@K-'ara@, @K'-ara@). One contract stated two ways is
+--   one contract only if the two agree on every string.
+--
 --   Length is counted in CODE POINTS (#1100 requirement 6): 'T.length'
 --   already does, and every repertoire member is one precomposed code
 --   point, so a marked name and its unmarked equivalent measure the
@@ -270,19 +279,26 @@ asFreeRoot c lr = freeRootsOnly $ case M.lookup c (lrBound lr) of
 --   an emitted mark also belonged to the language that emitted it.
 contractOk ∷ Text → Bool
 contractOk w =
-    T.length w ≥ 3 ∧ T.length w ≤ 32
-    ∧ startsUpperLetter ∧ endsLetter
-    ∧ T.all okChar w
-    ∧ not ("--" `T.isInfixOf` w)
-    ∧ not ("''" `T.isInfixOf` w)
+    T.length w ≥ 3 ∧ T.length w ≤ 32 ∧ wellFormed (T.unpack w)
   where
-    startsUpperLetter = case T.uncons w of
-        Just (c, _) → isNameInitial c
-        Nothing     → False
-    endsLetter = case T.unsnoc w of
-        Just (_, c) → isNameLetter c
-        Nothing     → False
-    okChar c = isNameLetter c ∨ c `elem` nameMarks
+    -- ^[UPPER] then the remainder.
+    wellFormed (c : cs) = isNameInitial c ∧ leadingRun cs
+    wellFormed []       = False
+
+    -- [lower]* — the run after the initial may be empty.
+    leadingRun cs = case break isMark cs of
+        (letters, [])       → all isNameLower letters
+        (letters, _ : rest) → all isNameLower letters ∧ markedRun rest
+
+    -- (?:['-][lower]+)* — every later run follows exactly one mark and
+    -- must be NONEMPTY, which is what rejects a trailing mark, two
+    -- identical marks, and two different ones alike.
+    markedRun cs = case break isMark cs of
+        ([], _)             → False
+        (letters, [])       → all isNameLower letters
+        (letters, _ : rest) → all isNameLower letters ∧ markedRun rest
+
+    isMark c = c `elem` nameMarks
 
 -- | The title font. Named here rather than reached for through
 --   'generatedNameFonts' because the point of the font-coverage group
@@ -1924,6 +1940,43 @@ spec = describe "Generated language names" $ do
                 T.length w `shouldSatisfy` (≤ 32)
                 T.length w `shouldSatisfy` (≥ 3)
                 BS.length (encodeUtf8 w) `shouldSatisfy` (> T.length w)
+
+        it "accepts and rejects exactly what the report tool's regex \
+           \does" $ do
+            -- The predicate and @tools/language_report.py@'s
+            -- CONTRACT_RE are two statements of ONE contract, so the
+            -- cases are mirrored verbatim in that tool's --self-test.
+            -- Without the negative half a weaker predicate reports
+            -- "zero contract violations" for output the enforced regex
+            -- would reject.
+            let accepted =
+                    [ "Kara", "Kara'b", "Kara-bo", "Kar"
+                    , "K\x00E1r\x00F3", "\x00C1r\x00F3-b\x00E1"
+                    , "\x00D8ka", "Ka\x00F8-r\x00E1'b" ]
+                rejected =
+                    [ ("lowercase initial",            "kara")
+                    , ("lowercase extended initial",   "\x00E1ra")
+                    , ("below the 3-character floor",  "Ka")
+                    , ("uppercase in the interior",    "KAra")
+                    , ("uppercase extended interior",  "K\x00C1ra")
+                    , ("repeated hyphen",              "Kara--bo")
+                    , ("repeated apostrophe",          "Kara''bo")
+                    , ("hyphen then apostrophe",       "K-'ara")
+                    , ("apostrophe then hyphen",       "K'-ara")
+                    , ("leading mark",                 "-Kara")
+                    , ("leading extended mark",        "-K\x00E1ra")
+                    , ("trailing mark",                "Kara-")
+                    , ("trailing extended mark",       "K\x00E1r\x00E1-")
+                    , ("a digit",                      "Kar3")
+                    , ("a letter outside the set",     "Kar\x00E6")
+                    , ("a curly quote for the mark",   "Kara\x2019\&b")
+                    -- A combining sequence renders identically to the
+                    -- accepted precomposed letter and must still be
+                    -- rejected: the repertoire is single code points.
+                    , ("a combining mark",             "A\x0301ra\x0301")
+                    , ("empty",                        "") ]
+            filter (not ∘ contractOk) accepted `shouldBe` []
+            [ label | (label, w) ← rejected, contractOk w ] `shouldBe` []
 
         it "describes one canonical set, shared with the report tool" $ do
             -- The single explicit inventory the reviewed spec asks for:

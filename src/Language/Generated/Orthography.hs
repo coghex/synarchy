@@ -35,8 +35,8 @@
 --     'Language.Generated.Onset.consonantOnly' was designed around. It
 --     costs three characters to exclude and removes the whole question.
 --
---   Font safety (#1100 requirement 3) is settled by 'nameFontPolicy'
---   over in "Engine.Graphics.Font.Repertoire": generated names are
+--   Font safety (#1100 requirement 3) is settled by
+--   'Engine.Graphics.Font.Repertoire.generatedNameFonts': generated names are
 --   displayed in the extended-Latin fonts only, and every character
 --   'outputInventory' lists is proved to rasterize from each of them by
 --   "Test.Headless.Language.Generated"'s font-coverage group. Adding a
@@ -55,6 +55,7 @@ module Language.Generated.Orthography
     , isExtendedLetter
     , isNameLetter
     , isNameInitial
+    , isNameLower
     , nameMarks
     , outputInventory
       -- * Per-language selection
@@ -243,22 +244,34 @@ isExtendedLetter ∷ Char → Bool
 isExtendedLetter c = any match extendedLetterTable
   where match (_, _, _, lower, upper) = c ≡ lower ∨ c ≡ upper
 
--- | Whether a character is a LETTER for the purposes of every rule that
---   used to say "ASCII letter" — #1095's triple-run detection and
---   #1096's "a bound form retains a visible letter".
---
---   Widening those predicates cannot disturb versions 1-4: their
---   inventories are ASCII, so no text they produce contains a character
---   this admits and 'Data.Char.isAsciiUpper'/'isAsciiLower' did not.
-isNameLetter ∷ Char → Bool
-isNameLetter c = isAsciiUpper c ∨ isAsciiLower c ∨ isExtendedLetter c
-
 -- | Whether a character may be a rendered name's INITIAL: an uppercase
---   letter, ASCII or extended.
+--   letter, ASCII or extended. The output contract admits exactly one
+--   of these, at position zero and nowhere else.
 isNameInitial ∷ Char → Bool
 isNameInitial c =
     isAsciiUpper c ∨ any isUpper' extendedLetterTable
   where isUpper' (_, _, _, _, upper) = c ≡ upper
+
+-- | Whether a character may appear in a name's REMAINDER: a lowercase
+--   letter, ASCII or extended.
+isNameLower ∷ Char → Bool
+isNameLower c =
+    isAsciiLower c ∨ any isLower' extendedLetterTable
+  where isLower' (_, _, _, lower, _) = c ≡ lower
+
+-- | Whether a character is a LETTER for the purposes of every rule that
+--   used to say "ASCII letter" — #1095's triple-run detection and
+--   #1096's "a bound form retains a visible letter".
+--
+--   Defined as the union of the two case predicates rather than as a
+--   third independent list, so a repertoire member can never be a
+--   letter to one rule and not to another.
+--
+--   Widening these cannot disturb versions 1-4: their inventories are
+--   ASCII, so no text they produce contains a character this admits and
+--   'Data.Char.isAsciiUpper'/'isAsciiLower' did not.
+isNameLetter ∷ Char → Bool
+isNameLetter c = isNameInitial c ∨ isNameLower c
 
 -- | The only non-letter characters a generated name may contain.
 --
