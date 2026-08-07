@@ -28,7 +28,7 @@ import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
-import World.Render.ChunkLookup (canonicalTileFrame)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Render.HitTest (pickWorldTile)
 import World.Render.TileQuads (worldCursorToQuad, worldCursorBgToQuad)
 

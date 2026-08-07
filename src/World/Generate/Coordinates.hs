@@ -4,6 +4,8 @@ module World.Generate.Coordinates
     , chunkToGlobal
     , chunkWorldBounds
     , cameraChunkCoord
+    , canonicalTileFrame
+    , canonicalTileCoord
     ) where
 
 import UPrelude
@@ -38,6 +40,45 @@ cameraChunkCoord facing camX camY =
     let (gx, gy) = worldToGrid facing camX camY
         (coord, _) = globalToChunk gx gy
     in coord
+
+-- * Canonical (u-wrapped) tile frame — #1135
+--
+--   Chunks are STORED under u-wrapped coords ('wrapChunkCoordU', applied
+--   at insert time by "World.Thread.ChunkLoading"). A tile coord that
+--   was not itself read out of stored world data — one unprojected from
+--   the screen, or handed in by a Lua caller — can therefore name an
+--   ALIAS of a loaded chunk: same physical tile, coord one whole world
+--   away along u. Both helpers below move such a coord into the stored
+--   frame, and are the identity for a coord already in it (and for
+--   arena / zero-size worlds, where 'wrapChunkCoordU' never wraps).
+
+-- | Resolve a global tile coord to the canonical chunk that STORES it,
+--   its local index within that chunk, and the whole-chunk @(dgx, dgy)@
+--   shift carrying any coord from the raw frame into the stored one.
+--
+--   The shift is the u-wrap expressed in tiles: it moves whole chunks,
+--   so the local index is the same on both sides, and it preserves
+--   @v = gx + gy@ exactly as 'wrapChunkCoordU' preserves @v = cx + cy@.
+canonicalTileFrame ∷ Int                -- ^ world size in chunks
+                   → Int → Int          -- ^ global tile (gx, gy), raw frame
+                   → (ChunkCoord, (Int, Int), (Int, Int))
+                      -- ^ (stored chunk, local (lx, ly), tile shift (dgx, dgy))
+canonicalTileFrame worldSize gx gy =
+    let (ccRaw@(ChunkCoord rcx rcy), local) = globalToChunk gx gy
+        ChunkCoord ccx ccy = wrapChunkCoordU worldSize ccRaw
+    in ( ChunkCoord ccx ccy
+       , local
+       , ((ccx - rcx) * chunkSize, (ccy - rcy) * chunkSize) )
+
+-- | A global tile coord moved into the canonical stored frame. Use this
+--   at an engine ENTRY point that accepts a tile coord from outside the
+--   stored frame (a Lua designation anchor, a screen-derived pick), so
+--   everything downstream shares one frame instead of each consumer
+--   re-deriving — or failing to derive — its own.
+canonicalTileCoord ∷ Int → Int → Int → (Int, Int)
+canonicalTileCoord worldSize gx gy =
+    let (_, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
+    in (gx + dgx, gy + dgy)
 
 floorMod ∷ Int → Int → Int
 floorMod a b = a - div a b * b

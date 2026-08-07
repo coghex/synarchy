@@ -2,6 +2,7 @@
 --   "World.Thread.Command.Cursor" (issue #564).
 module World.Thread.Command.Cursor.Common
     ( maxDesignateSide
+    , canonicalDesignationTile
     , recordDesignationOutcome
     , recordMissingWorldOutcome
     ) where
@@ -14,13 +15,31 @@ import Engine.Core.Capability.WorldSim
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
-import World.Types (WorldPageId)
+import World.Types (WorldPageId, WorldState(..), WorldGenParams(..))
+import World.Generate.Coordinates (canonicalTileCoord)
 import World.Thread.Helpers (unWorldPageId)
 
 -- | Cap on the designation rectangle's side length. Guards against a
 --   misclick across the map turning into a 100k-tile designation.
 maxDesignateSide ∷ Int
 maxDesignateSide = 128
+
+-- | Move a designation tile coord into the canonical (u-wrapped) frame
+--   chunks are stored under (#1135).
+--
+--   Designation coords enter the engine from Lua — world.setMineAnchor,
+--   world.designateMine and their chop/till/construct/plant siblings all
+--   round arbitrary numbers — so nothing guarantees they are already in
+--   that frame. Normalising HERE, at the entry point, is what keeps the
+--   anchor, the live preview (World.Render.CursorQuads) and the commit
+--   all talking about the same tile: an anchor left in a u-seam alias
+--   would sit a whole world away from a canonical hover, turning a
+--   one-tile designation into a capped 128-wide sweep and missing its
+--   own loaded chunk. Identity for a coord already canonical.
+canonicalDesignationTile ∷ WorldState → Int → Int → IO (Int, Int)
+canonicalDesignationTile worldState gx gy = do
+    paramsM ← readIORef (wsGenParamsRef worldState)
+    pure (canonicalTileCoord (maybe 128 wgpWorldSize paramsM) gx gy)
 
 -- | F4 (#646) action-outcome oracle tap for a rectangle-sweep
 --   designation commit: "accepted" if every requested tile/tree landed,

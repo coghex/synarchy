@@ -37,7 +37,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemManager(..), ItemDef(..), ItemInstance(..))
 import World.Generate (viewDepth)
-import World.Render.ChunkLookup (canonicalTileFrame)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..)
@@ -306,6 +306,7 @@ hitTestGroundItemAt env worldState pixX pixY = do
         im       ← readIORef (itemManagerRef env)
         texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
         paramsM  ← readIORef (wsGenParamsRef worldState)
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
 
         let facing = camFacing camera
             -- Same seam wrap the render pass uses, so an item across the
@@ -326,15 +327,31 @@ hitTestGroundItemAt env worldState pixX pixY = do
             worldX = (normX * 2.0 - 1.0) * vw + camX
             worldY = (normY * 2.0 - 1.0) * vh + camY
 
+            -- The render pass draws at drawX0 + xOff, where xOff maps the
+            -- item's CANONICAL chunk onto the screen alias nearest the
+            -- camera. Clicks arrive in that same on-screen frame, so the
+            -- hit test has to apply the identical offset (#1135) — the
+            -- geometry alone is a whole worldScreenWidth away from the
+            -- click for anything shown through its wrapped image, i.e.
+            -- visible but unclickable. It also reproduces the render
+            -- pass's visibility gate: an item that is not drawn at all
+            -- must not be pickable.
+            vb = computeViewBounds camera fbW fbH effectiveDepth
             candidates =
                 [ (tz, dist, gid)
                 | (gid, gi) ← HM.toList (gisItems gis)
-                , Just (tz, _tex, drawX, drawY, quadW, quadH, _uw)
+                , Just (tz, _tex, drawX0, drawY, quadW, quadH, _uw)
                     ← [itemGeometry tileData im texSizes facing zSlice
                                     worldSize gi]
+                , let (chunkCoord, _, _) =
+                          canonicalTileFrame worldSize
+                              (floor (giX gi)) (floor (giY gi))
+                , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                   vb camX chunkCoord]
                 , tz ≤ zSlice
                 , tz ≥ zSlice - effectiveDepth
-                , let cx = drawX + quadW * 0.5
+                , let drawX = drawX0 + xOff
+                      cx = drawX + quadW * 0.5
                       cy = drawY + quadH * 0.5
                       dx = worldX - cx
                       dy = worldY - cy

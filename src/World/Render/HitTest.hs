@@ -22,7 +22,7 @@ import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import World.Grid (worldToGrid, worldToGridF, tileSideHeight, tileHeight)
 import World.Render.ViewBounds (ViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
-import World.Render.ChunkLookup (canonicalTileFrame)
+import World.Generate.Coordinates (canonicalTileFrame)
 
 -- | Resolved hit: @(gx, gy, z, xOffset, hoverPos)@ where @(gx,gy,z)@ is
 --   the solid tile under the cursor, @xOffset@ is the wrapped-chunk x

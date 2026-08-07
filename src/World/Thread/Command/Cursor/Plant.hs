@@ -31,7 +31,8 @@ import World.Generate (globalToChunk)
 import World.Plant.Types (newPlantDesignation)
 import World.Vegetation (isTilledSoil)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
-import World.Thread.Command.Cursor.Common (recordMissingWorldOutcome)
+import World.Thread.Command.Cursor.Common
+    (recordMissingWorldOutcome, canonicalDesignationTile)
 
 -- | Commit a plant designation at (gx, gy) for the named crop. Refused
 --   (silently — the caller polls plant.getDesignationAt to confirm) if
@@ -46,11 +47,18 @@ import World.Thread.Command.Cursor.Common (recordMissingWorldOutcome)
 --   plantable-crop species.
 handleWorldDesignatePlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Text → IO ()
-handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
+handleWorldDesignatePlantCommand env logger pageId rgx rgy cropName = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Nothing → recordMissingWorldOutcome env "plant.designate" pageId gx gy
+        Nothing → recordMissingWorldOutcome env "plant.designate" pageId rgx rgy
         Just worldState → do
+            -- Canonicalise the commit's own corners too (#1135):
+            -- these arrive straight from Lua, not from the stored
+            -- anchor, so a caller that bypassed pickTile could otherwise
+            -- designate in a u-seam alias frame — missing its loaded
+            -- chunk while the preview (already canonical) showed the
+            -- real tiles. Identity for coords already canonical.
+            (gx, gy) ← canonicalDesignationTile worldState rgx rgy
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             plots ← readIORef (wsCropPlotsRef worldState)

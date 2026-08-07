@@ -1136,6 +1136,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FloraGrowth
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
+                   Test.Headless.World.DesignationSeam
                    Test.Headless.World.Render.FrontWallLift
                    Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.HitTest

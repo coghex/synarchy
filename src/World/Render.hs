@@ -19,7 +19,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Generate (viewDepth)
 import World.Grid (zoomFadeStart, zoomFadeEnd, worldToGrid)
-import World.Render.ChunkLookup (canonicalTileFrame)
+import World.Generate.Coordinates (canonicalTileFrame)
 
 import World.Render.Zoom.Quads (generateZoomMapQuads)
 import World.Render.Camera (cameraChanged)
