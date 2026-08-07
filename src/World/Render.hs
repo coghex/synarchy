@@ -19,8 +19,8 @@ import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Generate (viewDepth, globalToChunk)
 import World.Grid (zoomFadeStart, zoomFadeEnd, worldToGrid)
-import World.ZoomMap (generateZoomMapQuads)
 
+import World.Render.Zoom.Quads (generateZoomMapQuads)
 import World.Render.Camera (cameraChanged)
 import World.Render.Quads (renderWorldQuads)
 import World.Render.CursorQuads (renderWorldCursorQuads)
