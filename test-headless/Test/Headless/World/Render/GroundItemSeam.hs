@@ -178,6 +178,12 @@ spec = do
 --   case that forces a non-zero wrap offset. The offset is asserted
 --   non-zero first, so the test cannot pass trivially by the scenario
 --   collapsing to the interior one.
+--
+--   FaceSouth only, deliberately. The wrap offset is screen-X-only
+--   ('World.Render.ChunkCulling.bestWrapOffset'), which is exact at
+--   south/north but cannot correct east/west, where a u-wrap displaces
+--   screen Y instead — a pre-existing engine-wide limitation split out
+--   to #1176, which owns extending this fixture across all four facings.
 engineSpec ∷ Spec
 engineSpec = beforeAll initEnv $
   describe "ground-item click across the U seam (#1135)" $
