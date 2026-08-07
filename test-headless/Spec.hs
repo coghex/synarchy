@@ -118,6 +118,7 @@ import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
+import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.World.Render.WaterSlope as RenderWaterSlope
 import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
@@ -342,7 +343,8 @@ main = hspec $ do
     describe "River.CalderaHazard" RiverCalderaHazard.spec
     describe "World.Render.FrontWallLift" FrontWallLift.spec
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
-    GroundItemSeam.engineSpec
+    describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
+    describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
     describe "World.Render.WaterSlope" RenderWaterSlope.spec
