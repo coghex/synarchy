@@ -14,10 +14,12 @@ module Test.Headless.World.Render.WaterSlope (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Render.ChunkLookup (canonicalChunkLookup)
 import World.Render.WaterSlope (waterSlopeAt)
 
 -- | The tile under test sits away from every chunk edge so all four
@@ -136,6 +138,68 @@ spec = do
           terrLookup c = if c ≡ neighborCoord then Just flatTerr else Nothing
       in waterSlopeAt dryMap flatTerr home chunkLookup terrLookup 0 ty mySurf
            `shouldBe` 9
+
+  -- #1135: the cross-chunk branch builds its neighbour coord in the HOME
+  -- chunk's raw frame, but chunks are STORED u-wrapped. At the seam the
+  -- two disagree and a raw HM.lookup misses a LOADED neighbour, so the
+  -- branch silently returned False and no slope bit was ever set there.
+  --
+  -- These drive the real production lookup boundary
+  -- ('World.Render.ChunkLookup.canonicalChunkLookup', the same helper
+  -- 'renderWorldQuads' builds its callbacks from) over a map keyed ONLY
+  -- by the canonical coord — a test-local wrap would pass even if the
+  -- production lookup regressed.
+  describe "cross-chunk neighbour across the U seam (#1135)" $ do
+    -- worldSize 64 → canonical chunk u ∈ [-32, 32). Home chunk (16,-15)
+    -- has u = 31, so its raw EAST neighbour (17,-15) has u = 32 — one
+    -- past the range, stored instead under ChunkCoord (-15) 17.
+    let seamHome    = ChunkCoord 16 (-15)
+        seamStored  = ChunkCoord (-15) 17
+        seamWorld   = 64
+        -- Local x of the east neighbour cell: the step off lx = chunkSize-1
+        -- lands on local x 0 of the next chunk, same ly.
+        neighborLocal = (0, ty)
+        seamTerr = terrMapWith [(neighborLocal, mySurf - 4)]
+        seamFluid = fluidMapWith [(neighborLocal, FluidCell River (mySurf - 3))]
+        -- Production boundary, backed by a map holding ONLY the stored key.
+        lookupVia m = canonicalChunkLookup seamWorld (HM.fromList [(seamStored, m)])
+
+    it "sets the east slope bit for a DRY drop across the seam" $
+      -- Raw key ChunkCoord 17 (-15) must resolve to the stored (-15) 17.
+      waterSlopeAt dryMap flatTerr seamHome
+          (lookupVia dryMap) (lookupVia seamTerr)
+          (chunkSize - 1) ty mySurf
+        `shouldBe` 6
+
+    it "sets the east slope bit for a WET drop across the seam" $
+      waterSlopeAt dryMap flatTerr seamHome
+          (lookupVia seamFluid) (lookupVia flatTerr)
+          (chunkSize - 1) ty mySurf
+        `shouldBe` 6
+
+    it "matches the equivalent interior fixture exactly" $
+      -- Same relative geometry one chunk in from the seam: the wrap is
+      -- the identity there, so the bits must be identical (requirement 4).
+      let interiorHome   = ChunkCoord 15 (-15)
+          interiorStored = ChunkCoord 16 (-15)
+          interiorVia m  = canonicalChunkLookup seamWorld
+                               (HM.fromList [(interiorStored, m)])
+          seamBits = waterSlopeAt dryMap flatTerr seamHome
+                         (lookupVia dryMap) (lookupVia seamTerr)
+                         (chunkSize - 1) ty mySurf
+          interiorBits = waterSlopeAt dryMap flatTerr interiorHome
+                             (interiorVia dryMap) (interiorVia seamTerr)
+                             (chunkSize - 1) ty mySurf
+      in seamBits `shouldBe` interiorBits
+
+    it "still yields no slope when the seam neighbour is genuinely unloaded" $
+      -- The negative case the old raw lookup could not distinguish from a
+      -- loaded-but-aliased neighbour: an empty map means NOT LOADED.
+      let emptyVia ∷ ChunkCoord → Maybe a
+          emptyVia = canonicalChunkLookup seamWorld HM.empty
+      in waterSlopeAt dryMap flatTerr seamHome emptyVia emptyVia
+             (chunkSize - 1) ty mySurf
+           `shouldBe` 0
 
   -- Real seed-42 tile (-55,-29), pulled from a live `--dump=terrain,fluid
   -- --seed 42 --worldSize 32` run: a river surface at z=38 borders a DRY

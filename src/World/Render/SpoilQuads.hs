@@ -120,6 +120,17 @@ renderSpoilQuads env worldState tileAlpha = do
 
             quadFor lvl (_tile@(tx, ty), (mat, corners)) = do
                 let (chunkCoord, (lx, ly)) = globalToChunk tx ty
+                -- Raw lookup, deliberately (#1135 audit) — the one render
+                -- lookup whose input really is canonical by construction.
+                -- 'wsSpoilRef' has exactly two writers: World.Thread
+                -- .Command.Edit.Dig, keying piles by a tile it just dug
+                -- out of a LOADED (therefore canonically-keyed) chunk,
+                -- and World.Load.Stage restoring those same keys from a
+                -- save. Unlike ground items (item.spawnGround) and
+                -- designation anchors (world.setMineAnchor), there is no
+                -- Lua entry point that writes a spoil pile at an
+                -- arbitrary coord — the scripting API only READS this
+                -- state — so the wrap here would be the identity.
                 lc ← HM.lookup chunkCoord (wtdChunks tileData)
                 xOff ← isChunkVisibleWrapped facing worldSize vb camX
                                              chunkCoord
