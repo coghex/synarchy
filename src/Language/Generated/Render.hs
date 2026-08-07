@@ -22,6 +22,7 @@ import qualified Data.Text as T
 import Language.Semantic.Types
 import Language.Generated.Types
 import Language.Generated.Boundary (joinMorphemes)
+import Language.Generated.Bound (LanguageRoots(..))
 
 -- | Why a 'NameExpr' could not be natively rendered.
 newtype NativeRenderError = NativeUnknownConcept ConceptId
@@ -31,10 +32,11 @@ nativeRenderErrorText ∷ NativeRenderError → Text
 nativeRenderErrorText (NativeUnknownConcept (ConceptId cid)) =
     "unknown concept id " <> cid <> " in native name expression"
 
--- | Render one native proper name. @roots@ is the concept→root
---   assignment for this profile's language ('Language.Generated.Root.assignRoots'
---   over the caller's catalogue) — looking up a concept absent from it
---   is the only way this can fail.
+-- | Render one native proper name. @roots@ is the concept→morpheme
+--   assignment for this profile's language
+--   ('Language.Generated.Root.assignLanguageRoots' over the caller's
+--   catalogue) — looking up a concept absent from its FREE map is the
+--   only way this can fail.
 --
 --   Ordering (#710 requirement 11): 'Modifier' and 'Of' are both
 --   descriptive compounds and share 'profCompoundOrder'; 'Possessive'
@@ -42,27 +44,54 @@ nativeRenderErrorText (NativeUnknownConcept (ConceptId cid)) =
 --   (see 'Language.Generated.Types' for the rationale). 'Of's explicit
 --   number applies the profile's plural marking to the complement, the
 --   same marking 'applyPluralMark' exposes for direct testing.
-renderNative ∷ Profile → M.Map ConceptId Text → NameExpr → Either NativeRenderError Text
+--
+--   Bound forms (#1096 requirement 6) are selected by SEMANTIC ROLE,
+--   not by rendered word order: the dependent slot of each compound
+--   form takes the concept's bound form when it has one, the head slot
+--   always takes the free form, and 'Bare' — which has no dependent
+--   slot at all — is always free. Whether the profile then writes the
+--   dependent side first or last is 'orderPair'/'orderGenitive''s
+--   business and changes only display order, never which slot was
+--   dependent.
+--
+--   Requirement 7's ordering falls out of where the selection sits:
+--   'dependent' resolves the morpheme BEFORE 'applyNumber' or
+--   'orderGenitive''s possessive marking ever see it, so a mark is
+--   always applied to the already-selected form, and the join it then
+--   meets goes through #1095's boundary repair exactly as before.
+--
+--   Every lookup here is an ordinary map lookup on an assignment built
+--   ahead of time (#1096 requirement 8). Nothing in this module scans a
+--   catalogue, derives a shortening, or retries: a concept with no
+--   stored bound form simply falls back to its free root.
+renderNative ∷ Profile → LanguageRoots → NameExpr → Either NativeRenderError Text
 renderNative prof roots expr = case expr of
     Bare c → do
         r ← look c
         pure (capitalizeWord r)
     Modifier m h → do
-        rm ← look m
+        rm ← dependent m
         rh ← look h
         pure $ capitalizeWord (orderPair prof rm rh)
     Of h num c → do
         rh ← look h
-        rc ← look c
+        rc ← dependent c
         pure $ capitalizeWord (orderPair prof (applyNumber prof num rc) rh)
     Possessive o h → do
-        ro ← look o
+        ro ← dependent o
         rh ← look h
         pure $ capitalizeWord (orderGenitive prof ro rh)
   where
-    look cid = case M.lookup cid roots of
+    look cid = case M.lookup cid (lrFree roots) of
         Nothing → Left (NativeUnknownConcept cid)
         Just r  → Right r
+
+    -- The free lookup runs FIRST even when a bound form exists, so an
+    -- unknown concept stays the descriptive failure it always was
+    -- rather than being masked by a bound map that happened to carry it.
+    dependent cid = do
+        r ← look cid
+        pure (fromMaybe r (M.lookup cid (lrBound roots)))
 
 -- | Apply explicit-number marking to a root: unchanged when singular,
 --   the profile's plural affix appended when plural. The bare root is

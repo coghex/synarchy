@@ -15,6 +15,7 @@ module Language.Generated.Hash
     ( fmix64
     , textSeed
     , conceptSeed
+    , boundSeed
     , draw
     , wordInRange
     , pickIndex
@@ -55,6 +56,25 @@ conceptSeed (GeneratorVersion v) (LangSeed s) cid attempt =
            `xor` fmix64 (fromIntegral v * 0x9E3779B97F4A7C15)
            `xor` textSeed (conceptIdText cid)
            `xor` fmix64 (fromIntegral attempt * 0xD6E8FEB86659FD93)
+
+-- | The deterministic per-concept value bound-form selection ranks and
+--   derives its candidate from (#1096 requirement 2): a function of the
+--   generator version, the language seed, and the concept id, and of
+--   NOTHING else — no catalogue position, no traversal order, no other
+--   concept's outcome.
+--
+--   DOMAIN-SEPARATED from 'conceptSeed' by a dedicated salt, so a
+--   concept's bound-form ranking is independent of the root that concept
+--   was assigned: without the salt the two would be the same value, and
+--   "which concepts get bound forms" would be a function of the root
+--   draw rather than a selection of its own.
+boundSeed ∷ GeneratorVersion → LangSeed → ConceptId → Word64
+boundSeed ver seed cid =
+    fmix64 (conceptSeed ver seed cid 0 `xor` boundFormDomain)
+  where
+    -- ASCII "BoundFm1": an arbitrary but fixed domain tag, in the same
+    -- spirit as the constants above.
+    boundFormDomain = 0x426F756E64466D31
 
 -- | One independent, stateless draw from a base seed at a given step.
 --   Bumping the step index is how a pure fold makes successive
