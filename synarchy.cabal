@@ -654,7 +654,6 @@ library
                      World.Render.Zoom.Quads
                      World.Render.Zoom.Cursor
                      World.Render.Zoom.Icons
-                     World.Render.Zoom.Background
                      World.Generate
                      World.Generate.Arena
                      World.Generate.Constants
@@ -856,7 +855,6 @@ library
                      World.Material
                      World.Material.Id
                      World.Preview
-                     World.ZoomMap
                      World.ZoomMap.Cache
                      World.ZoomMap.Cache.Build
                      World.ZoomMap.Cache.BuildPixels
