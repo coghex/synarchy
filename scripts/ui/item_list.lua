@@ -445,8 +445,13 @@ local function buildRows(inst, s, listY, listBottom)
             track(inst, "sprite", bgId)
         end
 
-        -- Icon plus the shared broken-equipment overlay.
-        local iconTex = p.rowIcon and p.rowIcon(row) or row.iconTex
+        -- Icon plus the shared broken-equipment overlay. A supplied
+        -- rowIcon is AUTHORITATIVE, including when it returns nil: the
+        -- item-contents host answers nil for a negative (missing) icon
+        -- handle, and an `or row.iconTex` fallback would put that very
+        -- handle back and render an undefined-texture sprite.
+        local iconTex
+        if p.rowIcon then iconTex = p.rowIcon(row) else iconTex = row.iconTex end
         if iconTex then
             local iconY = rowY + math.floor((rowH - iconSz) / 2)
             local iconId = UI.newSprite(inst.name .. "_icon_" .. i,

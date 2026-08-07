@@ -386,6 +386,42 @@ spec = describe "Item list widget" $ do
             naClickable p `shouldBe` False
             naRouted p `shouldBe` False
 
+        it "a rowIcon callback is authoritative even when it answers nil (missing-icon handle)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls setupLua
+            -- The item-contents host answers nil for a NEGATIVE icon
+            -- handle (that API reports a missing icon that way). A
+            -- `p.rowIcon(row) or row.iconTex` fallback would put the
+            -- negative handle straight back and render an
+            -- undefined-texture sprite, silently undoing the guard.
+            r ← evalDebug ls $ luaLines
+                [ "local il = require('scripts.ui.item_list');"
+                , "local pg = UI.newPage('il_icon', 'overlay'); UI.showPage(pg);"
+                , "local p = baseParams(pg, {"
+                , "  {defName='missing', displayName='Missing', weight=1, iconTex=-1},"
+                , "  {defName='present', displayName='Present', weight=1, iconTex=1},"
+                , "});"
+                , "p.rowIcon = function(g)"
+                , "  if g.iconTex and g.iconTex >= 0 then return g.iconTex end;"
+                , "  return nil end;"
+                , "local id = il.new(p);"
+                , "local names = {};"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  names[e.name] = true end;"
+                , "local rows = #il.getRows(id);"
+                , "il.destroy(id);"
+                , "return {rows = rows,"
+                , "        missingIcon = names['probe_list_icon_1'] == true,"
+                , "        presentIcon = names['probe_list_icon_2'] == true}"
+                ]
+            p ← decodeOr r ∷ IO IconProbe
+            ipRows p `shouldBe` 2
+            -- No sprite at all for the missing-icon row ...
+            ipMissingIcon p `shouldBe` False
+            -- ... while the row that DOES have one still gets it, so the
+            -- check can't pass by the widget dropping every icon.
+            ipPresentIcon p `shouldBe` True
+
         it "renders the optional capacity header and footer only when the host supplies them" $ \env → do
             ls ← newBareLuaBackend env
             run ls setupLua
@@ -845,6 +881,12 @@ data NoActionProbe = NoActionProbe
 instance FromJSON NoActionProbe where
     parseJSON = withObject "NoActionProbe" $ \o →
         NoActionProbe <$> o .: "interactive" <*> o .: "clickable" <*> o .: "routed"
+
+data IconProbe = IconProbe
+    { ipRows ∷ Int, ipMissingIcon ∷ Bool, ipPresentIcon ∷ Bool } deriving Show
+instance FromJSON IconProbe where
+    parseJSON = withObject "IconProbe" $ \o →
+        IconProbe <$> o .: "rows" <*> o .: "missingIcon" <*> o .: "presentIcon"
 
 data ChromeProbe = ChromeProbe { cprBare ∷ Text, cprChrome ∷ Text } deriving Show
 instance FromJSON ChromeProbe where
