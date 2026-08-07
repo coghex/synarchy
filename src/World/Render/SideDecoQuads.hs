@@ -85,6 +85,14 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
     -- Nothing only when that neighbor chunk isn't loaded — then the drop
     -- is unknown, so we draw no side face (the same conservative default
     -- waterSlopeAt uses at an unloaded seam).
+    --
+    -- That "only" holds because the caller resolves the coord built here
+    -- through World.Render.ChunkLookup (#1135): the step below is in THIS
+    -- chunk's raw frame, and at the cylindrical U seam it names an alias
+    -- of the coord the neighbour is stored under. Handing that alias
+    -- straight to HM.lookup used to miss on a LOADED neighbour, and the
+    -- silent Nothing read here as "not loaded" — so water side faces
+    -- vanished along the seam.
     neighborCell ∷ Int → Int → Maybe (Maybe FluidCell, Int)
     neighborCell nx ny
         | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =

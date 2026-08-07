@@ -19,7 +19,14 @@ import World.Types
 --     Grid S (ly+1) → pixel left   (West,  bit 8)
 --     Grid W (lx-1) → pixel top    (North, bit 1)
 --
---   Supports cross-chunk lookups via the chunkLookup function.
+--   Supports cross-chunk lookups via the chunkLookup function. A step
+--   off this chunk is built in the home chunk's RAW frame, so at the
+--   cylindrical U seam it names an alias of the coord the neighbour is
+--   stored under; the caller must resolve it through
+--   'World.Render.ChunkLookup' (#1135). With that in place, a False from
+--   a cross-chunk branch means the neighbour genuinely isn't loaded —
+--   before it, a loaded neighbour across the seam silently read as
+--   absent and the slope bit was never set there.
 waterSlopeAt ∷ V.Vector (Maybe FluidCell) → VU.Vector Int → ChunkCoord
              → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
              → (ChunkCoord → Maybe (VU.Vector Int))

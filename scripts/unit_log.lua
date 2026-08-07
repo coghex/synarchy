@@ -19,6 +19,7 @@ local label       = require("scripts.ui.label")
 local button      = require("scripts.ui.button")
 local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
+local textWrap    = require("scripts.ui.text_wrap")
 
 local unitLog = package.loaded["scripts.unit_log"] or {}
 package.loaded["scripts.unit_log"] = unitLog
@@ -226,37 +227,10 @@ local function entriesFor(uid, tabKey)
     return all
 end
 
-local function wrapText(text, maxW, font, fontSize)
-    local function fits(str)
-        return engine.getTextWidth(font, str, fontSize) <= maxW
-    end
-    local lines, cur = {}, ""
-    for word in text:gmatch("%S+") do
-        local trial = (cur == "") and word or (cur .. " " .. word)
-        if fits(trial) then
-            cur = trial
-        else
-            if cur ~= "" then lines[#lines + 1] = cur; cur = "" end
-            if fits(word) then
-                cur = word
-            else
-                local chunk = ""
-                for ch in word:gmatch(".") do
-                    if fits(chunk .. ch) then
-                        chunk = chunk .. ch
-                    else
-                        if chunk ~= "" then lines[#lines + 1] = chunk end
-                        chunk = ch
-                    end
-                end
-                cur = chunk
-            end
-        end
-    end
-    if cur ~= "" then lines[#lines + 1] = cur end
-    if #lines == 0 then lines[1] = "" end
-    return lines
-end
+-- Word-wrap `text` to fit `maxW` pixels; a single word wider than the panel
+-- hard-breaks between CODE POINTS (#1159). Same helper the combat and
+-- injury log panels use.
+local wrapText = textWrap.byWord
 
 -----------------------------------------------------------
 -- Build the panel chrome

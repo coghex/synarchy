@@ -2909,7 +2909,7 @@ only persistence code (`save_modules.lua`, `data_codec.lua`). A
 `scripts/lib/util.lua` and `scripts/lib/format.lua` would absorb most of the
 above.
 
-### CH-126. `shell.wrapText` says "by character" and iterates by byte
+### [#1159] CH-126. `shell.wrapText` says "by character" and iterates by byte
 `scripts/shell.lua:682`:
 
 ```lua
@@ -2938,6 +2938,17 @@ its only `string.sub` mention is a comment explaining why not to use it) —
 `shell.lua` uses the older `FocusManager` path (CH-120) and never adopted
 `utf8_safe`. CLAUDE.md's UTF-8 rule is scoped to `UI.TextBuffer` widgets, so
 the shell is outside its letter; it should not be.
+
+The same byte loop appeared three more times: the combat, injury, and per-unit
+log panels each carried a byte-identical private `wrapText` whose hard-break
+fallback for an over-wide word iterated `word:gmatch(".")` — a byte pattern.
+
+Resolved in #1159 by extracting one shared `scripts/ui/text_wrap.lua`
+(`byCharacter` for the console, `byWord` for the three panels), whose walk
+advances one code point at a time and is total on malformed input rather than
+asserting like `utf8_safe`. `shell.wrapTextByWord`, the never-called
+word-wrapping twin, is gone. CLAUDE.md's text contract now covers display as
+well as editable widgets.
 
 ### CH-127. Four features are split across both a flat file and a same-named directory
 `scripts/` has 178 files, **134 of them flat in the root** (43,695 lines), and

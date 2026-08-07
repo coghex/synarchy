@@ -1,5 +1,6 @@
 -- Shell module for debug console
 local boxTextures = require("scripts.ui.box_textures")
+local textWrap = require("scripts.ui.text_wrap")
 local shell = {}
 
 -- Script ID (passed from engine)
@@ -679,62 +680,13 @@ function shell.getCurrentWord()
     return inputBuffer:match("[%w_%.]+$") or ""
 end
 
--- Wrap text into multiple lines that fit within maxWidth (by character)
+-- Wrap text into multiple lines that fit within maxWidth, breaking between
+-- Unicode CODE POINTS -- console output is arbitrary text (Lua values, error
+-- messages), so a byte-wise break would split multi-byte characters. The
+-- shared implementation lives in scripts/ui/text_wrap.lua; the word-wrapping
+-- variant beside it is what the log panels use.
 function shell.wrapText(text, maxWidth, font)
-    local lines = {}
-    local currentLine = ""
-    
-    for i = 1, #text do
-        local char = text:sub(i, i)
-        local testLine = currentLine .. char
-        local width = engine.getTextWidth(font, testLine, fontSize)
-        
-        if width > maxWidth and currentLine ~= "" then
-            table.insert(lines, currentLine)
-            currentLine = char
-        else
-            currentLine = testLine
-        end
-    end
-    
-    if currentLine ~= "" then
-        table.insert(lines, currentLine)
-    end
-    
-    if #lines == 0 then
-        table.insert(lines, text)
-    end
-    
-    return lines
-end
-
--- Wrap text into multiple lines that fit within maxWidth
-function shell.wrapTextByWord(text, maxWidth, font)
-    local lines = {}
-    local currentLine = ""
-    
-    for word in text:gmatch("%S+") do
-        local testLine = currentLine == "" and word or (currentLine .. " " .. word)
-        local width = engine.getTextWidth(font, testLine, fontSize)
-        
-        if width > maxWidth and currentLine ~= "" then
-            table.insert(lines, currentLine)
-            currentLine = word
-        else
-            currentLine = testLine
-        end
-    end
-    
-    if currentLine ~= "" then
-        table.insert(lines, currentLine)
-    end
-    
-    -- Handle empty input
-    if #lines == 0 then
-        table.insert(lines, text)
-    end
-    
-    return lines
+    return textWrap.byCharacter(text, maxWidth, font, fontSize)
 end
 
 -- Count lines needed for a history entry

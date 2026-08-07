@@ -1,0 +1,249 @@
+{-# LANGUAGE Strict #-}
+-- | Pure tests for 'World.Render.GroundItemQuads.itemGeometry' at the U
+--   seam (issue #1135).
+--
+--   Ground items store bare float @(x, y)@ and NOTHING normalises them
+--   on the way in — @item.spawnGround@ takes arbitrary numbers and
+--   stores them directly, with no requirement that the tile be loaded or
+--   the coord canonical. So an item genuinely can come to rest at a
+--   u-seam alias of a loaded chunk. Left raw, the chunk lookup missed
+--   that loaded chunk and the item was BOTH invisible and unhittable —
+--   this helper backs the render pass and 'hitTestGroundItemAt' alike.
+--
+--   The fix canonicalises the whole tile frame, not just the map key:
+--   the coords also drive the screen position here and the sort key /
+--   wrap offset in the render pass, so an aliased item must resolve to
+--   exactly the geometry it would have had at its canonical coords.
+module Test.Headless.World.Render.GroundItemSeam (spec, engineSpec) where
+
+import UPrelude
+import Test.Hspec
+import Data.IORef (writeIORef)
+import qualified Data.HashMap.Strict as HM
+import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.State
+    (EngineEnv(..), itemManagerRef)
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
+import Item.Ground (GroundItem(..), GroundItems(..))
+import World.Generate (viewDepth)
+import World.Generate.Coordinates (canonicalTileFrame)
+import World.Grid (gridToWorld, worldScreenWidth)
+import World.Render.ChunkCulling (isChunkVisibleWrapped)
+import World.Render.GroundItemQuads (hitTestGroundItemAt, itemGeometry)
+import World.Render.ViewBounds (computeViewBounds)
+import World.State.Types (WorldState(..), emptyWorldState)
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import Engine.Asset.Handle (TextureHandle(..))
+import Item.Types (ItemDef(..), ItemInstance(..), ItemManager(..))
+import Structure.Types (emptyChunkStructures)
+import World.Chunk.Types
+    (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
+import World.Flora.Types (emptyFloraChunkData)
+import World.Fluid.Types (emptyIceMap)
+import World.Tile.Types (WorldTileData(..))
+
+-- | worldSize 64 chunks → canonical chunk u ∈ [-32, 32).
+worldSize ∷ Int
+worldSize = 64
+
+zSlice ∷ Int
+zSlice = 10
+
+-- | Chunk (17,-15) has u = 32 — one past the canonical range — and is
+--   STORED under ChunkCoord (-15) 17. The tile shift between the two
+--   frames is a whole world: (-512, +512) in tiles.
+stored ∷ ChunkCoord
+stored = ChunkCoord (-15) 17
+
+rawTile, canonTile ∷ (Int, Int)
+rawTile   = (17 * chunkSize, (-15) * chunkSize)
+canonTile = ((-15) * chunkSize, 17 * chunkSize)
+
+solidChunk ∷ ChunkCoord → LoadedChunk
+solidChunk coord =
+    let area = chunkSize * chunkSize
+        col  = ColumnTiles
+                 { ctStartZ = 0
+                 , ctMats   = VU.replicate 20 1
+                 , ctSlopes = VU.replicate 20 0
+                 , ctVeg    = VU.replicate 20 0
+                 }
+    in LoadedChunk
+        { lcCoord = coord
+        , lcTiles = V.replicate area col
+        , lcSurfaceMap = VU.replicate area zSlice
+        , lcTerrainSurfaceMap = VU.replicate area zSlice
+        , lcFluidMap = V.replicate area Nothing
+        , lcIceMap = emptyIceMap, lcFlora = emptyFloraChunkData
+        , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
+        , lcMagma = Nothing, lcStructures = emptyChunkStructures
+        }
+
+tilesAt ∷ ChunkCoord → WorldTileData
+tilesAt coord = WorldTileData
+    { wtdChunks = HM.fromList [(coord, solidChunk coord)]
+    , wtdMaxChunks = 200
+    }
+
+bareItemDef ∷ ItemDef
+bareItemDef = ItemDef
+    { idName = "probe_rock", idDisplayName = "probe_rock"
+    , idTexture = TextureHandle 0
+    , idWeight = 1.0, idWeightSpec = Nothing, idKind = "misc"
+    , idCategory = "Misc", idMake = "", idMaterial = ""
+    , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
+    , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
+    , idWeapon = Nothing, idArmor = Nothing, idUnequippable = False
+    , idBuffs = [], idInsulation = 0
+    }
+
+items ∷ ItemManager
+items = ItemManager (HM.fromList [("probe_rock", bareItemDef)])
+
+-- | An item resting at a deliberately off-centre point in its tile, so
+--   the in-tile fraction is non-trivial and a frame shift that mangled
+--   it would move the sprite.
+itemAt ∷ Float → Float → GroundItem
+itemAt x y = GroundItem
+    { giInst = ItemInstance
+        { iiDefName = "probe_rock", iiCurrentFill = 0
+        , iiQuality = 100, iiCondition = 100, iiWeight = 1.0
+        , iiSharpness = 100, iiContents = [], iiInstanceId = 1
+        , iiTemp = Nothing
+        }
+    , giX = x, giY = y
+    }
+
+geometry ∷ WorldTileData → GroundItem
+         → Maybe (Int, TextureHandle, Float, Float, Float, Float, Int)
+geometry tiles = itemGeometry tiles items HM.empty FaceSouth zSlice worldSize
+
+spec ∷ Spec
+spec = do
+
+  describe "an item at a U-seam alias (#1135)" $ do
+    let tiles = tilesAt stored
+        (rawX, rawY) = rawTile
+        (canonX, canonY) = canonTile
+        -- Same physical spot, named two ways: the alias coords a Lua
+        -- item.spawnGround could store, and their canonical equivalent.
+        aliased   = itemAt (fromIntegral rawX + 0.25)
+                           (fromIntegral rawY + 0.75)
+        canonical = itemAt (fromIntegral canonX + 0.25)
+                           (fromIntegral canonY + 0.75)
+
+    it "precondition: only the canonical chunk is a key in the map" $ do
+      -- Pins that this fixture exercises the alias path — the chunk IS
+      -- loaded, and only the wrapped key finds it.
+      HM.member (ChunkCoord 17 (-15)) (wtdChunks tiles) `shouldBe` False
+      HM.member stored (wtdChunks tiles) `shouldBe` True
+
+    it "resolves its loaded chunk instead of vanishing" $
+      -- Before the fix the raw lookup missed: no quad, and no hit —
+      -- itemGeometry backs rendering AND hitTestGroundItemAt.
+      geometry tiles aliased `shouldSatisfy` isJust
+
+    it "produces exactly the geometry of the same spot named canonically" $
+      -- The whole frame moves together, so the aliased item must land on
+      -- the identical resting z and screen quad — not merely resolve.
+      geometry tiles aliased `shouldBe` geometry tiles canonical
+
+    it "is still Nothing when the chunk genuinely is not loaded" $
+      -- The negative the raw lookup could not tell apart from an alias.
+      geometry (WorldTileData HM.empty 200) aliased `shouldBe` Nothing
+
+  describe "away from the seam the wrap is the identity" $ do
+    -- Chunk (16,-15) has u = 31 — inside the canonical range, so it is
+    -- its own key and nothing shifts (requirement 4).
+    let interior = ChunkCoord 16 (-15)
+        tiles = tilesAt interior
+        gi = itemAt (fromIntegral (16 * chunkSize) + 0.25)
+                    (fromIntegral ((-15) * chunkSize) + 0.75)
+
+    it "resolves an interior item unchanged" $
+      geometry tiles gi `shouldSatisfy` isJust
+
+
+-- | The other half of the round-2 review concern: an item drawn through
+--   its WRAPPED image across the U seam has to be clickable where it is
+--   DRAWN. The render pass paints at @drawX0 + xOff@, so a hit test that
+--   compared clicks against the unwrapped geometry alone was a whole
+--   'worldScreenWidth' away from every such click — visible, unhittable.
+--
+--   This drives the real 'hitTestGroundItemAt' (engine-backed: it reads
+--   camera / viewport / item-manager state off EngineEnv) with the
+--   camera parked on the item's ALIASED position, which is exactly the
+--   case that forces a non-zero wrap offset. The offset is asserted
+--   non-zero first, so the test cannot pass trivially by the scenario
+--   collapsing to the interior one.
+--
+--   FaceSouth only, deliberately. The wrap offset is screen-X-only
+--   ('World.Render.ChunkCulling.bestWrapOffset'), which is exact at
+--   south/north but cannot correct east/west, where a u-wrap displaces
+--   screen Y instead — a pre-existing engine-wide limitation split out
+--   to #1176, which owns extending this fixture across all four facings.
+engineSpec ∷ Spec
+engineSpec = beforeAll initEnv $
+  describe "ground-item click across the U seam (#1135)" $
+    it "hits the item where its wrapped image is actually drawn" $ \env → do
+        ws ← emptyWorldState
+        writeIORef (wsGenParamsRef ws)
+            (Just defaultWorldGenParams { wgpWorldSize = worldSize })
+        writeIORef (wsTilesRef ws) (tilesAt stored)
+        writeIORef (itemManagerRef env) items
+
+        -- The item sits at its CANONICAL coords, mid-tile.
+        let (canonX, canonY) = canonTile
+            gi = itemAt (fromIntegral canonX + 0.5) (fromIntegral canonY + 0.5)
+            gid = 7
+        writeIORef (wsGroundItemsRef ws)
+            (GroundItems 8 (HM.fromList [(gid, gi)]))
+
+        -- Park the camera on the ALIAS of that tile — a whole world away
+        -- along u — so the item can only be on screen via its wrapped
+        -- image, which is the configuration the bug hid in.
+        let (rawX, rawY) = rawTile
+            (aliasWX, aliasWY) = gridToWorld FaceSouth rawX rawY
+            (fbW, fbH) = (800, 600)
+            (winW, winH) = (800, 600)
+            zoom = 4.0 ∷ Float
+            cam = defaultCamera
+                    { camPosition = (aliasWX, aliasWY), camZoom = zoom
+                    , camFacing = FaceSouth, camZSlice = zSlice }
+        writeIORef (cameraRef env) cam
+        writeIORef (windowSizeRef env) (winW, winH)
+        writeIORef (framebufferSizeRef env) (fbW, fbH)
+
+        let effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+            vb = computeViewBounds cam fbW fbH effDepth
+            (chunkCoord, _, _) =
+                canonicalTileFrame worldSize (floor (giX gi)) (floor (giY gi))
+        case ( itemGeometryOf gi, isChunkVisibleWrapped FaceSouth worldSize
+                                      vb aliasWX chunkCoord ) of
+          (Nothing, _) → expectationFailure "item geometry did not resolve"
+          (_, Nothing) → expectationFailure "item chunk not visible from the alias"
+          (Just (_, _, drawX0, drawY, quadW, quadH, _), Just xOff) → do
+            -- Precondition: the item really is being shown through its
+            -- wrapped image, one world width from its own geometry.
+            abs (abs xOff - worldScreenWidth worldSize) `shouldSatisfy` (< 1.0)
+
+            -- Click dead centre of the quad AS DRAWN, converted back to a
+            -- window pixel with the hit test's own pixel→world mapping.
+            let aspect = fromIntegral winW / fromIntegral winH ∷ Float
+                vw = zoom * aspect
+                vh = zoom
+                cx = drawX0 + xOff + quadW * 0.5
+                cy = drawY + quadH * 0.5
+                pixX = fromIntegral winW
+                     * (((cx - aliasWX) / vw) + 1.0) / 2.0
+                pixY = fromIntegral winH
+                     * (((cy - aliasWY) / vh) + 1.0) / 2.0
+            hit ← hitTestGroundItemAt env ws (realToFrac pixX) (realToFrac pixY)
+            hit `shouldBe` Just gid
+  where
+    initEnv = do
+        EngineInitResult env ← initializeEngineHeadless
+        pure env
+    itemGeometryOf = geometry (tilesAt stored)

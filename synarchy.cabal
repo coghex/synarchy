@@ -638,6 +638,7 @@ library
                      World.Render.Camera.Types
                      World.Render.ViewBounds
                      World.Render.ChunkCulling
+                     World.Render.ChunkLookup
                      World.Render.HitTest
                      World.Render.Quads
                      World.Render.WaterSlope
@@ -1136,7 +1137,9 @@ test-suite synarchy-test-headless
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.SideFace
+                   Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.World.Render.WaterSlope
                    Test.Headless.World.Render.ZoomBakeUV
@@ -1180,6 +1183,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
+                   Test.Headless.Lua.TextWrapping
                    Test.Headless.Graphics.BindlessRebind
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
