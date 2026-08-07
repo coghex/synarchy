@@ -68,17 +68,6 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                 chunkOcean = isOceanChunk oceanMap coord
                            ∨ hasAnyOceanFluid worldSize oceanMap coord
 
-                -- Neighbor ocean chunks for edge seeding of ocean flood fill
-                _wrapC = wrapChunkCoordU worldSize
-                _chunkOceanN = isOceanChunk oceanMap (wrapC (ChunkCoord ccx (ccy - 1)))
-                            ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord ccx (ccy - 1)))
-                _chunkOceanS = isOceanChunk oceanMap (wrapC (ChunkCoord ccx (ccy + 1)))
-                            ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord ccx (ccy + 1)))
-                _chunkOceanE = isOceanChunk oceanMap (wrapC (ChunkCoord (ccx + 1) ccy))
-                            ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord (ccx + 1) ccy))
-                _chunkOceanW = isOceanChunk oceanMap (wrapC (ChunkCoord (ccx - 1) ccy))
-                            ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord (ccx - 1) ccy))
-
                 -- Use the full detail-world pipeline (bordered region +
                 -- timeline + coastal erosion + fluid + vegetation) for
                 -- accurate terrain. Vegetation comes from the SAME
