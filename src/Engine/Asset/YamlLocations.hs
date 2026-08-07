@@ -3,6 +3,7 @@ module Engine.Asset.YamlLocations
     ( LocationYamlPosition(..)
     , LocationYamlContent(..)
     , LocationYamlBounds(..)
+    , LocationYamlNaming(..)
     , LocationYamlDef(..)
     , LocationYamlFile(..)
     , loadLocationYaml
@@ -67,6 +68,24 @@ instance FromJSON LocationYamlBounds where
         ⊛ v .: "max_x"
         ⊛ v .: "max_y"
 
+-- | The authored naming scheme (#1101): the two concept-id pools a
+--   definition's generated instance names draw on. Both keys are
+--   required and both lists must be nonempty — see 'LocationYamlDef''s
+--   'FromJSON' instance. The ids themselves are validated against the
+--   concept catalogue by the API loader
+--   ('Location.Naming.locationNamingErrors'), which is where the
+--   catalogue is available; this module keeps its existing
+--   zero-local-dependency shape.
+data LocationYamlNaming = LocationYamlNaming
+    { lynHeads     ∷ ![Text]
+    , lynModifiers ∷ ![Text]
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON LocationYamlNaming where
+    parseJSON = withObject "LocationYamlNaming" $ \v → LocationYamlNaming
+        ⊚ v .: "heads"
+        ⊛ v .: "modifiers"
+
 -- | True iff a fixed content offset falls inside a bounds box —
 --   duplicated from 'Location.Bounds.rawContainsPoint' rather than
 --   imported, so this module keeps its existing zero-local-dependency
@@ -107,6 +126,9 @@ data LocationYamlDef = LocationYamlDef
     , lydMapIcons   ∷ !(Maybe (Text, Text))
                       -- ^ (undiscovered, discovered) zoom-map annotation
                       --   texture paths (#781); 'Nothing' = no annotation.
+    , lydNaming     ∷ !LocationYamlNaming
+                      -- ^ required concept pools for generated instance
+                      --   names (#1101).
     } deriving (Show, Eq, Generic)
 
 -- | Fetch a required field as a raw 'Value' first (which never fails to
@@ -152,6 +174,7 @@ instance FromJSON LocationYamlDef where
         bounds   ← requireField lid "bounds" v
         margin   ← requireField lid "discovery_margin" v
         mapIcons ← parseMapIcons lid v
+        naming   ← requireField lid "naming" v
         contents ← v .:? "contents" .!= []
         anchor   ← v .:? "anchor" .!= []
         -- Reject inverted bounds / a negative margin / an out-of-bounds
@@ -183,6 +206,16 @@ instance FromJSON LocationYamlDef where
                 fail (T.unpack ("location '" <> lid <> "': unsupported anchor tag '"
                     <> tag <> "' (expected one of: "
                     <> T.intercalate ", " validAnchorTags <> ")"))
+        -- #1101: a pool that is present but empty would leave the
+        -- definition with no concept to draw, which is authored data
+        -- silently meaning "fall back to the label" — the one thing the
+        -- fallback must not be able to say. Rejected here, at the same
+        -- entry point as the spatial contract above.
+        forM_ [ ("naming.heads" ∷ Text, lynHeads naming)
+              , ("naming.modifiers", lynModifiers naming) ] $ \(field, pool) →
+            when (null pool) $
+                fail (T.unpack ("location '" <> lid <> "': " <> field
+                    <> " must not be empty"))
         LocationYamlDef lid
             ⊚ v .:? "label"       .!= ""
             ⊛ v .:? "type"        .!= "natural"
@@ -194,6 +227,7 @@ instance FromJSON LocationYamlDef where
             ⊛ pure bounds
             ⊛ pure margin
             ⊛ pure mapIcons
+            ⊛ pure naming
 
 newtype LocationYamlFile = LocationYamlFile
     { lyfLocations ∷ [LocationYamlDef]

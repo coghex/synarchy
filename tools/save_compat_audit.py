@@ -1405,7 +1405,11 @@ def generate_current_format_session(
         spawn_unit_at: tuple[int, int] = (0, 0),
         settle_seconds: float = 0.0,
         setup_lua: list[str] | None = None,
-        require_lua: str | None = None) -> None:
+        require_lua: str | None = None,
+        world_name: str | None = None,
+        world_gloss: str | None = None,
+        language_seed: str | None = None,
+        language_version: int | None = None) -> None:
     """Boot a REAL headless engine (isolated resource root -- see
     _make_isolated_gen_root), init a world, optionally spawn ONE building
     and/or ONE unit through the SAME engine.saveWorld/building.spawn/
@@ -1427,6 +1431,14 @@ def generate_current_format_session(
     proceeding would produce exactly the hollow fixture this exists to
     prevent.
 
+    @world_name@/@world_gloss@/@language_seed@ give the page a #1092
+    language provenance, which is what makes its placed locations carry
+    real generated names and glosses (#1101) instead of definition
+    labels. Without them the fixture can only ever capture the
+    no-language fallback -- an empty gloss on every location -- which
+    would leave the new field untested by the very fixture registered to
+    cover its wire version.
+
     This can only ever produce a fixture at the CURRENT wire format -- a
     live engine never writes a historical shape (see this module's own
     docstring for why a historical baseline stays a manual operation)."""
@@ -1440,8 +1452,16 @@ def generate_current_format_session(
                     args=["--resource-root", root], ready_timeout=180)
         if spawn_building or spawn_unit:
             _bootstrap_gen_defs(send, port)
-        inited = send(port, f"world.init('{page_id}', {seed}, {world_size}, "
-                             f"{plate_count}); return 'ok'")
+        init_args = f"'{page_id}', {seed}, {world_size}, {plate_count}"
+        if world_name is not None:
+            init_args += f", '{world_name}'"
+            init_args += (f", '{world_gloss}'" if world_gloss is not None
+                          else ", nil")
+            if language_seed is not None:
+                init_args += f", '{language_seed}'"
+                if language_version is not None:
+                    init_args += f", {language_version}"
+        inited = send(port, f"world.init({init_args}); return 'ok'")
         if "ok" not in inited:
             raise GenerationError(f"world.init failed: {inited!r}")
         time.sleep(1.0)  # let generation settle before saving/spawning
@@ -2029,7 +2049,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
             spawn_building=args.spawn_building, spawn_unit=args.spawn_unit,
             out_path=fixture_path, spawn_unit_at=_parse_tile(args.spawn_unit_at),
             settle_seconds=args.settle_seconds, setup_lua=args.setup_lua,
-            require_lua=args.require_lua)
+            require_lua=args.require_lua, world_name=args.world_name,
+            world_gloss=args.world_gloss, language_seed=args.language_seed,
+            language_version=args.language_version)
     except GenerationError as e:
         # Round-16 review: generate_current_format_session no longer
         # ONLY writes fixture_path as an untouchable-if-failed last step
@@ -2058,7 +2080,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
             f"Generated through the real codec (tools/save_compat_audit.py "
             f"--generate-session): a real headless engine booted in an "
             f"isolated resource root, world.init('{args.page_id}', "
-            f"{args.seed}, {args.world_size}, {args.plate_count})"
+            f"{args.seed}, {args.world_size}, {args.plate_count}"
+            + (f", '{args.world_name}'" if args.world_name else "")
+            + (f" named in the generated language seeded "
+               f"{args.language_seed}" if args.language_seed else "")
+            + ")"
             + (f", building.spawn('{args.spawn_building}', 0, 0)"
                if args.spawn_building else "")
             + (f", unit.spawn('{args.spawn_unit}', {args.spawn_unit_at}, "
@@ -2173,6 +2199,24 @@ def main() -> int:
                      help="--generate-session only, default 3")
     ap.add_argument("--page-id", default="generated_page",
                      help="--generate-session only, default 'generated_page'")
+    ap.add_argument("--world-name", default=None,
+                     help="--generate-session only: the page's #707 display "
+                          "name. Required before --language-seed can attach "
+                          "provenance (there is no identity to attach it to "
+                          "without one)")
+    ap.add_argument("--world-gloss", default=None,
+                     help="--generate-session only: the display name's "
+                          "English gloss")
+    ap.add_argument("--language-seed", default=None,
+                     help="--generate-session only: the #1092 language seed, "
+                          "as a decimal string, that --world-name was "
+                          "rendered from. Attaching it is what makes the "
+                          "generated fixture's placed locations carry real "
+                          "generated names and glosses (#1101) rather than "
+                          "definition labels")
+    ap.add_argument("--language-version", type=int, default=None,
+                     help="--generate-session only: the language's generator "
+                          "version; defaults to the engine's current one")
     ap.add_argument("--spawn-building", default=None,
                      help="--generate-session only: a real building def "
                           "name to spawn at (0,0), e.g. cargo_hold_S")

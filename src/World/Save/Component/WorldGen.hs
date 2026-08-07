@@ -64,9 +64,12 @@
 module World.Save.Component.WorldGen
     ( WorldGenParamsDTO(..)
     , WorldGenParamsDTOv1(..)
+    , WorldGenParamsDTOv2(..)
     , AbsBoundsDTO(..)
     , LocationInstanceDTO(..)
     , LocationInstancesDTO(..)
+    , LocationInstanceDTOv1(..)
+    , LocationInstancesDTOv1(..)
     , TectonicPlateDTO(..)
     , CalendarConfigDTO(..)
     , SunConfigDTO(..)
@@ -92,8 +95,12 @@ module World.Save.Component.WorldGen
     , fromWorldGenParamsDTO
     , fromWorldGenParamsDTOv1
     , toWorldGenParamsDTOv1
+    , fromWorldGenParamsDTOv2
+    , toWorldGenParamsDTOv2
     , toLocationInstancesDTO
     , fromLocationInstancesDTO
+    , toLocationInstancesDTOv1
+    , fromLocationInstancesDTOv1
     , toClimateStateDTO
     , fromClimateStateDTO
     ) where
@@ -560,6 +567,10 @@ fromAbsBoundsDTO d = AbsBounds (abdMinX d) (abdMinY d) (abdMaxX d) (abdMaxY d)
 --   conversion rather than embedding it. 'LocationInstanceId' is a leaf
 --   id and 'LocationLifecycle' a payload-free append-only enum, both
 --   reused as-is exactly like 'ChunkCoord' / 'ZoomMapMode'.
+--
+--   This is the CURRENT shape, carried by @world-pages@ v4, with the
+--   English gloss #1101 stores beside the display name.
+--   'LocationInstanceDTOv1' below is the frozen pre-#1101 shape.
 data LocationInstanceDTO = LocationInstanceDTO
     { lidId              ∷ !LocationInstanceId
     , lidDefId           ∷ !Text
@@ -569,6 +580,7 @@ data LocationInstanceDTO = LocationInstanceDTO
     , lidBounds          ∷ !AbsBoundsDTO
     , lidDiscoveryMargin ∷ !Int
     , lidDisplayName     ∷ !Text
+    , lidGloss           ∷ !(Maybe Text)
     , lidLifecycle       ∷ !LocationLifecycle
     , lidContentsSpawned ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize)
@@ -583,6 +595,7 @@ toLocationInstanceDTO i = LocationInstanceDTO
     , lidBounds          = toAbsBoundsDTO (liBounds i)
     , lidDiscoveryMargin = liDiscoveryMargin i
     , lidDisplayName     = liDisplayName i
+    , lidGloss           = liGloss i
     , lidLifecycle       = liLifecycle i
     , lidContentsSpawned = liContentsSpawned i
     }
@@ -596,6 +609,7 @@ fromLocationInstanceDTO d = LocationInstance
     , liBounds          = fromAbsBoundsDTO (lidBounds d)
     , liDiscoveryMargin = lidDiscoveryMargin d
     , liDisplayName     = lidDisplayName d
+    , liGloss           = lidGloss d
     , liLifecycle       = lidLifecycle d
     , liContentsSpawned = lidContentsSpawned d
     }
@@ -623,6 +637,80 @@ fromLocationInstancesDTO d = LocationInstances
     , lisPendingLegacy = Nothing
     }
 
+-- | The FROZEN pre-#1101 instance shape, preserved verbatim for
+--   decode-only backward compatibility: everything the current DTO
+--   carries except the gloss. Never edited — a further change freezes
+--   the CURRENT shape as 'LocationInstanceDTOv2' instead (frozen-DTO
+--   boundary rule).
+data LocationInstanceDTOv1 = LocationInstanceDTOv1
+    { lid1Id              ∷ !LocationInstanceId
+    , lid1DefId           ∷ !Text
+    , lid1Chunk           ∷ !ChunkCoord
+    , lid1AnchorX         ∷ !Int
+    , lid1AnchorY         ∷ !Int
+    , lid1Bounds          ∷ !AbsBoundsDTO
+    , lid1DiscoveryMargin ∷ !Int
+    , lid1DisplayName     ∷ !Text
+    , lid1Lifecycle       ∷ !LocationLifecycle
+    , lid1ContentsSpawned ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | A pre-#1101 instance keeps the name it was stored with, EXACTLY —
+--   it was rendered once when the instance was placed and is never
+--   re-derived (#1101 requirements 4 and 7) — and decodes with NO gloss.
+--   A gloss is the English reading of a generated name; a stored label
+--   has no such reading, and inventing one would attach a meaning to a
+--   location that never had it.
+fromLocationInstanceDTOv1 ∷ LocationInstanceDTOv1 → LocationInstance
+fromLocationInstanceDTOv1 d = LocationInstance
+    { liId              = lid1Id d
+    , liDefId           = lid1DefId d
+    , liChunk           = lid1Chunk d
+    , liAnchor          = (lid1AnchorX d, lid1AnchorY d)
+    , liBounds          = fromAbsBoundsDTO (lid1Bounds d)
+    , liDiscoveryMargin = lid1DiscoveryMargin d
+    , liDisplayName     = lid1DisplayName d
+    , liGloss           = Nothing
+    , liLifecycle       = lid1Lifecycle d
+    , liContentsSpawned = lid1ContentsSpawned d
+    }
+
+-- | The FROZEN pre-#1101 instance table. Structurally identical to
+--   'LocationInstancesDTO' but over the frozen per-instance shape.
+data LocationInstancesDTOv1 = LocationInstancesDTOv1
+    { lisd1NextId ∷ !Int
+    , lisd1ById   ∷ !(HM.HashMap LocationInstanceId LocationInstanceDTOv1)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen table — the round-trip partner every frozen
+--   DTO version's tests build fixture bytes with (the same reason
+--   'toWorldGenParamsDTOv1' exists).
+toLocationInstancesDTOv1 ∷ LocationInstances → LocationInstancesDTOv1
+toLocationInstancesDTOv1 l = LocationInstancesDTOv1
+    { lisd1NextId = lisNextId l
+    , lisd1ById   = HM.map toV1 (lisById l)
+    }
+  where
+    toV1 i = LocationInstanceDTOv1
+        { lid1Id              = liId i
+        , lid1DefId           = liDefId i
+        , lid1Chunk           = liChunk i
+        , lid1AnchorX         = fst (liAnchor i)
+        , lid1AnchorY         = snd (liAnchor i)
+        , lid1Bounds          = toAbsBoundsDTO (liBounds i)
+        , lid1DiscoveryMargin = liDiscoveryMargin i
+        , lid1DisplayName     = liDisplayName i
+        , lid1Lifecycle       = liLifecycle i
+        , lid1ContentsSpawned = liContentsSpawned i
+        }
+
+fromLocationInstancesDTOv1 ∷ LocationInstancesDTOv1 → LocationInstances
+fromLocationInstancesDTOv1 d = LocationInstances
+    { lisNextId        = lisd1NextId d
+    , lisById          = HM.map fromLocationInstanceDTOv1 (lisd1ById d)
+    , lisPendingLegacy = Nothing
+    }
+
 -- WorldGenParams ----------------------------------------------------
 
 -- | Frozen mirror of 'WorldGenParams' (a mutable runtime record that
@@ -635,9 +723,12 @@ fromLocationInstancesDTO d = LocationInstances
 --   record is a frozen DTO (see this module's haddock); 'GeoTimeline'
 --   and the content-collection aliases are reused as leaves.
 --
---   This is the CURRENT (v2) shape, carried by @world-pages@ v2.
---   'WorldGenParamsDTOv1' below is the frozen shape that shipped before
---   #911 and is decode-only.
+--   This is the CURRENT shape, carried by @world-pages@ v4: its
+--   instance table is 'LocationInstancesDTO', which #1101 extended with
+--   a per-instance gloss. 'WorldGenParamsDTOv2' below is the frozen
+--   shape @world-pages@ v2 and v3 carry (the #911 instance table, no
+--   gloss), and 'WorldGenParamsDTOv1' the frozen pre-#911 shape (three
+--   chunk-keyed location sets); both are decode-only.
 data WorldGenParamsDTO = WorldGenParamsDTO
     { gpSeed                    ∷ !Word64
     , gpWorldSize               ∷ !Int
@@ -719,6 +810,102 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpLocationOverlay         = gpLocationOverlay d
     , wgpLocationInstances       = fromLocationInstancesDTO (gpLocationInstances d)
     , wgpLocationStamped         = gpLocationStamped d
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+-- Frozen pre-#1101 worldgen params (@world-pages@ v2 / v3) -----------
+
+-- | The FROZEN pre-#1101 shape of 'WorldGenParamsDTO', preserved
+--   verbatim for decode-only backward compatibility: identical to the
+--   current type except that its instance table is the frozen
+--   'LocationInstancesDTOv1', whose instances carry no gloss. This is
+--   what @world-pages@ v2 (#911) and v3 (#1092) both encoded — #1092
+--   changed the page IDENTITY only, so both versions share one gen-params
+--   shape. Never edited; a further gen-params change freezes the CURRENT
+--   type as a v3 instead (frozen-DTO boundary rule).
+data WorldGenParamsDTOv2 = WorldGenParamsDTOv2
+    { gp2Seed                    ∷ !Word64
+    , gp2WorldSize               ∷ !Int
+    , gp2PlateCount              ∷ !Int
+    , gp2Plates                  ∷ ![TectonicPlateDTO]
+    , gp2Calender                ∷ !CalendarConfigDTO
+    , gp2SunConfig               ∷ !SunConfigDTO
+    , gp2MoonConfig              ∷ !MoonConfigDTO
+    , gp2GeoTimeline             ∷ !GeoTimeline
+    , gp2OceanMap                ∷ !OceanMap
+    , gp2OceanDist               ∷ !OceanDistMap
+    , gp2ClimateParams           ∷ !ClimateParamsDTO
+    , gp2ClimateState            ∷ !ClimateStateDTO
+    , gp2ErosionIntensity        ∷ !Float
+    , gp2VolcanicActivity        ∷ !Float
+    , gp2LavaPoolDepth           ∷ !Int
+    , gp2LavaPoolRadius          ∷ !Int
+    , gp2WaterfallQuantum        ∷ !Int
+    , gp2OreLevers               ∷ !OreLeversDTO
+    , gp2TimelineParams          ∷ !TimelineParamsDTO
+    , gp2LocationOverlay         ∷ !LocationOverlay
+    , gp2LocationInstances       ∷ !LocationInstancesDTOv1
+    , gp2LocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen v2 gen params, the round-trip partner
+--   'toWorldGenParamsDTOv1' already provides for v1 — how a test builds
+--   real pre-#1101 bytes to migrate from.
+toWorldGenParamsDTOv2 ∷ WorldGenParams → WorldGenParamsDTOv2
+toWorldGenParamsDTOv2 p = WorldGenParamsDTOv2
+    { gp2Seed                    = wgpSeed p
+    , gp2WorldSize               = wgpWorldSize p
+    , gp2PlateCount              = wgpPlateCount p
+    , gp2Plates                  = map toTectonicPlateDTO (wgpPlates p)
+    , gp2Calender                = toCalendarConfigDTO (wgpCalender p)
+    , gp2SunConfig               = toSunConfigDTO (wgpSunConfig p)
+    , gp2MoonConfig              = toMoonConfigDTO (wgpMoonConfig p)
+    , gp2GeoTimeline             = wgpGeoTimeline p
+    , gp2OceanMap                = wgpOceanMap p
+    , gp2OceanDist               = wgpOceanDist p
+    , gp2ClimateParams           = toClimateParamsDTO (wgpClimateParams p)
+    , gp2ClimateState            = toClimateStateDTO (wgpClimateState p)
+    , gp2ErosionIntensity        = wgpErosionIntensity p
+    , gp2VolcanicActivity        = wgpVolcanicActivity p
+    , gp2LavaPoolDepth           = wgpLavaPoolDepth p
+    , gp2LavaPoolRadius          = wgpLavaPoolRadius p
+    , gp2WaterfallQuantum        = wgpWaterfallQuantum p
+    , gp2OreLevers               = toOreLeversDTO (wgpOreLevers p)
+    , gp2TimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp2LocationOverlay         = wgpLocationOverlay p
+    , gp2LocationInstances       = toLocationInstancesDTOv1
+                                      (wgpLocationInstances p)
+    , gp2LocationStamped         = wgpLocationStamped p
+    }
+
+-- | Rebuild the live record from a v2 DTO. Every field rides across
+--   untouched; each stored instance keeps its exact stored name and
+--   gains NO gloss ('fromLocationInstanceDTOv1').
+fromWorldGenParamsDTOv2 ∷ WorldGenParamsDTOv2 → WorldGenParams
+fromWorldGenParamsDTOv2 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                    = gp2Seed d
+    , wgpWorldSize               = gp2WorldSize d
+    , wgpPlateCount              = gp2PlateCount d
+    , wgpPlates                  = map fromTectonicPlateDTO (gp2Plates d)
+    , wgpCalender                = fromCalendarConfigDTO (gp2Calender d)
+    , wgpSunConfig               = fromSunConfigDTO (gp2SunConfig d)
+    , wgpMoonConfig              = fromMoonConfigDTO (gp2MoonConfig d)
+    , wgpGeoTimeline             = gp2GeoTimeline d
+    , wgpOceanMap                = gp2OceanMap d
+    , wgpOceanDist               = gp2OceanDist d
+    , wgpClimateParams           = fromClimateParamsDTO (gp2ClimateParams d)
+    , wgpClimateState            = fromClimateStateDTO (gp2ClimateState d)
+    , wgpErosionIntensity        = gp2ErosionIntensity d
+    , wgpVolcanicActivity        = gp2VolcanicActivity d
+    , wgpLavaPoolDepth           = gp2LavaPoolDepth d
+    , wgpLavaPoolRadius          = gp2LavaPoolRadius d
+    , wgpWaterfallQuantum        = gp2WaterfallQuantum d
+    , wgpOreLevers               = fromOreLeversDTO (gp2OreLevers d)
+    , wgpTimelineParams          = fromTimelineParamsDTO (gp2TimelineParams d)
+    , wgpLocationOverlay         = gp2LocationOverlay d
+    , wgpLocationInstances       = fromLocationInstancesDTOv1
+                                      (gp2LocationInstances d)
+    , wgpLocationStamped         = gp2LocationStamped d
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 

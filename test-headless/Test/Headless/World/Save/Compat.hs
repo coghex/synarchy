@@ -59,15 +59,22 @@ import World.Save.Types
     , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..)
     , resolveLegacyLocationParams )
 import Location.Types (emptyLocationRegistry)
+import Location.Bounds (AbsBounds(..))
+import World.Chunk.Types (ChunkCoord(..))
+import Location.Instance
+    ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    , LocationLifecycle(..), instancesToList )
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import World.Save.Component.Page
     ( fromWorldGenParamsDTOv1, toWorldGenParamsDTOv1, toWorldGenParamsDTO
+    , toWorldGenParamsDTOv2
     , PageCoreDTO(..), WorldPagesDTO(..), PageCoreDTOv1(..)
     , WorldPagesDTOv1(..), PageCoreDTOv2(..), WorldPagesDTOv2(..)
+    , PageCoreDTOv3(..), WorldPagesDTOv3(..)
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
     , LanguageProvenanceDTO(..), basePageSnapshots
-    , migrateWorldPagesV1, migrateWorldPagesV2 )
+    , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3 )
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -683,6 +690,10 @@ spec = do
              \(issue #1092)" $ do
         let identityOf pages pid =
                 pgsIdentity =≪ HM.lookup (WorldPageId pid) (wpBase pages)
+            -- A page's placed locations in id order (#1101).
+            instancesOf pages pid = maybe []
+                (instancesToList . wgpLocationInstances . pgsGenParams)
+                (HM.lookup (WorldPageId pid) (wpBase pages))
             -- Decode the REAL tracked B1 bytes, optionally adjust the
             -- single page they carry, migrate, and hand the resulting
             -- PageSnapshot to the assertion.
@@ -723,7 +734,39 @@ spec = do
                     (wiGloss =≪ ident) `shouldBe` Just "an old gloss"
                     (wiLanguage =≪ ident) `shouldBe` Nothing
 
-        it "the CURRENT v3 page core round-trips a present provenance -- \
+        it "a frozen v3 page core's already-named location keeps its EXACT \
+           \stored name and gains no gloss -- an existing location is \
+           \never renamed into the world's language by the upgrade" $ do
+            let dto = WorldPagesDTOv3 [legacyPageCoreV3]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv3 of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let insts = instancesOf (migrateWorldPagesV3 dto')
+                                    "legacy_page"
+                    map liDisplayName insts `shouldBe` ["Small Ruin"]
+                    map liGloss insts `shouldBe` [Nothing]
+                    -- The page's own identity DOES declare a language,
+                    -- so "no gloss" here is the write-once rule, not an
+                    -- absent provenance quietly doing the work.
+                    (wiLanguage =≪ identityOf (migrateWorldPagesV3 dto')
+                                       "legacy_page")
+                        `shouldBe` Just (LanguageProvenance
+                                            (LangSeed 0xABCDEF0123456789)
+                                            (GeneratorVersion 1))
+
+        it "the CURRENT v4 page core round-trips a location's name AND \
+           \gloss -- so the v3 absence above is a real decode outcome, \
+           \not a field that is always Nothing" $ do
+            let dto = WorldPagesDTO [currentPageCoreNamed]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let insts = instancesOf (basePageSnapshots dto')
+                                    "legacy_page"
+                    map liDisplayName insts `shouldBe` ["Vashenkoro"]
+                    map liGloss insts `shouldBe` [Just "Ashen Keep"]
+
+        it "the CURRENT v4 page core round-trips a present provenance -- \
            \so the two absences above are a real decode outcome, not a \
            \field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCore]
@@ -1183,12 +1226,66 @@ legacyPageCoreV1 = PageCoreDTOv1
 legacyPageCoreV2 ∷ PageCoreDTOv2
 legacyPageCoreV2 = PageCoreDTOv2
     { pc2PageId     = WorldPageId "legacy_page"
-    , pc2GenParams  = toWorldGenParamsDTO defaultWorldGenParams
+    , pc2GenParams  = toWorldGenParamsDTOv2 defaultWorldGenParams
     , pc2CameraX    = 1, pc2CameraY = 2
     , pc2TimeHour   = 12, pc2TimeMinute = 30
     , pc2DateYear   = 1, pc2DateMonth = 2, pc2DateDay = 3
     , pc2MapMode    = ZMDefault
     , pc2Identity   = Just legacyIdentityDTO
+    }
+
+-- | #1101 fixture: a pre-#1101 (@world-pages@ v3) page core carrying a
+--   real placed location. Its gen params are the frozen pre-#1101
+--   shape, so the instance genuinely has nowhere to store a gloss —
+--   which is what makes the v3 migration's "keeps its stored name,
+--   gains no gloss" contract a real decode outcome rather than a field
+--   that was never written.
+legacyPageCoreV3 ∷ PageCoreDTOv3
+legacyPageCoreV3 = PageCoreDTOv3
+    { pc3PageId     = WorldPageId "legacy_page"
+    , pc3GenParams  = toWorldGenParamsDTOv2 defaultWorldGenParams
+                          { wgpLocationInstances = legacyNamedInstances }
+    , pc3CameraX    = 1, pc3CameraY = 2
+    , pc3TimeHour   = 12, pc3TimeMinute = 30
+    , pc3DateYear   = 1, pc3DateMonth = 2, pc3DateDay = 3
+    , pc3MapMode    = ZMDefault
+    , pc3Identity   = Just (WorldIdentityDTO "Legacy World"
+                               (Just "an old gloss")
+                               (Just (LanguageProvenanceDTO
+                                          0xABCDEF0123456789 1)))
+    }
+
+-- | One already-named placed location, as a pre-#1101 save holds it:
+--   an ordinary 'ldLabel' name (nothing before #1101 could produce any
+--   other kind) and no gloss field at all.
+legacyNamedInstances ∷ LocationInstances
+legacyNamedInstances = LocationInstances
+    { lisNextId        = 2
+    , lisById          = HM.singleton (LocationInstanceId 1) LocationInstance
+        { liId              = LocationInstanceId 1
+        , liDefId           = "ruin_small"
+        , liChunk           = ChunkCoord 2 3
+        , liAnchor          = (80, 112)
+        , liBounds          = AbsBounds 78 110 82 114
+        , liDiscoveryMargin = 6
+        , liDisplayName     = "Small Ruin"
+        , liGloss           = Nothing
+        , liLifecycle       = LifecycleDiscovered
+        , liContentsSpawned = True
+        }
+    , lisPendingLegacy = Nothing
+    }
+
+-- | #1101: the current page core carrying a location named in the
+--   page's own language, gloss and all.
+currentPageCoreNamed ∷ PageCoreDTO
+currentPageCoreNamed = currentPageCore
+    { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
+        { wgpLocationInstances = legacyNamedInstances
+            { lisById = HM.map
+                (\i → i { liDisplayName = "Vashenkoro"
+                        , liGloss       = Just "Ashen Keep" })
+                (lisById legacyNamedInstances) } }
     }
 
 currentPageCore ∷ PageCoreDTO

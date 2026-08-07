@@ -503,10 +503,20 @@ pageCore pid = PageCoreDTO
 --   payload built here is genuinely not a v3 payload.
 pageCoreV2 ∷ WorldPageId → PageCoreDTOv2
 pageCoreV2 pid = PageCoreDTOv2
-    { pc2PageId = pid, pc2GenParams = toWorldGenParamsDTO defaultGP
+    { pc2PageId = pid, pc2GenParams = toWorldGenParamsDTOv2 defaultGP
     , pc2CameraX = 0, pc2CameraY = 0, pc2TimeHour = 0, pc2TimeMinute = 0
     , pc2DateYear = 1, pc2DateMonth = 1, pc2DateDay = 1, pc2MapMode = ZMDefault
     , pc2Identity = Just (WorldIdentityDTOv1 "Old World" Nothing) }
+
+-- | The same page core in the frozen pre-#1101 v3 shape: #1092's
+--   three-field identity over the frozen pre-#1101 gen params, whose
+--   location-instance table carries no gloss.
+pageCoreV3 ∷ WorldPageId → PageCoreDTOv3
+pageCoreV3 pid = PageCoreDTOv3
+    { pc3PageId = pid, pc3GenParams = toWorldGenParamsDTOv2 defaultGP
+    , pc3CameraX = 0, pc3CameraY = 0, pc3TimeHour = 0, pc3TimeMinute = 0
+    , pc3DateYear = 1, pc3DateMonth = 1, pc3DateDay = 1, pc3MapMode = ZMDefault
+    , pc3Identity = Just (WorldIdentityDTO "Old World" Nothing Nothing) }
 
 -- | A minimal 'WorldPageSave' fixture (all designation/entity maps
 --   empty) for the round-8 def-reference validators below, which only
@@ -700,7 +710,7 @@ spec = do
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))
             check (ccEncode coreSessionCodec)   (ccDecode coreSessionCodec 1)
-            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 3)
+            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 4)
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
             check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
@@ -713,7 +723,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 3
+            ccVersion worldPagesCodec `shouldBe` 4
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -926,12 +936,12 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
 
-        it "reports an unsupported version identically for a THREE-version \
+        it "reports an unsupported version identically for a FOUR-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 4 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 4
+            decodeErrorOf worldPagesCodec 5 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 5
                     DecodePhase
-                    "unsupported schema version (reader supports v1, v2, v3)")
+                    "unsupported schema version (reader supports v1, v2, v3, v4)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -968,6 +978,17 @@ spec = do
                 Left e → expectationFailure (T.unpack (renderComponentError e))
             decodeErrorOf worldPagesCodec 3 v2Bytes
                 `shouldSatisfy` maybe False ((≡ DecodePhase) . cePhase)
+            decodeErrorOf worldPagesCodec 4 v2Bytes
+                `shouldSatisfy` maybe False ((≡ DecodePhase) . cePhase)
+
+        it "a v3 world-pages payload reaches the v3 decoder (#1101) rather \
+           \than the current one" $ do
+            let v3Bytes = S.encode (WorldPagesDTOv3 [pageCoreV3 page1])
+            case ccDecode worldPagesCodec 3 v3Bytes of
+                Right wp → map (fmap wiName . pgsIdentity)
+                               (HM.elems (wpBase wp))
+                    `shouldBe` [Just "Old World"]
+                Left e → expectationFailure (T.unpack (renderComponentError e))
 
         it "a v1 craft-bills payload reaches the v1 decoder and comes back \
            \MIGRATED (bare ids wrapped as same-page references), not \

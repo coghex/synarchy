@@ -17,8 +17,8 @@ import Location.Bounds (AbsBounds(..), RelBounds(..))
 import Location.Instance
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 import Location.Types
-    ( LocationDef(..), LocationRegistry, emptyLocationRegistry
-    , registerLocation )
+    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    , emptyLocationRegistry, registerLocation )
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
@@ -27,6 +27,18 @@ import World.Save.Component.Page
     ( PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
     , migrateWorldPagesV1, toWorldGenParamsDTOv1, WorldIdentityDTOv1(..) )
 import World.Save.Snapshot (PageSnapshot(..))
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 
 -- * Fixtures — two ruin-shaped defs. "ruin" is 5x5 (margin 6); "camp"
 --   is a distinct 3x3 (margin 2) so a test can tell the two apart by
@@ -49,6 +61,7 @@ mkDef lid label bounds margin = LocationDef
     , ldBounds          = bounds
     , ldDiscoveryMargin = margin
     , ldMapIcons        = Nothing
+    , ldNaming          = testNaming
     }
 
 registry ∷ LocationRegistry
@@ -65,7 +78,7 @@ overlay3 = HM.fromList
     ]
 
 instances3 ∷ LocationInstances
-instances3 = buildLocationInstances registry overlay3
+instances3 = buildLocationInstances Nothing registry overlay3
 
 -- | The pre-#911 per-chunk flags a v1 payload carries for 'overlay3':
 --   chunk (0,0) discovered, chunk (2,-1) contents-spawned — two
@@ -100,9 +113,9 @@ identityOf lis =
 --   addressable, which the chunk-keyed sets could not.
 sameChunk ∷ (LocationInstanceId, LocationInstanceId, LocationInstances)
 sameChunk =
-    let (a, l1) = allocateLocationInstance (ChunkCoord 7 7) ruinDef
+    let (a, l1) = allocateLocationInstance Nothing (ChunkCoord 7 7) ruinDef
                       emptyLocationInstances
-        (b, l2) = allocateLocationInstance (ChunkCoord 7 7) campDef l1
+        (b, l2) = allocateLocationInstance Nothing (ChunkCoord 7 7) campDef l1
     in (a, b, l2)
 
 spec ∷ Spec
@@ -121,7 +134,7 @@ spec = describe "Location instance identity" $ do
 
         it "reproduces the same id → (definition, anchor) mapping when the \
            \same placement is recomputed" $
-            identityOf (buildLocationInstances registry overlay3)
+            identityOf (buildLocationInstances Nothing registry overlay3)
                 `shouldBe` identityOf instances3
 
         it "leaves the allocator strictly above every live id" $ do
@@ -130,7 +143,7 @@ spec = describe "Location instance identity" $ do
 
         it "reserves an id for an overlay entry whose definition is not \
            \registered, so the remaining ids do not shift" $ do
-            let partial = buildLocationInstances
+            let partial = buildLocationInstances Nothing
                     (registerLocation campDef emptyLocationRegistry) overlay3
             -- Only "camp" resolves; it keeps id 1 (its (cx,cy) slot), and
             -- the allocator still accounts for all three placements.
@@ -139,12 +152,12 @@ spec = describe "Location instance identity" $ do
             lisNextId partial `shouldBe` 4
 
         it "an empty overlay yields an empty table with a fresh allocator" $ do
-            let none = buildLocationInstances registry emptyLocationOverlay
+            let none = buildLocationInstances Nothing registry emptyLocationOverlay
             instancesToList none `shouldBe` []
             lisNextId none `shouldBe` firstLocationInstanceId
 
         it "allocateLocationInstance hands out the next id and advances it" $ do
-            let (iid, after) = allocateLocationInstance (ChunkCoord 9 9)
+            let (iid, after) = allocateLocationInstance Nothing (ChunkCoord 9 9)
                                    ruinDef instances3
             unLocationInstanceId iid `shouldBe` 4
             lisNextId after `shouldBe` 5
@@ -155,7 +168,7 @@ spec = describe "Location instance identity" $ do
                 `shouldSatisfy` (not . null)
 
         it "flags an instance stored under a key that is not its own id" $ do
-            let inst = newLocationInstance (LocationInstanceId 1)
+            let inst = newLocationInstance Nothing (LocationInstanceId 1)
                            (ChunkCoord 0 0) ruinDef
                 broken = LocationInstances
                     { lisNextId        = 9

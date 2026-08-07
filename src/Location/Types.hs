@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, DeriveGeneric #-}
 module Location.Types
     ( LocationContent(..)
+    , LocationNaming(..)
     , LocationDef(..)
     , LocationRegistry(..)
     , emptyLocationRegistry
@@ -13,6 +14,7 @@ module Location.Types
 import UPrelude
 import GHC.Generics (Generic)
 import Data.List (sortOn)
+import Language.Semantic.Types (ConceptId)
 import Location.Bounds (RelBounds(..))
 
 -- | One piece of content a location places when it is stamped — a
@@ -38,6 +40,24 @@ data LocationContent = LocationContent
                                       --   (defaults to "hostile" when omitted)
     , lconRolls    ∷ !Int             -- ^ "loot_table" only: how many times
                                       --   to roll the table (defaults to 1)
+    } deriving (Show, Eq, Generic)
+
+-- | The authored naming scheme a definition's placed instances draw
+--   their generated names from (#1101): two ordered, nonempty pools of
+--   #709 concept ids. Every generated location name is one
+--   @'Language.Semantic.Types.Modifier' modifier head@ expression, with
+--   the modifier drawn from 'lnModifiers' and the head from 'lnHeads' —
+--   which pools a location may draw on is DATA, never a hardcoded
+--   mapping from 'ldType'.
+--
+--   Both pools are validated against the concept catalogue when the
+--   definition loads ('Location.Naming.locationNamingErrors'): an empty
+--   pool, an unknown concept id, or a concept missing the lexical form
+--   its slot needs rejects the definition file outright rather than
+--   silently degrading to 'ldLabel'.
+data LocationNaming = LocationNaming
+    { lnHeads     ∷ ![ConceptId]  -- ^ candidate head concepts (nonempty)
+    , lnModifiers ∷ ![ConceptId]  -- ^ candidate modifier concepts (nonempty)
     } deriving (Show, Eq, Generic)
 
 -- | A data-driven location definition (data/locations/*.yaml). Mirrors
@@ -73,6 +93,10 @@ data LocationDef = LocationDef
                                       --   paths, (undiscovered, discovered)
                                       --   (#781). 'Nothing' = this location
                                       --   places no map annotation at all.
+    , ldNaming   ∷ !LocationNaming    -- ^ authored concept pools every
+                                      --   generated instance name draws
+                                      --   from (#1101). Required on
+                                      --   every definition.
     } deriving (Show, Eq, Generic)
 
 -- | Engine-wide registry of location defs loaded from data/locations/.
