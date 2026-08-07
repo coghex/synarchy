@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Per-chunk RGBA pixel generation, split out of
 --   "World.ZoomMap.Cache" (issue #573).

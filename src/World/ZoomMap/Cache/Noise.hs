@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Zoom-level ice noise, split out of "World.ZoomMap.Cache" (issue
 --   #573). Smooth continuous noise for ice-boundary classification at

@@ -7,7 +7,6 @@ module World.Command.Types
     ) where
 
 import UPrelude
-import qualified Data.ByteString as BS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
@@ -20,6 +19,7 @@ import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
+import World.Save.Payload (LuaComponentSpec, LuaRefEdge)
 import World.Save.Types (SaveData(..), AutosaveRequest(..))
 import World.Texture.Types (WorldTextureType(..))
 import World.Fluid.Types (FluidType(..), FluidCell(..))
@@ -225,24 +225,27 @@ data WorldCommand
         -- ^ Raise the column at (gx, gy) one z of the given material
         --   via the WeAddTile edit path (debug terrain placement —
         --   same machinery spoil promotion uses, so it persists).
-    | WorldSave WorldPageId Text Text [(Text, Word32, Bool, BS.ByteString)]
-        [(Text, Text, Int, Maybe Int, Text, Maybe Text)] (Maybe AutosaveRequest)
+    | WorldSave WorldPageId Text Text [LuaComponentSpec]
+        [LuaRefEdge] (Maybe AutosaveRequest)
         -- ^ pageId, save-name, request-timestamp (ISO 8601 microsecond
         --   precision, monotonically clamped), every currently-
         --   registered Lua save component (bare registry name, schema
         --   version, required flag, already-encoded payload — issue
-        --   #761, save-overhaul B3, mirrors
-        --   "World.Save.Envelope.LuaComponentSpec" without importing
-        --   the whole Save/Envelope module graph into this one), and
+        --   #761, save-overhaul B3), and
         --   every reference edge those components' @references()@
         --   hooks reported on the SAME live snapshot (component id,
         --   kind, target id, optional owning-unit id, source field
         --   path, and (#915) the edge's own declared world page for the
         --   one kind whose id is page-local — issue #764,
-        --   save-overhaul C3, mirrors the load path's
-        --   'prepareLuaLoad' result shape; the path replaces a
+        --   save-overhaul C3, the same record the load path's
+        --   'prepareLuaLoad' returns; the path replaces a
         --   synthetic "kind#id" diagnostic path with the actual field
-        --   the edge came from). The Lua side captures the
+        --   the edge came from). Both payloads are the canonical
+        --   records from the LEAF module "World.Save.Payload" (issue
+        --   #1103) — naming them costs this module no dependency on
+        --   the Save/Envelope module graph, which is why they are no
+        --   longer re-spelled here as anonymous tuples.
+        --   The Lua side captures the
         --   timestamp at request time (so two saves queued close
         --   together get distinct timestamps reflecting when the
         --   player asked, not whenever the world thread happened to

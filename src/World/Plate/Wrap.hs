@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Cylindrical world-wrap arithmetic, split out of "World.Plate"
 --   (issue #560). Pure coordinate math shared by plate queries, the
