@@ -22,6 +22,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import System.Directory (doesFileExist)
+import Engine.Graphics.Font.Repertoire (generatedNameFonts)
 
 menuPath, settingsPath, generalPath, generationPath, climatePath ∷ FilePath
 menuPath       = "scripts/create_world_menu.lua"
@@ -29,6 +30,10 @@ settingsPath   = "scripts/create_world/settings_tab.lua"
 generalPath    = "scripts/create_world/general_tab.lua"
 generationPath = "scripts/create_world/generation.lua"
 climatePath    = "scripts/create_world/climate_tab.lua"
+
+randboxPath, bootPath ∷ FilePath
+randboxPath = "scripts/ui/randbox.lua"
+bootPath    = "scripts/ui_manager_boot.lua"
 
 quotedAfter ∷ Text → Text → Maybe Text
 quotedAfter marker line =
@@ -38,6 +43,24 @@ quotedAfter marker line =
     in if T.null suffix ∨ T.null afterQuote
        then Nothing
        else Just $ T.takeWhile (/= '"') $ T.drop 1 afterQuote
+
+-- | 'quotedAfter' restricted to a marker whose value is a string
+--   LITERAL — the first thing after it, ignoring spaces, must be the
+--   opening quote.
+--
+--   Without that restriction any @field = someExpression .. "x"@ line
+--   would be read as declaring @x@, so a field assigned a computed
+--   value (#1106's world-name gloss label, whose text comes from the
+--   current suggestion) would silently enter a list of authored labels.
+--   Requiring the literal is what keeps these source-level assertions
+--   from depending on how a line happens to be written.
+literalAfter ∷ Text → Text → Maybe Text
+literalAfter marker line = do
+    let (_, suffix) = T.breakOn marker line
+    if T.null suffix then Nothing else do
+        let value = T.stripStart (T.drop (T.length marker) suffix)
+        rest ← T.stripPrefix "\"" value
+        pure (T.takeWhile (/= '"') rest)
 
 blockAfter ∷ Text → Text → Text → Text
 blockAfter start end source =
@@ -55,7 +78,7 @@ tabEntries source = mapMaybe entry $ T.lines block
         pure (key, name)
 
 settingsLabels ∷ Text → [Text]
-settingsLabels = mapMaybe (quotedAfter "text     =") ∘ T.lines
+settingsLabels = mapMaybe (literalAfter "text     =") ∘ T.lines
 
 generalLabels ∷ Text → [Text]
 generalLabels = mapMaybe (quotedAfter "addRow(") ∘ T.lines
@@ -73,10 +96,18 @@ lns = T.intercalate "\n"
 --   @package.path@ with no extra setup — the same assumption
 --   "Test.Headless.Lua.SaveModules" already relies on.
 runsOk ∷ Text → Expectation
-runsOk chunkText = do
+runsOk = runsWith handoffPrelude
+
+-- | 'runsOk' with a different prelude, for the suggestion-state chunks
+--   that need no world_view/world_manager wiring at all.
+runsSuggest ∷ Text → Expectation
+runsSuggest = runsWith suggestPrelude
+
+runsWith ∷ Text → Text → Expectation
+runsWith prelude chunkText = do
     result ← Lua.run @Lua.Exception $ do
         Lua.openlibs
-        preludeStatus ← Lua.dostring (TE.encodeUtf8 handoffPrelude)
+        preludeStatus ← Lua.dostring (TE.encodeUtf8 prelude)
         case preludeStatus of
             Lua.OK → do
                 status ← Lua.dostring (TE.encodeUtf8 chunkText)
@@ -137,6 +168,45 @@ genParams nameExpr =
     "{ seed = 7, worldSize = 64, plateCount = 3, worldName = "
     <> nameExpr <> " }"
 
+-- | The same table plus the identity a live generated-language
+--   SUGGESTION carries (#1106): its English gloss and the #1092
+--   provenance of the language that rendered it.
+genSuggestedParams ∷ Text
+genSuggestedParams = lns
+    [ "{ seed = 7, worldSize = 64, plateCount = 3,"
+    , "  worldName = 'Karadun', worldGloss = 'Ashen Land',"
+    , "  languageSeed = '18446744073709551615', languageVersion = 5 }"
+    ]
+
+-- | Stubs for @scripts/create_world/name_suggest.lua@'s only outside
+--   dependency, plus a fresh `pending` table.
+--
+--   @world.suggestName@ is replaced by a deterministic fake whose whole
+--   job is to be DISTINGUISHABLE per (seed, ordinal) — the real
+--   generator's own determinism and non-repetition are pinned by
+--   "Test.Headless.Language.Suggest". What is under test here is which
+--   of its results the screen keeps, and when it throws them away.
+suggestPrelude ∷ Text
+suggestPrelude = lns
+    [ "suggestCalls = {}"
+    , "suggestFails = false"
+    , "world = {"
+    , "  suggestName = function(seed, ordinal)"
+    , "    suggestCalls[#suggestCalls + 1] = { seed = seed, ordinal = ordinal }"
+    , "    if suggestFails then return nil, 'no catalogue' end"
+    , "    return {"
+    , "      name = 'N' .. tostring(seed) .. '_' .. tostring(ordinal),"
+    , "      gloss = 'G' .. tostring(seed) .. '_' .. tostring(ordinal),"
+    , "      language = { seed = tostring(seed) .. '000', version = 5 },"
+    , "    }"
+    , "  end,"
+    , "}"
+    , "engine = { logWarn = function() end, logInfo = function() end,"
+    , "           logDebug = function() end }"
+    , "nameSuggest = require('scripts.create_world.name_suggest')"
+    , "function newPending() return { worldName = '', seed = '' } end"
+    ]
+
 spec ∷ Spec
 spec = do
     menuSource       ← runIO $ TIO.readFile menuPath
@@ -154,6 +224,46 @@ spec = do
     it "exposes exactly the five active General controls" $
         settingsLabels settingsSource ++ generalLabels generalSource
             `shouldBe` ["Name", "Seed", "Size", "Days / Month", "Months / Year"]
+
+    -- #1106 requirement 9: the dummy generator is gone, not merely
+    -- bypassed. Its word lists had no language, no meaning, and no
+    -- gloss, and it drew from Lua's global RNG (#708 principle 9).
+    describe "the dummy world-name generator (#1106)" $ do
+        randboxSource ← runIO $ TIO.readFile randboxPath
+
+        it "no longer exists" $
+            forM_ ["randomName", "local prefixes", "local middles"
+                  , "local suffixes"] $ \dead →
+                (dead, T.isInfixOf dead randboxSource) `shouldBe` (dead, False)
+
+        it "leaves the NAME control classified for validation" $
+            randboxSource `shouldSatisfy` T.isInfixOf "NAME = \"name\""
+
+        -- The seed field still rolls hex from math.random, which is
+        -- fine and unrelated; what must never come back is a NAME value
+        -- produced anywhere but the injected generator. Checked against
+        -- generateRandom's own extracted body, not the whole file —
+        -- randbox.Type.NAME legitimately appears in the validation and
+        -- length-limit branches, which are not generators.
+        it "gives randbox.Type.NAME no built-in generator at all" $ do
+            let body = blockAfter "local function generateRandom(rb)"
+                                  "\nend" randboxSource
+            body `shouldSatisfy` (not ∘ T.null)
+            body `shouldSatisfy` T.isInfixOf "rb.generate"
+            body `shouldSatisfy` (not ∘ T.isInfixOf "NAME")
+
+    -- Requirement 10: generated names may carry extended-Latin letters
+    -- (#1100), so the font Create World actually renders text in has to
+    -- be one of the fonts that inventory was proven against.
+    it "renders menus in a font cleared for generated names" $ do
+        bootSource ← TIO.readFile bootPath
+        let menuFontLines =
+                filter (T.isInfixOf "menuFontHandle = engine.loadFont")
+                       (T.lines bootSource)
+            namesAFontFor l =
+                any (\f → T.isInfixOf (T.pack f) l) generatedNameFonts
+        menuFontLines `shouldSatisfy` (not ∘ null)
+        forM_ menuFontLines $ \l → l `shouldSatisfy` namesAFontFor
 
     it "removes the obsolete Climate UI module and all orchestration wiring" $ do
         doesFileExist climatePath `shouldReturn` False
@@ -218,11 +328,180 @@ spec = do
             , "       'invented a gloss: ' .. tostring(call[6]))"
             ]
 
+    -- #1106 requirement 5: a name that is still a live SUGGESTION
+    -- carries its gloss and the language that rendered it into the
+    -- identity path, so world.getIdentity/getLanguageProvenance can
+    -- answer for it later and the world's locations can be named in the
+    -- same language.
+    it "carries a suggestion's gloss and provenance into world.init" $
+        runsOk $ lns
+            [ "local call = generate(" <> genSuggestedParams <> ")"
+            , "assert(call[5] == 'Karadun', 'name: ' .. tostring(call[5]))"
+            , "assert(call[6] == 'Ashen Land', 'gloss: ' .. tostring(call[6]))"
+            -- A decimal STRING, not a number: the top of the Word64
+            -- range survives neither Lua's signed integer nor its double.
+            , "assert(call[7] == '18446744073709551615',"
+            , "       'language seed: ' .. tostring(call[7]))"
+            , "assert(call[8] == 5, 'generator version: ' .. tostring(call[8]))"
+            ]
+
     -- The first link of the chain, which already worked and must keep
     -- working: generation.lua publishing the captured name onto the
     -- params table world_view reads.
     it "publishes the captured name onto worldView.worldParams" $
         generationSource `shouldSatisfy` T.isInfixOf "worldName  = p.worldName"
+
+    it "publishes a suggestion's gloss and provenance alongside it" $
+        forM_ ["worldGloss = nameGloss", "languageSeed    = langSeed"
+              , "languageVersion = langVersion"] $ \field →
+            generationSource `shouldSatisfy` T.isInfixOf field
+
+    ---------------------------------------------------------------
+    -- #1106: which names are suggestions, and what erases that
+    ---------------------------------------------------------------
+    describe "world-name suggestion state (#1106)" $ do
+        -- Requirement 2: the dice advances a sequence, so successive
+        -- presses ask for successive ordinals of ONE seed's language.
+        it "advances the reroll ordinal on every press" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "assert(nameSuggest.suggest(p, 11) == 'N11_0')"
+                , "assert(nameSuggest.suggest(p, 11) == 'N11_1')"
+                , "assert(nameSuggest.suggest(p, 11) == 'N11_2')"
+                , "assert(p.worldName == 'N11_2', p.worldName)"
+                , "assert(p.nameGloss == 'G11_2', tostring(p.nameGloss))"
+                , "assert(#suggestCalls == 3, tostring(#suggestCalls))"
+                , "assert(suggestCalls[1].seed == 11)"
+                , "assert(suggestCalls[3].ordinal == 2)"
+                ]
+
+        it "records provenance for a suggestion" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "assert(nameSuggest.isSuggested(p))"
+                , "local gloss, seed, version = nameSuggest.identity(p)"
+                , "assert(gloss == 'G11_0', tostring(gloss))"
+                , "assert(seed == '11000', tostring(seed))"
+                , "assert(version == 5, tostring(version))"
+                ]
+
+        -- Requirement 4 / #708 principle 7: typing makes the name the
+        -- player's, and it stops meaning anything. Retyping the very
+        -- text that was suggested counts — authorship, not spelling.
+        it "drops gloss and provenance the moment the player edits" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.clear(p)"
+                , "assert(not nameSuggest.isSuggested(p))"
+                , "assert(nameSuggest.gloss(p) == nil)"
+                , "local gloss, seed, version = nameSuggest.identity(p)"
+                , "assert(gloss == nil and seed == nil and version == nil,"
+                , "       'provenance survived a manual edit')"
+                ]
+
+        it "keeps a manual name out of the identity path entirely" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "p.worldName = 'Handtyped'"
+                , "local gloss, seed, version = nameSuggest.identity(p)"
+                , "assert(gloss == nil and seed == nil and version == nil,"
+                , "       'invented provenance for a typed name')"
+                ]
+
+        -- Requirement 3: a new seed is a new language, and the sequence
+        -- restarts in it.
+        it "restarts the sequence in a new language on a seed change" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.suggest(p, 11)"
+                , "assert(nameSuggest.reseed(p, 22) == 'N22_0',"
+                , "       'after reseed: ' .. tostring(p.worldName))"
+                , "assert(p.nameGloss == 'G22_0', tostring(p.nameGloss))"
+                , "local _, seed = nameSuggest.identity(p)"
+                , "assert(seed == '22000', tostring(seed))"
+                ]
+
+        it "leaves a manually typed name untouched by a seed change" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "p.worldName = 'Handtyped'"
+                , "nameSuggest.clear(p)"
+                , "assert(nameSuggest.reseed(p, 22) == nil)"
+                , "assert(p.worldName == 'Handtyped', p.worldName)"
+                , "assert(not nameSuggest.isSuggested(p))"
+                ]
+
+        -- The guard that keeps a resize rebuild from being mistaken for
+        -- an edit: restoreAll re-fires the seed control's onChange with
+        -- the SAME text, and re-rolling the name off that would destroy
+        -- exactly the state the rebuild is preserving.
+        it "ignores a seed re-notification that did not change the seed" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "local before = p.worldName"
+                , "assert(nameSuggest.reseed(p, 11) == nil)"
+                , "assert(nameSuggest.reseed(p, 11) == nil)"
+                , "assert(p.worldName == before, p.worldName)"
+                , "assert(#suggestCalls == 1, tostring(#suggestCalls))"
+                ]
+
+        -- Requirement 7: a failed suggestion reports and changes
+        -- nothing. There is no fallback generator left to fall back to.
+        it "leaves the name and metadata alone when suggestion fails" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "local name, gloss = p.worldName, p.nameGloss"
+                , "suggestFails = true"
+                , "local value, err = nameSuggest.suggest(p, 11)"
+                , "assert(value == nil, tostring(value))"
+                , "assert(err == 'no catalogue', tostring(err))"
+                , "assert(p.worldName == name, p.worldName)"
+                , "assert(p.nameGloss == gloss, tostring(p.nameGloss))"
+                , "assert(nameSuggest.isSuggested(p))"
+                ]
+
+        -- Requirement 8 / the reviewer's rebuild clause: the state a
+        -- resize must preserve lives on `pending`, which outlives the
+        -- widgets, so a rebuild that re-reads it sees the same
+        -- suggestion, gloss, provenance, and sequence position.
+        it "keeps suggestion state on the table a rebuild preserves" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.suggest(p, 11)"
+                , "local snapshot = {"
+                , "  name = p.worldName, gloss = p.nameGloss,"
+                , "  seed = p.nameLanguageSeed, version = p.nameLanguageVersion,"
+                , "  ordinal = p.nameOrdinal, suggested = p.nameSuggested,"
+                , "}"
+                , "assert(snapshot.ordinal == 2, tostring(snapshot.ordinal))"
+                , "for k, v in pairs(snapshot) do"
+                , "  assert(v ~= nil, 'rebuild would lose ' .. k)"
+                , "end"
+                ]
+
+        it "forgets everything on Defaults" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.reset(p)"
+                , "assert(p.nameOrdinal == nil)"
+                , "assert(p.nameSeedNum == nil)"
+                , "assert(not nameSuggest.isSuggested(p))"
+                ]
+
+    -- The Create World screen and generation.lua must normalize the
+    -- seed text identically, or the language a name is suggested in is
+    -- not the language the generated world records.
+    it "derives the language seed the same way generation.lua does" $ do
+        settingsSource `shouldSatisfy` T.isInfixOf "tonumber(seedText or \"\", 16) or 0"
+        generationSource `shouldSatisfy` T.isInfixOf "tonumber(p.seed, 16) or 0"
 
     it "continues submitting hidden clock, astronomy, and climate defaults" $
         forM_ [ "hours_per_day"

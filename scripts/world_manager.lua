@@ -113,6 +113,14 @@ function worldManager.createWorld(params)
     -- whitespace-only name as no identity at all), so nothing here trims,
     -- defaults, or synthesizes a name.
     local worldName  = params.worldName
+    -- #1106: the gloss and language provenance of a name that came from
+    -- the generated-language system. Same rule as worldName — forwarded
+    -- verbatim, never defaulted, never synthesized. All three are nil
+    -- for a player-typed name, which is exactly how the engine tells a
+    -- generated identity from a custom one.
+    local worldGloss      = params.worldGloss
+    local languageSeed    = params.languageSeed
+    local languageVersion = params.languageVersion
 
     engine.logInfo("Creating world: " .. worldId
         .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")
@@ -147,10 +155,12 @@ function worldManager.createWorld(params)
     -- once the world thread processes it.
     -- A nil worldName leaves argument 5 nil, which world.init reads
     -- identically to the four-argument form — arena, debug, and console
-    -- callers are unaffected (#708 acceptance criterion 7). The gloss
-    -- (argument 6) stays unsupplied: the dummy name generator has no
-    -- concept of one.
-    world.init(worldId, seed, worldSize, plateCount, worldName)
+    -- callers are unaffected (#708 acceptance criterion 7). Arguments
+    -- 6-8 (gloss, language seed, generator version) follow the same
+    -- rule: nil for every caller that has no generated name, which is
+    -- indistinguishable from not passing them at all.
+    world.init(worldId, seed, worldSize, plateCount, worldName,
+               worldGloss, languageSeed, languageVersion)
 
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)

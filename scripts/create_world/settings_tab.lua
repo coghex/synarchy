@@ -4,12 +4,14 @@
 --
 -- Row order:
 --   1. Name       (randbox)
---   2. Seed       (randbox)
---   3. World Size (dropdown)
-local label      = require("scripts.ui.label")
-local randbox    = require("scripts.ui.randbox")
-local dropdown   = require("scripts.ui.dropdown")
-local responsive = require("scripts.ui.responsive")
+--   2. its gloss  (label — #1106, the meaning of a suggested name)
+--   3. Seed       (randbox)
+--   4. World Size (dropdown)
+local label       = require("scripts.ui.label")
+local randbox     = require("scripts.ui.randbox")
+local dropdown    = require("scripts.ui.dropdown")
+local responsive  = require("scripts.ui.responsive")
+local nameSuggest = require("scripts.create_world.name_suggest")
 
 local settingsTab = {}
 
@@ -17,6 +19,17 @@ local settingsTab = {}
 settingsTab.nameRandBoxId  = nil
 settingsTab.seedRandBoxId  = nil
 settingsTab.sizeDropdownId = nil
+settingsTab.glossLabelId   = nil
+
+-- #1106: how a hex seed field becomes the number the language is
+-- derived from. Identical to generation.lua's own `tonumber(p.seed, 16)
+-- or 0`, on purpose — the language a name is suggested in must be the
+-- language the generated world records, so both sides must normalize
+-- the seed text the same way. Two spellings of one seed ("a3f7" /
+-- "A3F7") are one number and therefore one language.
+function settingsTab.seedNumber(seedText)
+    return tonumber(seedText or "", 16) or 0
+end
 
 -----------------------------------------------------------
 -- World Size Options
@@ -123,6 +136,27 @@ function settingsTab.create(params)
     local sizeDropdownUiscale = responsive.fitScale(
         naturalSizeDropdownWidth, cw * (1 - LABEL_COLUMN_FRACTION), uiscale)
 
+    -- #1106: the world seed must be FINAL before the Name row exists,
+    -- because the name is suggested in that seed's own language. The
+    -- Seed row is built second (the visual order is Name, Seed, Size),
+    -- so the value it will display is settled here instead of inside
+    -- its own randbox.new. A seed carried over from a previous visit or
+    -- a rebuild is kept as-is; only a genuinely empty one is rolled.
+    if not pending.seed or pending.seed == "" then
+        pending.seed = randbox.newHexSeed()
+    end
+
+    -- The screen's FIRST world name, offered before the player has
+    -- touched anything. Guarded on the sequence never having started
+    -- (nameOrdinal is nil only on a fresh menu and after Defaults), NOT
+    -- on the field merely being empty: a rebuild of a name the player
+    -- deliberately cleared must leave it cleared, and the randbox's own
+    -- fill-if-empty behaviour is therefore switched off below.
+    if pending.nameOrdinal == nil
+       and (pending.worldName == nil or pending.worldName == "") then
+        nameSuggest.suggest(pending, settingsTab.seedNumber(pending.seed))
+    end
+
     ---------------------------------------------------------
     -- Row 1: World Name (randbox - wide)
     ---------------------------------------------------------
@@ -144,6 +178,66 @@ function settingsTab.create(params)
     local nameW = math.floor(base.nameBoxWidth * uiscale)
     local nameBtnSize = math.floor(base.randboxHeight * uiscale)
     local nameTotalW = nameW + nameBtnSize
+    local nameRowY = rowY(rowIndex)
+    local nameBoxX = cx + cw - nameTotalW
+
+    -- #1106 requirement 6: a native name with no visible meaning is
+    -- indistinguishable from the word-list output this replaced, so the
+    -- English gloss is shown beside it — "Karadun" over "Ashen Land".
+    --
+    -- It gets its own row slot rather than sharing the Name row. The
+    -- space between the row's label column and the right-aligned name
+    -- box is not reserved for anything and shrinks to nothing at the
+    -- narrow end of the supported envelope (computeContentScaleFactor
+    -- lets the control eat everything past cw*LABEL_COLUMN_FRACTION),
+    -- so a gloss placed there would collide with the "Name" label
+    -- exactly when the window is smallest. A row of its own always fits
+    -- and stays legible.
+    --
+    -- Built before the randbox so the generator callback below can
+    -- already refresh it. A single fixed font size is used, since a
+    -- text element's size is fixed at creation — the label is
+    -- right-aligned and its left edge clamped into the row, and the
+    -- tab's own clipping viewport handles the remainder in the
+    -- pathological case.
+    local glossFontSize = math.floor(base.fontSize * 0.7)
+    local glossRowY = rowY(rowIndex + 1)
+
+    settingsTab.glossLabelId = params.trackLabel(label.new({
+        name     = "world_name_gloss",
+        text     = nameSuggest.gloss(pending) or "",
+        font     = font,
+        fontSize = glossFontSize,
+        color    = {0.75, 0.75, 0.75, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local glossHandle = label.getElementHandle(settingsTab.glossLabelId)
+    UI.addChild(container, glossHandle, cx, glossRowY + s.fontSize)
+    UI.setZIndex(glossHandle, zContent)
+    table.insert(elements, { type = "label", handle = glossHandle })
+
+    -- Re-measure and re-place the gloss for whatever the name currently
+    -- is. Hidden outright when there is none to show — a manual name
+    -- has no meaning, and an empty label would leave a stale one behind.
+    local function refreshGloss()
+        local id = settingsTab.glossLabelId
+        if not id then return end
+        local text = nameSuggest.gloss(pending)
+        if not text then
+            label.setText(id, "")
+            label.setVisible(id, false)
+            return
+        end
+        label.setText(id, text)
+        local width = engine.getTextWidth(
+            font, text, math.floor(glossFontSize * uiscale))
+        label.setPosition(id,
+            math.max(cx, cx + cw - width), glossRowY + s.fontSize)
+        label.setVisible(id, true)
+    end
+    settingsTab.refreshGloss = refreshGloss
+    refreshGloss()
 
     settingsTab.nameRandBoxId = params.trackRandBox(randbox.new({
         name     = "world_name",
@@ -158,16 +252,36 @@ function settingsTab.create(params)
         randType = randbox.Type.NAME,
         default  = pending.worldName ~= ""
                        and pending.worldName or nil,
+        autoGenerate = false,
+        -- #1106: the dice button. Advances this seed's suggestion
+        -- sequence, so successive presses keep one language's sound
+        -- while the meaning changes. Returning nil on failure leaves
+        -- the field exactly as it was — there is no fallback generator.
+        generate = function()
+            local value = nameSuggest.suggest(
+                pending, settingsTab.seedNumber(pending.seed))
+            refreshGloss()
+            return value
+        end,
         onChange  = function(value, id, name)
             pending.worldName = value
         end,
+        -- The moment the player takes over the field, the name stops
+        -- being the language's: gloss and provenance go immediately
+        -- (#708 principle 7), even if the typed text happens to match
+        -- what was suggested.
+        onUserEdit = function(value, id, name)
+            pending.worldName = value
+            nameSuggest.clear(pending)
+            refreshGloss()
+        end,
     }))
 
-    randbox.setPosition(settingsTab.nameRandBoxId,
-                        cx + cw - nameTotalW, rowY(rowIndex))
+    randbox.setPosition(settingsTab.nameRandBoxId, nameBoxX, nameRowY)
     table.insert(elements, { type = "randbox", id = settingsTab.nameRandBoxId })
 
-    rowIndex = rowIndex + 1
+    -- Name row plus the gloss row beneath it.
+    rowIndex = rowIndex + 2
 
     ---------------------------------------------------------
     -- Row 2: Seed (randbox)
@@ -207,6 +321,25 @@ function settingsTab.create(params)
                        and pending.seed or nil,
         onChange  = function(value, id, name)
             pending.seed = value
+            -- #1106 requirement 3: the language comes from the seed, so
+            -- a new seed means a new language and a fresh suggestion —
+            -- but only for a name that IS a suggestion. A name the
+            -- player typed is theirs and is left alone.
+            --
+            -- nameSuggest.reseed decides "did the seed actually change"
+            -- from the NUMERIC value, which is also what makes a resize
+            -- rebuild inert here: restoreAll re-fires onChange with the
+            -- same seed text, and re-rolling the name off that would
+            -- destroy the very state the rebuild is preserving.
+            if nameSuggest.reseed(pending, settingsTab.seedNumber(value)) then
+                if settingsTab.nameRandBoxId then
+                    randbox.setValue(settingsTab.nameRandBoxId,
+                                     pending.worldName)
+                end
+                if settingsTab.refreshGloss then
+                    settingsTab.refreshGloss()
+                end
+            end
         end,
     }))
 
@@ -261,7 +394,8 @@ function settingsTab.create(params)
     dropdown.setPosition(ddSizeId, cx + cw - ddSizeW, rowY(rowIndex))
     table.insert(elements, { type = "dropdown", id = ddSizeId })
 
-    return elements, 3
+    -- Name, its gloss, Seed, Size.
+    return elements, 4
 end
 
 -----------------------------------------------------------

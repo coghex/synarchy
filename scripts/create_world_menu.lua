@@ -778,10 +778,14 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
     -- list under the "General" tab).
     local settingsParams = tabParamsFor("settings")
     local settingsElems, settingsRows = settingsTab.create(settingsParams)
-    -- Offset the general tab content below the settings rows
+    -- Offset the general tab content below the settings rows. Driven by
+    -- the row count settingsTab.create actually reports, so a row added
+    -- there (#1106's world-name gloss line) can't leave this stale and
+    -- overlap the two lists.
     local generalParams = {}
     for k, v in pairs(settingsParams) do generalParams[k] = v end
-    generalParams.contentY = settingsParams.contentY + s.rowSpacing * 3
+    generalParams.contentY = settingsParams.contentY
+                           + s.rowSpacing * settingsRows
     local generalElems, generalRows = generalTab.create(generalParams)
     -- Merge both element lists
     local combinedSettings = {}
