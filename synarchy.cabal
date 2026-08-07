@@ -558,6 +558,7 @@ library
                      Language.Semantic.English
                      Language.Generated.Types
                      Language.Generated.Hash
+                     Language.Generated.Orthography
                      Language.Generated.Onset
                      Language.Generated.Boundary
                      Language.Generated.Bound
