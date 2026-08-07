@@ -27,20 +27,16 @@ import World.Types
 import World.Generate (chunkToGlobal, globalToChunk)
 import World.Chop.Types (newChopDesignation)
 import World.Thread.Command.Cursor.Common
-    ( maxDesignateSide, canonicalDesignationTile
-    , recordDesignationOutcome, recordMissingWorldOutcome )
+    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetChopAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState → do
-            -- Normalise into the stored frame so the anchor, the live
-            -- preview and the commit all name the same tile (#1135).
-            (cgx, cgy) ← canonicalDesignationTile worldState gx gy
+        Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { chopAnchor = Just (cgx, cgy) }, ())
+                (cs { chopAnchor = Just (gx, gy) }, ())
         Nothing → pure ()
 
 handleWorldClearChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -59,19 +55,11 @@ handleWorldClearChopAnchorCommand env _logger pageId = do
 --   own surface z. Clears the anchor afterwards.
 handleWorldDesignateChopCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → Text → IO ()
-handleWorldDesignateChopCommand env logger pageId rgx1 rgy1 rgx2 rgy2 tag = do
+handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Nothing → recordMissingWorldOutcome env "chop.designate" pageId rgx1 rgy1
+        Nothing → recordMissingWorldOutcome env "chop.designate" pageId gx1 gy1
         Just worldState → do
-            -- Canonicalise the commit's own corners too (#1135):
-            -- these arrive straight from Lua, not from the stored
-            -- anchor, so a caller that bypassed pickTile could otherwise
-            -- designate in a u-seam alias frame — missing its loaded
-            -- chunk while the preview (already canonical) showed the
-            -- real tiles. Identity for coords already canonical.
-            (gx1, gy1) ← canonicalDesignationTile worldState rgx1 rgy1
-            (gx2, gy2) ← canonicalDesignationTile worldState rgx2 rgy2
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             harvests ← readIORef (wsFloraHarvestsRef worldState)

@@ -22,20 +22,16 @@ import World.Types
 import World.Generate (globalToChunk)
 import World.Mine.Types (designationFromSlope)
 import World.Thread.Command.Cursor.Common
-    ( maxDesignateSide, canonicalDesignationTile
-    , recordDesignationOutcome, recordMissingWorldOutcome )
+    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetMineAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState → do
-            -- Normalise into the stored frame so the anchor, the live
-            -- preview and the commit all name the same tile (#1135).
-            (cgx, cgy) ← canonicalDesignationTile worldState gx gy
+        Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { mineAnchor = Just (cgx, cgy) }, ())
+                (cs { mineAnchor = Just (gx, gy) }, ())
         Nothing → pure ()
 
 handleWorldClearMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
@@ -57,19 +53,11 @@ handleWorldClearMineAnchorCommand env _logger pageId = do
 --   dropped clear command.
 handleWorldDesignateMineCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → IO ()
-handleWorldDesignateMineCommand env logger pageId rgx1 rgy1 rgx2 rgy2 = do
+handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Nothing → recordMissingWorldOutcome env "world.designateMine" pageId rgx1 rgy1
+        Nothing → recordMissingWorldOutcome env "world.designateMine" pageId gx1 gy1
         Just worldState → do
-            -- Canonicalise the commit's own corners too (#1135):
-            -- these arrive straight from Lua, not from the stored
-            -- anchor, so a caller that bypassed pickTile could otherwise
-            -- designate in a u-seam alias frame — missing its loaded
-            -- chunk while the preview (already canonical) showed the
-            -- real tiles. Identity for coords already canonical.
-            (gx1, gy1) ← canonicalDesignationTile worldState rgx1 rgy1
-            (gx2, gy2) ← canonicalDesignationTile worldState rgx2 rgy2
             tileData ← readIORef (wsTilesRef worldState)
             let surfaceZAt gx gy = do
                     let (coord, (lx, ly)) = globalToChunk gx gy

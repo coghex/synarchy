@@ -28,7 +28,6 @@ import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
-import World.Generate.Coordinates (canonicalTileFrame)
 import World.Render.HitTest (pickWorldTile)
 import World.Render.TileQuads (worldCursorToQuad, worldCursorBgToQuad)
 
@@ -308,29 +307,17 @@ renderWorldCursorQuads env worldState tileAlpha = do
     let clampSide a b
             | b ≥ a     = min b (a + maxMinePreviewSide - 1)
             | otherwise = max b (a - maxMinePreviewSide + 1)
-        -- Canonicalise the tile frame before reading (#1135). The hover
-        -- tile arrives from 'pickWorldTile' already canonical, but an
-        -- ANCHOR does not have to: world.setMineAnchor /
-        -- construction.designate take arbitrary Lua coords and round
-        -- them, so an anchor can name a u-seam alias of a loaded chunk.
-        -- Left raw the read missed it and the whole preview silently
-        -- vanished. Identity away from the seam.
+        -- Raw lookup, deferred with the rest of the designation frame
+        -- (#1135 audit → #1175). Its inputs are a 'pickWorldTile' hover
+        -- and a designation anchor, which share whatever frame that pick
+        -- reports; canonicalising only this read would resolve tiles the
+        -- COMMIT (World.Thread.Command.Cursor.*, still raw) would then
+        -- miss, so preview and designation would disagree about what was
+        -- marked. Both ends move together in #1175 or neither does.
         surfaceZAt gx gy = do
-            let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
+            let (chunkCoord, (lx, ly)) = globalToChunk gx gy
             lc ← HM.lookup chunkCoord (wtdChunks tileData)
             pure (lcSurfaceMap lc VU.! columnIndex lx ly)
-        -- One preview tile resolved end to end: its surface z, its coords
-        -- in the STORED frame, and the wrap offset taken against that same
-        -- canonical chunk — so the z-read, the drawn position and the
-        -- offset can't disagree about which frame they are in.
-        previewTileAt gx gy = do
-            let (chunkCoord, (lx, ly), (dgx, dgy)) =
-                    canonicalTileFrame worldSize gx gy
-            lc ← HM.lookup chunkCoord (wtdChunks tileData)
-            xOff ← isChunkVisibleWrapped facing worldSize vb camX chunkCoord
-            pure ( gx + dgx, gy + dgy
-                 , lcSurfaceMap lc VU.! columnIndex lx ly
-                 , xOff )
         minePreviewQuads = case (mineAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
@@ -344,10 +331,13 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha xOff tex
-                    | rawGX ← [xLo .. xHi]
-                    , rawGY ← [yLo .. yHi]
-                    , Just (gx, gy, z, xOff) ← [previewTileAt rawGX rawGY]
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
                     ]
             _ → V.empty
 
@@ -381,9 +371,12 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha xOff tex
-                    | (rawGX, rawGY) ← tiles
-                    , Just (gx, gy, z, xOff) ← [previewTileAt rawGX rawGY]
+                    | (gx, gy) ← tiles
+                    , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
                     ]
             _ → V.empty
 
@@ -403,9 +396,12 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha xOff tex
-                    | rawGX ← [xLo .. xHi]
-                    , rawGY ← [yLo .. yHi]
-                    , Just (gx, gy, z, xOff) ← [previewTileAt rawGX rawGY]
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
                     ]
             _ → V.empty
 
@@ -425,10 +421,13 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha xOff tex
-                    | rawGX ← [xLo .. xHi]
-                    , rawGY ← [yLo .. yHi]
-                    , Just (gx, gy, z, xOff) ← [previewTileAt rawGX rawGY]
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
                     ]
             _ → V.empty
 

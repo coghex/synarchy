@@ -35,8 +35,7 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
 import World.Construct.Apply ( applyConstructSlopeToChunk
                              , clearConstructSlope )
 import World.Thread.Command.Cursor.Common
-    ( maxDesignateSide, canonicalDesignationTile
-    , recordDesignationOutcome, recordMissingWorldOutcome )
+    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
 import Structure.Types (StructureSlot, slotFromText)
 
 handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -44,12 +43,9 @@ handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPage
 handleWorldSetConstructAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState → do
-            -- Normalise into the stored frame so the anchor, the live
-            -- preview and the commit all name the same tile (#1135).
-            (cgx, cgy) ← canonicalDesignationTile worldState gx gy
+        Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { constructAnchor = Just (cgx, cgy) }, ())
+                (cs { constructAnchor = Just (gx, gy) }, ())
         Nothing → pure ()
 
 handleWorldClearConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -102,20 +98,12 @@ structureOccupiedAt tileData gx gy slot =
 --   Unloaded-chunk tiles are skipped. Clears the anchor afterwards.
 handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → ConstructTarget → IO ()
-handleWorldDesignateConstructCommand env logger pageId rgx1 rgy1 rgx2 rgy2 tgt = do
+handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing → recordMissingWorldOutcome env "construction.designate"
-            pageId rgx1 rgy1
+            pageId gx1 gy1
         Just worldState → do
-            -- Canonicalise the commit's own corners too (#1135):
-            -- these arrive straight from Lua, not from the stored
-            -- anchor, so a caller that bypassed pickTile could otherwise
-            -- designate in a u-seam alias frame — missing its loaded
-            -- chunk while the preview (already canonical) showed the
-            -- real tiles. Identity for coords already canonical.
-            (gx1, gy1) ← canonicalDesignationTile worldState rgx1 rgy1
-            (gx2, gy2) ← canonicalDesignationTile worldState rgx2 rgy2
             tileData ← readIORef (wsTilesRef worldState)
             let surfaceZAt gx gy = do
                     let (coord, (lx, ly)) = globalToChunk gx gy
