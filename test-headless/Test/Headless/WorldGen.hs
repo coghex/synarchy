@@ -8,7 +8,7 @@ module Test.Headless.WorldGen (spec) where
 
 import UPrelude
 import Test.Hspec
-import Data.List (isInfixOf, sortOn)
+import Data.List (isInfixOf, nub, sortOn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as Cereal
@@ -24,6 +24,8 @@ import World.Generate.Config
     , normalizeWorldSize
     )
 import World.Plate (generatePlates)
+import World.River.Identity (timelineRivers, timelineRiverFeatureIds)
+import World.River.Naming (rvnById)
 import World.Types
 import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
@@ -177,6 +179,35 @@ spec = do
                 (wgpOceanMap p) (wgpOceanDist p)
                 (gtWorldLakes (wgpGeoTimeline p)) (gtWorldRivers (wgpGeoTimeline p))
                 defs
+
+        it "identifies every river a REAL generated timeline surfaces \
+           \(#1102): the compaction pass's one-event-per-active-river \
+           \invariant holds on actual worldgen output, so every river \
+           \gets a feature id rather than the defensive no-id fallback" $
+                \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            let paired = timelineRivers (wgpGeoTimeline p)
+            paired `shouldSatisfy` (not ∘ null)
+            map fst paired `shouldSatisfy` all isJust
+            -- Ids are unique, so no two rivers can share a name.
+            let ids = timelineRiverFeatureIds (wgpGeoTimeline p)
+            length ids `shouldBe` length paired
+            length (nub ids) `shouldBe` length ids
+            -- Stable call over call, on the same page, from the same
+            -- stored params — nothing here is recomputed from hashmap
+            -- order or wall-clock.
+            map fst (timelineRivers (wgpGeoTimeline p))
+                `shouldBe` map fst paired
+
+        it "leaves a world with no language provenance with every river \
+           \identified and none NAMED -- the #1102 requirement 6 default \
+           \the shared world (no display name at all) exercises" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            timelineRiverFeatureIds (wgpGeoTimeline p)
+                `shouldSatisfy` (not ∘ null)
+            rvnById (wgpRiverNames p) `shouldBe` HM.empty
 
         it "world init wires a serializable overlay field" $ \env → do
             ws ← sharedWorld env 42 64 3

@@ -908,6 +908,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/i1-location-language-names.expected.json"
         }
       ]
+    },
+    {
+      "id": "j1-river-language-names",
+      "description": "Rivers named in their world's own language (issue #1102, epic #708): world-pages became v5, adding the per-page GeoFeatureId-keyed river name + gloss table beside the location instances #1101 extended. This baseline tracks a REAL current-format session written by the live engine at world-pages v5, whose page carries a #1092 language provenance AND generates several rivers -- so the new table really holds generated names and glosses rather than the empty table an unnamed (or river-less) world produces, and the new field is exercised by the fixture registered to cover its version. The pre-#1102 v4 shape stays tracked by i1, the pre-#1101 v3 shape by g1/h1, the pre-#1092 v2 shape by d1/e1/f1, and the pre-#911 v1 shape by b2/b3/c3; every one of them decodes with an EMPTY river-name table, never re-rendered (#1102 requirements 5 and 6).",
+      "declaredAt": "2026-08-07",
+      "declaredByIssue": 1102,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldPagesV4 (v4 -> v5: the page's river-name table decodes EMPTY -- a save written before rivers were named never acquires them), migrateWorldPagesV3 (v3 -> current), migrateWorldPagesV2 (v2 -> current), migrateWorldPagesV1 (v1 -> current) + Location.Instance.resolveLegacyLocationInstances",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "j1-river-language-names-session",
+          "path": "test-headless/data/save-compat/j1-river-language-names.bin",
+          "kind": "complete-session",
+          "sha256": "1e7ff276a9b93b8c8e103465b9d54ae0fa63affba5c27034105666bc38559773",
+          "sizeBytes": 908937,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3, 'Vashenkoro' named in the generated language seeded 12345678901234567890), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/j1-river-language-names.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

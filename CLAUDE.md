@@ -865,8 +865,8 @@ before touching each area:
   `world.markLocationContentsSpawnedById(id[, pageId])`. The
   coordinate-addressed `hasSpawnedLocationContents`/
   `markLocationContentsSpawned` remain compatibility wrappers resolving
-  to the chunk's first instance. Persistence: `world-pages` (v4 since
-  #1101; v3 since #1092; #911 introduced its v2), with a
+  to the chunk's first instance. Persistence: `world-pages` (v5 since
+  #1102; v4 since #1101; v3 since #1092; #911 introduced its v2), with a
   frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
   against the location registry at the load path's content-validation
   stage (`resolveLegacyLocations`) before publication. Gates: hspec
@@ -891,6 +891,35 @@ before touching each area:
   to `ldLabel` with the `gloss` key ABSENT; absence is never papered
   over by inventing a language. Gate: hspec `--match "Location naming"`,
   plus `location_content_probe.py` phase 5.
+- **River identity + naming (#1102)** — `world.getRivers()` gives every
+  river an `id`: the `GeoFeatureId` the timeline already allocated, so
+  the durable identity is `(WorldPageId, GeoFeatureId)` (feature ids
+  restart at zero per timeline, and the query only ever reads the ACTIVE
+  page). `World.River.Identity` is the ONE place events are paired with
+  features — compaction re-emits exactly one event per active river
+  feature in `gtFeatures` order, and the pairing is CHECKED against
+  source/mouth/flow before it is trusted, so a violated invariant yields
+  no id rather than a wrong one. A named river also carries `name` and
+  `gloss`; both keys are ABSENT (nil) otherwise. Names live in a
+  per-page `wgpRiverNames` table keyed by `GeoFeatureId` — deliberately
+  NOT on `PersistentFeature`, whose `GeoTimeline` is a positionally
+  serialized worldgen-OUTPUT schema; naming moves no terrain and no
+  baseline. The expression is `Modifier modifier head` over a NARROW
+  in-code head pool (`riverHeadConcepts`: `RIVER` — added to the
+  catalogue by this issue — plus `FORD`, `CROSSING`, `BAY`, `VALE`,
+  `HOLLOW`) and a WIDE modifier pool (every catalogue concept with a
+  modifier form): the asymmetry is what makes a head morpheme recur
+  across a map's rivers and in the world's own name. Rivers have no
+  definition file to author pools on, which is why these are code and
+  not data. WRITE-ONCE (#708 principle 5): `buildRiverNames` at world
+  init is the only writer, so growing the catalogue never re-renders a
+  stored name even though `assignLanguageRoots` re-resolves collisions
+  over the whole concept set. A page with no provenance has an EMPTY
+  table — ids still work. `Language.Naming` holds the machinery both
+  this and #1101 use; a third caller belongs there too, not in a copy.
+  Gates: hspec `--match "River naming"` / `--match "River identity"`,
+  the shared-world identity specs under `--match "Location overlay"`,
+  and `tools/river_naming_probe.py`.
 - **Location discovery (#780)** — a one-way lifecycle promotion to
   `discovered`, fired when a `uiFactionId == "player"` unit enters the
   instance's `discovery_margin` halo; ticks for EVERY loaded page,

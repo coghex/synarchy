@@ -568,6 +568,7 @@ library
                      Language.Generated.Render
                      Language.Generated.Signature
                      Language.Generated.Report
+                     Language.Naming
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
@@ -739,6 +740,8 @@ library
                      World.Geology.Event
                      World.Hydrology.Types
                      World.Hydrology.Event
+                     World.River.Identity
+                     World.River.Naming
                      World.Hydrology.Simulation
                      World.Hydrology.Simulation.Types
                      World.Hydrology.Simulation.Grid
@@ -1155,6 +1158,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.Naming
+                   Test.Headless.River.Naming
                    Test.Headless.Location.LootDeterminism
                    Test.Headless.Location.MapIcons
                    Test.Headless.Tutorial.Definitions

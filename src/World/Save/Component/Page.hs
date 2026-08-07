@@ -35,7 +35,8 @@
 --   - 'WorldGenParams'      → 'WorldGenParamsDTO' (with its nested live
 --                             config/state records frozen recursively —
 --                             see "World.Save.Component.WorldGen"; the
---                             pre-#1101 shape stays as
+--                             pre-#1102 shape stays as
+--                             'WorldGenParamsDTOv3', the pre-#1101 one as
 --                             'WorldGenParamsDTOv2' and the pre-#911 one
 --                             as 'WorldGenParamsDTOv1')
 --   - 'WorldIdentity'       → 'WorldIdentityDTO' (its optional
@@ -86,10 +87,13 @@ module World.Save.Component.Page
     , WorldPagesDTOv2(..)
     , PageCoreDTOv3(..)
     , WorldPagesDTOv3(..)
+    , PageCoreDTOv4(..)
+    , WorldPagesDTOv4(..)
     , WorldPages(..)
     , migrateWorldPagesV1
     , migrateWorldPagesV2
     , migrateWorldPagesV3
+    , migrateWorldPagesV4
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
@@ -98,6 +102,9 @@ module World.Save.Component.Page
     , WorldGenParamsDTO(..)
     , WorldGenParamsDTOv1(..)
     , WorldGenParamsDTOv2(..)
+    , WorldGenParamsDTOv3(..)
+    , RiverNameDTO(..)
+    , RiverNamesDTO(..)
     , WorldIdentityDTO(..)
     , WorldIdentityDTOv1(..)
     , LanguageProvenanceDTO(..)
@@ -121,6 +128,8 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv1
     , fromWorldGenParamsDTOv2
     , toWorldGenParamsDTOv2
+    , fromWorldGenParamsDTOv3
+    , toWorldGenParamsDTOv3
     , toItemInstanceDTO
     , fromItemInstanceDTO
     , toGroundItemDTO
@@ -147,7 +156,10 @@ import World.Save.Component.WorldGen
     , WorldGenParamsDTOv1(..), fromWorldGenParamsDTOv1
     , toWorldGenParamsDTOv1
     , WorldGenParamsDTOv2(..), fromWorldGenParamsDTOv2
-    , toWorldGenParamsDTOv2 )
+    , toWorldGenParamsDTOv2
+    , WorldGenParamsDTOv3(..), fromWorldGenParamsDTOv3
+    , toWorldGenParamsDTOv3
+    , RiverNameDTO(..), RiverNamesDTO(..) )
 import Location.Instance (locationInstanceAllocatorErrors)
 import World.Generate.Types (WorldGenParams(..))
 import World.Chunk.Types (ChunkCoord)
@@ -549,9 +561,10 @@ fromEditsDTO = HM.map (map fromWorldEditDTO)
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v4) wire shape — see 'PageCoreDTOv3' for the
---   frozen pre-#1101 one, 'PageCoreDTOv2' for the pre-#1092 one, and
---   'PageCoreDTOv1' for the pre-#911 one.
+--   This is the CURRENT (v5) wire shape — see 'PageCoreDTOv4' for the
+--   frozen pre-#1102 one, 'PageCoreDTOv3' for the pre-#1101 one,
+--   'PageCoreDTOv2' for the pre-#1092 one, and 'PageCoreDTOv1' for the
+--   pre-#911 one.
 data PageCoreDTO = PageCoreDTO
     { pcPageId      ∷ !WorldPageId
     , pcGenParams   ∷ !WorldGenParamsDTO
@@ -646,6 +659,29 @@ newtype WorldPagesDTOv3 = WorldPagesDTOv3 { wpd3Pages ∷ [PageCoreDTOv3] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN v4 wire shape (#1101 through #1102), preserved verbatim
+--   for decode-only backward compatibility: #1092's identity over
+--   #1101's gen params, whose location instances carry a gloss but
+--   whose page carries no river-name table. Never edited; a further
+--   schema change adds a newer type instead (frozen-DTO boundary rule).
+data PageCoreDTOv4 = PageCoreDTOv4
+    { pc4PageId      ∷ !WorldPageId
+    , pc4GenParams   ∷ !WorldGenParamsDTOv3
+    , pc4CameraX     ∷ !Float
+    , pc4CameraY     ∷ !Float
+    , pc4TimeHour    ∷ !Int
+    , pc4TimeMinute  ∷ !Int
+    , pc4DateYear    ∷ !Int
+    , pc4DateMonth   ∷ !Int
+    , pc4DateDay     ∷ !Int
+    , pc4MapMode     ∷ !ZoomMapMode
+    , pc4Identity    ∷ !(Maybe WorldIdentityDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv4 = WorldPagesDTOv4 { wpd4Pages ∷ [PageCoreDTOv4] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
 -- | The canonical decoded value of the @world-pages@ component, kept
 --   separate from either wire DTO ("World.Save.Component.Types": the
 --   canonical type a codec decodes INTO is the migration target). It is
@@ -658,23 +694,24 @@ data WorldPages = WorldPages
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
     } deriving (Show)
 
--- | Encoding always writes the current v4 shape; v3 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV3' (#1101), v2
---   via 'migrateWorldPagesV2' (#1092), and v1 via 'migrateWorldPagesV1'
---   (#911). Issue #1093: this used to be a hand-rolled 'ComponentCodec'
---   because the shared helper had no real multi-version dispatch —
---   'componentCodec' now expresses it, with each accepted version
---   declared exactly once.
+-- | Encoding always writes the current v5 shape; v4 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV4' (#1102), v3
+--   via 'migrateWorldPagesV3' (#1101), v2 via 'migrateWorldPagesV2'
+--   (#1092), and v1 via 'migrateWorldPagesV1' (#911). Issue #1093: this
+--   used to be a hand-rolled 'ComponentCodec' because the shared helper
+--   had no real multi-version dispatch — 'componentCodec' now expresses
+--   it, with each accepted version declared exactly once.
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-    , csVersion       = 4
+    , csVersion       = 5
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 3 migrateWorldPagesV3
+    , csOlderVersions = [ atVersion 4 migrateWorldPagesV4
+                        , atVersion 3 migrateWorldPagesV3
                         , atVersion 2 migrateWorldPagesV2
                         , atVersion 1 migrateWorldPagesV1 ]
     , csValidate      = validatePages
@@ -714,9 +751,9 @@ validatePages wp
           , msg ← locationInstanceAllocatorErrors
                       (wgpLocationInstances (pgsGenParams p))
           ]
-  where err = ComponentError worldPagesComponentId 4 ValidatePhase
+  where err = ComponentError worldPagesComponentId 5 ValidatePhase
 
--- | Turn the decoded v4 page cores into the base 'PageSnapshot' map every
+-- | Turn the decoded v5 page cores into the base 'PageSnapshot' map every
 --   other page-scoped component then writes onto (assembly). All entity/
 --   activity/edit fields start empty and are overwritten by their own
 --   REQUIRED components; a valid save leaves none of these placeholders.
@@ -737,6 +774,37 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         , pgsDateDay    = pcDateDay p
         , pgsMapMode    = pcMapMode p
         , pgsIdentity   = fromWorldIdentityDTO <$> pcIdentity p
+        }
+
+-- | The v4 migration (#1102): decode the frozen v4 page cores into the
+--   same base 'PageSnapshot' map. The ONLY difference is the per-page
+--   river-name table, which comes back EMPTY
+--   ('World.Save.Component.WorldGen.fromWorldGenParamsDTOv3'): a save
+--   written before #1102 named no rivers, and a name is never inferred
+--   after the fact for a page whose language it was not rendered from
+--   (#1102 requirements 5 and 6). Its rivers still carry ids, which are
+--   derived from the timeline the page already stores, so the identity
+--   half of the feature works on a pre-#1102 save with no migration at
+--   all. Everything else — identity with its provenance, location
+--   instances with their stored names and glosses, clocks, camera, map
+--   mode — rides across untouched.
+migrateWorldPagesV4 ∷ WorldPagesDTOv4 → WorldPages
+migrateWorldPagesV4 (WorldPagesDTOv4 ps) = WorldPages
+    { wpPageIds = map pc4PageId ps
+    , wpBase    = HM.fromList [ (pc4PageId p, toBase p) | p ← ps ]
+    }
+  where
+    toBase p = (blankPageSnapshot (pc4PageId p)
+                    (fromWorldGenParamsDTOv3 (pc4GenParams p)))
+        { pgsCameraX    = pc4CameraX p
+        , pgsCameraY    = pc4CameraY p
+        , pgsTimeHour   = pc4TimeHour p
+        , pgsTimeMinute = pc4TimeMinute p
+        , pgsDateYear   = pc4DateYear p
+        , pgsDateMonth  = pc4DateMonth p
+        , pgsDateDay    = pc4DateDay p
+        , pgsMapMode    = pc4MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc4Identity p
         }
 
 -- | The v3 migration (#1101): decode the frozen v3 page cores into the
@@ -826,7 +894,7 @@ migrateWorldPagesV1 (WorldPagesDTOv1 ps) = WorldPages
         , pgsIdentity   = fromWorldIdentityDTOv1 <$> pc1Identity p
         }
 
--- | The zeroed base 'PageSnapshot' the v4, v3, v2, and v1 paths above
+-- | The zeroed base 'PageSnapshot' the v5, v4, v3, v2, and v1 paths above
 --   all build on, so they can never drift in which placeholder fields
 --   they leave for the other components to fill. Each caller record-updates
 --   the page-core scalars it decoded; everything left here is a

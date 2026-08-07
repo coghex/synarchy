@@ -72,13 +72,19 @@ import World.Save.Component.Page
     , PageCoreDTO(..), WorldPagesDTO(..), PageCoreDTOv1(..)
     , WorldPagesDTOv1(..), PageCoreDTOv2(..), WorldPagesDTOv2(..)
     , PageCoreDTOv3(..), WorldPagesDTOv3(..)
+    , toWorldGenParamsDTOv3
+    , PageCoreDTOv4(..), WorldPagesDTOv4(..)
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
     , LanguageProvenanceDTO(..), basePageSnapshots
-    , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3 )
+    , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
+    , migrateWorldPagesV4 )
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Base (GeoFeatureId(..))
+import World.River.Naming
+    (RiverName(..), RiverNames(..), riverNamesToList, emptyRiverNames)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
@@ -694,6 +700,9 @@ spec = do
             instancesOf pages pid = maybe []
                 (instancesToList . wgpLocationInstances . pgsGenParams)
                 (HM.lookup (WorldPageId pid) (wpBase pages))
+            riversOf pages pid = maybe []
+                (riverNamesToList . wgpRiverNames . pgsGenParams)
+                (HM.lookup (WorldPageId pid) (wpBase pages))
             -- Decode the REAL tracked B1 bytes, optionally adjust the
             -- single page they carry, migrate, and hand the resulting
             -- PageSnapshot to the assertion.
@@ -754,7 +763,43 @@ spec = do
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
 
-        it "the CURRENT v4 page core round-trips a location's name AND \
+        it "a frozen v4 page core comes back with NO river names, while \
+           \its already-named location keeps its EXACT stored name and \
+           \gloss -- a save written before rivers were named never \
+           \acquires them, and nothing else regresses to do it" $ do
+            let dto = WorldPagesDTOv4 [legacyPageCoreV4]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv4 of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    riversOf (migrateWorldPagesV4 dto') "legacy_page"
+                        `shouldBe` []
+                    let insts = instancesOf (migrateWorldPagesV4 dto')
+                                    "legacy_page"
+                    map liDisplayName insts `shouldBe` ["Vashenkoro"]
+                    map liGloss insts `shouldBe` [Just "Ashen Keep"]
+                    -- The page's own identity DOES declare a language,
+                    -- so "no river names" here is the write-once rule
+                    -- (#1102 requirements 5 and 6), not an absent
+                    -- provenance quietly doing the work.
+                    (wiLanguage =≪ identityOf (migrateWorldPagesV4 dto')
+                                       "legacy_page")
+                        `shouldBe` Just (LanguageProvenance
+                                            (LangSeed 0xABCDEF0123456789)
+                                            (GeneratorVersion 1))
+
+        it "the CURRENT v5 page core round-trips a river's name AND gloss, \
+           \keyed by its feature id -- so the v4 absence above is a real \
+           \decode outcome, not a table that is always empty" $ do
+            let dto = WorldPagesDTO [currentPageCoreRivers]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err  → expectationFailure err
+                Right dto' →
+                    riversOf (basePageSnapshots dto') "legacy_page"
+                        `shouldBe` [ (GeoFeatureId 3
+                                     , RiverName "Vashendral"
+                                           (Just "Ashen River")) ]
+
+        it "the CURRENT v5 page core round-trips a location's name AND \
            \gloss -- so the v3 absence above is a real decode outcome, \
            \not a field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCoreNamed]
@@ -766,7 +811,7 @@ spec = do
                     map liDisplayName insts `shouldBe` ["Vashenkoro"]
                     map liGloss insts `shouldBe` [Just "Ashen Keep"]
 
-        it "the CURRENT v4 page core round-trips a present provenance -- \
+        it "the CURRENT v5 page core round-trips a present provenance -- \
            \so the two absences above are a real decode outcome, not a \
            \field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCore]
@@ -847,6 +892,46 @@ spec = do
                     map iiDefName (concatMap crItems records)
                         `shouldBe` ["bandage"]
                     map crStoredWeight records `shouldSatisfy` all (> 0)
+
+    -- #1102's mirror of the pair above, and for the same reason: the
+    -- new per-page river-name table decodes EMPTY for every baseline
+    -- written before it existed, which is indistinguishable from a
+    -- table that silently lost its contents unless some tracked fixture
+    -- carries a genuinely POPULATED one.
+    describe "river names across baselines (issue #1102)" $ do
+        let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            withRivers path k = do
+                bytes ← BS.readFile path
+                case decodeSessionEnvelope luaNames luaNames bytes of
+                    Left err → expectationFailure
+                        (path <> " did not decode: " <> T.unpack err)
+                    Right (_, snap, _, _) → k
+                        [ wgpRiverNames (pgsGenParams p)
+                        | p ← HM.elems (snapPages snap) ]
+
+        it "a tracked baseline written BEFORE rivers were named decodes \
+           \with every page's river-name table empty -- no name is ever \
+           \inferred for a world that was saved without one" $
+            withRivers
+                "test-headless/data/save-compat/i1-location-language-names.bin" $
+                \ts → do
+                    ts `shouldNotBe` []
+                    ts `shouldSatisfy` all (≡ emptyRiverNames)
+
+        it "the tracked current-version baseline carries genuinely NAMED \
+           \rivers -- every entry a non-empty native name with a \
+           \non-empty English gloss, so this coverage can never silently \
+           \decay into the same empty default the pre-#1102 baselines \
+           \already prove" $
+            withRivers
+                "test-headless/data/save-compat/j1-river-language-names.bin" $
+                \ts → do
+                    let named = concatMap riverNamesToList ts
+                    length named `shouldSatisfy` (> 1)
+                    map (rvnDisplayName ∘ snd) named
+                        `shouldSatisfy` all (not ∘ T.null)
+                    map (rvnGloss ∘ snd) named `shouldSatisfy` all
+                        (maybe False (not ∘ T.null))
 
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
         it "refuses to migrate a legacy envelope carrying an extra \
@@ -1278,14 +1363,51 @@ legacyNamedInstances = LocationInstances
 
 -- | #1101: the current page core carrying a location named in the
 --   page's own language, gloss and all.
+-- | #1102 fixture: a pre-#1102 (@world-pages@ v4) page core whose gen
+--   params are the frozen pre-#1102 shape, so the page genuinely has
+--   nowhere to store a river name — which is what makes the v4
+--   migration's "no river names, everything else exact" contract a real
+--   decode outcome rather than a field that was never written. Its
+--   location is already named IN a language, so the migration is also
+--   shown not to disturb what #1101 stored.
+legacyPageCoreV4 ∷ PageCoreDTOv4
+legacyPageCoreV4 = PageCoreDTOv4
+    { pc4PageId     = WorldPageId "legacy_page"
+    , pc4GenParams  = toWorldGenParamsDTOv3 defaultWorldGenParams
+                          { wgpLocationInstances = namedLocationInstances }
+    , pc4CameraX    = 1, pc4CameraY = 2
+    , pc4TimeHour   = 12, pc4TimeMinute = 30
+    , pc4DateYear   = 1, pc4DateMonth = 2, pc4DateDay = 3
+    , pc4MapMode    = ZMDefault
+    , pc4Identity   = Just (WorldIdentityDTO "Legacy World"
+                               (Just "an old gloss")
+                               (Just (LanguageProvenanceDTO
+                                          0xABCDEF0123456789 1)))
+    }
+
+-- | 'legacyNamedInstances' with a generated name and gloss, as #1101
+--   stores one. Shared by the v4 fixture above and the current-shape
+--   one below.
+namedLocationInstances ∷ LocationInstances
+namedLocationInstances = legacyNamedInstances
+    { lisById = HM.map (\i → i { liDisplayName = "Vashenkoro"
+                               , liGloss       = Just "Ashen Keep" })
+                       (lisById legacyNamedInstances) }
+
+-- | The current page core carrying one NAMED river, so the v4 fixture's
+--   empty table above is a decode outcome rather than a shape that can
+--   never hold anything.
+currentPageCoreRivers ∷ PageCoreDTO
+currentPageCoreRivers = currentPageCore
+    { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
+        { wgpRiverNames = RiverNames (HM.singleton (GeoFeatureId 3)
+              (RiverName "Vashendral" (Just "Ashen River"))) }
+    }
+
 currentPageCoreNamed ∷ PageCoreDTO
 currentPageCoreNamed = currentPageCore
     { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
-        { wgpLocationInstances = legacyNamedInstances
-            { lisById = HM.map
-                (\i → i { liDisplayName = "Vashenkoro"
-                        , liGloss       = Just "Ashen Keep" })
-                (lisById legacyNamedInstances) } }
+        { wgpLocationInstances = namedLocationInstances }
     }
 
 currentPageCore ∷ PageCoreDTO

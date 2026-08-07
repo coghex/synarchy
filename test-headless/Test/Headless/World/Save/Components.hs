@@ -51,6 +51,7 @@ import World.Save.Types
     , missingConstructDefReferences
     , WorldPageSave(..), SaveData(..), resolveLegacyLocationParams )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.River.Naming (RiverNames(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -511,6 +512,13 @@ pageCoreV2 pid = PageCoreDTOv2
 -- | The same page core in the frozen pre-#1101 v3 shape: #1092's
 --   three-field identity over the frozen pre-#1101 gen params, whose
 --   location-instance table carries no gloss.
+pageCoreV4 ∷ WorldPageId → PageCoreDTOv4
+pageCoreV4 pid = PageCoreDTOv4
+    { pc4PageId = pid, pc4GenParams = toWorldGenParamsDTOv3 defaultGP
+    , pc4CameraX = 0, pc4CameraY = 0, pc4TimeHour = 0, pc4TimeMinute = 0
+    , pc4DateYear = 1, pc4DateMonth = 1, pc4DateDay = 1, pc4MapMode = ZMDefault
+    , pc4Identity = Just (WorldIdentityDTO "Old World" Nothing Nothing) }
+
 pageCoreV3 ∷ WorldPageId → PageCoreDTOv3
 pageCoreV3 pid = PageCoreDTOv3
     { pc3PageId = pid, pc3GenParams = toWorldGenParamsDTOv2 defaultGP
@@ -602,7 +610,7 @@ goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
     [ ("core-session",        (85,   "74d3010096cbbe2b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
-    , ("world-pages",         (1289, "7b86411a57c4dd80"))
+    , ("world-pages",         (1305, "b916dab724c6e2a0"))
     , ("world-edits",         (50,   "1ed7627acac89064"))
     , ("world-activity",      (194,  "251087e70708d624"))
     , ("buildings",           (151,  "3dafc93879ea3b82"))
@@ -617,7 +625,7 @@ goldenFullPayloads ∷ [(Text, (Int, Text))]
 goldenFullPayloads =
     [ ("core-session",        (85,  "0641eeed95100f9a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
-    , ("world-pages",         (674, "6a873da3692b0a6f"))
+    , ("world-pages",         (682, "68ac6b08adf6134f"))
     , ("world-edits",         (70,  "814069e34515f996"))
     , ("world-activity",      (332, "0292cc7e9c1053e3"))
     , ("buildings",           (130, "2b6c80ab8c216329"))
@@ -710,7 +718,7 @@ spec = do
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))
             check (ccEncode coreSessionCodec)   (ccDecode coreSessionCodec 1)
-            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 4)
+            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 5)
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
             check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
@@ -723,7 +731,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 4
+            ccVersion worldPagesCodec `shouldBe` 5
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -853,7 +861,7 @@ spec = do
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \
            \requirement 10)" $
-            case ccDecode worldPagesCodec 3 (ccEncode worldPagesCodec richSnapshot) of
+            case ccDecode worldPagesCodec 5 (ccEncode worldPagesCodec richSnapshot) of
                 Right wp →
                     [ wgpSeed (pgsGenParams p)
                     | p ← maybeToList (HM.lookup page1 (wpBase wp)) ]
@@ -936,12 +944,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
 
-        it "reports an unsupported version identically for a FOUR-version \
+        it "reports an unsupported version identically for a FIVE-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 5 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 5
+            decodeErrorOf worldPagesCodec 6 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 6
                     DecodePhase
-                    "unsupported schema version (reader supports v1, v2, v3, v4)")
+                    "unsupported schema version \
+                    \(reader supports v1, v2, v3, v4, v5)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -980,6 +989,8 @@ spec = do
                 `shouldSatisfy` maybe False ((≡ DecodePhase) . cePhase)
             decodeErrorOf worldPagesCodec 4 v2Bytes
                 `shouldSatisfy` maybe False ((≡ DecodePhase) . cePhase)
+            decodeErrorOf worldPagesCodec 5 v2Bytes
+                `shouldSatisfy` maybe False ((≡ DecodePhase) . cePhase)
 
         it "a v3 world-pages payload reaches the v3 decoder (#1101) rather \
            \than the current one" $ do
@@ -988,6 +999,20 @@ spec = do
                 Right wp → map (fmap wiName . pgsIdentity)
                                (HM.elems (wpBase wp))
                     `shouldBe` [Just "Old World"]
+                Left e → expectationFailure (T.unpack (renderComponentError e))
+
+        it "a v4 world-pages payload reaches the v4 decoder (#1102) rather \
+           \than the current one, and its page comes back with NO river \
+           \names -- a save written before rivers were named never \
+           \acquires them" $ do
+            let v4Bytes = S.encode (WorldPagesDTOv4 [pageCoreV4 page1])
+            case ccDecode worldPagesCodec 4 v4Bytes of
+                Right wp → do
+                    map (fmap wiName . pgsIdentity) (HM.elems (wpBase wp))
+                        `shouldBe` [Just "Old World"]
+                    map (rvnById . wgpRiverNames . pgsGenParams)
+                        (HM.elems (wpBase wp))
+                        `shouldBe` [HM.empty]
                 Left e → expectationFailure (T.unpack (renderComponentError e))
 
         it "a v1 craft-bills payload reaches the v1 decoder and comes back \

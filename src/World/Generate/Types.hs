@@ -35,6 +35,7 @@ import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)
 import World.Magma.Init (buildVolcanoCtx)
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 import Location.Instance (LocationInstances(..), emptyLocationInstances)
+import World.River.Naming (RiverNames, emptyRiverNames)
 import World.Chunk.Types (ChunkCoord)
 
 -- | Pure, serializable world generation parameters.
@@ -111,6 +112,21 @@ data WorldGenParams = WorldGenParams
       --   marker, set once on first stamp and never revisited by
       --   player structure edits, so it stays true even after the
       --   anchor tile is cleared.
+    , wgpRiverNames ∷ !RiverNames
+      -- ^ Per-page river-name table (#1102): each river's name in this
+      --   page's own generated language, plus its English gloss, keyed
+      --   by the 'World.Base.GeoFeatureId' the timeline already
+      --   allocated. Sits BESIDE 'wgpLocationInstances' for the same
+      --   reason it exists at all — a name is not terrain, and
+      --   'wgpGeoTimeline' is a positionally serialized worldgen-output
+      --   schema (see "World.River.Naming").
+      --
+      --   Empty for a page with no #1092 language provenance and for
+      --   every save written before #1102: a river then keeps its id
+      --   and has no name, and nothing infers one. Written ONCE at
+      --   world init and read thereafter (#708 principle 5).
+      --
+      --   Serialized.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -151,6 +167,7 @@ instance Serialize WorldGenParams where
         put (lisNextId (wgpLocationInstances p))
         put (lisById (wgpLocationInstances p))
         put (wgpLocationStamped p)
+        put (wgpRiverNames p)
     get = do
         seed       ← get
         ws         ← get
@@ -175,6 +192,7 @@ instance Serialize WorldGenParams where
         locNextId  ← get
         locById    ← get
         locStamped ← get
+        riverNames ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -203,6 +221,7 @@ instance Serialize WorldGenParams where
                 , lisPendingLegacy = Nothing
                 }
             , wgpLocationStamped  = locStamped
+            , wgpRiverNames       = riverNames
             , wgpVolcanoCtx       = vc
             }
 
@@ -235,6 +254,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpLocationOverlay = emptyLocationOverlay
     , wgpLocationInstances = emptyLocationInstances
     , wgpLocationStamped = HS.empty
+    , wgpRiverNames = emptyRiverNames
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 
