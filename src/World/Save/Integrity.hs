@@ -74,6 +74,7 @@ import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId )
+import World.Save.Payload (LuaRefEdge(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
 import World.Save.Snapshot
     ( SessionSnapshot(..), PageSnapshot(..), allItemInstanceIds )
@@ -374,34 +375,13 @@ buildKnownEntities snap = KnownEntities
     }
   where pages = HM.elems (snapPages snap)
 
--- | One reference a Lua save component's @references()@ hook reported —
---   the raw @{kind=.., id=..}@ shape, plus which Lua component it came
---   from (for diagnostic attribution), the OWNING unit id when the hook
---   supplied one (@lreOwner@ — every @unitAiReferences@ entry is emitted
---   from inside a per-unit loop, so it always has one;
---   @buildingSpawnReferences@ entries never need one, since its
---   "unit"/"building" kinds resolve session-wide regardless), and
---   (issue #764) the actual field path this edge came
---   from (@lrePath@ — e.g. @"unit[7].attackTargetUid"@,
---   @"building[12].lastUid"@), in the SAME dotted-path style
---   'refEdgeError' already uses for Haskell-side findings — see
---   @unit_ai_save_refs.lua@'s @unitAiReferences@ and
---   @building_spawn.lua@'s @buildingSpawnReferences@, which build it.
---   @lrePage@ (#915) is the edge's OWN declared world page, for the one
---   reference kind whose id means nothing without it
---   (@location_instance@ — a per-page allocator whose durable identity
---   IS @(page, id)@, see #911). Unlike @craft_bill@/@ground_item@,
---   which borrow the owning unit's page, a location memory must name
---   its page itself: the page is part of what the unit remembers, not
---   an incidental fact about where the unit currently stands.
-data LuaRefEdge = LuaRefEdge
-    { lreComponent ∷ !Text
-    , lreKind      ∷ !Text
-    , lreId        ∷ !Int
-    , lreOwner     ∷ !(Maybe Int)
-    , lrePath      ∷ !Text
-    , lrePage      ∷ !(Maybe Text)
-    } deriving (Show, Eq)
+-- 'LuaRefEdge' — the edge record this module's checks consume — is
+-- defined in the leaf module "World.Save.Payload" and re-exported here,
+-- so the HsLua reader that builds it
+-- ("Engine.Scripting.Lua.API.Save.Bridge") and the world-thread command
+-- that transports it ("World.Command.Types") can name the SAME record
+-- without importing this module's own snapshot/envelope dependencies
+-- (issue #1103). Its full haddock lives with the definition.
 
 -- | Does this edge resolve against the known entity sets? An unknown
 --   @kind@ string is not this function's problem to catch (a

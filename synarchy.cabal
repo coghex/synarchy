@@ -559,6 +559,7 @@ library
                      Language.Semantic.English
                      Language.Generated.Types
                      Language.Generated.Hash
+                     Language.Generated.Orthography
                      Language.Generated.Onset
                      Language.Generated.Boundary
                      Language.Generated.Bound
@@ -655,7 +656,6 @@ library
                      World.Render.Zoom.Quads
                      World.Render.Zoom.Cursor
                      World.Render.Zoom.Icons
-                     World.Render.Zoom.Background
                      World.Generate
                      World.Generate.Arena
                      World.Generate.Constants
@@ -788,6 +788,7 @@ library
                      World.Save.Autosave
                      World.Save.Compat.MetadataV1
                      World.Save.Compat.SessionV90
+                     World.Save.Payload
                      World.Save.Reference
                      World.Save.Integrity
                      World.Save.Storage
@@ -857,7 +858,6 @@ library
                      World.Material
                      World.Material.Id
                      World.Preview
-                     World.ZoomMap
                      World.ZoomMap.Cache
                      World.ZoomMap.Cache.Build
                      World.ZoomMap.Cache.BuildPixels
@@ -1161,6 +1161,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Lua.SaveBridge
                    Test.Headless.Lua.TutorialProgress
                    Test.Headless.Lua.TutorialEvaluation
                    Test.Headless.Lua.UnitAiLocations

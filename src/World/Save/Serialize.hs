@@ -26,7 +26,8 @@ import World.Save.Types (SaveData, SaveMetadata(..), checkWorldCount)
 import World.Save.Envelope
     ( encodeSessionSnapshot, decodeSessionEnvelope
     , decodeSaveEnvelopeMetadata, decodeSaveEnvelopeMetadataClassified
-    , GenerationFailure(..), renderGenerationFailure )
+    , GenerationFailure(..), renderGenerationFailure
+    , LuaComponentSpec(..) )
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import qualified World.Save.Storage as Storage
 import Engine.Core.Log (LoggerState, LogCategory(..), logWarn)
@@ -253,7 +254,8 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                                           , srmTimestamp = smTimestamp meta
                                           , srmAutosave  = smAutosave meta }
                 sd ← checkWorldCount (snapshotToSaveData req snap)
-                pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ]
+                pure (sd, [ (lcsId c, lcsVersion c, lcsPayload c)
+                          | c ← luaComponents ]
                      , isMigrated)
         return $ either (\err → Left (LoadPaused, err)) Right result
 

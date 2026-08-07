@@ -50,11 +50,18 @@ module Test.Headless.World.Save.Contract (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
-import World.Save.Envelope (encodeSessionSnapshot, decodeSessionEnvelope)
+import qualified Data.Text as T
+import World.Save.Envelope
+    ( encodeSessionSnapshot, decodeSessionEnvelope, LuaComponentSpec(..)
+    , metadataComponentId, currentEnvelopeVersion )
+import World.Save.Envelope.Codec (DecodedEnvelope(..), decodeEnvelope)
+import World.Save.Envelope.Types
+    ( ComponentId(..), ComponentDescriptor(..), EnvelopeManifest(..)
+    , defaultEnvelopeLimits )
+import World.Save.Component (componentKnownIds, componentRequiredIds)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter
     (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
@@ -392,11 +399,37 @@ representativeSnapshot = case captureSessionSnapshot richGlobals [richPage, mini
 --   live-engine `unitAi.getState`/`building.getSpawnRemaining`
 --   round-trip checks in `tools/persistence_contract_probe.py`/
 --   `_sweep.py` (which a pure, engine-less module cannot perform).
-syntheticLuaComponents ∷ [(Text, Word32, Bool, BS.ByteString)]
+syntheticLuaComponents ∷ [LuaComponentSpec]
 syntheticLuaComponents =
-    [ ("unit_ai", 3, True, "synthetic-unit_ai-payload")
-    , ("building_spawn", 3, True, "synthetic-building_spawn-payload")
+    [ LuaComponentSpec { lcsId = "unit_ai", lcsVersion = 3
+                       , lcsRequired = True
+                       , lcsPayload = "synthetic-unit_ai-payload" }
+    , LuaComponentSpec { lcsId = "building_spawn", lcsVersion = 3
+                       , lcsRequired = True
+                       , lcsPayload = "synthetic-building_spawn-payload" }
     ]
+
+-- | The encoding-pin fixture (issue #1103), deliberately separate from
+--   'syntheticLuaComponents': every field differs between the two specs
+--   (versions 4 vs 2, required True vs False, distinct payloads) and
+--   they are listed in NON-canonical id order, so the manifest
+--   assertions below genuinely pin which value each envelope descriptor
+--   field received and what order the codec laid them out in — a fixture
+--   whose entries agreed on a field could not.
+pinnedLuaComponents ∷ [LuaComponentSpec]
+pinnedLuaComponents =
+    [ LuaComponentSpec { lcsId = "unit_ai", lcsVersion = 4
+                       , lcsRequired = True
+                       , lcsPayload = "pinned-unit_ai-payload" }
+    , LuaComponentSpec { lcsId = "building_spawn", lcsVersion = 2
+                       , lcsRequired = False
+                       , lcsPayload = "pinned-building_spawn-bytes" }
+    ]
+
+-- | The reserved @lua.@ namespace "World.Save.Envelope" prefixes a bare
+--   registry id into on the way to the manifest.
+luaCid ∷ Text → ComponentId
+luaCid name = ComponentId ("lua." <> name)
 
 -- | The real Lua persistence registry's module names (mirrors
 --   'save_compat_audit.GHCI_DUMP_SUMMARY_TEMPLATE'/
@@ -441,6 +474,41 @@ spec = do
                     identityLanguage snap page2 `shouldBe` Nothing
                     (wiName <$> pageIdentityOf snap page2)
                         `shouldBe` (wiName <$> customIdentity)
+
+    describe "Lua component encoding pin (issue #1103)" $ do
+        it "encodeSessionSnapshot puts each LuaComponentSpec's OWN id, \
+           \version, required flag and payload on the wire, in the \
+           \codec's canonical id order -- read back through the \
+           \Codec-level envelope decoder rather than the symmetric \
+           \encode/extractLuaComponents pair a round trip exercises, so \
+           \a swap made consistently on both sides still fails here" $ do
+            let req = SaveRequestMeta { srmSlotName  = "lua_pin_test"
+                                      , srmTimestamp = "ts"
+                                      , srmAutosave  = False }
+                meta = snapshotSaveMetadata req representativeSnapshot
+                encoded = encodeSessionSnapshot meta representativeSnapshot
+                              pinnedLuaComponents
+                knownIds = HS.insert metadataComponentId componentKnownIds
+                    `HS.union`
+                        HS.fromList (map (luaCid . lcsId) pinnedLuaComponents)
+                requiredIds =
+                    HS.insert metadataComponentId componentRequiredIds
+            case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                                knownIds requiredIds encoded of
+                Left err → expectationFailure (show err)
+                Right de → do
+                    let isLua (ComponentId t) = "lua." `T.isPrefixOf` t
+                        luaDescs = filter (isLua . cdId)
+                                          (emComponents (deManifest de))
+                    -- Canonical layout order is component-id ascending,
+                    -- which reverses the input order above.
+                    map cdId luaDescs `shouldBe`
+                        [luaCid "building_spawn", luaCid "unit_ai"]
+                    map cdVersion luaDescs `shouldBe` [2, 4]
+                    map cdRequired luaDescs `shouldBe` [False, True]
+                    map (\d → HM.lookup (cdId d) (dePayloads de)) luaDescs
+                        `shouldBe` [ Just "pinned-building_spawn-bytes"
+                                   , Just "pinned-unit_ai-payload" ]
 
     describe "repeated-cycle stability (pure, requirement 9)" $ do
         it "three successive encode -> decode -> re-encode cycles never \

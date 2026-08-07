@@ -56,7 +56,6 @@ module Language.Generated.Bound
     ) where
 
 import UPrelude
-import Data.Char (isAsciiUpper, isAsciiLower)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -65,6 +64,7 @@ import Language.Semantic.Types (ConceptId(..))
 import Language.Generated.Types
 import Language.Generated.Hash
 import Language.Generated.Onset (admissibleOnset, consonantCapable)
+import Language.Generated.Orthography (isNameLetter)
 
 -- | One language's complete concept→morpheme assignment: the free root
 --   every concept has, plus the bound form the few selected concepts
@@ -196,10 +196,12 @@ boundFormLegal prof free bound =
     not (T.null bound)
     ∧ T.length bound < T.length free
     ∧ bound `T.isPrefixOf` free
-    ∧ T.any asciiLetter bound
+    -- "Retains a visible letter" over #1100's whole repertoire, not
+    -- just ASCII: a bound form that kept only an accented letter is a
+    -- perfectly good morpheme, and rejecting it would have made a
+    -- language's marked roots quietly ineligible for bound forms.
+    ∧ T.any isNameLetter bound
     ∧ boundFormAdmissible prof bound
-  where
-    asciiLetter c = isAsciiUpper c ∨ isAsciiLower c
 
 -- | Whether every adjacent pair of CONSONANT-CAPABLE visible characters
 --   inside a bound form is accepted by this profile's own exported

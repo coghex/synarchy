@@ -68,7 +68,7 @@ import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
 import Craft.Types (RecipeManager(..))
 import World.Save.Integrity
-    ( LuaRefEdge(..), luaReferenceErrors
+    ( luaReferenceErrors
     , capIntegrityErrors, renderIntegrityReport )
 import World.Types
     ( WorldCommand(..), WorldManager(wmWorlds)
@@ -838,9 +838,7 @@ continueLoad env logger requestId saveName descriptors = do
                         -- reference contract — see
                         -- "World.Save.Integrity"'s haddock) — logged as
                         -- diagnostics only (requirement 16).
-                        let edges = [ LuaRefEdge c k i o p pg
-                                    | (c, k, i, o, p, pg) ← luaRefs ]
-                            -- componentVersions (issue #764):
+                        let -- componentVersions (issue #764):
                             -- 'descriptors' is this SAME load's
                             -- current Lua registry ({id,version,required}),
                             -- already threaded into 'continueLoad' above --
@@ -850,7 +848,7 @@ continueLoad env logger requestId saveName descriptors = do
                             componentVersions = HM.fromList
                                 [ (n, v) | (n, v, _) ← descriptors ]
                             report = capIntegrityErrors
-                                (luaReferenceErrors componentVersions known edges)
+                                (luaReferenceErrors componentVersions known luaRefs)
                         forM_ (renderIntegrityReport report) $ \msg →
                             logWarn logger CatWorld $
                                 "loadSave '" <> saveName

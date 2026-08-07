@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Coastal tectonic steepness (#220) and inland rift intensity (#223)
 --   fields, split out of "World.Plate" (issue #560).

@@ -46,7 +46,7 @@ import World.Save.Envelope
     ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope, encodeSessionSnapshot
     , metadataComponentId, metadataComponentVersion
     , legacyMetadataComponentVersion, currentEnvelopeVersion
-    , foreignOptionalComponentIds )
+    , foreignOptionalComponentIds, LuaComponentSpec(..) )
 import World.Save.Envelope.Codec
     (decodeEnvelope, encodeEnvelope, dePayloads, deManifest)
 import World.Save.Envelope.Types
@@ -535,7 +535,7 @@ spec = do
                             reencoded =
                                 encodeSessionSnapshot meta resolved luaComponents
                             actualLuaNames =
-                                HS.fromList [ n | (n, _, _, _) ← luaComponents ]
+                                HS.fromList (map lcsId luaComponents)
                         case decodeSessionEnvelope luaNames actualLuaNames reencoded of
                             Left err → expectationFailure
                                 (mfrPath fixture <> ": re-encode/fresh-decode \

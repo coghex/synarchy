@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | River-event compaction: the post-timeline pass that collapses
 --   every active river's scattered per-Age

@@ -62,7 +62,7 @@ module World.Save.Envelope
     , metadataComponentVersion
     , metadataComponentInputVersions
     , legacyMetadataComponentVersion
-    , LuaComponentSpec
+    , LuaComponentSpec(..)
     , encodeSessionSnapshot
     , decodeSessionEnvelope
     , decodeSaveEnvelopeMetadata
@@ -82,6 +82,7 @@ import qualified Data.Serialize as S
 import qualified Data.Text as T
 import World.Save.Envelope.Types
 import World.Save.Envelope.Codec
+import World.Save.Payload (LuaComponentSpec(..))
 import World.Save.Types (SaveMetadata)
 import World.Save.Compat.MetadataV1
     (decodeSaveMetadataV1, migrateSaveMetadataV1)
@@ -136,13 +137,12 @@ metadataComponentInputVersions =
 legacyMetadataComponentVersion ∷ Word32
 legacyMetadataComponentVersion = 1
 
--- | One Lua-owned component: its bare (unprefixed) registry id, schema
---   version, the writer's own required/optional declaration, and its
---   already-canonically-encoded payload bytes (see
---   @scripts/lib/data_codec.lua@) — the same shape
---   "World.Save.Envelope.Codec.ComponentSpec" uses for the Haskell set,
---   minus the id-namespacing this module owns (issue #761).
-type LuaComponentSpec = (Text, Word32, Bool, BS.ByteString)
+-- 'LuaComponentSpec' — one Lua-owned component's id, version,
+-- required flag, and encoded payload — is defined in the leaf module
+-- "World.Save.Payload" and re-exported here, so the HsLua reader that
+-- builds it and the world-thread command that transports it can name
+-- the SAME record without importing this module's graph (issue #1103).
+-- Its full haddock lives with the definition.
 
 luaComponentId ∷ Text → ComponentId
 luaComponentId name = ComponentId (luaComponentPrefix <> name)
@@ -190,8 +190,9 @@ encodeSessionSnapshot
 encodeSessionSnapshot meta snap luaSpecs =
     let metaSpec   = (metadataComponentId, metadataComponentVersion, True
                      , S.encode meta)
-        luaEnvSpecs = [ (luaComponentId name, ver, req, payload)
-                      | (name, ver, req, payload) ← luaSpecs ]
+        luaEnvSpecs = [ ( luaComponentId (lcsId s), lcsVersion s
+                        , lcsRequired s, lcsPayload s )
+                      | s ← luaSpecs ]
         specs = metaSpec : encodeComponentSpecs snap ⧺ luaEnvSpecs
     in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion specs of
         Right bytes → bytes
@@ -610,7 +611,10 @@ tryLegacyMetadataFallbacks bytes = case decodeLegacySessionMetadata bytes of
 --   registry name Lua itself uses.
 extractLuaComponents ∷ DecodedEnvelope → [LuaComponentSpec]
 extractLuaComponents de =
-    [ (name, cdVersion d, cdRequired d, payload)
+    [ LuaComponentSpec { lcsId       = name
+                       , lcsVersion  = cdVersion d
+                       , lcsRequired = cdRequired d
+                       , lcsPayload  = payload }
     | d ← emComponents (deManifest de)
     , Just name ← [T.stripPrefix luaComponentPrefix (cidText (cdId d))]
     , Just payload ← [HM.lookup (cdId d) (dePayloads de)]

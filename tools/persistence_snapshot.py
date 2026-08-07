@@ -59,7 +59,7 @@ _GHCI_COMPARE_TEMPLATE = r"""
 import qualified Data.ByteString as BS
 import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
-import World.Save.Envelope (decodeSessionEnvelope)
+import World.Save.Envelope (decodeSessionEnvelope, LuaComponentSpec(..))
 
 let paths = {paths_literal}
 let luaNames = HS.fromList ["unit_ai", "building_spawn"]
@@ -77,7 +77,7 @@ case sequence [ either (const Nothing) Just d | (_, d) <- decodedList ] of
       [ (p, err) | (p, Left err) <- decodedList ])
   Just decoded -> do
     let snaps = [ (p, snap) | ((p, _), (_, snap, _, _)) <- zip decodedList decoded ]
-        luaPayloads = [ (p, HM.fromList [ (name, bytes) | (name, _, _, bytes) <- comps ])
+        luaPayloads = [ (p, HM.fromList [ (lcsId c, lcsPayload c) | c <- comps ])
                       | ((p, _), (_, _, comps, _)) <- zip decodedList decoded ]
     case (snaps, luaPayloads) of
       ((_, firstSnap) : snapRest, (_, firstLua) : luaRest) -> do

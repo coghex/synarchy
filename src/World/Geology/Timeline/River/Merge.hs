@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 module World.Geology.Timeline.River.Merge
     ( mergeConvergingRivers
