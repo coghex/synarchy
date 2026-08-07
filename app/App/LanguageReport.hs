@@ -20,6 +20,8 @@ import Language.Semantic.Types (ConceptId(..), catVersion, conceptCount,
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Generated.Types
 import Language.Generated.Onset (onsetTotalPairs)
+import Language.Generated.Orthography
+    (outputInventory, profileDiacriticText, profileExtendedChars)
 import Language.Generated.Report
 
 runLanguageReport ∷ (Word64, Word64) → IO ()
@@ -47,6 +49,13 @@ runLanguageReport (loSeed, hiSeed) = do
                   [ "generatorVersion" .= generatorVersionInt currentGeneratorVersion
                   , "catalogueVersion" .= catVersion cat
                   , "conceptCount"     .= conceptCount cat
+                  -- #1100: the generator's own statement of every
+                  -- character a name can contain.
+                  -- @tools/language_report.py@ carries an independent
+                  -- literal copy and fails when the two differ, so the
+                  -- contract it enforces cannot silently follow a
+                  -- widened repertoire it was never reviewed against.
+                  , "outputInventory"  .= T.pack outputInventory
                   , "seeds"            .= map seedReportJSON reports
                   ]
           BL.putStr (encode topJSON)
@@ -100,6 +109,13 @@ profileJSON p = object
     -- diagnostics name the rule a language actually chose.
     , "boundaryRule"     .= boundaryRuleText (profBoundary p)
     , "boundarySegments" .= boundarySegmentText (profBoundary p)
+    -- #1100's per-language orthography, derived from the inventories
+    -- above rather than stored beside them. Emitted so the checker can
+    -- assert the property that makes an accent a convention instead of
+    -- noise: every extended character in a rendered name belongs to the
+    -- language that rendered it.
+    , "extendedChars"    .= T.pack (profileExtendedChars p)
+    , "diacritic"        .= profileDiacriticText p
     ]
   where
     shapeText = T.pack ∘ map segChar ∘ shapeSegments

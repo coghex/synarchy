@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 
 -- | Elevation-spike removal for the chunk timeline pipeline.

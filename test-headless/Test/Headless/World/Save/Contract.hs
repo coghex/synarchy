@@ -50,11 +50,18 @@ module Test.Headless.World.Save.Contract (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
-import World.Save.Envelope (encodeSessionSnapshot, decodeSessionEnvelope)
+import qualified Data.Text as T
+import World.Save.Envelope
+    ( encodeSessionSnapshot, decodeSessionEnvelope, LuaComponentSpec(..)
+    , metadataComponentId, currentEnvelopeVersion )
+import World.Save.Envelope.Codec (DecodedEnvelope(..), decodeEnvelope)
+import World.Save.Envelope.Types
+    ( ComponentId(..), ComponentDescriptor(..), EnvelopeManifest(..)
+    , defaultEnvelopeLimits )
+import World.Save.Component (componentKnownIds, componentRequiredIds)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter
     (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
@@ -66,6 +73,10 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..), mkWorldIdentity)
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
+import Location.Bounds (AbsBounds(..))
+import Location.Instance
+    ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    , LocationLifecycle(..) )
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -226,7 +237,13 @@ richNodes = PowerNodes
 richPage ∷ PageSnapshot
 richPage = PageSnapshot
     { pgsPageId       = page1
-    , pgsGenParams    = canon defaultWorldGenParams { wgpSeed = 424242 }
+    , pgsGenParams    = canon defaultWorldGenParams
+                          { wgpSeed = 424242
+                          -- #1101: a placed location named in this
+                          -- page's own language, gloss and all. An
+                          -- empty instance table could not tell a
+                          -- persisted gloss from a dropped one.
+                          , wgpLocationInstances = richLocationInstances }
     , pgsCameraX      = 12.5
     , pgsCameraY      = 7.5
     , pgsTimeHour     = 14
@@ -268,6 +285,42 @@ richPage = PageSnapshot
 richProvenance ∷ LanguageProvenance
 richProvenance = LanguageProvenance
     { lpSeed = LangSeed 0x8FEEDFACECAFEB0B, lpVersion = GeneratorVersion 1 }
+
+-- | The rich page's placed locations (#1101): one named in the page's
+--   own language WITH a gloss, and one 'ldLabel' fallback with none —
+--   so the round trip proves the gloss is carried when present AND left
+--   absent when it is not, rather than defaulted either way.
+richLocationInstances ∷ LocationInstances
+richLocationInstances = LocationInstances
+    { lisNextId        = 3
+    , lisById          = HM.fromList
+        [ (LocationInstanceId 1, LocationInstance
+            { liId              = LocationInstanceId 1
+            , liDefId           = "ruin_small"
+            , liChunk           = ChunkCoord 2 3
+            , liAnchor          = (80, 112)
+            , liBounds          = AbsBounds 78 110 82 114
+            , liDiscoveryMargin = 6
+            , liDisplayName     = "Vashenkoro"
+            , liGloss           = Just "Ashen Keep"
+            , liLifecycle       = LifecycleDiscovered
+            , liContentsSpawned = True
+            })
+        , (LocationInstanceId 2, LocationInstance
+            { liId              = LocationInstanceId 2
+            , liDefId           = "ruin_small"
+            , liChunk           = ChunkCoord 5 5
+            , liAnchor          = (176, 176)
+            , liBounds          = AbsBounds 174 174 178 178
+            , liDiscoveryMargin = 6
+            , liDisplayName     = "Small Ruin"
+            , liGloss           = Nothing
+            , liLifecycle       = LifecycleUnknown
+            , liContentsSpawned = False
+            })
+        ]
+    , lisPendingLegacy = Nothing
+    }
 
 -- | A second, minimal page -- proves multi-page independence (a stable
 --   identity + distinct per-page camera/gen-params, requirement 4),
@@ -346,11 +399,37 @@ representativeSnapshot = case captureSessionSnapshot richGlobals [richPage, mini
 --   live-engine `unitAi.getState`/`building.getSpawnRemaining`
 --   round-trip checks in `tools/persistence_contract_probe.py`/
 --   `_sweep.py` (which a pure, engine-less module cannot perform).
-syntheticLuaComponents ∷ [(Text, Word32, Bool, BS.ByteString)]
+syntheticLuaComponents ∷ [LuaComponentSpec]
 syntheticLuaComponents =
-    [ ("unit_ai", 3, True, "synthetic-unit_ai-payload")
-    , ("building_spawn", 3, True, "synthetic-building_spawn-payload")
+    [ LuaComponentSpec { lcsId = "unit_ai", lcsVersion = 3
+                       , lcsRequired = True
+                       , lcsPayload = "synthetic-unit_ai-payload" }
+    , LuaComponentSpec { lcsId = "building_spawn", lcsVersion = 3
+                       , lcsRequired = True
+                       , lcsPayload = "synthetic-building_spawn-payload" }
     ]
+
+-- | The encoding-pin fixture (issue #1103), deliberately separate from
+--   'syntheticLuaComponents': every field differs between the two specs
+--   (versions 4 vs 2, required True vs False, distinct payloads) and
+--   they are listed in NON-canonical id order, so the manifest
+--   assertions below genuinely pin which value each envelope descriptor
+--   field received and what order the codec laid them out in — a fixture
+--   whose entries agreed on a field could not.
+pinnedLuaComponents ∷ [LuaComponentSpec]
+pinnedLuaComponents =
+    [ LuaComponentSpec { lcsId = "unit_ai", lcsVersion = 4
+                       , lcsRequired = True
+                       , lcsPayload = "pinned-unit_ai-payload" }
+    , LuaComponentSpec { lcsId = "building_spawn", lcsVersion = 2
+                       , lcsRequired = False
+                       , lcsPayload = "pinned-building_spawn-bytes" }
+    ]
+
+-- | The reserved @lua.@ namespace "World.Save.Envelope" prefixes a bare
+--   registry id into on the way to the manifest.
+luaCid ∷ Text → ComponentId
+luaCid name = ComponentId ("lua." <> name)
 
 -- | The real Lua persistence registry's module names (mirrors
 --   'save_compat_audit.GHCI_DUMP_SUMMARY_TEMPLATE'/
@@ -395,6 +474,41 @@ spec = do
                     identityLanguage snap page2 `shouldBe` Nothing
                     (wiName <$> pageIdentityOf snap page2)
                         `shouldBe` (wiName <$> customIdentity)
+
+    describe "Lua component encoding pin (issue #1103)" $ do
+        it "encodeSessionSnapshot puts each LuaComponentSpec's OWN id, \
+           \version, required flag and payload on the wire, in the \
+           \codec's canonical id order -- read back through the \
+           \Codec-level envelope decoder rather than the symmetric \
+           \encode/extractLuaComponents pair a round trip exercises, so \
+           \a swap made consistently on both sides still fails here" $ do
+            let req = SaveRequestMeta { srmSlotName  = "lua_pin_test"
+                                      , srmTimestamp = "ts"
+                                      , srmAutosave  = False }
+                meta = snapshotSaveMetadata req representativeSnapshot
+                encoded = encodeSessionSnapshot meta representativeSnapshot
+                              pinnedLuaComponents
+                knownIds = HS.insert metadataComponentId componentKnownIds
+                    `HS.union`
+                        HS.fromList (map (luaCid . lcsId) pinnedLuaComponents)
+                requiredIds =
+                    HS.insert metadataComponentId componentRequiredIds
+            case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                                knownIds requiredIds encoded of
+                Left err → expectationFailure (show err)
+                Right de → do
+                    let isLua (ComponentId t) = "lua." `T.isPrefixOf` t
+                        luaDescs = filter (isLua . cdId)
+                                          (emComponents (deManifest de))
+                    -- Canonical layout order is component-id ascending,
+                    -- which reverses the input order above.
+                    map cdId luaDescs `shouldBe`
+                        [luaCid "building_spawn", luaCid "unit_ai"]
+                    map cdVersion luaDescs `shouldBe` [2, 4]
+                    map cdRequired luaDescs `shouldBe` [False, True]
+                    map (\d → HM.lookup (cdId d) (dePayloads de)) luaDescs
+                        `shouldBe` [ Just "pinned-building_spawn-bytes"
+                                   , Just "pinned-unit_ai-payload" ]
 
     describe "repeated-cycle stability (pure, requirement 9)" $ do
         it "three successive encode -> decode -> re-encode cycles never \

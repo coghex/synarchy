@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Global per-tile elevation query, split out of "World.Plate" (issue
 --   #560).

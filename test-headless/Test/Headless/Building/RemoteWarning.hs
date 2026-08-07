@@ -19,12 +19,24 @@ import World.Chunk.Types (ChunkCoord(..))
 import Building.Types
 import Building.Placement (RemoteCheck(..), remoteCheck, isRemote)
 import Location.Types
-    ( LocationDef(..), LocationRegistry, emptyLocationRegistry
-    , registerLocation
+    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    , emptyLocationRegistry, registerLocation
     )
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 import Location.Instance (buildLocationInstances)
 import Location.Bounds (RelBounds(..), remotePortalThresholdTiles)
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 
 -- * Fixtures
 
@@ -72,6 +84,7 @@ baseLoc lid bounds = LocationDef
     , ldBounds          = bounds
     , ldDiscoveryMargin = 6
     , ldMapIcons        = Nothing
+    , ldNaming          = testNaming
     }
 
 -- | Registers one location "loc" at chunk (0,0) (anchor tile (8,8)),
@@ -103,7 +116,7 @@ westEdgeAt relMinX =
 checkAt ∷ Int → LocationRegistry → LocationOverlay → BuildingDef → Int → Int
         → RemoteCheck
 checkAt worldSize locs overlay def gx gy =
-    remoteCheck (buildLocationInstances locs overlay) worldSize def gx gy
+    remoteCheck (buildLocationInstances Nothing locs overlay) worldSize def gx gy
 
 spec ∷ Spec
 spec = describe "Remote portal warning" $ do

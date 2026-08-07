@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Generate zoom-map quads (the main zoomed-out world view).
 module World.Render.Zoom.Quads

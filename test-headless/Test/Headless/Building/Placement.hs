@@ -33,13 +33,25 @@ import Building.Types
 import Building.Placement (canPlaceAt, PlacementResult(..))
 import Building.Render (ghostTint)
 import Location.Types
-    ( LocationDef(..), LocationRegistry, emptyLocationRegistry
-    , registerLocation
+    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    , emptyLocationRegistry, registerLocation
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
     (LocationInstances, buildLocationInstances, emptyLocationInstances)
 import Location.Bounds (RelBounds(..))
+import Language.Semantic.Types (ConceptId(..))
+
+-- | The naming scheme every 'LocationDef' fixture in this module
+--   carries (#1101). One concept per pool is enough: these specs are
+--   about geometry, lifecycle, and identity, and every one of them
+--   builds instances with NO namer, so the pools are never drawn from.
+testNaming ∷ LocationNaming
+testNaming = LocationNaming
+    { lnHeads     = [ConceptId "KEEP"]
+    , lnModifiers = [ConceptId "ASH"]
+    }
+
 
 -- * Fixtures
 
@@ -136,6 +148,7 @@ locDef lid = LocationDef
     , ldBounds          = RelBounds (-2) (-2) 2 2
     , ldDiscoveryMargin = 6
     , ldMapIcons        = Nothing
+    , ldNaming          = testNaming
     }
 
 -- | One location "loc1" placed at chunk (0,0). Its anchor is the
@@ -153,7 +166,7 @@ overlay1 = HM.singleton (ChunkCoord 0 0) "loc1"
 --   (#911) — built from the overlay above exactly the way world init
 --   builds it, so the stored bounds are the same (6,6)..(10,10) box.
 instances1 ∷ LocationInstances
-instances1 = buildLocationInstances registry1 overlay1
+instances1 = buildLocationInstances Nothing registry1 overlay1
 
 -- | An unoccupied manager — the location-exclusion tests don't need
 --   any existing buildings.
@@ -277,7 +290,7 @@ spec = describe "Portal location exclusion (#778)" $ do
         -- (6,22)..(10,26), which DOES contain footprint tile (8,24) —
         -- physically adjacent across the wrap even though the raw
         -- coordinates are far apart.
-        let seamInstances = buildLocationInstances registry1
+        let seamInstances = buildLocationInstances Nothing registry1
                                 (HM.singleton (ChunkCoord 1 0) "loc1")
             seamWtd = worldWithChunks [flatChunkAt (ChunkCoord 0 1) 5]
             seamCheck ws = canPlaceAt noBuildings seamWtd seamInstances

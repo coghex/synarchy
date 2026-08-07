@@ -45,49 +45,79 @@ spec = describe "Location spatial bounds" $ do
                 `shouldBe` Right (LocationYamlBounds (-2) (-2) 2 2)
 
         it "rejects a definition missing bounds entirely, naming the location" $
-            decodeDef "{ id: t, builder: b, discovery_margin: 6 }"
+            decodeDef
+                "{ id: t, builder: b, discovery_margin: 6,\
+                \  naming: { heads: [KEEP], modifiers: [ASH] } }"
+                `shouldSatisfy` rejectedNaming "t"
+
+        it "rejects a definition missing the naming block entirely (#1101), \
+           \naming the location" $
+            decodeDef
+                "{ id: t, builder: b, discovery_margin: 6,\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
+                `shouldSatisfy` rejectedNaming "t"
+
+        it "rejects a naming block missing one of its two pools (#1101)" $
+            decodeDef
+                "{ id: t, builder: b, discovery_margin: 6,\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  naming: { heads: [KEEP] } }"
+                `shouldSatisfy` rejectedNaming "t"
+
+        it "rejects an EMPTY naming pool (#1101) -- present but empty is \
+           \authored data silently meaning 'fall back to the label', which \
+           \is what an absent language means and must not be forgeable" $ do
+            decodeDef
+                "{ id: t, builder: b, discovery_margin: 6,\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  naming: { heads: [], modifiers: [ASH] } }"
+                `shouldSatisfy` rejectedNaming "t"
+            decodeDef
+                "{ id: t, builder: b, discovery_margin: 6,\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  naming: { heads: [KEEP], modifiers: [] } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a definition missing discovery_margin, naming the location" $
             decodeDef
-                "{ id: t, builder: b,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a malformed bounds block, naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: nope, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects inverted bounds (min_x > max_x), naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: 5, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects inverted bounds (min_y > max_y), naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: 5, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a negative discovery margin, naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: -1,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: -1,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a fixed content position outside the declared bounds, naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  contents: [ { kind: item, id: x, position: {x: 5, y: 0} } ] }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "accepts a fixed content position on the bounds edge (inclusive)" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  contents: [ { kind: item, id: x, position: {x: 2, y: -2} } ] }"
                 `shouldSatisfy` isRight'

@@ -24,6 +24,7 @@ import qualified Data.Text.Encoding as TE
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Integrity (KnownEntities(..))
+import World.Save.Payload (LuaComponentSpec(..), LuaRefEdge(..))
 
 -- | Pop the Lua error message at the top of the stack and log it
 --   via the engine logger. Used by every save_modules.* bridge call
@@ -184,7 +185,7 @@ describeLuaComponents logger = do
 -- | Read {id=string, version=number, required=boolean, payload=string}
 --   from the table at the top of the stack.
 readSnapshotComponentField
-    ∷ Lua.LuaE Lua.Exception (Maybe (Text, Word32, Bool, BS.ByteString))
+    ∷ Lua.LuaE Lua.Exception (Maybe LuaComponentSpec)
 readSnapshotComponentField = do
     _ ← Lua.getfield (-1) "id"
     midB ← Lua.tostring (-1)
@@ -200,7 +201,11 @@ readSnapshotComponentField = do
     Lua.pop 1
     case (midB, mver, mpayload) of
         (Just idb, Just ver, Just payload) →
-            return (Just (TE.decodeUtf8Lenient idb, fromIntegral ver, req, payload))
+            return (Just LuaComponentSpec
+                { lcsId       = TE.decodeUtf8Lenient idb
+                , lcsVersion  = fromIntegral ver
+                , lcsRequired = req
+                , lcsPayload  = payload })
         _ → return Nothing
 
 -- | Call @saveModules.snapshotAll()@ (issue #761): a REQUIRED
@@ -216,8 +221,7 @@ readSnapshotComponentField = do
 collectLuaComponents
     ∷ LoggerState
     → Lua.LuaE Lua.Exception
-        (Either Text ( [(Text, Word32, Bool, BS.ByteString)]
-                     , [(Text, Text, Int, Maybe Int, Text, Maybe Text)] ))
+        (Either Text ([LuaComponentSpec], [LuaRefEdge]))
 collectLuaComponents logger = do
     ok ← callSaveModules1 logger "snapshotAll" 0 (return ())
     if not ok
@@ -340,8 +344,7 @@ readErrorStringField = do
 --   diagnostic: a per-page instance id names nothing on its own, so an
 --   edge missing its page resolves against nothing — see
 --   'World.Save.Integrity.luaEdgeResolves'.
-readReferenceEdgeField
-    ∷ Lua.LuaE Lua.Exception (Maybe (Text, Text, Int, Maybe Int, Text, Maybe Text))
+readReferenceEdgeField ∷ Lua.LuaE Lua.Exception (Maybe LuaRefEdge)
 readReferenceEdgeField = do
     _ ← Lua.getfield (-1) "component"
     mcompB ← Lua.tostring (-1)
@@ -363,11 +366,13 @@ readReferenceEdgeField = do
     Lua.pop 1
     case (mcompB, mkindB, mid) of
         (Just compB, Just kindB, Just i) →
-            return (Just ( TE.decodeUtf8Lenient compB
-                         , TE.decodeUtf8Lenient kindB, fromIntegral i
-                         , fromIntegral ⊚ mowner
-                         , maybe "" TE.decodeUtf8Lenient mpathB
-                         , TE.decodeUtf8Lenient ⊚ mpageB ))
+            return (Just LuaRefEdge
+                { lreComponent = TE.decodeUtf8Lenient compB
+                , lreKind      = TE.decodeUtf8Lenient kindB
+                , lreId        = fromIntegral i
+                , lreOwner     = fromIntegral ⊚ mowner
+                , lrePath      = maybe "" TE.decodeUtf8Lenient mpathB
+                , lrePage      = TE.decodeUtf8Lenient ⊚ mpageB })
         _ → return Nothing
 
 -- | Call @saveModules.prepareLoad(components, requestId, isMigrating)@
@@ -406,7 +411,7 @@ readReferenceEdgeField = do
 prepareLuaLoad
     ∷ LoggerState → Int → [(Text, Word32, BS.ByteString)] → Bool
     → KnownEntities
-    → Lua.LuaE Lua.Exception (Either Text [(Text, Text, Int, Maybe Int, Text, Maybe Text)])
+    → Lua.LuaE Lua.Exception (Either Text [LuaRefEdge])
 prepareLuaLoad logger requestId components isMigratingLegacyBaseline known = do
     ok ← callSaveModules1 logger "prepareLoad" 4
             (pushComponentsArray components

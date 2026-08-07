@@ -89,7 +89,7 @@ newtype GeneratorVersion = GeneratorVersion { generatorVersionInt ∷ Int }
 --   'supportedGeneratorVersions': advancing this must never make an
 --   older world's recorded version unconstructible.
 currentGeneratorVersion ∷ GeneratorVersion
-currentGeneratorVersion = GeneratorVersion 4
+currentGeneratorVersion = GeneratorVersion 5
 
 -- | Every version 'Language.Generated.Profile.generateProfile' can
 --   build a profile for — historical versions included, since a save
@@ -101,7 +101,7 @@ currentGeneratorVersion = GeneratorVersion 4
 supportedGeneratorVersions ∷ [GeneratorVersion]
 supportedGeneratorVersions =
     [ GeneratorVersion 1, GeneratorVersion 2, GeneratorVersion 3
-    , GeneratorVersion 4 ]
+    , GeneratorVersion 4, GeneratorVersion 5 ]
 
 -- | Which generated language produced a piece of rendered text, and
 --   under which generator (#1092). Seed and version are ONE value, so

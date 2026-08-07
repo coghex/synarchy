@@ -25,6 +25,7 @@ module Engine.Graphics.Font.Repertoire
   , printableAscii
   , extendedLatin
   , asciiWithCurlyQuotes
+  , generatedNameFonts
     -- * Atlas identity
   , FontKey(..)
   , sdfSizeSentinel
@@ -117,6 +118,33 @@ repertoireForFont path = case trackedFontName path of
     Just "shell.ttf"  → extendedLatin
     Just "gothic.ttf" → asciiWithCurlyQuotes
     _                 → printableAscii
+
+-- | The fonts a generated language's names (#1100) may be displayed
+--   in — the answer to #1100 requirement 3, which asked for one of
+--   three choices to be taken explicitly.
+--
+--   The choice taken is the second: CHANGE WHICH FONT DISPLAYS
+--   GENERATED NAMES. @gothic.ttf@ is excluded. Its cmap carries 84 code
+--   points — fewer than printable ASCII, missing @\/ : ; \< = \> [ \\ ]
+--   ^ \` { | } ~@ — so restricting the extended inventory to what it
+--   supplies (the first choice) would forbid every accented letter and
+--   the feature with it, while replacing the asset (the third) needs a
+--   commissioned font and is deliberately left as its own issue. It
+--   stays the decorative title font it already is.
+--
+--   This is a POLICY statement, not a mechanism. A caller picks a font
+--   handle per text element and the engine has no notion of "this text
+--   is a generated name", so the restriction cannot be enforced by
+--   construction. What it does is name the set that
+--   "Test.Headless.Language.Generated"'s font-coverage group proves
+--   @Language.Generated.Orthography.outputInventory@ against, by
+--   generating each of these fonts' real atlas from the shipped
+--   @.ttf@. A future surface that renders a world's generated name
+--   picks a font from this list; picking one outside it means widening
+--   this list and satisfying that test, which is exactly the gate
+--   requirement 3 asks for.
+generatedNameFonts ∷ [FilePath]
+generatedNameFonts = ["assets/fonts/arcade.ttf", "assets/fonts/shell.ttf"]
 
 -- | The file name of a path naming a font in the tracked
 --   @assets\/fonts@ directory, whatever it is prefixed with.

@@ -34,7 +34,10 @@
 --
 --   - 'WorldGenParams'      → 'WorldGenParamsDTO' (with its nested live
 --                             config/state records frozen recursively —
---                             see "World.Save.Component.WorldGen")
+--                             see "World.Save.Component.WorldGen"; the
+--                             pre-#1101 shape stays as
+--                             'WorldGenParamsDTOv2' and the pre-#911 one
+--                             as 'WorldGenParamsDTOv1')
 --   - 'WorldIdentity'       → 'WorldIdentityDTO' (its optional
 --                             'LanguageProvenance' frozen as
 --                             'LanguageProvenanceDTO'; the pre-#1092
@@ -81,9 +84,12 @@ module World.Save.Component.Page
     , WorldPagesDTOv1(..)
     , PageCoreDTOv2(..)
     , WorldPagesDTOv2(..)
+    , PageCoreDTOv3(..)
+    , WorldPagesDTOv3(..)
     , WorldPages(..)
     , migrateWorldPagesV1
     , migrateWorldPagesV2
+    , migrateWorldPagesV3
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
@@ -91,6 +97,7 @@ module World.Save.Component.Page
       -- * Frozen leaf DTOs (requirement 4)
     , WorldGenParamsDTO(..)
     , WorldGenParamsDTOv1(..)
+    , WorldGenParamsDTOv2(..)
     , WorldIdentityDTO(..)
     , WorldIdentityDTOv1(..)
     , LanguageProvenanceDTO(..)
@@ -112,6 +119,8 @@ module World.Save.Component.Page
     , fromWorldGenParamsDTO
     , fromWorldGenParamsDTOv1
     , toWorldGenParamsDTOv1
+    , fromWorldGenParamsDTOv2
+    , toWorldGenParamsDTOv2
     , toItemInstanceDTO
     , fromItemInstanceDTO
     , toGroundItemDTO
@@ -136,7 +145,9 @@ import Power.Types (emptyPowerNodes)
 import World.Save.Component.WorldGen
     ( WorldGenParamsDTO(..), toWorldGenParamsDTO, fromWorldGenParamsDTO
     , WorldGenParamsDTOv1(..), fromWorldGenParamsDTOv1
-    , toWorldGenParamsDTOv1 )
+    , toWorldGenParamsDTOv1
+    , WorldGenParamsDTOv2(..), fromWorldGenParamsDTOv2
+    , toWorldGenParamsDTOv2 )
 import Location.Instance (locationInstanceAllocatorErrors)
 import World.Generate.Types (WorldGenParams(..))
 import World.Chunk.Types (ChunkCoord)
@@ -538,8 +549,9 @@ fromEditsDTO = HM.map (map fromWorldEditDTO)
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v3) wire shape — see 'PageCoreDTOv2' for the
---   frozen pre-#1092 one and 'PageCoreDTOv1' for the pre-#911 one.
+--   This is the CURRENT (v4) wire shape — see 'PageCoreDTOv3' for the
+--   frozen pre-#1101 one, 'PageCoreDTOv2' for the pre-#1092 one, and
+--   'PageCoreDTOv1' for the pre-#911 one.
 data PageCoreDTO = PageCoreDTO
     { pcPageId      ∷ !WorldPageId
     , pcGenParams   ∷ !WorldGenParamsDTO
@@ -588,13 +600,13 @@ newtype WorldPagesDTOv1 = WorldPagesDTOv1 { wpd1Pages ∷ [PageCoreDTOv1] }
 --   for decode-only backward compatibility: the #911 gen params, but
 --   the pre-#1092 identity with no language provenance. Never edited.
 --
---   It shares the CURRENT 'WorldGenParamsDTO' deliberately — #1092
---   changed the identity only, exactly as the live v2 shape had it.
---   A later gen-params change freezes that type the way #911 froze
---   'WorldGenParamsDTOv1' and repoints this field at the frozen copy.
+--   Its gen params are 'WorldGenParamsDTOv2', the frozen pre-#1101
+--   shape — #1101 was the "later gen-params change" this comment used
+--   to anticipate, so the field was repointed off the current type onto
+--   the frozen copy exactly as described, leaving these bytes unchanged.
 data PageCoreDTOv2 = PageCoreDTOv2
     { pc2PageId      ∷ !WorldPageId
-    , pc2GenParams   ∷ !WorldGenParamsDTO
+    , pc2GenParams   ∷ !WorldGenParamsDTOv2
     , pc2CameraX     ∷ !Float
     , pc2CameraY     ∷ !Float
     , pc2TimeHour    ∷ !Int
@@ -610,6 +622,30 @@ newtype WorldPagesDTOv2 = WorldPagesDTOv2 { wpd2Pages ∷ [PageCoreDTOv2] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN v3 wire shape (#1092 through #1101), preserved verbatim
+--   for decode-only backward compatibility: #1092's identity (name,
+--   gloss, optional language provenance) over the frozen pre-#1101 gen
+--   params, whose location instances carry no gloss of their own. Never
+--   edited; a further schema change adds a newer type instead
+--   (frozen-DTO boundary rule).
+data PageCoreDTOv3 = PageCoreDTOv3
+    { pc3PageId      ∷ !WorldPageId
+    , pc3GenParams   ∷ !WorldGenParamsDTOv2
+    , pc3CameraX     ∷ !Float
+    , pc3CameraY     ∷ !Float
+    , pc3TimeHour    ∷ !Int
+    , pc3TimeMinute  ∷ !Int
+    , pc3DateYear    ∷ !Int
+    , pc3DateMonth   ∷ !Int
+    , pc3DateDay     ∷ !Int
+    , pc3MapMode     ∷ !ZoomMapMode
+    , pc3Identity    ∷ !(Maybe WorldIdentityDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv3 = WorldPagesDTOv3 { wpd3Pages ∷ [PageCoreDTOv3] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
 -- | The canonical decoded value of the @world-pages@ component, kept
 --   separate from either wire DTO ("World.Save.Component.Types": the
 --   canonical type a codec decodes INTO is the migration target). It is
@@ -622,22 +658,24 @@ data WorldPages = WorldPages
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
     } deriving (Show)
 
--- | Encoding always writes the current v3 shape; v2 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV2' (#1092) and
---   v1 through 'migrateWorldPagesV1' (#911). Issue #1093: this used to
---   be a hand-rolled 'ComponentCodec' because the shared helper had no
---   real multi-version dispatch — 'componentCodec' now expresses it,
---   with each accepted version declared exactly once.
+-- | Encoding always writes the current v4 shape; v3 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV3' (#1101), v2
+--   via 'migrateWorldPagesV2' (#1092), and v1 via 'migrateWorldPagesV1'
+--   (#911). Issue #1093: this used to be a hand-rolled 'ComponentCodec'
+--   because the shared helper had no real multi-version dispatch —
+--   'componentCodec' now expresses it, with each accepted version
+--   declared exactly once.
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-    , csVersion       = 3
+    , csVersion       = 4
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 2 migrateWorldPagesV2
+    , csOlderVersions = [ atVersion 3 migrateWorldPagesV3
+                        , atVersion 2 migrateWorldPagesV2
                         , atVersion 1 migrateWorldPagesV1 ]
     , csValidate      = validatePages
     }
@@ -676,9 +714,9 @@ validatePages wp
           , msg ← locationInstanceAllocatorErrors
                       (wgpLocationInstances (pgsGenParams p))
           ]
-  where err = ComponentError worldPagesComponentId 3 ValidatePhase
+  where err = ComponentError worldPagesComponentId 4 ValidatePhase
 
--- | Turn the decoded v3 page cores into the base 'PageSnapshot' map every
+-- | Turn the decoded v4 page cores into the base 'PageSnapshot' map every
 --   other page-scoped component then writes onto (assembly). All entity/
 --   activity/edit fields start empty and are overwritten by their own
 --   REQUIRED components; a valid save leaves none of these placeholders.
@@ -701,13 +739,42 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         , pgsIdentity   = fromWorldIdentityDTO <$> pcIdentity p
         }
 
--- | The v2→v3 migration (#1092): decode the frozen v2 page cores into
---   the same base 'PageSnapshot' map. The ONLY difference is the
---   identity — every v2 page's name and gloss carry across byte-exact
+-- | The v3 migration (#1101): decode the frozen v3 page cores into the
+--   same base 'PageSnapshot' map. The ONLY difference is the per-page
+--   LOCATION instances, whose stored display names carry across
+--   EXACTLY — a location named before this landing keeps that name
+--   forever (#1101 requirements 4 and 7), and is not renamed into the
+--   world's language on upgrade — while each gains no gloss
+--   ('World.Save.Component.WorldGen.fromLocationInstanceDTOv1'). The
+--   page's own identity, provenance included, rides across untouched:
+--   #1101 changed no world-identity field.
+migrateWorldPagesV3 ∷ WorldPagesDTOv3 → WorldPages
+migrateWorldPagesV3 (WorldPagesDTOv3 ps) = WorldPages
+    { wpPageIds = map pc3PageId ps
+    , wpBase    = HM.fromList [ (pc3PageId p, toBase p) | p ← ps ]
+    }
+  where
+    toBase p = (blankPageSnapshot (pc3PageId p)
+                    (fromWorldGenParamsDTOv2 (pc3GenParams p)))
+        { pgsCameraX    = pc3CameraX p
+        , pgsCameraY    = pc3CameraY p
+        , pgsTimeHour   = pc3TimeHour p
+        , pgsTimeMinute = pc3TimeMinute p
+        , pgsDateYear   = pc3DateYear p
+        , pgsDateMonth  = pc3DateMonth p
+        , pgsDateDay    = pc3DateDay p
+        , pgsMapMode    = pc3MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc3Identity p
+        }
+
+-- | The v2 migration (#1092): decode the frozen v2 page cores into
+--   the same base 'PageSnapshot' map. The identity difference is the
+--   headline — every v2 page's name and gloss carry across byte-exact
 --   while its language provenance decodes ABSENT
 --   ('fromWorldIdentityDTOv1'), never inferred from the world seed or
---   the name text. Gen params, clocks, camera, and map mode ride
---   across untouched.
+--   the name text. Its gen params are the frozen pre-#1101 shape, so
+--   its location instances likewise keep their stored names and gain
+--   no gloss. Clocks, camera, and map mode ride across untouched.
 migrateWorldPagesV2 ∷ WorldPagesDTOv2 → WorldPages
 migrateWorldPagesV2 (WorldPagesDTOv2 ps) = WorldPages
     { wpPageIds = map pc2PageId ps
@@ -715,7 +782,7 @@ migrateWorldPagesV2 (WorldPagesDTOv2 ps) = WorldPages
     }
   where
     toBase p = (blankPageSnapshot (pc2PageId p)
-                    (fromWorldGenParamsDTO (pc2GenParams p)))
+                    (fromWorldGenParamsDTOv2 (pc2GenParams p)))
         { pgsCameraX    = pc2CameraX p
         , pgsCameraY    = pc2CameraY p
         , pgsTimeHour   = pc2TimeHour p
@@ -759,9 +826,9 @@ migrateWorldPagesV1 (WorldPagesDTOv1 ps) = WorldPages
         , pgsIdentity   = fromWorldIdentityDTOv1 <$> pc1Identity p
         }
 
--- | The zeroed base 'PageSnapshot' the v3, v2, and v1 paths above all
---   build on, so they can never drift in which placeholder fields they
---   leave for the other components to fill. Each caller record-updates
+-- | The zeroed base 'PageSnapshot' the v4, v3, v2, and v1 paths above
+--   all build on, so they can never drift in which placeholder fields
+--   they leave for the other components to fill. Each caller record-updates
 --   the page-core scalars it decoded; everything left here is a
 --   placeholder a REQUIRED component overwrites during assembly.
 blankPageSnapshot ∷ WorldPageId → WorldGenParams → PageSnapshot

@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Per-chunk bordered-terrain cache build + stitching into
 --   world-resolution grids. Runs the plate-base → applyTimelineChunk →

@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | River tracing via flow-direction chain, split (issue #581) into
 --   focused submodules under "World.Geology.Timeline.RiverTrace.*":

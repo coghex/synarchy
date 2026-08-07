@@ -821,6 +821,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/h1-container-knowledge.expected.json"
         }
       ]
+    },
+    {
+      "id": "i1-location-language-names",
+      "description": "Locations named in their world's own language (issue #1101, epic #708): world-pages became v4, adding LocationInstance's English gloss beside the display name it already stored. This baseline tracks a REAL current-format session written by the live engine at world-pages v4, whose page carries a #1092 language provenance -- so its placed ruins hold genuinely GENERATED names and non-empty glosses rather than the ldLabel fallback an unnamed world produces, and the new field is exercised by the fixture registered to cover its version. The pre-#1101 v3 shape stays tracked by g1/h1, the pre-#1092 v2 shape by d1/e1/f1, and the pre-#911 v1 shape by b2/b3/c3; all three decode with every stored location name carried across EXACTLY and no gloss, never re-derived (#1101 requirements 4 and 7).",
+      "declaredAt": "(fill in: YYYY-MM-DD)",
+      "declaredByIssue": 1101,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldPagesV3 (v3 -> v4: each stored location instance keeps its exact display name and gains no gloss), migrateWorldPagesV2 (v2 -> current), migrateWorldPagesV1 (v1 -> current) + Location.Instance.resolveLegacyLocationInstances",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "i1-location-language-names-session",
+          "path": "test-headless/data/save-compat/i1-location-language-names.bin",
+          "kind": "complete-session",
+          "sha256": "f475b4c1a56af1c82aa21c38df22d3597e6b4b2945cbd1d486061c71f292504f",
+          "sizeBytes": 480357,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 8, 3, 'Vashenkoro' named in the generated language seeded 12345678901234567890), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/i1-location-language-names.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

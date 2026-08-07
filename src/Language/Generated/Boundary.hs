@@ -64,11 +64,12 @@ module Language.Generated.Boundary
     ) where
 
 import UPrelude
-import Data.Char (toLower, isAsciiUpper, isAsciiLower)
+import Data.Char (toLower)
 import qualified Data.Text as T
 import Language.Generated.Types
 import Language.Generated.Hash
 import Language.Generated.Onset (admissibleOnset, consonantOnly, vowelCapable)
+import Language.Generated.Orthography (isNameLetter)
 
 -- | Build one language's boundary policy from its own inventories.
 --   Deterministic in @(seed, inventories)@ alone, so repeated
@@ -127,19 +128,25 @@ joinMorphemes = mediate MorphemeScope
 joinSyllables ∷ Profile → Text → Text → Text
 joinSyllables = mediate SyllableScope
 
--- | Whether a triple-letter run is present: three contiguous ASCII
---   letters that are the same letter ignoring case. Punctuation
---   interrupts a run, so a hyphen join's @a-a@ and an apostrophe
---   affix's @h'h@ are not runs; case is ignored, so a capitalized
---   @Aaa@ is.
+-- | Whether a triple-letter run is present: three contiguous letters
+--   that are the same letter ignoring case. Punctuation interrupts a
+--   run, so a hyphen join's @a-a@ and an apostrophe affix's @h'h@ are
+--   not runs; case is ignored, so a capitalized @Aaa@ is.
+--
+--   "Letter" is 'Language.Generated.Orthography.isNameLetter', which
+--   covers #1100's extended repertoire as well as ASCII — an @ááá@ run
+--   is exactly as much a triple as @aaa@, and gating on
+--   'Data.Char.isAsciiLower' would have let one through unseen. Two
+--   DIFFERENT letters never form a run whatever their marks, because
+--   'sameLetter' compares whole code points: @á@ and @a@ are distinct
+--   phonemes here, so @aáa@ is not a run either.
 hasTripleRun ∷ Text → Bool
 hasTripleRun = go ∘ T.unpack
   where
     go (a : b : c : rest)
-        | isLetter a ∧ sameLetter a b ∧ sameLetter b c = True
-        | otherwise                                    = go (b : c : rest)
+        | isNameLetter a ∧ sameLetter a b ∧ sameLetter b c = True
+        | otherwise                                        = go (b : c : rest)
     go _ = False
-    isLetter ch = isAsciiUpper ch ∨ isAsciiLower ch
 
 -- Which kind of junction is being mediated. Both share the repair
 -- machinery; they differ only in what counts as needing repair, and in

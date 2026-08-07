@@ -459,7 +459,13 @@ class _Args:
             # (a per-unit location memory is INGESTED by the unit-AI
             # tick once the unit stands in a discovery halo).
             spawn_unit_at="0,0", settle_seconds=0.0, setup_lua=None,
-            require_lua=None)
+            require_lua=None,
+            # #1101: the page's optional display identity and the
+            # language provenance it was rendered from -- what makes a
+            # generated fixture's placed locations carry real generated
+            # names/glosses rather than definition labels.
+            world_name=None, world_gloss=None, language_seed=None,
+            language_version=None)
         defaults.update(kwargs)
         self.__dict__.update(defaults)
 
