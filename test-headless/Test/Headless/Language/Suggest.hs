@@ -27,7 +27,7 @@ import Language.Generated.Render (renderNative)
 import Language.Suggest
 import Engine.Scripting.Lua.Types (LanguageCache(..))
 import Engine.Scripting.Lua.API.World.Lifecycle
-    (suggestionStep, suggestionStepLabel)
+    (suggestionStep, suggestionStepLabel, readCatalogueForSuggestions)
 
 -- | Provenance for one world seed at the current generator.
 provFor ∷ Word64 → LanguageProvenance
@@ -235,6 +235,30 @@ spec = describe "world-name suggestions" $ do
             let broken = Just (LanguageCache (Left "no catalogue") Nothing)
             step prov42 broken `shouldBe` "failed"
             step prov7 broken `shouldBe` "failed"
+
+        -- Round 3: caching that failure only helps if the read RETURNS
+        -- one. loadCatalogue reports a file it parsed and rejected, but
+        -- a missing or unreadable one throws out of BS.readFile — which
+        -- would escape past the cache write and put the disk back on
+        -- every press.
+        it "turns an unreadable catalogue into a value, not an exception" $ do
+            result ← readCatalogueForSuggestions
+                        "data/language/does_not_exist.yaml"
+            case result of
+                Right _  → expectationFailure "read a nonexistent catalogue"
+                Left msg → do
+                    msg `shouldSatisfy` T.isInfixOf "does_not_exist.yaml"
+                    msg `shouldSatisfy` T.isInfixOf "could not be loaded"
+
+        it "reports a catalogue it could read but not validate" $ do
+            result ← readCatalogueForSuggestions "data/units/acolyte.yaml"
+            case result of
+                Right _  → expectationFailure "validated a unit definition"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "could not be loaded"
+
+        it "still reads the real catalogue" $ do
+            result ← readCatalogueForSuggestions conceptCataloguePath
+            fmap catVersion result `shouldBe` Right (catVersion prodCat)
 
 -- | Which of the five shapes an expression took, as report text.
 shapeOf ∷ NameExpr → String

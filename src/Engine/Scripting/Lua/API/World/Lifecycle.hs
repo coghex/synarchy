@@ -7,6 +7,7 @@ module Engine.Scripting.Lua.API.World.Lifecycle
     , SuggestionStep(..)
     , suggestionStep
     , suggestionStepLabel
+    , readCatalogueForSuggestions
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -24,6 +25,7 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.Char (isDigit)
 import Data.IORef (readIORef, writeIORef)
+import Control.Exception (IOException, evaluate, try)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
@@ -345,7 +347,7 @@ resolveSuggestion backendState seed ordinal = do
         StepFailed msg → pure (Left msg)
         StepBuild cat  → build cat
         StepReadCatalogue → do
-            eCat ← catalogueFromDisk
+            eCat ← readCatalogueForSuggestions conceptCataloguePath
             case eCat of
                 Left msg → do
                     writeIORef (lbsLanguageCache backendState)
@@ -373,15 +375,30 @@ resolveSuggestion backendState seed ordinal = do
         Left sErr → Left (suggestErrorText sErr)
         Right sug → Right sug
 
-    catalogueFromDisk ∷ IO (Either Text Catalogue)
-    catalogueFromDisk = do
-        eCat ← loadCatalogue conceptCataloguePath
-        pure $ case eCat of
-            Left cErr → Left $ "concept catalogue "
-                <> T.pack conceptCataloguePath
-                <> " could not be loaded, so no name can be suggested: "
-                <> catalogueErrorText cErr
-            Right cat → Right cat
+-- | The catalogue read behind a suggestion, with BOTH of its failure
+--   modes turned into one descriptive 'Left'.
+--
+--   'loadCatalogue' only returns 'Left' for a file it could PARSE and
+--   reject; a missing or unreadable one throws out of 'BS.readFile'
+--   instead. Letting that propagate would skip the cache write, so the
+--   very case the cache exists for — a broken installation — would go
+--   back to a filesystem read per dice press (#1106 requirement 8).
+--
+--   'evaluate' forces the decode inside the handler's scope, so the
+--   result is a settled 'Either' rather than a thunk that could still
+--   fault after the caller has cached it. Only 'IOException' is caught:
+--   an async exception delivered to this thread is not a catalogue
+--   problem and must not be recorded as one.
+readCatalogueForSuggestions ∷ FilePath → IO (Either Text Catalogue)
+readCatalogueForSuggestions path = do
+    eRead ← try (loadCatalogue path ⌦ evaluate)
+    pure $ case eRead of
+        Left (ioErr ∷ IOException) → Left (describe (T.pack (show ioErr)))
+        Right (Left cErr)          → Left (describe (catalogueErrorText cErr))
+        Right (Right cat)          → Right cat
+  where
+    describe why = "concept catalogue " <> T.pack path
+        <> " could not be loaded, so no name can be suggested: " <> why
 
 -- | world.initArena(pageId) — create flat test arena, no geology
 worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
