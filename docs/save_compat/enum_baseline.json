@@ -1,11 +1,25 @@
 {
-  "_comment": "Golden constructor lists for every positionally-serialized sum type (issue #1145). Generated and checked by tools/enum_append_only_audit.py -- do not hand-edit to make the audit pass: a change that is not a pure append is a save-format break, not a baseline update. `components` and `onSaveWire` are informational reachability attribution; the `constructors` list is the contract.",
+  "_comment": "Golden constructor lists for every positionally-serialized sum type (issue #1145). Generated and checked by tools/enum_append_only_audit.py -- do not hand-edit to make the audit pass: a change that is not a pure append is a save-format break, not a baseline update. The `constructors` list is the contract; `source`/`onSaveWire`/`components`/`carriers` record where each type sat on the save wire when it was captured, so a type that is later renamed, moved, or deleted -- and therefore can no longer be walked -- still reports which components and historical shapes carried it.",
   "types": {
     "Craft.Bills.BillMode": {
       "source": "src/Craft/Bills.hs",
       "onSaveWire": true,
       "components": [
         "craft-bills"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"craft-bills\" — World.Save.Component.Entities",
+          "via": "PageCraftBillsDTO → BillQueueDTO → CraftBillDTO → BillMode"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → BillQueueDTOv1 → CraftBillDTOv1 → BillMode"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → CraftBills → CraftBill → BillMode"
+        }
       ],
       "constructors": [
         {
@@ -27,6 +41,20 @@
       "onSaveWire": true,
       "components": [
         "core-session"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"core-session\" — World.Save.Component.Session",
+          "via": "LiveCameraDTO → CameraFacing"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → CameraFacing"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → CameraFacing"
+        }
       ],
       "constructors": [
         {
@@ -52,6 +80,16 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → LocationInstancesDTO → LocationInstanceDTO → LocationLifecycle"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → LocationInstances → LocationInstance → LocationLifecycle"
+        }
       ],
       "constructors": [
         {
@@ -86,6 +124,20 @@
       "components": [
         "power-nodes"
       ],
+      "carriers": [
+        {
+          "carrier": "\"power-nodes\" — World.Save.Component.Entities",
+          "via": "PagePowerNodesDTO → NodeRegistryDTO → PowerNodeDTO → PowerRole"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → NodeRegistryDTOv1 → PowerNodeDTOv1 → PowerRole"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → PowerNodes → PowerNode → PowerRole"
+        }
+      ],
       "constructors": [
         {
           "name": "PowerSource",
@@ -103,6 +155,24 @@
       "components": [
         "unit-sim",
         "units"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "via": "PageSimDTO → UnitSimStateDTO → Direction"
+        },
+        {
+          "carrier": "\"units\" — World.Save.Component.Entities",
+          "via": "PageUnitsDTO → UnitInstanceDTO → Direction"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "UnitSnapshotV90 → UnitInstanceDTO → Direction"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "UnitInstanceSnapshot → Direction"
+        }
       ],
       "constructors": [
         {
@@ -145,6 +215,20 @@
       "components": [
         "unit-sim"
       ],
+      "carriers": [
+        {
+          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "via": "PageSimDTO → UnitSimStateDTO → Pose"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → UnitSimStateDTO → Pose"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → UnitSimState → Pose"
+        }
+      ],
       "constructors": [
         {
           "name": "Standing",
@@ -186,6 +270,20 @@
       "components": [
         "unit-sim"
       ],
+      "carriers": [
+        {
+          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "via": "PageSimDTO → UnitSimStateDTO → UnitActivity"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → UnitSimStateDTO → UnitActivity"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → UnitSimState → UnitActivity"
+        }
+      ],
       "constructors": [
         {
           "name": "Idle",
@@ -223,6 +321,20 @@
       "components": [
         "world-activity"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "via": "PageActivityDTO → ConstructDesignationDTO → ConstructStatus"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → ConstructDesignationDTO → ConstructStatus"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → ConstructDesignations → ConstructDesignation → ConstructStatus"
+        }
+      ],
       "constructors": [
         {
           "name": "CsPending",
@@ -242,6 +354,12 @@
       "source": "src/World/Construct/Types.hs",
       "onSaveWire": true,
       "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → ConstructDesignations → ConstructDesignation → ConstructTarget"
+        }
+      ],
       "constructors": [
         {
           "name": "CtStructure",
@@ -257,6 +375,12 @@
       "source": "src/World/Edit/Types.hs",
       "onSaveWire": true,
       "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldEdits → WorldEdit"
+        }
+      ],
       "constructors": [
         {
           "name": "WeDeleteTile",
@@ -308,6 +432,7 @@
       "source": "src/World/Flora/Types.hs",
       "onSaveWire": false,
       "components": [],
+      "carriers": [],
       "constructors": [
         {
           "name": "CycleDormant",
@@ -335,6 +460,7 @@
       "source": "src/World/Flora/Types.hs",
       "onSaveWire": false,
       "components": [],
+      "carriers": [],
       "constructors": [
         {
           "name": "PhaseSprout",
@@ -378,6 +504,7 @@
       "source": "src/World/Flora/Types.hs",
       "onSaveWire": false,
       "components": [],
+      "carriers": [],
       "constructors": [
         {
           "name": "Evergreen",
@@ -403,6 +530,20 @@
       "components": [
         "world-edits"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "via": "PageEditsDTO → WorldEditDTO → FluidType"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldEditDTO → FluidType"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldEdits → WorldEdit → FluidType"
+        }
+      ],
       "constructors": [
         {
           "name": "Ocean",
@@ -427,6 +568,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoEvent"
+        }
       ],
       "constructors": [
         {
@@ -485,6 +640,20 @@
       "components": [
         "world-pages"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → PersistentFeature → FeatureActivity"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → PersistentFeature → FeatureActivity"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → PersistentFeature → FeatureActivity"
+        }
+      ],
       "constructors": [
         {
           "name": "FActive",
@@ -509,6 +678,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → FeatureEvolution"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent → FeatureEvolution"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoEvent → FeatureEvolution"
+        }
       ],
       "constructors": [
         {
@@ -543,6 +726,20 @@
       "components": [
         "world-pages"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → FeatureShape"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent → FeatureShape"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoEvent → FeatureShape"
+        }
+      ],
       "constructors": [
         {
           "name": "VolcanicShape",
@@ -558,6 +755,7 @@
       "source": "src/World/Geology/Timeline/Feature.hs",
       "onSaveWire": false,
       "components": [],
+      "carriers": [],
       "constructors": [
         {
           "name": "Active",
@@ -582,6 +780,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → FeatureEvolution → VolcanicFeature"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent → FeatureEvolution → VolcanicFeature"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → VolcanoCtx → MagmaSource → VolcanicFeature"
+        }
       ],
       "constructors": [
         {
@@ -624,6 +836,20 @@
       "components": [
         "world-pages"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoPeriod → GeoScale"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoPeriod → GeoScale"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoPeriod → GeoScale"
+        }
+      ],
       "constructors": [
         {
           "name": "Eon",
@@ -651,6 +877,7 @@
       "source": "src/World/Hydrology/Types.hs",
       "onSaveWire": false,
       "components": [],
+      "carriers": [],
       "constructors": [
         {
           "name": "Advancing",
@@ -675,6 +902,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → HydroEvolution"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent → HydroEvolution"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoEvent → HydroEvolution"
+        }
       ],
       "constructors": [
         {
@@ -729,6 +970,20 @@
       "components": [
         "world-pages"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → HydroFeature"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent → HydroFeature"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoEvent → HydroFeature"
+        }
+      ],
       "constructors": [
         {
           "name": "RiverFeature",
@@ -749,6 +1004,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → HydroFeature → LakeParams → LakeSource"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → GeoTimeline → GeoEvent → HydroFeature → LakeParams → LakeSource"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → GeoTimeline → GeoEvent → HydroFeature → LakeParams → LakeSource"
+        }
       ],
       "constructors": [
         {
@@ -774,6 +1043,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → ZoomMapMode"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → ZoomMapMode"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → ZoomMapMode"
+        }
       ],
       "constructors": [
         {
@@ -816,6 +1099,16 @@
       "components": [
         "world-activity"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "via": "PageActivityDTO → ConstructDesignationDTO → ConstructTargetDTO"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → ConstructDesignationDTO → ConstructTargetDTO"
+        }
+      ],
       "constructors": [
         {
           "name": "CtStructureD",
@@ -832,6 +1125,16 @@
       "onSaveWire": true,
       "components": [
         "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "via": "PageEditsDTO → WorldEditDTO"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldEditDTO"
+        }
       ],
       "constructors": [
         {
@@ -884,6 +1187,12 @@
       "source": "src/World/Save/Reference.hs",
       "onSaveWire": true,
       "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Reference — the typed persistent references shared by every component",
+          "via": "ContentKind"
+        }
+      ],
       "constructors": [
         {
           "name": "ContentUnit",
@@ -927,6 +1236,12 @@
       "source": "src/World/Save/Reference.hs",
       "onSaveWire": true,
       "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Reference — the typed persistent references shared by every component",
+          "via": "RefKind"
+        }
+      ],
       "constructors": [
         {
           "name": "RefPage",
@@ -970,6 +1285,12 @@
       "source": "src/World/Save/Reference.hs",
       "onSaveWire": true,
       "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Reference — the typed persistent references shared by every component",
+          "via": "RefScope"
+        }
+      ],
       "constructors": [
         {
           "name": "ScopeGlobal",
@@ -989,6 +1310,16 @@
       "source": "src/World/Tool/Types.hs",
       "onSaveWire": true,
       "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → ToolMode"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → ToolMode"
+        }
+      ],
       "constructors": [
         {
           "name": "DefaultTool",
@@ -1030,6 +1361,20 @@
       "components": [
         "world-pages"
       ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → ClimateStateDTO → AtmoGridDTO → PressureSystemDTO → PressureType"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → ClimateStateDTO → AtmoGridDTO → PressureSystemDTO → PressureType"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → ClimateState → AtmoGrid → PressureSystem → PressureType"
+        }
+      ],
       "constructors": [
         {
           "name": "HighPressure",
@@ -1046,6 +1391,20 @@
       "onSaveWire": true,
       "components": [
         "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldGenParamsDTO → ClimateStateDTO → SurfaceBudgetDTO → SurfaceType"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldGenParamsDTOv1 → ClimateStateDTO → SurfaceBudgetDTO → SurfaceType"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldGenParams → ClimateState → SurfaceBudget → SurfaceType"
+        }
       ],
       "constructors": [
         {

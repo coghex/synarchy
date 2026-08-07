@@ -69,6 +69,17 @@ Arity is part of the record because a constructor that keeps its name
 and index but gains or loses a field changes that alternative's payload
 layout just as destructively as a reorder changes the tag.
 
+Each entry also records WHERE that type sat on the save wire when it was
+captured — its source file, and every component and historical shape
+reachability found, with the path. That is not decoration: a type that
+is renamed, moved, or DELETED can no longer be walked, and it is exactly
+the change whose migration guidance matters most, since every tag it
+defined stops decoding. The recorded attribution is what lets that case
+still name the affected components. Because it would otherwise rot
+silently, the whole file is kept REGENERATED: a baseline whose
+attribution no longer matches the code fails on its own (distinctly from
+any constructor change) rather than being quietly trusted.
+
 Comparison runs in BOTH directions on module-qualified identities, so an
 omitted type, a stale entry, a renamed type, and a same-named type in
 another module all fail rather than pass silently.
@@ -1020,11 +1031,30 @@ def compute_wire_carriers(root: Path, scan: Scan) -> dict[str, list[Carrier]]:
 
 # ----- Baseline ------------------------------------------------------
 
-def load_baseline(path: Path) -> dict[str, list[Constructor]]:
+@dataclass
+class BaselineEntry:
+    """One type's checked-in record: the constructor contract, plus the
+    save-wire attribution captured WITH it.
+
+    The attribution is recorded rather than merely recomputed because a
+    type that is renamed, moved, or deleted can no longer be walked —
+    and that is exactly the change whose migration guidance matters
+    most. `recorded_carrier_lines` reads it back for that case."""
+    constructors: list[Constructor]
+    components: tuple[str, ...] = ()
+    carriers: tuple[tuple[str, str], ...] = ()   # (label, via-path)
+    source: str = ""
+
+
+def load_baseline(path: Path) -> dict[str, BaselineEntry]:
     """Read the checked-in constructor baseline.
 
-    Strict: a malformed entry fails rather than being skipped, because a
-    skipped entry is an unguarded enum."""
+    Strict about the CONTRACT (`constructors`): a malformed entry fails
+    rather than being skipped, because a skipped entry is an unguarded
+    enum. Lenient about the informational attribution, which a
+    hand-written entry may legitimately omit — its absence only costs
+    detail in one diagnostic, and `run_repository_audit`'s
+    regenerated-file check catches it anyway."""
     if not path.exists():
         raise AuditError(f"{BASELINE_REL}: baseline file is missing")
     try:
@@ -1058,7 +1088,19 @@ def load_baseline(path: Path) -> dict[str, list[Constructor]]:
                     f"{BASELINE_REL}: `{qualified}`'s `{item['name']}` has a "
                     f"non-integer arity {arity!r}")
             ctors.append(Constructor(str(item["name"]), arity))
-        out[qualified] = ctors
+        recorded: list[tuple[str, str]] = []
+        for item in entry.get("carriers", []):
+            if not isinstance(item, dict) or "carrier" not in item \
+                    or "via" not in item:
+                raise AuditError(
+                    f"{BASELINE_REL}: `{qualified}` has a `carriers` entry "
+                    f"without both `carrier` and `via`")
+            recorded.append((str(item["carrier"]), str(item["via"])))
+        out[qualified] = BaselineEntry(
+            constructors=ctors,
+            components=tuple(str(c) for c in entry.get("components", [])),
+            carriers=tuple(recorded),
+            source=str(entry.get("source", "")))
     if not out:
         raise AuditError(
             f"{BASELINE_REL}: declares no types — a vacuous baseline would "
@@ -1072,13 +1114,15 @@ def render_baseline(guarded: dict[str, GuardedType],
     types: dict[str, object] = {}
     for qualified in sorted(guarded):
         entry = guarded[qualified]
+        recorded = sorted(carriers.get(qualified, ()),
+                          key=lambda c: (c.sort_key, c.path))
         types[qualified] = {
             "source": entry.rel_path,
             "onSaveWire": qualified in carriers,
-            "components": sorted({
-                component
-                for carrier in carriers.get(qualified, ())
-                for component in carrier.components}),
+            "components": sorted({component for carrier in recorded
+                                  for component in carrier.components}),
+            "carriers": [{"carrier": c.label, "via": " → ".join(c.path)}
+                         for c in recorded],
             "constructors": [{"name": c.name, "arity": c.arity}
                              for c in entry.constructors],
         }
@@ -1088,9 +1132,12 @@ def render_baseline(guarded: dict[str, GuardedType],
             "sum type (issue #1145). Generated and checked by "
             "tools/enum_append_only_audit.py -- do not hand-edit to make "
             "the audit pass: a change that is not a pure append is a "
-            "save-format break, not a baseline update. `components` and "
-            "`onSaveWire` are informational reachability attribution; the "
-            "`constructors` list is the contract."),
+            "save-format break, not a baseline update. The `constructors` "
+            "list is the contract; `source`/`onSaveWire`/`components`/"
+            "`carriers` record where each type sat on the save wire when "
+            "it was captured, so a type that is later renamed, moved, or "
+            "deleted -- and therefore can no longer be walked -- still "
+            "reports which components and historical shapes carried it."),
         "types": types,
     }
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
@@ -1103,7 +1150,10 @@ class Finding:
     qualified: str
     compatible: bool       # True = append-compatible; baseline must ratchet
     lines: list[str]
-    show_carriers: bool = True
+    # Set when the LIVE declaration is gone (renamed, moved, deleted, or
+    # no longer qualifying), so its attribution must be read back from
+    # the baseline instead of walked.
+    recorded: BaselineEntry | None = None
 
 
 def classify(qualified: str, entry: GuardedType,
@@ -1151,7 +1201,7 @@ def describe_incompatibility(baseline: list[Constructor],
 
 
 def compare(guarded: dict[str, GuardedType],
-            baseline: dict[str, list[Constructor]]) -> list[Finding]:
+            baseline: dict[str, BaselineEntry]) -> list[Finding]:
     """Cross-check the discovered set against the baseline BOTH ways."""
     findings: list[Finding] = []
     for qualified in sorted(guarded):
@@ -1164,56 +1214,109 @@ def compare(guarded: dict[str, GuardedType],
                 f"baseline entry — APPEND-COMPATIBLE.",
             ]))
             continue
-        finding = classify(qualified, guarded[qualified], baseline[qualified])
+        finding = classify(qualified, guarded[qualified],
+                           baseline[qualified].constructors)
         if finding is not None:
             findings.append(finding)
     for qualified in sorted(baseline):
         if qualified in guarded:
             continue
+        recorded = baseline[qualified]
+        where = f" — last seen in {recorded.source}" if recorded.source else ""
         findings.append(Finding(qualified, False, [
-            f"{qualified} (baseline only)",
+            f"{qualified} (baseline only{where})",
             "    has a baseline entry but no longer qualifies for the "
             "guarded set — it was renamed, moved to another module, lost "
             "its `Generic`-derived `Serialize` instance, stopped being a "
             "sum, or was deleted.",
-            "    Every one of those changes what already-saved bytes mean. "
-            "Confirm no shipped payload carries it, then remove the entry "
-            "in the SAME commit as the change.",
-        ], show_carriers=False))
+            f"    Every one of those changes what already-saved bytes mean: "
+            f"the {len(recorded.constructors)} tag(s) it defined "
+            f"({', '.join(c.render() for c in recorded.constructors)}) no "
+            f"longer decode to anything.",
+        ], recorded=recorded))
     return findings
 
 
 # ----- Reporting -----------------------------------------------------
 
+# The migration every incompatible change needs, whether the live
+# declaration is still there to walk or not. Declared once so the two
+# paths below cannot drift into giving different instructions.
+_MIGRATION_STEPS = [
+    "    Do this instead of editing the declaration in place:",
+    "      1. Freeze the CURRENT shape as a versioned DTO that stays "
+    "decodable — including a frozen copy of the OLD enum, since the "
+    "historical bytes still carry the old tags.",
+    "      2. Bump `ccVersion` on EVERY component listed above, and add "
+    "the outgoing version to that component's `ccInputVers` (through "
+    "`csOlderVersions`/`atVersion`) so the reader still accepts it.",
+    "      3. Migrate from the frozen DTO into the changed type.",
+    "      4. Then make the change you wanted — appending at the END, "
+    "which needs no migration at all, if that is enough — and ratchet "
+    "this baseline.",
+]
+
+_OFF_WIRE_NOTE = (
+    "    No save-wire DTO reaches it, so no component version needs "
+    "bumping — but this type does derive positional `Serialize`, so "
+    "confirm nothing outside src/World/Save writes it to disk before "
+    "changing it.")
+
+
 def carrier_lines(qualified: str,
                   carriers: dict[str, list[Carrier]]) -> list[str]:
-    """The migration guidance for one incompatible change: every affected
-    component and historical shape, and what to do instead."""
+    """The migration guidance for one incompatible change to a type that
+    is STILL declared: every affected component and historical shape,
+    walked fresh, and what to do instead."""
     entries = carriers.get(qualified, [])
     if not entries:
-        return [
-            "    Not reachable from any save-wire DTO in this tree, so no "
-            "component version needs bumping today — but this type does "
-            "derive positional `Serialize`, so confirm nothing outside "
-            "src/World/Save writes it to disk before changing it.",
-        ]
+        return [_OFF_WIRE_NOTE]
     lines = ["    On the wire in:"]
     for carrier in sorted(entries, key=lambda c: (c.sort_key, c.path)):
         lines.append(f"      {carrier.label}")
         lines.append(f"        via {' → '.join(carrier.path)}")
-    lines.extend([
-        "    Do this instead of editing the declaration in place:",
-        "      1. Freeze the CURRENT shape as a versioned DTO that stays "
-        "decodable — including a frozen copy of the OLD enum, since the "
-        "historical bytes still carry the old tags.",
-        "      2. Bump `ccVersion` on EVERY component listed above, and add "
-        "the outgoing version to that component's `ccInputVers` (through "
-        "`csOlderVersions`/`atVersion`) so the reader still accepts it.",
-        "      3. Migrate from the frozen DTO into the changed type.",
-        "      4. Then append the new constructor at the END, and ratchet "
-        "this baseline.",
-    ])
-    return lines
+    return lines + _MIGRATION_STEPS
+
+
+def recorded_carrier_lines(entry: BaselineEntry) -> list[str]:
+    """The same guidance for a type whose declaration is GONE.
+
+    A renamed, moved, or deleted guarded type cannot be walked — there
+    is nothing left to reach — yet it is precisely the change that needs
+    the components named, because every tag it defined stops decoding.
+    So the attribution captured alongside its constructor list is read
+    back instead of recomputed."""
+    if not entry.carriers:
+        if entry.components:
+            # An entry written before `carriers` existed, or hand-added:
+            # the flat component list is still enough to name them.
+            lines = ["    The baseline recorded it on the wire in "
+                     "(attribution as captured, not a fresh walk — the "
+                     "declaration is gone):"]
+            lines.extend(f'      "{component}"'
+                         for component in entry.components)
+            return lines + _MIGRATION_STEPS
+        return [
+            "    The baseline recorded no save-wire carrier for it, so no "
+            "component version needs bumping — but confirm that is still "
+            "true (the declaration is gone, so this cannot be re-derived) "
+            "before dropping the entry."]
+    lines = ["    The baseline recorded it on the wire in (attribution as "
+             "captured, not a fresh walk — the declaration is gone):"]
+    for label, via in entry.carriers:
+        lines.append(f"      {label}")
+        lines.append(f"        via {via}")
+    return lines + _MIGRATION_STEPS
+
+
+def guidance_lines(finding: Finding,
+                   carriers: dict[str, list[Carrier]]) -> list[str]:
+    """Migration guidance for one incompatible finding, from whichever
+    attribution is available: a fresh walk when the type is still
+    declared, the baseline's own record when it is not."""
+    if finding.recorded is not None:
+        return recorded_carrier_lines(finding.recorded)
+    return carrier_lines(finding.qualified, carriers)
 
 
 def report(findings: list[Finding], carriers: dict[str, list[Carrier]],
@@ -1223,8 +1326,8 @@ def report(findings: list[Finding], carriers: dict[str, list[Carrier]],
     if not findings:
         if stale_attribution:
             print(f"{BASELINE_REL}: every constructor list matches, but its "
-                  f"`source`/`onSaveWire`/`components` attribution no longer "
-                  f"matches the code.")
+                  f"`source`/`onSaveWire`/`components`/`carriers` "
+                  f"attribution no longer matches the code.")
             print("  Nothing is broken on the wire — but a diagnostic that "
                   "names the wrong components is worse than none, so the "
                   "file is kept regenerated rather than merely append-checked.")
@@ -1240,9 +1343,8 @@ def report(findings: list[Finding], carriers: dict[str, list[Carrier]],
         for finding in incompatible:
             for line in finding.lines:
                 print(f"  {line}")
-            if finding.show_carriers:
-                for line in carrier_lines(finding.qualified, carriers):
-                    print(f"  {line}")
+            for line in guidance_lines(finding, carriers):
+                print(f"  {line}")
             print()
     if compatible:
         print(f"{len(compatible)} append-compatible change(s) — allowed, but "
@@ -1310,9 +1412,8 @@ def run_update_baseline(root: Path = REPO_ROOT) -> int:
         for finding in incompatible:
             for line in finding.lines:
                 print(f"  {line}")
-            if finding.show_carriers:
-                for line in carrier_lines(finding.qualified, carriers):
-                    print(f"  {line}")
+            for line in guidance_lines(finding, carriers):
+                print(f"  {line}")
         return 1
     rendered = render_baseline(scan.guarded, carriers)
     before = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -1606,6 +1707,46 @@ def _self_test() -> list[str]:
             "migration guidance: `units` claimed a `ToolMode` that only its "
             f"codec's LIVE input carries, not its DTO:\n{tool_out}")
 
+    # 3b. The same guidance is required when the DECLARATION IS GONE —
+    #     renamed, moved, or deleted — which is the change that most
+    #     needs it and the one no fresh walk can produce, since there is
+    #     nothing left to reach. The attribution captured beside the
+    #     constructor list is read back instead.
+    for label, tree in (
+            ("deleted", {k: v for k, v in _clean_tree().items()
+                         if k != "src/Unit/Sim/Types.hs"}),
+            ("renamed", dict(_clean_tree(), **{
+                "src/Unit/Sim/Types.hs": _pose(
+                    "Standing", "Crouching", "Crawling").replace(
+                        "data Pose", "data Posture")}))):
+        _, gone_out = _run(tree)
+        for needle in ("INCOMPATIBLE", "Unit.Sim.Types.Pose",
+                       "last seen in src/Unit/Sim/Types.hs",
+                       "Standing/0, Crouching/0, Crawling/0",
+                       "attribution as captured",
+                       '"unit-sim" — World.Save.Component.Entities',
+                       '"units" — World.Save.Component.Entities',
+                       "via UnitSimStateDTO → Pose",
+                       "via UnitInstanceDTO → Pose",
+                       "Bump `ccVersion` on EVERY", "`ccInputVers`",
+                       "Migrate from the frozen DTO"):
+            if needle not in gone_out:
+                failures.append(
+                    f"{label} guarded type: guidance missing {needle!r}:"
+                    f"\n{gone_out}")
+    # A hand-added entry that never recorded any attribution must say so
+    # rather than imply the type was safely off the wire.
+    def bare_ghost(document) -> None:
+        document["types"]["Unit.Sim.Types.Ghost"] = {
+            "constructors": [{"name": "GhostA", "arity": 0},
+                             {"name": "GhostB", "arity": 0}]}
+
+    bare = _clean_tree()
+    bare[BASELINE_REL] = _rewrite_baseline(bare_ghost)
+    expect_fail("baseline-only entry with no recorded attribution", bare,
+                "Unit.Sim.Types.Ghost", "recorded no save-wire carrier",
+                "cannot be re-derived")
+
     # 4. Requirement 6: an append is classified as ALLOWED, distinctly
     #    from a failure, and still requires the baseline to ratchet.
     appended = with_pose("Standing", "Crouching", "Crawling", "Sleeping")
@@ -1891,7 +2032,7 @@ def _self_test() -> list[str]:
     orphan["src/World/Save/Component/Entities.hs"] = \
         "module World.Save.Component.Entities where\n"
     expect_fail("unreachable guarded type", orphan,
-                "Not reachable from any save-wire DTO")
+                "No save-wire DTO reaches it")
 
     # 16. The comment stripper must not misread code AS a comment (which
     #     would blank a real constructor out of the compared set).

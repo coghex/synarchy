@@ -1149,12 +1149,14 @@ docstring before adding, moving, or changing one. It guards **every**
 "reachable from a save component", currently 34 types, so a type that
 becomes persisted later was already guarded the day its instance was
 derived. `docs/save_compat/enum_baseline.json` is the golden
-constructor list (name + arity, module-qualified); it is GENERATED, so
-don't hand-edit it — a pure append ratchets it with
-`--update-baseline`, and anything else is a wire-format break the audit
-refuses to record. An incompatible change's output names every
-component and historical shape that carries the type, with the
-reachability path.
+constructor list (name + arity, module-qualified) plus the save-wire
+attribution captured with it; it is GENERATED end to end, so don't
+hand-edit it — a pure append ratchets it with `--update-baseline`, and
+anything else is a wire-format break the audit refuses to record. An
+incompatible change's output names every component and historical shape
+that carries the type, with the reachability path — including for a
+type that was renamed or deleted, which is read back from the recorded
+attribution because there is nothing left to walk.
 
 **Architecture (persistence-overhaul epic #756-#768, landed):**
 - `World.Save.Snapshot.SessionSnapshot` is the immutable, validated
