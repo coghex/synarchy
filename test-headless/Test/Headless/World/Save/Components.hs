@@ -33,11 +33,13 @@ import World.Save.Component.Knowledge (containerKnowledgeCodec)
 import World.Save.Compat.SessionV90
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
-import World.Save.Integrity (integrityErrorCap)
+import World.Save.Integrity (integrityErrorCap, KnownEntities(..))
+import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
 import Location.Types (emptyLocationRegistry)
-import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
+import World.Save.Snapshot.Adapter
+    (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
@@ -47,7 +49,7 @@ import World.Save.Types
     , MissingBillOutputItemRef(..), missingBillOutputItemReferences
     , MissingConstructDefRef(..)
     , missingConstructDefReferences
-    , WorldPageSave(..), resolveLegacyLocationParams )
+    , WorldPageSave(..), SaveData(..), resolveLegacyLocationParams )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
@@ -358,6 +360,72 @@ richItem = ItemInstance
                     { iiDefName = "mini_kit", iiCurrentFill = 0, iiQuality = 50
                     , iiCondition = 33, iiWeight = 0.2, iiSharpness = 12.5
                     , iiInstanceId = 902, iiTemp = Just (-4.0), iiContents = [] } ] } ] }
+
+-- Item-container coverage fixture (#1090) ----------------------------
+
+-- | A plain item carrying one nested 'iiContents' child, both with
+--   distinct ids and def names — @iid@ for the outer, @iid + 1@ for the
+--   nested one.
+nestedCoverItem ∷ Word64 → Text → ItemInstance
+nestedCoverItem iid nm = (coverItem iid nm)
+    { iiContents = [coverItem (iid + 1) (nm <> "_nested")] }
+
+coverItem ∷ Word64 → Text → ItemInstance
+coverItem iid nm = ItemInstance
+    { iiDefName = nm, iiCurrentFill = 0, iiQuality = 0, iiCondition = 100
+    , iiWeight = 1, iiSharpness = 0, iiInstanceId = iid, iiTemp = Nothing
+    , iiContents = [] }
+
+-- | One page carrying a DISTINCT item id in every one of the six item
+--   containers the save system enumerates, each holding a nested
+--   'iiContents' child: twelve ids in all (#1090). Every container map
+--   is a singleton, so the traversal order is deterministic and can be
+--   asserted.
+--
+--   A container dropped from the shared enumeration is observable here
+--   as ids missing from EVERY consumer — which is the point: the three
+--   enumerations that preceded #1090 could each silently stop seeing a
+--   container with no type error and no test failure.
+containerCoveragePage ∷ PageSnapshot
+containerCoveragePage = (minimalPage page1)
+    { pgsGroundItems = GroundItems 2
+        (HM.singleton 1 (GroundItem (nestedCoverItem 100 "ground") 0 0))
+    , pgsUnits = UnitSnapshot
+        (HM.singleton (UnitId 1)
+            (minimalUnitInstance [nestedCoverItem 200 "inventory"])
+                { uisEquipped =
+                    HM.singleton "head" (nestedCoverItem 300 "equipped")
+                , uisAccessories = [nestedCoverItem 400 "accessory"] })
+        10
+    , pgsBuildings = BuildingSnapshot
+        (HM.singleton (BuildingId 1)
+            (minimalBuildingInstance [nestedCoverItem 500 "storage"])
+                { bisMaterialsDelivered =
+                    HM.singleton "wood" [nestedCoverItem 600 "delivered"] })
+        10
+    }
+
+containerCoverageSnapshot ∷ SessionSnapshot
+containerCoverageSnapshot = case captureSessionSnapshot
+        minimalGlobals { sgNextItemId = 1000 } [containerCoveragePage] of
+    Right s   → s
+    Left errs → error ("containerCoverageSnapshot invalid: " <> show errs)
+
+-- | The same fixture seen through the OTHER page shape, via the real
+--   production adapter — so one session exercises both the @pgs*@ and
+--   @wps*@ projections of the shared enumeration.
+containerCoveragePageSave ∷ WorldPageSave
+containerCoveragePageSave =
+    case sdWorlds (snapshotToSaveData (SaveRequestMeta "s" "t" False)
+                       containerCoverageSnapshot) of
+        (w : _) → w
+        []      → error "containerCoveragePageSave: no pages"
+
+-- | Every item-instance id the fixture plants: six outer items, six
+--   nested children.
+containerCoverageIds ∷ [Word64]
+containerCoverageIds =
+    concat [ [n, n + 1] | n ← [100, 200, 300, 400, 500, 600] ]
 
 -- | 'WorldGenParams' with distinctive values planted across the newly
 --   FROZEN nested worldgen records (a non-default calendar; a climate
@@ -1554,6 +1622,71 @@ spec = do
                             (HM.singleton (UnitId 1) u) 10 })
             HS.fromList (map midrDefName missing)
                 `shouldBe` HS.fromList ["first_aid_kit", "ghost_helmet"]
+
+    -- #1090: the three item enumerations became one. These pin what
+    -- unification is FOR — that every consumer observes every
+    -- container — against an explicit expected id set rather than
+    -- against each other, since pairwise agreement would be satisfied
+    -- by a container the shared enumeration drops for all of them.
+    describe "shared item enumeration (#1090)" $ do
+        let coverPages = [(page1, containerCoveragePageSave)]
+            -- No item def is registered, so every planted item is
+            -- reported and the source labels cover all six containers.
+            coverMissing = missingItemDefReferences HS.empty coverPages
+
+        it "the allocator/duplicate walk observes every container" $
+            HS.fromList (allItemInstanceIds containerCoverageSnapshot)
+                `shouldBe` HS.fromList containerCoverageIds
+
+        it "the allocator/duplicate walk reports each id exactly once" $
+            length (allItemInstanceIds containerCoverageSnapshot)
+                `shouldBe` length containerCoverageIds
+
+        it "the load-time known-entity set observes every container" $
+            keItemInstances
+                (knownEntitiesFromSaveData
+                    (snapshotToSaveData (SaveRequestMeta "s" "t" False)
+                         containerCoverageSnapshot))
+                `shouldBe` HS.fromList (map fromIntegral containerCoverageIds)
+
+        it "the missing-item-def validator observes every container" $
+            HS.fromList (map midrItemId coverMissing)
+                `shouldBe` HS.fromList containerCoverageIds
+
+        it "reports the right source label for every container's OUTER \
+           \and NESTED item" $
+            HM.fromList [ (midrItemId r, midrSource r) | r ← coverMissing ]
+                `shouldBe` HM.fromList
+                    [ (100, "ground item"),      (101, "ground item")
+                    , (200, "unit inventory"),   (201, "unit inventory")
+                    , (300, "unit equipped"),    (301, "unit equipped")
+                    , (400, "unit accessories"), (401, "unit accessories")
+                    , (500, "building storage"), (501, "building storage")
+                    , (600, "building materials delivered")
+                    , (601, "building materials delivered") ]
+
+        -- Requirement 4: unifying the enumeration must not renumber
+        -- either consumer's output. The two were written with opposite
+        -- conventions and both orders are observable, so the shared
+        -- walk keeps both.
+        it "preserves the id walk's ground-first container order" $
+            allItemInstanceIds containerCoverageSnapshot
+                `shouldBe` [ 100, 101      -- ground items
+                           , 200, 201      -- unit inventory
+                           , 300, 301      -- unit equipped
+                           , 400, 401      -- unit accessories
+                           , 600, 601      -- building materials delivered
+                           , 500, 501 ]    -- building storage
+
+        it "preserves the missing-item-def validator's buildings-first \
+           \container order" $
+            map midrItemId coverMissing
+                `shouldBe` [ 500, 501      -- building storage
+                           , 600, 601      -- building materials delivered
+                           , 200, 201      -- unit inventory
+                           , 300, 301      -- unit equipped
+                           , 400, 401      -- unit accessories
+                           , 100, 101 ]    -- ground items
 
     -- #760 round 8: craft-bill recipe validation.
     describe "missing recipe definition rejection (#760 round 8)" $ do
