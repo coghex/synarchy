@@ -142,7 +142,7 @@ import World.Save.Types (SaveData, SaveMetadata(..), checkWorldCount)
 import World.Save.Envelope
     ( decodeSessionEnvelope, decodeSessionEnvelopeClassified
     , GenerationFailure(..), renderGenerationFailure
-    , foreignOptionalComponentIds )
+    , foreignOptionalComponentIds, LuaComponentSpec(..) )
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 
@@ -817,5 +817,6 @@ decodeGenerationFile luaKnownNames luaRequiredNames path = do
                                     (smAutosave meta)
                     sd ← either (Left . GenerationIncompatible) Right
                            (checkWorldCount (snapshotToSaveData req snap))
-                    pure (sd, [ (n, v, p) | (n, v, _req, p) ← luaComponents ]
+                    pure (sd, [ (lcsId c, lcsVersion c, lcsPayload c)
+                              | c ← luaComponents ]
                          , isMigrated)
