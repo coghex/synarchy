@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generated-language report (#710, #1094, #1095, #1096) —
+"""Generated-language report (#710, #1094, #1095, #1096, #1100) —
 quality/regression tool for the native-name generator
 (`Language.Generated.*`), not a bug-gating probe.
 
@@ -10,11 +10,22 @@ never touches the graphical engine, headless simulation, or world
 generation) and reports on/validates its JSON output: profile
 diversity, canonical native-name renderings alongside their English
 glosses, root collisions, duplicate names, output-length distribution,
-contract (ASCII/length/capitalization/punctuation) violations, #1094's
-two-consonant-onset and `y`-role contracts, #1095's triple-letter-run
-guarantee and per-language boundary phonology, and #1096's bound
-morphemes. No generation logic is reimplemented here — only inspection
-of the Haskell generator's real output.
+contract (repertoire/length/capitalization/punctuation) violations,
+#1094's two-consonant-onset and `y`-role contracts, #1095's
+triple-letter-run guarantee and per-language boundary phonology, #1096's
+bound morphemes, and #1100's per-language extended orthography. No
+generation logic is reimplemented here — only inspection of the Haskell
+generator's real output.
+
+#1100's output repertoire is the one thing this tool holds an
+independent copy of, in `EXTENDED_LOWER`/`EXTENDED_UPPER` below. That is
+deliberate: the contract regex is the ENFORCED statement of what a name
+may contain, so deriving it from the generator's own claim would make it
+follow any widening automatically and enforce nothing. The generator
+emits its `outputInventory` in the report header and `--check` fails
+when the two disagree, so a repertoire change has to be made in both
+places — here, where it is reviewed as a contract, and there, where it
+is generated — and neither side can drift alone.
 
 That last clause is why #1096's admissibility verdict arrives as a
 per-record `admissible` BOOLEAN computed by the Haskell side rather than
@@ -33,21 +44,27 @@ the distinction matters:
   every word-initial two-consonant onset admissible under that profile's
   own exported relation, no identical-consonant onset, every
   boundary-phonology-era profile declaring a real boundary rule, no
-  duplicate name within a single language, the 3-character minimum, and
+  duplicate name within a single language, the 3-character minimum,
   #1096's bound-form rules (at most eight per language, every stored
   form a nonempty strictly-shorter prefix retaining a visible letter,
   zero inadmissible forms, zero bound-related collisions, at least one
   visible free-to-bound shortening across the sample, and no bound form
-  at all below the version that introduced them).
+  at all below the version that introduced them), and #1100's
+  orthography rules (the generator's declared output repertoire equals
+  this tool's own, every extended character in a rendered name belongs
+  to the inventory of the language that rendered it, and no extended
+  character at all below the version that introduced them).
 * Pinned gates are REGRESSION PINS measured from the current generator
   at the canonical `--seeds 0:255` sample: exact distinct-signature,
   total-name and distinct-name counts, the maximum and average name
   length, the cross-seed onset-diversity ratio, the presence of all
-  three `y` roles, and the presence of both compound and both genitive
-  orderings. Nothing forbids two independently generated languages from
-  coincidentally sharing a short string, so these are pins to be updated
-  deliberately alongside a generator change, not invariants. They are
-  skipped (loudly) for any other seed range.
+  three `y` roles, the presence of both compound and both genitive
+  orderings, and #1100's requirement that the sample contain languages
+  WITH extended orthography and languages without. Nothing forbids two
+  independently generated languages from coincidentally sharing a short
+  string, so these are pins to be updated deliberately alongside a
+  generator change, not invariants. They are skipped (loudly) for any
+  other seed range.
 
 #1096's bound-slot renderings are accumulated SEPARATELY from the
 canonical `renderings` array and never enter the distinct-name,
@@ -86,10 +103,64 @@ import subprocess
 import sys
 from collections import Counter
 
-# One canonical native word: an uppercase ASCII letter, then lowercase
-# ASCII letters, with optional internal '-'/''' runs of letters — never
-# leading, trailing, or a repeated mark (#710 requirement 6).
-CONTRACT_RE = re.compile(r"^[A-Z][a-z]*(?:['-][a-z]+)*$")
+# --- #1100: the output repertoire ------------------------------------
+#
+# This tool's INDEPENDENT copy of
+# Language.Generated.Orthography.extendedLetterTable's two case columns,
+# ascending by code point. Written as escapes so a review reads code
+# points rather than trusting a terminal font, with the glyphs alongside.
+# `--check` compares the assembled inventory against the generator's own
+# `outputInventory`, so these cannot silently fall behind it.
+EXTENDED_LOWER = (
+    "\u00E0\u00E1\u00E2\u00E4\u00E5\u00E7\u00E8\u00E9"  # à á â ä å ç è é
+    "\u00EA\u00EB\u00EC\u00ED\u00EE\u00EF\u00F2\u00F3"  # ê ë ì í î ï ò ó
+    "\u00F4\u00F6\u00F8\u00F9\u00FA\u00FB\u00FC\u0101"  # ô ö ø ù ú û ü ā
+    "\u0103\u0105\u0107\u0109\u010D\u010F\u0111\u0113"  # ă ą ć ĉ č ď đ ē
+    "\u0119\u011B\u011D\u011F\u0125\u012B\u0135\u013A"  # ę ě ĝ ğ ĥ ī ĵ ĺ
+    "\u013E\u0142\u0144\u0148\u014D\u0151\u0155\u0159"  # ľ ł ń ň ō ő ŕ ř
+    "\u015B\u015D\u015F\u0161\u0163\u0165\u016B\u016D"  # ś ŝ ş š ţ ť ū ŭ
+    "\u016F\u0171\u0175\u017A\u017E"                    # ů ű ŵ ź ž
+)
+EXTENDED_UPPER = (
+    "\u00C0\u00C1\u00C2\u00C4\u00C5\u00C7\u00C8\u00C9"  # À Á Â Ä Å Ç È É
+    "\u00CA\u00CB\u00CC\u00CD\u00CE\u00CF\u00D2\u00D3"  # Ê Ë Ì Í Î Ï Ò Ó
+    "\u00D4\u00D6\u00D8\u00D9\u00DA\u00DB\u00DC\u0100"  # Ô Ö Ø Ù Ú Û Ü Ā
+    "\u0102\u0104\u0106\u0108\u010C\u010E\u0110\u0112"  # Ă Ą Ć Ĉ Č Ď Đ Ē
+    "\u0118\u011A\u011C\u011E\u0124\u012A\u0134\u0139"  # Ę Ě Ĝ Ğ Ĥ Ī Ĵ Ĺ
+    "\u013D\u0141\u0143\u0147\u014C\u0150\u0154\u0158"  # Ľ Ł Ń Ň Ō Ő Ŕ Ř
+    "\u015A\u015C\u015E\u0160\u0162\u0164\u016A\u016C"  # Ś Ŝ Ş Š Ţ Ť Ū Ŭ
+    "\u016E\u0170\u0174\u0179\u017D"                    # Ů Ű Ŵ Ź Ž
+)
+
+# The two non-letter characters a name may contain: the possessive
+# apostrophe and the JoinHyphen separator, both pre-existing. #1100
+# requirement 8 permits more only with an orthographic justification and
+# adjacency rules; none was added.
+NAME_MARKS = "'-"
+
+LOWER_LETTERS = "abcdefghijklmnopqrstuvwxyz" + EXTENDED_LOWER
+UPPER_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + EXTENDED_UPPER
+LETTERS = frozenset(LOWER_LETTERS + UPPER_LETTERS)
+EXTENDED_SET = frozenset(EXTENDED_LOWER + EXTENDED_UPPER)
+
+# The whole ASCII alphabet is admitted even though `q` and `x` are in
+# neither phoneme pool: this is the historical contract's letter class,
+# and narrowing it would tighten the contract for no gain.
+OUTPUT_INVENTORY = "".join(sorted(LOWER_LETTERS + UPPER_LETTERS + NAME_MARKS))
+
+# One canonical native word: an uppercase letter, then lowercase letters,
+# with optional internal '-'/''' runs of letters — never leading,
+# trailing, or a repeated mark (#710 requirement 6, repertoire widened by
+# #1100). Built from the repertoire above so the regex and the
+# cross-check can never describe different character sets.
+CONTRACT_RE = re.compile(
+    r"^[{u}][{l}]*(?:['-][{l}]+)*$".format(
+        u=re.escape(UPPER_LETTERS), l=re.escape(LOWER_LETTERS)))
+
+# #1100: the first generator version whose languages draw extended
+# letters. Below it a language is pure ASCII and must stay that way, or a
+# historical world's names would re-render.
+EXTENDED_ORTHOGRAPHY_VERSION = 5
 
 REPRESENTATIVE_COUNT = 5
 WORD64_MAX = 2 ** 64 - 1
@@ -126,18 +197,24 @@ BOUND_FORM_VERSION = 4
 # --- Pinned gates (the canonical 0:255 sample only) -------------------
 
 PINNED_RANGE = (0, 255)
-PINNED_VERSION = 4
+PINNED_VERSION = 5
 
 PIN_DISTINCT_SIGNATURES = 256
 PIN_TOTAL_NAMES = 1280
 PIN_DISTINCT_NAMES = 1280
-PIN_MAX_LENGTH = 21
-# Measured at generator version 4. The version-3 figure was 9.9422; the
-# small drop is bound forms shortening the dependent slot of whichever
-# canonical expressions happened to select one. Observational — the hard
-# gate is the 3-32 output contract.
-PIN_AVG_LENGTH = 9.7969
+PIN_MAX_LENGTH = 22
+# Measured at generator version 5. The version-4 figure was 9.7969 and
+# the version-3 one 9.9422. Observational — the hard gate is the 3-32
+# output contract.
+PIN_AVG_LENGTH = 9.7234
 AVG_LENGTH_TOLERANCE = 0.5
+
+# #1100 acceptance: "some languages draw extended characters and others
+# draw none". Floors rather than exact counts — the population split is
+# a property of the draw, and pinning it exactly would turn an unrelated
+# generator tweak into a failure with nothing wrong behind it.
+PIN_MIN_MARKED_LANGUAGES = 100
+PIN_MIN_PLAIN_LANGUAGES = 20
 
 # Hard floors, kept no weaker than the ratios this checker enforced
 # before #1094 tightened it to exact pins.
@@ -190,19 +267,41 @@ def contract_violations(name):
 
 
 def letter_runs(name, length):
-    """Every run of `length` contiguous ASCII letters in `name` that are
-    the same letter ignoring case (#1095 requirement 3).
+    """Every run of `length` contiguous letters in `name` that are the
+    same letter ignoring case (#1095 requirement 3).
 
     Case is folded because rendering capitalizes the first letter last,
     so `Aaa` is a triple; punctuation is not a letter, so a hyphen join's
     `a-a` and an apostrophe affix's `h'h` interrupt a run rather than
     forming one.
+
+    "Letter" spans #1100's extended repertoire, matching
+    Language.Generated.Boundary.hasTripleRun: `ááá` is exactly as much a
+    triple as `aaa`, and the old `isascii()` guard would have skipped
+    straight past it. Distinct letters never form a run whatever their
+    marks — `á` and `a` are different code points and different
+    phonemes — so `aáa` is not one.
     """
     folded = name.lower()
     return [folded[i:i + length]
             for i in range(len(folded) - length + 1)
-            if folded[i].isascii() and folded[i].isalpha()
-            and len(set(folded[i:i + length])) == 1]
+            if folded[i] in LETTERS and len(set(folded[i:i + length])) == 1]
+
+
+def foreign_extended_chars(name, profile):
+    """Every extended character in `name` that does NOT belong to the
+    inventory of the language that rendered it (#1100 requirement 1).
+
+    This is the check that separates a convention from decoration. An
+    accent is only a signature if it came out of the language's own
+    phoneme inventory; a mark applied to finished output would show up
+    here as a character the profile never held. Compared case-folded,
+    because rendering capitalizes the initial and inventories are
+    lowercase.
+    """
+    own = set(profile["consonants"]) | set(profile["vowels"])
+    return sorted({c for c in name
+                   if c in EXTENDED_SET and c.lower() not in own})
 
 
 def parse_seeds(raw):
@@ -280,7 +379,7 @@ def bound_form_violations(free, bound):
         reasons.append("not-shorter")
     if not free.startswith(bound):
         reasons.append("not-a-prefix")
-    if not any(c.isascii() and c.isalpha() for c in bound):
+    if not any(c in LETTERS for c in bound):
         reasons.append("no-visible-letter")
     return reasons
 
@@ -344,6 +443,83 @@ def self_test():
            ["not-a-prefix", "no-visible-letter"])
     expect("bound None", bound_form_violations("kara", None), ["missing"])
 
+    # --- #1100: the widened repertoire --------------------------------
+
+    # Every literal below is written as escapes. Accented text in a
+    # source file has two spellings that look identical, and one of the
+    # cases here exists precisely to tell them apart.
+
+    # The assembled inventory must be exactly what the contract regex's
+    # two classes plus the marks describe, or a character could be
+    # admitted by one and not the other.
+    expect("inventory size", len(OUTPUT_INVENTORY), 26 * 2 + 61 * 2 + 2)
+    expect("inventory is sorted and unique",
+           OUTPUT_INVENTORY, "".join(sorted(set(OUTPUT_INVENTORY))))
+    expect("extended cases pair up", len(EXTENDED_LOWER), len(EXTENDED_UPPER))
+    # Each lowercase member uppercases to the member at the same index,
+    # which is what makes a name starting with one capitalizable at all.
+    for lo_c, up_c in zip(EXTENDED_LOWER, EXTENDED_UPPER):
+        expect("upper(U+%04X)" % ord(lo_c), lo_c.upper(), up_c)
+        expect("lower(U+%04X)" % ord(up_c), up_c.lower(), lo_c)
+
+    # The contract over extended names: a marked initial and marked
+    # interior letters are accepted, and the pre-existing structural
+    # rules still hold around them.
+    expect("contract 'K\u00E1r\u00F3'",
+           contract_violations("K\u00E1r\u00F3"), [])
+    expect("contract '\u00C1r\u00F3-b\u00E1'",
+           contract_violations("\u00C1r\u00F3-b\u00E1"), [])
+    expect("contract 'K\u00E1ra\u2019b'",   # curly quote is not the mark
+           contract_violations("K\u00E1ra\u2019b"),
+           ["character-or-capitalization"])
+    # A combining sequence is deliberately NOT the same thing as a
+    # precomposed letter: #1100 restricts the repertoire to single code
+    # points, so "A" + U+0301 is rejected even though it renders
+    # identically to the accepted U+00C1.
+    expect("contract combining A+U+0301",
+           contract_violations("A\u0301ra\u0301"),
+           ["character-or-capitalization"])
+    for label, bad in (("lowercase extended initial", "\u00E1ra"),
+                       ("uppercase in the interior",  "K\u00C1ra"),
+                       ("letter outside the repertoire", "Kar\u00E6"),
+                       ("trailing mark",  "K\u00E1-"),
+                       ("leading mark",   "-K\u00E1ra")):
+        if not contract_violations(bad):
+            failures.append(f"contract {label} {bad!r}: accepted, "
+                            f"want rejected")
+
+    # A triple of an extended letter is a triple; a marked and unmarked
+    # pair of the same base are DIFFERENT letters and form no run.
+    expect("triple U+00E1 x3", bool(letter_runs("\u00E1\u00E1\u00E1", 3)), True)
+    expect("triple U+00C1+U+00E1 x2",
+           bool(letter_runs("\u00C1\u00E1\u00E1", 3)), True)
+    expect("triple a-U+00E1-a", bool(letter_runs("a\u00E1a", 3)), False)
+    expect("double U+00E1 x2", bool(letter_runs("\u00E1\u00E1", 2)), True)
+    expect("double a+U+00E1", bool(letter_runs("a\u00E1", 2)), False)
+
+    # An extended letter IS a visible letter, so a bound form made of
+    # one has no shape violation.
+    expect("bound 'k\u0105ra'/'k\u0105'",
+           bound_form_violations("k\u0105ra", "k\u0105"), [])
+    expect("bound '\u0105ra'/'\u0105'",
+           bound_form_violations("\u0105ra", "\u0105"), [])
+
+    # The membership detector, so "zero foreign extended characters" is
+    # evidence the gate FIRES on a sprinkled accent rather than evidence
+    # it cannot see one.
+    marked = {"consonants": "kr", "vowels": "a\u00E1"}
+    plain = {"consonants": "kr", "vowels": "a"}
+    expect("own mark in its own language",
+           foreign_extended_chars("K\u00E1ra", marked), [])
+    expect("own mark as the initial",
+           foreign_extended_chars("\u00C1ra", marked), [])
+    expect("foreign mark in a plain language",
+           foreign_extended_chars("K\u00E1ra", plain), ["\u00E1"])
+    expect("foreign mark as the initial",
+           foreign_extended_chars("\u00C1ra", plain), ["\u00C1"])
+    expect("an ascii name is never foreign",
+           foreign_extended_chars("Kara", plain), [])
+
     for f in failures:
         print(f"SELF-TEST FAIL: {f}", file=sys.stderr)
     if failures:
@@ -402,6 +578,8 @@ def main():
               f"{' ...' if len(p['onsetPairs']) > 12 else ''}")
         print(f"    boundaryRule={p['boundaryRule']} "
               f"segments={p['boundarySegments']!r}")
+        print(f"    diacritic={p['diacritic']} "
+              f"extendedChars={p['extendedChars']!r}")
         bfs = s["boundForms"]
         print(f"    bound forms ({len(bfs)}/{MAX_BOUND_FORMS}): "
               + (", ".join(f"{b['concept']} {b['free']}->{b['bound']}"
@@ -452,8 +630,32 @@ def main():
     within_seed_duplicates = []
     triple_runs = []
     names_with_double = 0
+    # --- #1100: per-language orthography ------------------------------
+    # An extended character is only a convention if it came out of the
+    # inventory of the language that rendered it, so membership is
+    # accumulated over BOTH name populations (canonical here, bound-slot
+    # below) — the check is zero-gated, so extra population can only
+    # find more defects.
+    foreign_extended = []
+    extended_before_version = []
+    marked_languages = 0
+    plain_languages = 0
+    diacritic_counts = Counter()
+    names_with_extended = 0
+
     for s in seeds:
         this_seed = Counter()
+        p = s["profile"]
+        if p["extendedChars"]:
+            marked_languages += 1
+        else:
+            plain_languages += 1
+        diacritic_counts[p["diacritic"]] += 1
+        # A version predating extended orthography must have none at
+        # all: that is what keeps its pinned goldens byte-identical.
+        if p["version"] < EXTENDED_ORTHOGRAPHY_VERSION and p["extendedChars"]:
+            extended_before_version.append(
+                (s["seed"], p["version"], p["extendedChars"]))
         for r in s["renderings"]:
             name = r["native"]
             all_names.append(name)
@@ -465,6 +667,12 @@ def main():
                     triple_runs.append((s["seed"], r["form"], name, run))
                 if letter_runs(name, 2):
                     names_with_double += 1
+                if any(c in EXTENDED_SET for c in name):
+                    names_with_extended += 1
+                foreign = foreign_extended_chars(name, p)
+                if foreign:
+                    foreign_extended.append(
+                        (s["seed"], r["form"], name, foreign))
             reasons = contract_violations(name)
             if reasons:
                 violations.append((s["seed"], r["form"], name, reasons))
@@ -522,6 +730,10 @@ def main():
             for run in letter_runs(name, 3):
                 bound_triple_runs.append(
                     (s["seed"], r["concept"], r["slot"], name, run))
+            foreign = foreign_extended_chars(name, p)
+            if foreign:
+                foreign_extended.append(
+                    (s["seed"], f"{r['concept']}/{r['slot']}", name, foreign))
             # Requirement 6's first row: Bare has no dependent slot, so
             # it is always the free form. Compared case-insensitively
             # because rendering capitalizes the initial — that is the
@@ -723,6 +935,21 @@ def main():
     print(f"genitive orders: "
           f"{', '.join(f'{k}={v}' for k, v in sorted(genitive_orders.items()))}")
 
+    # --- #1100 summary -------------------------------------------------
+    print(f"languages with extended orthography: {marked_languages} / "
+          f"{len(seeds)} (plain: {plain_languages})")
+    print(f"diacritic families: "
+          f"{', '.join(f'{k}={v}' for k, v in sorted(diacritic_counts.items()))}")
+    if all_names:
+        print(f"canonical names containing an extended character: "
+              f"{names_with_extended} / {len(all_names)} "
+              f"({100 * names_with_extended / len(all_names):.1f}%)")
+    print(f"extended characters not in the rendering language's own "
+          f"inventory: {len(foreign_extended)}")
+    for (seed, form, name, chars) in foreign_extended[:20]:
+        print(f"  seed={seed} form={form} name={name!r} "
+              f"foreign={''.join(chars)!r}")
+
     if not args.check:
         return 0
 
@@ -841,6 +1068,41 @@ def main():
         if not bound_lengths:
             fail("no bound-slot names were rendered")
 
+    # --- #1100: extended orthography (structural, every seed range) ---
+
+    # The generator's declared repertoire against this tool's own. A
+    # mismatch means the contract regex below is enforcing a different
+    # character set from the one names are drawn from, which makes every
+    # "zero contract violations" result meaningless in one direction or
+    # the other.
+    declared = data.get("outputInventory")
+    if declared is None:
+        fail("the report carries no outputInventory, so the enforced "
+             "contract cannot be checked against the generator's own "
+             "repertoire")
+    elif declared != OUTPUT_INVENTORY:
+        only_gen = "".join(sorted(set(declared) - set(OUTPUT_INVENTORY)))
+        only_here = "".join(sorted(set(OUTPUT_INVENTORY) - set(declared)))
+        fail(f"the generator's output repertoire ({len(declared)} chars) "
+             f"differs from this tool's ({len(OUTPUT_INVENTORY)}): "
+             f"generator-only {only_gen!r}, checker-only {only_here!r}")
+
+    if extended_before_version:
+        first = extended_before_version[0]
+        fail(f"{len(extended_before_version)} profile(s) below generator "
+             f"version {EXTENDED_ORTHOGRAPHY_VERSION} carry extended "
+             f"characters, which would re-render a historical language's "
+             f"names (first: seed {first[0]} at version {first[1]} with "
+             f"{first[2]!r})")
+
+    if foreign_extended:
+        first = foreign_extended[0]
+        fail(f"{len(foreign_extended)} name(s) contain an extended "
+             f"character that is not in the inventory of the language "
+             f"that rendered it, so it was applied to output rather than "
+             f"drawn as a phoneme (first: seed {first[0]} {first[2]!r} "
+             f"foreign {''.join(first[3])!r})")
+
     mismatched_versions = [v for v in version_counts if v != generator_version]
     if mismatched_versions:
         fail(f"profiles built at version(s) {mismatched_versions} while the report "
@@ -917,6 +1179,31 @@ def main():
             fail(f"the canonical sample uses only genitive ordering(s) "
                  f"{sorted(genitive_orders)}, so the possessive slot is "
                  f"exercised in one direction only")
+
+        # #1100: the choice has to VARY by seed. One-sided in either
+        # direction defeats the design — every world accented the same
+        # way is no more a per-language signature than none of them
+        # being accented at all.
+        if marked_languages < PIN_MIN_MARKED_LANGUAGES:
+            fail(f"only {marked_languages} of {len(seeds)} languages draw "
+                 f"extended characters (floor {PIN_MIN_MARKED_LANGUAGES})")
+        if plain_languages < PIN_MIN_PLAIN_LANGUAGES:
+            fail(f"only {plain_languages} of {len(seeds)} languages draw "
+                 f"none (floor {PIN_MIN_PLAIN_LANGUAGES}) — the extended "
+                 f"repertoire must be a per-language choice, not a "
+                 f"universal one")
+        if names_with_extended == 0:
+            fail("no canonical name contains an extended character, so the "
+                 "widened repertoire changes no completed name")
+        # More than one family, for the same reason both compound and
+        # both genitive orderings are required above: with a single
+        # family every accented world reads the same, and "difference
+        # across worlds" is untested.
+        marked_families = [f for f in diacritic_counts if f != "none"]
+        if len(marked_families) < 2:
+            fail(f"the canonical sample uses only the diacritic "
+                 f"{sorted(marked_families)}, so an accent identifies no "
+                 f"language in particular")
 
     if ok:
         print("CHECK OK")

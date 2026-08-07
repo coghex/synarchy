@@ -12,6 +12,7 @@ module Language.Generated.Profile
     , buildProfileV2
     , buildProfileV3
     , buildProfileV4
+    , buildProfileV5
     ) where
 
 import UPrelude
@@ -20,6 +21,7 @@ import Language.Generated.Types
 import Language.Generated.Hash
 import Language.Generated.Onset (buildOnsetRelation)
 import Language.Generated.Boundary (buildBoundaryPolicy)
+import Language.Generated.Orthography (extendedInventory)
 
 -- | Generate a profile for an explicit version. Dispatch is per
 --   VERSION, never by comparison with 'currentGeneratorVersion'
@@ -33,6 +35,7 @@ generateProfile ver seed = case generatorVersionInt ver of
     2 → Right (buildProfileV2 seed)
     3 → Right (buildProfileV3 seed)
     4 → Right (buildProfileV4 seed)
+    5 → Right (buildProfileV5 seed)
     v → Left (UnsupportedGeneratorVersion v)
 
 -- | The version-1 profile generator. Total: every drawn range is
@@ -387,6 +390,124 @@ buildProfileV4 seed@(LangSeed s0) =
 
     in Profile
         { profVersion        = GeneratorVersion 4
+        , profSeed           = seed
+        , profConsonants     = consonants
+        , profVowels         = vowels
+        , profSyllableShapes = shapes
+        , profMinSyllables   = minSyll
+        , profMaxSyllables   = maxSyll
+        , profCompoundOrder  = compoundOrder
+        , profPossessive     = PossessiveMarking genitiveOrder possAffix
+        , profPlural         = PluralMarking pluralAffix
+        , profJoin           = joinStyle
+        , profOnset          = buildOnsetRelation onsetSeed consonants
+        , profBoundary       = buildBoundaryPolicy boundarySeed consonants vowels
+        }
+
+-- | The version-5 profile generator (#1100). Same style vocabulary as
+--   version 4, plus the one thing this version exists for: per-language
+--   extended orthography. A language draws a diacritic family and a few
+--   marked letters from it, and those letters JOIN its inventories —
+--   they are phonemes, not decoration applied afterwards.
+--
+--   That placement is the whole design. Everything downstream reads the
+--   inventories and nothing reads a separate "accents" field, so the
+--   extended letters participate in #1094's onset relation, #1095's
+--   boundary repair, #1096's bound forms, and affix generation
+--   identically to ASCII ones, with no rule anywhere spelling out an
+--   exception for them. It is also why the marks are drawn BEFORE the
+--   affixes, onset relation and boundary policy below: those three are
+--   built from the FINAL inventories, so an accented letter can be an
+--   affix letter, a member of an admissible onset pair, or a linking
+--   segment.
+--
+--   Like every version before it this stamps a LITERAL
+--   'GeneratorVersion' and deliberately REPEATS the draws it shares with
+--   its predecessors rather than factoring them into a helper — each
+--   version's body is frozen output (#710 requirement 15, #1092
+--   requirement 4), and a shared helper is a live edge down which a
+--   later version's tweak silently re-renders every older world's names.
+--
+--   The orthography draw is appended at a FRESH step index, so a
+--   version-5 profile keeps version 4's ASCII inventories, shapes,
+--   orders and syllable counts for the same seed; the marked letters
+--   (and what the onset relation, boundary policy and affixes make of
+--   them) are the only difference between the two versions.
+buildProfileV5 ∷ LangSeed → Profile
+buildProfileV5 seed@(LangSeed s0) =
+    let baseSeed = fmix64 (s0 `xor` 0xA5A5A5A5A5A5A5A5)
+
+        consSeed     = draw baseSeed 1
+        vowSeed      = draw baseSeed 2
+        shapeSeed    = draw baseSeed 3
+        sylSeed      = draw baseSeed 4
+        orderSeed    = draw baseSeed 5
+        possSeed     = draw baseSeed 6
+        pluralSeed   = draw baseSeed 7
+        joinSeed     = draw baseSeed 8
+        yRoleSeed    = draw baseSeed 9
+        onsetSeed    = draw baseSeed 10
+        boundarySeed = draw baseSeed 11
+        orthoSeed    = draw baseSeed 12
+
+        yRole = case wordInRange (draw yRoleSeed 0) 0 2 of
+            0 → YConsonantOnly
+            1 → YVowelOnly
+            _ → YBothRoles
+        yIsConsonant = yRole ≢ YVowelOnly
+        yIsVowel     = yRole ≢ YConsonantOnly
+
+        consCount = wordInRange (draw consSeed 0) minConsonants maxConsonants
+        consDrawn = take (if yIsConsonant then consCount - 1 else consCount)
+                          (shuffleBy consSeed 1 consonantPoolNoY)
+        baseConsonants
+            | yIsConsonant = insertAt (pickIndex (draw consSeed 100)
+                                                  (length consDrawn + 1))
+                                       'y' consDrawn
+            | otherwise    = consDrawn
+
+        vowCount = wordInRange (draw vowSeed 0) minVowels maxVowels
+        vowDrawn = take (if yIsVowel then vowCount - 1 else vowCount)
+                         (shuffleBy vowSeed 1 vowelPool)
+        baseVowels
+            | yIsVowel  = insertAt (pickIndex (draw vowSeed 100)
+                                               (length vowDrawn + 1))
+                                    'y' vowDrawn
+            | otherwise = vowDrawn
+
+        -- The marked letters are APPENDED rather than inserted at drawn
+        -- positions. Every selection downstream is a uniform
+        -- 'pickIndex' over the whole list, so a tail position is no
+        -- less likely than any other — and appending keeps the ASCII
+        -- prefix of a version-5 inventory identical to version 4's,
+        -- which is what makes the two versions comparable seed by seed.
+        (extVowels, extConsonants) =
+            extendedInventory orthoSeed baseVowels baseConsonants
+        consonants = baseConsonants <> extConsonants
+        vowels     = baseVowels <> extVowels
+
+        shapeCount = wordInRange (draw shapeSeed 0) minShapes maxShapes
+        shapes = take shapeCount (shuffleBy shapeSeed 1 syllableShapePool)
+
+        minSyll = wordInRange (draw sylSeed 0) 1 2
+        maxSyll = minSyll + wordInRange (draw sylSeed 1) 0 1
+
+        compoundOrder
+            | wordInRange (draw orderSeed 0) 0 1 ≡ 0 = ModifierFirst
+            | otherwise                               = HeadFirst
+        genitiveOrder
+            | wordInRange (draw orderSeed 1) 0 1 ≡ 0 = OwnerFirst
+            | otherwise                               = HeadFirstGenitive
+
+        possAffix   = genAffix possSeed consonants vowels True
+        pluralAffix = genAffix pluralSeed consonants vowels False
+
+        joinStyle
+            | wordInRange (draw joinSeed 0) 0 1 ≡ 0 = JoinCompact
+            | otherwise                               = JoinHyphen
+
+    in Profile
+        { profVersion        = GeneratorVersion 5
         , profSeed           = seed
         , profConsonants     = consonants
         , profVowels         = vowels
