@@ -27,12 +27,13 @@
 -- at the call site (`Unit.Thread.Movement`), since the greedy stepper
 -- reads `stepCost` only for its replan trigger, not for step length.
 --
--- Future extension points (left as TODOs in the code, NOT plumbed yet):
+-- Future extension points (not plumbed yet):
 --   * Weather modifier (snow/rain slowing units)
 --   * Per-unit modifier (heavy armor slower, light units faster)
 --
--- These can be added by widening the function signature; call sites
--- pass placeholder modifiers of 1.0 today.
+-- Follow the material modifier pattern: derive the factor from values
+-- `stepCost` already receives, or add a scalar to `PathingConfig`
+-- (plus a config/pathing.yaml key). Do not widen `stepCost`'s signature.
 module Unit.Pathing.Cost
     ( stepCost
     , lookupTerrainZ
