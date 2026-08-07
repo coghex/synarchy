@@ -3170,14 +3170,28 @@ saveComponentRegistry =
 # ghostCodec exists in source but is NOT in the registry list above.
 SYNTHETIC_CODEC_SOURCE = """\
 regCodec ∷ ComponentCodec RegDTO
-regCodec = serializeCodec
-    registeredComponentId 1 True []
-    encodeReg (\\_ d → Right d) (const [])
+regCodec = componentCodec ComponentSpec
+    { csComponent     = registeredComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = encodeReg
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
 
 ghostCodec ∷ ComponentCodec GhostDTO
-ghostCodec = serializeCodec
-    ghostComponentId 1 True []
-    encodeGhost (\\_ d → Right d) (const [])
+ghostCodec = componentCodec ComponentSpec
+    { csComponent     = ghostComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = encodeGhost
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
 """
 
 # Both id identifiers are DEFINED here -- a naive literal grep would treat

@@ -75,9 +75,16 @@ data CoreSessionDTO = CoreSessionDTO
     } deriving (Show, Eq, Generic, Serialize)
 
 coreSessionCodec ∷ ComponentCodec CoreSessionDTO
-coreSessionCodec = serializeCodec
-    coreSessionComponentId 1 True [worldPagesComponentId]
-    encodeCore (\_ d → Right d) (const [])
+coreSessionCodec = componentCodec ComponentSpec
+    { csComponent     = coreSessionComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = [worldPagesComponentId]
+    , csEncode        = encodeCore
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
   where
     encodeCore snap = CoreSessionDTO
         { csGameTime       = snapGameTime snap
@@ -186,10 +193,16 @@ validateTexPalette (TexPaletteDTO nextId pairs) = concat
     ]
 
 texPaletteCodec ∷ ComponentCodec TexPaletteDTO
-texPaletteCodec = serializeCodec
-    texPaletteComponentId 1 True []
-    (\snap → toTexPaletteDTO (snapTexPalette snap)) (\_ d → Right d)
-    validateTexPalette
+texPaletteCodec = componentCodec ComponentSpec
+    { csComponent     = texPaletteComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = \snap → toTexPaletteDTO (snapTexPalette snap)
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = validateTexPalette
+    }
 
 coreSessionTexPalette ∷ TexPaletteDTO → SessionSnapshot → SessionSnapshot
 coreSessionTexPalette d snap = snap { snapTexPalette = fromTexPaletteDTO d }

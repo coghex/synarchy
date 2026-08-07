@@ -140,16 +140,20 @@ validateContainerKnowledge (ContainerKnowledgeDTO slices) = concat
 --   against) and @"buildings"@ (whose restored instance set the load
 --   boundary scrubs dangling records against).
 containerKnowledgeCodec ∷ ComponentCodec ContainerKnowledgeDTO
-containerKnowledgeCodec = serializeCodec
-    containerKnowledgeComponentId 1 False
-    [worldPagesComponentId, buildingsComponentId]
-    (\snap → ContainerKnowledgeDTO
+containerKnowledgeCodec = componentCodec ComponentSpec
+    { csComponent     = containerKnowledgeComponentId
+    , csVersion       = 1
+    , csRequired      = False
+    , csDeps          = [worldPagesComponentId, buildingsComponentId]
+    , csEncode        = \snap → ContainerKnowledgeDTO
         [ PageContainerKnowledgeDTO (pgsPageId p)
             (HM.map toContainerRecordDTO
                     (ckRecords (pgsContainerKnowledge p)))
-        | p ← orderedPages snap ])
-    (\_ d → Right d)
-    validateContainerKnowledge
+        | p ← orderedPages snap ]
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = validateContainerKnowledge
+    }
 
 applyContainerKnowledge
     ∷ Word32 → ContainerKnowledgeDTO → HM.HashMap WorldPageId PageSnapshot

@@ -949,8 +949,16 @@ def test_detects_registered_component_missing_from_source_scan() -> None:
         only_file = component_dir / "Session.hs"
         only_file.write_text(
             "coreSessionComponentId = ComponentId \"core-session\"\n"
-            "coreSessionCodec = serializeCodec\n"
-            "    coreSessionComponentId 1 True\n")
+            "coreSessionCodec = componentCodec ComponentSpec\n"
+            "    { csComponent     = coreSessionComponentId\n"
+            "    , csVersion       = 1\n"
+            "    , csRequired      = True\n"
+            "    , csDeps          = []\n"
+            "    , csEncode        = encodeCore\n"
+            "    , csDecode        = id\n"
+            "    , csOlderVersions = []\n"
+            "    , csValidate      = const []\n"
+            "    }\n")
         old_registry_path = sca.COMPONENT_REGISTRY_SOURCE_PATH
         old_haskell_paths = sca.HASKELL_COMPONENT_SOURCE_PATHS
         sca.COMPONENT_REGISTRY_SOURCE_PATH = registry_path
@@ -965,6 +973,158 @@ def test_detects_registered_component_missing_from_source_scan() -> None:
             except ValueError as e:
                 expect("totallyMissingCodec" in str(e),
                        f"expected the error to name the missing codec, got: {e}")
+        finally:
+            sca.COMPONENT_REGISTRY_SOURCE_PATH = old_registry_path
+            sca.HASKELL_COMPONENT_SOURCE_PATHS = old_haskell_paths
+
+
+def test_discover_component_specs_derives_input_versions_from_one_declaration() -> None:
+    print("issue #1093: the accepted-version set comes from the SAME single "
+          "declaration the reader dispatches on -- csVersion plus each "
+          "csOlderVersions `atVersion <n>` -- not a separately parsed list")
+    specs = sca.discover_component_specs("""\
+singletonCodec ∷ ComponentCodec OneDTO
+singletonCodec = componentCodec ComponentSpec
+    { csComponent     = oneComponentId
+    , csVersion       = 1
+    , csRequired      = True
+    , csDeps          = [otherComponentId]
+    , csEncode        = \\snap → OneDTO (map f (pages snap))
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
+
+-- Field ORDER deliberately shuffled, and the older-version list spans
+-- several lines: neither may change what this parser reads.
+evolvedCodec ∷ ComponentCodec ThreeDTO
+evolvedCodec = componentCodec ComponentSpec
+    { csVersion       = 3
+    , csOlderVersions = [ atVersion 2 migrateV2
+                        , atVersion 1 migrateV1 ]
+    , csComponent     = threeComponentId
+    , csRequired      = False
+    , csDeps          = []
+    , csEncode        = encodeThree
+    , csDecode        = buildThree
+    , csValidate      = validateThree
+    }
+""")
+    by_codec = {s["codec"]: s for s in specs}
+    expect(set(by_codec) == {"singletonCodec", "evolvedCodec"},
+           f"expected both codecs discovered, got {sorted(by_codec)}")
+    expect(by_codec["singletonCodec"] == {
+               "codec": "singletonCodec",
+               "componentIdIdent": "oneComponentId",
+               "currentVersion": 1, "inputVersions": [1], "required": True},
+           f"expected the singleton spec parsed from one declaration, got "
+           f"{by_codec['singletonCodec']}")
+    expect(by_codec["evolvedCodec"] == {
+               "codec": "evolvedCodec",
+               "componentIdIdent": "threeComponentId",
+               "currentVersion": 3, "inputVersions": [1, 2, 3],
+               "required": False},
+           f"expected inputVersions [1, 2, 3] derived from csVersion + "
+           f"csOlderVersions, got {by_codec['evolvedCodec']}")
+
+
+def test_discover_component_specs_ignores_commented_out_fields() -> None:
+    print("issue #1093: a `--` comment inside a spec cannot contribute a "
+          "phantom accepted version or a phantom field")
+    specs = sca.discover_component_specs("""\
+c ∷ ComponentCodec D
+c = componentCodec ComponentSpec
+    { csComponent     = cId
+    , csVersion       = 2
+    -- , csVersion       = 9   (an older value left in a comment)
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = enc
+    , csDecode        = id
+    , csOlderVersions = [ atVersion 1 migrateV1 ]  -- not atVersion 7 anything
+    , csValidate      = const []
+    }
+""")
+    expect(len(specs) == 1 and specs[0]["inputVersions"] == [1, 2],
+           f"expected exactly [1, 2] from the live declarations, got {specs}")
+
+
+def test_discover_component_specs_raises_on_a_spec_missing_a_needed_field() -> None:
+    print("issue #1093: a spec whose fields this audit needs are absent "
+          "raises loudly rather than silently matching into the NEXT codec's "
+          "fields and reporting a wrong version for it")
+    try:
+        sca.discover_component_specs("""\
+brokenCodec = componentCodec ComponentSpec
+    { csComponent     = brokenComponentId
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = enc
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
+
+laterCodec = componentCodec ComponentSpec
+    { csComponent     = laterComponentId
+    , csVersion       = 7
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = enc
+    , csDecode        = id
+    , csOlderVersions = []
+    , csValidate      = const []
+    }
+""", "synthetic.hs")
+        expect(False, "expected discover_component_specs to raise for a spec "
+                      "with no csVersion field")
+    except ValueError as e:
+        expect("brokenCodec" in str(e) and "csVersion" in str(e),
+               f"expected the error to name the codec and the missing field, "
+               f"got: {e}")
+
+
+def test_hand_rolled_component_codec_is_no_longer_silently_discovered() -> None:
+    print("issue #1093: every gameplay codec now goes through the shared "
+          "construction, so a codec that hand-rolls the ComponentCodec "
+          "record is NOT discovered -- and the saveComponentRegistry cross-"
+          "check then fails loudly naming it, rather than this tool quietly "
+          "reporting the component as undiscovered")
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        registry_path = tmp / "Component.hs"
+        registry_path.write_text(
+            "saveComponentRegistry ∷ [RegisteredComponent]\n"
+            "saveComponentRegistry =\n"
+            "    [ registerComponent handRolledCodec\n"
+            "        (\\_ d snap -> Right snap)\n"
+            "    ]\n"
+            "\n"
+            "-- next binding\n")
+        component_dir = tmp / "Component"
+        component_dir.mkdir()
+        only_file = component_dir / "Session.hs"
+        only_file.write_text(
+            "handRolledComponentId = ComponentId \"hand-rolled\"\n"
+            "handRolledCodec ∷ ComponentCodec D\n"
+            "handRolledCodec = ComponentCodec\n"
+            "    { ccId        = handRolledComponentId\n"
+            "    , ccVersion   = 2\n"
+            "    , ccInputVers = [1, 2]\n"
+            "    , ccRequired  = True\n"
+            "    }\n")
+        old_registry_path = sca.COMPONENT_REGISTRY_SOURCE_PATH
+        old_haskell_paths = sca.HASKELL_COMPONENT_SOURCE_PATHS
+        sca.COMPONENT_REGISTRY_SOURCE_PATH = registry_path
+        sca.HASKELL_COMPONENT_SOURCE_PATHS = [only_file]
+        try:
+            try:
+                sca.real_component_registry()
+                expect(False, "expected real_component_registry() to raise "
+                              "for a hand-rolled ComponentCodec record")
+            except ValueError as e:
+                expect("handRolledCodec" in str(e),
+                       f"expected the error to name the codec, got: {e}")
         finally:
             sca.COMPONENT_REGISTRY_SOURCE_PATH = old_registry_path
             sca.HASKELL_COMPONENT_SOURCE_PATHS = old_haskell_paths
@@ -1325,6 +1485,10 @@ def main() -> int:
         test_generate_session_rolls_back_fixture_and_summary_on_validation_failure,
         test_normalize_fixture_timestamp_makes_generation_reproducible,
         test_detects_registered_component_missing_from_source_scan,
+        test_discover_component_specs_derives_input_versions_from_one_declaration,
+        test_discover_component_specs_ignores_commented_out_fields,
+        test_discover_component_specs_raises_on_a_spec_missing_a_needed_field,
+        test_hand_rolled_component_codec_is_no_longer_silently_discovered,
         test_haskell_component_source_paths_discovers_new_files_automatically,
         test_discover_lua_save_modules_finds_the_real_two_modules,
         test_detects_unknown_component_id_in_baseline,
