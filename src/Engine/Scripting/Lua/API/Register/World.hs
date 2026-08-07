@@ -28,6 +28,7 @@ registerWorldAPI env backendState = do
   registerLuaFunction "getIdentity" (worldGetIdentityFn env)
   registerLuaFunction "getLanguageProvenance" (worldGetLanguageProvenanceFn env)
   registerLuaFunction "suggestName" (worldSuggestNameFn backendState)
+  registerLuaFunction "generatedNameCharacters" worldGeneratedNameCharactersFn
   registerLuaFunction "initArena" (worldInitArenaFn env)
   registerLuaFunction "initArenaDone" (worldInitArenaDoneFn env)
   registerLuaFunction "openArena" (worldOpenArenaFn env)

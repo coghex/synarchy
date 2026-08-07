@@ -206,6 +206,11 @@ suggestPrelude = lns
     , "    }"
     , "  end,"
     , "}"
+    -- The real repertoire's shape in miniature: ASCII letters, an
+    -- extended letter, and both marks a rendered name can carry.
+    , "world.generatedNameCharacters = function()"
+    , "  return \"abcxyzABCXYZ\\u{00E9}\\u{0163}-'\""
+    , "end"
     , "engine = { logWarn = function() end, logInfo = function() end,"
     , "           logDebug = function() end }"
     , "nameSuggest = require('scripts.create_world.name_suggest')"
@@ -232,8 +237,12 @@ randboxPrelude = lns
     , "UI.newBox = function() return newHandle() end"
     , "UI.newText = function() return newHandle() end"
     , "UI.newSprite = function() return newHandle() end"
+    -- Cursor offsets are CODEPOINTS, exactly as UI.TextBuffer defines
+    -- them — a byte-indexed stand-in would split an extended letter and
+    -- report a corruption the real engine cannot produce.
+    , "local function at(t, cp) return utf8.offset(t, cp + 1) end"
     , "UI.setTextInput = function(h, t) buffers[h] = t or ''"
-    , "  cursors[h] = #buffers[h] end"
+    , "  cursors[h] = utf8.len(buffers[h]) end"
     , "UI.getTextInput = function(h) return buffers[h] or '' end"
     , "UI.setCursor = function(h, p) cursors[h] = p end"
     , "UI.getCursor = function(h) return cursors[h] or 0 end"
@@ -242,17 +251,21 @@ randboxPrelude = lns
     , "UI.hasFocus = function(h) return focused == h end"
     , "UI.insertChar = function(h, c)"
     , "  local t, p = buffers[h] or '', cursors[h] or 0"
-    , "  buffers[h] = t:sub(1, p) .. c .. t:sub(p + 1); cursors[h] = p + 1"
+    , "  local b = at(t, p)"
+    , "  buffers[h] = t:sub(1, b - 1) .. c .. t:sub(b); cursors[h] = p + 1"
     , "end"
     , "UI.deleteBackward = function(h)"
     , "  local t, p = buffers[h] or '', cursors[h] or 0"
     , "  if p > 0 then"
-    , "    buffers[h] = t:sub(1, p - 1) .. t:sub(p + 1); cursors[h] = p - 1"
+    , "    buffers[h] = t:sub(1, at(t, p - 1) - 1) .. t:sub(at(t, p))"
+    , "    cursors[h] = p - 1"
     , "  end"
     , "end"
     , "UI.deleteForward = function(h)"
     , "  local t, p = buffers[h] or '', cursors[h] or 0"
-    , "  if p < #t then buffers[h] = t:sub(1, p) .. t:sub(p + 2) end"
+    , "  if p < utf8.len(t) then"
+    , "    buffers[h] = t:sub(1, at(t, p) - 1) .. t:sub(at(t, p + 1))"
+    , "  end"
     , "end"
     , "engine = {"
     , "  loadTexture = function() return 1 end,"
@@ -559,6 +572,32 @@ spec = do
                 , "end"
                 ]
 
+        -- Review round 5: requirement 4's "type over the suggestion" is
+        -- impossible if the field rejects the characters the generator
+        -- just put in it. The admissible set comes from the engine
+        -- (outputInventory), so it cannot drift from what is rendered.
+        it "admits every character a generated name can carry" $
+            runsSuggest $ lns
+                [ "for _, c in ipairs({ 'a', 'Z', '\\u{00E9}', '\\u{0163}',"
+                , "                     '-', \"'\" }) do"
+                , "  assert(nameSuggest.isNameChar(c),"
+                , "         'rejected a generated-name character: ' .. c)"
+                , "end"
+                , "for _, c in ipairs({ '7', ' ', '/', '\\u{4E2D}' }) do"
+                , "  assert(not nameSuggest.isNameChar(c),"
+                , "         'admitted a non-name character: ' .. c)"
+                , "end"
+                ]
+
+        it "falls back to ASCII letters when the engine cannot answer" $
+            runsSuggest $ lns
+                [ "package.loaded['scripts.create_world.name_suggest'] = nil"
+                , "world.generatedNameCharacters = nil"
+                , "local ns = require('scripts.create_world.name_suggest')"
+                , "assert(ns.isNameChar('a') and ns.isNameChar('-'))"
+                , "assert(not ns.isNameChar('7'))"
+                ]
+
         it "forgets everything on Defaults" $
             runsSuggest $ lns
                 [ "local p = newPending()"
@@ -717,6 +756,40 @@ spec = do
                 , "assert(randbox.getValue(id) == '', randbox.getValue(id))"
                 ]
 
+        -- Review round 5: the field consults an injected validator, so
+        -- a World Name can admit exactly what the generator produces.
+        -- The default NAME class is ASCII-only, which is why the
+        -- injection had to exist rather than the class being widened
+        -- for every randbox.
+        it "honours an injected character validator" $
+            runsRandbox $ lns
+                [ "local id = randbox.new{"
+                , "  name = 'world_name', page = 1, font = 1,"
+                , "  randType = randbox.Type.NAME, default = 'Kara',"
+                , "  autoGenerate = false,"
+                , "  validateChar = function(c)"
+                , "    return c == '\\u{00E9}' or c == \"'\" or c == '-'"
+                , "  end,"
+                , "}"
+                , "randbox.focus(id)"
+                , "randbox.setCursor(id, 4)"
+                , "assert(randbox.onCharInput('\\u{00E9}'))"
+                , "assert(randbox.onCharInput(\"'\"))"
+                , "assert(randbox.onCharInput('7'))"
+                , "assert(randbox.getValue(id) == 'Kara\\u{00E9}\\u{0027}',"
+                , "       randbox.getValue(id))"
+                ]
+
+        it "rejects a generated name's own letters without one" $
+            runsRandbox $ lns
+                [ "local id = newNameBox('Kara')"
+                , "randbox.setCursor(id, 4)"
+                , "assert(randbox.onCharInput('\\u{00E9}'))"
+                , "assert(randbox.getValue(id) == 'Kara',"
+                , "       'the ASCII default is no longer ASCII-only: '"
+                , "       .. randbox.getValue(id))"
+                ]
+
         -- The other way in: the initial suggestion failed, so the
         -- generator declined. Same requirement — an empty field, not a
         -- crashed menu and not an invented name.
@@ -740,6 +813,13 @@ spec = do
     it "derives the language seed the same way generation.lua does" $ do
         settingsSource `shouldSatisfy` T.isInfixOf "tonumber(seedText or \"\", 16) or 0"
         generationSource `shouldSatisfy` T.isInfixOf "tonumber(p.seed, 16) or 0"
+
+    -- The validator only helps the player if the World Name control
+    -- actually gets it; both halves are behaviourally covered above,
+    -- and this is the wire between them.
+    it "gives the World Name control the generated-name validator" $
+        settingsSource `shouldSatisfy`
+            T.isInfixOf "validateChar = nameSuggest.isNameChar"
 
     it "continues submitting hidden clock, astronomy, and climate defaults" $
         forM_ [ "hours_per_day"

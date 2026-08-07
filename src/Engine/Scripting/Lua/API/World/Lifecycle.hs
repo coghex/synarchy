@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.World.Lifecycle
     , worldGetIdentityFn
     , worldGetLanguageProvenanceFn
     , worldSuggestNameFn
+    , worldGeneratedNameCharactersFn
     , SuggestionStep(..)
     , suggestionStep
     , suggestionStepLabel
@@ -41,6 +42,7 @@ import Language.Generated.Types
     ( LanguageProvenance(..), GeneratorVersion(..), LangSeed(..)
     , GeneratorError(..), generatorErrorText, currentGeneratorVersion
     , supportedGeneratorVersions, langSeedText )
+import Language.Generated.Orthography (outputInventory)
 import Language.Semantic.Types (Catalogue, catalogueErrorText)
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Suggest
@@ -288,6 +290,26 @@ worldSuggestNameFn backendState = do
             Lua.pushnil
             Lua.pushstring (TE.encodeUtf8 msg)
             return 2
+
+-- | world.generatedNameCharacters() → string
+--
+--   Every character a generated name can ever contain
+--   ('Language.Generated.Orthography.outputInventory'), as one UTF-8
+--   string: ASCII letters in both cases, #1100's extended letters in
+--   both cases, and the two marks a rendered name may carry (the
+--   possessive apostrophe and a hyphen-joining language's separator).
+--
+--   Exists so a text field holding a world name can accept exactly what
+--   the generator can produce. #1106 requirement 4 turns on a player
+--   being able to TYPE over a suggestion, which they cannot do if the
+--   field rejects the very letters it was just filled with — and a
+--   hand-written character class in Lua would drift from the generator
+--   the first time the repertoire moved. This is the generator's own
+--   answer, so the two cannot disagree.
+worldGeneratedNameCharactersFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+worldGeneratedNameCharactersFn = do
+    Lua.pushstring (TE.encodeUtf8 (T.pack outputInventory))
+    return 1
 
 -- | What one suggestion request must do, given 'lbsLanguageCache' as it
 --   stands. Split out from the IO around it because this is exactly

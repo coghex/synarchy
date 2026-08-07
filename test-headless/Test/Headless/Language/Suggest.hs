@@ -24,6 +24,7 @@ import Language.Generated.Types
 import Language.Generated.Profile (generateProfile)
 import Language.Generated.Signature (profileSignature)
 import Language.Generated.Render (renderNative)
+import Language.Generated.Orthography (outputInventory)
 import Language.Suggest
 import Engine.Scripting.Lua.Types (LanguageCache(..))
 import Engine.Scripting.Lua.API.World.Lifecycle
@@ -178,6 +179,29 @@ spec = describe "world-name suggestions" $ do
             forM_ sampleSeeds $ \s →
                 forM_ (suggestionsFor prodCat s 20) $ \sug →
                     nsGloss sug `shouldSatisfy` (not ∘ T.null)
+
+        -- The World Name field admits exactly `outputInventory`
+        -- (through world.generatedNameCharacters), so a suggestion that
+        -- reached outside it would be a name the player could see but
+        -- not retype (#1106 requirement 4). This is what ties the two
+        -- ends of that claim together.
+        it "uses only characters the name field admits" $ do
+            let admitted = outputInventory
+            forM_ sampleSeeds $ \s →
+                forM_ (suggestionsFor prodCat s 20) $ \sug →
+                    forM_ (T.unpack (nsName sug)) $ \c →
+                        (nsName sug, c) `shouldSatisfy`
+                            (\(_, ch) → ch `elem` admitted)
+
+        -- Not vacuous: the shipped generator really does emit both a
+        -- mark and a non-ASCII letter, which is why widening the field
+        -- was necessary rather than cosmetic.
+        it "reaches beyond plain ASCII letters in practice" $ do
+            let names = [ nsName sug
+                        | s ← sampleSeeds, sug ← suggestionsFor prodCat s 20 ]
+                chars = concatMap T.unpack names
+            filter (\c → c ≡ '\'' ∨ c ≡ '-') chars `shouldSatisfy` (not ∘ null)
+            filter (> '\x007F') chars `shouldSatisfy` (not ∘ null)
 
     describe "failure reporting" $ do
         -- A version this build cannot construct is refused, never

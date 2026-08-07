@@ -106,6 +106,12 @@ end
 -----------------------------------------------------------
 
 local function isValidChar(rb, char)
+    -- An injected validator wins, the same opt-in dropdown.lua already
+    -- offers. #1106 uses it for World Name, whose admissible characters
+    -- are the generated language's business rather than this kit's.
+    if rb.validateChar then
+        return rb.validateChar(char) and true or false
+    end
     if rb.randType == randbox.Type.HEX_SEED then
         return char:match("^[0-9a-fA-F]$") ~= nil
     elseif rb.randType == randbox.Type.NAME then
@@ -203,6 +209,7 @@ function randbox.new(params)
         --                  rebuild) and so cannot tell the two apart.
         generate = params.generate,
         onUserEdit = params.onUserEdit,
+        validateChar = params.validateChar,
         textColor = textColor,
         uiscale = uiscale,
         zIndex = params.zIndex or 0,

@@ -253,6 +253,11 @@ function settingsTab.create(params)
         default  = pending.worldName ~= ""
                        and pending.worldName or nil,
         autoGenerate = false,
+        -- The field must accept every character the generator can put
+        -- in it, or typing over a suggestion (#1106 requirement 4) is
+        -- impossible for any name carrying an extended letter, an
+        -- apostrophe, or a join hyphen.
+        validateChar = nameSuggest.isNameChar,
         -- #1106: the dice button. Advances this seed's suggestion
         -- sequence, so successive presses keep one language's sound
         -- while the meaning changes. Returning nil on failure leaves

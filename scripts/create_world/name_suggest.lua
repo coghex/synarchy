@@ -148,6 +148,43 @@ function nameSuggest.reset(pending)
     pending.nameSeedNum = nil
 end
 
+-- Whether the World Name field accepts one character.
+--
+-- The admissible set is the GENERATOR's own
+-- (`Language.Generated.Orthography.outputInventory`, via
+-- `world.generatedNameCharacters`), not a character class written out
+-- here: a suggested name carries extended-Latin letters (#1100) plus
+-- the possessive apostrophe and a hyphen-joining language's separator,
+-- and requirement 4's "type over the suggestion" is impossible if the
+-- field rejects the letters it was just filled with. Asking the engine
+-- also means the two cannot drift apart when the repertoire moves.
+--
+-- Resolved once and memoized -- this runs per keystroke. If the query
+-- is unavailable the field falls back to plain ASCII letters and the
+-- two marks, which is strictly better than accepting nothing.
+local nameChars = nil
+
+local function resolveNameChars()
+    if nameChars then return nameChars end
+    nameChars = {}
+    local ok, repertoire = pcall(world.generatedNameCharacters)
+    if ok and type(repertoire) == "string" and repertoire ~= "" then
+        for _, cp in utf8.codes(repertoire) do
+            nameChars[utf8.char(cp)] = true
+        end
+    else
+        for c in ("abcdefghijklmnopqrstuvwxyz"
+               .. "ABCDEFGHIJKLMNOPQRSTUVWXYZ-'"):gmatch(".") do
+            nameChars[c] = true
+        end
+    end
+    return nameChars
+end
+
+function nameSuggest.isNameChar(char)
+    return resolveNameChars()[char] == true
+end
+
 -- Reconcile the recorded suggestion against the text the control now
 -- holds, whoever put it there. Returns whether the name is still a
 -- suggestion afterwards.
