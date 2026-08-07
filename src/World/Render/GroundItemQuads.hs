@@ -15,6 +15,7 @@
 module World.Render.GroundItemQuads
     ( renderGroundItemQuads
     , hitTestGroundItemAt
+    , itemGeometry
     ) where
 
 import UPrelude
@@ -36,7 +37,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemManager(..), ItemDef(..), ItemInstance(..))
 import World.Generate (viewDepth)
-import World.Generate.Coordinates (globalToChunk)
+import World.Render.ChunkLookup (canonicalTileFrame)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..)
@@ -92,23 +93,30 @@ dropAt mask fx fy =
 itemGeometry ∷ WorldTileData → ItemManager
              → HM.HashMap TextureHandle (Int, Int)
              → CameraFacing → Int
+             → Int                -- ^ world size in chunks (seam wrap)
              → GroundItem
              → Maybe (Int, TextureHandle, Float, Float, Float, Float, Int)
                -- ^ (tz, tex, drawX, drawY, quadW, quadH, underwaterDepth)
-itemGeometry tileData im texSizes facing zSlice gi = do
-    let tx = floor (giX gi) ∷ Int
-        ty = floor (giY gi) ∷ Int
-        (chunkCoord, (lx, ly)) = globalToChunk tx ty
-    -- Raw lookup, deliberately (#1135 audit). A ground item's resting
-    -- position is read out of WORLD DATA, never unprojected from screen
-    -- space: every writer places it on a tile the sim already holds
-    -- (dig scatter, a unit's own position, forage, item.spawnGround),
-    -- and tiles only exist inside canonically-keyed chunks, so tx/ty are
-    -- already in the stored frame and the wrap would be the identity.
-    -- Canonicalising the KEY ALONE would also be wrong here: quadForM
-    -- pairs these same raw tx/ty with a wrap offset taken against the
-    -- raw chunkCoord, so a wrapped key with unshifted coords would draw
-    -- the item a whole world width off.
+itemGeometry tileData im texSizes facing zSlice worldSize gi = do
+    -- Canonicalise the WHOLE tile frame, not just the map key (#1135).
+    -- A ground item stores bare float coords and nothing normalises
+    -- them on the way in: item.spawnGround accepts arbitrary numbers
+    -- and stores them directly, so an item CAN come to rest at a u-seam
+    -- alias of a loaded chunk. Left raw, the lookup missed that loaded
+    -- chunk and the item was both invisible and unhittable (this helper
+    -- backs the render pass AND hitTestGroundItemAt).
+    --
+    -- The key alone would not be enough: tx/ty also drive the screen
+    -- position here and the sort key / wrap offset in quadForM, so all
+    -- of them move into the stored frame together. The shift is whole
+    -- tiles, so the in-tile fraction is taken against the RAW floor and
+    -- is unchanged by it. Identity away from the seam.
+    let rawTX = floor (giX gi) ∷ Int
+        rawTY = floor (giY gi) ∷ Int
+        (chunkCoord, (lx, ly), (dgx, dgy)) =
+            canonicalTileFrame worldSize rawTX rawTY
+        tx = rawTX + dgx
+        ty = rawTY + dgy
     lc ← HM.lookup chunkCoord (wtdChunks tileData)
     itemDef ← HM.lookup (iiDefName (giInst gi)) (imDefs im)
     let idx = columnIndex lx ly
@@ -118,8 +126,8 @@ itemGeometry tileData im texSizes facing zSlice gi = do
         slopeMask = if si ≥ 0 ∧ si < VU.length (ctSlopes col)
                     then ctSlopes col VU.! si
                     else 0
-        fx = giX gi - fromIntegral tx
-        fy = giY gi - fromIntegral ty
+        fx = giX gi - fromIntegral rawTX
+        fy = giY gi - fromIntegral rawTY
         drop' = dropAt slopeMask fx fy
 
         underwaterDepth = case lcFluidMap lc V.! idx of
@@ -214,10 +222,16 @@ renderGroundItemQuads env worldState tileAlpha = do
 
             quadForM (gid, gi) = do
                 (tz, texHandle, drawX0, drawY, quadW, quadH, uwDepth)
-                    ← itemGeometry tileData im texSizes facing zSlice gi
-                let tx = floor (giX gi) ∷ Int
-                    ty = floor (giY gi) ∷ Int
-                    (chunkCoord, _) = globalToChunk tx ty
+                    ← itemGeometry tileData im texSizes facing zSlice
+                                   worldSize gi
+                -- Same canonical frame itemGeometry drew in, so the
+                -- offset and sort key pair with that position (#1135).
+                let rawTX = floor (giX gi) ∷ Int
+                    rawTY = floor (giY gi) ∷ Int
+                    (chunkCoord, _, (dgx, dgy)) =
+                        canonicalTileFrame worldSize rawTX rawTY
+                    tx = rawTX + dgx
+                    ty = rawTY + dgy
                 xOff ← isChunkVisibleWrapped facing worldSize vb camX
                                              chunkCoord
                 if tz > zSlice ∨ tz < zSlice - effectiveDepth
@@ -225,7 +239,7 @@ renderGroundItemQuads env worldState tileAlpha = do
                   else do
                     let drawX = drawX0 + xOff
                         relativeZ = tz - zSlice
-                        fy = giY gi - fromIntegral ty
+                        fy = giY gi - fromIntegral rawTY
                         (fa, fb) = applyFacing facing tx ty
                         sortKey = fromIntegral (fa + fb)
                                 + fromIntegral relativeZ * 0.001
@@ -291,8 +305,12 @@ hitTestGroundItemAt env worldState pixX pixY = do
         tileData ← readIORef (wsTilesRef worldState)
         im       ← readIORef (itemManagerRef env)
         texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+        paramsM  ← readIORef (wsGenParamsRef worldState)
 
         let facing = camFacing camera
+            -- Same seam wrap the render pass uses, so an item across the
+            -- U seam stays clickable exactly where it is drawn (#1135).
+            worldSize = maybe 128 wgpWorldSize paramsM
             zoom   = camZoom camera
             zSlice = camZSlice camera
             -- Match the render band (renderGroundItemQuads) so a visible
@@ -312,7 +330,8 @@ hitTestGroundItemAt env worldState pixX pixY = do
                 [ (tz, dist, gid)
                 | (gid, gi) ← HM.toList (gisItems gis)
                 , Just (tz, _tex, drawX, drawY, quadW, quadH, _uw)
-                    ← [itemGeometry tileData im texSizes facing zSlice gi]
+                    ← [itemGeometry tileData im texSizes facing zSlice
+                                    worldSize gi]
                 , tz ≤ zSlice
                 , tz ≥ zSlice - effectiveDepth
                 , let cx = drawX + quadW * 0.5
