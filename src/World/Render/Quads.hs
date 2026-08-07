@@ -74,6 +74,13 @@ renderWorldQuads env worldState zoomAlpha snap = do
                       Just params → wgpWorldSize params
     let zSlice = camZSlice camera
         zoom   = camZoom camera
+        -- Caught by the #1135 audit's search, but not a coordinate
+        -- lookup: this ENUMERATES the stored LoadedChunk values and
+        -- accepts no caller coord, so there is no key to canonicalise.
+        -- Every element is already in the stored frame — insertion keys
+        -- on the canonical lcCoord (World.Thread.ChunkLoading →
+        -- World.Tile.Types.insertChunk), and consumers below read each
+        -- chunk's own lcCoord rather than reconstructing one.
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
 
