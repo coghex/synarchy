@@ -638,6 +638,7 @@ library
                      World.Render.Camera.Types
                      World.Render.ViewBounds
                      World.Render.ChunkCulling
+                     World.Render.ChunkLookup
                      World.Render.HitTest
                      World.Render.Quads
                      World.Render.WaterSlope
@@ -1136,6 +1137,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.HitTest
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.World.Render.WaterSlope

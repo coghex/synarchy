@@ -20,14 +20,19 @@ import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import World.Grid (worldToGrid, worldToGridF, tileSideHeight, tileHeight)
-import World.Generate.Coordinates (globalToChunk)
 import World.Render.ViewBounds (ViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
+import World.Render.ChunkLookup (canonicalTileFrame)
 
 -- | Resolved hit: @(gx, gy, z, xOffset, hoverPos)@ where @(gx,gy,z)@ is
 --   the solid tile under the cursor, @xOffset@ is the wrapped-chunk x
 --   offset, and @hoverPos@ is the fractional grid position (item/unit
 --   convention) at the click point.
+--
+--   @(gx, gy)@ and @hoverPos@ are in the CANONICAL (stored) frame — the
+--   one loaded chunks are keyed in and the one every world command
+--   speaks — so a hit resolved across the U seam can be handed straight
+--   to a designation / build / pick command (#1135).
 type HitResult = (Int, Int, Int, Float, (Float, Float))
 
 -- | Unproject a screen pixel to the tile under it. Mirror of the inline
@@ -78,10 +83,22 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
         let relZ = z - zSlice
             adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
                            - tileHeight * 0.5
-            (gx, gy) = worldToGrid facing worldX adjustedWorldY
-            hoverPos = worldToGridF facing worldX
+            (rawGX, rawGY) = worldToGrid facing worldX adjustedWorldY
+            (rawHX, rawHY) = worldToGridF facing worldX
                 (worldY + fromIntegral relZ * tileSideHeight)
-            (chunkCoord, (lx, ly)) = globalToChunk gx gy
+            -- The camera is wrapped into the canonical range, but the
+            -- VIEWPORT around it is not: near the seam the far half of
+            -- the screen unprojects to coords outside that range, whose
+            -- chunk is stored under the wrapped alias. Resolve the stored
+            -- chunk and carry the tile coords into its frame with the
+            -- same whole-chunk delta (#1135) — wrapping only the map key
+            -- would report an alias no world command can act on. The
+            -- delta is (0,0) away from the seam.
+            (chunkCoord, (lx, ly), (dgx, dgy)) =
+                canonicalTileFrame worldSize rawGX rawGY
+            gx = rawGX + dgx
+            gy = rawGY + dgy
+            hoverPos = (rawHX + fromIntegral dgx, rawHY + fromIntegral dgy)
         in case HM.lookup chunkCoord (wtdChunks tileData) of
             Nothing → tryZ (z - 1)
             Just lc →
@@ -92,6 +109,9 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
                     i = z - colMinZ
                 in if i < 0 ∨ i >= colLen
                    then tryZ (z - 1)
+                   -- The offset is taken against the CANONICAL chunk —
+                   -- the coord it is actually drawn under — so it pairs
+                   -- with the canonical (gx, gy) returned beside it.
                    else if ctMats col VU.! i ≠ 0
                         then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
                                Just xOff → Just (gx, gy, z, xOff, hoverPos)

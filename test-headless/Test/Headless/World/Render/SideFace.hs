@@ -18,12 +18,14 @@ module Test.Headless.World.Render.SideFace (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Scene.Types (SortableQuad)
+import Engine.Scene.Types (SortableQuad(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Render.ChunkLookup (canonicalChunkLookup)
 import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.Textures.Types (defaultWorldTextures)
 import World.Render.ViewBounds (ViewBounds(..))
@@ -58,7 +60,12 @@ run fm tm fluidLookup terrLookup =
         10 64 1.0 0.0 allVisible
 
 spec ∷ Spec
-spec = describe "waterSideFaceQuads across chunk seams" $ do
+spec = do
+  inChunkSpec
+  seamSpec
+
+inChunkSpec ∷ Spec
+inChunkSpec = describe "waterSideFaceQuads across chunk seams" $ do
 
     -- Home chunk (0,0): one Lake tile on the EAST edge (lx = 15) at z=10.
     -- Flat terrain at z=10 everywhere, so the in-chunk (left) neighbor is
@@ -100,3 +107,79 @@ spec = describe "waterSideFaceQuads across chunk seams" $ do
             inTerr  = terrMapWith 10 [((6, 8), 0)]
         length (run inFluid inTerr (const Nothing) (const Nothing))
             `shouldBe` 10
+
+-- | #1135: 'neighborCell' builds its cross-chunk coord in the HOME
+--   chunk's raw frame, but chunks are STORED u-wrapped. Right at the
+--   seam those disagree, so the raw @HM.lookup@ missed a LOADED
+--   neighbour and the resulting Nothing read as "not loaded" — side
+--   faces silently vanished along the whole seam.
+--
+--   These drive the real production lookup boundary
+--   ('World.Render.ChunkLookup.canonicalChunkLookup' — the same helper
+--   'renderWorldQuads' builds its two callbacks from) against a map
+--   keyed ONLY by the canonical coord. A test-local 'wrapChunkCoordU'
+--   would pass even if the production lookup regressed.
+seamSpec ∷ Spec
+seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
+    -- worldSize 64 → canonical chunk u ∈ [-32, 32). Home chunk (16,-15)
+    -- has u = 31, so its raw EAST neighbour (17,-15) has u = 32 — one
+    -- past the range, and is stored under ChunkCoord (-15) 17 instead.
+    let seamHome   = ChunkCoord 16 (-15)
+        seamStored = ChunkCoord (-15) 17
+        seamWorld  = 64
+        -- One Lake tile on the home chunk's EAST edge at z=10, flat
+        -- terrain at 10, so every emitted quad comes from the seam step.
+        homeFluid = fluidMapWith [((chunkSize - 1, 8), FluidCell Lake 10)]
+        homeTerr  = terrMapWith 10 []
+        lookupVia m = canonicalChunkLookup seamWorld
+                          (HM.fromList [(seamStored, m)])
+        runAt coord fluidLookup terrLookup =
+            waterSideFaceQuads (\_ → 0) (\_ → 1.0) defaultWorldTextures
+                FaceSouth coord homeFluid homeTerr fluidLookup terrLookup
+                10 64 1.0 0.0 allVisible
+
+    it "renders side faces over a DRY drop across the seam" $
+        -- Neighbour stored under the wrapped key is dry at z=0 → z=0..9.
+        length (runAt seamHome (lookupVia (fluidMapWith []))
+                               (lookupVia (terrMapWith 0 [])))
+            `shouldBe` 10
+
+    it "renders side faces over a LOWER-WATER drop across the seam" $
+        length (runAt seamHome
+                    (lookupVia (fluidMapWith [((0, 8), FluidCell Lake 5)]))
+                    (lookupVia (terrMapWith 0 [])))
+            `shouldBe` 5
+
+    it "matches the equivalent interior fixture exactly" $ do
+        -- Same relative geometry one chunk IN from the seam: home chunk
+        -- (15,-15) has u = 29, so its raw east neighbour (16,-15) is
+        -- itself canonical and the wrap is the identity (requirement 4).
+        --
+        -- The two fixtures sit at different world positions, so the
+        -- absolute sort keys legitimately differ by the tile offset
+        -- between them. Compare the per-quad structure instead —
+        -- normalised against each fixture's own base key, which is
+        -- exactly the z-stack the drop produces (one quad per z, keys
+        -- 0.001 apart). Normalising subtracts Floats of different
+        -- magnitudes, so compare within a tolerance two orders of
+        -- magnitude below that step rather than bit-exactly.
+        let interiorVia m = canonicalChunkLookup seamWorld
+                                (HM.fromList [(ChunkCoord 16 (-15), m)])
+            seamQuads = runAt seamHome (lookupVia (fluidMapWith []))
+                                       (lookupVia (terrMapWith 0 []))
+            interiorQuads = runAt (ChunkCoord 15 (-15))
+                                (interiorVia (fluidMapWith []))
+                                (interiorVia (terrMapWith 0 []))
+            normalised qs = let ks = map sqSortKey qs
+                            in map (subtract (minimum ks)) ks
+        length seamQuads `shouldBe` 10
+        length seamQuads `shouldBe` length interiorQuads
+        zip (normalised seamQuads) (normalised interiorQuads)
+            `shouldSatisfy` all (\(a, b) → abs (a - b) < 1.0e-5)
+
+    it "draws nothing when the seam neighbour is genuinely unloaded" $
+        -- The negative case the raw lookup could not tell apart from a
+        -- loaded-but-aliased neighbour: an empty map means NOT LOADED.
+        let emptyVia ∷ ChunkCoord → Maybe a
+            emptyVia = canonicalChunkLookup seamWorld HM.empty
+        in length (runAt seamHome emptyVia emptyVia) `shouldBe` 0

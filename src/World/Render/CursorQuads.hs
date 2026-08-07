@@ -307,6 +307,13 @@ renderWorldCursorQuads env worldState tileAlpha = do
     let clampSide a b
             | b ≥ a     = min b (a + maxMinePreviewSide - 1)
             | otherwise = max b (a - maxMinePreviewSide + 1)
+        -- Raw lookup, deliberately (#1135 audit). Every caller feeds this
+        -- an anchor or hover tile that came from 'pickWorldTile', which
+        -- reports in the CANONICAL stored frame — so the wrap here would
+        -- be the identity. Preserve that: the previews below pair these
+        -- same coords with a wrap offset taken against their own raw
+        -- chunk coord, so a key wrapped without shifting the coords would
+        -- draw the preview a whole world width off.
         surfaceZAt gx gy = do
             let (chunkCoord, (lx, ly)) = globalToChunk gx gy
             lc ← HM.lookup chunkCoord (wtdChunks tileData)

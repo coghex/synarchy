@@ -120,6 +120,14 @@ renderSpoilQuads env worldState tileAlpha = do
 
             quadFor lvl (_tile@(tx, ty), (mat, corners)) = do
                 let (chunkCoord, (lx, ly)) = globalToChunk tx ty
+                -- Raw lookup, deliberately (#1135 audit). Spoil piles are
+                -- keyed by the tiles that were DUG (World.Thread.Command
+                -- .Edit.Dig writes wsSpoilRef from a dig target), so these
+                -- coords come out of world data already in the canonical
+                -- stored frame — the wrap would be the identity. And, as
+                -- in GroundItemQuads, the raw tx/ty are paired below with
+                -- a wrap offset taken against this same raw chunkCoord:
+                -- wrapping only the key would misplace the quad.
                 lc ← HM.lookup chunkCoord (wtdChunks tileData)
                 xOff ← isChunkVisibleWrapped facing worldSize vb camX
                                              chunkCoord

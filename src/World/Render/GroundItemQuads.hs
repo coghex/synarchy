@@ -99,6 +99,16 @@ itemGeometry tileData im texSizes facing zSlice gi = do
     let tx = floor (giX gi) ∷ Int
         ty = floor (giY gi) ∷ Int
         (chunkCoord, (lx, ly)) = globalToChunk tx ty
+    -- Raw lookup, deliberately (#1135 audit). A ground item's resting
+    -- position is read out of WORLD DATA, never unprojected from screen
+    -- space: every writer places it on a tile the sim already holds
+    -- (dig scatter, a unit's own position, forage, item.spawnGround),
+    -- and tiles only exist inside canonically-keyed chunks, so tx/ty are
+    -- already in the stored frame and the wrap would be the identity.
+    -- Canonicalising the KEY ALONE would also be wrong here: quadForM
+    -- pairs these same raw tx/ty with a wrap offset taken against the
+    -- raw chunkCoord, so a wrapped key with unshifted coords would draw
+    -- the item a whole world width off.
     lc ← HM.lookup chunkCoord (wtdChunks tileData)
     itemDef ← HM.lookup (iiDefName (giInst gi)) (imDefs im)
     let idx = columnIndex lx ly
