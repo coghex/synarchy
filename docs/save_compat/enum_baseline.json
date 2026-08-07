@@ -1,0 +1,1094 @@
+{
+  "_comment": "Golden constructor lists for every positionally-serialized sum type (issue #1145). Generated and checked by tools/enum_append_only_audit.py -- do not hand-edit to make the audit pass: a change that is not a pure append is a save-format break, not a baseline update. `components` and `onSaveWire` are informational reachability attribution; the `constructors` list is the contract.",
+  "types": {
+    "Craft.Bills.BillMode": {
+      "source": "src/Craft/Bills.hs",
+      "onSaveWire": true,
+      "components": [
+        "craft-bills"
+      ],
+      "constructors": [
+        {
+          "name": "FixedCount",
+          "arity": 0
+        },
+        {
+          "name": "RepeatForever",
+          "arity": 0
+        },
+        {
+          "name": "UntilStock",
+          "arity": 0
+        }
+      ]
+    },
+    "Engine.Graphics.Camera.CameraFacing": {
+      "source": "src/Engine/Graphics/Camera.hs",
+      "onSaveWire": true,
+      "components": [
+        "core-session"
+      ],
+      "constructors": [
+        {
+          "name": "FaceSouth",
+          "arity": 0
+        },
+        {
+          "name": "FaceWest",
+          "arity": 0
+        },
+        {
+          "name": "FaceNorth",
+          "arity": 0
+        },
+        {
+          "name": "FaceEast",
+          "arity": 0
+        }
+      ]
+    },
+    "Location.Instance.LocationLifecycle": {
+      "source": "src/Location/Instance.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "LifecycleUnknown",
+          "arity": 0
+        },
+        {
+          "name": "LifecycleHinted",
+          "arity": 0
+        },
+        {
+          "name": "LifecycleDiscovered",
+          "arity": 0
+        },
+        {
+          "name": "LifecycleActive",
+          "arity": 0
+        },
+        {
+          "name": "LifecycleCleared",
+          "arity": 0
+        },
+        {
+          "name": "LifecycleDepleted",
+          "arity": 0
+        }
+      ]
+    },
+    "Power.Types.PowerRole": {
+      "source": "src/Power/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "power-nodes"
+      ],
+      "constructors": [
+        {
+          "name": "PowerSource",
+          "arity": 0
+        },
+        {
+          "name": "PowerStorage",
+          "arity": 0
+        }
+      ]
+    },
+    "Unit.Direction.Direction": {
+      "source": "src/Unit/Direction.hs",
+      "onSaveWire": true,
+      "components": [
+        "unit-sim",
+        "units"
+      ],
+      "constructors": [
+        {
+          "name": "DirS",
+          "arity": 0
+        },
+        {
+          "name": "DirSW",
+          "arity": 0
+        },
+        {
+          "name": "DirW",
+          "arity": 0
+        },
+        {
+          "name": "DirNW",
+          "arity": 0
+        },
+        {
+          "name": "DirN",
+          "arity": 0
+        },
+        {
+          "name": "DirNE",
+          "arity": 0
+        },
+        {
+          "name": "DirE",
+          "arity": 0
+        },
+        {
+          "name": "DirSE",
+          "arity": 0
+        }
+      ]
+    },
+    "Unit.Sim.Types.Pose": {
+      "source": "src/Unit/Sim/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "unit-sim"
+      ],
+      "constructors": [
+        {
+          "name": "Standing",
+          "arity": 0
+        },
+        {
+          "name": "Crouching",
+          "arity": 0
+        },
+        {
+          "name": "Crawling",
+          "arity": 0
+        },
+        {
+          "name": "Collapsed",
+          "arity": 0
+        },
+        {
+          "name": "Dead",
+          "arity": 0
+        },
+        {
+          "name": "Climbing",
+          "arity": 0
+        },
+        {
+          "name": "Falling",
+          "arity": 0
+        },
+        {
+          "name": "Sleeping",
+          "arity": 0
+        }
+      ]
+    },
+    "Unit.Sim.Types.UnitActivity": {
+      "source": "src/Unit/Sim/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "unit-sim"
+      ],
+      "constructors": [
+        {
+          "name": "Idle",
+          "arity": 0
+        },
+        {
+          "name": "Walking",
+          "arity": 0
+        },
+        {
+          "name": "Drinking",
+          "arity": 0
+        },
+        {
+          "name": "Eating",
+          "arity": 0
+        },
+        {
+          "name": "Picking",
+          "arity": 0
+        },
+        {
+          "name": "TransitioningTo",
+          "arity": 1
+        },
+        {
+          "name": "Running",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Construct.Types.ConstructStatus": {
+      "source": "src/World/Construct/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-activity"
+      ],
+      "constructors": [
+        {
+          "name": "CsPending",
+          "arity": 0
+        },
+        {
+          "name": "CsClaimed",
+          "arity": 0
+        },
+        {
+          "name": "CsComplete",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Construct.Types.ConstructTarget": {
+      "source": "src/World/Construct/Types.hs",
+      "onSaveWire": true,
+      "components": [],
+      "constructors": [
+        {
+          "name": "CtStructure",
+          "arity": 1
+        },
+        {
+          "name": "CtBuilding",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Edit.Types.WorldEdit": {
+      "source": "src/World/Edit/Types.hs",
+      "onSaveWire": true,
+      "components": [],
+      "constructors": [
+        {
+          "name": "WeDeleteTile",
+          "arity": 2
+        },
+        {
+          "name": "WeSetFluidTile",
+          "arity": 3
+        },
+        {
+          "name": "WeAddTile",
+          "arity": 3
+        },
+        {
+          "name": "WeSetSlope",
+          "arity": 4
+        },
+        {
+          "name": "WeSetCell",
+          "arity": 4
+        },
+        {
+          "name": "WeSetStructure",
+          "arity": 6
+        },
+        {
+          "name": "WeClearStructure",
+          "arity": 3
+        },
+        {
+          "name": "WeSetVeg",
+          "arity": 4
+        },
+        {
+          "name": "WePlaceFlora",
+          "arity": 5
+        },
+        {
+          "name": "WeSetFluidSnapshot",
+          "arity": 4
+        },
+        {
+          "name": "WeClearFluidSnapshot",
+          "arity": 2
+        }
+      ]
+    },
+    "World.Flora.Types.AnnualStageTag": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "constructors": [
+        {
+          "name": "CycleDormant",
+          "arity": 0
+        },
+        {
+          "name": "CycleBudding",
+          "arity": 0
+        },
+        {
+          "name": "CycleFlowering",
+          "arity": 0
+        },
+        {
+          "name": "CycleFruiting",
+          "arity": 0
+        },
+        {
+          "name": "CycleSenescing",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Flora.Types.LifePhaseTag": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "constructors": [
+        {
+          "name": "PhaseSprout",
+          "arity": 0
+        },
+        {
+          "name": "PhaseSeedling",
+          "arity": 0
+        },
+        {
+          "name": "PhaseVegetating",
+          "arity": 0
+        },
+        {
+          "name": "PhaseBudding",
+          "arity": 0
+        },
+        {
+          "name": "PhaseFlowering",
+          "arity": 0
+        },
+        {
+          "name": "PhaseRipening",
+          "arity": 0
+        },
+        {
+          "name": "PhaseMatured",
+          "arity": 0
+        },
+        {
+          "name": "PhaseWithering",
+          "arity": 0
+        },
+        {
+          "name": "PhaseDead",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Flora.Types.LifecycleType": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "constructors": [
+        {
+          "name": "Evergreen",
+          "arity": 0
+        },
+        {
+          "name": "Perennial",
+          "arity": 3
+        },
+        {
+          "name": "Annual",
+          "arity": 0
+        },
+        {
+          "name": "Biennial",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Fluid.Types.FluidType": {
+      "source": "src/World/Fluid/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "constructors": [
+        {
+          "name": "Ocean",
+          "arity": 0
+        },
+        {
+          "name": "Lake",
+          "arity": 0
+        },
+        {
+          "name": "River",
+          "arity": 0
+        },
+        {
+          "name": "Lava",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Geology.Timeline.Event.GeoEvent": {
+      "source": "src/World/Geology/Timeline/Event.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "CraterEvent",
+          "arity": 1
+        },
+        {
+          "name": "VolcanicEvent",
+          "arity": 1
+        },
+        {
+          "name": "VolcanicModify",
+          "arity": 2
+        },
+        {
+          "name": "LandslideEvent",
+          "arity": 1
+        },
+        {
+          "name": "GlaciationEvent",
+          "arity": 1
+        },
+        {
+          "name": "FloodEvent",
+          "arity": 1
+        },
+        {
+          "name": "HydroEvent",
+          "arity": 1
+        },
+        {
+          "name": "HydroModify",
+          "arity": 2
+        },
+        {
+          "name": "RiverSegmentEvent",
+          "arity": 1
+        },
+        {
+          "name": "RiverDeltaEvent",
+          "arity": 1
+        },
+        {
+          "name": "OreSheetEvent",
+          "arity": 1
+        },
+        {
+          "name": "GlacierMoraineEvent",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Geology.Timeline.Feature.FeatureActivity": {
+      "source": "src/World/Geology/Timeline/Feature.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "FActive",
+          "arity": 0
+        },
+        {
+          "name": "FDormant",
+          "arity": 0
+        },
+        {
+          "name": "FExtinct",
+          "arity": 0
+        },
+        {
+          "name": "FCollapsed",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Geology.Timeline.Feature.FeatureEvolution": {
+      "source": "src/World/Geology/Timeline/Feature.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "Reactivate",
+          "arity": 5
+        },
+        {
+          "name": "GoDormant",
+          "arity": 2
+        },
+        {
+          "name": "GoExtinct",
+          "arity": 2
+        },
+        {
+          "name": "CollapseToCaldera",
+          "arity": 5
+        },
+        {
+          "name": "ParasiticEruption",
+          "arity": 4
+        },
+        {
+          "name": "FlankCollapse",
+          "arity": 5
+        }
+      ]
+    },
+    "World.Geology.Timeline.Feature.FeatureShape": {
+      "source": "src/World/Geology/Timeline/Feature.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "VolcanicShape",
+          "arity": 1
+        },
+        {
+          "name": "HydroShape",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Geology.Timeline.Feature.VolcanicActivity": {
+      "source": "src/World/Geology/Timeline/Feature.hs",
+      "onSaveWire": false,
+      "components": [],
+      "constructors": [
+        {
+          "name": "Active",
+          "arity": 0
+        },
+        {
+          "name": "Dormant",
+          "arity": 0
+        },
+        {
+          "name": "Extinct",
+          "arity": 0
+        },
+        {
+          "name": "Collapsed",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Geology.Timeline.Feature.VolcanicFeature": {
+      "source": "src/World/Geology/Timeline/Feature.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "ShieldVolcano",
+          "arity": 1
+        },
+        {
+          "name": "CinderCone",
+          "arity": 1
+        },
+        {
+          "name": "LavaDome",
+          "arity": 1
+        },
+        {
+          "name": "Caldera",
+          "arity": 1
+        },
+        {
+          "name": "FissureVolcano",
+          "arity": 1
+        },
+        {
+          "name": "LavaTube",
+          "arity": 1
+        },
+        {
+          "name": "SuperVolcano",
+          "arity": 1
+        },
+        {
+          "name": "HydrothermalVent",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Geology.Timeline.Types.GeoScale": {
+      "source": "src/World/Geology/Timeline/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "Eon",
+          "arity": 0
+        },
+        {
+          "name": "Era",
+          "arity": 0
+        },
+        {
+          "name": "Period",
+          "arity": 0
+        },
+        {
+          "name": "Epoch",
+          "arity": 0
+        },
+        {
+          "name": "Age",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Hydrology.Types.GlacierActivity": {
+      "source": "src/World/Hydrology/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "constructors": [
+        {
+          "name": "Advancing",
+          "arity": 0
+        },
+        {
+          "name": "Stable",
+          "arity": 0
+        },
+        {
+          "name": "Retreating",
+          "arity": 0
+        },
+        {
+          "name": "Melted",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Hydrology.Types.HydroEvolution": {
+      "source": "src/World/Hydrology/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "RiverBranch",
+          "arity": 4
+        },
+        {
+          "name": "RiverMeander",
+          "arity": 2
+        },
+        {
+          "name": "RiverCapture",
+          "arity": 2
+        },
+        {
+          "name": "RiverDam",
+          "arity": 3
+        },
+        {
+          "name": "RiverDryUp",
+          "arity": 0
+        },
+        {
+          "name": "GlacierAdvance",
+          "arity": 2
+        },
+        {
+          "name": "GlacierRetreat",
+          "arity": 2
+        },
+        {
+          "name": "GlacierBranch",
+          "arity": 4
+        },
+        {
+          "name": "GlacierMelt",
+          "arity": 1
+        },
+        {
+          "name": "LakeDrain",
+          "arity": 1
+        },
+        {
+          "name": "LakeExpand",
+          "arity": 2
+        }
+      ]
+    },
+    "World.Hydrology.Types.HydroFeature": {
+      "source": "src/World/Hydrology/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "RiverFeature",
+          "arity": 1
+        },
+        {
+          "name": "GlacierFeature",
+          "arity": 1
+        },
+        {
+          "name": "LakeFeature",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Hydrology.Types.LakeSource": {
+      "source": "src/World/Hydrology/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "DammedRiver",
+          "arity": 1
+        },
+        {
+          "name": "GlacialBasin",
+          "arity": 1
+        },
+        {
+          "name": "TectonicBasin",
+          "arity": 0
+        },
+        {
+          "name": "CalderaLake",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Render.Zoom.Types.ZoomMapMode": {
+      "source": "src/World/Render/Zoom/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "ZMDefault",
+          "arity": 0
+        },
+        {
+          "name": "ZMTemp",
+          "arity": 0
+        },
+        {
+          "name": "ZMSeaTemp",
+          "arity": 0
+        },
+        {
+          "name": "ZMPressure",
+          "arity": 0
+        },
+        {
+          "name": "ZMHumidity",
+          "arity": 0
+        },
+        {
+          "name": "ZMPrecipitation",
+          "arity": 0
+        },
+        {
+          "name": "ZMPrecipType",
+          "arity": 0
+        },
+        {
+          "name": "ZMEvaporation",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Save.Component.Page.ConstructTargetDTO": {
+      "source": "src/World/Save/Component/Page.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-activity"
+      ],
+      "constructors": [
+        {
+          "name": "CtStructureD",
+          "arity": 1
+        },
+        {
+          "name": "CtBuildingD",
+          "arity": 1
+        }
+      ]
+    },
+    "World.Save.Component.Page.WorldEditDTO": {
+      "source": "src/World/Save/Component/Page.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "constructors": [
+        {
+          "name": "WeDeleteTileD",
+          "arity": 2
+        },
+        {
+          "name": "WeSetFluidTileD",
+          "arity": 3
+        },
+        {
+          "name": "WeAddTileD",
+          "arity": 3
+        },
+        {
+          "name": "WeSetSlopeD",
+          "arity": 4
+        },
+        {
+          "name": "WeSetCellD",
+          "arity": 4
+        },
+        {
+          "name": "WeSetStructureD",
+          "arity": 6
+        },
+        {
+          "name": "WeClearStructureD",
+          "arity": 3
+        },
+        {
+          "name": "WeSetVegD",
+          "arity": 4
+        },
+        {
+          "name": "WePlaceFloraD",
+          "arity": 5
+        },
+        {
+          "name": "WeSetFluidSnapshotD",
+          "arity": 4
+        },
+        {
+          "name": "WeClearFluidSnapshotD",
+          "arity": 2
+        }
+      ]
+    },
+    "World.Save.Reference.ContentKind": {
+      "source": "src/World/Save/Reference.hs",
+      "onSaveWire": true,
+      "components": [],
+      "constructors": [
+        {
+          "name": "ContentUnit",
+          "arity": 0
+        },
+        {
+          "name": "ContentItem",
+          "arity": 0
+        },
+        {
+          "name": "ContentBuilding",
+          "arity": 0
+        },
+        {
+          "name": "ContentMaterial",
+          "arity": 0
+        },
+        {
+          "name": "ContentRecipe",
+          "arity": 0
+        },
+        {
+          "name": "ContentFlora",
+          "arity": 0
+        },
+        {
+          "name": "ContentConstruct",
+          "arity": 0
+        },
+        {
+          "name": "ContentLocation",
+          "arity": 0
+        },
+        {
+          "name": "ContentInfection",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Save.Reference.RefKind": {
+      "source": "src/World/Save/Reference.hs",
+      "onSaveWire": true,
+      "components": [],
+      "constructors": [
+        {
+          "name": "RefPage",
+          "arity": 0
+        },
+        {
+          "name": "RefUnit",
+          "arity": 0
+        },
+        {
+          "name": "RefBuilding",
+          "arity": 0
+        },
+        {
+          "name": "RefItemInstance",
+          "arity": 0
+        },
+        {
+          "name": "RefBill",
+          "arity": 0
+        },
+        {
+          "name": "RefPowerNode",
+          "arity": 0
+        },
+        {
+          "name": "RefGroundItem",
+          "arity": 0
+        },
+        {
+          "name": "RefContent",
+          "arity": 1
+        },
+        {
+          "name": "RefLocationInstance",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Save.Reference.RefScope": {
+      "source": "src/World/Save/Reference.hs",
+      "onSaveWire": true,
+      "components": [],
+      "constructors": [
+        {
+          "name": "ScopeGlobal",
+          "arity": 0
+        },
+        {
+          "name": "ScopeSamePage",
+          "arity": 0
+        },
+        {
+          "name": "ScopeCrossPage",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Tool.Types.ToolMode": {
+      "source": "src/World/Tool/Types.hs",
+      "onSaveWire": true,
+      "components": [],
+      "constructors": [
+        {
+          "name": "DefaultTool",
+          "arity": 0
+        },
+        {
+          "name": "InfoTool",
+          "arity": 0
+        },
+        {
+          "name": "MineTool",
+          "arity": 0
+        },
+        {
+          "name": "BuildTool",
+          "arity": 0
+        },
+        {
+          "name": "ConstructTool",
+          "arity": 0
+        },
+        {
+          "name": "ChopTool",
+          "arity": 0
+        },
+        {
+          "name": "TillTool",
+          "arity": 0
+        },
+        {
+          "name": "PlantTool",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Weather.Types.PressureType": {
+      "source": "src/World/Weather/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "HighPressure",
+          "arity": 0
+        },
+        {
+          "name": "LowPressure",
+          "arity": 0
+        }
+      ]
+    },
+    "World.Weather.Types.SurfaceType": {
+      "source": "src/World/Weather/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "constructors": [
+        {
+          "name": "SurfIceSheet",
+          "arity": 0
+        },
+        {
+          "name": "SurfTundra",
+          "arity": 0
+        },
+        {
+          "name": "SurfBoreal",
+          "arity": 0
+        },
+        {
+          "name": "SurfTempForest",
+          "arity": 0
+        },
+        {
+          "name": "SurfGrassland",
+          "arity": 0
+        },
+        {
+          "name": "SurfDesert",
+          "arity": 0
+        },
+        {
+          "name": "SurfTropical",
+          "arity": 0
+        },
+        {
+          "name": "SurfSavanna",
+          "arity": 0
+        },
+        {
+          "name": "SurfWetland",
+          "arity": 0
+        },
+        {
+          "name": "SurfOcean",
+          "arity": 0
+        }
+      ]
+    }
+  }
+}

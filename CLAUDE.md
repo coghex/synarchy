@@ -11,7 +11,7 @@ referenced issues/PRs when you need the full story behind a contract stated here
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat / cabal-library-module-inventory audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat / enum-append-only / cabal-library-module-inventory / material-id audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
 - **Debug output:** `ENGINE_DEBUG=Vulkan,Graphics,...` environment variable
 
 ## Testing Tiers
@@ -1139,6 +1139,22 @@ subsystem table above for the full contract.
 enum serialized via `Generic Serialize`) are positional by constructor
 tag — **append-only**. Inserting/reordering silently corrupts saves;
 anything beyond appending requires a `currentSaveVersion` bump.
+
+Enforced mechanically since #1145 by `tools/enum_append_only_audit.py`
+(in CI and `make ci`, with its own `--self-test`), which is the
+authority on which types are guarded and why — read its module
+docstring before adding, moving, or changing one. It guards **every**
+`data` declaration under `src/`/`app/` that derives `Serialize` through
+`Generic` and has two or more constructors — a deliberate superset of
+"reachable from a save component", currently 34 types, so a type that
+becomes persisted later was already guarded the day its instance was
+derived. `docs/save_compat/enum_baseline.json` is the golden
+constructor list (name + arity, module-qualified); it is GENERATED, so
+don't hand-edit it — a pure append ratchets it with
+`--update-baseline`, and anything else is a wire-format break the audit
+refuses to record. An incompatible change's output names every
+component and historical shape that carries the type, with the
+reachability path.
 
 **Architecture (persistence-overhaul epic #756-#768, landed):**
 - `World.Save.Snapshot.SessionSnapshot` is the immutable, validated

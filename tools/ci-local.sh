@@ -54,54 +54,58 @@ fi
 # needs to be injected here.
 printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 
-echo "==> [1/14] build (library + executable, -Werror)"
+echo "==> [1/15] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/14] build test suites"
+echo "==> [2/15] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/14] headless hspec suite"
+echo "==> [3/15] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/14] test audit"
+echo "==> [4/15] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/14] lua module line budget"
+echo "==> [5/15] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [6/14] lua duplicate function audit"
+echo "==> [6/15] lua duplicate function audit"
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [7/14] haskell module line budget"
+echo "==> [7/15] haskell module line budget"
 python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
 
-echo "==> [8/14] unicode operator audit"
+echo "==> [8/15] unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
 
-echo "==> [9/14] persistence inventory audit"
+echo "==> [9/15] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [10/14] EngineEnv capability inventory audit"
+echo "==> [10/15] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
-echo "==> [11/14] save compatibility audit"
+echo "==> [11/15] save compatibility audit"
 python3 tools/test_save_compat_audit.py
 python3 tools/save_compat_audit.py
 
-echo "==> [12/14] cabal library module inventory audit"
+echo "==> [12/15] enum append-only audit"
+python3 tools/enum_append_only_audit.py --self-test
+python3 tools/enum_append_only_audit.py
+
+echo "==> [13/15] cabal library module inventory audit"
 python3 tools/test_cabal_module_audit.py
 python3 tools/cabal_module_audit.py
 
-echo "==> [13/14] material id/name correspondence audit"
+echo "==> [14/15] material id/name correspondence audit"
 python3 tools/material_id_audit.py --self-test
 python3 tools/material_id_audit.py
 
-echo "==> [14/14] world_check --quick"
+echo "==> [15/15] world_check --quick"
 python3 tools/world_check.py --quick
 
 echo "==> make ci: all gates passed"

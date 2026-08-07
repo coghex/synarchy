@@ -359,6 +359,21 @@ jobs:
           python3 tools/test_save_compat_audit.py
           python3 tools/save_compat_audit.py
 
+      # Cheap, no-engine guard (issue #1145): fails if a
+      # positionally-serialized (`Generic`-derived `Serialize`) sum type's
+      # constructor list changes in any way that is not a pure append.
+      # The tag is an index, so a reorder/insert/remove/rename silently
+      # reinterprets every already-saved value with nothing failing to
+      # compile -- and the compat fixtures above only prove the handful of
+      # constructors they happen to carry. Deliberately unconditional
+      # rather than path-selective: the guarded set is discovered from
+      # every `src/`/`app/` module, and the baseline it compares against
+      # can drift from either side.
+      - name: Enum append-only audit
+        run: |
+          python3 tools/enum_append_only_audit.py --self-test
+          python3 tools/enum_append_only_audit.py
+
       # Cheap, no-engine guard (issue #972, CH-28): fails if a
       # `src/**/*.hs` module is missing from synarchy.cabal's explicit
       # library inventory. Deliberately unconditional rather than
