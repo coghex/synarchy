@@ -246,6 +246,18 @@ zero-based Unicode code-point offsets. Lua strings are UTF-8 byte
 arrays — editable widgets must use `scripts/ui/utf8_safe.lua`, never
 `#text` or byte-based `string.sub`.
 
+**Text display (#1159):** the same rule binds read-only DISPLAY paths —
+wrapping, truncation, and any other per-character walk advances one code
+point at a time, or non-ASCII text renders as mojibake and gets measured
+once per byte. Lua PATTERNS are byte-oriented too, so `gmatch(".")` is a
+byte loop, not a character loop. Pixel-width wrapping goes through
+`scripts/ui/text_wrap.lua` — `byCharacter` (the debug console) and
+`byWord` (word wrap with a character hard-break; all three log panels) —
+rather than a fourth private copy. Unlike `utf8_safe`, it never raises on
+malformed UTF-8 and never drops a byte: display paths wrap whatever an
+arbitrary Lua value stringified to. Gate: hspec
+`--match "Lua.TextWrapping"`.
+
 **Layers + modal boundary (#742):** pages live on six `UILayer`s,
 painted bottom-to-top `LayerHUD < LayerOverlay < LayerMenu < LayerModal
 < LayerTooltip < LayerDebug`; `uiLayerBand` is the single paint-order

@@ -1180,6 +1180,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
+                   Test.Headless.Lua.TextWrapping
                    Test.Headless.Graphics.BindlessRebind
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols

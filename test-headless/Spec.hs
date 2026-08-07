@@ -107,6 +107,7 @@ import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
+import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
@@ -334,6 +335,7 @@ main = hspec $ do
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
+    describe "Lua.TextWrapping" LuaTextWrapping.spec
     UISlider.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
