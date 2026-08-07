@@ -25,6 +25,9 @@ import Language.Generated.Profile (generateProfile)
 import Language.Generated.Signature (profileSignature)
 import Language.Generated.Render (renderNative)
 import Language.Suggest
+import Engine.Scripting.Lua.Types (LanguageCache(..))
+import Engine.Scripting.Lua.API.World.Lifecycle
+    (suggestionStep, suggestionStepLabel)
 
 -- | Provenance for one world seed at the current generator.
 provFor ∷ Word64 → LanguageProvenance
@@ -195,6 +198,43 @@ spec = describe "world-name suggestions" $ do
                 Right _  → expectationFailure "suggested from an empty catalogue"
                 Left err → suggestErrorText err `shouldSatisfy`
                     T.isInfixOf "empty"
+
+    -- Requirement 8: the dice button runs synchronously on the UI's own
+    -- thread. Exactly one press per session may reach the filesystem —
+    -- reading `data/language/concepts.yaml` on every press is what the
+    -- cache exists to prevent, and a press that FAILS to read it is not
+    -- exempt (review round 2).
+    describe "the suggestion cache's step decision" $ do
+        let step p c = suggestionStepLabel (suggestionStep p c)
+            prov42   = provFor 42
+            prov7    = provFor 7
+            sgr42    = suggesterFor prodCat 42
+
+        it "reads the catalogue only when nothing is cached" $
+            step prov42 Nothing `shouldBe` "read"
+
+        it "reuses a cached suggester for the same language" $
+            step prov42 (Just (LanguageCache (Right prodCat)
+                                             (Just (prov42, sgr42))))
+                `shouldBe` "reuse"
+
+        -- Editing the seed is a different language, so the suggester is
+        -- rebuilt — but from the cached catalogue, never off disk.
+        it "rebuilds from the cached catalogue for a different language" $
+            step prov7 (Just (LanguageCache (Right prodCat)
+                                            (Just (prov42, sgr42))))
+                `shouldBe` "build"
+
+        it "rebuilds without re-reading when no suggester was cached" $
+            step prov42 (Just (LanguageCache (Right prodCat) Nothing))
+                `shouldBe` "build"
+
+        -- The round-2 blocker: a catalogue that would not load used to
+        -- go uncached, so every later press retried the disk read.
+        it "reports a cached catalogue failure without re-reading" $ do
+            let broken = Just (LanguageCache (Left "no catalogue") Nothing)
+            step prov42 broken `shouldBe` "failed"
+            step prov7 broken `shouldBe` "failed"
 
 -- | Which of the five shapes an expression took, as report text.
 shapeOf ∷ NameExpr → String

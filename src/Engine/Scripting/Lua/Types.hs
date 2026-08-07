@@ -66,13 +66,23 @@ type LuaScripts = TVar (Map.Map FilePath LuaScript)
 --   'lcSuggester', while the catalogue behind it is the same file
 --   contents and is kept. Rerolling within one seed reuses both.
 --
+--   'lcCatalogue' caches a FAILED load as readily as a successful one,
+--   and the failure is sticky for the session. That is deliberate:
+--   re-reading a missing or malformed file on every press of a menu
+--   button is precisely the per-press filesystem I/O the synchronous
+--   suggestion path must not do, and @data/language/concepts.yaml@ is a
+--   shipped data file — an installation that cannot supply it does not
+--   repair itself mid-session.
+--
 --   Purely derived, purely a cache: every field is reconstructible from
 --   @data/language/concepts.yaml@ plus the provenance, nothing here is
 --   authoritative for anything, and it is never persisted. It lives on
 --   'LuaBackendState' because the Lua thread is the only thread that
 --   suggests names.
 data LanguageCache = LanguageCache
-  { lcCatalogue ∷ Catalogue
+  { lcCatalogue ∷ Either Text Catalogue
+    -- ^ The resolved catalogue, or the descriptive reason it could not
+    --   be resolved.
   , lcSuggester ∷ Maybe (LanguageProvenance, NameSuggester)
   }
 

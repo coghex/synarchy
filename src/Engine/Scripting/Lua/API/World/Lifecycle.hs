@@ -4,6 +4,9 @@ module Engine.Scripting.Lua.API.World.Lifecycle
     , worldGetIdentityFn
     , worldGetLanguageProvenanceFn
     , worldSuggestNameFn
+    , SuggestionStep(..)
+    , suggestionStep
+    , suggestionStepLabel
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -284,6 +287,38 @@ worldSuggestNameFn backendState = do
             Lua.pushstring (TE.encodeUtf8 msg)
             return 2
 
+-- | What one suggestion request must do, given 'lbsLanguageCache' as it
+--   stands. Split out from the IO around it because this is exactly
+--   where a press can turn back into filesystem work: everything except
+--   'StepReadCatalogue' must complete without touching the disk.
+data SuggestionStep
+    = StepReadCatalogue
+      -- ^ Nothing cached yet — the one read a session ever needs.
+    | StepFailed !Text
+      -- ^ A cached catalogue failure, reported again as-is.
+    | StepBuild !Catalogue
+      -- ^ Catalogue cached, but the language is a different one.
+    | StepReuse !NameSuggester
+      -- ^ Cached suggester for exactly this language.
+
+suggestionStep ∷ LanguageProvenance → Maybe LanguageCache → SuggestionStep
+suggestionStep _ Nothing = StepReadCatalogue
+suggestionStep prov (Just lc) = case lcCatalogue lc of
+    Left msg  → StepFailed msg
+    Right cat → case lcSuggester lc of
+        Just (p, sgr) | p ≡ prov → StepReuse sgr
+        _                        → StepBuild cat
+
+-- | A step as report text. 'SuggestionStep' carries a 'NameSuggester'
+--   and a 'Catalogue', neither worth an 'Eq' instance of its own, so
+--   this is what a test compares.
+suggestionStepLabel ∷ SuggestionStep → Text
+suggestionStepLabel s = case s of
+    StepReadCatalogue → "read"
+    StepFailed _      → "failed"
+    StepBuild _       → "build"
+    StepReuse _       → "reuse"
+
 -- | Resolve one suggestion, reusing 'lbsLanguageCache' wherever it
 --   still applies (#1106 requirement 8: the dice button runs
 --   synchronously on the UI's own thread, so a press must not re-read
@@ -292,43 +327,47 @@ worldSuggestNameFn backendState = do
 --
 --   Rerolling within one seed reuses both levels. Editing the seed is a
 --   different language, so the suggester is rebuilt — but from the
---   CACHED catalogue, with no filesystem access at all. Only the very
---   first suggestion of a session reads the file.
+--   CACHED catalogue, with no filesystem access at all. Exactly one
+--   suggestion per session reads the file, whether that read SUCCEEDS
+--   or FAILS: a failure is cached and reported from the cache
+--   thereafter, so a broken installation costs one read rather than one
+--   per press (see 'LanguageCache' for why that is sticky).
 --
---   A failure caches whatever it did manage to resolve, so a broken
---   generator version doesn't force a re-read on every subsequent press
+--   A profile-construction failure caches the catalogue it did resolve,
+--   so an unconstructible generator version doesn't force a re-read
 --   either.
 resolveSuggestion
     ∷ LuaBackendState → Word64 → Int → IO (Either Text NameSuggestion)
 resolveSuggestion backendState seed ordinal = do
     cached ← readIORef (lbsLanguageCache backendState)
-    eCat ← case cached of
-        Just lc → pure (Right (lcCatalogue lc))
-        Nothing → catalogueFromDisk
-    case eCat of
-        Left msg  → pure (Left msg)
-        Right cat → case reuseSuggester cached of
-            Just sgr → pure (render sgr)
-            Nothing  → case mkNameSuggester cat prov of
-                Left sErr → do
+    case suggestionStep prov cached of
+        StepReuse sgr  → pure (render sgr)
+        StepFailed msg → pure (Left msg)
+        StepBuild cat  → build cat
+        StepReadCatalogue → do
+            eCat ← catalogueFromDisk
+            case eCat of
+                Left msg → do
                     writeIORef (lbsLanguageCache backendState)
-                        (Just (LanguageCache cat Nothing))
-                    pure (Left (suggestErrorText sErr))
-                Right sgr → do
-                    writeIORef (lbsLanguageCache backendState)
-                        (Just (LanguageCache cat (Just (prov, sgr))))
-                    pure (render sgr)
+                        (Just (LanguageCache (Left msg) Nothing))
+                    pure (Left msg)
+                Right cat → build cat
   where
     prov = LanguageProvenance
         { lpSeed    = worldLanguageSeed seed
         , lpVersion = currentGeneratorVersion
         }
 
-    reuseSuggester ∷ Maybe LanguageCache → Maybe NameSuggester
-    reuseSuggester mLc = do
-        lc        ← mLc
-        (p, sgr)  ← lcSuggester lc
-        if p ≡ prov then Just sgr else Nothing
+    build ∷ Catalogue → IO (Either Text NameSuggestion)
+    build cat = case mkNameSuggester cat prov of
+        Left sErr → do
+            writeIORef (lbsLanguageCache backendState)
+                (Just (LanguageCache (Right cat) Nothing))
+            pure (Left (suggestErrorText sErr))
+        Right sgr → do
+            writeIORef (lbsLanguageCache backendState)
+                (Just (LanguageCache (Right cat) (Just (prov, sgr))))
+            pure (render sgr)
 
     render sgr = case suggestNameAt sgr ordinal of
         Left sErr → Left (suggestErrorText sErr)

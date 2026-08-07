@@ -390,14 +390,16 @@ function createWorldMenu.createUI(opts)
     -- input (its raw filter text is discarded back to the selected
     -- option on destroy), so it needs the same preservation.
     local dropdownSnap = nil
-    -- #1106: the World Name's MEANING — its gloss, the language that
-    -- rendered it, and where the reroll sequence stands — which no
-    -- widget knows about. It must be captured before destroyOwned() for
-    -- the same reason the text is: tearing the controls down unfocuses
-    -- them, and an unsubmitted Seed edit submitting on the way out
+    -- #1106: the committed seed, the World Name, and the name's MEANING
+    -- — its gloss, the language that rendered it, and where the reroll
+    -- sequence stands — none of which any widget knows about. Captured
+    -- before destroyOwned() for the same reason the text is: tearing the
+    -- controls down unfocuses them, so an unsubmitted Seed edit submits
+    -- on the way out, commits a seed the player never accepted, and
     -- re-suggests the name in a whole new language. Restoring only the
-    -- text afterwards would leave the old name wearing the new
-    -- language's gloss and provenance.
+    -- text afterwards would leave a name paired with another language's
+    -- gloss and provenance, or with a seed that is not the one it was
+    -- drawn from.
     local suggestionSnap = nil
     if preserveState then
         textboxSnap = textbox.snapshotPage(createWorldMenu.page)

@@ -613,10 +613,13 @@ spec = do
         it "survives a rebuild that submits a pending seed edit" $
             runsSuggest $ lns
                 [ "local p = newPending()"
+                , "p.seed = 'B'"
                 , "nameSuggest.suggest(p, 11)"
                 , "local snap = nameSuggest.snapshot(p)"
                 , "local shownName = p.worldName"
-                -- Teardown: the seed control unfocuses into a new seed.
+                -- Teardown: the seed control unfocuses, committing the
+                -- edit the player never submitted.
+                , "p.seed = 'C'"
                 , "nameSuggest.reseed(p, 22)"
                 , "assert(p.worldName ~= shownName, 'reseed did nothing')"
                 -- Rebuild: restoreAll puts the old text back, and the
@@ -624,13 +627,37 @@ spec = do
                 , "nameSuggest.reconcile(p, shownName)"
                 , "assert(nameSuggest.gloss(p) == nil,"
                 , "       'paired the old name with the new language')"
-                -- Then the meaning snapshot is restored.
+                -- Then the (seed, name, meaning) snapshot is restored.
                 , "nameSuggest.restore(p, snap)"
                 , "assert(p.worldName == shownName, p.worldName)"
                 , "assert(nameSuggest.gloss(p) == 'G11_0', tostring(p.nameGloss))"
                 , "local _, seed = nameSuggest.identity(p)"
                 , "assert(seed == '11000', tostring(seed))"
                 , "assert(p.nameSeedNum == 11, tostring(p.nameSeedNum))"
+                ]
+
+        -- Review round 2: the seed that produced a name is part of the
+        -- tuple. Restoring the name without it would leave generation
+        -- reading the seed the teardown committed while the identity
+        -- describes the language the name came from.
+        it "restores the committed seed alongside the name it produced" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "p.seed = 'B'"
+                , "nameSuggest.suggest(p, 11)"
+                , "local snap = nameSuggest.snapshot(p)"
+                -- Teardown commits an edit the player never submitted.
+                , "p.seed = 'C'"
+                , "nameSuggest.reseed(p, 22)"
+                , "nameSuggest.restore(p, snap)"
+                , "assert(p.seed == 'B', 'committed seed: ' .. tostring(p.seed))"
+                , "assert(p.nameSeedNum == 11, tostring(p.nameSeedNum))"
+                -- Submitting the still-pending edit now re-suggests
+                -- exactly as it would have without the rebuild.
+                , "p.seed = 'C'"
+                , "assert(nameSuggest.reseed(p, 22) == 'N22_0',"
+                , "       'pending edit no longer re-suggests: '"
+                , "       .. tostring(p.worldName))"
                 ]
 
     -- Review round 1: a keystroke that leaves the buffer untouched is

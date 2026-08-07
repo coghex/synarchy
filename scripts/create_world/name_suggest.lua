@@ -172,13 +172,21 @@ function nameSuggest.reconcile(pending, text)
     return pending.nameSuggested == true
 end
 
--- The complete suggestion tuple, for a caller that destroys and
--- recreates the controls around it (a responsive rebuild). The widgets'
--- own snapshot carries text, cursor, and focus; this carries the
--- meaning, the language, and the sequence position, which no widget
+-- The complete (seed, name, meaning) tuple, for a caller that destroys
+-- and recreates the controls around it (a responsive rebuild). The
+-- widgets' own snapshot carries text, cursor, and focus; this carries
+-- the meaning, the language, and the sequence position, which no widget
 -- knows about.
+--
+-- The COMMITTED seed is part of the tuple because the language is
+-- derived from it: restoring a name without the seed it was suggested
+-- for would leave the two describing different languages. The
+-- distinction that matters is committed versus in-progress -- the raw
+-- text a Seed control holds mid-edit belongs to the widget snapshot,
+-- and `pending.seed` only catches up when the player submits it.
 function nameSuggest.snapshot(pending)
     return {
+        seed            = pending.seed,
         worldName       = pending.worldName,
         suggestedText   = pending.nameSuggestedText,
         gloss           = pending.nameGloss,
@@ -192,6 +200,13 @@ end
 
 function nameSuggest.restore(pending, snap)
     if not snap then return end
+    -- Tearing the controls down unfocuses them, so an unsubmitted Seed
+    -- edit SUBMITS on the way out and commits a seed the player never
+    -- accepted. Putting the committed seed back with the name is what
+    -- keeps the pair honest -- and leaves the edit still pending in the
+    -- widget, so submitting it later re-suggests exactly as it would
+    -- have without the rebuild.
+    pending.seed                = snap.seed
     pending.worldName           = snap.worldName
     pending.nameSuggestedText   = snap.suggestedText
     pending.nameGloss           = snap.gloss
