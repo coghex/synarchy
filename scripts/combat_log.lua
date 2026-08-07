@@ -18,6 +18,7 @@ local label       = require("scripts.ui.label")
 local button      = require("scripts.ui.button")
 local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
+local textWrap    = require("scripts.ui.text_wrap")
 
 -- Singleton (matches event_log so engine.loadScript and require
 -- both reach the same table; see gotcha_dofile_module_state).
@@ -686,40 +687,10 @@ local function spawnArrow(name, glyph, x, callbackName, greyed)
 end
 
 -- Word-wrap `text` to fit `maxW` pixels at the given font/size. Breaks on
--- spaces; hard-splits a single word wider than the panel. Returns a list of
--- line strings (always at least one).
-local function wrapText(text, maxW, font, fontSize)
-    local function fits(str)
-        return engine.getTextWidth(font, str, fontSize) <= maxW
-    end
-    local lines, cur = {}, ""
-    for word in text:gmatch("%S+") do
-        local trial = (cur == "") and word or (cur .. " " .. word)
-        if fits(trial) then
-            cur = trial
-        else
-            if cur ~= "" then lines[#lines + 1] = cur; cur = "" end
-            if fits(word) then
-                cur = word
-            else
-                -- A single word wider than the panel: hard-break it.
-                local chunk = ""
-                for ch in word:gmatch(".") do
-                    if fits(chunk .. ch) then
-                        chunk = chunk .. ch
-                    else
-                        if chunk ~= "" then lines[#lines + 1] = chunk end
-                        chunk = ch
-                    end
-                end
-                cur = chunk
-            end
-        end
-    end
-    if cur ~= "" then lines[#lines + 1] = cur end
-    if #lines == 0 then lines[1] = "" end
-    return lines
-end
+-- spaces; hard-splits a single word wider than the panel between CODE POINTS
+-- (#1159). Shared with the injury and per-unit log panels, which wrap the
+-- same event prose.
+local wrapText = textWrap.byWord
 
 renderContent = function()
     destroyTransient()
