@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Deterministic hashing and small interpolation helpers shared across
 --   the "World.Plate.*" split (issue #560). No local dependencies beyond

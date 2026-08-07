@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Bake ZoomChunkEntry vectors into render-ready BakedZoomEntry vectors.
 module World.Render.Zoom.Bake
