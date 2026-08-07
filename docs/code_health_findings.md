@@ -101,7 +101,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [ ] CH-70. The save system's item enumeration is implemented three times
 - [ ] CH-71. `WorldPageId` has no accessor, so ten sites hand-write one
 - [ ] CH-72. Nine near-identical `Missing*Ref` types, misplaced in `Types.hs`
-- [ ] CH-73. `serializeCodec` cannot express the migration the component system exists for
+- [x] CH-73. `serializeCodec` cannot express the migration the component system exists for — [#1093]
 - [ ] CH-74. `Component/Entities.hs` is five components in one 1139-line module
 - [ ] CH-75. `tshow` is invented four times, while 570 sites don't use it
 - [ ] CH-76. Envelope compat is named after the epic's internal phase letters
@@ -1602,6 +1602,16 @@ the definition.
 
 Fix: give `serializeCodec` an input-version list (or a `migrate` variant), and
 name the version/required arguments.
+
+**Resolved (#1093).** `serializeCodec` is replaced by `componentCodec` taking a
+named-field `ComponentSpec`, plus `atVersion`, which declares one accepted
+version and closes over the frozen DTO type that version's bytes decode
+through — so a single codec decodes a different DTO per version, which a
+widened `ccInputVers` under one `Serialize d` constraint never could.
+`ccInputVers`, the decode dispatch, and the unsupported-version message are all
+derived from those same declarations. All eleven registered gameplay codecs
+(including the four that hand-rolled multi-version decode) now go through it,
+and no codec hand-writes either universal decode error.
 
 ### CH-74. `Component/Entities.hs` is five components in one 1139-line module
 It defines five independent codecs:
