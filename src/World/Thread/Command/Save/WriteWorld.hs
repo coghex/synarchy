@@ -15,7 +15,6 @@ module World.Thread.Command.Save.WriteWorld
     ) where
 
 import UPrelude
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.List as L
@@ -34,8 +33,9 @@ import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Integrity
     (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
-    , IntegrityReport(..), buildKnownEntities, LuaRefEdge(..)
+    , IntegrityReport(..), buildKnownEntities, LuaRefEdge
     , luaReferenceErrors, integrityErrorCap)
+import World.Save.Payload (LuaComponentSpec(..))
 import Unit.Types (UnitManager(..), unitsOnPage)
 import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
@@ -54,8 +54,8 @@ import World.Generate.Coordinates (chunkToGlobal)
 --   'encodeSessionSnapshot' below rather than through 'SessionGlobals'
 --   at all — Lua-owned state is no longer part of 'SessionSnapshot'.
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
-                       → Text → [(Text, Word32, Bool, BS.ByteString)]
-                       → [(Text, Text, Int, Maybe Int, Text, Maybe Text)]
+                       → Text → [LuaComponentSpec]
+                       → [LuaRefEdge]
                        → Maybe AutosaveRequest
                        → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
@@ -264,8 +264,6 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- dangling-reference contract) — logged as
                                 -- diagnostics only (requirement 16).
                                 let knownLua = buildKnownEntities snap
-                                    luaEdges = [ LuaRefEdge c k i o p pg
-                                               | (c, k, i, o, p, pg) ← luaRefs ]
                                     -- componentVersions (issue #764):
                                     -- luaComponents already
                                     -- carries each component's just-
@@ -274,11 +272,11 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     -- edge was actually collected against
                                     -- rather than a hardcoded placeholder.
                                     componentVersions = HM.fromList
-                                        [ (cid, ver)
-                                        | (cid, ver, _, _) ← luaComponents ]
+                                        [ (lcsId c, lcsVersion c)
+                                        | c ← luaComponents ]
                                     luaReport = capIntegrityErrors
                                         (luaReferenceErrors
-                                            componentVersions knownLua luaEdges)
+                                            componentVersions knownLua luaRefs)
                                 forM_ (renderIntegrityReport luaReport) $ \m →
                                     logWarn logger CatWorld $
                                         "saveWorld '" <> saveName
@@ -337,9 +335,10 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     -- what gets written.
                                     releaseCaptureLock' env
                                     let luaKnownNames =
-                                            HS.fromList [ n | (n,_,_,_) ← luaComponents ]
-                                        luaRequiredNames =
-                                            HS.fromList [ n | (n,_,req,_) ← luaComponents, req ]
+                                            HS.fromList (map lcsId luaComponents)
+                                        luaRequiredNames = HS.fromList
+                                            [ lcsId c
+                                            | c ← luaComponents, lcsRequired c ]
                                     result ← writeSaveFiles saveName meta encoded
                                                 luaKnownNames luaRequiredNames
                                     case result of
