@@ -153,8 +153,14 @@ OUTPUT_INVENTORY = "".join(sorted(LOWER_LETTERS + UPPER_LETTERS + NAME_MARKS))
 # trailing, or a repeated mark (#710 requirement 6, repertoire widened by
 # #1100). Built from the repertoire above so the regex and the
 # cross-check can never describe different character sets.
+#
+# Applied with `fullmatch`, and deliberately carrying no anchors of
+# its own: Python's `$` also matches immediately BEFORE a trailing
+# newline, so `match` + `$` accepted "Kara\n" — a string the Hspec
+# predicate rejects and the output inventory has no character for.
+# `fullmatch` is the only spelling that means "the whole string".
 CONTRACT_RE = re.compile(
-    r"^[{u}][{l}]*(?:['-][{l}]+)*$".format(
+    r"[{u}][{l}]*(?:['-][{l}]+)*".format(
         u=re.escape(UPPER_LETTERS), l=re.escape(LOWER_LETTERS)))
 
 # #1100: the first generator version whose languages draw extended
@@ -261,7 +267,7 @@ def contract_violations(name):
         reasons.append("repeated-punctuation")
     if name[:1] in "'-" or name[-1:] in "'-":
         reasons.append("leading-or-trailing-punctuation")
-    if not CONTRACT_RE.match(name):
+    if not CONTRACT_RE.fullmatch(name):
         reasons.append("character-or-capitalization")
     return reasons
 
@@ -490,7 +496,14 @@ def self_test():
                        # the Hspec predicate's own table for the same
                        # reason.
                        ("hyphen then apostrophe", "K-'ara"),
-                       ("apostrophe then hyphen", "K'-ara")):
+                       ("apostrophe then hyphen", "K'-ara"),
+                       # Python's `$` matches before a trailing
+                       # newline, so this is the case `fullmatch`
+                       # above exists for. Its two neighbours were
+                       # already rejected and pin that they stay so.
+                       ("trailing newline", "Kara\n"),
+                       ("trailing carriage return", "Kara\r"),
+                       ("embedded newline", "Ka\nra")):
         if not contract_violations(bad):
             failures.append(f"contract {label} {bad!r}: accepted, "
                             f"want rejected")

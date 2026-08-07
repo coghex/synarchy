@@ -1974,6 +1974,12 @@ spec = describe "Generated language names" $ do
                     -- accepted precomposed letter and must still be
                     -- rejected: the repertoire is single code points.
                     , ("a combining mark",             "A\x0301ra\x0301")
+                    -- Python's `$` matches before a trailing
+                    -- newline, so the report tool's regex needs
+                    -- `fullmatch` to agree with this predicate.
+                    , ("a trailing newline",           "Kara\n")
+                    , ("a trailing carriage return",   "Kara\r")
+                    , ("an embedded newline",          "Ka\nra")
                     , ("empty",                        "") ]
             filter (not ∘ contractOk) accepted `shouldBe` []
             [ label | (label, w) ← rejected, contractOk w ] `shouldBe` []
