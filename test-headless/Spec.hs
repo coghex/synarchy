@@ -144,6 +144,7 @@ import qualified Test.Headless.Location.LootDeterminism as LocationLootDetermini
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
+import qualified Test.Headless.Lua.SaveBridge as LuaSaveBridge
 import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
@@ -266,6 +267,7 @@ main = hspec $ do
     describe "save components" SaveComponents.spec
     describe "save migrations" SaveCompat.spec
     describe "persistence reference integrity" SaveIntegrity.spec
+    describe "persistence reference integrity" LuaSaveBridge.spec
     describe "atomic save storage" SaveStorage.spec
     describe "persistence contract" SaveContract.spec
     describe "Save.Barrier" SaveBarrier.spec
