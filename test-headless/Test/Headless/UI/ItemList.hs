@@ -26,6 +26,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (newIORef)
+import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
@@ -34,7 +35,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 
 spec ∷ SpecWith EngineEnv
-spec = describe "Item list widget" $ do
+spec = after drainLuaToEngineQueue $ describe "Item list widget" $ do
 
     -- * Grouping and the canonical stack key
 
@@ -723,6 +724,25 @@ spec = describe "Item list widget" $ do
 
 -- * Bare-Lua-backend helpers (mirrors
 --   Test.Headless.UI.TransferContextMenu)
+
+-- | Empty the engine's Lua-to-engine queue after every case.
+--
+-- Each case boots its OWN Lua backend, so each re-runs the widget
+-- module init that loads the 9-patch tab/box textures through
+-- engine.loadTexture -- and every one of those posts a
+-- LuaLoadTextureRequest to the queue this spec SHARES with the rest of
+-- the aroundAll block. Nothing drains it here (the harness runs no
+-- render thread), so the requests would pile up and later specs that
+-- assert on the queue's exact contents would see this spec's leftovers
+-- instead of their own single message
+-- (Test.Headless.Lua.RenderQueue, and Test.Headless.Lua.PauseGate
+-- through the load transaction RenderQueue leaves open when it fails).
+-- Same "leave the shared engine as you found it" discipline as
+-- Test.Headless.UI.TransferContextMenu's unitManagerRef bracket.
+drainLuaToEngineQueue ∷ EngineEnv → IO ()
+drainLuaToEngineQueue env = do
+    _ ← Q.flushQueue (luaToEngineQueue env)
+    pure ()
 
 newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
 newBareLuaBackend env = do
