@@ -80,7 +80,9 @@ end
 -- Fragment for panels that hash item state to decide when to rebuild
 -- (#303 review: a priority toggle or a claim starting/ending must
 -- invalidate those caches the same way a condition/sharpness change
--- already does — computeInvKey/computeEquipKey in unit_info_v2.lua).
+-- already does — the inventory list's presentation key in
+-- unit_info_v2_inventory.lua, computeEquipKey in
+-- unit_info_v2_equipment.lua).
 function repairStatus.cacheKey(it)
     if not repairStatus.isEligible(it) then return "" end
     local unitAi = require("scripts.unit_ai")

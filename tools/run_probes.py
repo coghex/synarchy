@@ -246,6 +246,12 @@ PROBES = [
      "GPU offscreen visual check: tutorial checklist HUD open/closed panel, "
      "transparent overlay over terrain, long-list wheel scrolling, and real "
      "clicks passing through its rows to gameplay (#960)"),
+    ("item_list_widget", "item_list_widget_probe.py",
+     "offscreen: the shared item-list widget across all three migrated hosts "
+     "(cargo Contents, item-container Contents, unit-info inventory) — stack "
+     "grouping/counts, parameterized tab layouts, tab selection, resize-"
+     "restored selection, representative right-click routing, and the "
+     "item-contents panel's deliberate absence of one (#1088)"),
     ("transactional_load", "transactional_load_probe.py",
      "whole-session load transaction: mutual exclusion, complete replacement "
      "(not merge), missing-def rejection leaves the old session intact, "

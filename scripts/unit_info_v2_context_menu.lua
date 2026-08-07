@@ -8,6 +8,15 @@
 
 local unitInfoV2 = package.loaded["scripts.unit_info_v2"]
 local repairStatus = require("scripts.ui.repair_status")
+local inventoryMod = require("scripts.unit_info_v2_inventory")
+
+-- Force the inventory section to redraw on the NEXT tick. The
+-- inventory list's rebuild comparison belongs to the shared item-list
+-- widget (#1088), so this asks the widget rather than clearing a hash
+-- this module used to own.
+local function invalidateInventory()
+    inventoryMod.invalidate()
+end
 
 local M = {}
 
@@ -83,9 +92,10 @@ local function preferredEmptySlot(uid, slots)
 end
 
 -- Wrap a repairStatus.menuItem so clicking it also forces an immediate
--- panel rebuild (#303 review): computeInvKey/computeEquipKey already
--- fold in repair priority/claim state so the AI claiming or finishing a
--- job is picked up on the next tick regardless, but a player's own
+-- panel rebuild (#303 review): the inventory list's presentation key
+-- and computeEquipKey already fold in repair priority/claim state so
+-- the AI claiming or finishing a job is picked up on the next tick
+-- regardless, but a player's own
 -- click should redraw the SAME frame — every other mutating menu action
 -- below already does this inline.
 local function withInvalidate(menuItem)
@@ -93,25 +103,21 @@ local function withInvalidate(menuItem)
     local baseCallback = menuItem.callback
     menuItem.callback = function()
         baseCallback()
-        unitInfoV2.lastInvKey   = nil
+        invalidateInventory()
         unitInfoV2.lastEquipKey = nil
     end
     return menuItem
 end
 
 -- Right-click on an inventory row → context menu with Equip / Unequip.
--- Routed via uiManager.onInventoryItemRightClick (set by the row's
--- hit-zone in rebuildInventorySection).
-function unitInfoV2.handleInvItemRightClick(elemHandle)
-    local row
-    for _, r in ipairs(unitInfoV2.invRows) do
-        if r.hitId == elemHandle then row = r; break end
-    end
-    if not row then return false end
+-- The shared item-list widget routes the click here with the EXACT
+-- rendered row's representative instance (uiManager.onItemListRightClick
+-- → itemList.handleCallback).
+function unitInfoV2.handleInvItemRightClick(item)
+    if not item then return false end
 
     local uid = unitInfoV2.activeUid
     if not uid then return false end
-    local item = row.item
 
     local menuItems = {}
     if item.equipped then
@@ -127,7 +133,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 label    = "Unequip",
                 callback = function()
                     equipment.unequipAccessory(uid, idx)
-                    unitInfoV2.lastInvKey   = nil
+                    invalidateInventory()
                     unitInfoV2.lastEquipKey = nil
                 end,
             }
@@ -136,7 +142,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 label    = "Unequip",
                 callback = function()
                     equipment.unequip(uid, item.equippedSlot)
-                    unitInfoV2.lastInvKey   = nil
+                    invalidateInventory()
                     unitInfoV2.lastEquipKey = nil
                 end,
             }
@@ -148,7 +154,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
             label    = "Equip",
             callback = function()
                 equipment.equipAccessory(uid, item.defName, item.instanceId)
-                unitInfoV2.lastInvKey   = nil
+                invalidateInventory()
                 unitInfoV2.lastEquipKey = nil
             end,
         }
@@ -165,7 +171,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 label    = "Equip",
                 callback = function()
                     equipment.equip(uid, slotId, item.defName, item.instanceId)
-                    unitInfoV2.lastInvKey   = nil
+                    invalidateInventory()
                     unitInfoV2.lastEquipKey = nil
                 end,
             }
@@ -179,7 +185,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                     label    = s.name,
                     callback = function()
                         equipment.equip(uid, s.id, item.defName, item.instanceId)
-                        unitInfoV2.lastInvKey   = nil
+                        invalidateInventory()
                         unitInfoV2.lastEquipKey = nil
                     end,
                 }
@@ -229,7 +235,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 callback = function()
                     unit.depositToCargo(uid, c.bid, item.defName,
                                         item.instanceId)
-                    unitInfoV2.lastInvKey = nil
+                    invalidateInventory()
                 end,
             }
         end
@@ -283,7 +289,7 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
                 icon     = it.iconTex,
                 callback = function()
                     equipment.equip(uid, rec.slotId, defName, instId)
-                    unitInfoV2.lastInvKey   = nil
+                    invalidateInventory()
                     unitInfoV2.lastEquipKey = nil
                 end,
             }
@@ -296,7 +302,7 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
             label    = "Unequip",
             callback = function()
                 equipment.unequip(uid, rec.slotId)
-                unitInfoV2.lastInvKey   = nil
+                invalidateInventory()
                 unitInfoV2.lastEquipKey = nil
             end,
         }
@@ -350,7 +356,7 @@ function unitInfoV2.handleAccessoryRowRightClick(elemHandle)
             label    = "Unequip",
             callback = function()
                 equipment.unequipAccessory(uid, idx)
-                unitInfoV2.lastInvKey   = nil
+                invalidateInventory()
                 unitInfoV2.lastEquipKey = nil
             end,
         } }

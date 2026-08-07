@@ -1707,12 +1707,13 @@ spec = aroundAll withSharedFixture $ do
                 , "unit.getInventory = origInv; equipment.getLoadout = origLoadout;"
                 , "unit.getInfo = origInfo; equipment.getAccessories = origAcc;"
                 , "local ir = u.invRect;"
+                , "local rows = im.rows();"
                 , "local rowInfos = {};"
-                , "for _, row in ipairs(u.invRows) do"
+                , "for _, row in ipairs(rows) do"
                 , "    local info = UI.getElementInfo(row.hitId);"
                 , "    table.insert(rowInfos, {x=info.x, y=info.y, w=info.width, h=info.height});"
                 , "end;"
-                , "return {ok = ok, rowCount = #u.invRows,"
+                , "return {ok = ok, rowCount = #rows,"
                 , "        rectTop = ir.y, rectBottom = ir.y + ir.h, rows = rowInfos}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe UnitInfoInvRowsProbe of
@@ -1723,6 +1724,88 @@ spec = aroundAll withSharedFixture $ do
                     forM_ (uiirpRows p) $ \rc → do
                         rrY rc `shouldSatisfy` (≥ uiirpRectTop p)
                         (rrY rc + rrH rc) `shouldSatisfy` (≤ uiirpRectBottom p)
+
+        it "the migrated inventory tab strip wraps into centred rows with no content frame, and falls back to All when the selected category disappears (#1088)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #1088 requirement 7: unit-info's bespoke tab strip is now
+            -- a frame-free WRAPPED scripts/ui/tabbar layout. Enough
+            -- categories to force a wrap; every row must stay centred
+            -- inside the section rect and no content frame may appear.
+            -- Then the selected category's only item goes away and the
+            -- selection must fall back to All rather than blanking the
+            -- list.
+            r ← evalJSON ls $ luaLines
+                [ "local hud = require('scripts.hud');"
+                , "hud.init(1,2,1920,1080);"
+                , "hud.createUI();"
+                , "local u = require('scripts.unit_info_v2');"
+                , "u.update(0.016);"
+                , "local origInv = unit.getInventory;"
+                , "local origLoadout = equipment.getLoadout;"
+                , "local origInfo = unit.getInfo;"
+                , "local origAcc = equipment.getAccessories;"
+                , "local origWidth = engine.getTextWidth;"
+                -- Real measurement: this fixture otherwise reports 0 for
+                -- every string, which would never wrap.
+                , "engine.getTextWidth = function(_, s, px) return #s * px * 0.6 end;"
+                , "local full = {};"
+                , "for i = 1, 8 do full[i] = {defName='item'..i,"
+                , "    displayName='Item '..i, category='Category'..i, weight=1.0} end;"
+                , "unit.getInventory = function() return full end;"
+                , "equipment.getLoadout = function() return {} end;"
+                , "unit.getInfo = function() return {equipmentClass = nil} end;"
+                , "equipment.getAccessories = function() return {} end;"
+                , "u.activeUid = 1;"
+                , "local im = require('scripts.unit_info_v2_inventory');"
+                , "im.rebuildInventorySection();"
+                , "local il = require('scripts.ui.item_list');"
+                , "local tb = require('scripts.ui.tabbar');"
+                , "local tabs = il.getTabs(u.invListId);"
+                , "local rect = u.invRect;"
+                , "local rowsY = {}; local minX, maxRight = nil, nil;"
+                , "for _, t in ipairs(tabs) do"
+                , "    rowsY[tostring(t.y)] = true;"
+                , "    if minX == nil or t.x < minX then minX = t.x end;"
+                , "    if maxRight == nil or (t.x + t.width) > maxRight then"
+                , "        maxRight = t.x + t.width end"
+                , "end;"
+                , "local nTabRows = 0;"
+                , "for _ in pairs(rowsY) do nTabRows = nTabRows + 1 end;"
+                , "im.onTabChange('Category3');"
+                , "im.rebuildInventorySection();"
+                , "local selected = u.activeInvTab;"
+                -- Category3's only item is removed: the selection must
+                -- snap back to All rather than showing an empty list.
+                , "local reduced = {};"
+                , "for i, it in ipairs(full) do"
+                , "    if it.category ~= 'Category3' then reduced[#reduced+1] = it end"
+                , "end;"
+                , "unit.getInventory = function() return reduced end;"
+                , "im.rebuildInventorySection();"
+                , "local after = u.activeInvTab;"
+                , "local rowsAfter = #il.getRows(u.invListId);"
+                , "engine.getTextWidth = origWidth;"
+                , "unit.getInventory = origInv; equipment.getLoadout = origLoadout;"
+                , "unit.getInfo = origInfo; equipment.getAccessories = origAcc;"
+                , "return {tabRows = nTabRows, hasFrame = tb.hasFrame(il.getTabBarId(u.invListId)),"
+                , "        minX = minX, maxRight = maxRight,"
+                , "        rectLeft = rect.x, rectRight = rect.x + rect.w,"
+                , "        selected = selected, after = after, rowsAfter = rowsAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe InvTabMigrationProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    itmpTabRows p `shouldSatisfy` (≥ 2)      -- genuinely wrapped
+                    itmpHasFrame p `shouldBe` False
+                    itmpMinX p `shouldSatisfy` (≥ itmpRectLeft p)
+                    itmpMaxRight p `shouldSatisfy` (≤ itmpRectRight p)
+                    -- Centred: the left margin matches the right margin
+                    -- to within a pixel of integer rounding.
+                    abs ((itmpMinX p - itmpRectLeft p)
+                         - (itmpRectRight p - itmpMaxRight p)) `shouldSatisfy` (≤ 1)
+                    itmpSelected p `shouldBe` "Category3"
+                    itmpAfter p `shouldBe` "All"
+                    itmpRowsAfter p `shouldSatisfy` (≥ 1)
 
         it "infoPanel.suppress('unit_info_v2') hides the generic panel; unsuppress restores it while content remains" $ \(env, ls) → do
             resetFixture env ls
@@ -1994,7 +2077,8 @@ spec = aroundAll withSharedFixture $ do
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor(1, 400, 400);"
                 , "local out = {};"
-                , "for _, t in ipairs(cip.state.tabs) do"
+                , "local il = require('scripts.ui.item_list');"
+                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
                 , "    local info = UI.getElementInfo(t.boxId);"
                 , "    table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height})"
                 , "end;"
@@ -2038,7 +2122,8 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg1 = UI.newPage('cargo_lbl_test_1', 'overlay');"
                 , "cip.setup({page = pg1, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor(1, 400, 400);"
-                , "local _, unshunkH = label.getSize(cip.state.tabs[1].labelId);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local _, unshunkH = label.getSize(il.getTabs(cip.state.listId)[1].labelId);"
                 , "building.getStorage = function() return {"
                 , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
                 , "    { defName='i3', category='Cat3' }, { defName='i4', category='Cat4' },"
@@ -2048,7 +2133,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg2 = UI.newPage('cargo_lbl_test_2', 'overlay');"
                 , "cip.setup({page = pg2, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor(1, 400, 400);"
-                , "local _, shrunkH = label.getSize(cip.state.tabs[2].labelId);"
+                , "local _, shrunkH = label.getSize(il.getTabs(cip.state.listId)[2].labelId);"
                 , "building.getStorageCapacity = origCap;"
                 , "building.getStorage = origStorage;"
                 , "return {unshrunkH = unshunkH, shrunkH = shrunkH}"
@@ -2080,11 +2165,12 @@ spec = aroundAll withSharedFixture $ do
                 , "hud.createUI();"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.openFor(42, 400, 400);"
+                , "local il = require('scripts.ui.item_list');"
                 , "local targetBox = nil;"
-                , "for _, t in ipairs(cip.state.tabs) do"
-                , "    if t.name == 'Cat2' then targetBox = t.boxId end"
+                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "    if t.key == 'Cat2' then targetBox = t.boxId end"
                 , "end;"
-                , "cip.handleTabClick(targetBox);"
+                , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
                 , "local wasOpenBefore = cip.isOpen();"
                 , "local tabBefore = cip.state.activeTab;"
                 , "hud.onFramebufferResize(1600, 900);"
@@ -2102,6 +2188,106 @@ spec = aroundAll withSharedFixture $ do
                     crpIsOpenAfter p `shouldBe` True
                     crpBidAfter p `shouldBe` 42
                     crpTabAfter p `shouldBe` "Cat2"
+
+        it "cargo_inventory_panel: the migrated tab strip adds no content frame, and its rows keep a working right-click (#1088)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #1088 migration: cargo's bespoke tab strip is now a
+            -- frame-free scripts/ui/tabbar layout. The default framed
+            -- layout would add a content frame BEHIND the item rows,
+            -- which is exactly the regression requirement 6 forbids.
+            -- The row right-click must keep resolving to the exact
+            -- rendered row's representative instance, so it is driven
+            -- through the real shared dispatcher, not a host function.
+            r ← evalJSON ls $ luaLines
+                [ "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "local origSel = unit.getSelected;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', displayName='Ore', category='Cat1', weight=2.0 },"
+                , "    { defName='i2', displayName='Rope', category='Cat2', weight=1.0 },"
+                , "} end;"
+                , "unit.getSelected = function() return {} end;"
+                , "local cm = require('scripts.ui.context_menu');"
+                , "local origShow = cm.show; _G.__menuShown = false;"
+                , "cm.show = function() _G.__menuShown = true end;"
+                , "local pg = UI.newPage('cargo_frame_page', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "cip.openFor(7, 100, 100);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local tb = require('scripts.ui.tabbar');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local rowInfo = UI.getElementInfo(rows[1].hitId);"
+                , "local routed = il.handleCallback('onItemListRightClick', rows[1].hitId);"
+                , "cm.show = origShow;"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage; unit.getSelected = origSel;"
+                , "return {hasFrame = tb.hasFrame(il.getTabBarId(cip.state.listId)),"
+                , "        tabCount = #il.getTabs(cip.state.listId),"
+                , "        rowCount = #rows, interactive = rowInfo.interactive,"
+                , "        routed = routed, menuShown = _G.__menuShown}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CargoMigrationProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cmpHasFrame p `shouldBe` False
+                    cmpTabCount p `shouldBe` 3      -- All + Cat1 + Cat2
+                    cmpRowCount p `shouldBe` 2
+                    cmpInteractive p `shouldBe` True
+                    cmpRouted p `shouldBe` True
+                    cmpMenuShown p `shouldBe` True
+
+        it "item_contents_panel: rows expose NO right-click action, and an empty container still renders its empty state (#1088)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #1088 requirement 8: a missing right-click callback must
+            -- create no right-click action and no fake blocking
+            -- surface -- while the transparent per-row tooltip host
+            -- itself stays (hover hit-testing is purely geometric).
+            r ← evalJSON ls $ luaLines
+                [ "local orig = unit.getItemContents;"
+                , "local origInv = unit.getInventory;"
+                , "unit.getInventory = function() return {} end;"
+                , "unit.getItemContents = function() return {"
+                , "    { defName='bandage', displayName='Bandage', count=3,"
+                , "      weight=0.1, condition=100 },"
+                , "} end;"
+                , "local pg = UI.newPage('item_contents_page_a', 'overlay'); UI.showPage(pg);"
+                , "local icp = require('scripts.item_contents_panel');"
+                , "icp.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1, menuFont = 1});"
+                , "icp.openFor(3, 'first_aid_kit', 100, 100);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local rows = il.getRows(icp.state.listId);"
+                , "local info = UI.getElementInfo(rows[1].hitId);"
+                , "local routed = il.handleCallback('onItemListRightClick', rows[1].hitId);"
+                , "icp.closeIfOpen();"
+                , "unit.getItemContents = function() return {} end;"
+                , "local pg2 = UI.newPage('item_contents_page_b', 'overlay'); UI.showPage(pg2);"
+                , "icp.setup({page = pg2, fbW = 1920, fbH = 1080, boxTexSet = 1, menuFont = 1});"
+                , "icp.openFor(3, 'first_aid_kit', 100, 100);"
+                , "local emptyOpen = icp.isOpen();"
+                , "local emptyRows = #il.getRows(icp.state.listId);"
+                , "local hasEmptyLabel = false;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "    if e.name == 'item_contents_empty_text'"
+                , "       or e.text == '(empty)' then hasEmptyLabel = true end"
+                , "end;"
+                , "icp.closeIfOpen();"
+                , "unit.getItemContents = orig; unit.getInventory = origInv;"
+                , "return {rowCount = #rows, interactive = info.interactive,"
+                , "        routed = routed, emptyOpen = emptyOpen,"
+                , "        emptyRows = emptyRows, hasEmptyLabel = hasEmptyLabel}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ItemContentsMigrationProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    icmpRowCount p `shouldBe` 1
+                    -- No onClick and no onRightClick registered at all.
+                    icmpInteractive p `shouldBe` False
+                    icmpRouted p `shouldBe` False
+                    icmpEmptyOpen p `shouldBe` True
+                    icmpEmptyRows p `shouldBe` 0
+                    icmpHasEmptyLabel p `shouldBe` True
 
         it "crafting_panel: a resize preserves the open station AND in-progress recipe count/until-target edits (round-14 review)" $ \(env, ls) → do
             resetFixture env ls
@@ -2734,6 +2920,38 @@ data ViolationProbe = ViolationProbe
 instance FromJSON ViolationProbe where
     parseJSON = withObject "ViolationProbe" $ \o →
         ViolationProbe <$> o .: "count" <*> o .: "loser" <*> o .: "winner" <*> o .: "ambiguous"
+
+data CargoMigrationProbe = CargoMigrationProbe
+    { cmpHasFrame ∷ Bool, cmpTabCount ∷ Int, cmpRowCount ∷ Int
+    , cmpInteractive ∷ Bool, cmpRouted ∷ Bool, cmpMenuShown ∷ Bool } deriving Show
+instance FromJSON CargoMigrationProbe where
+    parseJSON = withObject "CargoMigrationProbe" $ \o →
+        CargoMigrationProbe <$> o .: "hasFrame" <*> o .: "tabCount"
+                            <*> o .: "rowCount" <*> o .: "interactive"
+                            <*> o .: "routed" <*> o .: "menuShown"
+
+data ItemContentsMigrationProbe = ItemContentsMigrationProbe
+    { icmpRowCount ∷ Int, icmpInteractive ∷ Bool, icmpRouted ∷ Bool
+    , icmpEmptyOpen ∷ Bool, icmpEmptyRows ∷ Int
+    , icmpHasEmptyLabel ∷ Bool } deriving Show
+instance FromJSON ItemContentsMigrationProbe where
+    parseJSON = withObject "ItemContentsMigrationProbe" $ \o →
+        ItemContentsMigrationProbe <$> o .: "rowCount" <*> o .: "interactive"
+                                   <*> o .: "routed" <*> o .: "emptyOpen"
+                                   <*> o .: "emptyRows" <*> o .: "hasEmptyLabel"
+
+data InvTabMigrationProbe = InvTabMigrationProbe
+    { itmpTabRows ∷ Int, itmpHasFrame ∷ Bool
+    , itmpMinX ∷ Double, itmpMaxRight ∷ Double
+    , itmpRectLeft ∷ Double, itmpRectRight ∷ Double
+    , itmpSelected ∷ Text, itmpAfter ∷ Text, itmpRowsAfter ∷ Int } deriving Show
+instance FromJSON InvTabMigrationProbe where
+    parseJSON = withObject "InvTabMigrationProbe" $ \o →
+        InvTabMigrationProbe <$> o .: "tabRows" <*> o .: "hasFrame"
+                             <*> o .: "minX" <*> o .: "maxRight"
+                             <*> o .: "rectLeft" <*> o .: "rectRight"
+                             <*> o .: "selected" <*> o .: "after"
+                             <*> o .: "rowsAfter"
 
 data RectRow = RectRow { rrX ∷ Double, rrY ∷ Double, rrW ∷ Double, rrH ∷ Double } deriving Show
 instance FromJSON RectRow where

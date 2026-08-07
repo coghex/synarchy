@@ -20,6 +20,7 @@ local slider   = require("scripts.ui.slider")
 local randbox  = require("scripts.ui.randbox")
 local toggle   = require("scripts.ui.toggle")
 local uiList   = require("scripts.ui.list")
+local itemList = require("scripts.ui.item_list")
 local contextMenu = require("scripts.ui.context_menu")
 local focusIndicator = require("scripts.ui.focus_indicator")
 local hud      = require("scripts.hud")
@@ -160,6 +161,14 @@ end
 
 function uiManager.onTabClick(elemHandle)
     return tabbar.handleCallback("onTabClick", elemHandle)
+end
+
+-- Right-click on a row of the shared item-list widget (#1088). One
+-- dispatcher for every host that embeds the widget -- the widget
+-- resolves which instance owns the row and hands its host the exact
+-- representative item.
+function uiManager.onItemListRightClick(elemHandle)
+    return itemList.handleCallback("onItemListRightClick", elemHandle)
 end
 
 function uiManager.onDropdownClick(elemHandle)
