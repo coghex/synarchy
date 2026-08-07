@@ -240,8 +240,14 @@ function randbox.new(params)
     -- World Name the player deliberately emptied).
     local initValue = params.default
     if (not initValue or initValue == "") and params.autoGenerate ~= false then
-        initValue = generateRandom(rb) or ""
+        initValue = generateRandom(rb)
     end
+    -- An empty field is a real state, and everything below (the text
+    -- element, onChange, the debug line) needs a string for it. Both
+    -- ways of reaching it are ordinary: a rebuild of a World Name the
+    -- player cleared supplies no default and generates nothing, and a
+    -- generator may decline.
+    initValue = initValue or ""
     UI.setTextInput(rb.boxId, initValue)
 
     -- Display text

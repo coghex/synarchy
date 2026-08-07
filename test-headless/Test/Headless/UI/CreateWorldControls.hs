@@ -705,6 +705,35 @@ spec = do
                 , "assert(#edits == 0, 'reported ' .. tostring(edits[1]))"
                 ]
 
+        -- Review round 3: an empty field is a real state, reached
+        -- whenever the World Name a player cleared is rebuilt — no
+        -- default to restore, and autoGenerate off so the rebuild can't
+        -- refill it. Everything downstream of the initial value needs a
+        -- string, so nil must not survive construction.
+        it "constructs an empty field when there is no value to show" $
+            runsRandbox $ lns
+                [ "local id = newNameBox(nil)"
+                , "assert(id, 'construction failed')"
+                , "assert(randbox.getValue(id) == '', randbox.getValue(id))"
+                ]
+
+        -- The other way in: the initial suggestion failed, so the
+        -- generator declined. Same requirement — an empty field, not a
+        -- crashed menu and not an invented name.
+        it "constructs an empty field when the generator declines" $
+            runsRandbox $ lns
+                [ "local reported"
+                , "local id = randbox.new{"
+                , "  name = 'world_name', page = 1, font = 1,"
+                , "  randType = randbox.Type.NAME,"
+                , "  generate = function() return nil end,"
+                , "  onChange = function(v) reported = v end,"
+                , "}"
+                , "assert(id, 'construction failed')"
+                , "assert(randbox.getValue(id) == '', randbox.getValue(id))"
+                , "assert(reported == '', tostring(reported))"
+                ]
+
     -- The Create World screen and generation.lua must normalize the
     -- seed text identically, or the language a name is suggested in is
     -- not the language the generated world records.
