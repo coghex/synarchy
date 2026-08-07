@@ -9,18 +9,25 @@ import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Forage
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.Plant (worldGetPlantSuitabilityFn)
+import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
 -- | Populate and install the @world@ and @flora@ global tables.
-registerWorldAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
-registerWorldAPI env = do
+--
+--   Takes 'LuaBackendState' for @world.suggestName@ alone (#1106),
+--   which keeps its concept-catalogue and language cache there — the
+--   same reason 'Engine.Scripting.Lua.API.Register.Engine.registerEngineAPI'
+--   already takes it.
+registerWorldAPI ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception ()
+registerWorldAPI env backendState = do
   Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn (toWorldSimCapability env))
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn (toWorldSimCapability env))
   registerLuaFunction "init" (worldInitFn env)
   registerLuaFunction "getIdentity" (worldGetIdentityFn env)
   registerLuaFunction "getLanguageProvenance" (worldGetLanguageProvenanceFn env)
+  registerLuaFunction "suggestName" (worldSuggestNameFn backendState)
   registerLuaFunction "initArena" (worldInitArenaFn env)
   registerLuaFunction "initArenaDone" (worldInitArenaDoneFn env)
   registerLuaFunction "openArena" (worldOpenArenaFn env)

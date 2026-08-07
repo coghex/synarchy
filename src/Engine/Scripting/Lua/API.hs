@@ -41,5 +41,5 @@ registerLuaAPI lst env backendState stateRef = Lua.runWith lst $ do
   registerEquipmentAPI env
   registerCraftAPI env
   registerItemAPI env
-  registerWorldAPI env
+  registerWorldAPI env backendState
   registerCameraAPI env

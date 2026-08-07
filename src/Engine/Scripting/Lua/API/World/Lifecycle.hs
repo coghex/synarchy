@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.World.Lifecycle
     ( worldInitFn
     , worldGetIdentityFn
     , worldGetLanguageProvenanceFn
+    , worldSuggestNameFn
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -19,7 +20,7 @@ import qualified Data.Text as T
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.Char (isDigit)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
@@ -28,12 +29,18 @@ import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.State (EngineEnv, luaQueue, activeWorldStateFrom)
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
-import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Engine.Scripting.Lua.Types
+    (LuaMsg(..), LuaBackendState(..), LanguageCache(..))
 import World.Types
 import Language.Generated.Types
     ( LanguageProvenance(..), GeneratorVersion(..), LangSeed(..)
     , GeneratorError(..), generatorErrorText, currentGeneratorVersion
     , supportedGeneratorVersions, langSeedText )
+import Language.Semantic.Types (Catalogue, catalogueErrorText)
+import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Suggest
+    ( NameSuggester, NameSuggestion(..), mkNameSuggester, suggestNameAt
+    , suggestErrorText, worldLanguageSeed )
 import World.Generate.Config
     (minimumWorldSize, normalizePlateCount, normalizeWorldSize)
 import World.Plate (defaultPlatesFor)
@@ -220,6 +227,122 @@ worldGetLanguageProvenanceFn env = do
             Lua.setfield (-2) "version"
         Nothing → Lua.pushnil
     return 1
+
+-- | world.suggestName(worldSeed [, ordinal])
+--     → { name, gloss, language = { seed, version } }
+--     → nil, errorMessage
+--
+--   The producer side of the naming arc (#1106): suggestion number
+--   @ordinal@ (0-based, defaulting to 0) of the language belonging to
+--   @worldSeed@ — the NORMALIZED numeric world seed the Create World
+--   screen is about to pass to @world.init@, so the world's own name and
+--   its locations' names come out of the same language, and two
+--   spellings of one seed identify one language.
+--
+--   Returns the native name AND its English gloss, both rendered from
+--   one semantic expression, plus the #1092 provenance to record if the
+--   player accepts the suggestion — in exactly the
+--   @{ seed = \<decimal string\>, version = \<int\> }@ shape
+--   'worldGetLanguageProvenanceFn' returns and @world.init@ accepts, for
+--   the same reason: a language seed is unsigned 64-bit and neither of
+--   Lua's numeric types carries the top of that range intact.
+--
+--   Rerolling means calling again with the NEXT ordinal. Consecutive
+--   ordinals are guaranteed a different meaning in the SAME language
+--   (see "Language.Suggest"), which is the behavior the dice button
+--   exists to show.
+--
+--   A failure — no catalogue on disk, a malformed one, an
+--   unconstructible generator version — returns @nil@ plus a
+--   descriptive message and changes nothing. There is deliberately no
+--   fallback name: the dummy word-list generator this replaced produced
+--   text with no language behind it, and quietly resurrecting that
+--   behavior is what #1106 requirement 7 forbids.
+worldSuggestNameFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
+worldSuggestNameFn backendState = do
+    seedArg ← Lua.tointeger 1
+    ordArg  ← Lua.tointeger 2
+    let seed    = maybe 0 fromIntegral seedArg ∷ Word64
+        ordinal = max 0 (maybe 0 fromIntegral ordArg) ∷ Int
+    result ← Lua.liftIO $ resolveSuggestion backendState seed ordinal
+    case result of
+        Right sug → do
+            Lua.newtable
+            Lua.pushstring (TE.encodeUtf8 (nsName sug))
+            Lua.setfield (-2) "name"
+            Lua.pushstring (TE.encodeUtf8 (nsGloss sug))
+            Lua.setfield (-2) "gloss"
+            Lua.newtable
+            Lua.pushstring (TE.encodeUtf8 (langSeedText (nsSeed sug)))
+            Lua.setfield (-2) "seed"
+            Lua.pushinteger (fromIntegral (generatorVersionInt (nsVersion sug)))
+            Lua.setfield (-2) "version"
+            Lua.setfield (-2) "language"
+            return 1
+        Left msg → do
+            Lua.pushnil
+            Lua.pushstring (TE.encodeUtf8 msg)
+            return 2
+
+-- | Resolve one suggestion, reusing 'lbsLanguageCache' wherever it
+--   still applies (#1106 requirement 8: the dice button runs
+--   synchronously on the UI's own thread, so a press must not re-read
+--   and re-parse @data/language/concepts.yaml@ or re-derive 150 concept
+--   roots).
+--
+--   Rerolling within one seed reuses both levels. Editing the seed is a
+--   different language, so the suggester is rebuilt — but from the
+--   CACHED catalogue, with no filesystem access at all. Only the very
+--   first suggestion of a session reads the file.
+--
+--   A failure caches whatever it did manage to resolve, so a broken
+--   generator version doesn't force a re-read on every subsequent press
+--   either.
+resolveSuggestion
+    ∷ LuaBackendState → Word64 → Int → IO (Either Text NameSuggestion)
+resolveSuggestion backendState seed ordinal = do
+    cached ← readIORef (lbsLanguageCache backendState)
+    eCat ← case cached of
+        Just lc → pure (Right (lcCatalogue lc))
+        Nothing → catalogueFromDisk
+    case eCat of
+        Left msg  → pure (Left msg)
+        Right cat → case reuseSuggester cached of
+            Just sgr → pure (render sgr)
+            Nothing  → case mkNameSuggester cat prov of
+                Left sErr → do
+                    writeIORef (lbsLanguageCache backendState)
+                        (Just (LanguageCache cat Nothing))
+                    pure (Left (suggestErrorText sErr))
+                Right sgr → do
+                    writeIORef (lbsLanguageCache backendState)
+                        (Just (LanguageCache cat (Just (prov, sgr))))
+                    pure (render sgr)
+  where
+    prov = LanguageProvenance
+        { lpSeed    = worldLanguageSeed seed
+        , lpVersion = currentGeneratorVersion
+        }
+
+    reuseSuggester ∷ Maybe LanguageCache → Maybe NameSuggester
+    reuseSuggester mLc = do
+        lc        ← mLc
+        (p, sgr)  ← lcSuggester lc
+        if p ≡ prov then Just sgr else Nothing
+
+    render sgr = case suggestNameAt sgr ordinal of
+        Left sErr → Left (suggestErrorText sErr)
+        Right sug → Right sug
+
+    catalogueFromDisk ∷ IO (Either Text Catalogue)
+    catalogueFromDisk = do
+        eCat ← loadCatalogue conceptCataloguePath
+        pure $ case eCat of
+            Left cErr → Left $ "concept catalogue "
+                <> T.pack conceptCataloguePath
+                <> " could not be loaded, so no name can be suggested: "
+                <> catalogueErrorText cErr
+            Right cat → Right cat
 
 -- | world.initArena(pageId) — create flat test arena, no geology
 worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
