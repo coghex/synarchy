@@ -1,7 +1,9 @@
 -- Offline regression harness for issue #618's requirement 3: the five
 -- `truncateToWidth` ellipsis helpers (scripts/popup.lua, event_log.lua,
 -- unit_info_v2_inventory.lua, item_contents_panel.lua,
--- cargo_inventory_panel.lua) binary-search a pixel-width cut point over
+-- cargo_inventory_panel.lua -- the last three merged into
+-- scripts/ui/item_list.lua's single shared helper by #1088)
+-- binary-search a pixel-width cut point over
 -- RAW BYTE offsets. Lua strings are byte arrays -- string.sub cuts by
 -- byte, not codepoint -- so an unguarded search can land its cut point
 -- inside a multi-byte UTF-8 sequence (e.g. right after the 0xC3 lead

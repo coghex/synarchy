@@ -145,14 +145,6 @@ function uiManager.onUnitInfoLogClick(elemHandle)
     return false
 end
 
-function uiManager.onInventoryTabClick(elemHandle)
-    local mod = package.loaded["scripts.unit_info_v2"]
-    if mod and mod.handleInvTabClick then
-        return mod.handleInvTabClick(elemHandle)
-    end
-    return false
-end
-
 -- Build-menu tab strip + icon clicks. See scripts/build_tool.lua's
 -- handleTabClick / handleIconClick for dispatch.
 function uiManager.onBuildMenuTabClick(elemHandle)
@@ -175,32 +167,6 @@ end
 -- "Choose Another Site" buttons.
 function uiManager.onBuildToolRemoteWarningClick(elemHandle)
     return buildToolRemoteWarning.handleClick(elemHandle)
-end
-
--- Cargo inventory popup tab strip + per-row right-click. The popup
--- is triggered from init.lua's right-click handler (Contents menu).
-function uiManager.onCargoInventoryTabClick(elemHandle)
-    local mod = package.loaded["scripts.cargo_inventory_panel"]
-    if mod and mod.handleTabClick then
-        return mod.handleTabClick(elemHandle)
-    end
-    return false
-end
-
-function uiManager.onCargoInventoryItemRightClick(elemHandle)
-    local mod = package.loaded["scripts.cargo_inventory_panel"]
-    if mod and mod.handleItemRightClick then
-        return mod.handleItemRightClick(elemHandle)
-    end
-    return false
-end
-
-function uiManager.onInventoryItemRightClick(elemHandle)
-    local mod = package.loaded["scripts.unit_info_v2"]
-    if mod and mod.handleInvItemRightClick then
-        return mod.handleInvItemRightClick(elemHandle)
-    end
-    return false
 end
 
 function uiManager.onEquipSlotRightClick(elemHandle)

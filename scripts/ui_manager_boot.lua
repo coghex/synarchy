@@ -86,6 +86,7 @@ function uiManager.init(scriptId)
     randbox.init()
     toggle.init()
     uiList.init()
+    require("scripts.ui.item_list").init()
     -- These load their own widget textures. They used to be initialized
     -- only by settingsMenu.init, which the eager boot ran at startup; once
     -- menu init went lazy, a menu that uses them BEFORE Settings is ever

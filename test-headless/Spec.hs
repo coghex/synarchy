@@ -110,6 +110,7 @@ import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
+import qualified Test.Headless.UI.ItemList as UIItemList
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
@@ -170,6 +171,7 @@ main = hspec $ do
         describe "World Generation" WorldGen.spec
         describe "World.SelectTileZ" SelectTileZ.spec
         UITransferContextMenu.spec
+        UIItemList.spec
         describe "World.ActionOutcome" ActionOutcome.spec
         describe "Geology" Geology.spec
         describe "Chunk/Fast Parity" Parity.spec

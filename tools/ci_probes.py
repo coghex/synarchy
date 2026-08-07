@@ -210,6 +210,11 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                    "through zoom-map icons, portal ghost/remote-modal "
                                    "flow, and real-input-driven unit movement — no GPU "
                                    "on the CI runner (#782)"),
+    "item_list_widget": (NEEDS_GPU, "offscreen boot: the shared item-list "
+                         "widget's real rendered rows/tabs across the three "
+                         "migrated panels, located via ui.dumpWidgets() "
+                         "against a real Vulkan-rendered HUD — no GPU on the "
+                         "CI runner (#1088)"),
     "transfer_context_menu": (NEEDS_GPU, "offscreen boot: real right-click -> "
                               "\"Transfer\" context-menu row located via "
                               "ui.dumpWidgets() against a real Vulkan-rendered "

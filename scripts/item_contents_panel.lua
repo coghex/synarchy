@@ -6,10 +6,16 @@
 -- context menu → "Contents".
 --
 -- This is the unit-carried analogue of cargo_inventory_panel (which
--- shows a storage building's contents). Same 9-patch box + icon-row
--- look, but a single flat list — a kit is one category, so no tab
--- strip. (If toolboxes later mix categories, lift the cargo panel's
--- computeTabs/buildTabStrip in here.)
+-- shows a storage building's contents). Since #1088 both render their
+-- rows through the SAME shared item-list widget
+-- (scripts/ui/item_list.lua); this popup simply leaves the widget's
+-- optional category tab strip off, because a kit is one category. (If
+-- toolboxes later mix categories, enable the widget's tabs here.)
+--
+-- The rows are ALREADY GROUPED by defName on the Haskell side, so this
+-- host hands them to the widget pre-grouped: the finer stack key the
+-- other two hosts use must not re-split them, and their order (a
+-- hashmap enumeration) must not be re-sorted.
 --
 -- Data source: unit.getItemContents(uid, defName) → grouped rows of
 -- { defName, displayName, category, count, weight, iconTex, fill,
@@ -33,11 +39,10 @@ local itemContentsPanel =
     package.loaded["scripts.item_contents_panel"] or {}
 package.loaded["scripts.item_contents_panel"] = itemContentsPanel
 
-local panel       = require("scripts.ui.panel")
-local label       = require("scripts.ui.label")
-local scale       = require("scripts.ui.scale")
-local brokenOverlay = require("scripts.ui.broken_overlay")
-local utf8Safe    = require("scripts.ui.utf8_safe")
+local panel    = require("scripts.ui.panel")
+local label    = require("scripts.ui.label")
+local scale    = require("scripts.ui.scale")
+local itemList = require("scripts.ui.item_list")
 
 -----------------------------------------------------------
 -- Layout constants. Mirrors cargo_inventory_panel so the two read the
@@ -76,12 +81,10 @@ itemContentsPanel.state = itemContentsPanel.state or {
     panelId     = nil,
     titleId     = nil,
     subtitleId  = nil,
-    rowElements = {},   -- list of {kind, id} for cleanup
-    lastHash    = "",
+    listId      = nil,   -- shared item-list widget instance (#1088)
 }
 
-itemContentsPanel.hud           = nil   -- assets set by setup()
-itemContentsPanel.whitePixelTex = nil
+itemContentsPanel.hud = nil   -- assets set by setup()
 
 -----------------------------------------------------------
 -- HUD hookup
@@ -94,51 +97,70 @@ end
 -- Helpers
 -----------------------------------------------------------
 
--- Cheap snapshot we hash to decide whether a rebuild is needed
--- (contents change when a medic draws a bandage / returns a tool).
-local function contentHash(uid, defName, instanceId)
-    local rows = unit.getItemContents(uid, defName, instanceId)
-    if not rows then return "__gone__" end
-    local parts = { tostring(#rows) }
-    for _, r in ipairs(rows) do
-        parts[#parts + 1] = (r.defName or "?")
-                          .. ":" .. tostring(r.count or 0)
-                          .. ":" .. tostring(r.fill or 0)
-                          .. ":" .. tostring(r.condition or 0)
-    end
-    return table.concat(parts, ",")
-end
-
--- Binary-search truncation with ".." suffix (same rule as the cargo
--- panel) so long item names don't run into the weight column. Every
--- candidate cut point is snapped to a complete UTF-8 character boundary
--- (utf8Safe) so a multi-byte character is never split into a dangling
--- lead byte -- string.sub cuts by byte offset, not codepoint.
-local function truncateToWidth(text, font, fontPx, maxPx)
-    if not text or text == "" then return text end
-    local fullW = engine.getTextWidth(font, text, fontPx) or 0
-    if fullW <= maxPx then return text end
-    local lo, hi = 1, #text
-    while lo < hi do
-        local mid = math.floor((lo + hi) / 2)
-        local cut = utf8Safe.snapToCharBoundary(text, mid)
-        local candidate = string.sub(text, 1, cut) .. ".."
-        local w = engine.getTextWidth(font, candidate, fontPx) or 0
-        if w <= maxPx then lo = mid + 1 else hi = mid end
-    end
-    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, math.max(1, lo - 1))) .. ".."
+-- The item-list parameters describing THIS panel's data and
+-- presentation policy. Rows arrive ALREADY GROUPED by defName from the
+-- Haskell side (src/Engine/Scripting/Lua/API/Units/Inventory.hs), so
+-- the widget must neither re-split them by the finer stack key nor
+-- reorder them, and this panel shows no category tabs.
+local function listDataParams(rows)
+    return {
+        items      = rows,
+        preGrouped = true,
+        tabs       = false,
+        uiscale    = scale.get(),
+        maxRows    = MAX_ROWS,
+        emptyText  = "(empty)",
+        emptyColor = EMPTY_COL,
+        rowIcon    = function(g)
+            -- Unlike the other hosts, this API can report a missing
+            -- icon as a negative handle.
+            if g.iconTex and g.iconTex >= 0 then return g.iconTex end
+            return nil
+        end,
+        rowName = function(g)
+            local n = g.displayName or g.defName or "?"
+            if (g.count or 1) > 1 then
+                n = string.format("%s ×%d", n, g.count)
+            end
+            return n
+        end,
+        rowWeightText = function(g)
+            -- Per-item TRUE mass (empty + fill + nested contents, from
+            -- itemTotalWeight) × count.
+            return string.format("%.2f kg", (g.weight or 0) * (g.count or 1))
+        end,
+        rowColor = function() return ROW_NAME_COL end,
+        rowTooltip = function(g)
+            local hintLines = {}
+            if g.fill and g.fill > 0 then
+                hintLines[#hintLines + 1] = string.format("Holds: %.2f", g.fill)
+            end
+            if g.condition and g.condition > 0 and g.condition < 100 then
+                hintLines[#hintLines + 1] =
+                    string.format("Condition: %.0f%%", g.condition)
+            elseif g.condition and g.condition <= 0 then
+                hintLines[#hintLines + 1] = "Broken"
+            end
+            if #hintLines == 0 then return nil end
+            return {
+                text = g.displayName or g.defName or "?",
+                hint = table.concat(hintLines, "\n"),
+            }
+        end,
+        -- No right-click action: this panel is read-only, so the widget
+        -- registers no click callback for its rows at all.
+    }
 end
 
 -----------------------------------------------------------
 -- Element teardown
 -----------------------------------------------------------
-local function destroyRows()
+local function destroyList()
     local s = itemContentsPanel.state
-    for _, e in ipairs(s.rowElements) do
-        if e.kind == "label" then label.destroy(e.id)
-        else UI.deleteElement(e.id) end
+    if s.listId then
+        itemList.destroy(s.listId)
+        s.listId = nil
     end
-    s.rowElements = {}
 end
 
 local function destroyTitle()
@@ -148,7 +170,7 @@ local function destroyTitle()
 end
 
 local function destroyAll()
-    destroyRows()
+    destroyList()
     destroyTitle()
     local s = itemContentsPanel.state
     if s.panelId then
@@ -211,152 +233,12 @@ local function buildTitle(originX, originY, defName, rows)
 end
 
 -----------------------------------------------------------
--- Render: contents rows
------------------------------------------------------------
-local function buildRows(originX, originY, contentW, rows)
-    destroyRows()
-    local s = itemContentsPanel.state
-    local h = itemContentsPanel.hud
-    if not h then return 0 end
-    local uiscale = scale.get()
-    local rowH   = math.floor(ROW_H   * uiscale)
-    local rowPad = math.floor(ROW_PAD * uiscale)
-    local iconSz = math.floor(ICON_SZ * uiscale)
-    local txtPad = math.floor(TEXT_PAD * uiscale)
-
-    if #rows == 0 then
-        local emptyLbl = label.new({
-            name     = "item_contents_empty",
-            text     = "(empty)",
-            font     = h.menuFont,
-            fontSize = 13,
-            color    = EMPTY_COL,
-            page     = h.page,
-            uiscale  = uiscale,
-        })
-        local eh = label.getElementHandle(emptyLbl)
-        UI.addToPage(h.page, eh, originX + txtPad,
-            originY + math.floor(rowH / 2) + math.floor(13 * 0.3))
-        UI.setZIndex(eh, 133)
-        s.rowElements[#s.rowElements + 1] = { kind = "label", id = emptyLbl }
-        return 1
-    end
-
-    local shownCount = math.min(#rows, MAX_ROWS)
-    for i = 1, shownCount do
-        local g = rows[i]
-        local rowY = originY + (i - 1) * (rowH + rowPad)
-
-        -- Icon (with broken overlay when a reusable tool is worn out).
-        if g.iconTex and g.iconTex >= 0 then
-            local iconY = rowY + math.floor((rowH - iconSz) / 2)
-            local iconId = UI.newSprite("item_contents_icon_" .. i,
-                iconSz, iconSz, g.iconTex,
-                1.0, 1.0, 1.0, 1.0, h.page)
-            UI.addToPage(h.page, iconId, originX + txtPad, iconY)
-            UI.setZIndex(iconId, 133)
-            s.rowElements[#s.rowElements + 1] = { kind = "sprite", id = iconId }
-            local oid = brokenOverlay.add(h.page,
-                "item_contents_broken_" .. i, g.condition,
-                originX + txtPad, iconY, iconSz, iconSz, 134)
-            if oid then
-                s.rowElements[#s.rowElements + 1] =
-                    { kind = "sprite", id = oid }
-            end
-        end
-
-        -- Right-aligned weight: per-item TRUE mass (empty + fill + nested
-        -- contents, from itemTotalWeight) × count.
-        local wText = string.format("%.2f kg",
-            (g.weight or 0) * (g.count or 1))
-        local wLbl = label.new({
-            name     = "item_contents_w_" .. i,
-            text     = wText,
-            font     = h.menuFont,
-            fontSize = 13,
-            color    = ROW_WEIGHT_COL,
-            page     = h.page,
-            uiscale  = uiscale,
-        })
-        local wH = label.getElementHandle(wLbl)
-        local wW = select(1, label.getSize(wLbl))
-        UI.addToPage(h.page, wH,
-            originX + contentW - txtPad - wW,
-            rowY + math.floor(rowH / 2) + math.floor(13 * 0.3))
-        UI.setZIndex(wH, 133)
-        s.rowElements[#s.rowElements + 1] = { kind = "label", id = wLbl }
-
-        -- Display name with stack suffix, truncated with ".." to avoid
-        -- overrunning the weight column.
-        local rawName = g.displayName or g.defName or "?"
-        if (g.count or 1) > 1 then
-            rawName = string.format("%s ×%d", rawName, g.count)
-        end
-        local nameX     = originX + txtPad + iconSz + txtPad
-        local nameRight = originX + contentW - txtPad - wW
-                                  - math.floor(NAME_RIGHT_GAP * uiscale)
-        local nameMaxPx = math.max(0, nameRight - nameX)
-        local nameFontPx = math.floor(13 * uiscale)
-        local nameText   = truncateToWidth(rawName, h.menuFont,
-                                           nameFontPx, nameMaxPx)
-        local nameLbl = label.new({
-            name     = "item_contents_name_" .. i,
-            text     = nameText,
-            font     = h.menuFont,
-            fontSize = 13,
-            color    = ROW_NAME_COL,
-            page     = h.page,
-            uiscale  = uiscale,
-        })
-        local nh = label.getElementHandle(nameLbl)
-        UI.addToPage(h.page, nh, nameX,
-            rowY + math.floor(rowH / 2) + math.floor(13 * 0.3))
-        UI.setZIndex(nh, 133)
-        s.rowElements[#s.rowElements + 1] = { kind = "label", id = nameLbl }
-
-        -- Per-row tooltip: fill (litres / count in a bottle) and
-        -- condition for the reusable tools. Hosted on a transparent
-        -- full-row hit-zone above the icon + labels.
-        local hintLines = {}
-        if g.fill and g.fill > 0 then
-            hintLines[#hintLines + 1] =
-                string.format("Holds: %.2f", g.fill)
-        end
-        if g.condition and g.condition > 0 and g.condition < 100 then
-            hintLines[#hintLines + 1] =
-                string.format("Condition: %.0f%%", g.condition)
-        elseif g.condition and g.condition <= 0 then
-            hintLines[#hintLines + 1] = "Broken"
-        end
-        local hitId = UI.newSprite("item_contents_hit_" .. i,
-            contentW, rowH, itemContentsPanel.whitePixelTex,
-            1.0, 1.0, 1.0, 0.0, h.page)
-        UI.addToPage(h.page, hitId, originX, rowY)
-        UI.setZIndex(hitId, 135)
-        if #hintLines > 0 then
-            UI.setClickable(hitId, true)
-            UI.setTooltipRich(hitId, {
-                text = g.displayName or g.defName or "?",
-                hint = table.concat(hintLines, "\n"),
-            })
-        end
-        s.rowElements[#s.rowElements + 1] = { kind = "sprite", id = hitId }
-    end
-    return shownCount
-end
-
------------------------------------------------------------
 -- Open / refresh
 -----------------------------------------------------------
 local function buildLayout(uid, defName, mx, my, instanceId)
     local s = itemContentsPanel.state
     local h = itemContentsPanel.hud
     if not h or not h.page then return end
-
-    if not itemContentsPanel.whitePixelTex then
-        itemContentsPanel.whitePixelTex = engine.loadTexture(
-            "assets/textures/utility/white.png")
-    end
 
     local rows = unit.getItemContents(uid, defName, instanceId) or {}
 
@@ -410,10 +292,26 @@ local function buildLayout(uid, defName, mx, my, instanceId)
     local cw = pbounds.width
 
     destroyTitle()
+    destroyList()
     buildTitle(cx, cy, defName, rows)
-    buildRows(cx, cy + titleH + subH + 8, cw, rows)
 
-    s.lastHash = contentHash(uid, defName, s.instanceId)
+    local dataParams = listDataParams(rows)
+    dataParams.name         = "item_contents"
+    dataParams.page         = h.page
+    dataParams.font         = h.menuFont
+    dataParams.x            = cx
+    dataParams.y            = cy + titleH + subH + 8
+    dataParams.width        = cw
+    dataParams.height       = rowsH
+    dataParams.rowHeight    = ROW_H
+    dataParams.rowPad       = ROW_PAD
+    dataParams.iconSize     = ICON_SZ
+    dataParams.textPad      = TEXT_PAD
+    dataParams.nameRightGap = NAME_RIGHT_GAP
+    dataParams.rowFontSize  = 13
+    dataParams.weightColor  = ROW_WEIGHT_COL
+    dataParams.zBase        = 132
+    s.listId = itemList.new(dataParams)
 end
 
 -- instanceId (optional) targets the EXACT container the player clicked,
@@ -449,7 +347,6 @@ function itemContentsPanel.closeIfOpen()
     s.uid        = nil
     s.defName    = nil
     s.instanceId = nil
-    s.lastHash   = ""
 end
 
 function itemContentsPanel.isOpen()
@@ -457,18 +354,20 @@ function itemContentsPanel.isOpen()
 end
 
 -----------------------------------------------------------
--- Per-tick refresh: cheap content-hash compare. Closes the popup if
--- the unit or its container went away (consumed / unit died).
+-- Per-tick refresh. The rebuild comparison belongs to the shared
+-- item-list widget; the "container went away" check below is
+-- host-owned lifecycle, not invalidation — the popup must not outlive
+-- the kit it describes (consumed / unit died).
 -----------------------------------------------------------
 function itemContentsPanel.update(dt)
     local s = itemContentsPanel.state
     if not s.open or not s.uid or not s.defName then return end
-    local h = contentHash(s.uid, s.defName, s.instanceId)
-    if h == "__gone__" then
+    local rows = unit.getItemContents(s.uid, s.defName, s.instanceId)
+    if not rows then
         itemContentsPanel.closeIfOpen()
         return
     end
-    if h ~= s.lastHash then
+    if itemList.isStale(s.listId, listDataParams(rows)) then
         buildLayout(s.uid, s.defName, s.mx, s.my, s.instanceId)
     end
 end
