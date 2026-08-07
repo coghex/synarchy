@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Polar glacier-border tests, split out of "World.Plate" (issue #560).
 module World.Plate.Glacier

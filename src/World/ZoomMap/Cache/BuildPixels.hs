@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Build the zoom cache entries AND per-chunk pixel data in one pass,
 --   split out of "World.ZoomMap.Cache" (issue #573).

@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Eon → Era → Period → Epoch → Age timeline loops: the recursive
 --   descent that builds one 'GeoPeriod' per structural tier, bottoming

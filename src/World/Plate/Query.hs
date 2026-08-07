@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict #-}
 -- | Nearest-plate lookup and boundary classification, split out of
 --   "World.Plate" (issue #560).
