@@ -27,6 +27,7 @@ import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (globalToChunk)
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , ConstructDesignation(..)
                              , StructurePiece(..)
@@ -35,7 +36,7 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
 import World.Construct.Apply ( applyConstructSlopeToChunk
                              , clearConstructSlope )
 import World.Thread.Command.Cursor.Common
-    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
+    (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
 import Structure.Types (StructureSlot, slotFromText)
 
 handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -43,9 +44,11 @@ handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPage
 handleWorldSetConstructAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: canonical anchor, rectangle formed in its frame.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { constructAnchor = Just (gx, gy) }, ())
+                (cs { constructAnchor = Just (canonicalTile worldSize gx gy) }, ())
         Nothing → pure ()
 
 handleWorldClearConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -80,10 +83,14 @@ structurePieceSlot (StructurePiece _ kind edge) = case kind of
 --   is no need to also consult the Lua read-your-writes staging cache
 --   ('wsStructureStageRef'), which exists only for same-tick reads from
 --   the debug builder (#805).
-structureOccupiedAt ∷ WorldTileData → Int → Int → StructureSlot → Bool
-structureOccupiedAt tileData gx gy slot =
-    let (coord, _) = globalToChunk gx gy
-        key = (gx, gy, fromIntegral (fromEnum slot) ∷ Word8)
+--
+--   #1175: the tile arrives in the drag's anchor-local alias frame, so
+--   both the chunk and the per-tile key are canonicalised — 'lcStructures'
+--   is keyed by global tile coord inside the chunk that stores it.
+structureOccupiedAt ∷ Int → WorldTileData → Int → Int → StructureSlot → Bool
+structureOccupiedAt worldSize tileData gx gy slot =
+    let (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
+        key = (gx + dgx, gy + dgy, fromIntegral (fromEnum slot) ∷ Word8)
     in maybe False (HM.member key . lcStructures) (lookupChunk coord tileData)
 
 -- | Commit a construction designation. Per-z-level like mining: only
@@ -105,14 +112,15 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
             pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
+            worldSize ← pageWrapWorldSize worldState
+            -- #1175: canonicalised column read, so an anchor-local alias
+            -- resolves the chunk that stores the tile. Identity inland.
             let surfaceZAt gx gy = do
-                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
                     lc ← lookupChunk coord tileData
                     pure (lcSurfaceMap lc VU.! columnIndex lx ly)
-                xLo = min gx1 gx2
-                yLo = min gy1 gy2
-                xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
-                yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+                ((xLo, yLo), (xHi, yHi)) =
+                    designateRect worldSize (gx1, gy1) (gx2, gy2)
                 -- A building only ever targets its single anchor tile
                 -- (never the swept rectangle), so it always "requests"
                 -- exactly 1 regardless of the two-click rectangle size.
@@ -125,17 +133,20 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
                         -- A building is a single footprint: only the
                         -- anchor tile, at its own surface z.
                         CtBuilding _ →
-                            [ ((gx1, gy1), newConstructDesignation anchorZ tgt) ]
+                            [ ( canonicalTile worldSize gx1 gy1
+                              , newConstructDesignation anchorZ tgt ) ]
                         -- Structure pieces tile the rectangle, per-z-level,
                         -- skipping any tile whose target slot is occupied.
                         CtStructure piece →
-                            [ ((gx, gy), newConstructDesignation z tgt)
+                            [ ( canonicalTile worldSize gx gy
+                              , newConstructDesignation z tgt )
                             | gx ← [xLo .. xHi]
                             , gy ← [yLo .. yHi]
                             , Just z ← [surfaceZAt gx gy]
                             , z ≡ anchorZ
-                            , maybe True (not . structureOccupiedAt tileData gx gy)
-                                        (structurePieceSlot piece)
+                            , maybe True
+                                (not . structureOccupiedAt worldSize tileData gx gy)
+                                (structurePieceSlot piece)
                             ]
             atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
                 (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
@@ -168,11 +179,17 @@ handleWorldCancelConstructCommand env _logger pageId gx gy = do
 --   removed designation; every other caller (this tick or later) sees
 --   Nothing, since there is nothing left to remove. No Lua-side timing
 --   heuristic can replicate that guarantee.
+--
+--   #1175: the tile is canonicalised HERE, once, so both callers — the
+--   queued cancel command and the synchronous refund verb — accept any
+--   u-alias and resolve the one stored key.
 popConstructDesignation ∷ WorldState → (Int, Int) → IO (Maybe ConstructDesignation)
-popConstructDesignation worldState (gx, gy) = do
+popConstructDesignation worldState (rawGX, rawGY) = do
+    worldSize ← pageWrapWorldSize worldState
+    let key = canonicalTile worldSize rawGX rawGY
     mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
-        \m → (HM.delete (gx, gy) m, HM.lookup (gx, gy) m)
-    forM_ mCd $ resetConstructSlope worldState (gx, gy)
+        \m → (HM.delete key m, HM.lookup key m)
+    forM_ mCd $ resetConstructSlope worldState key
     pure mCd
 
 -- | Build AI hook (#96): set a designation's status. Complete removes it
@@ -184,12 +201,15 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
+            -- #1175: a build-AI job coord is a point op like any other.
+            worldSize ← pageWrapWorldSize worldState
+            let key = canonicalTile worldSize gx gy
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case st of
-                    CsComplete → (HM.delete (gx, gy) m, HM.lookup (gx, gy) m)
+                    CsComplete → (HM.delete key m, HM.lookup key m)
                     _          → (HM.adjust (\cd → cd { cdStatus = st })
-                                           (gx, gy) m, Nothing)
-            forM_ mCd $ resetConstructSlope worldState (gx, gy)
+                                           key m, Nothing)
+            forM_ mCd $ resetConstructSlope worldState key
         Nothing → pure ()
 
 -- | Build AI hook (#96): pour progress into a designation. Deltas are
@@ -205,23 +225,31 @@ handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
+            -- #1175: a build-AI job coord is a point op like any other.
+            worldSize ← pageWrapWorldSize worldState
+            let key = canonicalTile worldSize gx gy
             mUpd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
-                \m → case HM.lookup (gx, gy) m of
+                \m → case HM.lookup key m of
                     Nothing → (m, Nothing)
                     Just cd →
                         let cd' = cd { cdProgress = max 0.0 (min 1.0
                                           (cdProgress cd + delta)) }
-                        in ( HM.insert (gx, gy) cd' m
+                        in ( HM.insert key cd' m
                            , Just (cdProgress cd, cd') )
             forM_ mUpd $ \(prevProgress, cd') →
-                withConstructChunk worldState (gx, gy) $
-                    applyConstructSlopeToChunk (gx, gy) prevProgress cd'
+                withConstructChunk worldState key $
+                    applyConstructSlopeToChunk key prevProgress cd'
         Nothing → pure ()
 
 -- | Run a chunk transform for the designation tile's loaded chunk and
 --   invalidate the render caches — the same writeback the live dig
 --   path uses ('handleWorldDigTileCommand'). No-op when the chunk
 --   isn't loaded (the load path re-derives the display instead).
+--
+--   Takes a CANONICAL tile coord (#1175): every caller canonicalises
+--   before touching the designation map, and the transform it passes
+--   ('applyConstructSlopeToChunk' / 'clearConstructSlope') indexes the
+--   resolved chunk with the same coord.
 withConstructChunk ∷ WorldState → (Int, Int)
                    → (LoadedChunk → LoadedChunk) → IO ()
 withConstructChunk worldState (gx, gy) f = do

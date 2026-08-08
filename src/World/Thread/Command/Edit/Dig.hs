@@ -22,7 +22,7 @@ import Engine.Core.Capability.ContentRegistries
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (globalToChunk, canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Material (MaterialProps(..), getMaterialProps
@@ -65,14 +65,31 @@ import World.Thread.Helpers (unWorldPageId)
 handleWorldDigTileCommand ∷ EngineEnv → IORef StdGen → Q.Queue UnitCommand
     → LoggerState → WorldPageId
     → Int → Int → Float → Float → Float → Float → Float → IO ()
-handleWorldDigTileCommand env rngRef unitQ logger pageId gx gy ux uy amount
-                          skill percep = do
+handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
+                          amount skill percep = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
                 "World not found for dig tile: " <> unWorldPageId pageId
         Just ws → do
+            -- #1175: the mine designation this consumes is stored under a
+            -- CANONICAL key, so the tile is resolved into that frame before
+            -- anything is looked up — a dig job coord restored from a
+            -- pre-#1175 save can still be a u-alias, and a raw lookup would
+            -- silently find no designation and never progress it. The
+            -- digger's own position takes the SAME whole-tile shift: the wrap
+            -- is an isometry, so "which corner of the tile is the digger
+            -- nearest" (spoilStartVertex) stays the answer it was. Identity
+            -- away from the seam.
+            worldSize ← pageWrapWorldSize ws
+            let (digCoord, (digLx, digLy), (dgx, dgy)) =
+                    canonicalTileFrame worldSize rawGX rawGY
+                digIdx = columnIndex digLx digLy
+                gx = rawGX + dgx
+                gy = rawGY + dgy
+                ux = rawUX + fromIntegral dgx
+                uy = rawUY + fromIntegral dgy
             desigs ← readIORef (wsMineDesignationsRef ws)
             case HM.lookup (gx, gy) desigs of
                 Nothing → pure ()
@@ -205,9 +222,6 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId gx gy ux uy amount
                                     bumpQuadCacheGen ws
                                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                                     writeIORef (wsBgQuadCacheRef ws)   Nothing
-  where
-    (digCoord, (digLx, digLy)) = globalToChunk gx gy
-    digIdx = columnIndex digLx digLy
 
 -- | Spawn @n@ yield items (chunks, gems) as ground items scattered
 --   on the dig tile. Each gets a random sub-tile position, retried a

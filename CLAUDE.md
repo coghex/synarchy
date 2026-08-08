@@ -803,6 +803,48 @@ before touching each area:
   (neutralises the unit_ai wander tick so `moveTo` is the only
   steering). `startFall` clears the move target on landing — fall
   checks assert the fall + landing z, not arrival.
+- **Tile-coordinate frame at the U seam (#1175)** — chunks are STORED
+  u-wrapped, so one physical tile has two names near the seam. ONE
+  contract, stated in full on `World.Render.HitTest`: `pickWorldTile`
+  and every Lua caller it backs (`world.pickTile`/`pickPos`/
+  `getHoverTile`/`getHoverPos`) report CANONICAL coords, and the
+  fractional hover position takes the SAME whole-tile shift as the
+  integer tile; designation maps (mine/chop/till/plant/construct) store
+  canonical keys; every point read, mutation and cancellation accepts
+  any alias and returns canonical — including the verbs a worker
+  FINISHES a job with (`world.getDigInfoAt`/`digTile`, `harvestFlora`,
+  `setVegAt`, `plantCropAt`/`plantRowCropAt`, `structure.place`/`hasAt`/
+  `floorZAt`/`clear`, and `building.spawn`/`canPlaceAt` — whose footprint
+  walk resolves each tile, since a footprint is stepped off its anchor
+  and straddles the seam even from a canonical one), which is what lets a
+  job coord persisted by a pre-#1175 save run to completion with no
+  migration. Rectangles are the exception that
+  makes it work: canonical is a STORAGE frame, not a geometry one — two
+  adjacent tiles across the seam sit a whole world apart in it — so a
+  drag's second endpoint is re-expressed in the anchor's local alias
+  frame (`localizeTileToAnchor`, shared by
+  `World.Thread.Command.Cursor.Common.designateRect`, the
+  `CursorQuads` previews, and Lua via `world.localizeTile` for
+  `build_tool.lua`'s wire snap / occupancy scan) BEFORE any clamp or
+  `min`/`max`, with canonicalisation per enumerated tile at
+  lookup/storage only. A job-SELECTION range gate needs that frame too —
+  a seam-side job measures a world away in canonical coords and would
+  never be claimed — so `construction.getPendingJobs` reports `lx`/`ly`
+  beside the canonical `x`/`y`, and `unit_ai_construct.lua` measures with
+  those. Canonicalising one end alone was MEASURED worse
+  than the old seam-blind behaviour; don't do it. Away from the seam,
+  and in arena / non-wrapping worlds, every step is the identity.
+  Persistence: `world-activity` v2 (same bytes, canonical-key
+  invariant); a v1 payload is re-keyed on load. The init QUEUE
+  (`world.loadChunksInRegion`, `World.Load.Stage`'s saved-camera radius,
+  world init) is wrapped at the drain, so every loader stores canonically
+  — before that, a seam-crossing region generated a SECOND chunk for one
+  physical place and canonical readers resolved to whichever the camera
+  loader had put there. Seam VISIBILITY is the
+  separate axis #1176 owns — which tile a pixel NAMES is this contract,
+  where that tile is DRAWN is `bestWrapOffset`'s facing-aware `(x, y)`
+  offset; both hold at all four facings. Gates: hspec
+  `--match "World.Render.PickSeam"`, `--match "World.DesignationSeam"`.
 - **Construction (#95/#96)** — `construction.*` designations +
   construct_job AI (claim → source materials → progress → place →
   stake); build costs in `data/structure_packs/*.yaml` `build:` blocks.

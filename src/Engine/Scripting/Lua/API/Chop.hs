@@ -26,9 +26,10 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom)
 import Engine.Asset.Handle (TextureHandle(..))
-import World.Types (WorldManager(..), WorldState(..))
+import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 import World.Page.Types (WorldPageId(..))
 import World.Command.Types (WorldCommand(..))
+import World.Generate.Coordinates (canonicalTile, seamTileDist2)
 import World.Chop.Types
 
 -- | chop.setAnchor(pageId, gx, gy) — first-click anchor.
@@ -96,7 +97,9 @@ chopCancelDesignationFn wsc = do
         _ → pure ()
     return 0
 
--- | chop.getDesignationAt(pageId, gx, gy) → {x, y, z} | nil.
+-- | chop.getDesignationAt(pageId, gx, gy) → {x, y, z} | nil. Accepts any
+--   u-alias of the tile and reports the CANONICAL stored coords (#1175);
+--   identity away from the seam.
 chopGetDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 chopGetDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -105,13 +108,13 @@ chopGetDesignationAtFn wsc = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                gx = round gxN ∷ Int
-                gy = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsChopDesignationsRef ws)
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (gx, gy) = canonicalTile worldSize (round gxN) (round gyN)
                     case HM.lookup (gx, gy) m of
                         Just cd → do
                             Lua.newtable
@@ -143,7 +146,8 @@ chopGetDesignationCountFn wsc = do
 
 -- | chop.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tree by Euclidean distance — the chop AI's
---   "distance to nearest chop job" term. Mirrors nearestMineDesignation.
+--   "distance to nearest chop job" term. Mirrors nearestMineDesignation,
+--   including its seam-aware compare and canonical result (#1175).
 chopNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 chopNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -158,10 +162,8 @@ chopNearestDesignationFn wsc = do
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsChopDesignationsRef ws)
-                    let dist2 (gx, gy) =
-                            let dx = fromIntegral gx - ux
-                                dy = fromIntegral gy - uy
-                            in dx * dx + dy * dy
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let dist2 = seamTileDist2 worldSize (ux, uy)
                         best = foldl' (\acc k → case acc of
                                   Nothing → Just (k, dist2 k)
                                   Just (_, d) | dist2 k < d → Just (k, dist2 k)

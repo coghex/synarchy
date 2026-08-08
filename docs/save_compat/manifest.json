@@ -1082,6 +1082,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/k1-name-etymology.expected.json"
         }
       ]
+    },
+    {
+      "id": "k1-canonical-designation-frame",
+      "description": "Designation maps keyed in the canonical (u-wrapped) tile frame (issue #1175): world-activity became v2. The wire LAYOUT is byte-identical to v1 -- what changed is the invariant its keys carry, so a fixture registered at v2 has to actually HOLD designations, which this one does: its page carries both mine and till designations written through the live designation path. The pre-#1175 v1 shape, whose keys carried no canonical promise, stays tracked by b2/b3/c3/d1/e1/f1/g1/h1/i1/j1 and is re-keyed on load by applyWorldActivity.",
+      "declaredAt": "2026-08-08",
+      "declaredByIssue": 1175,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "identity for world-activity v2 (this baseline IS the v2 shape); World.Save.Component.Page.applyWorldActivity re-keys a v1 payload's designations into the canonical frame, and migrateWorldPagesV4/V3/V2/V1 continue to cover the page core",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "k1-canonical-designation-frame-session",
+          "path": "test-headless/data/save-compat/k1-canonical-designation-frame.bin",
+          "kind": "complete-session",
+          "sha256": "1e548fa1ab4917f4e710c9138482517055b858092c0f92ff666ab4ad6184d892",
+          "sizeBytes": 908588,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then world.setMineAnchor('generated_page', 2, 2); world.designateMine('generated_page', 2, 2, 4, 3); till.designate('generated_page', -4, -4, -3, -3) and held until `world.getMineDesignationCount('generated_page') > 0`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/k1-canonical-designation-frame.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

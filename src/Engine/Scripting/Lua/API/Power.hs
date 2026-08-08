@@ -54,6 +54,7 @@ import Craft.Bills (BillId(..))
 import Craft.Types (RecipeDef(..), lookupRecipe)
 import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
 import Unit.Pathing.Cost (lookupTerrainZ)
+import World.Generate.Coordinates (canonicalTile)
 import Item.Types (ItemInstance(..))
 import Power.Types
 import Power.Network (wireTilesOn, positionsOf, computeSnapshots, consumersOn,
@@ -152,21 +153,26 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                     let locInstances = maybe emptyLocationInstances
                                              wgpLocationInstances mParams
                         worldSizeChunks = maybe 0 wgpWorldSize mParams
+                        -- #1175: resolve the placement tile into the
+                        -- stored frame first, exactly as building.spawn
+                        -- does — a node placement is the same
+                        -- validate-then-spawn pair. Identity inland.
+                        (cgx, cgy) = canonicalTile worldSizeChunks gx gy
                     case canPlaceAt
                             (bm { bmInstances =
                                     buildingsOnPage pid (bmInstances bm) })
-                            wtd locInstances worldSizeChunks def gx gy of
+                            wtd locInstances worldSizeChunks def cgx cgy of
                         NotPlaceable reason → do
                             rollback item ix
                             pure (Left reason)
                         Placeable → do
-                            let gz = floorZAt wtd gx gy
+                            let gz = floorZAt worldSizeChunks wtd cgx cgy
                             bid ← atomicModifyIORef'
                                     (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
                                         let (bid', bm'') = nextBuildingId bm'
                                         in (bm'', bid')
                             Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-                                BuildingSpawn bid defName gx gy gz pid
+                                BuildingSpawn bid defName cgx cgy gz pid
                             nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
                                 addPowerNode bid role param
                             pure (Right (nid, bid))
@@ -184,10 +190,12 @@ placeNodeOn env ws pid defName uid gx gy role param = do
 -- | Terrain Z at the anchor tile. Falls back to 0 if the chunk isn't
 --   loaded — shouldn't happen since canPlaceAt already verified,
 --   defensive. Mirrors Buildings.hs's private helper of the same name.
-floorZAt ∷ WorldTileData → Int → Int → Int
-floorZAt wtd gx gy = case lookupTerrainZ wtd gx gy of
-    Just z  → z
-    Nothing → 0
+floorZAt ∷ Int → WorldTileData → Int → Int → Int
+floorZAt worldSize wtd gx gy =
+    let (cgx, cgy) = canonicalTile worldSize gx gy
+    in case lookupTerrainZ wtd cgx cgy of
+        Just z  → z
+        Nothing → 0
 
 -- | Pop the first item instance matching @name@, reporting its
 --   0-based index for a possible rollback. Mirrors Units.hs's private

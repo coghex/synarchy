@@ -1082,6 +1082,8 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectTileZ
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
+                   Test.Headless.World.ChunkQueueFrame
+                   Test.Headless.World.DesignationSeam
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns
@@ -1146,6 +1148,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
                    Test.Headless.World.Render.GroundItemSeam
+                   Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit

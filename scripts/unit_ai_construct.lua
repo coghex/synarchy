@@ -187,7 +187,7 @@ local function findConstructJob(uid, fromX, fromY, params)
                 end
             end
             if viable then
-                local d = distance(fromX, fromY, job.x + 0.5, job.y + 0.5)
+                local d = distance(fromX, fromY, job.lx + 0.5, job.ly + 0.5)
                 if d <= bestD then
                     job.dist = d
                     job.build = build

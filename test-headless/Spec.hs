@@ -52,6 +52,7 @@ import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
+import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.World.RenderedSurface as RenderedSurface
@@ -120,6 +121,8 @@ import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
+import qualified Test.Headless.World.Render.PickSeam as PickSeam
+import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -181,6 +184,7 @@ main = hspec $ do
         UITransferContextMenu.spec
         UIItemList.spec
         describe "World.ActionOutcome" ActionOutcome.spec
+        ChunkQueueFrame.spec
         describe "Geology" Geology.spec
         describe "Chunk/Fast Parity" Parity.spec
         describe "Biome Flatness" Flatness.spec
@@ -351,6 +355,9 @@ main = hspec $ do
     describe "World.Render.FrontWallLift" FrontWallLift.spec
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
     describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
+    describe "World.Render.PickSeam" PickSeam.spec
+    describe "World.DesignationSeam" DesignationSeam.spec
+    describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec

@@ -25,18 +25,21 @@ import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (chunkToGlobal, globalToChunk)
+import World.Generate.Coordinates (canonicalTile)
 import World.Chop.Types (newChopDesignation)
 import World.Thread.Command.Cursor.Common
-    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
+    (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetChopAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: canonical anchor, rectangle formed in its frame.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { chopAnchor = Just (gx, gy) }, ())
+                (cs { chopAnchor = Just (canonicalTile worldSize gx gy) }, ())
         Nothing → pure ()
 
 handleWorldClearChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -63,10 +66,9 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             harvests ← readIORef (wsFloraHarvestsRef worldState)
-            let xLo = min gx1 gx2
-                yLo = min gy1 gy2
-                xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
-                yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+            worldSize ← pageWrapWorldSize worldState
+            let ((xLo, yLo), (xHi, yHi)) =
+                    designateRect worldSize (gx1, gy1) (gx2, gy2)
                 (cLo, _) = globalToChunk xLo yLo
                 (cHi, _) = globalToChunk xHi yHi
                 ChunkCoord cx0 cy0 = cLo
@@ -74,19 +76,29 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                 -- Walk the overlapped chunks' flora instances rather
                 -- than probing every rect tile — a designation sweep is
                 -- mostly empty ground.
+                --
+                -- #1175: the rectangle is in the ANCHOR's alias frame, so
+                -- the chunks it spans are too. Each is canonicalised to
+                -- find the chunk that stores it, while the tile coord
+                -- stays in the rectangle's own frame (so the bounds test
+                -- means what it says) and is canonicalised again for the
+                -- harvest read and the stored key. Identity inland.
                 entries =
-                    [ ((tgx, tgy), newChopDesignation z)
+                    [ (canonicalTile worldSize tgx tgy, newChopDesignation z)
                     | cx ← [cx0 .. cx1], cy ← [cy0 .. cy1]
-                    , Just lc ← [lookupChunk (ChunkCoord cx cy) tileData]
+                    , let rawCoord = ChunkCoord cx cy
+                    , Just lc ← [lookupChunk (wrapChunkCoordU worldSize rawCoord)
+                                             tileData]
                     , i ← fcdInstances (lcFlora lc)
                     , Just sp ← [lookupSpecies (fiSpecies i) cat]
                     , Just fh ← [fsHarvest sp]
                     , tag `elem` fhTags fh
                     , let lx = fromIntegral (fiTileX i)
                           ly = fromIntegral (fiTileY i)
-                          (tgx, tgy) = chunkToGlobal (ChunkCoord cx cy) lx ly
+                          (tgx, tgy) = chunkToGlobal rawCoord lx ly
                     , tgx ≥ xLo, tgx ≤ xHi, tgy ≥ yLo, tgy ≤ yHi
-                    , HM.lookupDefault 0 (tgx, tgy) harvests ≤ 0
+                    , HM.lookupDefault 0 (canonicalTile worldSize tgx tgy)
+                                         harvests ≤ 0
                     , let z = lcSurfaceMap lc VU.! columnIndex lx ly
                     ]
             atomicModifyIORef' (wsChopDesignationsRef worldState) $ \m →
@@ -114,9 +126,11 @@ handleWorldCancelChopCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldCancelChopCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: cancellation accepts any alias of the stored key.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsChopDesignationsRef worldState) $ \m →
-                (HM.delete (gx, gy) m, ())
+                (HM.delete (canonicalTile worldSize gx gy) m, ())
         Nothing → pure ()
 
 handleWorldSetChopDesignateTextureCommand ∷ EngineEnv → LoggerState
