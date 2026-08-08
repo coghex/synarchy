@@ -33,8 +33,10 @@ import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Types (chunkSize)
 import World.Generate.Coordinates
-    (globalToChunk, canonicalTile, seamTileDist2, chunkInSeamRegion)
+    ( globalToChunk, canonicalTile, seamTileDist2, chunkInSeamRegion
+    , localizeTileToAnchor )
 import World.Command.Types (WorldCommand(..))
 import World.Construct.Types
 import World.Thread.Command.Cursor.Construct (popConstructDesignation)
@@ -121,8 +123,20 @@ constructCancelDesignationFn wsc = do
 -- | construction.getPendingJobs(cx1, cy1, cx2, cy2) → array of jobs in
 --   the chunk region on the active world. Each job:
 --     { x, y, z, category, status, progress,
+--       lx, ly                -- see below
 --       pack, kind, edge      -- structure targets
 --       building              -- building targets }
+--
+--   @x@/@y@ are the CANONICAL stored key — what every other
+--   @construction.*@ verb reports and accepts (#1175). @lx@/@ly@ are the
+--   SAME tile re-expressed in the u-alias frame local to this region's
+--   own centre, which is the scanning worker's neighbourhood: measure
+--   distances with those. A job across the seam is physically adjacent
+--   yet a whole world away in canonical numbers, so a caller that
+--   range-gated on @x@/@y@ would reject every one of them and no worker
+--   would ever claim a seam-side job. Identical to @x@/@y@ away from the
+--   seam, and in arena / non-wrapping worlds.
+--
 --   The build AI (#96) reads this to find work. Jobs a worker has
 --   claimed ARE included, carrying status "claimed" — the AI filters on
 --   status when looking for fresh work (so a second worker still can't
@@ -156,9 +170,21 @@ constructGetPendingJobsFn wsc = do
                 -- job back to pending (acceptance: getPendingJobs shows
                 -- "claimed" while in progress, "pending" after release).
                 jobs = [ kv | kv@(k, _) ← HM.toList m, inRegion k ]
+                -- The region is stepped outward from the worker's own
+                -- chunk, so its centre IS that worker's frame.
+                centreTile =
+                    ( ((round cx1 + round cx2) `div` 2) * chunkSize
+                          + chunkSize `div` 2
+                    , ((round cy1 + round cy2) `div` 2) * chunkSize
+                          + chunkSize `div` 2 )
             Lua.newtable
             forM_ (zip [1 ∷ Int ..] jobs) $ \(i, ((gx, gy), cd)) → do
                 pushJobTable gx gy cd
+                let (lx, ly) = localizeTileToAnchor worldSize centreTile (gx, gy)
+                Lua.pushinteger (fromIntegral lx)
+                Lua.setfield (Lua.nth 2) "lx"
+                Lua.pushinteger (fromIntegral ly)
+                Lua.setfield (Lua.nth 2) "ly"
                 Lua.rawseti (Lua.nth 2) (fromIntegral i)
             return 1
         _ → Lua.pushnil >> return 1

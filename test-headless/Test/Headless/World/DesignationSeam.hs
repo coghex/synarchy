@@ -43,7 +43,8 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Structure.Types (emptyChunkStructures)
+import Structure.Types
+    (StructurePieceData(..), StructureSlot(..), emptyChunkStructures)
 import World.Chop.Types (newChopDesignation)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
@@ -106,10 +107,14 @@ outerStored = ChunkCoord (-15) 17
 rowY ∷ Int
 rowY = (-15) * chunkSize + 8
 
-anchorTile, farTilePicked ∷ (Int, Int)
+anchorTile, farTilePicked, farTileLocal ∷ (Int, Int)
 anchorTile    = (16 * chunkSize + 14, rowY)          -- inner, canonical
 farTilePicked = canonicalTile worldSize (17 * chunkSize + 2) rowY
                                                       -- outer, as PICKED
+-- | The far tile as a worker standing in 'innerChunk' sees it: the
+--   u-alias of its canonical key that sits four tiles away rather than a
+--   world away. What @getPendingJobs@ reports as @lx@/@ly@.
+farTileLocal  = (17 * chunkSize + 2, rowY)
 
 -- | What the drag must designate: the five physical tiles, each under
 --   its own canonical key.
@@ -557,6 +562,65 @@ engineSpec = beforeAll setup $ do
           (fst alias) (snd alias)
       HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
 
+  describe "a job across the seam is reachable AND measurable" $
+    it "getPendingJobs reports it, canonically keyed and worker-local" $
+        \(env, ls) → do
+      -- The worker stands in the inner chunk; the job's canonical key
+      -- lives a whole world away because its chunk is stored wrapped.
+      ws ← resetPage env 0 noFlora
+      logger ← readIORef (loggerRef env)
+      handleWorldDesignateConstructCommand env logger fixturePage
+          (fst farTilePicked) (snd farTilePicked)
+          (fst farTilePicked) (snd farTilePicked) wirePiece
+      HM.keys <$> readIORef (wsConstructDesignationsRef ws)
+          `shouldReturn` [farTilePicked]
+      -- Listing it at all needs the region test to count chunk aliases;
+      -- x/y stay the canonical key every point verb accepts, and lx/ly
+      -- put the SAME tile back beside the worker so a range gate on
+      -- construct_scan_range can actually pass. Measured raw, the job is
+      -- a world away and no builder would ever claim it.
+      evalDebug ls (T.concat
+          [ "local js = construction.getPendingJobs(15, -16, 17, -14); "
+          , "if #js ~= 1 then return 'count=' .. #js end; "
+          , "local j = js[1]; "
+          , "return j.x .. ',' .. j.y .. '|' .. j.lx .. ',' .. j.ly" ])
+        `shouldReturn` tshow (fst farTilePicked) <> ","
+                       <> tshow (snd farTilePicked) <> "|"
+                       <> tshow (fst farTileLocal) <> ","
+                       <> tshow (snd farTileLocal)
+
+  describe "the worker verbs that finish a job take the same alias" $ do
+
+    it "structure.hasAt sees an occupied seam tile through its alias" $
+        \(env, ls) → do
+      -- Concern behind #1175 round 1: build_tool's occupancy pre-check
+      -- scans ANCHOR-LOCAL alias tiles, so a raw structure lookup reports
+      -- an occupied seam tile as free and the tool records an accepted
+      -- outcome for a commit that will create no jobs.
+      _ ← resetPageWithFloor env
+      evalDebug ls (T.concat
+          [ "return tostring(structure.hasAt(", tshow (fst anchorTile), ", "
+          , tshow (snd anchorTile), ", 'floor')) .. ',' .. "
+          , "tostring(structure.hasAt(", tshow (fst (aliasOf anchorTile))
+          , ", ", tshow (snd (aliasOf anchorTile)), ", 'floor'))" ])
+        `shouldReturn` "true,true"
+
+    it "world.getDigInfoAt resolves an aliased dig job" $ \(env, ls) → do
+      -- A digJob restored from a pre-#1175 save can still hold an alias;
+      -- read and consume must find the canonical designation it names.
+      ws ← resetPage env 0 noFlora
+      logger ← readIORef (loggerRef env)
+      handleWorldDesignateMineCommand env logger fixturePage
+          (fst anchorTile) (snd anchorTile) (fst anchorTile) (snd anchorTile)
+      HM.keys <$> readIORef (wsMineDesignationsRef ws)
+          `shouldReturn` [anchorTile]
+      let (agx, agy) = aliasOf anchorTile
+      evalDebug ls (T.concat
+          [ "local m = world.getDigInfoAt('", pageText, "', "
+          , tshow agx, ", ", tshow agy, "); "
+          , "return m and tostring(m) or 'nil'" ])
+        `shouldReturn` "1"
+
   where
     setup = do
         EngineInitResult env ← initializeEngineHeadless
@@ -588,6 +652,21 @@ resetPage env veg flora = do
     writeIORef (wsTilesRef ws) (seamTiles veg flora)
     writeIORef (worldManagerRef env) WorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
+    pure ws
+
+-- | The seam page with a floor piece already placed on 'anchorTile',
+--   stored under its CANONICAL key inside the chunk that holds it —
+--   exactly how the structure overlay records a real placement.
+resetPageWithFloor ∷ EngineEnv → IO WorldState
+resetPageWithFloor env = do
+    ws ← resetPage env 0 noFlora
+    let floorTag = fromIntegral (fromEnum SFloor) ∷ Word8
+        key = (fst anchorTile, snd anchorTile, floorTag)
+        occupied lc = lc { lcStructures =
+            HM.insert key (StructurePieceData 0 0 zSlice) (lcStructures lc) }
+    writeIORef (wsTilesRef ws) $ (seamTiles 0 noFlora)
+        { wtdChunks = HM.adjust occupied innerChunk
+                          (wtdChunks (seamTiles 0 noFlora)) }
     pure ws
 
 pageState ∷ EngineEnv → IO WorldState

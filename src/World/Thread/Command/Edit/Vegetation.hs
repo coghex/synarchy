@@ -18,7 +18,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Vegetation (isTilledSoil)
@@ -31,14 +31,22 @@ import World.Thread.Helpers (unWorldPageId)
 --   chunk eviction + save/load like every other edit.
 handleWorldSetVegCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Int → Word8 → IO ()
-handleWorldSetVegCommand wsc logger pageId gx gy z vegId = do
+handleWorldSetVegCommand wsc logger pageId rawGX rawGY z vegId = do
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
                 "World not found for set veg: " <> unWorldPageId pageId
         Just ws → do
-            let (coord, (lx, ly)) = globalToChunk gx gy
+            -- #1175: the till AI reaches here with a designation job coord,
+            -- which a pre-#1175 save can hold as a u-alias. Canonicalise so
+            -- the edit lands in the chunk that stores the tile (and is
+            -- logged under the key a replay will match). Identity inland.
+            worldSize ← pageWrapWorldSize ws
+            let (coord, (lx, ly), (dgx, dgy)) =
+                    canonicalTileFrame worldSize rawGX rawGY
+                gx = rawGX + dgx
+                gy = rawGY + dgy
                 idx  = columnIndex lx ly
                 edit = WeSetVeg gx gy z vegId
             td ← readIORef (wsTilesRef ws)
@@ -78,14 +86,20 @@ handleWorldSetVegCommand wsc logger pageId gx gy z vegId = do
 --   validation.
 handleWorldPlantRowCropAtCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Text → IO ()
-handleWorldPlantRowCropAtCommand wsc logger pageId gx gy cropName = do
+handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
                 "World not found for plant row crop: " <> unWorldPageId pageId
         Just ws → do
-            let (coord, (lx, ly)) = globalToChunk gx gy
+            -- #1175: same as setVeg above — the farm AI's completion coord
+            -- comes from a plant designation and may be a legacy alias.
+            worldSize ← pageWrapWorldSize ws
+            let (coord, (lx, ly), (dgx, dgy)) =
+                    canonicalTileFrame worldSize rawGX rawGY
+                gx = rawGX + dgx
+                gy = rawGY + dgy
                 idx  = columnIndex lx ly
             td ← readIORef (wsTilesRef ws)
             cat ← readIORef (wsFloraCatalogRef wsc)
