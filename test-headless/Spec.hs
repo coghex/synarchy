@@ -146,6 +146,7 @@ import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.Naming as LocationNaming
+import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
@@ -368,6 +369,7 @@ main = hspec $ do
     ContainerKnowledge.spec
     LocationInstance.spec
     LocationNaming.spec
+    RiverNaming.spec
     LocationLootDeterminism.spec
     LocationMapIcons.spec
     TutorialDefinitions.spec

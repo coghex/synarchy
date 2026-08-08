@@ -206,6 +206,11 @@ PROBES = [
      "repair AI: claim/fetch/walk/repair/return + role weighting (#302)"),
     ("resource_root", "resource_root_probe.py",
      "resource-root launch contract: built exe runs --dump/--headless from outside the repo (#636)"),
+    ("river_naming", "river_naming_probe.py",
+     "river identity + naming through Lua: stable GeoFeatureId ids attached to "
+     "the same geometry call over call, generated name/gloss with a recurring "
+     "head, the no-language fallback, and both surviving save/fresh-load and "
+     "regeneration (#1102)"),
     ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
     ("save_compat_migration", "save_compat_migration_probe.py",

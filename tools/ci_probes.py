@@ -122,6 +122,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                          "knowledge layer alongside the player-wide "
                                          "discovery checks)"),
     "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
+    "river_naming": (SCENARIO_HEAVY, "#1102: three real engine boots -- generation, a "
+                                     "fresh-process save/load round trip, and a "
+                                     "fresh-process regeneration -- around two real "
+                                     "16-chunk worldgens"),
     "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
     "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),
     "power": (SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "

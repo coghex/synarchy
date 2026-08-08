@@ -70,6 +70,8 @@ import World.Save.Types
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
     , SaveData(..), WorldPageSave(..) )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Base (GeoFeatureId(..))
+import World.River.Naming (RiverName(..), RiverNames(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..), mkWorldIdentity)
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -243,7 +245,11 @@ richPage = PageSnapshot
                           -- page's own language, gloss and all. An
                           -- empty instance table could not tell a
                           -- persisted gloss from a dropped one.
-                          , wgpLocationInstances = richLocationInstances }
+                          , wgpLocationInstances = richLocationInstances
+                          -- #1102: the same for rivers — a named one
+                          -- with its gloss, keyed by the feature id the
+                          -- timeline allocated.
+                          , wgpRiverNames = richRiverNames }
     , pgsCameraX      = 12.5
     , pgsCameraY      = 7.5
     , pgsTimeHour     = 14
@@ -322,6 +328,16 @@ richLocationInstances = LocationInstances
     , lisPendingLegacy = Nothing
     }
 
+-- | The rich page's river names (#1102): two rivers named in the page's
+--   own language, each with its English gloss, keyed by 'GeoFeatureId'.
+--   Two rather than one so a round trip that collapsed the table to a
+--   single entry — or lost the keying — could not pass.
+richRiverNames ∷ RiverNames
+richRiverNames = RiverNames $ HM.fromList
+    [ (GeoFeatureId 3, RiverName "Vashendral" (Just "Ashen River"))
+    , (GeoFeatureId 11, RiverName "Koromvash" (Just "Iron Ford"))
+    ]
+
 -- | A second, minimal page -- proves multi-page independence (a stable
 --   identity + distinct per-page camera/gen-params, requirement 4),
 --   and (#1092) the CUSTOM-name case beside the rich page's generated
@@ -364,6 +380,11 @@ pageIdentityOf snap pid = pgsIdentity =≪ HM.lookup pid (snapPages snap)
 
 identityLanguage ∷ SessionSnapshot → WorldPageId → Maybe LanguageProvenance
 identityLanguage snap pid = wiLanguage =≪ pageIdentityOf snap pid
+
+riverNamesOf ∷ SessionSnapshot → WorldPageId → HM.HashMap GeoFeatureId RiverName
+riverNamesOf snap pid =
+    maybe HM.empty (rvnById ∘ wgpRiverNames ∘ pgsGenParams)
+          (HM.lookup pid (snapPages snap))
 
 richGlobals ∷ SessionGlobals
 richGlobals = SessionGlobals
@@ -472,6 +493,14 @@ spec = do
                     identityLanguage snap page1
                         `shouldBe` Just richProvenance
                     identityLanguage snap page2 `shouldBe` Nothing
+                    -- #1102, stated explicitly for the same reason:
+                    -- the generated page's river names AND glosses come
+                    -- back keyed by the same feature ids, while the
+                    -- custom-named page's table stays empty rather than
+                    -- acquiring inferred names.
+                    riverNamesOf snap page1
+                        `shouldBe` rvnById richRiverNames
+                    riverNamesOf snap page2 `shouldBe` HM.empty
                     (wiName <$> pageIdentityOf snap page2)
                         `shouldBe` (wiName <$> customIdentity)
 

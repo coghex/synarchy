@@ -44,7 +44,9 @@ import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Semantic.Types (catalogueErrorText)
 import Location.Types (allLocations)
 import Location.Instance (buildLocationInstances)
-import Location.Naming (LocationNamer, mkLocationNamer)
+import Language.Naming (Namer, mkNamer)
+import World.River.Identity (timelineRiverFeatureIds)
+import World.River.Naming (buildRiverNames)
 import Location.Overlay ( computeLocationPlacement, LocationPlacement(..)
                         , PlacementOutcome(..) )
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
@@ -209,12 +211,14 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- Empty (and skipped) when no defs are loaded — the common
     -- headless-dump path stays byte-identical and zero-cost.
     locRegistry ← readIORef (crLocationDefsRef (toContentRegistriesCapability env))
-    -- #1101: each placed location's name is rendered in THIS page's own
-    -- generated language, resolved from the identity's #1092 provenance
-    -- recorded a few lines above. A page with no provenance (a
-    -- custom-named world, an unnamed one) genuinely has no language and
-    -- gets 'Nothing' — its locations keep their definition labels.
-    namer ← resolveLocationNamer logger identity
+    -- #1101/#1102: this page's placed locations AND its rivers are both
+    -- named in THIS page's own generated language, resolved from the
+    -- identity's #1092 provenance recorded a few lines above. One namer
+    -- serves both, which is what makes a root recur across them. A page
+    -- with no provenance (a custom-named world, an unnamed one)
+    -- genuinely has no language and gets 'Nothing' — its locations keep
+    -- their definition labels and its rivers stay unnamed.
+    namer ← resolvePageNamer logger identity
     let locDefs = allLocations locRegistry
         placement = computeLocationPlacement seed worldSize plates oceanMap oceanDist
                       (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
@@ -228,9 +232,16 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             -- from those same ids, once, and never re-derived.
             , wgpLocationInstances =
                 buildLocationInstances namer locRegistry overlay
+            -- River names (#1102) are rendered from the ids the
+            -- timeline already allocated, once, and never re-derived.
+            -- The table is empty without a language; the ids stay
+            -- available either way.
+            , wgpRiverNames =
+                buildRiverNames namer (timelineRiverFeatureIds timeline)
             }
     _ ← evaluate (force (wgpLocationOverlay params))
     _ ← evaluate (force (wgpLocationInstances params))
+    _ ← evaluate (force (wgpRiverNames params))
     -- #997: a world with no locations at all makes the expedition arc
     -- unplayable on that save, so the two interesting outcomes are
     -- reported rather than passing silently. NoLand is the explicit
@@ -358,8 +369,9 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         <> "surface at z=" <> T.pack (show surfaceElev)
         <> ": " <> unWorldPageId pageId
 
--- | The namer this page's placed locations are named through (#1101),
---   or 'Nothing' when the page has no language to name them in.
+-- | The namer this page's generated names are rendered through — its
+--   placed locations (#1101) and its rivers (#1102) — or 'Nothing' when
+--   the page has no language to name them in.
 --
 --   'Nothing' is the ordinary, expected result for every page whose
 --   identity carries no #1092 provenance — a custom-named world, an
@@ -367,25 +379,26 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 --   DOES declare a language can still end up unnamed are both logged:
 --   a catalogue that will not load, and a provenance naming a generator
 --   version this build cannot construct. Neither substitutes another
---   language; the locations fall back to their definition labels, which
---   is what "this world has no language" already means everywhere else.
-resolveLocationNamer
-    ∷ LoggerState → Maybe WorldIdentity → IO (Maybe LocationNamer)
-resolveLocationNamer logger identity = case wiLanguage =≪ identity of
+--   language; the locations fall back to their definition labels and
+--   the rivers to no name at all, which is what "this world has no
+--   language" already means everywhere else.
+resolvePageNamer
+    ∷ LoggerState → Maybe WorldIdentity → IO (Maybe Namer)
+resolvePageNamer logger identity = case wiLanguage =≪ identity of
     Nothing   → pure Nothing
     Just prov → do
         eCat ← loadCatalogue conceptCataloguePath
         case eCat of
             Left cErr → do
                 logWarn logger CatWorld $
-                    "Location naming disabled for this world: concept "
+                    "Name generation disabled for this world: concept "
                     <> "catalogue " <> T.pack conceptCataloguePath
                     <> " could not be loaded: " <> catalogueErrorText cErr
                 pure Nothing
-            Right cat → case mkLocationNamer cat prov of
+            Right cat → case mkNamer cat prov of
                 Left gErr → do
                     logWarn logger CatWorld $
-                        "Location naming disabled for this world: "
+                        "Name generation disabled for this world: "
                         <> generatorErrorText gErr
                     pure Nothing
                 Right namer → pure (Just namer)

@@ -42,6 +42,7 @@ concepts:
   - { id: CLIFF,     domain: place, singular: cliff,     plural: cliffs,     modifier: cliff,     possessive: "cliff's" }
   - { id: BAY,       domain: place, singular: bay,       plural: bays,       modifier: bay,       possessive: "bay's" }
   - { id: FORD,      domain: place, singular: ford,      plural: fords,      modifier: ford,      possessive: "ford's" }
+  - { id: RIVER,     domain: place, singular: river,     plural: rivers,     modifier: river,     possessive: "river's" }
   - { id: HOLLOW,    domain: place, singular: hollow,    plural: hollows,    modifier: hollow,    possessive: "hollow's" }
   - { id: MARSH,     domain: place, singular: marsh,     plural: marshes,    modifier: marsh,     possessive: "marsh's" }
   - { id: CAVERN,    domain: place, singular: cavern,    plural: caverns,    modifier: cavern,    possessive: "cavern's" }

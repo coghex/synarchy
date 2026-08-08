@@ -15,6 +15,7 @@
 --   discipline):
 --
 --   - 'WorldGenParams'  → 'WorldGenParamsDTO'
+--   - 'RiverName'       → 'RiverNameDTO' (and its table → 'RiverNamesDTO')
 --   - 'TectonicPlate'   → 'TectonicPlateDTO'
 --   - 'CalendarConfig'  → 'CalendarConfigDTO'
 --   - 'SunConfig'       → 'SunConfigDTO'
@@ -65,6 +66,9 @@ module World.Save.Component.WorldGen
     ( WorldGenParamsDTO(..)
     , WorldGenParamsDTOv1(..)
     , WorldGenParamsDTOv2(..)
+    , WorldGenParamsDTOv3(..)
+    , RiverNameDTO(..)
+    , RiverNamesDTO(..)
     , AbsBoundsDTO(..)
     , LocationInstanceDTO(..)
     , LocationInstancesDTO(..)
@@ -97,6 +101,10 @@ module World.Save.Component.WorldGen
     , toWorldGenParamsDTOv1
     , fromWorldGenParamsDTOv2
     , toWorldGenParamsDTOv2
+    , fromWorldGenParamsDTOv3
+    , toWorldGenParamsDTOv3
+    , toRiverNamesDTO
+    , fromRiverNamesDTO
     , toLocationInstancesDTO
     , fromLocationInstancesDTO
     , toLocationInstancesDTOv1
@@ -127,6 +135,8 @@ import World.Weather.Types
 import World.Geology.Ore.Types (OreLevers(..))
 import Location.Overlay.Types (LocationOverlay)
 import Location.Bounds (AbsBounds(..))
+import World.Base (GeoFeatureId)
+import World.River.Naming (RiverName(..), RiverNames(..), emptyRiverNames)
 import Location.Instance
     ( LocationInstance(..), LocationInstances(..), LocationInstanceId
     , LocationLifecycle, pendingLegacyFlags, instancesToList
@@ -713,6 +723,48 @@ fromLocationInstancesDTOv1 d = LocationInstances
 
 -- WorldGenParams ----------------------------------------------------
 
+-- River names (#1102) ------------------------------------------------
+
+-- | Frozen mirror of 'World.River.Naming.RiverName'. Small and stable
+--   today, but it is a LIVE record on a live per-page table — a later
+--   naming issue could give a river a second reading or a provenance of
+--   its own — so it gets the same explicit conversion every other live
+--   record on 'WorldGenParams' does rather than being embedded.
+data RiverNameDTO = RiverNameDTO
+    { rvdDisplayName ∷ !Text
+    , rvdGloss       ∷ !(Maybe Text)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Frozen mirror of 'World.River.Naming.RiverNames'.
+--   'World.Base.GeoFeatureId' is a leaf id newtype over 'Int', reused
+--   as-is exactly like 'LocationInstanceId' / 'ChunkCoord'.
+newtype RiverNamesDTO = RiverNamesDTO
+    { rvdById ∷ HM.HashMap GeoFeatureId RiverNameDTO }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+toRiverNameDTO ∷ RiverName → RiverNameDTO
+toRiverNameDTO n = RiverNameDTO
+    { rvdDisplayName = rvnDisplayName n
+    , rvdGloss       = rvnGloss n
+    }
+
+-- | Rebuild the live record. A stored name is carried across EXACTLY —
+--   never re-rendered from the page's language, which is the whole
+--   point of #708 principle 5 (a river named under one catalogue keeps
+--   that name even after the catalogue grows).
+fromRiverNameDTO ∷ RiverNameDTO → RiverName
+fromRiverNameDTO d = RiverName
+    { rvnDisplayName = rvdDisplayName d
+    , rvnGloss       = rvdGloss d
+    }
+
+toRiverNamesDTO ∷ RiverNames → RiverNamesDTO
+toRiverNamesDTO = RiverNamesDTO . HM.map toRiverNameDTO . rvnById
+
+fromRiverNamesDTO ∷ RiverNamesDTO → RiverNames
+fromRiverNamesDTO = RiverNames . HM.map fromRiverNameDTO . rvdById
+
 -- | Frozen mirror of 'WorldGenParams' (a mutable runtime record that
 --   gains fields as worldgen features land — the #89/#90/#424/#780
 --   location flags were the recent examples, and #911 replaced two of
@@ -723,12 +775,14 @@ fromLocationInstancesDTOv1 d = LocationInstances
 --   record is a frozen DTO (see this module's haddock); 'GeoTimeline'
 --   and the content-collection aliases are reused as leaves.
 --
---   This is the CURRENT shape, carried by @world-pages@ v4: its
---   instance table is 'LocationInstancesDTO', which #1101 extended with
---   a per-instance gloss. 'WorldGenParamsDTOv2' below is the frozen
---   shape @world-pages@ v2 and v3 carry (the #911 instance table, no
---   gloss), and 'WorldGenParamsDTOv1' the frozen pre-#911 shape (three
---   chunk-keyed location sets); both are decode-only.
+--   This is the CURRENT shape, carried by @world-pages@ v5: it adds
+--   #1102's per-page river-name table beside the location instances.
+--   'WorldGenParamsDTOv3' below is the frozen shape @world-pages@ v4
+--   carries (#1101's per-instance gloss, no river names),
+--   'WorldGenParamsDTOv2' the frozen shape v2 and v3 carry (the #911
+--   instance table, no gloss), and 'WorldGenParamsDTOv1' the frozen
+--   pre-#911 shape (three chunk-keyed location sets); all three are
+--   decode-only.
 data WorldGenParamsDTO = WorldGenParamsDTO
     { gpSeed                    ∷ !Word64
     , gpWorldSize               ∷ !Int
@@ -752,6 +806,7 @@ data WorldGenParamsDTO = WorldGenParamsDTO
     , gpLocationOverlay         ∷ !LocationOverlay
     , gpLocationInstances       ∷ !LocationInstancesDTO
     , gpLocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    , gpRiverNames              ∷ !RiverNamesDTO
     } deriving (Show, Eq, Generic, Serialize)
 
 toWorldGenParamsDTO ∷ WorldGenParams → WorldGenParamsDTO
@@ -778,6 +833,7 @@ toWorldGenParamsDTO p = WorldGenParamsDTO
     , gpLocationOverlay         = wgpLocationOverlay p
     , gpLocationInstances       = toLocationInstancesDTO (wgpLocationInstances p)
     , gpLocationStamped         = wgpLocationStamped p
+    , gpRiverNames              = toRiverNamesDTO (wgpRiverNames p)
     }
 
 -- | Rebuild the live record from the DTO, restoring the transient
@@ -810,6 +866,105 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpLocationOverlay         = gpLocationOverlay d
     , wgpLocationInstances       = fromLocationInstancesDTO (gpLocationInstances d)
     , wgpLocationStamped         = gpLocationStamped d
+    , wgpRiverNames              = fromRiverNamesDTO (gpRiverNames d)
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+-- Frozen pre-#1102 worldgen params (@world-pages@ v4) ----------------
+
+-- | The FROZEN pre-#1102 shape of 'WorldGenParamsDTO', preserved
+--   verbatim for decode-only backward compatibility: identical to the
+--   current type except that it carries no river-name table. This is
+--   what @world-pages@ v4 (#1101) encoded. Never edited; a further
+--   gen-params change freezes the CURRENT type as a v4 instead
+--   (frozen-DTO boundary rule).
+data WorldGenParamsDTOv3 = WorldGenParamsDTOv3
+    { gp3Seed                    ∷ !Word64
+    , gp3WorldSize               ∷ !Int
+    , gp3PlateCount              ∷ !Int
+    , gp3Plates                  ∷ ![TectonicPlateDTO]
+    , gp3Calender                ∷ !CalendarConfigDTO
+    , gp3SunConfig               ∷ !SunConfigDTO
+    , gp3MoonConfig              ∷ !MoonConfigDTO
+    , gp3GeoTimeline             ∷ !GeoTimeline
+    , gp3OceanMap                ∷ !OceanMap
+    , gp3OceanDist               ∷ !OceanDistMap
+    , gp3ClimateParams           ∷ !ClimateParamsDTO
+    , gp3ClimateState            ∷ !ClimateStateDTO
+    , gp3ErosionIntensity        ∷ !Float
+    , gp3VolcanicActivity        ∷ !Float
+    , gp3LavaPoolDepth           ∷ !Int
+    , gp3LavaPoolRadius          ∷ !Int
+    , gp3WaterfallQuantum        ∷ !Int
+    , gp3OreLevers               ∷ !OreLeversDTO
+    , gp3TimelineParams          ∷ !TimelineParamsDTO
+    , gp3LocationOverlay         ∷ !LocationOverlay
+    , gp3LocationInstances       ∷ !LocationInstancesDTO
+    , gp3LocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen v3 gen params, the round-trip partner
+--   'toWorldGenParamsDTOv1'/'toWorldGenParamsDTOv2' already provide for
+--   the older shapes — how a test builds real pre-#1102 bytes to
+--   migrate from. Production never writes this shape.
+toWorldGenParamsDTOv3 ∷ WorldGenParams → WorldGenParamsDTOv3
+toWorldGenParamsDTOv3 p = WorldGenParamsDTOv3
+    { gp3Seed                    = wgpSeed p
+    , gp3WorldSize               = wgpWorldSize p
+    , gp3PlateCount              = wgpPlateCount p
+    , gp3Plates                  = map toTectonicPlateDTO (wgpPlates p)
+    , gp3Calender                = toCalendarConfigDTO (wgpCalender p)
+    , gp3SunConfig               = toSunConfigDTO (wgpSunConfig p)
+    , gp3MoonConfig              = toMoonConfigDTO (wgpMoonConfig p)
+    , gp3GeoTimeline             = wgpGeoTimeline p
+    , gp3OceanMap                = wgpOceanMap p
+    , gp3OceanDist               = wgpOceanDist p
+    , gp3ClimateParams           = toClimateParamsDTO (wgpClimateParams p)
+    , gp3ClimateState            = toClimateStateDTO (wgpClimateState p)
+    , gp3ErosionIntensity        = wgpErosionIntensity p
+    , gp3VolcanicActivity        = wgpVolcanicActivity p
+    , gp3LavaPoolDepth           = wgpLavaPoolDepth p
+    , gp3LavaPoolRadius          = wgpLavaPoolRadius p
+    , gp3WaterfallQuantum        = wgpWaterfallQuantum p
+    , gp3OreLevers               = toOreLeversDTO (wgpOreLevers p)
+    , gp3TimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp3LocationOverlay         = wgpLocationOverlay p
+    , gp3LocationInstances       = toLocationInstancesDTO
+                                      (wgpLocationInstances p)
+    , gp3LocationStamped         = wgpLocationStamped p
+    }
+
+-- | Rebuild the live record from a v3 DTO. Every field rides across
+--   untouched and the river-name table comes back EMPTY — a save
+--   written before #1102 named no rivers, and a name is never inferred
+--   after the fact (#1102 requirements 5 and 6). Its rivers keep their
+--   ids, which are derived from the timeline it already carries.
+fromWorldGenParamsDTOv3 ∷ WorldGenParamsDTOv3 → WorldGenParams
+fromWorldGenParamsDTOv3 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                    = gp3Seed d
+    , wgpWorldSize               = gp3WorldSize d
+    , wgpPlateCount              = gp3PlateCount d
+    , wgpPlates                  = map fromTectonicPlateDTO (gp3Plates d)
+    , wgpCalender                = fromCalendarConfigDTO (gp3Calender d)
+    , wgpSunConfig               = fromSunConfigDTO (gp3SunConfig d)
+    , wgpMoonConfig              = fromMoonConfigDTO (gp3MoonConfig d)
+    , wgpGeoTimeline             = gp3GeoTimeline d
+    , wgpOceanMap                = gp3OceanMap d
+    , wgpOceanDist               = gp3OceanDist d
+    , wgpClimateParams           = fromClimateParamsDTO (gp3ClimateParams d)
+    , wgpClimateState            = fromClimateStateDTO (gp3ClimateState d)
+    , wgpErosionIntensity        = gp3ErosionIntensity d
+    , wgpVolcanicActivity        = gp3VolcanicActivity d
+    , wgpLavaPoolDepth           = gp3LavaPoolDepth d
+    , wgpLavaPoolRadius          = gp3LavaPoolRadius d
+    , wgpWaterfallQuantum        = gp3WaterfallQuantum d
+    , wgpOreLevers               = fromOreLeversDTO (gp3OreLevers d)
+    , wgpTimelineParams          = fromTimelineParamsDTO (gp3TimelineParams d)
+    , wgpLocationOverlay         = gp3LocationOverlay d
+    , wgpLocationInstances       = fromLocationInstancesDTO
+                                      (gp3LocationInstances d)
+    , wgpLocationStamped         = gp3LocationStamped d
+    , wgpRiverNames              = emptyRiverNames
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -906,6 +1061,7 @@ fromWorldGenParamsDTOv2 d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances       = fromLocationInstancesDTOv1
                                       (gp2LocationInstances d)
     , wgpLocationStamped         = gp2LocationStamped d
+    , wgpRiverNames              = emptyRiverNames
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -977,6 +1133,7 @@ fromWorldGenParamsDTOv1 d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances       =
         pendingLegacyFlags (gp1LocationDiscovered d) (gp1LocationContentsSpawned d)
     , wgpLocationStamped         = gp1LocationStamped d
+    , wgpRiverNames              = emptyRiverNames
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
