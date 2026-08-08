@@ -12,6 +12,8 @@ import Data.Hashable (Hashable)
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Language.Generated.Types (LanguageProvenance)
+import Language.Etymology.Source (EtymologySource(..))
+import Language.Semantic.Types (NameExpr)
 
 -- | 'Serialize' is derived from the underlying 'Text' (instance in
 --   UPrelude) so world-page ids can be persisted in saves — each page's
@@ -44,6 +46,19 @@ data WorldIdentity = WorldIdentity
         --   explain existing ones — never to recompute them. 'wiName'
         --   and 'wiGloss' are already-rendered output (#708 principle
         --   5) and must not be regenerated from the recovered seed.
+    , wiEtymology ∷ !(Maybe EtymologySource)
+        -- ^ What 'wiName' was rendered FROM (#1104): the originating
+        --   'Language.Semantic.Types.NameExpr' plus the provenance that
+        --   rendered it, so the name can be decomposed into roots and
+        --   meanings without parsing the displayed string.
+        --
+        --   Optional independently of 'wiLanguage', and narrower: a
+        --   custom name has neither, while a generated name whose
+        --   caller supplied provenance but no expression has language
+        --   but no etymology. Absence is an ordinary state — every save
+        --   written before #1104 decodes with it absent — and is never
+        --   repaired by inferring an expression from the name, the
+        --   gloss, or the world seed (#1104 requirement 1).
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Normalize raw display-name / gloss input into an identity. Each
@@ -59,26 +74,34 @@ data WorldIdentity = WorldIdentity
 --   language provenance — see 'mkGeneratedWorldIdentity' for the
 --   generated one.
 mkWorldIdentity ∷ Maybe Text → Maybe Text → Maybe WorldIdentity
-mkWorldIdentity = mkIdentity Nothing
+mkWorldIdentity = mkIdentity Nothing Nothing
 
 -- | The GENERATED-name path: identical normalization, plus the
 --   provenance of the language that rendered the text (#1092). A
 --   caller must supply provenance explicitly here — nothing infers it
 --   from the name, the gloss, or any world-generation seed.
+--
+--   The originating expression (#1104) is supplied the same way and is
+--   independently optional: a caller that knows the provenance but not
+--   the expression records a language with no etymology rather than a
+--   guessed one.
 mkGeneratedWorldIdentity
-    ∷ Maybe Text → Maybe Text → LanguageProvenance → Maybe WorldIdentity
-mkGeneratedWorldIdentity mName mGloss prov =
-    mkIdentity (Just prov) mName mGloss
+    ∷ Maybe Text → Maybe Text → LanguageProvenance → Maybe NameExpr
+    → Maybe WorldIdentity
+mkGeneratedWorldIdentity mName mGloss prov mExpr =
+    mkIdentity (Just prov) (mkSource <$> mExpr) mName mGloss
+  where
+    mkSource expr = EtymologySource { esExpr = expr, esLanguage = prov }
 
 -- | Shared normalization for both construction paths, so they can
 --   never drift in what counts as a valid name/gloss. Deliberately
 --   NOT exported: provenance is a required argument here, so every
 --   identity is built through a path that states it explicitly.
 mkIdentity
-    ∷ Maybe LanguageProvenance → Maybe Text → Maybe Text
-    → Maybe WorldIdentity
-mkIdentity prov mName mGloss = case fmap T.strip mName of
-    Just n | not (T.null n) → Just (WorldIdentity n gloss prov)
+    ∷ Maybe LanguageProvenance → Maybe EtymologySource → Maybe Text
+    → Maybe Text → Maybe WorldIdentity
+mkIdentity prov mSource mName mGloss = case fmap T.strip mName of
+    Just n | not (T.null n) → Just (WorldIdentity n gloss prov mSource)
     _                       → Nothing
   where
     gloss = case fmap T.strip mGloss of

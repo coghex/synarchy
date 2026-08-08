@@ -202,6 +202,7 @@ suggestPrelude = lns
     , "    return {"
     , "      name = 'N' .. tostring(seed) .. '_' .. tostring(ordinal),"
     , "      gloss = 'G' .. tostring(seed) .. '_' .. tostring(ordinal),"
+    , "      expr = 'Modifier:M' .. tostring(seed) .. ':H' .. tostring(ordinal),"
     , "      language = { seed = tostring(seed) .. '000', version = 5 },"
     , "    }"
     , "  end,"
@@ -485,6 +486,49 @@ spec = do
                 , "local gloss, seed, version = nameSuggest.identity(p)"
                 , "assert(gloss == nil and seed == nil and version == nil,"
                 , "       'provenance survived a manual edit')"
+                ]
+
+        -- #1104: the semantic expression rides with the gloss and the
+        -- provenance, all the way to world.init. Without it an accepted
+        -- suggestion would record WHICH language named the world but not
+        -- WHAT the name means, and its etymology would be permanently
+        -- unavailable — the one case #1104 requirement 1 exists to
+        -- prevent for newly created worlds.
+        it "records the name EXPRESSION alongside the provenance, and \
+           \forwards it as identity's fourth value" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "assert(p.nameExpr == 'Modifier:M11:H0', tostring(p.nameExpr))"
+                , "local gloss, seed, version, expr = nameSuggest.identity(p)"
+                , "assert(expr == 'Modifier:M11:H0', tostring(expr))"
+                , "assert(gloss == 'G11_0' and seed == '11000' and version == 5)"
+                ]
+
+        it "drops the expression the moment the player edits, with the \
+           \rest of the generated identity" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "nameSuggest.clear(p)"
+                , "assert(p.nameExpr == nil, tostring(p.nameExpr))"
+                , "local _, _, _, expr = nameSuggest.identity(p)"
+                , "assert(expr == nil, 'an expression survived a manual edit')"
+                ]
+
+        it "carries the expression through a responsive rebuild's \
+           \snapshot/restore, so a resize cannot silently strip a \
+           \world's etymology before it is created" $
+            runsSuggest $ lns
+                [ "local p = newPending()"
+                , "nameSuggest.suggest(p, 11)"
+                , "local snap = nameSuggest.snapshot(p)"
+                , "assert(snap.expr == 'Modifier:M11:H0', tostring(snap.expr))"
+                , "local q = newPending()"
+                , "nameSuggest.restore(q, snap)"
+                , "assert(q.nameExpr == 'Modifier:M11:H0', tostring(q.nameExpr))"
+                , "local _, _, _, expr = nameSuggest.identity(q)"
+                , "assert(expr == 'Modifier:M11:H0', tostring(expr))"
                 ]
 
         it "keeps a manual name out of the identity path entirely" $

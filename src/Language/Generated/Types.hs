@@ -55,6 +55,7 @@ module Language.Generated.Types
 import UPrelude
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 
@@ -70,8 +71,8 @@ import GHC.Generics (Generic)
 --   'Serialize' is derived from the underlying 'Word64' so a world's
 --   language provenance can ride into a save (#1092).
 newtype LangSeed = LangSeed { langSeedWord ∷ Word64 }
-    deriving (Show, Eq)
-    deriving newtype (Serialize)
+    deriving stock (Show, Eq, Generic)
+    deriving newtype (NFData, Serialize)
 
 -- | A seed's decimal text, for surfaces that cannot carry an unsigned
 --   64-bit integer losslessly (#1092): a Lua integer is SIGNED 64-bit
@@ -87,8 +88,8 @@ langSeedText (LangSeed s) = T.pack (show s)
 --   2 and 15) — which is what lets a world named by an older generator
 --   still be explained after the current version advances (#1092).
 newtype GeneratorVersion = GeneratorVersion { generatorVersionInt ∷ Int }
-    deriving (Show, Eq)
-    deriving newtype (Serialize)
+    deriving stock (Show, Eq, Generic)
+    deriving newtype (NFData, Serialize)
 
 -- | The version new languages are generated at. Distinct from
 --   'supportedGeneratorVersions': advancing this must never make an
@@ -115,7 +116,7 @@ supportedGeneratorVersions =
 data LanguageProvenance = LanguageProvenance
     { lpSeed    ∷ !LangSeed          -- ^ The language's seed.
     , lpVersion ∷ !GeneratorVersion  -- ^ The generator that rendered it.
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | Ordering for the two compound forms (@Modifier@, @Of@): which side
 --   is written first.

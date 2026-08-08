@@ -37,6 +37,14 @@ function uiManager.reflowAfterHudResize()
     -- gameplay scripts never forces this one to load.
     local tutorialHud = package.loaded["scripts.tutorial_hud"]
     if tutorialHud then tutorialHud.reflow() end
+    -- Name plate + etymology panel (#1104): both anchor against hud's
+    -- framebuffer geometry, so they reflow AFTER it for the same reason
+    -- popup/unitInfoV2 do. Reached through package.loaded so a boot
+    -- profile without the gameplay scripts never forces them to load.
+    local namePlate = package.loaded["scripts.name_plate"]
+    if namePlate then namePlate.reflow() end
+    local etymologyPanel = package.loaded["scripts.etymology_panel"]
+    if etymologyPanel then etymologyPanel.reflow() end
 end
 
 -- A UI-scale-only Settings Apply/Save/Back (same framebuffer size, new
@@ -88,4 +96,10 @@ function uiManager.notifyGameplayRescale(width, height)
     -- itself.
     local tutorialHud = package.loaded["scripts.tutorial_hud"]
     if tutorialHud then tutorialHud.reflow(width, height) end
+    -- #1104, scale-only path: same ordering rule as the real-resize
+    -- fan-out above — both anchor on hud's already-rebuilt geometry.
+    local namePlate = package.loaded["scripts.name_plate"]
+    if namePlate then namePlate.reflow() end
+    local etymologyPanel = package.loaded["scripts.etymology_panel"]
+    if etymologyPanel then etymologyPanel.reflow() end
 end

@@ -121,6 +121,11 @@ function worldManager.createWorld(params)
     local worldGloss      = params.worldGloss
     local languageSeed    = params.languageSeed
     local languageVersion = params.languageVersion
+    -- #1104: the semantic expression the name was rendered from. Same
+    -- rule again — verbatim, never defaulted, nil for a player-typed
+    -- name, which is how the engine tells a decomposable name from one
+    -- with no meaning behind it.
+    local nameExpr        = params.nameExpr
 
     engine.logInfo("Creating world: " .. worldId
         .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")
@@ -158,9 +163,10 @@ function worldManager.createWorld(params)
     -- callers are unaffected (#708 acceptance criterion 7). Arguments
     -- 6-8 (gloss, language seed, generator version) follow the same
     -- rule: nil for every caller that has no generated name, which is
-    -- indistinguishable from not passing them at all.
+    -- indistinguishable from not passing them at all. Argument 9
+    -- (#1104's name expression) follows it exactly.
     world.init(worldId, seed, worldSize, plateCount, worldName,
-               worldGloss, languageSeed, languageVersion)
+               worldGloss, languageSeed, languageVersion, nameExpr)
 
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)

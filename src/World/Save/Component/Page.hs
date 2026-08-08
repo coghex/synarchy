@@ -35,14 +35,18 @@
 --   - 'WorldGenParams'      → 'WorldGenParamsDTO' (with its nested live
 --                             config/state records frozen recursively —
 --                             see "World.Save.Component.WorldGen"; the
---                             pre-#1102 shape stays as
+--                             pre-#1104 shape stays as
+--                             'WorldGenParamsDTOv4', the pre-#1102 one as
 --                             'WorldGenParamsDTOv3', the pre-#1101 one as
 --                             'WorldGenParamsDTOv2' and the pre-#911 one
 --                             as 'WorldGenParamsDTOv1')
 --   - 'WorldIdentity'       → 'WorldIdentityDTO' (its optional
 --                             'LanguageProvenance' frozen as
---                             'LanguageProvenanceDTO'; the pre-#1092
---                             shape stays as 'WorldIdentityDTOv1')
+--                             'LanguageProvenanceDTO' and its optional
+--                             #1104 etymology source as
+--                             'EtymologySourceDTO'; the pre-#1104 shape
+--                             stays as 'WorldIdentityDTOv2' and the
+--                             pre-#1092 one as 'WorldIdentityDTOv1')
 --   - 'WorldEdit'           → 'WorldEditDTO' (its own frozen tag order,
 --                             decoupled from the live sum's constructor
 --                             order, so REORDERING the live type can no
@@ -89,11 +93,14 @@ module World.Save.Component.Page
     , WorldPagesDTOv3(..)
     , PageCoreDTOv4(..)
     , WorldPagesDTOv4(..)
+    , PageCoreDTOv5(..)
+    , WorldPagesDTOv5(..)
     , WorldPages(..)
     , migrateWorldPagesV1
     , migrateWorldPagesV2
     , migrateWorldPagesV3
     , migrateWorldPagesV4
+    , migrateWorldPagesV5
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
@@ -103,12 +110,17 @@ module World.Save.Component.Page
     , WorldGenParamsDTOv1(..)
     , WorldGenParamsDTOv2(..)
     , WorldGenParamsDTOv3(..)
+    , WorldGenParamsDTOv4(..)
     , RiverNameDTO(..)
     , RiverNamesDTO(..)
+    , EtymologySourceDTO(..)
     , WorldIdentityDTO(..)
     , WorldIdentityDTOv1(..)
+    , WorldIdentityDTOv2(..)
     , LanguageProvenanceDTO(..)
     , fromWorldIdentityDTOv1
+    , toWorldIdentityDTOv2
+    , fromWorldIdentityDTOv2
     , WorldEditDTO(..)
     , MineDesignationDTO(..)
     , StructurePieceDTO(..)
@@ -130,6 +142,10 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv2
     , fromWorldGenParamsDTOv3
     , toWorldGenParamsDTOv3
+    , fromWorldGenParamsDTOv4
+    , toWorldGenParamsDTOv4
+    , toEtymologySourceDTO
+    , fromEtymologySourceDTO
     , toItemInstanceDTO
     , fromItemInstanceDTO
     , toGroundItemDTO
@@ -159,6 +175,10 @@ import World.Save.Component.WorldGen
     , toWorldGenParamsDTOv2
     , WorldGenParamsDTOv3(..), fromWorldGenParamsDTOv3
     , toWorldGenParamsDTOv3
+    , WorldGenParamsDTOv4(..), fromWorldGenParamsDTOv4
+    , toWorldGenParamsDTOv4
+    , EtymologySourceDTO(..)
+    , toEtymologySourceDTO, fromEtymologySourceDTO
     , RiverNameDTO(..), RiverNamesDTO(..) )
 import Location.Instance (locationInstanceAllocatorErrors)
 import World.Generate.Types (WorldGenParams(..))
@@ -197,12 +217,21 @@ tshow = T.pack . show
 
 -- Frozen leaf DTOs (requirement 4) -----------------------------------
 
--- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v3)
---   shape, carrying the optional language provenance #1092 added.
+-- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v6)
+--   shape: the optional language provenance #1092 added, plus the
+--   optional etymology source #1104 added.
+--
+--   The two are independently optional, exactly as they are on the live
+--   record: provenance says WHICH language named the world, the source
+--   says WHAT expression it rendered. A world can have the first without
+--   the second (a caller that recorded a language but no expression),
+--   never the second without the first — the source carries its own
+--   provenance, so the pair can never disagree about the language.
 data WorldIdentityDTO = WorldIdentityDTO
-    { widName     ∷ !Text
-    , widGloss    ∷ !(Maybe Text)
-    , widLanguage ∷ !(Maybe LanguageProvenanceDTO)
+    { widName      ∷ !Text
+    , widGloss     ∷ !(Maybe Text)
+    , widLanguage  ∷ !(Maybe LanguageProvenanceDTO)
+    , widEtymology ∷ !(Maybe EtymologySourceDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Frozen mirror of 'LanguageProvenance' (#1092). Seed and version
@@ -231,10 +260,40 @@ fromLanguageProvenanceDTO d = LanguageProvenance
 toWorldIdentityDTO ∷ WorldIdentity → WorldIdentityDTO
 toWorldIdentityDTO i = WorldIdentityDTO (wiName i) (wiGloss i)
     (toLanguageProvenanceDTO <$> wiLanguage i)
+    (toEtymologySourceDTO <$> wiEtymology i)
 
 fromWorldIdentityDTO ∷ WorldIdentityDTO → WorldIdentity
 fromWorldIdentityDTO d = WorldIdentity (widName d) (widGloss d)
     (fromLanguageProvenanceDTO <$> widLanguage d)
+    (fromEtymologySourceDTO <$> widEtymology d)
+
+-- | The FROZEN pre-#1104 identity shape (@world-pages@ v3 through v5),
+--   preserved verbatim for decode-only backward compatibility: name,
+--   gloss, and #1092's language provenance, with no etymology source.
+--   Never edited; a further identity schema change freezes the CURRENT
+--   shape as 'WorldIdentityDTOv3' rather than touching this one
+--   (frozen-DTO boundary rule).
+data WorldIdentityDTOv2 = WorldIdentityDTOv2
+    { wid2Name     ∷ !Text
+    , wid2Gloss    ∷ !(Maybe Text)
+    , wid2Language ∷ !(Maybe LanguageProvenanceDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen shape — the round-trip partner a frozen-DTO
+--   fixture is built with (the same reason 'toWorldGenParamsDTOv3'
+--   exists).
+toWorldIdentityDTOv2 ∷ WorldIdentity → WorldIdentityDTOv2
+toWorldIdentityDTOv2 i = WorldIdentityDTOv2 (wiName i) (wiGloss i)
+    (toLanguageProvenanceDTO <$> wiLanguage i)
+
+-- | A pre-#1104 identity keeps its name, gloss, and language EXACTLY
+--   and decodes with NO etymology source — the same honest absence
+--   'fromWorldIdentityDTOv1' produces for provenance. A world named
+--   before the expression was recorded genuinely has none to recover,
+--   and deriving one from the name would fabricate a meaning.
+fromWorldIdentityDTOv2 ∷ WorldIdentityDTOv2 → WorldIdentity
+fromWorldIdentityDTOv2 d = WorldIdentity (wid2Name d) (wid2Gloss d)
+    (fromLanguageProvenanceDTO <$> wid2Language d) Nothing
 
 -- | The FROZEN pre-#1092 identity shape, preserved verbatim for
 --   decode-only backward compatibility: name and gloss, no language.
@@ -254,7 +313,8 @@ data WorldIdentityDTOv1 = WorldIdentityDTOv1
 --   recoverable language, and guessing one would attach a false
 --   etymology to a real world. Name and gloss carry across exactly.
 fromWorldIdentityDTOv1 ∷ WorldIdentityDTOv1 → WorldIdentity
-fromWorldIdentityDTOv1 d = WorldIdentity (wid1Name d) (wid1Gloss d) Nothing
+fromWorldIdentityDTOv1 d =
+    WorldIdentity (wid1Name d) (wid1Gloss d) Nothing Nothing
 
 -- | Frozen mirror of 'WorldEdit'. Its OWN constructor order is the wire
 --   contract, decoupled from the live sum's — so reordering the live
@@ -561,10 +621,10 @@ fromEditsDTO = HM.map (map fromWorldEditDTO)
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v5) wire shape — see 'PageCoreDTOv4' for the
---   frozen pre-#1102 one, 'PageCoreDTOv3' for the pre-#1101 one,
---   'PageCoreDTOv2' for the pre-#1092 one, and 'PageCoreDTOv1' for the
---   pre-#911 one.
+--   This is the CURRENT (v6) wire shape — see 'PageCoreDTOv5' for the
+--   frozen pre-#1104 one, 'PageCoreDTOv4' for the pre-#1102 one,
+--   'PageCoreDTOv3' for the pre-#1101 one, 'PageCoreDTOv2' for the
+--   pre-#1092 one, and 'PageCoreDTOv1' for the pre-#911 one.
 data PageCoreDTO = PageCoreDTO
     { pcPageId      ∷ !WorldPageId
     , pcGenParams   ∷ !WorldGenParamsDTO
@@ -652,7 +712,7 @@ data PageCoreDTOv3 = PageCoreDTOv3
     , pc3DateMonth   ∷ !Int
     , pc3DateDay     ∷ !Int
     , pc3MapMode     ∷ !ZoomMapMode
-    , pc3Identity    ∷ !(Maybe WorldIdentityDTO)
+    , pc3Identity    ∷ !(Maybe WorldIdentityDTOv2)
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTOv3 = WorldPagesDTOv3 { wpd3Pages ∷ [PageCoreDTOv3] }
@@ -675,10 +735,33 @@ data PageCoreDTOv4 = PageCoreDTOv4
     , pc4DateMonth   ∷ !Int
     , pc4DateDay     ∷ !Int
     , pc4MapMode     ∷ !ZoomMapMode
-    , pc4Identity    ∷ !(Maybe WorldIdentityDTO)
+    , pc4Identity    ∷ !(Maybe WorldIdentityDTOv2)
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTOv4 = WorldPagesDTOv4 { wpd4Pages ∷ [PageCoreDTOv4] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN v5 wire shape (#1102 through #1104), preserved verbatim
+--   for decode-only backward compatibility: #1092's identity over
+--   #1102's gen params, neither of which carries an etymology source.
+--   Never edited; a further schema change adds a newer type instead
+--   (frozen-DTO boundary rule).
+data PageCoreDTOv5 = PageCoreDTOv5
+    { pc5PageId      ∷ !WorldPageId
+    , pc5GenParams   ∷ !WorldGenParamsDTOv4
+    , pc5CameraX     ∷ !Float
+    , pc5CameraY     ∷ !Float
+    , pc5TimeHour    ∷ !Int
+    , pc5TimeMinute  ∷ !Int
+    , pc5DateYear    ∷ !Int
+    , pc5DateMonth   ∷ !Int
+    , pc5DateDay     ∷ !Int
+    , pc5MapMode     ∷ !ZoomMapMode
+    , pc5Identity    ∷ !(Maybe WorldIdentityDTOv2)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv5 = WorldPagesDTOv5 { wpd5Pages ∷ [PageCoreDTOv5] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -694,9 +777,10 @@ data WorldPages = WorldPages
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
     } deriving (Show)
 
--- | Encoding always writes the current v5 shape; v4 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV4' (#1102), v3
---   via 'migrateWorldPagesV3' (#1101), v2 via 'migrateWorldPagesV2'
+-- | Encoding always writes the current v6 shape; v5 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV5' (#1104), v4
+--   via 'migrateWorldPagesV4' (#1102), v3 via 'migrateWorldPagesV3'
+--   (#1101), v2 via 'migrateWorldPagesV2'
 --   (#1092), and v1 via 'migrateWorldPagesV1' (#911). Issue #1093: this
 --   used to be a hand-rolled 'ComponentCodec' because the shared helper
 --   had no real multi-version dispatch — 'componentCodec' now expresses
@@ -704,13 +788,14 @@ data WorldPages = WorldPages
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-    , csVersion       = 5
+    , csVersion       = 6
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 4 migrateWorldPagesV4
+    , csOlderVersions = [ atVersion 5 migrateWorldPagesV5
+                        , atVersion 4 migrateWorldPagesV4
                         , atVersion 3 migrateWorldPagesV3
                         , atVersion 2 migrateWorldPagesV2
                         , atVersion 1 migrateWorldPagesV1 ]
@@ -751,9 +836,9 @@ validatePages wp
           , msg ← locationInstanceAllocatorErrors
                       (wgpLocationInstances (pgsGenParams p))
           ]
-  where err = ComponentError worldPagesComponentId 5 ValidatePhase
+  where err = ComponentError worldPagesComponentId 6 ValidatePhase
 
--- | Turn the decoded v5 page cores into the base 'PageSnapshot' map every
+-- | Turn the decoded v6 page cores into the base 'PageSnapshot' map every
 --   other page-scoped component then writes onto (assembly). All entity/
 --   activity/edit fields start empty and are overwritten by their own
 --   REQUIRED components; a valid save leaves none of these placeholders.
@@ -774,6 +859,37 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         , pgsDateDay    = pcDateDay p
         , pgsMapMode    = pcMapMode p
         , pgsIdentity   = fromWorldIdentityDTO <$> pcIdentity p
+        }
+
+-- | The v5 migration (#1104): decode the frozen v5 page cores into the
+--   same base 'PageSnapshot' map. The ONLY difference is the optional
+--   etymology source, which comes back ABSENT on all three of the
+--   things that can carry one — the page's own identity, each location
+--   instance, and each river name. A save written before #1104 recorded
+--   no expressions, and one is never reconstructed after the fact from
+--   a stored name, gloss, entity type, id, or content definition
+--   (#1104 requirement 1). Those names and glosses themselves, the
+--   page's language provenance, the location instances with their
+--   lifecycles, the river-name table with its ids, clocks, camera, and
+--   map mode all ride across untouched — so a pre-#1104 save keeps
+--   every name it had and simply reports its etymology as unavailable.
+migrateWorldPagesV5 ∷ WorldPagesDTOv5 → WorldPages
+migrateWorldPagesV5 (WorldPagesDTOv5 ps) = WorldPages
+    { wpPageIds = map pc5PageId ps
+    , wpBase    = HM.fromList [ (pc5PageId p, toBase p) | p ← ps ]
+    }
+  where
+    toBase p = (blankPageSnapshot (pc5PageId p)
+                    (fromWorldGenParamsDTOv4 (pc5GenParams p)))
+        { pgsCameraX    = pc5CameraX p
+        , pgsCameraY    = pc5CameraY p
+        , pgsTimeHour   = pc5TimeHour p
+        , pgsTimeMinute = pc5TimeMinute p
+        , pgsDateYear   = pc5DateYear p
+        , pgsDateMonth  = pc5DateMonth p
+        , pgsDateDay    = pc5DateDay p
+        , pgsMapMode    = pc5MapMode p
+        , pgsIdentity   = fromWorldIdentityDTOv2 <$> pc5Identity p
         }
 
 -- | The v4 migration (#1102): decode the frozen v4 page cores into the
@@ -804,7 +920,7 @@ migrateWorldPagesV4 (WorldPagesDTOv4 ps) = WorldPages
         , pgsDateMonth  = pc4DateMonth p
         , pgsDateDay    = pc4DateDay p
         , pgsMapMode    = pc4MapMode p
-        , pgsIdentity   = fromWorldIdentityDTO <$> pc4Identity p
+        , pgsIdentity   = fromWorldIdentityDTOv2 <$> pc4Identity p
         }
 
 -- | The v3 migration (#1101): decode the frozen v3 page cores into the
@@ -832,7 +948,7 @@ migrateWorldPagesV3 (WorldPagesDTOv3 ps) = WorldPages
         , pgsDateMonth  = pc3DateMonth p
         , pgsDateDay    = pc3DateDay p
         , pgsMapMode    = pc3MapMode p
-        , pgsIdentity   = fromWorldIdentityDTO <$> pc3Identity p
+        , pgsIdentity   = fromWorldIdentityDTOv2 <$> pc3Identity p
         }
 
 -- | The v2 migration (#1092): decode the frozen v2 page cores into
@@ -894,7 +1010,7 @@ migrateWorldPagesV1 (WorldPagesDTOv1 ps) = WorldPages
         , pgsIdentity   = fromWorldIdentityDTOv1 <$> pc1Identity p
         }
 
--- | The zeroed base 'PageSnapshot' the v5, v4, v3, v2, and v1 paths above
+-- | The zeroed base 'PageSnapshot' the v6, v5, v4, v3, v2, and v1 paths above
 --   all build on, so they can never drift in which placeholder fields
 --   they leave for the other components to fill. Each caller record-updates
 --   the page-core scalars it decoded; everything left here is a

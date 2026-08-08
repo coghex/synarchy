@@ -59,7 +59,9 @@ import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Language.Generated.Hash (draw, pickIndex)
-import Language.Naming (Namer(..), nameDrawSeed, renderNamed)
+import Language.Etymology.Source (EtymologySource(..))
+import Language.Naming
+    ( Namer(..), nameDrawSeed, namerProvenance, renderNamed )
 import Language.Semantic.Types
     ( Catalogue, ConceptId(..), FormKind(..), NameExpr(..), conceptIds
     , formOf, lookupConcept )
@@ -79,6 +81,13 @@ data RiverName = RiverName
       --   at all — but the field keeps the shape those two already
       --   established, so a later feature that can store a name without
       --   a meaning has somewhere to say so.
+    , rvnEtymology   ∷ !(Maybe EtymologySource)
+      -- ^ what 'rvnDisplayName' was rendered FROM (#1104), the third
+      --   copy of the same shape 'World.Page.Types.wiEtymology' and
+      --   'Location.Instance.liEtymology' carry: the originating
+      --   expression plus the provenance that rendered it. Written ONCE
+      --   with the name; absent for every river named before #1104, and
+      --   never inferred afterwards.
     } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | A page's river-name table. Sparse by construction: a page with no
@@ -188,7 +197,12 @@ nameRiver Nothing    _   = Nothing
 nameRiver (Just nmr) fid = do
     expr           ← riverNameExpr nmr fid
     (native, glos) ← renderNamed nmr expr
-    pure RiverName { rvnDisplayName = native, rvnGloss = Just glos }
+    pure RiverName
+        { rvnDisplayName = native
+        , rvnGloss       = Just glos
+        , rvnEtymology   = Just EtymologySource
+            { esExpr = expr, esLanguage = namerProvenance nmr }
+        }
 
 -- | Name every river a page has, once. The ONLY writer of a river name.
 --

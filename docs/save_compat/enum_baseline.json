@@ -75,6 +75,62 @@
         }
       ]
     },
+    "Language.Semantic.Types.GramNumber": {
+      "source": "src/Language/Semantic/Types.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldIdentityDTO → EtymologySourceDTO → NameExprDTO → GramNumber"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldIdentity → EtymologySource → NameExpr → GramNumber"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "Singular",
+          "arity": 0
+        },
+        {
+          "name": "Plural",
+          "arity": 0
+        }
+      ]
+    },
+    "Language.Semantic.Types.NameExpr": {
+      "source": "src/Language/Semantic/Types.hs",
+      "onSaveWire": true,
+      "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → WorldIdentity → EtymologySource → NameExpr"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "Bare",
+          "arity": 1
+        },
+        {
+          "name": "Modifier",
+          "arity": 2
+        },
+        {
+          "name": "Of",
+          "arity": 3
+        },
+        {
+          "name": "Possessive",
+          "arity": 2
+        }
+      ]
+    },
     "Location.Instance.LocationLifecycle": {
       "source": "src/Location/Instance.hs",
       "onSaveWire": true,
@@ -1179,6 +1235,37 @@
         },
         {
           "name": "WeClearFluidSnapshotD",
+          "arity": 2
+        }
+      ]
+    },
+    "World.Save.Component.WorldGen.NameExprDTO": {
+      "source": "src/World/Save/Component/WorldGen.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-pages"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "via": "PageCoreDTO → WorldIdentityDTO → EtymologySourceDTO → NameExprDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "BareD",
+          "arity": 1
+        },
+        {
+          "name": "ModifierD",
+          "arity": 2
+        },
+        {
+          "name": "OfD",
+          "arity": 3
+        },
+        {
+          "name": "PossessiveD",
           "arity": 2
         }
       ]

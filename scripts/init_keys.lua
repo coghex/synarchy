@@ -38,6 +38,11 @@ function M.onKeyDown(key)
         local craftingPanel = require("scripts.crafting_panel")
         if craftingPanel.handleKeyDown(key) then return end
 
+        -- Etymology panel (#1104) — a read-only explanation of a name,
+        -- as transient as the popups above it and dismissed the same way.
+        local etymologyPanel = require("scripts.etymology_panel")
+        if etymologyPanel.handleKeyDown(key) then return end
+
         local popup = require("scripts.popup")
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")

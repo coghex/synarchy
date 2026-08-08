@@ -1409,7 +1409,8 @@ def generate_current_format_session(
         world_name: str | None = None,
         world_gloss: str | None = None,
         language_seed: str | None = None,
-        language_version: int | None = None) -> None:
+        language_version: int | None = None,
+        name_expr: str | None = None) -> None:
     """Boot a REAL headless engine (isolated resource root -- see
     _make_isolated_gen_root), init a world, optionally spawn ONE building
     and/or ONE unit through the SAME engine.saveWorld/building.spawn/
@@ -1439,6 +1440,13 @@ def generate_current_format_session(
     would leave the new field untested by the very fixture registered to
     cover its wire version.
 
+    @name_expr@ (#1104) is the encoded semantic expression the world
+    name was rendered from -- world.suggestName's own `expr` reply. It is
+    what puts a #1104 etymology source on the page's own identity; the
+    page's locations and rivers acquire theirs from the language itself,
+    so they need nothing here. Same reasoning as the provenance above: a
+    fixture generated without it can only capture the absent case.
+
     This can only ever produce a fixture at the CURRENT wire format -- a
     live engine never writes a historical shape (see this module's own
     docstring for why a historical baseline stays a manual operation)."""
@@ -1459,8 +1467,15 @@ def generate_current_format_session(
                           else ", nil")
             if language_seed is not None:
                 init_args += f", '{language_seed}'"
-                if language_version is not None:
-                    init_args += f", {language_version}"
+                # A name expression can only ride on the generated-name
+                # path, and world.init reads it as argument 9 -- so the
+                # version argument must be present (even as its default)
+                # before it can be supplied positionally.
+                if language_version is not None or name_expr is not None:
+                    init_args += (f", {language_version}"
+                                  if language_version is not None else ", nil")
+                if name_expr is not None:
+                    init_args += f", '{name_expr}'"
         inited = send(port, f"world.init({init_args}); return 'ok'")
         if "ok" not in inited:
             raise GenerationError(f"world.init failed: {inited!r}")
@@ -2051,7 +2066,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             settle_seconds=args.settle_seconds, setup_lua=args.setup_lua,
             require_lua=args.require_lua, world_name=args.world_name,
             world_gloss=args.world_gloss, language_seed=args.language_seed,
-            language_version=args.language_version)
+            language_version=args.language_version,
+            name_expr=args.name_expr)
     except GenerationError as e:
         # Round-16 review: generate_current_format_session no longer
         # ONLY writes fixture_path as an untouchable-if-failed last step
@@ -2217,6 +2233,13 @@ def main() -> int:
     ap.add_argument("--language-version", type=int, default=None,
                      help="--generate-session only: the language's generator "
                           "version; defaults to the engine's current one")
+    ap.add_argument("--name-expr", default=None,
+                     help="--generate-session only: the #1104 encoded name "
+                          "expression --world-name was rendered from (e.g. "
+                          "'Modifier:ASH:LAND'), exactly as world.suggestName "
+                          "reports it. Attaching it is what gives the "
+                          "generated fixture's page identity a real etymology "
+                          "source rather than the absent case")
     ap.add_argument("--spawn-building", default=None,
                      help="--generate-session only: a real building def "
                           "name to spawn at (0,0), e.g. cargo_hold_S")

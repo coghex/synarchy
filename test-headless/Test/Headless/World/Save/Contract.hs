@@ -72,6 +72,9 @@ import World.Save.Types
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Base (GeoFeatureId(..))
 import World.River.Naming (RiverName(..), RiverNames(..))
+import Language.Etymology.Source (EtymologySource(..))
+import Language.Semantic.Types
+    (ConceptId(..), GramNumber(..), NameExpr(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..), mkWorldIdentity)
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -279,7 +282,20 @@ richPage = PageSnapshot
     , pgsContainerKnowledge = richKnowledge
     , pgsIdentity     = Just (WorldIdentity "Aldermoor Deep"
                                   (Just "the deep home")
-                                  (Just richProvenance))
+                                  (Just richProvenance)
+                                  (Just richWorldEtymology))
+    }
+
+-- | The rich page's own etymology source (#1104): the expression its
+--   name was rendered from, plus the language that rendered it. An
+--   @Of@ with an explicit PLURAL is chosen deliberately — it is the
+--   only form carrying a 'GramNumber', so a carrier that dropped or
+--   defaulted the number would show up here rather than survive as a
+--   silently-singular round trip.
+richWorldEtymology ∷ EtymologySource
+richWorldEtymology = EtymologySource
+    { esExpr     = Of (ConceptId "DEEP") Plural (ConceptId "HOME")
+    , esLanguage = richProvenance
     }
 
 -- | The rich page's language provenance (#1092): a GENERATED identity,
@@ -295,7 +311,9 @@ richProvenance = LanguageProvenance
 -- | The rich page's placed locations (#1101): one named in the page's
 --   own language WITH a gloss, and one 'ldLabel' fallback with none —
 --   so the round trip proves the gloss is carried when present AND left
---   absent when it is not, rather than defaulted either way.
+--   absent when it is not, rather than defaulted either way. #1104's
+--   etymology source rides the same split, on the same two instances,
+--   for the same reason.
 richLocationInstances ∷ LocationInstances
 richLocationInstances = LocationInstances
     { lisNextId        = 3
@@ -309,6 +327,9 @@ richLocationInstances = LocationInstances
             , liDiscoveryMargin = 6
             , liDisplayName     = "Vashenkoro"
             , liGloss           = Just "Ashen Keep"
+            , liEtymology       = Just EtymologySource
+                { esExpr     = Modifier (ConceptId "ASH") (ConceptId "KEEP")
+                , esLanguage = richProvenance }
             , liLifecycle       = LifecycleDiscovered
             , liContentsSpawned = True
             })
@@ -321,6 +342,7 @@ richLocationInstances = LocationInstances
             , liDiscoveryMargin = 6
             , liDisplayName     = "Small Ruin"
             , liGloss           = Nothing
+            , liEtymology       = Nothing
             , liLifecycle       = LifecycleUnknown
             , liContentsSpawned = False
             })
@@ -334,8 +356,14 @@ richLocationInstances = LocationInstances
 --   single entry — or lost the keying — could not pass.
 richRiverNames ∷ RiverNames
 richRiverNames = RiverNames $ HM.fromList
-    [ (GeoFeatureId 3, RiverName "Vashendral" (Just "Ashen River"))
-    , (GeoFeatureId 11, RiverName "Koromvash" (Just "Iron Ford"))
+    [ (GeoFeatureId 3, RiverName "Vashendral" (Just "Ashen River")
+        (Just EtymologySource
+            { esExpr     = Modifier (ConceptId "ASH") (ConceptId "RIVER")
+            , esLanguage = richProvenance }))
+    -- The second river deliberately carries NO source (#1104), so the
+    -- round trip proves absence survives beside presence in the same
+    -- table rather than being defaulted one way for every entry.
+    , (GeoFeatureId 11, RiverName "Koromvash" (Just "Iron Ford") Nothing)
     ]
 
 -- | A second, minimal page -- proves multi-page independence (a stable

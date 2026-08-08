@@ -48,7 +48,9 @@ import Language.Semantic.Types
 import Language.Generated.Types
     ( LanguageProvenance, Profile, GeneratorError )
 import Language.Generated.Hash (draw, pickIndex)
-import Language.Naming (Namer(..), mkNamer, renderNamed, nameDrawSeed)
+import Language.Etymology.Source (EtymologySource(..))
+import Language.Naming
+    ( Namer(..), mkNamer, namerProvenance, renderNamed, nameDrawSeed )
 import Location.Types (LocationDef(..), LocationNaming(..))
 
 -- | Everything needed to name locations in ONE world's language,
@@ -102,27 +104,33 @@ locationNameExpr prof def rawId =
     pick step pool@(_:_) =
         pool !! pickIndex (draw base step) (length pool)
 
--- | One instance's stored @(display name, English gloss)@ pair.
+-- | One instance's stored @(display name, English gloss, etymology
+--   source)@ triple.
 --
 --   With no namer — a world with no language provenance (#1101
---   requirement 6) — this is the definition's 'ldLabel' and NO gloss,
---   exactly today's behavior.
+--   requirement 6) — this is the definition's 'ldLabel', NO gloss, and
+--   NO etymology source, exactly today's behavior plus #1104's honest
+--   absence: an 'ldLabel' is not a generated name, so there is nothing
+--   to decompose.
 --
---   With one, both renderings come from the SAME 'NameExpr', so the
---   gloss always explains the name beside it. A rendering failure also
---   falls back to label + no gloss: it is defensive only, since the
---   definition's pools are validated against this catalogue at load
---   time and the roots cover every catalogue concept, so neither
---   renderer has a reachable failure here.
+--   With one, all three come from the SAME 'NameExpr', so the gloss
+--   always explains the name beside it and the source explains both. A
+--   rendering failure also falls back to label + no gloss + no source:
+--   it is defensive only, since the definition's pools are validated
+--   against this catalogue at load time and the roots cover every
+--   catalogue concept, so neither renderer has a reachable failure here.
 nameLocationInstance
-    ∷ Maybe LocationNamer → LocationDef → Int → (Text, Maybe Text)
-nameLocationInstance Nothing    def _     = (ldLabel def, Nothing)
+    ∷ Maybe LocationNamer → LocationDef → Int
+    → (Text, Maybe Text, Maybe EtymologySource)
+nameLocationInstance Nothing    def _     = (ldLabel def, Nothing, Nothing)
 nameLocationInstance (Just nmr) def rawId =
     case renderNamed nmr expr of
-        Just (native, gloss) → (native, Just gloss)
-        Nothing              → (ldLabel def, Nothing)
+        Just (native, gloss) → (native, Just gloss, Just source)
+        Nothing              → (ldLabel def, Nothing, Nothing)
   where
-    expr = locationNameExpr (nmrProfile nmr) def rawId
+    expr   = locationNameExpr (nmrProfile nmr) def rawId
+    source = EtymologySource
+        { esExpr = expr, esLanguage = namerProvenance nmr }
 
 -- | Validate a definition's authored naming scheme against the concept
 --   catalogue. Empty ⇒ the scheme is usable. Run when the definition

@@ -877,8 +877,9 @@ before touching each area:
   `world.markLocationContentsSpawnedById(id[, pageId])`. The
   coordinate-addressed `hasSpawnedLocationContents`/
   `markLocationContentsSpawned` remain compatibility wrappers resolving
-  to the chunk's first instance. Persistence: `world-pages` (v5 since
-  #1102; v4 since #1101; v3 since #1092; #911 introduced its v2), with a
+  to the chunk's first instance. Persistence: `world-pages` (v6 since
+  #1104; v5 since #1102; v4 since #1101; v3 since #1092; #911 introduced
+  its v2), with a
   frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
   against the location registry at the load path's content-validation
   stage (`resolveLegacyLocations`) before publication. Gates: hspec
@@ -930,10 +931,62 @@ before touching each area:
   table — ids still work. `Language.Naming` holds the machinery both
   this and #1101 use. `Language.Suggest` (#1106) resolves the same
   profile + roots + catalogue triple itself and is the one remaining
-  copy — fold it in rather than adding a fourth.
+  copy — fold it in rather than adding a fourth. A river's stored
+  `rvnEtymology` (#1104) is what lets its name be decomposed.
   Gates: hspec `--match "River naming"` / `--match "River identity"`,
   the shared-world identity specs under `--match "Location overlay"`,
   and `tools/river_naming_probe.py`.
+- **Name etymology (#1104)** — a generated name can be decomposed into
+  its roots and meanings. What makes that possible is a small optional
+  `EtymologySource` (the originating `NameExpr` plus the
+  `LanguageProvenance` that rendered it) persisted beside the name on all
+  three carriers: `wiEtymology`, `liEtymology`, `rvnEtymology`. A
+  precomputed morpheme list is deliberately NOT stored — the presentation
+  is reconstructed on query. `Language.Generated.Render` now produces an
+  ordered token TRACE and `renderNative` IS its concatenation, so
+  "concatenating the trace reproduces the stored name" holds by
+  construction; `Language.Generated.Boundary.joinMorphemesTrace` is the
+  one implementation both views of a boundary share. `Language.Etymology`
+  re-renders from the source and CHECKS the result against the
+  authoritative stored text before showing any of it — a mismatch (a
+  tampered name, a source from another language, a historical version
+  this build renders differently) reports unavailable rather than
+  explaining the wrong word. Morpheme identity is
+  `(LanguageProvenance, ConceptId)` — never spelling — so #1096's bound
+  form and its free root are ONE morpheme while two languages'
+  homographs, and the SAME seed under two generator versions, are not.
+  Capitalization is a surface-POSITION effect: the leading token carries
+  it, every canonical free spelling stays the unmarked lowercase root.
+  A source is additionally
+  required to belong to the PAGE's own recorded language
+  (`decomposeEntityName`): the surface check proves an expression renders
+  to the stored text under ITS OWN language, so a stale or foreign source
+  that happens to reproduce those letters would otherwise pass while
+  attributing every morpheme — and every recurrence link — to a language
+  the world does not have. A page with no provenance admits no source at
+  all. `world.getEtymology(kind[, id][, pageId])` feeds world/location/river
+  adapters into that one path; an unavailable reply still carries the
+  stored name so the UI can keep showing it. Recurrence is computed on
+  demand from the ACTIVE page — current world + `LifecycleDiscovered`-or-
+  later locations + ONLY the river being inspected (a world or location
+  target admits no river at all), the inspected entity excluded from its
+  own links, entries exposing nothing but an entity kind and an
+  already-visible name. There is no session history. `world.getRiverAt`
+  is the minimal selected-segment→identity resolution (channel
+  containment, nearest wins, no global river list). The expression
+  travels the whole Create World chain — `world.suggestName`'s `expr` →
+  `name_suggest` → `generation` → `world_view` → `world_manager` →
+  `world.init`'s 9th argument — and is cleared with the gloss and
+  provenance the moment the player edits the name. UI:
+  `scripts/etymology_panel.lua` is the ONE panel all three entry points
+  open, hosted by `scripts/name_plate.lua` on `hud.global_page` (NOT
+  `world_page` — a world's name is not a zoomed-in concern, and a plate
+  on a band-swapped page is unhittable in the zoom map). Persistence:
+  `world-pages` v6, with `PageCoreDTOv5`/`WorldGenParamsDTOv4`/
+  `WorldIdentityDTOv2`/`LocationInstanceDTOv2`/`RiverNameDTOv1` frozen —
+  every historical shape decodes with the source ABSENT, never inferred.
+  Gates: hspec `--match "Language etymology"` / `--match "Etymology
+  panel"`, `tools/etymology_probe.py` (manual-only, `needs-gpu`).
 - **Location discovery (#780)** — a one-way lifecycle promotion to
   `discovered`, fired when a `uiFactionId == "player"` unit enters the
   instance's `discovery_margin` halo; ticks for EVERY loaded page,
