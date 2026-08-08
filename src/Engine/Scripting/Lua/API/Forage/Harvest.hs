@@ -22,6 +22,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import System.Random (randomR)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import World.Types
+import World.Generate.Coordinates (canonicalTile)
 import World.Flora.Growth (floraGrowth, harvestOpen)
 import World.Flora.CropPlot (CropPlot(..), cropPlotElapsedDays,
                              cropPlotInstance)
@@ -54,14 +55,21 @@ worldHarvestFloraFn env = do
     mTag ← Lua.tostring 3
     case (mGx, mGy) of
         (Just gx', Just gy') → do
-            let gx = fromIntegral gx'
-                gy = fromIntegral gy'
+            let rawGX = fromIntegral gx'
+                rawGY = fromIntegral gy'
                 tagFilter = TE.decodeUtf8Lenient <$> mTag
             mSpawned ← Lua.liftIO $ do
                 mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
+                        -- #1175: the chop AI harvests at a chop-designation
+                        -- coord, which a pre-#1175 save can hold as a
+                        -- u-alias, and every tile-keyed map consulted below
+                        -- (crop plots, flora harvests) is canonical.
+                        -- Identity inland.
+                        worldSize ← pageWrapWorldSize ws
+                        let (gx, gy) = canonicalTile worldSize rawGX rawGY
                         -- Planted crop plot (#334): a BARE call only —
                         -- like chop's tagged flow, a plot isn't a
                         -- designation target, so a tag skips it

@@ -726,6 +726,24 @@ function buildTool.snapWirePath(ax, ay, x, y)
     else return ax, y end
 end
 
+-- Re-express a picked tile in the u-alias frame local to the drag's
+-- anchor (#1175), the same thing the engine's own commit does before it
+-- forms the rectangle. Every Lua-side computation over the two
+-- endpoints — the wire axis snap above, the occupancy scan below — has
+-- to happen in THAT frame, because world.pickTile reports canonical
+-- coords and two physically adjacent picks across the seam are a whole
+-- world apart there. Identity away from the seam, and a no-op wherever
+-- the world API is absent (the headless UI fixtures load this module
+-- against a bare Lua backend), so the guard degrades to the raw coords
+-- rather than raising.
+function buildTool.localizeToAnchor(ax, ay, x, y)
+    if world and world.localizeTile then
+        local lx, ly = world.localizeTile(ax, ay, x, y)
+        if lx and ly then return lx, ly end
+    end
+    return x, y
+end
+
 -- The structure.hasAt slot a piece designation targets — mirrors
 -- Construct.hs's structurePieceSlot / unit_ai_construct.lua's jobSlot
 -- (#805): walls/posts fall back to the same "ne"/"n" default used when
@@ -746,6 +764,11 @@ end
 -- will actually create zero jobs. Doesn't replicate the backend's
 -- z-level/unloaded-chunk filtering (an existing, unrelated gap) —
 -- occupancy is the one thing this record needs to get right.
+--
+-- #1175: the endpoints must already be in the ANCHOR's local u-alias
+-- frame (buildTool.localizeToAnchor). world.pickTile reports canonical
+-- coords, so a seam-crossing drag left raw would make this span the
+-- whole world — thousands of structure.hasAt calls on a click.
 local function structureCommitHasFreeSlot(target, x1, y1, x2, y2)
     local slot = structureCommitSlot(target)
     if not slot then return true end
@@ -1042,9 +1065,14 @@ function buildTool.handleMouseDown(button, x, y)
                     construction.setAnchor(wid, igx, igy)
                 else
                     local a = buildTool.state.anchor
-                    local x2, y2 = igx, igy
+                    -- #1175: into the anchor's frame FIRST, so the wire
+                    -- axis snap and the occupancy scan both see the
+                    -- small rectangle the player actually drew.
+                    local lx, ly = buildTool.localizeToAnchor(
+                        a[1], a[2], igx, igy)
+                    local x2, y2 = lx, ly
                     if isWirePath(target) then
-                        x2, y2 = buildTool.snapWirePath(a[1], a[2], igx, igy)
+                        x2, y2 = buildTool.snapWirePath(a[1], a[2], lx, ly)
                     end
                     local hasFreeSlot = structureCommitHasFreeSlot(
                         target, a[1], a[2], x2, y2)

@@ -6,6 +6,41 @@
 -- per-frame render hover resolution ('World.Render.CursorQuads') and the
 -- synchronous Lua pick (@world.pickTile@) call this so they can never
 -- drift — a drift here would silently place buildings on the wrong tile.
+--
+-- == The tile-coordinate frame contract (#1175)
+--
+-- Chunks are STORED under u-wrapped (canonical) coords. This function is
+-- where a screen pixel first becomes a tile coord, so it is the head of
+-- the frame contract every downstream designation coord obeys:
+--
+--   1. __What a pick reports is canonical.__ @pickWorldTile@, and every
+--      Lua caller it backs (@world.pickTile@ / @pickPos@ / @getHoverTile@
+--      / @getHoverPos@), report stored-frame coords. The fractional
+--      hover position receives the SAME whole-tile shift as the integer
+--      tile, so the two never name different places.
+--   2. __What a designation stores is canonical.__ Every designation map
+--      (mine / chop / till / plant / construct) is keyed canonically, so
+--      one physical tile has exactly one key.
+--   3. __What a Lua caller may pass is any alias.__ Point reads,
+--      mutations and cancellations canonicalise their argument, so a
+--      coord kept across a save, or computed in some other frame, still
+--      resolves. Coords the engine RETURNS are canonical.
+--   4. __Rectangles are formed in the anchor's local alias frame.__
+--      Canonical coords are a storage frame, not a geometry frame: two
+--      physically adjacent tiles across the seam sit at opposite ends of
+--      the canonical range. A drag's second endpoint is re-expressed
+--      relative to its anchor ('World.Generate.Coordinates.localizeTileToAnchor')
+--      BEFORE any clamp or @min@/@max@, and each enumerated tile is
+--      canonicalised only at lookup / storage.
+--   5. __Away from the seam every step above is the identity__, as it is
+--      for arena / non-wrapping worlds.
+--
+-- Seam VISIBILITY is the separate axis #1176 owns: the wrap offset
+-- 'World.Render.ChunkCulling.bestWrapOffset' returns is a facing-aware
+-- @(x, y)@ pair, because a u-wrap displaces screen Y rather than screen
+-- X at east/west. The two halves compose — this function resolves WHICH
+-- tile a pixel names, that one decides where the tile is drawn — and
+-- both hold at all four facings.
 module World.Render.HitTest
     ( HitResult
     , pickWorldTile
@@ -20,7 +55,7 @@ import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import World.Grid (worldToGrid, worldToGridF, tileSideHeight, tileHeight)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Render.ViewBounds (ViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 
@@ -80,30 +115,24 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
         let relZ = z - zSlice
             adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
                            - tileHeight * 0.5
-            (gx, gy) = worldToGrid facing worldX adjustedWorldY
-            hoverPos = worldToGridF facing worldX
+            (rawGX, rawGY) = worldToGrid facing worldX adjustedWorldY
+            (rawHX, rawHY) = worldToGridF facing worldX
                 (worldY + fromIntegral relZ * tileSideHeight)
-            (chunkCoord, (lx, ly)) = globalToChunk gx gy
-        -- Raw lookup, and KNOWN INCOMPLETE at the U seam (#1135 audit,
-        -- deferred to #1175 — not a justification, a recorded finding).
-        --
-        -- The camera is wrapped into the canonical range but the
-        -- viewport around it is not, so near the seam the far half of
-        -- the screen unprojects to a coord whose chunk is stored under
-        -- the wrapped alias: this misses, and tryZ walks down to "no
-        -- tile". Canonicalising HERE is not a local fix. This function's
-        -- result is the frame every designation coord downstream lives
-        -- in — anchors, rectangle corners, cancel and read keys, and the
-        -- coords scripts/unit_ai.lua stores across ticks. Shifting only
-        -- this one end makes those frames disagree, which is strictly
-        -- worse than the current uniform-but-seam-blind behaviour: it
-        -- was measured to turn a seam-crossing two-click drag into a
-        -- cap-sized sweep of unrelated tiles, because two physically
-        -- adjacent picks come back a whole world apart. The fix is to
-        -- normalise the pick + designation frame together (form
-        -- rectangles in the anchor's local alias frame; canonicalise
-        -- per tile only at lookup/storage; do it across
-        -- create/read/cancel/nearest for all five tools) — see #1175.
+            -- #1175: the camera is wrapped into the canonical range but
+            -- the viewport around it is not, so near the seam the far
+            -- half of the screen unprojects to a coord whose chunk is
+            -- stored under the wrapped alias. Resolving that alias to
+            -- the stored frame is what makes the lookup hit — and the
+            -- REPORTED coords move with it, integer tile and fractional
+            -- hover position taking the identical whole-tile shift, so a
+            -- caller can never receive a tile and a position naming
+            -- different places. Identity away from the seam.
+            (chunkCoord, (lx, ly), (dgx, dgy)) =
+                canonicalTileFrame worldSize rawGX rawGY
+            gx = rawGX + dgx
+            gy = rawGY + dgy
+            hoverPos = ( rawHX + fromIntegral dgx
+                       , rawHY + fromIntegral dgy )
         in case HM.lookup chunkCoord (wtdChunks tileData) of
             Nothing → tryZ (z - 1)
             Just lc →
@@ -115,10 +144,10 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
                 in if i < 0 ∨ i >= colLen
                    then tryZ (z - 1)
                    else if ctMats col VU.! i ≠ 0
-                        -- The 2-D offset propagates whenever the raw
-                        -- lookup above DOES resolve (#1176); making the
-                        -- lookup itself seam-aware is #1175's job, as
-                        -- the note above records.
+                        -- The lookup above is seam-aware (#1175) and the
+                        -- offset this returns is facing-aware (#1176), so
+                        -- a seam-side pixel now both resolves its tile and
+                        -- reports where that tile is actually drawn.
                         then case isChunkVisibleWrapped facing worldSize vb
                                       camX camY chunkCoord of
                                Just wrapOff → Just (gx, gy, z, wrapOff, hoverPos)

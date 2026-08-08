@@ -162,6 +162,7 @@ import World.Save.Component.WorldGen
     , RiverNameDTO(..), RiverNamesDTO(..) )
 import Location.Instance (locationInstanceAllocatorErrors)
 import World.Generate.Types (WorldGenParams(..))
+import World.Generate.Coordinates (canonicalTile)
 import World.Chunk.Types (ChunkCoord)
 import World.Page.Types (WorldPageId, WorldIdentity(..))
 import Language.Generated.Types
@@ -1008,16 +1009,27 @@ validateWorldActivity (WorldActivityDTO slices) =
     , gid ≥ gisiNextId (padGroundItems s)
     ]
 
+-- | v2 (#1175) is a SEMANTIC bump, not a shape change: the wire layout
+--   is byte-identical to v1, but a v2 payload promises every designation
+--   key is CANONICAL (u-wrapped into the frame chunks are stored under —
+--   see "World.Render.HitTest"'s frame contract), so one physical tile
+--   has exactly one key. v1 made no such promise: it recorded whatever
+--   raw coord the pick reported, which at the seam could be an alias.
+--
+--   v1 therefore stays explicitly accepted through its own frozen entry
+--   rather than having its meaning quietly rewritten underneath it, and
+--   'applyWorldActivity' canonicalises a v1 payload's keys on the way
+--   into the session (it re-saves as v2, so the repair is durable).
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 1
+    , csVersion       = 2
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = []
+    , csOlderVersions = [ atVersion 1 (id ∷ WorldActivityDTO → WorldActivityDTO) ]
     , csValidate      = validateWorldActivity
     }
   where
@@ -1034,20 +1046,38 @@ worldActivityCodec = componentCodec ComponentSpec
         , padSpoilPiles    = toSpoilDTO (pgsSpoilPiles p)
         }
 
+-- | #1175: a v1 slice's designation keys carry no canonical-frame
+--   promise, so each is re-keyed into the stored frame here — using the
+--   PAGE's own world size, which @csDeps = [worldPagesComponentId]@
+--   guarantees is already in place. Two v1 aliases of one physical tile
+--   collapse to a single key — the last in ascending ORIGINAL-key order
+--   wins. Which of the two survives is arbitrary (they describe the same
+--   tile), but it must not be HASH order, or the repair and the v2 bytes
+--   it re-saves as would vary run to run.
+--
+--   Applied for every accepted version: on a v2 payload it is the
+--   identity by construction, which is exactly the invariant worth
+--   re-establishing at the boundary rather than trusting.
 applyWorldActivity
     ∷ Word32 → WorldActivityDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
 applyWorldActivity ver (WorldActivityDTO slices) =
     applyPageSlices worldActivityComponentId ver padPageId writeActivity slices
   where
-    writeActivity s p = p
-        { pgsMineDesignations      = fromMineDTO (padMine s)
-        , pgsConstructDesignations = fromConstructDTO (padConstruct s)
-        , pgsChopDesignations      = fromChopDTO (padChop s)
-        , pgsTillDesignations      = fromTillDTO (padTill s)
-        , pgsPlantDesignations     = fromPlantDTO (padPlant s)
-        , pgsFloraHarvests         = padFloraHarvests s
-        , pgsCropPlots             = fromCropDTO (padCropPlots s)
-        , pgsGroundItems           = fromGroundItemsDTO (padGroundItems s)
-        , pgsSpoilPiles            = fromSpoilDTO (padSpoilPiles s)
-        }
+    writeActivity s p =
+        let ws = wgpWorldSize (pgsGenParams p)
+            canon ∷ HM.HashMap (Int, Int) v → HM.HashMap (Int, Int) v
+            canon m = HM.fromList
+                [ (canonicalTile ws gx gy, v)
+                | ((gx, gy), v) ← L.sortOn fst (HM.toList m) ]
+        in p
+            { pgsMineDesignations      = canon (fromMineDTO (padMine s))
+            , pgsConstructDesignations = canon (fromConstructDTO (padConstruct s))
+            , pgsChopDesignations      = canon (fromChopDTO (padChop s))
+            , pgsTillDesignations      = canon (fromTillDTO (padTill s))
+            , pgsPlantDesignations     = canon (fromPlantDTO (padPlant s))
+            , pgsFloraHarvests         = padFloraHarvests s
+            , pgsCropPlots             = fromCropDTO (padCropPlots s)
+            , pgsGroundItems           = fromGroundItemsDTO (padGroundItems s)
+            , pgsSpoilPiles            = fromSpoilDTO (padSpoilPiles s)
+            }

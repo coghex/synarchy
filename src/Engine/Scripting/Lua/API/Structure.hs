@@ -42,10 +42,12 @@ import Engine.Core.Capability.WorldSim
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, lookupPath, TexPalette(..))
-import World.Types (wsTilesRef, wsStructureStageRef, wmWorlds, WorldPageId(..), WorldState)
+import World.Types
+    (wsTilesRef, wsStructureStageRef, wmWorlds, WorldPageId(..), WorldState
+    , pageWrapWorldSize)
 import World.Chunk.Types (LoadedChunk(..))
 import World.Tile.Types (WorldTileData(..), lookupChunk)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Command.Types (WorldCommand(..))
 
 -- | Resolve which world page a structure op targets: a named page (any in
@@ -115,6 +117,11 @@ structurePlaceFn env = do
                                 mActive ← resolveStructurePage env (TE.decodeUtf8Lenient <$> pageA)
                                 case mActive of
                                     Just (pageId, ws) → do
+                                        -- #1175: place through the same
+                                        -- canonical key hasAt/floorZAt read,
+                                        -- so a staged piece and the edit that
+                                        -- follows it name one physical tile.
+                                        worldSize ← pageWrapWorldSize ws
                                         -- Only stage + queue when the target chunk
                                         -- is loaded: the world thread DROPS a
                                         -- WeSetStructure for an unloaded chunk
@@ -124,7 +131,10 @@ structurePlaceFn env = do
                                         -- (reachable stamping a room across a chunk
                                         -- boundary). Return false instead.
                                         td ← readIORef (wsTilesRef ws)
-                                        let (coord, _) = globalToChunk gxi gyi
+                                        let (coord, _, (dgx, dgy)) =
+                                                canonicalTileFrame worldSize gxi gyi
+                                            cgx = gxi + dgx
+                                            cgy = gyi + dgy
                                         case lookupChunk coord td of
                                             Nothing → pure False
                                             Just _  → do
@@ -134,11 +144,11 @@ structurePlaceFn env = do
                                                 -- walls) before the world thread has
                                                 -- applied it. (See wsStructureStageRef.)
                                                 atomicModifyIORef' (wsStructureStageRef ws) $ \st →
-                                                    ( HM.insert (gxi, gyi, slotTag)
+                                                    ( HM.insert (cgx, cgy, slotTag)
                                                                 (StructurePieceData texId faceId z) st
                                                     , () )
                                                 Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
-                                                    (WorldSetStructure pageId gxi gyi
+                                                    (WorldSetStructure pageId cgx cgy
                                                                        slotTag texId faceId z)
                                                 pure True
                                     Nothing → pure False
@@ -168,12 +178,17 @@ structureClearFn env = do
                         mActive ← activeWorldPage env
                         case mActive of
                             Just (pageId, ws) → do
+                                -- #1175: clear the SAME canonical key that
+                                -- structure.place staged and hasAt reads, or
+                                -- an aliased clear leaves the piece behind.
+                                worldSize ← pageWrapWorldSize ws
+                                let (cgx, cgy) = canonicalTile worldSize gxi gyi
                                 -- drop any staged add (no-op if not staged) so a
                                 -- re-query doesn't surface the just-cleared piece
                                 atomicModifyIORef' (wsStructureStageRef ws) $ \st →
-                                    (HM.delete (gxi, gyi, slotTag) st, ())
+                                    (HM.delete (cgx, cgy, slotTag) st, ())
                                 Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
-                                    (WorldClearStructure pageId gxi gyi slotTag)
+                                    (WorldClearStructure pageId cgx cgy slotTag)
                                 pure True
                             Nothing → pure False
                     Lua.pushboolean ok
@@ -357,18 +372,29 @@ structureGetAtFn env = do
 --   persistence read, and what's left after a save/load replay (when the cache
 --   is empty). Nothing if it's in neither: no staged add, and either no active
 --   world, the chunk holding (gx,gy) isn't loaded, or no piece there.
+--
+--   #1175: the tile is canonicalised first, so @structure.hasAt@ /
+--   @floorZAt@ / @getAt@ accept any u-alias — the same tolerance every
+--   designation point verb has. Two callers depend on it: a build-tool
+--   occupancy scan runs over ANCHOR-LOCAL alias tiles (a seam-side tile
+--   would otherwise read free and the tool would record an accepted
+--   outcome for a commit that creates no jobs), and a construct job whose
+--   coord came out of a pre-#1175 save can still be an alias. Identity
+--   away from the seam.
 lookupStructure ∷ EngineEnv → Maybe Text → Int → Int → StructureSlot
                 → IO (Maybe StructurePieceData)
-lookupStructure env mPage gx gy slot = do
+lookupStructure env mPage rawGX rawGY slot = do
     mWs ← fmap snd <$> resolveStructurePage env mPage
     case mWs of
         Nothing → pure Nothing
         Just ws → do
-            let key = (gx, gy, fromIntegral (fromEnum slot) ∷ Word8)
+            worldSize ← pageWrapWorldSize ws
+            let (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize rawGX rawGY
+                key = ( rawGX + dgx, rawGY + dgy
+                      , fromIntegral (fromEnum slot) ∷ Word8 )
             st ← readIORef (wsStructureStageRef ws)
             case HM.lookup key st of
                 Just spd → pure (Just spd)
                 Nothing  → do
                     td ← readIORef (wsTilesRef ws)
-                    let (coord, _) = globalToChunk gx gy
                     pure $ lookupChunk coord td ⌦ HM.lookup key . lcStructures

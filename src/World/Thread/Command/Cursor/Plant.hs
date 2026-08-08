@@ -27,7 +27,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import World.Types
-import World.Generate (globalToChunk)
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Plant.Types (newPlantDesignation)
 import World.Vegetation (isTilledSoil)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
@@ -54,9 +54,16 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             plots ← readIORef (wsCropPlotsRef worldState)
-            let (coord, (lx, ly)) = globalToChunk gx gy
+            worldSize ← pageWrapWorldSize worldState
+            -- #1175: a plant designation is a single-tile point op, so
+            -- the whole handler works in the canonical frame — the
+            -- eligibility reads, the occupancy checks and the stored key
+            -- all resolve the same physical tile whichever alias Lua
+            -- passed. Identity inland.
+            let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
+                (cgx, cgy) = canonicalTile worldSize gx gy
                 idx = columnIndex lx ly
-                hasExistingPlot = HM.member (gx, gy) plots
+                hasExistingPlot = HM.member (cgx, cgy) plots
                 resolvedCrop = case findSpeciesByName cropName cat of
                     Just (fid, _sp)
                         | Just wg ← HM.lookup (unFloraId fid) (fcWorldGen cat)
@@ -80,7 +87,7 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
             case (tileZ, resolvedCrop) of
                 (Just z, Just fid) → do
                     atomicModifyIORef' (wsPlantDesignationsRef worldState) $
-                        \m → (HM.insert (gx, gy) (newPlantDesignation z fid) m, ())
+                        \m → (HM.insert (cgx, cgy) (newPlantDesignation z fid) m, ())
                     logDebug logger CatWorld $
                         "Plant designation: (" <> T.pack (show gx) <> ","
                         <> T.pack (show gy) <> ") crop=" <> cropName
@@ -115,9 +122,11 @@ handleWorldCancelPlantCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldCancelPlantCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: cancellation accepts any alias of the stored key.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsPlantDesignationsRef worldState) $ \m →
-                (HM.delete (gx, gy) m, ())
+                (HM.delete (canonicalTile worldSize gx gy) m, ())
         Nothing → pure ()
 
 handleWorldSetPlantDesignateTextureCommand ∷ EngineEnv → LoggerState

@@ -35,7 +35,8 @@ import World.Types hiding (activeWorldPage)
 import World.Plant.Types
 import World.Flora.Placement (speciesFitnessDetail, FitnessFactor(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates
+    (globalToChunk, canonicalTile, seamTileDist2)
 
 -- | plant.designate(pageId, gx, gy, cropName) — single-tile plant
 --   designation, no anchor. Refused world-thread-side unless the tile
@@ -77,6 +78,8 @@ plantCancelDesignationFn wsc = do
     return 0
 
 -- | plant.getDesignationAt(pageId, gx, gy) → {x, y, z, crop, category} | nil.
+--   Accepts any u-alias of the tile and reports the CANONICAL stored
+--   coords (#1175); identity away from the seam.
 --   @category@ is the crop's worldGen category ("row_crop" |
 --   "groundcover_crop") — the farm AI (#336) needs it to pick which
 --   planting primitive to call (world.plantRowCropAt vs
@@ -90,13 +93,13 @@ plantGetDesignationAtFn wsc = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                gx = round gxN ∷ Int
-                gy = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsPlantDesignationsRef ws)
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (gx, gy) = canonicalTile worldSize (round gxN) (round gyN)
                     case HM.lookup (gx, gy) m of
                         Just pd → do
                             cat ← Lua.liftIO $ readIORef (wsFloraCatalogRef wsc)
@@ -138,7 +141,8 @@ plantGetDesignationCountFn wsc = do
 
 -- | plant.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tile by Euclidean distance — the farm AI's
---   "distance to nearest plant job" term. Mirrors till.nearestDesignation.
+--   "distance to nearest plant job" term. Mirrors till.nearestDesignation,
+--   including its seam-aware compare and canonical result (#1175).
 plantNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 plantNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -153,10 +157,8 @@ plantNearestDesignationFn wsc = do
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsPlantDesignationsRef ws)
-                    let dist2 (gx, gy) =
-                            let dx = fromIntegral gx - ux
-                                dy = fromIntegral gy - uy
-                            in dx * dx + dy * dy
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let dist2 = seamTileDist2 worldSize (ux, uy)
                         best = foldl' (\acc k → case acc of
                                   Nothing → Just (k, dist2 k)
                                   Just (_, d) | dist2 k < d → Just (k, dist2 k)

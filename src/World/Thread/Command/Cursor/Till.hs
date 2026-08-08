@@ -29,20 +29,22 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
-import World.Generate (globalToChunk)
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Till.Types (newTillDesignation)
 import World.Vegetation (isTilledSoil)
 import World.Thread.Command.Cursor.Common
-    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
+    (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetTillAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetTillAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: canonical anchor, rectangle formed in its frame.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { tillAnchor = Just (gx, gy) }, ())
+                (cs { tillAnchor = Just (canonicalTile worldSize gx gy) }, ())
         Nothing → pure ()
 
 handleWorldClearTillAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -67,8 +69,11 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
         Nothing → recordMissingWorldOutcome env "till.designate" pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
+            worldSize ← pageWrapWorldSize worldState
+            -- #1175: canonicalised column read, so an anchor-local alias
+            -- resolves the chunk that stores the tile. Identity inland.
             let tillableAt gx gy = do
-                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
                     lc ← lookupChunk coord tileData
                     let idx = columnIndex lx ly
                         z     = lcSurfaceMap lc VU.! idx
@@ -83,14 +88,12 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
                     if isNothing fluid ∧ not hasFlora ∧ not alreadyTilled
                         then Just z
                         else Nothing
-                xLo = min gx1 gx2
-                yLo = min gy1 gy2
-                xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
-                yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+                ((xLo, yLo), (xHi, yHi)) =
+                    designateRect worldSize (gx1, gy1) (gx2, gy2)
                 entries = case tillableAt gx1 gy1 of
                     Nothing → []   -- anchor unloaded or untillable: nothing
                     Just anchorZ →
-                        [ ((gx, gy), newTillDesignation z)
+                        [ (canonicalTile worldSize gx gy, newTillDesignation z)
                         | gx ← [xLo .. xHi]
                         , gy ← [yLo .. yHi]
                         , Just z ← [tillableAt gx gy]
@@ -114,9 +117,11 @@ handleWorldCancelTillCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldCancelTillCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: cancellation accepts any alias of the stored key.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsTillDesignationsRef worldState) $ \m →
-                (HM.delete (gx, gy) m, ())
+                (HM.delete (canonicalTile worldSize gx gy) m, ())
         Nothing → pure ()
 
 handleWorldSetTillDesignateTextureCommand ∷ EngineEnv → LoggerState
