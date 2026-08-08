@@ -4,6 +4,7 @@
 local advancedTab  = require("scripts.create_world.advanced_tab")
 local generalTab   = require("scripts.create_world.general_tab")
 local timelineTab  = require("scripts.create_world.timeline_tab")
+local nameSuggest  = require("scripts.create_world.name_suggest")
 local worldManager = require("scripts.world_manager")
 
 local generation = {}
@@ -111,6 +112,14 @@ function generation.start(menu, logPanel)
         },
     })
 
+    -- #1106: a name that is still a live SUGGESTION travels with its
+    -- English gloss and the #1092 provenance of the language that
+    -- rendered it; a name the player typed travels alone, with all
+    -- three absent (#708 principle 7 — the game never infers a meaning
+    -- or an etymology for player text). nameSuggest owns that
+    -- distinction; nothing here re-derives it from the name string.
+    local nameGloss, langSeed, langVersion = nameSuggest.identity(p)
+
     -- Store params on worldView so textures get wired up
     local worldView = require("scripts.world_view")
     worldView.worldParams = {
@@ -118,6 +127,9 @@ function generation.start(menu, logPanel)
         worldSize  = sizeNum,
         plateCount = plateNum,
         worldName  = p.worldName,
+        worldGloss = nameGloss,
+        languageSeed    = langSeed,
+        languageVersion = langVersion,
     }
 
     -- Kick off

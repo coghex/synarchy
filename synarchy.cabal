@@ -568,6 +568,7 @@ library
                      Language.Generated.Render
                      Language.Generated.Signature
                      Language.Generated.Report
+                     Language.Suggest
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
@@ -1108,6 +1109,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated
+                   Test.Headless.Language.Suggest
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact

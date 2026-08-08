@@ -59,8 +59,13 @@ import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 
 -- | The explicit 64-bit seed a language is generated from (#710
---   requirement 1). Distinct from any world-generation seed — a
---   language seed has no relationship to terrain/plate seeds.
+--   requirement 1). Still a value of its OWN — nothing here reads a
+--   terrain, plate, or gem seed, and no world-generation code reads
+--   this one — but no longer unrelated to world seeds in practice:
+--   'Language.Suggest.worldLanguageSeed' derives a world's language
+--   seed injectively from its normalized numeric world seed (#1106), so
+--   changing the seed on the Create World screen changes the language
+--   the suggested name is drawn from.
 --
 --   'Serialize' is derived from the underlying 'Word64' so a world's
 --   language provenance can ride into a save (#1092).
