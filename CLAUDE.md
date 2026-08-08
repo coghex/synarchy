@@ -928,7 +928,9 @@ before touching each area:
   stored name even though `assignLanguageRoots` re-resolves collisions
   over the whole concept set. A page with no provenance has an EMPTY
   table — ids still work. `Language.Naming` holds the machinery both
-  this and #1101 use; a third caller belongs there too, not in a copy.
+  this and #1101 use. `Language.Suggest` (#1106) resolves the same
+  profile + roots + catalogue triple itself and is the one remaining
+  copy — fold it in rather than adding a fourth.
   Gates: hspec `--match "River naming"` / `--match "River identity"`,
   the shared-world identity specs under `--match "Location overlay"`,
   and `tools/river_naming_probe.py`.
