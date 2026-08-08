@@ -54,10 +54,6 @@ import World.Fluid.OceanMask (oceanBitInChunk)
 --              chunk's real terrain is at or below the lake's
 --              uniform 'lkSurface'. Surface = lake's spillway.
 --   * dry    — otherwise.
---
--- The 'waterTableMap' arg is no longer used for surface placement;
--- it stays computed and stored on 'LoadedChunk' so that the
--- subsurface dig path can still ask "is this buried tile saturated?"
 composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
                 → V.Vector (Maybe FluidCell)
 composeFluidMap params coord terrainMap =
