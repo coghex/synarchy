@@ -82,7 +82,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
         -- World.Tile.Types.insertChunk), and consumers below read each
         -- chunk's own lcCoord rather than reconstructing one.
         chunks = HM.elems (wtdChunks tileData)
-        (camX, _camY) = camPosition camera
+        (camX, camY) = camPosition camera
 
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
 
@@ -128,13 +128,18 @@ renderWorldQuads env worldState zoomAlpha snap = do
             [ (lc, offset)
             | lc ← chunks
             , isChunkRelevantForSlice zSlice lc
-            , Just offset ← [isChunkVisibleWrapped facing worldSize vb camX (lcCoord lc)]
+            , Just offset ← [isChunkVisibleWrapped facing worldSize vb
+                                 camX camY (lcCoord lc)]
             ]
 
-    let chunkVectors = map (\(lc, xOffset) →
-            let coord  = lcCoord lc
+    let chunkVectors = map (\(lc, wrapOff) →
+            -- One offset per chunk, from the SAME call that judged it
+            -- visible (#1176 req 2): every subpass below shifts BOTH
+            -- screen axes by it, because at east/west facings the
+            -- u-wrap displaces screen Y and not screen X at all.
+            let (wrapX, wrapY) = wrapOff
+                coord  = lcCoord lc
                 tileMap = lcTiles lc
-                surfMap = lcSurfaceMap lc
                 fluidMap = lcFluidMap lc
                 iceMap   = lcIceMap lc
                 chunkHasFluid = V.any isJust fluidMap
@@ -177,13 +182,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
                            then acc
                            else foldl' (\acc2 z →
                                 let mat = ctMats col VU.! (z - ctStartZ col)
-                                    drawY' = rawY - fromIntegral (z - zSlice) * tileSideHeight
-                                in if mat ≡ 0 ∨ not (isTileVisible vb (rawX + xOffset) drawY')
+                                    drawY' = rawY + wrapY
+                                           - fromIntegral (z - zSlice) * tileSideHeight
+                                in if mat ≡ 0 ∨ not (isTileVisible vb (rawX + wrapX) drawY')
                                    then acc2
                                    else let slopeId = ctSlopes col VU.! (z - ctStartZ col)
                                             tile = Tile mat slopeId
                                             tq = tileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
+                                                    gx gy z tile zSlice effectiveDepth zoomAlpha wrapOff
                                                     mFluid chunkHasFluid
 
                                             -- Vegetation: only on surface tile, only when
@@ -202,12 +208,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                                               (cropPlotInstance cp)
                                                                 in vegQuadWithTexture lookupSlot lookupFmSlot
                                                                        textures facing gx gy z tex slopeId
-                                                                       zSlice effectiveDepth zoomAlpha xOffset
+                                                                       zSlice effectiveDepth zoomAlpha wrapOff
                                                             Nothing →
                                                                 let vegId = ctVeg col VU.! i
                                                                 in vegToQuad lookupSlot lookupFmSlot textures facing
                                                                        gx gy z vegId slopeId zSlice effectiveDepth
-                                                                       zoomAlpha xOffset
+                                                                       zoomAlpha wrapOff
                                                    else Nothing
 
                                         in case vegQ of
@@ -247,7 +253,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , texHandle ≢ TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
                                      gx gy inst' texHandle zSlice effectiveDepth
-                                     zoomAlpha xOffset texSizes]
+                                     zoomAlpha wrapOff texSizes]
                     ]
                 -- Water side-face quads: fill elevation gaps where water
                 -- drops over cliff edges
@@ -255,16 +261,15 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     then waterSideFaceQuads lookupSlot lookupFmSlot textures facing
                              coord fluidMap terrainSurfMap
                              fluidMapLookup terrMapLookup zSlice effectiveDepth
-                             zoomAlpha xOffset vb
+                             zoomAlpha wrapOff vb
                     else []
 
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy zSlice zSlice zoomAlpha xOffset
+                        gx gy zSlice zSlice zoomAlpha wrapOff
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let idx = columnIndex lx ly
-                          _surfZ = surfMap VU.! idx
                           terrainZ = terrainSurfMap VU.! idx
                     , terrainZ > zSlice
                     , let col = tileMap V.! idx
@@ -275,20 +280,20 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , not hasTile
                     , let (gx, gy) = chunkToGlobal coord lx ly
                           (rawX, rawY) = gridToScreen facing gx gy
-                          drawX = rawX + xOffset
-                          drawY = rawY
+                          drawX = rawX + wrapX
+                          drawY = rawY + wrapY
                     , isTileVisible vb drawX drawY
                     ]
 
                 _mkFreshwaterQuad gx gy ft fc slopeId =
                         freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                             gx gy (fcSurface fc) ft zSlice effectiveDepth
-                            zoomAlpha xOffset slopeId
+                            zoomAlpha wrapOff slopeId
 
                 -- Ice surface quads: rendered above ocean/freshwater
                 !iceQuads =
                     [ iceTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy (icSurface ic) zSlice effectiveDepth zoomAlpha xOffset
+                        gx gy (icSurface ic) zSlice effectiveDepth zoomAlpha wrapOff
                     | idx ← [0 .. chunkSize * chunkSize - 1]
                     , Just ic ← [iceMap V.! idx]
                     , icSurface ic ≤ zSlice
@@ -299,8 +304,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           (rawX, rawY) = gridToScreen facing gx gy
                           relativeZ = icSurface ic - zSlice
                           heightOffset = fromIntegral relativeZ * tileSideHeight
-                          drawX = rawX + xOffset
-                          drawY = rawY - heightOffset
+                          drawX = rawX + wrapX
+                          drawY = rawY + wrapY - heightOffset
                     , isTileVisible vb drawX drawY
                     ]
 
@@ -318,8 +323,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                         (rawX, rawY) = gridToScreen facing gx gy
                                         relativeZ = fcSurface fc - zSlice
                                         heightOffset = fromIntegral relativeZ * tileSideHeight
-                                        drawX = rawX + xOffset
-                                        drawY = rawY - heightOffset
+                                        drawX = rawX + wrapX
+                                        drawY = rawY + wrapY - heightOffset
                                         -- Skip ocean/lake rendering where ice covers the surface
                                         hasIce = isJust (iceMap V.! idx)
                                     in if not (isTileVisible vb drawX drawY)
@@ -329,7 +334,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                               | hasIce → (oAcc, lAcc, fAcc)
                                               | otherwise ->
                                                 ( oceanTileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
+                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha wrapOff
                                                   : oAcc
                                                 , lAcc
                                                 , fAcc
@@ -337,7 +342,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                             Lava  ->
                                                 ( oAcc
                                                 , lavaTileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
+                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha wrapOff
                                                   : lAcc
                                                 , fAcc
                                                 )
@@ -349,7 +354,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                 , lAcc
                                                 , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                                                     gx gy (fcSurface fc) Lake zSlice effectiveDepth
-                                                    zoomAlpha xOffset wSlope
+                                                    zoomAlpha wrapOff wSlope
                                                   : fAcc
                                                 )
                                             River ->
@@ -358,7 +363,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                 , lAcc
                                                 , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                                                     gx gy (fcSurface fc) River zSlice effectiveDepth
-                                                    zoomAlpha xOffset wSlope
+                                                    zoomAlpha wrapOff wSlope
                                                   : fAcc
                                                 )
                     ) ([], [], []) fluidMap
@@ -424,10 +429,30 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
             -- The u-wrap preserves v = gx + gy, so at north/south facings
             -- (depth = ±v) the two frames agree and the cross-seam lift
             -- is exact. At east/west facings depth follows u, which the
-            -- wrap shifts by a whole world width — the wall renders
-            -- nowhere near the sprite on screen there, and lifting
-            -- against its key would only corrupt the sprite's local
-            -- ordering: skip when the frames disagree.
+            -- wrap shifts by a whole world width, so the two keys are a
+            -- whole world apart: skip when the frames disagree.
+            --
+            -- RE-EXAMINED under #1176 and DELIBERATELY KEPT. That issue
+            -- made the wrap offset two-dimensional, so the sprite and
+            -- the wall across an east/west seam now do land next to each
+            -- other on SCREEN — the original wording here ("the wall
+            -- renders nowhere near the sprite") no longer describes the
+            -- placement. It does not describe the sort key either, and
+            -- the sort key is what this function returns. 'sqSortKey' is
+            -- painter DEPTH derived from grid coords ('applyFacing'),
+            -- which a screen-space translation cannot and does not
+            -- touch, so lifting the sprite to 'scDepth' would still
+            -- shove its key a whole world past every quad it is drawn
+            -- among and corrupt its local ordering. Removing the guard
+            -- needs the two ends to share a translated sort key, which
+            -- is a change to the depth frame, not to placement.
+            --
+            -- (Structure quads carry no wrap offset at ALL — see
+            -- 'Structure.Render', which is not one of the six
+            -- 'isChunkVisibleWrapped' consumers — so a wall's own
+            -- screen position across the seam is separately unfixed.
+            -- That is out of #1176's scope and does not change this
+            -- guard's verdict, which rests on the key alone.)
             let (sa, sb) = applyFacing facing (sgx + 1) (sgy + 1)
                 scDepth  = sa + sb
                 (la, lb) = applyFacing facing (wgx + 1) (wgy + 1)
@@ -450,7 +475,6 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
 findTopSolid ∷ ColumnTiles → Int
 findTopSolid col =
     let mats = ctMats col
-        _start = ctStartZ col
         len = VU.length mats
     in go (len - 1)
   where
