@@ -232,8 +232,7 @@ data GeoState = GeoState
 --   Temperature varies by latitude: hot at equator, cold at poles.
 initGeoState ∷ Word64 → Int → [TectonicPlate] → GeoState
 initGeoState _seed worldSize _plates =
-    let _halfChunks = worldSize `div` 2
-        regionsPerSide = worldSize `div` regionSize
+    let regionsPerSide = worldSize `div` regionSize
         halfRegions = regionsPerSide `div` 2
 
         -- Build temperature map from latitude
