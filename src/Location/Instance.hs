@@ -93,6 +93,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Location.Bounds (AbsBounds, translateBounds)
+import Language.Etymology.Source (EtymologySource)
 import Location.Naming (LocationNamer, nameLocationInstance)
 import Location.Overlay.Types (LocationOverlay, overlayToList)
 import Location.Types (LocationDef(..), LocationRegistry, lookupLocation)
@@ -221,6 +222,13 @@ data LocationInstance = LocationInstance
       --   'World.Page.Types.wiGloss'. 'Nothing' exactly when
       --   'liDisplayName' is an 'ldLabel' fallback — a label is not a
       --   generated name and has no meaning to explain.
+    , liEtymology       ∷ !(Maybe EtymologySource)
+      -- ^ what 'liDisplayName' was rendered FROM (#1104), mirroring
+      --   'World.Page.Types.wiEtymology': the originating expression
+      --   plus the provenance that rendered it. Written ONCE beside the
+      --   name and read thereafter; 'Nothing' for an 'ldLabel' fallback
+      --   and for every instance placed before #1104, and never
+      --   inferred afterwards.
     , liLifecycle       ∷ !LocationLifecycle
     , liContentsSpawned ∷ !Bool
       -- ^ one-time content-spawn flag (#90), now per INSTANCE. Stays
@@ -279,9 +287,9 @@ newLocationInstance
     ∷ Maybe LocationNamer → LocationInstanceId → ChunkCoord → LocationDef
     → LocationInstance
 newLocationInstance namer iid coord def =
-    let anchor         = locationAnchorTile coord
-        (name, gloss)  = nameLocationInstance namer def
-                            (unLocationInstanceId iid)
+    let anchor              = locationAnchorTile coord
+        (name, gloss, ety)  = nameLocationInstance namer def
+                                 (unLocationInstanceId iid)
     in LocationInstance
         { liId              = iid
         , liDefId           = ldId def
@@ -291,6 +299,7 @@ newLocationInstance namer iid coord def =
         , liDiscoveryMargin = ldDiscoveryMargin def
         , liDisplayName     = name
         , liGloss           = gloss
+        , liEtymology       = ety
         , liLifecycle       = LifecycleUnknown
         , liContentsSpawned = False
         }

@@ -342,6 +342,7 @@ library
                      Engine.Scripting.Lua.API.WorldQuery.Climate
                      Engine.Scripting.Lua.API.WorldQuery.Pick
                      Engine.Scripting.Lua.API.WorldQuery.Location
+                     Engine.Scripting.Lua.API.WorldQuery.Etymology
                      Engine.Scripting.Lua.API.Forage
                      Engine.Scripting.Lua.API.Forage.Lookup
                      Engine.Scripting.Lua.API.Forage.Query
@@ -570,6 +571,8 @@ library
                      Language.Generated.Report
                      Language.Naming
                      Language.Suggest
+                     Language.Etymology.Source
+                     Language.Etymology
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types

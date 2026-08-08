@@ -20,6 +20,7 @@
 module Language.Naming
     ( Namer(..)
     , mkNamer
+    , namerProvenance
     , renderNamed
     , nameDrawSeed
     ) where
@@ -72,6 +73,17 @@ mkNamer cat prov = do
 --   beside it. 'Nothing' when either rendering fails, which every
 --   caller turns into its own no-language fallback rather than into
 --   half a name.
+-- | The #1092 provenance a namer renders under, read back off the
+--   profile it already resolved. This is what #1104's etymology source
+--   records beside a name's expression, so a rendered name's language
+--   is stated by the thing that rendered it rather than looked up again
+--   somewhere that could answer differently.
+namerProvenance ∷ Namer → LanguageProvenance
+namerProvenance nmr = LanguageProvenance
+    { lpSeed    = profSeed (nmrProfile nmr)
+    , lpVersion = profVersion (nmrProfile nmr)
+    }
+
 renderNamed ∷ Namer → NameExpr → Maybe (Text, Text)
 renderNamed nmr expr =
     case ( renderNative (nmrProfile nmr) (nmrRoots nmr) expr

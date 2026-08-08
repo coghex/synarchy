@@ -256,7 +256,8 @@ richPage pid = (minimalPage pid)
     , pgsIdentity  = Just (WorldIdentity "Rich World" (Just "a gloss")
                                (Just (LanguageProvenance
                                           (LangSeed 0xC3A5F00DDEADBEEF)
-                                          (GeneratorVersion 1))))
+                                          (GeneratorVersion 1)))
+                               Nothing)
     , pgsBuildings = BuildingSnapshot
         { bsnInstances = HM.singleton (BuildingId 1) (minimalBuildingInstance [])
         , bsnNextId = 10 }
@@ -517,14 +518,14 @@ pageCoreV4 pid = PageCoreDTOv4
     { pc4PageId = pid, pc4GenParams = toWorldGenParamsDTOv3 defaultGP
     , pc4CameraX = 0, pc4CameraY = 0, pc4TimeHour = 0, pc4TimeMinute = 0
     , pc4DateYear = 1, pc4DateMonth = 1, pc4DateDay = 1, pc4MapMode = ZMDefault
-    , pc4Identity = Just (WorldIdentityDTO "Old World" Nothing Nothing) }
+    , pc4Identity = Just (WorldIdentityDTOv2 "Old World" Nothing Nothing) }
 
 pageCoreV3 ∷ WorldPageId → PageCoreDTOv3
 pageCoreV3 pid = PageCoreDTOv3
     { pc3PageId = pid, pc3GenParams = toWorldGenParamsDTOv2 defaultGP
     , pc3CameraX = 0, pc3CameraY = 0, pc3TimeHour = 0, pc3TimeMinute = 0
     , pc3DateYear = 1, pc3DateMonth = 1, pc3DateDay = 1, pc3MapMode = ZMDefault
-    , pc3Identity = Just (WorldIdentityDTO "Old World" Nothing Nothing) }
+    , pc3Identity = Just (WorldIdentityDTOv2 "Old World" Nothing Nothing) }
 
 -- | A minimal 'WorldPageSave' fixture (all designation/entity maps
 --   empty) for the round-8 def-reference validators below, which only
@@ -610,7 +611,7 @@ goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
     [ ("core-session",        (85,   "74d3010096cbbe2b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
-    , ("world-pages",         (1305, "b916dab724c6e2a0"))
+    , ("world-pages",         (1306, "bbbd554013191bac"))
     , ("world-edits",         (50,   "1ed7627acac89064"))
     , ("world-activity",      (194,  "251087e70708d624"))
     , ("buildings",           (151,  "3dafc93879ea3b82"))
@@ -625,7 +626,7 @@ goldenFullPayloads ∷ [(Text, (Int, Text))]
 goldenFullPayloads =
     [ ("core-session",        (85,  "0641eeed95100f9a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
-    , ("world-pages",         (682, "68ac6b08adf6134f"))
+    , ("world-pages",         (683, "d30d2ebf9922cf3d"))
     , ("world-edits",         (70,  "814069e34515f996"))
     , ("world-activity",      (332, "0292cc7e9c1053e3"))
     , ("buildings",           (130, "2b6c80ab8c216329"))
@@ -718,7 +719,7 @@ spec = do
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))
             check (ccEncode coreSessionCodec)   (ccDecode coreSessionCodec 1)
-            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 5)
+            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 6)
             check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
             check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
             check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
@@ -731,7 +732,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 5
+            ccVersion worldPagesCodec `shouldBe` 6
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -861,7 +862,7 @@ spec = do
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \
            \requirement 10)" $
-            case ccDecode worldPagesCodec 5 (ccEncode worldPagesCodec richSnapshot) of
+            case ccDecode worldPagesCodec 6 (ccEncode worldPagesCodec richSnapshot) of
                 Right wp →
                     [ wgpSeed (pgsGenParams p)
                     | p ← maybeToList (HM.lookup page1 (wpBase wp)) ]
@@ -944,13 +945,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
 
-        it "reports an unsupported version identically for a FIVE-version \
+        it "reports an unsupported version identically for a SIX-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 6 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 6
+            decodeErrorOf worldPagesCodec 7 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 7
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5)")
+                    \(reader supports v1, v2, v3, v4, v5, v6)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \

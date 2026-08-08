@@ -15,9 +15,10 @@ import qualified HsLua as Lua
 
 -- | Populate and install the @world@ and @flora@ global tables.
 --
---   Takes 'LuaBackendState' for @world.suggestName@ alone (#1106),
---   which keeps its concept-catalogue and language cache there — the
---   same reason 'Engine.Scripting.Lua.API.Register.Engine.registerEngineAPI'
+--   Takes 'LuaBackendState' for @world.suggestName@ (#1106) and
+--   @world.getEtymology@ (#1104), which share the concept-catalogue and
+--   language cache kept there — the same reason
+--   'Engine.Scripting.Lua.API.Register.Engine.registerEngineAPI'
 --   already takes it.
 registerWorldAPI ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception ()
 registerWorldAPI env backendState = do
@@ -105,6 +106,9 @@ registerWorldAPI env backendState = do
   registerLuaFunction "getChunkInfo" (worldGetChunkInfoFn (toWorldSimCapability env))
   registerLuaFunction "getAreaFluid" (worldGetAreaFluidFn (toWorldSimCapability env))
   registerLuaFunction "getRivers" (worldGetRiversFn (toWorldSimCapability env))
+  registerLuaFunction "getRiverAt" (worldGetRiverAtFn (toWorldSimCapability env))
+  registerLuaFunction "getEtymology"
+    (worldGetEtymologyFn (toWorldSimCapability env) backendState)
   registerLuaFunction "loadChunksInRegion" (worldLoadChunksInRegionFn (toWorldSimCapability env))
   registerLuaFunction "waitForChunks" (worldWaitForChunksFn (toWorldSimCapability env))
   registerLuaFunction "getHoverTile" (worldGetHoverTileFn env)

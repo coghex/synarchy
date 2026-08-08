@@ -55,14 +55,15 @@ import Power.Types
 -- is a CUSTOM name, so it carries no language provenance (#1092).
 namedIdent ∷ WorldIdentity
 namedIdent =
-    WorldIdentity "Fjord / Upper.. Reach" (Just "the high fjord") Nothing
+    WorldIdentity "Fjord / Upper.. Reach" (Just "the high fjord")
+                  Nothing Nothing
 
 -- A page literally named "main_world" saved as a SECONDARY page —
 -- issue #763 removed the old active-page-remap-to-main_world behavior
 -- entirely, so this no longer "collides" with anything; it just proves
 -- staging preserves an arbitrary saved id (including this one) verbatim.
 colliderIdent ∷ WorldIdentity
-colliderIdent = WorldIdentity "Collider" Nothing Nothing
+colliderIdent = WorldIdentity "Collider" Nothing Nothing Nothing
 
 -- The provenance of the generated identity below (#1092). The seed is
 -- deliberately ABOVE 2^63-1: a signed 64-bit or floating-point carrier
@@ -78,7 +79,7 @@ testProvenance = LanguageProvenance
 generatedIdent ∷ WorldIdentity
 generatedIdent = case mkGeneratedWorldIdentity
                         (Just "Vashenkoro") (Just "the salt reach")
-                        testProvenance of
+                        testProvenance Nothing of
     Just i  → i
     Nothing → error "generatedIdent: normalization rejected a valid name"
 
@@ -102,22 +103,26 @@ spec = do
 
         it "trims leading/trailing whitespace from the name" $ \_env →
             mkWorldIdentity (Just " Northreach ") Nothing
-                `shouldBe` Just (WorldIdentity "Northreach" Nothing Nothing)
+                `shouldBe`
+                    Just (WorldIdentity "Northreach" Nothing Nothing Nothing)
 
         it "preserves interior whitespace, punctuation, and case" $ \_env →
             mkWorldIdentity (Just "  North reach, the 2nd  ") Nothing
                 `shouldBe`
-                Just (WorldIdentity "North reach, the 2nd" Nothing Nothing)
+                Just (WorldIdentity "North reach, the 2nd" Nothing Nothing
+                                    Nothing)
 
         it "trims the gloss and keeps it optional" $ \_env → do
             mkWorldIdentity (Just "Northreach") (Just " the cold place ")
                 `shouldBe`
                 Just (WorldIdentity "Northreach" (Just "the cold place")
-                          Nothing)
+                          Nothing Nothing)
             mkWorldIdentity (Just "Northreach") (Just "   ")
-                `shouldBe` Just (WorldIdentity "Northreach" Nothing Nothing)
+                `shouldBe`
+                    Just (WorldIdentity "Northreach" Nothing Nothing Nothing)
             mkWorldIdentity (Just "Northreach") Nothing
-                `shouldBe` Just (WorldIdentity "Northreach" Nothing Nothing)
+                `shouldBe`
+                    Just (WorldIdentity "Northreach" Nothing Nothing Nothing)
 
     describe "identity is display text, not a save name" $ do
         it "accepts text sanitizeSaveName rejects ('/' and '..')" $ \_env → do
@@ -128,7 +133,8 @@ spec = do
             -- …and stored verbatim as display names.
             mkWorldIdentity (Just "Fjord / Upper.. Reach") Nothing
                 `shouldBe`
-                Just (WorldIdentity "Fjord / Upper.. Reach" Nothing Nothing)
+                Just (WorldIdentity "Fjord / Upper.. Reach" Nothing Nothing
+                                    Nothing)
 
     describe "language provenance (#1092)" $ do
         it "the custom-name path never attaches provenance" $ \_env → do
@@ -145,15 +151,16 @@ spec = do
         it "the generated-name path attaches exactly the supplied \
            \provenance, with identical normalization" $ \_env → do
             mkGeneratedWorldIdentity (Just "  Vashenkoro  ")
-                    (Just "  the salt reach ") testProvenance
+                    (Just "  the salt reach ") testProvenance Nothing
                 `shouldBe` Just (WorldIdentity "Vashenkoro"
                                      (Just "the salt reach")
-                                     (Just testProvenance))
+                                     (Just testProvenance) Nothing)
             -- A name that isn't a name is still no identity, provenance
             -- or not — provenance can never conjure one into existence.
             mkGeneratedWorldIdentity (Just "  ") (Just "g") testProvenance
+                                     Nothing
                 `shouldBe` Nothing
-            mkGeneratedWorldIdentity Nothing Nothing testProvenance
+            mkGeneratedWorldIdentity Nothing Nothing testProvenance Nothing
                 `shouldBe` Nothing
 
         it "a recovered provenance rebuilds the SAME profile the seed \

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Semantic proper names (#709): the language-independent middle layer
 --   of the world-naming arc (#708). A proper name is a structured
 --   'NameExpr' over stable 'ConceptId's — never an English source
@@ -40,23 +40,40 @@ module Language.Semantic.Types
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Control.DeepSeq (NFData)
+import Data.Serialize (Serialize)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
 -- | Stable identifier of a semantic concept (e.g. @ASH@, @LAND@).
 --   Uppercase ASCII letters, digits, and underscores; independent of —
 --   and never derived from — the concept's English wording.
+--
+--   'Serialize'\/'NFData' are derived from the underlying 'Text' so a
+--   name's originating expression can ride into a save as part of
+--   #1104's optional 'Language.Etymology.Source.EtymologySource'.
 newtype ConceptId = ConceptId { conceptIdText ∷ Text }
-    deriving (Show, Eq, Ord)
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Ord, NFData, Serialize)
 
 -- | Explicit grammatical number. The renderer never infers number (or
 --   any other lexical role) from an English string.
+--
+--   Serialized positionally by constructor tag through @Generic
+--   Serialize@ (#1104) — APPEND-ONLY, like every other enum reachable
+--   from a save (see the enum schema policy in @CLAUDE.md@ and
+--   @tools\/enum_append_only_audit.py@).
 data GramNumber = Singular | Plural
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | A proper name as structured meaning. The four supported forms are
 --   the #709 contract that #710's generated-language renderer must also
 --   cover — extend only alongside that issue's form list.
+--
+--   Serialized positionally by constructor tag through @Generic
+--   Serialize@ (#1104, which persists a generated name's originating
+--   expression) — APPEND-ONLY, exactly like 'GramNumber' above.
 data NameExpr
     = Bare !ConceptId
       -- ^ @Bare(SILENCE)@ → \"Silence\"
@@ -68,7 +85,7 @@ data NameExpr
     | Possessive !ConceptId !ConceptId
       -- ^ owner, then possessed head:
       --   @Possessive(WOLF, HEART)@ → \"Wolf's Heart\"
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | The naming domains the starter vocabulary spans (#709 req 7).
 data ConceptDomain

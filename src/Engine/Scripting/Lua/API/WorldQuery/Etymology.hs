@@ -1,0 +1,520 @@
+{-# LANGUAGE Strict #-}
+-- | Name-etymology queries (#1104): @world.getEtymology@ and the
+--   minimal @world.getRiverAt@ selection resolution it needs.
+--
+--   /One decomposition path./ World, location, and river are three thin
+--   ADAPTERS over one shared call: each resolves its own stored name,
+--   gloss, and optional 'EtymologySource', and hands all three to
+--   'Language.Etymology.decomposeName'. Nothing entity-specific reaches
+--   past that boundary, so the three can never explain a name
+--   differently (#1104 requirement 3).
+--
+--   /Read-only./ Every lookup here is an 'readIORef' on state the world
+--   thread owns; nothing is written, queued, or re-rendered. A stored
+--   name, gloss, source, and provenance are byte-identical before and
+--   after a query because the query never has a handle it could write
+--   through (requirement 2).
+--
+--   /Recurrence eligibility is computed, never remembered./ There is no
+--   session history and no \"seen names\" log (requirement 8). Each call
+--   re-derives the eligible set from the ACTIVE page as it stands: the
+--   current world name, every location at or beyond
+--   'LifecycleDiscovered', and — only when a river is the thing being
+--   inspected — that one river. An undiscovered location, another river,
+--   and every inactive page are absent by construction rather than by a
+--   filter that could be relaxed.
+module Engine.Scripting.Lua.API.WorldQuery.Etymology
+    ( worldGetEtymologyFn
+    , worldGetRiverAtFn
+      -- * Pure helpers (tested directly)
+    , EtyEntity(..)
+    , eligibleEntities
+    , recurrenceFor
+    , riverAtTile
+    ) where
+
+import UPrelude
+import Data.IORef (modifyIORef', readIORef)
+import Data.List (sortOn)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.Vector as V
+import qualified HsLua as Lua
+import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
+import Engine.Core.State (activeWorldStateFrom)
+import Engine.Scripting.Lua.Types (LuaBackendState(..), LanguageCache(..))
+import Language.Etymology
+import Language.Etymology.Source (EtymologySource)
+import Language.Semantic.Types (Catalogue, ConceptId(..), catalogueErrorText)
+import Language.Generated.Types
+    ( LanguageProvenance(..), generatorVersionInt, langSeedText )
+import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Location.Instance
+    ( LocationInstance(..), LocationInstanceId(..), instancesToList
+    , isDiscoveredLifecycle )
+import World.River.Identity (timelineRivers)
+import World.River.Naming (RiverName(..), lookupRiverName)
+-- Re-exports 'GeoFeatureId', 'WorldIdentity', 'WorldPageId', the
+-- world-manager/state records, and the river geometry this reads.
+import World.Types
+import Control.Exception (IOException, evaluate, try)
+
+-- * Eligible entities ------------------------------------------------
+
+-- | One thing on the active page whose name can participate in
+--   recurrence, reduced to exactly what a recurrence entry may expose:
+--   its KIND and its already-visible stored name (#1104 requirement 9's
+--   tightened wording — no coordinates, instance ids, lifecycle state,
+--   or river geometry travels with it).
+--
+--   The identity fields are here only so an entity can recognize
+--   ITSELF and drop out of its own recurrence list; they are never
+--   pushed to Lua.
+data EtyEntity = EtyEntity
+    { eeKind   ∷ !Text            -- ^ @world@ \/ @location@ \/ @river@
+    , eeRef    ∷ !(Maybe Int)     -- ^ its own id within that kind
+    , eeName   ∷ !Text
+    , eeGloss  ∷ !(Maybe Text)
+    , eeSource ∷ !(Maybe EtymologySource)
+    } deriving (Show, Eq)
+
+-- | The eligible set for one query (#1104 requirement 8).
+--
+--   @mRiver@ is the river currently being inspected, and is 'Nothing'
+--   for a world or location target — which is what makes \"no river
+--   participates at all\" the behavior for those two, rather than
+--   \"every named river on the page\".
+eligibleEntities
+    ∷ Maybe WorldIdentity
+    → [LocationInstance]
+    → Maybe (GeoFeatureId, RiverName)
+    → [EtyEntity]
+eligibleEntities mIdent instances mRiver =
+    worldEntry ⧺ locationEntries ⧺ riverEntry
+  where
+    worldEntry =
+        [ EtyEntity "world" Nothing (wiName i) (wiGloss i) (wiEtymology i)
+        | Just i ← [mIdent] ]
+
+    -- 'isDiscoveredLifecycle' rather than a fresh comparison: it is the
+    -- single predicate the zoom-map icons and the discovered query field
+    -- already share, so this cannot drift from what the rest of the game
+    -- calls discovered.
+    locationEntries =
+        [ EtyEntity "location" (Just (unLocationInstanceId (liId li)))
+                    (liDisplayName li) (liGloss li) (liEtymology li)
+        | li ← instances
+        , isDiscoveredLifecycle (liLifecycle li)
+        ]
+
+    riverEntry =
+        [ EtyEntity "river" (Just fid) (rvnDisplayName rn) (rvnGloss rn)
+                    (rvnEtymology rn)
+        | Just (GeoFeatureId fid, rn) ← [mRiver] ]
+
+-- | The recurrence links for one decomposition: per morpheme, in
+--   surface order, the OTHER eligible entities whose own validated
+--   decomposition contains the same morpheme identity.
+--
+--   Only names with a successfully validated etymology participate
+--   (requirement 8's last line): an entity whose decomposition comes
+--   back unavailable is simply absent, never matched on its raw text.
+--   The inspected entity itself is excluded — it is the thing being
+--   explained, not a place the morpheme also turns up.
+recurrenceFor
+    ∷ Catalogue → EtyEntity → [EtyEntity] → Etymology
+    → [(MorphemeIdentity, [EtyEntity])]
+recurrenceFor cat self eligible ety =
+    [ (mi, [ e | (e, other) ← decomposed, etymologyMentions mi other ])
+    | mi ← etymologyIdentities ety ]
+  where
+    decomposed =
+        [ (e, o)
+        | e ← eligible
+        , not (isSelf e)
+        , EtyAvailable o ← [ decomposeName cat (eeName e) (eeGloss e)
+                                          (eeSource e) ]
+        ]
+    isSelf e = eeKind e ≡ eeKind self ∧ eeRef e ≡ eeRef self
+
+-- * River selection ---------------------------------------------------
+
+-- | Which river's visible channel covers a tile, if any (#1104
+--   requirement 10's \"selecting a visible river segment, resolved
+--   through #1102's stable river identity\").
+--
+--   Deliberately minimal, and deliberately the CHANNEL rather than the
+--   valley: the channel is where the water a player can see actually
+--   is, so a click on a river bank does not silently select the river
+--   two valleys over. Geometry is read the same way
+--   'World.Hydrology.River.Carving' reads it — segment endpoints are
+--   global tile coordinates, and the perpendicular distance to the
+--   segment axis is compared against its own half width — so this
+--   cannot disagree with where the carve put the channel.
+--
+--   The nearest qualifying river wins, and a river with no resolvable
+--   'GeoFeatureId' is skipped rather than reported without one: an
+--   unidentified river cannot be looked up, and a wrong id would attach
+--   another river's name to it.
+riverAtTile ∷ GeoTimeline → Int → Int → Maybe GeoFeatureId
+riverAtTile timeline gx gy =
+    fmap snd (listToMaybe (sortOn fst hits))
+  where
+    hits =
+        [ (d, fid)
+        | (Just fid, river) ← timelineRivers timeline
+        , Just d ← [ closestChannelDistance river ]
+        ]
+
+    closestChannelDistance river = case dists of
+        [] → Nothing
+        ds → Just (minimum ds)
+      where
+        dists = [ d
+                | seg ← V.toList (rpSegments river)
+                , Just d ← [segmentDistance seg]
+                , d ≤ max 1.0 (fromIntegral (rsWidth seg) / 2.0) ]
+
+    -- Perpendicular distance from the segment AXIS, and only for a
+    -- point that actually lies beside the segment: past either end the
+    -- next segment — or the next river — owns the water, so an
+    -- unbounded axis distance would let a short tributary claim tiles
+    -- far downstream of itself.
+    segmentDistance seg
+        | segLen < 0.001          = Nothing
+        | alongT < 0 ∨ alongT > 1 = Nothing
+        | otherwise               = Just (abs (px * ny - py * nx))
+      where
+        GeoCoord sx sy = rsStart seg
+        GeoCoord ex ey = rsEnd seg
+        px = fromIntegral (gx - sx) ∷ Double
+        py = fromIntegral (gy - sy) ∷ Double
+        fdx = fromIntegral (ex - sx) ∷ Double
+        fdy = fromIntegral (ey - sy) ∷ Double
+        segLen = sqrt (fdx * fdx + fdy * fdy)
+        nx = fdx / segLen
+        ny = fdy / segLen
+        alongT = (px * nx + py * ny) / segLen
+
+-- * The Lua entry points ----------------------------------------------
+
+-- | world.getEtymology(kind [, id] [, pageId]) → table
+--
+--   @kind@ is @\"world\"@, @\"location\"@, or @\"river\"@. A location
+--   takes its 'LocationInstanceId'; a river takes the @id@
+--   @world.getRivers@ / @world.getRiverAt@ reports. @pageId@ defaults to
+--   the active page.
+--
+--   A successful result is
+--   @{ available = true, name, gloss?, language = { seed, version },
+--      form, morphemes = {...}, tokens = {...}, recurrence = {...} }@.
+--   Concatenating @tokens@' @text@ reproduces @name@ exactly.
+--
+--   An unsuccessful one is @{ available = false, reason, reasonText }@,
+--   and the caller keeps showing the stored name (#1104 requirement 7).
+--   @reason@ is a stable lowercase key; @reasonText@ is the player-facing
+--   sentence.
+worldGetEtymologyFn
+    ∷ WorldSimCapability → LuaBackendState
+    → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetEtymologyFn wsc backendState = do
+    kindArg ← Lua.tostring 1
+    idArg   ← Lua.tointeger 2
+    pageArg ← Lua.tostring 3
+    let kind = maybe "" TE.decodeUtf8Lenient kindArg
+        mPid = WorldPageId ∘ TE.decodeUtf8Lenient <$> pageArg
+        mId  = fromIntegral <$> idArg
+    result ← Lua.liftIO $ resolveEtymology wsc backendState kind mId mPid
+    pushEtymologyResult result
+    return 1
+
+-- | world.getRiverAt(gx, gy [, pageId]) → { id, name?, gloss? } | nil
+--
+--   The one selection resolution #1104 adds: which visible river covers
+--   a tile. Deliberately singular — it answers for the SELECTED tile
+--   only and exposes nothing about any other river, so it is not a
+--   global river list (#1104 requirement 10's explicit exclusion).
+--
+--   @name@ and @gloss@ are absent for a river the page never named,
+--   mirroring @world.getRivers@' own optional-field convention.
+worldGetRiverAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetRiverAtFn wsc = do
+    gxArg   ← Lua.tointeger 1
+    gyArg   ← Lua.tointeger 2
+    pageArg ← Lua.tostring 3
+    case (gxArg, gyArg) of
+        (Just gx, Just gy) → do
+            let mPid = WorldPageId ∘ TE.decodeUtf8Lenient <$> pageArg
+            mParams ← Lua.liftIO $ genParamsFor wsc mPid
+            case mParams ⌦ \params →
+                    (,) params <$> riverAtTile (wgpGeoTimeline params)
+                                               (fromIntegral gx)
+                                               (fromIntegral gy) of
+                Nothing → Lua.pushnil
+                Just (params, fid@(GeoFeatureId raw)) → do
+                    Lua.newtable
+                    Lua.pushinteger (fromIntegral raw)
+                    Lua.setfield (Lua.nth 2) "id"
+                    forM_ (lookupRiverName fid (wgpRiverNames params)) $ \rn → do
+                        Lua.pushstring (TE.encodeUtf8 (rvnDisplayName rn))
+                        Lua.setfield (Lua.nth 2) "name"
+                        forM_ (rvnGloss rn) $ \g → do
+                            Lua.pushstring (TE.encodeUtf8 g)
+                            Lua.setfield (Lua.nth 2) "gloss"
+        _ → Lua.pushnil
+    return 1
+
+-- * Resolution --------------------------------------------------------
+
+-- | What one query resolved to: either a decomposition plus the
+--   recurrence links around it, or the honest reason there is none.
+data ResolvedEtymology
+    = ResolvedOk !Etymology ![(MorphemeIdentity, [EtyEntity])]
+    | ResolvedNone !EtyUnavailable
+    | ResolvedNoEntity
+      -- ^ the page or the entity itself does not exist — distinct from
+      --   \"exists but cannot be explained\", and reported as an ordinary
+      --   unavailable result rather than an error
+
+resolveEtymology
+    ∷ WorldSimCapability → LuaBackendState → Text → Maybe Int
+    → Maybe WorldPageId → IO ResolvedEtymology
+resolveEtymology wsc backendState kind mId mPid = do
+    mState ← worldStateFor wsc mPid
+    case mState of
+        Nothing → pure ResolvedNoEntity
+        Just ws → do
+            mIdent  ← readIORef (wsIdentityRef ws)
+            mParams ← readIORef (wsGenParamsRef ws)
+            case mParams of
+                Nothing → pure ResolvedNoEntity
+                Just params → do
+                    let instances = instancesToList (wgpLocationInstances params)
+                        mRiver = do
+                            rid ← mId
+                            let fid = GeoFeatureId rid
+                            rn ← lookupRiverName fid (wgpRiverNames params)
+                            pure (fid, rn)
+                        -- Only a RIVER target admits a river into the
+                        -- eligible set (requirement 8).
+                        eligible = eligibleEntities mIdent instances
+                                       (if kind ≡ "river" then mRiver else Nothing)
+                        mSelf = selfEntity kind mId mIdent instances params
+                    case mSelf of
+                        Nothing → pure ResolvedNoEntity
+                        Just self → do
+                            eCat ← resolveCatalogue backendState
+                            pure $ case eCat of
+                                Left msg → ResolvedNone
+                                    (EtyReconstructionFailed msg)
+                                Right cat → case decomposeName cat (eeName self)
+                                                    (eeGloss self) (eeSource self) of
+                                    -- Sharpen the bare "no source" into
+                                    -- WHY there is none: #1104
+                                    -- requirement 7 lists a custom name,
+                                    -- an absent source, and an absent
+                                    -- provenance as three separate
+                                    -- honest answers, and only the
+                                    -- adapter can tell them apart.
+                                    EtyUnavailable EtyNoSource →
+                                        ResolvedNone (absentReason kind mIdent)
+                                    EtyUnavailable u → ResolvedNone u
+                                    EtyAvailable ety → ResolvedOk ety
+                                        (recurrenceFor cat self eligible ety)
+
+-- | Which of requirement 7's absences applies when a name has no
+--   etymology source.
+--
+--   A world page with no #1092 provenance was named by the PLAYER —
+--   'World.Page.Types.mkWorldIdentity' is the only path that produces
+--   one, and it never records a language — so "custom" is a fact here,
+--   not a guess. A location or river on such a page has no language
+--   behind it either, but its name is a definition label or a
+--   fallback rather than a player's choice, so it reports the page's
+--   missing language instead of claiming the player picked it.
+--
+--   With provenance present, the name really was generated and its
+--   expression simply predates #1104.
+absentReason ∷ Text → Maybe WorldIdentity → EtyUnavailable
+absentReason kind mIdent = case wiLanguage =≪ mIdent of
+    Just _  → EtyNoSource
+    Nothing
+        | kind ≡ "world" → EtyCustomName
+        | otherwise      → EtyNoProvenance
+
+-- | The entity a query targets, as the same reduced record recurrence
+--   uses — so the target and the things it is compared against are
+--   resolved by ONE piece of code and cannot disagree about what an
+--   entity's stored name is.
+selfEntity
+    ∷ Text → Maybe Int → Maybe WorldIdentity → [LocationInstance]
+    → WorldGenParams → Maybe EtyEntity
+selfEntity kind mId mIdent instances params = case kind of
+    "world" → do
+        i ← mIdent
+        pure (EtyEntity "world" Nothing (wiName i) (wiGloss i) (wiEtymology i))
+    "location" → do
+        lid ← mId
+        li  ← listToMaybe [ l | l ← instances
+                          , unLocationInstanceId (liId l) ≡ lid ]
+        pure (EtyEntity "location" (Just lid) (liDisplayName li)
+                        (liGloss li) (liEtymology li))
+    "river" → do
+        rid ← mId
+        rn  ← lookupRiverName (GeoFeatureId rid) (wgpRiverNames params)
+        pure (EtyEntity "river" (Just rid) (rvnDisplayName rn)
+                        (rvnGloss rn) (rvnEtymology rn))
+    _ → Nothing
+
+worldStateFor
+    ∷ WorldSimCapability → Maybe WorldPageId → IO (Maybe WorldState)
+worldStateFor wsc Nothing    = activeWorldStateFrom (wsWorldManagerRef wsc)
+worldStateFor wsc (Just pid) = do
+    mgr ← readIORef (wsWorldManagerRef wsc)
+    pure (lookup pid (wmWorlds mgr))
+
+genParamsFor
+    ∷ WorldSimCapability → Maybe WorldPageId → IO (Maybe WorldGenParams)
+genParamsFor wsc mPid = do
+    mState ← worldStateFor wsc mPid
+    case mState of
+        Nothing → pure Nothing
+        Just ws → readIORef (wsGenParamsRef ws)
+
+-- | The concept catalogue, reusing @world.suggestName@'s own cache
+--   ('lbsLanguageCache') so an etymology query costs no filesystem work
+--   in a session that has already read it — and fills that same cache
+--   for the dice button in a session that has not. Its failure is
+--   reported, never substituted with an empty catalogue: every concept
+--   would then look invalid and every name would report a fabricated
+--   reason.
+resolveCatalogue ∷ LuaBackendState → IO (Either Text Catalogue)
+resolveCatalogue backendState = do
+    cached ← readIORef (lbsLanguageCache backendState)
+    case lcCatalogue <$> cached of
+        Just done → pure done
+        Nothing   → do
+            eRead ← readCatalogueForEtymology
+            atomicWrite eRead
+            pure eRead
+  where
+    atomicWrite eRead = modifyIORef' (lbsLanguageCache backendState) $ \cur →
+        case cur of
+            Just lc → Just lc
+            Nothing → Just LanguageCache
+                { lcCatalogue = eRead, lcSuggester = Nothing }
+
+-- | Read the catalogue with BOTH of its failure modes turned into one
+--   descriptive 'Left' — 'loadCatalogue' throws for a missing or
+--   unreadable file and returns 'Left' for one it could parse and
+--   reject. Mirrors @world.suggestName@'s own reader for exactly the
+--   same reason: a broken installation must not turn every query into
+--   filesystem work.
+readCatalogueForEtymology ∷ IO (Either Text Catalogue)
+readCatalogueForEtymology = do
+    eRead ← try (loadCatalogue conceptCataloguePath ⌦ evaluate)
+    pure $ case eRead of
+        Left (ioErr ∷ IOException) → Left (describe (T.pack (show ioErr)))
+        Right (Left cErr)          → Left (describe (catalogueErrorText cErr))
+        Right (Right cat)          → Right cat
+  where
+    describe why = "the concept catalogue could not be read (" <> why <> ")"
+
+-- * Pushing -----------------------------------------------------------
+
+pushEtymologyResult ∷ ResolvedEtymology → Lua.LuaE Lua.Exception ()
+pushEtymologyResult res = case res of
+    ResolvedNoEntity → pushUnavailable "no_entity"
+        "there is no such name on this world"
+    ResolvedNone u   → pushUnavailable (etyUnavailableReason u)
+                                       (etyUnavailableText u)
+    ResolvedOk ety links → do
+        Lua.newtable
+        Lua.pushboolean True
+        Lua.setfield (Lua.nth 2) "available"
+        Lua.pushstring (TE.encodeUtf8 (etyName ety))
+        Lua.setfield (Lua.nth 2) "name"
+        forM_ (etyGloss ety) $ \g → do
+            Lua.pushstring (TE.encodeUtf8 g)
+            Lua.setfield (Lua.nth 2) "gloss"
+        Lua.pushstring (TE.encodeUtf8 (etyFormText (etyForm ety)))
+        Lua.setfield (Lua.nth 2) "form"
+        pushLanguage (etyLanguage ety)
+        Lua.setfield (Lua.nth 2) "language"
+        pushList (etyMorphemes ety) pushMorpheme
+        Lua.setfield (Lua.nth 2) "morphemes"
+        pushList (etyTokens ety) pushToken
+        Lua.setfield (Lua.nth 2) "tokens"
+        pushList links pushRecurrence
+        Lua.setfield (Lua.nth 2) "recurrence"
+
+pushUnavailable ∷ Text → Text → Lua.LuaE Lua.Exception ()
+pushUnavailable reason why = do
+    Lua.newtable
+    Lua.pushboolean False
+    Lua.setfield (Lua.nth 2) "available"
+    Lua.pushstring (TE.encodeUtf8 reason)
+    Lua.setfield (Lua.nth 2) "reason"
+    Lua.pushstring (TE.encodeUtf8 why)
+    Lua.setfield (Lua.nth 2) "reasonText"
+
+-- | The language a decomposition belongs to, in exactly the
+--   @{ seed = \<decimal string\>, version = \<int\> }@ shape
+--   @world.getLanguageProvenance@ reports and @world.init@ accepts — a
+--   language seed is unsigned 64-bit, and neither of Lua's numeric
+--   types carries the top of that range intact.
+pushLanguage ∷ LanguageProvenance → Lua.LuaE Lua.Exception ()
+pushLanguage prov = do
+    Lua.newtable
+    Lua.pushstring (TE.encodeUtf8 (langSeedText (lpSeed prov)))
+    Lua.setfield (Lua.nth 2) "seed"
+    Lua.pushinteger (fromIntegral (generatorVersionInt (lpVersion prov)))
+    Lua.setfield (Lua.nth 2) "version"
+
+pushMorpheme ∷ EtyMorpheme → Lua.LuaE Lua.Exception ()
+pushMorpheme m = do
+    Lua.newtable
+    setText "id" (morphemeIdentityText (emIdentity m))
+    setText "concept" (conceptIdText (emConcept m))
+    setText "role" (etyRoleText (emRole m))
+    setText "surface" (emSurface m)
+    setText "free" (emFree m)
+    Lua.pushboolean (emBound m)
+    Lua.setfield (Lua.nth 2) "bound"
+    setText "lemma" (emLemma m)
+    forM_ (emMark m) $ \mk → setText "mark" (etyMarkText mk)
+    forM_ (emMarkSurface m) $ \ms → setText "markSurface" ms
+
+pushToken ∷ EtyToken → Lua.LuaE Lua.Exception ()
+pushToken t = do
+    Lua.newtable
+    setText "kind" (etyTokenKindText t)
+    setText "text" (etyTokenText t)
+    case t of
+        TokenMorpheme cid _ → setText "concept" (conceptIdText cid)
+        TokenMark mk _      → setText "mark" (etyMarkText mk)
+        _                   → pure ()
+
+pushRecurrence
+    ∷ (MorphemeIdentity, [EtyEntity]) → Lua.LuaE Lua.Exception ()
+pushRecurrence (mi, entries) = do
+    Lua.newtable
+    setText "morpheme" (morphemeIdentityText mi)
+    setText "concept" (conceptIdText (miConcept mi))
+    pushList entries $ \e → do
+        Lua.newtable
+        setText "kind" (eeKind e)
+        setText "name" (eeName e)
+    Lua.setfield (Lua.nth 2) "entries"
+
+setText ∷ Lua.Name → Text → Lua.LuaE Lua.Exception ()
+setText key val = do
+    Lua.pushstring (TE.encodeUtf8 val)
+    Lua.setfield (Lua.nth 2) key
+
+pushList ∷ [a] → (a → Lua.LuaE Lua.Exception ()) → Lua.LuaE Lua.Exception ()
+pushList xs push = do
+    Lua.newtable
+    forM_ (zip [1 ..] xs) $ \(i, x) → do
+        push x
+        Lua.rawseti (Lua.nth 2) i
