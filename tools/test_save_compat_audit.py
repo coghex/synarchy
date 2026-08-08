@@ -465,7 +465,7 @@ class _Args:
             # generated fixture's placed locations carry real generated
             # names/glosses rather than definition labels.
             world_name=None, world_gloss=None, language_seed=None,
-            language_version=None)
+            language_version=None, name_expr=None)
         defaults.update(kwargs)
         self.__dict__.update(defaults)
 
