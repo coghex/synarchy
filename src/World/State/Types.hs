@@ -3,6 +3,7 @@ module World.State.Types
     ( WorldState(..)
     , BloodTextureHandles
     , emptyWorldState
+    , pageWrapWorldSize
     , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
@@ -296,6 +297,17 @@ emptyWorldState = do
                         wsCropPlotsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
                         wsIdentityRef
+
+-- | The world size (in chunks) that decides this page's u-wrap — the
+--   single input every canonical-tile-frame helper needs (#1175).
+--
+--   Zero (no wrapping) when the page has no gen params yet, which is the
+--   only honest answer: "World.Thread.ChunkLoading" bails out on the
+--   same @Nothing@ and therefore has not inserted — nor wrapped the key
+--   of — a single chunk. Defaulting to a nominal 128 the way the render
+--   passes do would wrap STORAGE keys the loader never wrapped.
+pageWrapWorldSize ∷ WorldState → IO Int
+pageWrapWorldSize ws = maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

@@ -2,6 +2,7 @@
 --   "World.Thread.Command.Cursor" (issue #564).
 module World.Thread.Command.Cursor.Common
     ( maxDesignateSide
+    , designateRect
     , recordDesignationOutcome
     , recordMissingWorldOutcome
     ) where
@@ -15,12 +16,39 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import World.Types (WorldPageId)
+import World.Generate.Coordinates (localizeTileToAnchor)
 import World.Thread.Helpers (unWorldPageId)
 
 -- | Cap on the designation rectangle's side length. Guards against a
 --   misclick across the map turning into a 100k-tile designation.
 maxDesignateSide ∷ Int
 maxDesignateSide = 128
+
+-- | The rectangle a two-click drag actually drew, in the ANCHOR's local
+--   alias frame (#1175 — see "World.Render.HitTest"'s frame contract).
+--
+--   Shared by every rectangle tool so they cannot disagree about what a
+--   seam-crossing drag means. The second endpoint is re-expressed
+--   relative to the anchor BEFORE the @min@/@max@ and the
+--   'maxDesignateSide' clamp: both picks come back canonical, and two
+--   physically adjacent tiles across the seam sit a whole world apart in
+--   that frame, so a raw @min@/@max@ would form a world-sized rectangle
+--   and the cap would then sweep 128 tiles of unrelated terrain.
+--
+--   The returned corners stay in the anchor's frame: canonicalisation is
+--   per enumerated tile, at lookup and storage only. Identity away from
+--   the seam.
+designateRect ∷ Int                        -- ^ world size in chunks
+              → (Int, Int)                 -- ^ anchor (first click)
+              → (Int, Int)                 -- ^ second endpoint, any alias
+              → ((Int, Int), (Int, Int))   -- ^ ((xLo, yLo), (xHi, yHi))
+designateRect worldSize anchor@(gx1, gy1) end =
+    let (gx2, gy2) = localizeTileToAnchor worldSize anchor end
+        xLo = min gx1 gx2
+        yLo = min gy1 gy2
+        xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
+        yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+    in ((xLo, yLo), (xHi, yHi))
 
 -- | F4 (#646) action-outcome oracle tap for a rectangle-sweep
 --   designation commit: "accepted" if every requested tile/tree landed,

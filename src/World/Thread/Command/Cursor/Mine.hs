@@ -19,19 +19,24 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
-import World.Generate (globalToChunk)
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Mine.Types (designationFromSlope)
 import World.Thread.Command.Cursor.Common
-    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
+    (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSetMineAnchorCommand env _logger pageId gx gy = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
+        Just worldState → do
+            -- #1175: an anchor is a stored coord like any other, so it is
+            -- canonicalised on the way in. The rectangle is then formed in
+            -- ITS frame ('designateRect'), which is what keeps a
+            -- seam-crossing drag the small rectangle the player drew.
+            worldSize ← pageWrapWorldSize worldState
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { mineAnchor = Just (gx, gy) }, ())
+                (cs { mineAnchor = Just (canonicalTile worldSize gx gy) }, ())
         Nothing → pure ()
 
 handleWorldClearMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
@@ -59,8 +64,12 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
         Nothing → recordMissingWorldOutcome env "world.designateMine" pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
+            worldSize ← pageWrapWorldSize worldState
+            -- #1175: every column read canonicalises its coord, so an
+            -- anchor-local alias resolves the chunk that actually stores
+            -- the tile instead of missing at the seam. Identity inland.
             let surfaceZAt gx gy = do
-                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
                     lc ← lookupChunk coord tileData
                     pure (lcSurfaceMap lc VU.! columnIndex lx ly)
                 -- Gen-time slope at the tile's surface: tiles that are
@@ -68,7 +77,7 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
                 -- ('designationFromSlope'), so the designation's volume
                 -- matches the material that's actually there.
                 slopeAt gx gy z =
-                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
                     in case lookupChunk coord tileData of
                         Nothing → 0
                         Just lc →
@@ -77,14 +86,13 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
                             in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
                                then ctSlopes col VU.! i
                                else 0
-                xLo = min gx1 gx2
-                yLo = min gy1 gy2
-                xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
-                yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+                ((xLo, yLo), (xHi, yHi)) =
+                    designateRect worldSize (gx1, gy1) (gx2, gy2)
                 entries = case surfaceZAt gx1 gy1 of
                     Nothing → []   -- anchor chunk unloaded: nothing
                     Just anchorZ →
-                        [ ((gx, gy), designationFromSlope z (slopeAt gx gy z))
+                        [ ( canonicalTile worldSize gx gy
+                          , designationFromSlope z (slopeAt gx gy z) )
                         | gx ← [xLo .. xHi]
                         , gy ← [yLo .. yHi]
                         , Just z ← [surfaceZAt gx gy]

@@ -19,7 +19,8 @@ import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingManager(..))
 import World.Types
 import World.Generate (viewDepth)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates
+    (globalToChunk, canonicalTileFrame, localizeTileToAnchor)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
                             , constructDesignationFootprint)
@@ -307,21 +308,27 @@ renderWorldCursorQuads env worldState tileAlpha = do
     let clampSide a b
             | b ≥ a     = min b (a + maxMinePreviewSide - 1)
             | otherwise = max b (a - maxMinePreviewSide + 1)
-        -- Raw lookup, deferred with the rest of the designation frame
-        -- (#1135 audit → #1175). Its inputs are a 'pickWorldTile' hover
-        -- and a designation anchor, which share whatever frame that pick
-        -- reports; canonicalising only this read would resolve tiles the
-        -- COMMIT (World.Thread.Command.Cursor.*, still raw) would then
-        -- miss, so preview and designation would disagree about what was
-        -- marked. Both ends move together in #1175 or neither does.
+        -- #1175: preview and commit share ONE frame discipline, or they
+        -- disagree about what a drag marked. Each previewed tile arrives
+        -- in the ANCHOR's local alias frame (see 'localizeHover' below)
+        -- and is canonicalised HERE, for the column read only — the
+        -- coord itself stays local, because that is the frame the quad's
+        -- screen position and wrap offset are computed in. Identity
+        -- inland; exactly what World.Thread.Command.Cursor.* does at
+        -- commit time.
         surfaceZAt gx gy = do
-            let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+            let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
             lc ← HM.lookup chunkCoord (wtdChunks tileData)
             pure (lcSurfaceMap lc VU.! columnIndex lx ly)
+        -- The hover pick comes back canonical, so a seam-crossing drag
+        -- would otherwise span the whole world here exactly as it would
+        -- at commit. Re-express it against the anchor first.
+        localizeHover ax ay hx hy = localizeTileToAnchor worldSize (ax, ay) (hx, hy)
         minePreviewQuads = case (mineAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
+            (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
-                let hx' = clampSide ax hx
+                let (hx, hy) = localizeHover ax ay hxRaw hyRaw
+                    hx' = clampSide ax hx
                     hy' = clampSide ay hy
                     xLo = min ax hx'
                     xHi = max ax hx'
@@ -352,9 +359,10 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- tool's commit (scripts/build_tool.lua) snaps the SAME way before
     -- calling construction.designate, so what previews is what commits.
     let constructPreviewQuads = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
+            (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
-                let hx' = clampSide ax hx
+                let (hx, hy) = localizeHover ax ay hxRaw hyRaw
+                    hx' = clampSide ax hx
                     hy' = clampSide ay hy
                     dx = hx' - ax
                     dy = hy' - ay
@@ -385,8 +393,9 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- takes wood-tagged flora at any surface z (forests span slopes) —
     -- so every loaded tile in the rectangle previews at its own z.
     let chopPreviewQuads = case (chopAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex) →
-                let hx' = clampSide ax hx
+            (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex) →
+                let (hx, hy) = localizeHover ax ay hxRaw hyRaw
+                    hx' = clampSide ax hx
                     hy' = clampSide ay hy
                     xLo = min ax hx'
                     xHi = max ax hx'
@@ -409,9 +418,10 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- construct — a farmed field is flat ground, unlike chop's
     -- slope-spanning forest sweep.
     let tillPreviewQuads = case (tillAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
+            (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
-                let hx' = clampSide ax hx
+                let (hx, hy) = localizeHover ax ay hxRaw hyRaw
+                    hx' = clampSide ax hx
                     hy' = clampSide ay hy
                     xLo = min ax hx'
                     xHi = max ax hx'

@@ -29,6 +29,33 @@
 -- in scripts/unit_ai_core.lua; the materials-sourcing ladder is in
 -- scripts/unit_ai_fetch.lua; per-unit location knowledge (#915) is in
 -- scripts/unit_ai_locations.lua.
+--
+-- Designation job coordinates (#1175 requirement 4, audit result). The
+-- job coords the AI stores across ticks -- s.digJob / s.chopJob /
+-- s.tillJob / s.plantJob / s.constructJob, in unit_ai_dig.lua,
+-- unit_ai_chop.lua, unit_ai_farm.lua and unit_ai_construct.lua -- are
+-- CANONICAL, and nothing in those modules had to change to keep them so:
+--
+--   * They are only ever PRODUCED by an engine query
+--     (nearest*Designation, get*DesignationAt,
+--     construction.getPendingJobs), each of which reports the canonical
+--     stored key -- see World/Render/HitTest.hs's frame contract. The AI
+--     never derives a job coord from a pick or from arithmetic over two
+--     of them.
+--   * They are only ever CONSUMED by point verbs, all of which accept
+--     any u-alias and resolve the one stored key. That is what lets a
+--     persisted job coord from a pre-#1175 save (lua.unit_ai v1-v4,
+--     possibly an alias) keep resolving after a load, with no migration.
+--   * The Lua-side claim tables (digKey / chopKey / till.key) are keyed
+--     by those same coords, so one physical tile now has exactly one
+--     claim key -- two aliases could previously hold it twice.
+--
+-- Deliberately NOT in that contract: unit MOVEMENT. Unit positions and
+-- pathing use the plain unwrapped global frame with no seam handling,
+-- so unit.moveTo(job.x + 0.5, ...) walks to the tile the long way round
+-- rather than across the seam. That is a pre-existing pathing
+-- limitation, not a frame mismatch -- the canonical coord still names
+-- the correct tile in the unit frame.
 
 local unitAi = package.loaded["scripts.unit_ai"] or {}
 package.loaded["scripts.unit_ai"] = unitAi
