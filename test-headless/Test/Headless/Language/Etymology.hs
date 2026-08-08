@@ -99,6 +99,10 @@ unavailableOf ∷ EtymologyResult → Maybe EtyUnavailable
 unavailableOf (EtyUnavailable u) = Just u
 unavailableOf _                  = Nothing
 
+isAvailable ∷ EtymologyResult → Bool
+isAvailable EtyAvailable{}   = True
+isAvailable EtyUnavailable{} = False
+
 -- | The first morpheme of a decomposition, or a descriptive failure.
 --   Total by construction rather than by 'head': every expression these
 --   specs build has at least one, and a change that made one empty
@@ -451,16 +455,81 @@ spec = beforeAll loadRealCatalogue $ do
            \or a fabricated cause" $ \_cat → do
             let reasons =
                     [ EtyCustomName, EtyNoSource, EtyNoProvenance
+                    , EtyForeignSource
                     , EtyUnsupportedVersion 99
                     , EtyInvalidConcept (ConceptId "X")
                     , EtyReconstructionFailed "why"
                     , EtySurfaceMismatch "a" "b" ]
             map etyUnavailableReason reasons `shouldBe`
-                [ "custom", "no_source", "no_provenance"
+                [ "custom", "no_source", "no_provenance", "foreign_source"
                 , "unsupported_version", "invalid_concept"
                 , "reconstruction_failed", "surface_mismatch" ]
             map etyUnavailableText reasons
                 `shouldSatisfy` all (not ∘ T.null)
+
+    -- The surface check proves the expression renders to the stored text
+    -- UNDER ITS OWN LANGUAGE. It cannot notice that the language is the
+    -- wrong one for the page, so the page's provenance is checked too.
+    describe "a source must belong to the page's own language" $ do
+        it "refuses a source whose language differs from the page's, even \
+           \though that source reconstructs the stored name perfectly" $
+            \cat → do
+                let (nameB, glossB) = storedFor cat provB modE
+                    srcB = sourceFor provB modE
+                -- On its own the source is entirely valid...
+                decomposeName cat nameB glossB (Just srcB)
+                    `shouldSatisfy` isAvailable
+                -- ...but the page says this world speaks language A, so
+                -- an explanation drawn from B would attribute every
+                -- morpheme — and every recurrence link — to a language
+                -- this world does not have.
+                unavailableOf (decomposeEntityName cat (Just provA)
+                                  nameB glossB (Just srcB))
+                    `shouldBe` Just EtyForeignSource
+
+        it "refuses a source on a page that records NO language at all -- \
+           \there is nothing for it to agree with, and absence is never \
+           \repaired by inference" $ \cat → do
+            let (name, gloss) = storedFor cat provA modE
+            unavailableOf (decomposeEntityName cat Nothing name gloss
+                              (Just (sourceFor provA modE)))
+                `shouldBe` Just EtyForeignSource
+
+        it "refuses a source whose seed matches but whose GENERATOR \
+           \VERSION does not -- two versions of one seed are two \
+           \languages, so a version drift is as much a mismatch as a \
+           \seed one" $ \cat → do
+            let (name, gloss) = storedFor cat provAOld modE
+            unavailableOf (decomposeEntityName cat (Just provA) name gloss
+                              (Just (sourceFor provAOld modE)))
+                `shouldBe` Just EtyForeignSource
+
+        it "accepts a source that DOES belong to the page's language, so \
+           \the check rejects mismatches rather than everything" $
+            \cat → do
+                let (name, gloss) = storedFor cat provA modE
+                decomposeEntityName cat (Just provA) name gloss
+                    (Just (sourceFor provA modE))
+                    `shouldSatisfy` isAvailable
+
+        it "still reports the ordinary absences when there is no source \
+           \to check, whatever the page records" $ \cat → do
+            unavailableOf (decomposeEntityName cat (Just provA)
+                              "Whatever" Nothing Nothing)
+                `shouldBe` Just EtyNoSource
+            unavailableOf (decomposeEntityName cat Nothing
+                              "Whatever" Nothing Nothing)
+                `shouldBe` Just EtyNoSource
+
+        it "sourceMatchesPage is exact on the whole provenance" $ \_cat → do
+            sourceMatchesPage (Just provA) (sourceFor provA modE)
+                `shouldBe` True
+            sourceMatchesPage (Just provA) (sourceFor provB modE)
+                `shouldBe` False
+            sourceMatchesPage (Just provA) (sourceFor provAOld modE)
+                `shouldBe` False
+            sourceMatchesPage Nothing (sourceFor provA modE)
+                `shouldBe` False
 
     describe "the query is read-only" $
         it "decomposing leaves the stored name, gloss, source, and \

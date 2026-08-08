@@ -957,7 +957,14 @@ before touching each area:
   homographs, and the SAME seed under two generator versions, are not.
   Capitalization is a surface-POSITION effect: the leading token carries
   it, every canonical free spelling stays the unmarked lowercase root.
-  `world.getEtymology(kind[, id][, pageId])` feeds world/location/river
+  A source is additionally
+  required to belong to the PAGE's own recorded language
+  (`decomposeEntityName`): the surface check proves an expression renders
+  to the stored text under ITS OWN language, so a stale or foreign source
+  that happens to reproduce those letters would otherwise pass while
+  attributing every morpheme — and every recurrence link — to a language
+  the world does not have. A page with no provenance admits no source at
+  all. `world.getEtymology(kind[, id][, pageId])` feeds world/location/river
   adapters into that one path; an unavailable reply still carries the
   stored name so the UI can keep showing it. Recurrence is computed on
   demand from the ACTIVE page — current world + `LifecycleDiscovered`-or-

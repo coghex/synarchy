@@ -58,6 +58,8 @@ module Language.Etymology
     , EtymologyResult(..)
       -- * Decomposition
     , decomposeName
+    , decomposeEntityName
+    , sourceMatchesPage
     , etymologyIdentities
     , etymologyMentions
     ) where
@@ -216,6 +218,10 @@ data EtyUnavailable
       -- ^ no etymology source was persisted (a name predating #1104)
     | EtyNoProvenance
       -- ^ the entity's page records no language provenance
+    | EtyForeignSource
+      -- ^ the entity's stored source belongs to a DIFFERENT generated
+      --   language than the page recorded (or to one at all, on a page
+      --   that records none)
     | EtyUnsupportedVersion !Int
       -- ^ the stored generator version cannot be constructed
     | EtyInvalidConcept !ConceptId
@@ -233,6 +239,7 @@ etyUnavailableReason u = case u of
     EtyCustomName             → "custom"
     EtyNoSource               → "no_source"
     EtyNoProvenance           → "no_provenance"
+    EtyForeignSource          → "foreign_source"
     EtyUnsupportedVersion _   → "unsupported_version"
     EtyInvalidConcept _       → "invalid_concept"
     EtyReconstructionFailed _ → "reconstruction_failed"
@@ -248,6 +255,9 @@ etyUnavailableText u = case u of
         "this name was recorded before its meaning was kept"
     EtyNoProvenance →
         "this world has no generated language"
+    EtyForeignSource →
+        "this name's recorded meaning belongs to a different language \
+        \than this world's, so it cannot explain it"
     EtyUnsupportedVersion v →
         "this name was written by language generator version "
         <> T.pack (show v) <> ", which this build cannot rebuild"
@@ -293,6 +303,46 @@ decomposeName cat storedName storedGloss (Just src) =
         Right prof → explain cat storedName storedGloss prov prof (esExpr src)
   where
     prov = esLanguage src
+
+-- | Explain one stored name, given the language its PAGE records.
+--
+--   This is the entry point every adapter uses, and it adds the one
+--   check 'decomposeName' structurally cannot make: that the source
+--   sitting beside the name belongs to the same generated language the
+--   page says named it.
+--
+--   The surface check alone is not enough. It proves the expression
+--   renders to the stored text UNDER THE SOURCE'S OWN LANGUAGE — so a
+--   source carrying some other language's provenance, whether stale,
+--   hand-edited, or carried across from another page, is accepted the
+--   moment it happens to reproduce those letters. What comes back then
+--   looks fully validated while attributing every morpheme to a
+--   language this world does not have, and #1104 requirement 4 keys
+--   morpheme IDENTITY on that language: the recurrence links would be
+--   computed in the wrong lexicon too.
+--
+--   A page with no provenance at all admits no source for the same
+--   reason — there is nothing for one to agree with, and requirement 1
+--   is explicit that absence is never repaired by inference.
+decomposeEntityName
+    ∷ Catalogue
+    → Maybe LanguageProvenance  -- ^ the page's own recorded language
+    → Text → Maybe Text → Maybe EtymologySource
+    → EtymologyResult
+decomposeEntityName cat pageProv storedName storedGloss mSource
+    | Just src ← mSource
+    , not (sourceMatchesPage pageProv src)
+    = EtyUnavailable EtyForeignSource
+    | otherwise
+    = decomposeName cat storedName storedGloss mSource
+
+-- | Whether a stored source belongs to the language the page recorded.
+--   Exact equality on the whole 'LanguageProvenance' — seed AND
+--   generator version — because two versions of one seed are two
+--   languages (requirement 4), so a version drift is as much a mismatch
+--   as a seed one.
+sourceMatchesPage ∷ Maybe LanguageProvenance → EtymologySource → Bool
+sourceMatchesPage pageProv src = pageProv ≡ Just (esLanguage src)
 
 explain
     ∷ Catalogue → Text → Maybe Text → LanguageProvenance → Profile

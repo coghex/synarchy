@@ -329,8 +329,16 @@ resolveEtymology wsc backendState kind mId mPid = do
                             pure $ case eCat of
                                 Left msg → ResolvedNone
                                     (EtyReconstructionFailed msg) stored
-                                Right cat → case decomposeName cat (eeName self)
-                                                    (eeGloss self) (eeSource self) of
+                                -- The PAGE's own language is passed in,
+                                -- so a source belonging to a different
+                                -- one is refused before it can produce a
+                                -- validated-looking explanation in the
+                                -- wrong lexicon.
+                                Right cat → case decomposeEntityName cat
+                                                    (wiLanguage =≪ mIdent)
+                                                    (eeName self)
+                                                    (eeGloss self)
+                                                    (eeSource self) of
                                     -- Sharpen the bare "no source" into
                                     -- WHY there is none: #1104
                                     -- requirement 7 lists a custom name,
