@@ -8,8 +8,28 @@
 -- visible slot gains a square sprite left of its label and the label
 -- indents past it; an item with no `icon` simply leaves its slot's
 -- sprite hidden.
+--
+-- params.columns (#1107) is OPT-IN the same way: an ordered list of
+-- EXTRA text columns, one real text element per column per visible
+-- slot, so a row can carry several independent facts that stay
+-- separately readable rather than being concatenated into one string.
+-- Each entry is
+--     { key       = "<item field>",       -- the value comes from item[key]
+--       fraction  = <0..1 of the row's usable width>,
+--       color     = {r,g,b,a},            -- resting color, own by default
+--       line      = <1 (default) or more>,-- which text line of the row
+--       fontScale = <multiplier, default 1> }
+-- nil (every pre-#1107 caller) means no column elements exist at all,
+-- and a single-line list lays out byte-identically to before.
+--
+-- `line` exists because a row whose width is already spoken for cannot
+-- gain a column without taking space from what it already showed:
+-- putting the new fields on line 2 leaves line 1's allocation intact.
+-- The lines are laid out as one tight block centered in the row, so the
+-- CALLER must size itemHeight to hold them all.
 local scale = require("scripts.ui.scale")
 local scrollbar = require("scripts.ui.scrollbar")
+local textWrap = require("scripts.ui.text_wrap")
 local list = {}
 
 -----------------------------------------------------------
@@ -45,6 +65,56 @@ end
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
+
+-- Bound one row field to its allocated column (#1107). A list with no
+-- columns keeps its historical behavior exactly: the raw text, bounded
+-- only by the viewport clip.
+local function fitField(ls, text, maxPx, fontPx)
+    if not ls.columns then return text end
+    return textWrap.truncateToWidth(text, ls.font, fontPx or ls.fontSize, maxPx)
+end
+
+-- The value one item contributes to column `i`, as a string. A missing
+-- field is an EMPTY column, never a substitute drawn from another field
+-- -- an unnamed world must not read as though it were named.
+local function columnText(ls, item, i)
+    local raw = item and ls.columns[i].key and item[ls.columns[i].key]
+    if raw == nil then return "" end
+    return tostring(raw)
+end
+
+-- Recolor a whole row. `emphasis` is the selected/hover color that
+-- overrides every field at once, or nil to restore each field's own
+-- resting color -- a column may define its own (a secondary fact reads
+-- dimmer than the row's identity), so restoring cannot simply reuse the
+-- primary label's.
+local function setRowColor(ls, slot, emphasis)
+    local c = emphasis or ls.textColor
+    UI.setColor(slot.textId, c[1], c[2], c[3], c[4])
+    if slot.columnIds then
+        for i, cId in ipairs(slot.columnIds) do
+            local cc = emphasis or ls.columns[i].color or ls.textColor
+            UI.setColor(cId, cc[1], cc[2], cc[3], cc[4])
+        end
+    end
+end
+
+-- One rendered row field, for list.dump (#1107). `width` is what the
+-- column was ALLOCATED; `textWidth` is what the rendered text actually
+-- measures, so a caller can tell "fits" from "was truncated to fit"
+-- without re-deriving the list's own font metrics.
+local function describeField(ls, elemId, width, fontPx)
+    local info = elemId and UI.getElementInfo(elemId) or nil
+    local text = (info and info.text) or ""
+    return {
+        text = text,
+        x = info and info.x or ls.x,
+        y = info and info.y or ls.y,
+        width = width or 0,
+        textWidth = engine.getTextWidth(ls.font, text,
+                        fontPx or ls.fontSize) or 0,
+    }
+end
 
 function list.measureItems(items, font, fontSize)
     local maxWidth = 0
@@ -93,9 +163,105 @@ function list.new(params)
     -- widths still align cleanly.
     local textAlign = params.textAlign or "left"
 
+    -- Optional extra text columns (#1107). Column geometry is a LIST
+    -- level property, not a per-item one, so the columns line up down
+    -- the whole list; each item supplies only its own text per column.
+    -- Deliberately left-aligned (and forcing the primary label back to
+    -- left too): a per-item textAlign offset is computed once at
+    -- creation and never revisited, which a scrolling multi-column row
+    -- would silently desync.
+    local columns = params.columns
+    if columns and #columns == 0 then columns = nil end
+    if columns then textAlign = "left" end
+
     local visibleCount = math.min(#items, maxVisible)
     local listWidth = params.width or 300
     local listHeight = visibleCount * itemHeight
+
+    -- Resolve the column layout once (#1107). The usable span is
+    -- between the label's start and the row's right padding, and each
+    -- column claims its `fraction` of it; on LINE 1 the primary label
+    -- keeps whatever is left over, on any further line the columns
+    -- start from the label's own x. Each width is a hard bound the row
+    -- text is truncated to -- the viewport clip alone is not enough
+    -- once a row carries more than one fact, because a clip cuts a
+    -- glyph mid-stroke and lets one overlong field run visually into
+    -- the next column. Every width floors at 0, so an out-of-envelope
+    -- framebuffer/scale combination degrades instead of producing
+    -- negative geometry.
+    --
+    -- A column's `line` is what lets a row carry facts that genuinely
+    -- do not fit side by side: putting every added field on line 2
+    -- leaves line 1's own allocation untouched, so a row that already
+    -- filled its width keeps showing exactly what it did before. The
+    -- caller is responsible for an `itemHeight` tall enough for the
+    -- lines it asked for.
+    local columnWidths, columnX, columnLine, columnFontSize = nil, nil, nil, nil
+    local primaryWidth = nil
+    -- Tallest font on each text line; line 1 always exists (the primary
+    -- label), so a row is at minimum what it always was.
+    local lineFont = { fontSize }
+    if columns then
+        local content = math.max(0, listWidth - labelX - textPadding)
+        columnWidths, columnX, columnLine, columnFontSize = {}, {}, {}, {}
+        local claimed = {}
+        for i, col in ipairs(columns) do
+            local line = col.line or 1
+            local taken = claimed[line] or 0
+            local w = math.max(0, math.floor(content * (col.fraction or 0)))
+            if taken + w > content then w = math.max(0, content - taken) end
+            columnWidths[i] = w
+            columnLine[i] = line
+            local fs = math.max(1, math.floor(fontSize * (col.fontScale or 1)))
+            columnFontSize[i] = fs
+            claimed[line] = taken + w
+            if not lineFont[line] or fs > lineFont[line] then
+                lineFont[line] = fs
+            end
+        end
+        primaryWidth = math.max(0, content - (claimed[1] or 0))
+        -- Line 1 resumes after the primary label; every other line
+        -- starts at the label column, since nothing precedes it there.
+        local cursor = { [1] = labelX + primaryWidth }
+        for i = 1, #columns do
+            local line = columnLine[i]
+            cursor[line] = cursor[line] or labelX
+            columnX[i] = cursor[line]
+            cursor[line] = cursor[line] + columnWidths[i]
+        end
+    end
+
+    -- Baseline of each text line within a slot. Empirically the text
+    -- element's origin is the baseline of a glyph row whose ascent is
+    -- close to the full font size (pixel font with little/no
+    -- descender), so centering a one-line block means baseline at
+    -- slotCenter + fontSize/2.
+    --
+    -- The lines are laid out as one TIGHT block centered in the row,
+    -- rather than one line per equal share of it. Even shares make the
+    -- gap inside a row identical to the gap between rows, and a reader
+    -- then can't tell which row a second line belongs to; leaving the
+    -- slack at the row's edges groups each row's lines together. With a
+    -- single line the result is byte-identical to the pre-#1107
+    -- formula.
+    local lineLeading = math.max(1, math.floor(4 * uiscale))
+    local lineBaseline = {}
+    do
+        local blockHeight = 0
+        for line = 1, #lineFont do
+            blockHeight = blockHeight + lineFont[line]
+                        + (line > 1 and lineLeading or 0)
+        end
+        local offset = math.floor((itemHeight - blockHeight) / 2)
+        for line = 1, #lineFont do
+            offset = offset + (line > 1 and lineLeading or 0) + lineFont[line]
+            lineBaseline[line] = offset
+        end
+    end
+
+    local function baselineFor(slotY, line)
+        return slotY + (lineBaseline[line] or lineBaseline[1])
+    end
 
     local ls = {
         id = id,
@@ -120,6 +286,11 @@ function list.new(params)
         textAlign = textAlign,
         iconSize = iconSize,
         labelX = labelX,
+        columns = columns,
+        columnWidths = columnWidths,
+        columnX = columnX,
+        columnFontSize = columnFontSize,
+        primaryWidth = primaryWidth,
         -- Colors
         textColor = textColor,
         highlightColor = highlightColor,
@@ -153,13 +324,7 @@ function list.new(params)
     ls.slotElements = {}
     for i = 1, visibleCount do
         local slotY = (i - 1) * itemHeight
-        -- Vertical centering. Empirically, the text element's origin
-        -- is the baseline of a glyph row whose ascent is close to the
-        -- full fontSize (pixel font with little/no descender), so the
-        -- visual center of the glyphs sits about fontSize/2 above the
-        -- baseline. Centering the visual mid-line on the slot center
-        -- means baseline at slotCenter + fontSize/2.
-        local textY = slotY + (itemHeight + fontSize) / 2
+        local textY = baselineFor(slotY, 1)
 
         -- Highlight sprite (hidden by default)
         local hlId = UI.newSprite(
@@ -204,7 +369,7 @@ function list.new(params)
 
         local txtId = UI.newText(
             ls.name .. "_txt_" .. i,
-            itemText,
+            fitField(ls, itemText, primaryWidth),
             ls.font,
             fontSize,
             textColor[1], textColor[2], textColor[3], textColor[4],
@@ -225,6 +390,32 @@ function list.new(params)
         end
         UI.addChild(ls.viewportId, txtId, textX, textY)
         UI.setZIndex(txtId, ls.zIndex + 2)
+
+        -- Extra columns (#1107): one real text element per column, so
+        -- each fact is independently readable (and independently
+        -- findable by name from a test/introspection oracle) rather
+        -- than being spliced into the primary label.
+        local columnIds = nil
+        if columns then
+            columnIds = {}
+            for c, col in ipairs(columns) do
+                local cc = col.color or textColor
+                local cfs = columnFontSize[c]
+                local cId = UI.newText(
+                    ls.name .. "_col" .. c .. "_" .. i,
+                    fitField(ls, columnText(ls, items[dataIndex], c),
+                             columnWidths[c], cfs),
+                    ls.font,
+                    cfs,
+                    cc[1], cc[2], cc[3], cc[4],
+                    ls.page
+                )
+                UI.addChild(ls.viewportId, cId,
+                    columnX[c], baselineFor(slotY, columnLine[c]))
+                UI.setZIndex(cId, ls.zIndex + 2)
+                columnIds[c] = cId
+            end
+        end
 
         -- Invisible hit-box sprite for click detection
         local hitId = UI.newSprite(
@@ -249,6 +440,7 @@ function list.new(params)
             textId = txtId,
             highlightId = hlId,
             iconId = iconId,
+            columnIds = columnIds,
             slot = i,
         })
     end
@@ -305,6 +497,9 @@ function list.destroy(id)
         if slot.textId then UI.deleteElement(slot.textId) end
         if slot.highlightId then UI.deleteElement(slot.highlightId) end
         if slot.iconId then UI.deleteElement(slot.iconId) end
+        if slot.columnIds then
+            for _, cId in ipairs(slot.columnIds) do UI.deleteElement(cId) end
+        end
     end
     if ls.viewportId then UI.deleteElement(ls.viewportId) end
 
@@ -342,7 +537,14 @@ function list.refreshSlots(id)
 
         if dataIndex <= #ls.items then
             local item = ls.items[dataIndex]
-            UI.setText(slot.textId, item.text)
+            UI.setText(slot.textId, fitField(ls, item.text, ls.primaryWidth))
+
+            if slot.columnIds then
+                for c, cId in ipairs(slot.columnIds) do
+                    UI.setText(cId, fitField(ls, columnText(ls, item, c),
+                        ls.columnWidths[c], ls.columnFontSize[c]))
+                end
+            end
 
             if slot.iconId then
                 if item.icon then
@@ -356,17 +558,16 @@ function list.refreshSlots(id)
             -- Determine colors based on selection state
             if dataIndex == ls.selectedIndex then
                 UI.setVisible(slot.highlightId, true)
-                UI.setColor(slot.textId,
-                    ls.selectedTextColor[1], ls.selectedTextColor[2],
-                    ls.selectedTextColor[3], ls.selectedTextColor[4])
+                setRowColor(ls, slot, ls.selectedTextColor)
             else
                 UI.setVisible(slot.highlightId, false)
-                UI.setColor(slot.textId,
-                    ls.textColor[1], ls.textColor[2],
-                    ls.textColor[3], ls.textColor[4])
+                setRowColor(ls, slot, nil)
             end
         else
             UI.setText(slot.textId, "")
+            if slot.columnIds then
+                for _, cId in ipairs(slot.columnIds) do UI.setText(cId, "") end
+            end
             UI.setVisible(slot.highlightId, false)
             if slot.iconId then UI.setVisible(slot.iconId, false) end
         end
@@ -390,14 +591,10 @@ function list.setHoveredSlot(id, slotIndex)
             if prevDataIndex == ls.selectedIndex then
                 -- Restore selected appearance
                 UI.setVisible(prev.highlightId, true)
-                UI.setColor(prev.textId,
-                    ls.selectedTextColor[1], ls.selectedTextColor[2],
-                    ls.selectedTextColor[3], ls.selectedTextColor[4])
+                setRowColor(ls, prev, ls.selectedTextColor)
             else
                 UI.setVisible(prev.highlightId, false)
-                UI.setColor(prev.textId,
-                    ls.textColor[1], ls.textColor[2],
-                    ls.textColor[3], ls.textColor[4])
+                setRowColor(ls, prev, nil)
             end
         end
     end
@@ -411,9 +608,7 @@ function list.setHoveredSlot(id, slotIndex)
             local dataIndex = ls.scrollOffset + slotIndex
             if dataIndex >= 1 and dataIndex <= #ls.items then
                 UI.setVisible(slot.highlightId, true)
-                UI.setColor(slot.textId,
-                    ls.highlightTextColor[1], ls.highlightTextColor[2],
-                    ls.highlightTextColor[3], ls.highlightTextColor[4])
+                setRowColor(ls, slot, ls.highlightTextColor)
             end
         end
     end
@@ -547,6 +742,13 @@ function list.onScroll(elemHandle, dx, dy)
                     isInList = true
                     break
                 end
+                for _, cId in ipairs(slot.columnIds or {}) do
+                    if cId == elemHandle then
+                        isInList = true
+                        break
+                    end
+                end
+                if isInList then break end
             end
 
             if not isInList then
@@ -614,6 +816,11 @@ function list.setVisible(id, visible)
     for _, slot in ipairs(ls.slotElements) do
         UI.setVisible(slot.hitId, visible)
         UI.setVisible(slot.textId, visible)
+        if slot.columnIds then
+            for _, cId in ipairs(slot.columnIds) do
+                UI.setVisible(cId, visible)
+            end
+        end
         if not visible then
             UI.setVisible(slot.highlightId, false)
             if slot.iconId then UI.setVisible(slot.iconId, false) end
@@ -732,10 +939,33 @@ function list.dump()
             if item then
                 local info = slot.hitId and UI.getElementInfo(slot.hitId) or nil
                 if info and info.pageVisible and info.visible then
+                    -- #1107: a multi-column row's fields AS RENDERED
+                    -- (post-truncation), each with the absolute
+                    -- position it drew at, the width it was allocated
+                    -- and the width it actually measures. `label` stays
+                    -- the primary item text alone, so an oracle reads
+                    -- each fact separately instead of matching one
+                    -- concatenated string, and can check a field
+                    -- against its own column rather than the row.
+                    -- Emitted only for a multi-column list, so a
+                    -- plain list's dump keeps its historical shape and
+                    -- cost.
+                    local primary, cols = nil, nil
+                    if ls.columns then
+                        cols = {}
+                        primary = describeField(ls, slot.textId, ls.primaryWidth)
+                        for c, col in ipairs(ls.columns) do
+                            cols[col.key] = describeField(ls,
+                                slot.columnIds and slot.columnIds[c],
+                                ls.columnWidths[c], ls.columnFontSize[c])
+                        end
+                    end
                     table.insert(out, {
                         id = "list:" .. id .. ":" .. slot.slot,
                         name = ls.name .. "_item_" .. dataIndex,
                         type = "list",
+                        primary = primary,
+                        columns = cols,
                         bounds = {
                             x = info and info.x or ls.x,
                             y = info and info.y or ls.y,

@@ -22,24 +22,59 @@ saveBrowser.fbH = 0
 saveBrowser.uiCreated = false
 saveBrowser.showMenuCallback = nil
 
--- The text ONE listing row renders as. Pure (no UI state, no widgets),
--- so it is the same function the browser draws with and a headless gate
--- can call directly -- there is no second, drifting copy of the label
--- rule.
+-- The SLOT column of one listing row: the save-slot identity plus the
+-- durable status tags and the timestamp. Pure (no UI state, no
+-- widgets), so it is the same function the browser draws with and a
+-- headless gate can call directly -- there is no second, drifting copy
+-- of the label rule.
 --
 -- #913: the "[Autosave]" tag comes from the durable autosave/manual
 -- classification carried in the save's own metadata, NOT from an
 -- "autosave-" name check: a player is free to type that name into the
 -- manual save box, and a row must say what the save actually IS.
+--
+-- #762/#1107: "[Recovered]" likewise reports a durable fact about the
+-- slot -- this listing was read back from the slot's PREVIOUS
+-- generation because the authoritative one was corrupt -- which
+-- engine.listSaves() has always published and no UI showed until now.
 function saveBrowser.rowLabel(save)
     local text = save.name
     if save.autosave then
         text = text .. "  [Autosave]"
     end
+    if save.recovered then
+        text = text .. "  [Recovered]"
+    end
     if save.timestamp then
         text = text .. "  -  " .. save.timestamp
     end
     return text
+end
+
+-- The THREE distinct facts one listing row renders (#1107, epic #708
+-- acceptance criterion 6): the save slot, the world's own name, and
+-- that name's English reading. They stay separate strings all the way
+-- to three separate text elements -- a save slot called
+-- `before_the_raid` holding a world called Karadun ("Ashen Land") must
+-- read as three facts, never one merged label.
+--
+-- Degrading is by ABSENCE, never by substitution. engine.listSaves()
+-- omits both identity fields for an unnamed save (a pre-identity save
+-- included) and omits worldGloss alone for a name with no stated
+-- meaning -- a custom player-entered name (#708 principle 7). A missing
+-- field yields an EMPTY column: the slot name is never repeated into
+-- the world-name column, because "this world has no name" and "this
+-- world is called before_the_raid" are different facts.
+function saveBrowser.rowFields(save)
+    return {
+        slot      = saveBrowser.rowLabel(save),
+        worldName = save.worldName or "",
+        -- Quoted so the reading is visibly a gloss of the name beside
+        -- it rather than a second name. A gloss cannot exist without a
+        -- name (World.Save.Types guarantees it), so this column is
+        -- empty whenever the world-name column is.
+        gloss     = save.worldGloss and ('"' .. save.worldGloss .. '"') or "",
+    }
 end
 
 -- Owned IDs for cleanup
@@ -48,10 +83,27 @@ saveBrowser.ownedButtons = {}
 saveBrowser.ownedPanels  = {}
 saveBrowser.ownedLists   = {}
 
+-- Row layout (#1107). The world identity gets its OWN line under the
+-- slot line rather than columns beside it: the slot line already ran
+-- the full width at 1280x720 (slot name + tags + an ISO timestamp is
+-- wider than the panel), so splitting it would have pushed the
+-- timestamp out of view entirely — and requirement 4 is that the row
+-- keeps everything it already carried. Line 2 then splits between the
+-- name and its gloss, in fractions of the row's usable width so they
+-- hold at every scale and framebuffer rather than reserving fixed
+-- pixels a narrow window can't afford. The gloss gets the larger share
+-- because an English reading is wordier than the name it explains.
+saveBrowser.WORLD_NAME_FRACTION = 0.45
+saveBrowser.GLOSS_FRACTION      = 0.55
+-- The identity line reads as secondary to the slot it belongs to.
+saveBrowser.IDENTITY_FONT_SCALE = 0.8
+
 saveBrowser.baseSizes = {
     fontSize      = 24,
     titleFontSize = 32,
-    itemHeight    = 40,
+    -- Two text lines per row since #1107 (slot line + identity line);
+    -- list.lua centers them in this height as one block.
+    itemHeight    = 64,
     maxVisible    = 12,
     panelPadX     = 60,
     panelPadY     = 60,
@@ -179,12 +231,17 @@ function saveBrowser.createUI()
 
     local saves = saveBrowser.saves
 
-    -- Build list items
+    -- Build list items. `value` stays the SLOT name (#1107): the world
+    -- identity is display-only, and onSelect must keep dispatching the
+    -- key engine.loadSave() actually loads.
     local listItems = {}
     for i, save in ipairs(saves) do
+        local fields = saveBrowser.rowFields(save)
         table.insert(listItems, {
-            text  = saveBrowser.rowLabel(save),
-            value = save.name,
+            text      = fields.slot,
+            worldName = fields.worldName,
+            gloss     = fields.gloss,
+            value     = save.name,
         })
     end
 
@@ -277,6 +334,18 @@ function saveBrowser.createUI()
             uiscale        = uiscale,
             zIndex         = baseZ + 2,
             items          = listItems,
+            -- #1107: the world's own name and its English reading, on
+            -- their own line under the slot line, each truncated to its
+            -- allocation rather than left to run into its neighbour.
+            -- The gloss reads dimmer than the name it explains.
+            columns = {
+                { key = "worldName", fraction = saveBrowser.WORLD_NAME_FRACTION,
+                  line = 2, fontScale = saveBrowser.IDENTITY_FONT_SCALE,
+                  color = {1.0, 1.0, 1.0, 1.0} },
+                { key = "gloss",     fraction = saveBrowser.GLOSS_FRACTION,
+                  line = 2, fontScale = saveBrowser.IDENTITY_FONT_SCALE,
+                  color = {0.72, 0.72, 0.72, 1.0} },
+            },
             textColor           = {1.0, 1.0, 1.0, 1.0},
             highlightColor      = {0.3, 0.5, 0.8, 0.8},
             highlightTextColor  = {1.0, 1.0, 1.0, 1.0},
