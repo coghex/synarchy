@@ -15,6 +15,7 @@
 module World.Render.GroundItemQuads
     ( renderGroundItemQuads
     , hitTestGroundItemAt
+    , itemGeometry
     ) where
 
 import UPrelude
@@ -36,7 +37,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemManager(..), ItemDef(..), ItemInstance(..))
 import World.Generate (viewDepth)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..)
@@ -92,13 +93,30 @@ dropAt mask fx fy =
 itemGeometry ∷ WorldTileData → ItemManager
              → HM.HashMap TextureHandle (Int, Int)
              → CameraFacing → Int
+             → Int                -- ^ world size in chunks (seam wrap)
              → GroundItem
              → Maybe (Int, TextureHandle, Float, Float, Float, Float, Int)
                -- ^ (tz, tex, drawX, drawY, quadW, quadH, underwaterDepth)
-itemGeometry tileData im texSizes facing zSlice gi = do
-    let tx = floor (giX gi) ∷ Int
-        ty = floor (giY gi) ∷ Int
-        (chunkCoord, (lx, ly)) = globalToChunk tx ty
+itemGeometry tileData im texSizes facing zSlice worldSize gi = do
+    -- Canonicalise the WHOLE tile frame, not just the map key (#1135).
+    -- A ground item stores bare float coords and nothing normalises
+    -- them on the way in: item.spawnGround accepts arbitrary numbers
+    -- and stores them directly, so an item CAN come to rest at a u-seam
+    -- alias of a loaded chunk. Left raw, the lookup missed that loaded
+    -- chunk and the item was both invisible and unhittable (this helper
+    -- backs the render pass AND hitTestGroundItemAt).
+    --
+    -- The key alone would not be enough: tx/ty also drive the screen
+    -- position here and the sort key / wrap offset in quadForM, so all
+    -- of them move into the stored frame together. The shift is whole
+    -- tiles, so the in-tile fraction is taken against the RAW floor and
+    -- is unchanged by it. Identity away from the seam.
+    let rawTX = floor (giX gi) ∷ Int
+        rawTY = floor (giY gi) ∷ Int
+        (chunkCoord, (lx, ly), (dgx, dgy)) =
+            canonicalTileFrame worldSize rawTX rawTY
+        tx = rawTX + dgx
+        ty = rawTY + dgy
     lc ← HM.lookup chunkCoord (wtdChunks tileData)
     itemDef ← HM.lookup (iiDefName (giInst gi)) (imDefs im)
     let idx = columnIndex lx ly
@@ -108,8 +126,8 @@ itemGeometry tileData im texSizes facing zSlice gi = do
         slopeMask = if si ≥ 0 ∧ si < VU.length (ctSlopes col)
                     then ctSlopes col VU.! si
                     else 0
-        fx = giX gi - fromIntegral tx
-        fy = giY gi - fromIntegral ty
+        fx = giX gi - fromIntegral rawTX
+        fy = giY gi - fromIntegral rawTY
         drop' = dropAt slopeMask fx fy
 
         underwaterDepth = case lcFluidMap lc V.! idx of
@@ -204,10 +222,16 @@ renderGroundItemQuads env worldState tileAlpha = do
 
             quadForM (gid, gi) = do
                 (tz, texHandle, drawX0, drawY, quadW, quadH, uwDepth)
-                    ← itemGeometry tileData im texSizes facing zSlice gi
-                let tx = floor (giX gi) ∷ Int
-                    ty = floor (giY gi) ∷ Int
-                    (chunkCoord, _) = globalToChunk tx ty
+                    ← itemGeometry tileData im texSizes facing zSlice
+                                   worldSize gi
+                -- Same canonical frame itemGeometry drew in, so the
+                -- offset and sort key pair with that position (#1135).
+                let rawTX = floor (giX gi) ∷ Int
+                    rawTY = floor (giY gi) ∷ Int
+                    (chunkCoord, _, (dgx, dgy)) =
+                        canonicalTileFrame worldSize rawTX rawTY
+                    tx = rawTX + dgx
+                    ty = rawTY + dgy
                 xOff ← isChunkVisibleWrapped facing worldSize vb camX
                                              chunkCoord
                 if tz > zSlice ∨ tz < zSlice - effectiveDepth
@@ -215,7 +239,7 @@ renderGroundItemQuads env worldState tileAlpha = do
                   else do
                     let drawX = drawX0 + xOff
                         relativeZ = tz - zSlice
-                        fy = giY gi - fromIntegral ty
+                        fy = giY gi - fromIntegral rawTY
                         (fa, fb) = applyFacing facing tx ty
                         sortKey = fromIntegral (fa + fb)
                                 + fromIntegral relativeZ * 0.001
@@ -281,8 +305,13 @@ hitTestGroundItemAt env worldState pixX pixY = do
         tileData ← readIORef (wsTilesRef worldState)
         im       ← readIORef (itemManagerRef env)
         texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+        paramsM  ← readIORef (wsGenParamsRef worldState)
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
 
         let facing = camFacing camera
+            -- Same seam wrap the render pass uses, so an item across the
+            -- U seam stays clickable exactly where it is drawn (#1135).
+            worldSize = maybe 128 wgpWorldSize paramsM
             zoom   = camZoom camera
             zSlice = camZSlice camera
             -- Match the render band (renderGroundItemQuads) so a visible
@@ -298,14 +327,31 @@ hitTestGroundItemAt env worldState pixX pixY = do
             worldX = (normX * 2.0 - 1.0) * vw + camX
             worldY = (normY * 2.0 - 1.0) * vh + camY
 
+            -- The render pass draws at drawX0 + xOff, where xOff maps the
+            -- item's CANONICAL chunk onto the screen alias nearest the
+            -- camera. Clicks arrive in that same on-screen frame, so the
+            -- hit test has to apply the identical offset (#1135) — the
+            -- geometry alone is a whole worldScreenWidth away from the
+            -- click for anything shown through its wrapped image, i.e.
+            -- visible but unclickable. It also reproduces the render
+            -- pass's visibility gate: an item that is not drawn at all
+            -- must not be pickable.
+            vb = computeViewBounds camera fbW fbH effectiveDepth
             candidates =
                 [ (tz, dist, gid)
                 | (gid, gi) ← HM.toList (gisItems gis)
-                , Just (tz, _tex, drawX, drawY, quadW, quadH, _uw)
-                    ← [itemGeometry tileData im texSizes facing zSlice gi]
+                , Just (tz, _tex, drawX0, drawY, quadW, quadH, _uw)
+                    ← [itemGeometry tileData im texSizes facing zSlice
+                                    worldSize gi]
+                , let (chunkCoord, _, _) =
+                          canonicalTileFrame worldSize
+                              (floor (giX gi)) (floor (giY gi))
+                , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                   vb camX chunkCoord]
                 , tz ≤ zSlice
                 , tz ≥ zSlice - effectiveDepth
-                , let cx = drawX + quadW * 0.5
+                , let drawX = drawX0 + xOff
+                      cx = drawX + quadW * 0.5
                       cy = drawY + quadH * 0.5
                       dx = worldX - cx
                       dy = worldY - cy
