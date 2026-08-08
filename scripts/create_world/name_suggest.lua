@@ -60,6 +60,12 @@ local function apply(pending, sug, seedNum, nextOrdinal)
     -- substitute for `nameSuggested` -- see reconcile for why both.
     pending.nameSuggestedText  = sug.name
     pending.nameGloss          = sug.gloss
+    -- #1104: the semantic EXPRESSION this suggestion was rendered from,
+    -- kept beside its gloss and provenance because it is what lets the
+    -- accepted name be decomposed into roots later. It travels with the
+    -- other three, is cleared with them the moment the name stops being
+    -- the language's, and is never re-derived from the name text.
+    pending.nameExpr           = sug.expr
     pending.nameLanguageSeed   = sug.language and sug.language.seed or nil
     pending.nameLanguageVersion = sug.language and sug.language.version or nil
     pending.nameSuggested      = true
@@ -137,6 +143,7 @@ function nameSuggest.clear(pending)
     pending.nameSuggested       = false
     pending.nameSuggestedText   = nil
     pending.nameGloss           = nil
+    pending.nameExpr            = nil
     pending.nameLanguageSeed    = nil
     pending.nameLanguageVersion = nil
 end
@@ -227,6 +234,7 @@ function nameSuggest.snapshot(pending)
         worldName       = pending.worldName,
         suggestedText   = pending.nameSuggestedText,
         gloss           = pending.nameGloss,
+        expr            = pending.nameExpr,
         languageSeed    = pending.nameLanguageSeed,
         languageVersion = pending.nameLanguageVersion,
         suggested       = pending.nameSuggested,
@@ -247,6 +255,7 @@ function nameSuggest.restore(pending, snap)
     pending.worldName           = snap.worldName
     pending.nameSuggestedText   = snap.suggestedText
     pending.nameGloss           = snap.gloss
+    pending.nameExpr            = snap.expr
     pending.nameLanguageSeed    = snap.languageSeed
     pending.nameLanguageVersion = snap.languageVersion
     pending.nameSuggested       = snap.suggested
@@ -277,10 +286,15 @@ end
 -- range), and generator version. All nil for a manual name, which is
 -- what makes provenance recorded for suggested names ONLY.
 function nameSuggest.identity(pending)
-    if not nameSuggest.isSuggested(pending) then return nil, nil, nil end
+    if not nameSuggest.isSuggested(pending) then
+        return nil, nil, nil, nil
+    end
     return pending.nameGloss,
            pending.nameLanguageSeed,
-           pending.nameLanguageVersion
+           pending.nameLanguageVersion,
+           -- #1104: fourth and last, so an older caller reading three
+           -- values is unaffected.
+           pending.nameExpr
 end
 
 return nameSuggest

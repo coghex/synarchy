@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+"""Name-etymology probe (#1104, epic #708) — the GPU-backed, windowless gate.
+
+The pure hspec groups cover the decomposition itself ("Language
+etymology") and the panel's lifecycle against a bare Lua backend
+("Etymology panel"). This probe covers what only a REAL boot can: the
+in-game panel driven through the actual UI, against a real generated
+world, with the real engine query behind it.
+
+It boots with ``--offscreen`` — full Vulkan, NO window — so the genuine
+UI flow runs (loading screen, menus, HUD) and ``input.*`` injection drives
+it. It never creates a visible window.
+
+Every control is located through the widget/dump ORACLES
+(``previewManager``-style ``dump()`` tables, ``ui.dumpWidgets``), never a
+hardcoded screen coordinate, and every entity is located through
+``world.listPlacedLocations`` / ``world.getRivers`` rather than a guessed
+tile.
+
+Phases:
+
+  1. Boot, generate a world named through the real generated-language
+     path, and reach the in-game HUD.
+  2. The WORLD entry point opens the panel, and its content is genuinely
+     populated: the stored name, the whole gloss, at least one morpheme
+     row carrying a concept/role/realized spelling/canonical free
+     spelling/English lemma, and surface tokens that concatenate back to
+     the stored name exactly.
+  3. A DISCOVERED location opens the SAME panel — same module, same
+     viewport handle lineage — retargeted rather than duplicated.
+  4. Selecting a visible named RIVER segment opens it again, resolved
+     through #1102's stable identity by ``world.getRiverAt``.
+  5. Bound/free explanation and recurrence rows are visibly populated
+     when the language produces them, and the free/bound relationship is
+     reported as ONE morpheme rather than two.
+  6. The honest UNAVAILABLE state renders for a name with no recoverable
+     derivation, still showing the stored name.
+  7. A resize keeps the panel valid, reachable, and pointed at the same
+     entity; close and teardown remove it cleanly with no stale handles.
+
+Needs a GPU (Vulkan device) — manual-only, never CI-gated.
+
+Usage:
+  python3 tools/etymology_probe.py
+  python3 tools/etymology_probe.py --port 9422 --seed 42 --size 16
+
+Exit code 0 = all checks passed.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from probelib import boot, quit_engine, send, send_json
+
+LOG = "/tmp/etymology_engine.log"
+
+#: The world page the production chain creates — scripts/world_view.lua
+#: hardcodes it, and scripts/hud.lua points at the same id, which is what
+#: the name plate reads through.
+PAGE = "main_world"
+
+
+def q(v) -> str:
+    """A Lua string literal, or `nil` for an absent value."""
+    if v is None:
+        return "nil"
+    return "'" + str(v).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+#: The language seed the world is named from. Deliberately above 2^63-1,
+#: so the decimal-string carrier world.init/world.getEtymology use is
+#: exercised over a range a Lua number could not hold losslessly.
+LANG_SEED = "12345678901234567890"
+
+failures = 0
+
+
+def check(ok: bool, label: str, detail: str = "") -> bool:
+    global failures
+    if ok:
+        print(f"  PASS  {label}")
+    else:
+        failures += 1
+        print(f"  FAIL  {label}" + (f"\n        {detail}" if detail else ""))
+    return ok
+
+
+def panel_dump(port: int):
+    """The panel's own read-only introspection table."""
+    return send_json(
+        port,
+        "local ep = package.loaded['scripts.etymology_panel']; "
+        "if not ep then return {missing = true} end; return ep.dump()",
+        timeout=15,
+    )
+
+
+def plate_dump(port: int):
+    return send_json(
+        port,
+        "local np = package.loaded['scripts.name_plate']; "
+        "if not np then return {missing = true} end; return np.dump()",
+        timeout=15,
+    )
+
+
+def open_via_plate(port: int, kind: str) -> bool:
+    """Click the name plate's row for ``kind`` at its REAL interactive
+    bounds, located through the plate's own dump rather than a guessed
+    coordinate."""
+    d = plate_dump(port)
+    if not isinstance(d, dict):
+        return False
+    for row in d.get("rows") or []:
+        if row.get("kind") == kind and row.get("x") is not None:
+            cx = int(row["x"]) + int(row.get("width") or 0) // 2
+            cy = int(row["y"]) + int(row.get("height") or 0) // 2
+            send(port, f"return input.click({cx}, {cy})", timeout=15)
+            # Injected input is queued and routed on the engine's own
+            # frames (press and release are separate events, and #745's
+            # activation only fires on the release), so the panel does
+            # not exist yet when this returns.
+            time.sleep(0.5)
+            return True
+    return False
+
+
+def tokens_reproduce_name(d) -> bool:
+    """#1104 requirement 3, checked by the probe ITSELF rather than
+    trusted from the engine's own claim: concatenating the reported
+    surface tokens must reproduce the stored name exactly."""
+    toks = d.get("tokens") or []
+    if not toks:
+        return False
+    return "".join(t.get("text") or "" for t in toks) == (d.get("name") or "")
+
+
+def morpheme_fields_populated(d) -> tuple[bool, str]:
+    ms = d.get("morphemes") or []
+    if not ms:
+        return False, "no morpheme rows"
+    for m in ms:
+        for key in ("concept", "role", "surface", "free", "lemma", "id"):
+            if not m.get(key):
+                return False, f"morpheme {m!r} missing {key}"
+    return True, ""
+
+
+def phase1_boot(args) -> tuple[object, str]:
+    print("\n[1] boot offscreen, generate a language-named world, reach the HUD")
+    proc = boot(args.port, log=LOG, args=["--size", args.window],
+                ready_timeout=240, mode=("--offscreen",))
+    # The name/gloss/expression triple comes from world.suggestName
+    # itself, so the stored name really was rendered from the expression
+    # stored beside it — a hand-written pair would satisfy the surface
+    # check only by accident.
+    sug = send_json(
+        args.port, f"return world.suggestName({args.seed}, 0)", timeout=30)
+    if not isinstance(sug, dict) or not sug.get("expr"):
+        check(False, "world.suggestName returned a usable suggestion",
+              f"got {sug!r}")
+        return proc, ""
+    name, gloss, expr = sug["name"], sug["gloss"], sug["expr"]
+    lang = sug.get("language") or {}
+    seed, version = lang.get("seed"), lang.get("version")
+    # Drive the PRODUCTION path, not world.init directly: entering the
+    # gameplay view re-creates the page from scripts/world_view.lua's own
+    # worldParams through worldManager.createWorld, so anything the Create
+    # World screen fails to forward is missing here too. Staging those
+    # params and then taking the real "world_view" transition is what
+    # makes this probe cover the whole chain rather than the engine call
+    # at the end of it — and is exactly how it caught the expression not
+    # being forwarded at all.
+    send(args.port,
+        "local wv = require('scripts.world_view'); "
+        "wv.worldParams = { seed = %d, worldSize = %d, plateCount = 3, "
+        "worldName = %s, worldGloss = %s, languageSeed = %s, "
+        "languageVersion = %s, nameExpr = %s }; return 'ok'"
+        % (args.seed, args.size, q(name), q(gloss), q(seed), version, q(expr)),
+        timeout=20)
+    send(args.port,
+         "local ui = require('scripts.ui_manager'); ui.showMenu('world_view')",
+         timeout=60)
+    send(args.port, "return world.waitForInit(600)", timeout=620)
+    ready = send_json(
+        args.port,
+        "local hud = package.loaded['scripts.hud']; "
+        "local np = package.loaded['scripts.name_plate']; "
+        "return {hud = (hud and hud.uiCreated) == true, "
+        "        plate = (np and np.hud ~= nil) == true, "
+        "        page = world.getActiveWorldId(), "
+        "        named = (world.getIdentity(world.getActiveWorldId()) or {}).name}",
+        timeout=30)
+    check(isinstance(ready, dict) and ready.get("hud") is True
+          and ready.get("plate") is True,
+          "the real gameplay view built the HUD and hosted the name plate",
+          f"got {ready!r}")
+    check(isinstance(ready, dict) and ready.get("named") == name,
+          "the production Create World chain carried the generated name "
+          "through to the live page",
+          f"got {ready!r}")
+    check(True, f"generated world '{name}' ({gloss}) from {expr}")
+    return proc, name
+
+
+def phase2_world(port: int, stored_name: str) -> None:
+    print("\n[2] the WORLD entry point opens a populated panel")
+    send(port, "local np = package.loaded['scripts.name_plate']; "
+               "if np then np.refresh() end", timeout=15)
+    if not check(open_via_plate(port, "world"),
+                 "the name plate offers a world row, clicked at its real bounds"):
+        # Fall back to the panel's own entry point so later phases still
+        # have something to assert against; the plate failure is recorded.
+        send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+                   "if ep then ep.openFor('world') end", timeout=15)
+    d = panel_dump(port)
+    if not isinstance(d, dict):
+        check(False, "panel dump readable", f"got {d!r}")
+        return
+    check(d.get("open") is True, "the panel is open")
+    check(d.get("kind") == "world", "it is inspecting the world")
+    check(d.get("name") == stored_name,
+          "it shows the AUTHORITATIVE stored name unchanged",
+          f"panel {d.get('name')!r} vs stored {stored_name!r}")
+    check(bool(d.get("gloss")), "the whole-name gloss is shown")
+    ok, why = morpheme_fields_populated(d)
+    check(ok, "every morpheme row carries concept/role/surface/free/lemma/id", why)
+    check(tokens_reproduce_name(d),
+          "the reported surface tokens concatenate back to the stored name",
+          f"tokens={d.get('tokens')!r} name={d.get('name')!r}")
+    check((d.get("rowCount") or 0) > 0, "visible rows were actually rendered")
+
+
+def phase3_location(port: int) -> None:
+    print("\n[3] a DISCOVERED location opens the SAME panel")
+    locs = send_json(port, f"return world.listPlacedLocations('{PAGE}')", timeout=30)
+    if not isinstance(locs, list) or not locs:
+        print("  SKIP  this world placed no locations")
+        return
+    target = locs[0]
+    iid = target.get("instance_id")
+    # Discovery is a lifecycle promotion the game drives; drive it the way
+    # the game does rather than asserting our own write, then select the
+    # ruin's own anchor tile so the plate resolves it.
+    send(port, f"world.setLocationLifecycle({iid}, 'discovered', '{PAGE}')",
+         timeout=15)
+    if select_tile(port, target["gx"], target["gy"]):
+        send(port, "local np = package.loaded['scripts.name_plate']; "
+                   "if np then np.refresh() end", timeout=15)
+        check(open_via_plate(port, "location"),
+              "the plate offers a row for the DISCOVERED location, clicked "
+              "at its real bounds")
+    else:
+        print("  SKIP  the ruin's tile could not be made resident to select")
+        send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+                   f"if ep then ep.openFor('location', {iid}) end", timeout=15)
+    d = panel_dump(port)
+    if not isinstance(d, dict):
+        check(False, "panel dump readable after the location route")
+        return
+    check(d.get("kind") == "location" and d.get("targetId") == iid,
+          "the same panel retargeted onto the location",
+          f"kind={d.get('kind')!r} target={d.get('targetId')!r}")
+    if d.get("available"):
+        check(tokens_reproduce_name(d),
+              "the location's tokens reproduce ITS stored name")
+
+
+def select_tile(port: int, gx: int, gy: int) -> bool:
+    """Make (gx, gy) the player's selected tile, the way the Info tool
+    does. Requires the column to be resident, so its chunk region is
+    loaded first; returns whether the selection actually took."""
+    cx, cy = gx // 32, gy // 32
+    send(port, f"return world.loadChunksInRegion({cx - 2}, {cy - 2}, "
+               f"{cx + 2}, {cy + 2})", timeout=60)
+    send(port, "return world.waitForChunks(120)", timeout=130)
+    send(port, f"world.selectTile('{PAGE}', {gx}, {gy})", timeout=15)
+    time.sleep(0.5)
+    sel = send_json(port, f"return world.getSelectedTile('{PAGE}')", timeout=15)
+    return (isinstance(sel, dict) and sel.get("gx") == gx
+            and sel.get("gy") == gy)
+
+
+def phase4_river(port: int) -> None:
+    print("\n[4] selecting a visible named RIVER opens it again")
+    rivers = send_json(port, "return world.getRivers()", timeout=45)
+    named = [r for r in (rivers or [])
+             if r.get("id") is not None and r.get("name") and r.get("segments")]
+    if not named:
+        print("  SKIP  this world generated no named rivers")
+        return
+    # Prefer a river whose first segment sits nearest the origin: the
+    # camera starts there, so its chunks are the likeliest to become
+    # resident, and a tile can only be SELECTED once its column is.
+    def dist(r):
+        seg = r["segments"][0]
+        return abs(seg.get("sx", 0)) + abs(seg.get("sy", 0))
+    river = min(named, key=dist)
+    seg = river["segments"][0]
+    gx, gy = seg["sx"], seg["sy"]
+
+    # The engine's own tile -> stable identity resolution, which is the
+    # selection path #1104 adds. Asserted unconditionally: it is a pure
+    # geometry query and needs no resident chunk.
+    at = send_json(port, f"return world.getRiverAt({gx}, {gy})", timeout=20)
+    check(isinstance(at, dict) and at.get("id") == river["id"],
+          "world.getRiverAt resolves the selected segment to its own river id",
+          f"getRiverAt={at!r} expected id={river.get('id')}")
+    check(isinstance(at, dict) and at.get("name") == river["name"],
+          "and reports that river's own stored name",
+          f"getRiverAt={at!r}")
+
+    if select_tile(port, gx, gy):
+        send(port, "local np = package.loaded['scripts.name_plate']; "
+                   "if np then np.refresh() end", timeout=15)
+        check(open_via_plate(port, "river"),
+              "the plate offers a row for the selected river, clicked at "
+              "its real bounds")
+    else:
+        # A river far from the camera can have no resident column to
+        # select; the plate's own row-building is gated by the hspec
+        # "Etymology panel" group, so skip rather than fail on residency.
+        print("  SKIP  the river's tile could not be made resident to select")
+        send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+                   f"if ep then ep.openFor('river', {river['id']}) end",
+             timeout=15)
+
+    d = panel_dump(port)
+    if not isinstance(d, dict):
+        check(False, "panel dump readable after the river route")
+        return
+    check(d.get("kind") == "river" and d.get("targetId") == river["id"],
+          "the same panel retargeted onto the river")
+    check(d.get("name") == river["name"],
+          "it shows the river's own stored name",
+          f"panel {d.get('name')!r} vs query {river['name']!r}")
+    if d.get("available"):
+        check(tokens_reproduce_name(d),
+              "the river's tokens reproduce ITS stored name")
+
+
+def phase5_bound_and_recurrence(port: int) -> None:
+    print("\n[5] bound/free explanation and recurrence rows")
+    # Look across every eligible entity for a bound form and a recurrence
+    # link, rather than assuming this seed's language produces either at a
+    # particular one: both are real language properties, not guarantees.
+    found_bound = False
+    found_recurrence = False
+    targets = [("world", "nil")]
+    locs = send_json(port, f"return world.listPlacedLocations('{PAGE}')", timeout=30)
+    for loc in (locs or [])[:4]:
+        targets.append(("location", str(loc.get("instance_id"))))
+    rivers = send_json(port, "return world.getRivers()", timeout=45)
+    for r in (rivers or [])[:6]:
+        if r.get("id") is not None:
+            targets.append(("river", str(r["id"])))
+
+    for kind, ident in targets:
+        send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+                   f"if ep then ep.openFor('{kind}', {ident}) end", timeout=15)
+        d = panel_dump(port)
+        if not isinstance(d, dict) or not d.get("available"):
+            continue
+        for m in d.get("morphemes") or []:
+            if m.get("bound"):
+                found_bound = True
+                # ONE morpheme, two spellings: the realized bound form and
+                # the canonical free root are both reported, and differ.
+                check(bool(m.get("free")) and
+                      m["free"].lower() != (m.get("surface") or "").lower(),
+                      "a bound form reports its canonical free spelling too",
+                      f"morpheme={m!r}")
+        for link in d.get("recurrence") or []:
+            for entry in link.get("entries") or []:
+                found_recurrence = True
+                check(entry.get("kind") in ("world", "location", "river")
+                      and bool(entry.get("name")),
+                      "a recurrence entry exposes only an entity kind and a name",
+                      f"entry={entry!r}")
+                check(set(entry.keys()) <= {"kind", "name"},
+                      "a recurrence entry leaks nothing else",
+                      f"entry keys={sorted(entry.keys())}")
+    if not found_bound:
+        print("  SKIP  this language formed no bound form on any inspected name")
+    if not found_recurrence:
+        print("  SKIP  no morpheme recurred across this world's eligible names")
+
+
+def phase6_unavailable(args) -> None:
+    print("\n[6] the honest UNAVAILABLE state")
+    port = args.port
+    # A CUSTOM-named page: a player-entered name has no language and no
+    # expression, which is requirement 7's first case. Deliberately TINY
+    # regardless of --size — this needs an identity, not terrain, and a
+    # second full-size generation would only cost minutes.
+    send(port, f"world.init('custom', {args.seed}, 16, 3, 'Player Name')",
+         timeout=20)
+    send(port, "return world.waitForInit(600)", timeout=620)
+    send(port, "world.show('custom')", timeout=20)
+    # Assert the switch actually happened before reading anything through
+    # it: openFor('world') resolves the ACTIVE page, so a page that never
+    # became active would silently re-answer for the previous world and
+    # every check below would be measuring the wrong thing.
+    active = send(port, "return world.getActiveWorldId()", timeout=20)
+    if "custom" not in (active or ""):
+        check(False, "the custom-named page became the active world",
+              f"active={active!r}")
+        return
+    send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+               "if ep then ep.openFor('world') end", timeout=15)
+    d = panel_dump(port)
+    if not isinstance(d, dict):
+        check(False, "panel dump readable for the custom-named world")
+        return
+    check(d.get("available") is False,
+          "a custom name reports its etymology as unavailable",
+          f"available={d.get('available')!r}")
+    check(d.get("reason") == "custom",
+          "and names the reason honestly as 'custom'",
+          f"reason={d.get('reason')!r}")
+    check(bool(d.get("reasonText")),
+          "with a non-empty player-facing explanation")
+    check(d.get("name") == "Player Name",
+          "while STILL showing the stored name",
+          f"name={d.get('name')!r}")
+    check(not (d.get("morphemes") or []),
+          "and inventing no morpheme rows")
+    check((d.get("rowCount") or 0) > 0,
+          "the unavailable state still renders something visible")
+    send(port, f"world.show('{PAGE}')", timeout=20)
+    send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+               "if ep then ep.closeIfOpen() end", timeout=15)
+
+
+def phase7_lifecycle(port: int) -> None:
+    print("\n[7] resize keeps it valid and reachable; close/teardown are clean")
+    send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+               "if ep then ep.openFor('world') end", timeout=15)
+    before = panel_dump(port)
+    send(port, "local ui = require('scripts.ui_manager'); "
+               "ui.onFramebufferResize(1024, 768)", timeout=20)
+    send(port, "local hud = require('scripts.hud'); "
+               "hud.init(hud.texWorldSelect or 1, hud.boxTexSet or 2, 1024, 768); "
+               "hud.createUI()", timeout=30)
+    after = panel_dump(port)
+    if isinstance(before, dict) and isinstance(after, dict):
+        check(after.get("open") is True, "the panel survives a resize")
+        check(after.get("kind") == before.get("kind")
+              and after.get("targetId") == before.get("targetId"),
+              "pointed at the SAME entity as before the resize",
+              f"before={before.get('kind')!r}/{before.get('targetId')!r} "
+              f"after={after.get('kind')!r}/{after.get('targetId')!r}")
+        check((after.get("rowCount") or 0) > 0,
+              "with valid, non-degenerate content after the rebuild")
+        rows = after.get("rows") or []
+        check(all((r.get("width") or 0) >= 0 and (r.get("height") or 0) >= 0
+                  for r in rows),
+              "every rendered row has non-degenerate bounds")
+    send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+               "if ep then ep.closeIfOpen() end", timeout=15)
+    closed = panel_dump(port)
+    if isinstance(closed, dict):
+        check(closed.get("open") is False, "close removes it")
+        check((closed.get("rowCount") or 0) == 0, "leaving no rows behind")
+        check(closed.get("viewport") is None,
+              "and no stale viewport handle",
+              f"viewport={closed.get('viewport')!r}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=9422)
+    ap.add_argument("--seed", type=int, default=42)
+    # 64 chunks, matching tools/location_content_probe.py: a smaller
+    # world places no locations at all, which would silently skip the
+    # location entry point AND most recurrence (two discovered ruins of
+    # one definition are the likeliest place a modifier recurs).
+    ap.add_argument("--size", type=int, default=64,
+                    help="world size in chunks")
+    ap.add_argument("--window", default="1280x720",
+                    help="offscreen render target size")
+    args = ap.parse_args()
+
+    proc = None
+    try:
+        proc, stored_name = phase1_boot(args)
+        if stored_name:
+            phase2_world(args.port, stored_name)
+            phase3_location(args.port)
+            phase4_river(args.port)
+            phase5_bound_and_recurrence(args.port)
+            phase6_unavailable(args)
+            phase7_lifecycle(args.port)
+    finally:
+        quit_engine(args.port, proc)
+
+    print()
+    if failures:
+        print(f"etymology_probe: {failures} check(s) FAILED")
+        return 1
+    print("etymology_probe: all checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

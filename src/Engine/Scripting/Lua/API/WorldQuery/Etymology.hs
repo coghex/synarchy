@@ -270,7 +270,13 @@ worldGetRiverAtFn wsc = do
 --   recurrence links around it, or the honest reason there is none.
 data ResolvedEtymology
     = ResolvedOk !Etymology ![(MorphemeIdentity, [EtyEntity])]
-    | ResolvedNone !EtyUnavailable
+    | ResolvedNone !EtyUnavailable !(Maybe (Text, Maybe Text))
+      -- ^ the reason, plus the entity's own stored name and gloss when
+      --   there IS an entity. #1104 requirement 7 is explicit that the
+      --   UI keeps showing the stored name beside the explanation, so an
+      --   unavailable result that dropped the name would force the panel
+      --   either to hide it or to fetch it a second way — and a second
+      --   way is a second answer waiting to disagree.
     | ResolvedNoEntity
       -- ^ the page or the entity itself does not exist — distinct from
       --   \"exists but cannot be explained\", and reported as an ordinary
@@ -304,9 +310,10 @@ resolveEtymology wsc backendState kind mId mPid = do
                         Nothing → pure ResolvedNoEntity
                         Just self → do
                             eCat ← resolveCatalogue backendState
+                            let stored = Just (eeName self, eeGloss self)
                             pure $ case eCat of
                                 Left msg → ResolvedNone
-                                    (EtyReconstructionFailed msg)
+                                    (EtyReconstructionFailed msg) stored
                                 Right cat → case decomposeName cat (eeName self)
                                                     (eeGloss self) (eeSource self) of
                                     -- Sharpen the bare "no source" into
@@ -318,7 +325,8 @@ resolveEtymology wsc backendState kind mId mPid = do
                                     -- adapter can tell them apart.
                                     EtyUnavailable EtyNoSource →
                                         ResolvedNone (absentReason kind mIdent)
-                                    EtyUnavailable u → ResolvedNone u
+                                                     stored
+                                    EtyUnavailable u → ResolvedNone u stored
                                     EtyAvailable ety → ResolvedOk ety
                                         (recurrenceFor cat self eligible ety)
 
@@ -425,9 +433,9 @@ readCatalogueForEtymology = do
 pushEtymologyResult ∷ ResolvedEtymology → Lua.LuaE Lua.Exception ()
 pushEtymologyResult res = case res of
     ResolvedNoEntity → pushUnavailable "no_entity"
-        "there is no such name on this world"
-    ResolvedNone u   → pushUnavailable (etyUnavailableReason u)
-                                       (etyUnavailableText u)
+        "there is no such name on this world" Nothing
+    ResolvedNone u stored → pushUnavailable (etyUnavailableReason u)
+                                            (etyUnavailableText u) stored
     ResolvedOk ety links → do
         Lua.newtable
         Lua.pushboolean True
@@ -448,8 +456,13 @@ pushEtymologyResult res = case res of
         pushList links pushRecurrence
         Lua.setfield (Lua.nth 2) "recurrence"
 
-pushUnavailable ∷ Text → Text → Lua.LuaE Lua.Exception ()
-pushUnavailable reason why = do
+-- | An unavailable result. Carries the entity's own stored name and
+--   gloss whenever there IS an entity, so the panel can keep showing the
+--   name it could not explain (#1104 requirement 7) without going and
+--   asking for it a second, independently-resolvable way.
+pushUnavailable
+    ∷ Text → Text → Maybe (Text, Maybe Text) → Lua.LuaE Lua.Exception ()
+pushUnavailable reason why stored = do
     Lua.newtable
     Lua.pushboolean False
     Lua.setfield (Lua.nth 2) "available"
@@ -457,6 +470,12 @@ pushUnavailable reason why = do
     Lua.setfield (Lua.nth 2) "reason"
     Lua.pushstring (TE.encodeUtf8 why)
     Lua.setfield (Lua.nth 2) "reasonText"
+    forM_ stored $ \(nm, gl) → do
+        Lua.pushstring (TE.encodeUtf8 nm)
+        Lua.setfield (Lua.nth 2) "name"
+        forM_ gl $ \g → do
+            Lua.pushstring (TE.encodeUtf8 g)
+            Lua.setfield (Lua.nth 2) "gloss"
 
 -- | The language a decomposition belongs to, in exactly the
 --   @{ seed = \<decimal string\>, version = \<int\> }@ shape

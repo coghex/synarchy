@@ -210,6 +210,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                 "HUD's rendered overlay, real toggle clicks, wheel "
                                 "scrolling and click-through via screenshots — no "
                                 "GPU on the CI runner (#960)"),
+    "etymology": (NEEDS_GPU, "offscreen boot: drives the in-game etymology panel "
+                  "through the real UI (name-plate rows located via the widget "
+                  "dump, clicked with input.click) against a real generated "
+                  "world -- needs a Vulkan device the CI runner does not have"),
     "location_embark": (NEEDS_GPU, "offscreen boot: real embark-to-discovery session "
                                    "through zoom-map icons, portal ghost/remote-modal "
                                    "flow, and real-input-driven unit movement — no GPU "

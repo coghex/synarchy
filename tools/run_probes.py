@@ -202,6 +202,11 @@ PROBES = [
      "unit.repairItem primitive (#300)"),
     ("repair", "repair_probe.py",
      "repair policy layer, station-gated (#301)"),
+    ("etymology", "etymology_probe.py",
+     "name etymology through the real offscreen UI: the world/location/river "
+     "entry points all opening ONE panel, morpheme rows whose surface tokens "
+     "reproduce the stored name, bound/free and recurrence presentation, the "
+     "honest unavailable state, and resize/close/teardown (#1104)"),
     ("repair_ai", "repair_ai_probe.py",
      "repair AI: claim/fetch/walk/repair/return + role weighting (#302)"),
     ("resource_root", "resource_root_probe.py",

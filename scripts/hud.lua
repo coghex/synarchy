@@ -216,6 +216,7 @@ function hud.createUI()
         return result
     end
     local reopenCargo, reopenItem, reopenCraft, reopenPlant, reopenPicker, reopenTile
+    local reopenEtymology
     if hud.uiCreated and hud.world_page and hud.zoom_page then
         reopenCargo = trySnapshot(function()
             local m = require("scripts.cargo_inventory_panel")
@@ -261,6 +262,17 @@ function hud.createUI()
             local m = require("scripts.tile_editor")
             if not m.state.active then return nil end
             return { gx = m.state.gx, gy = m.state.gy }
+        end)
+        -- #1104: the etymology panel's INSPECTED TARGET and scroll
+        -- offset must survive a geometry rebuild — a resize is a layout
+        -- change, not a semantic re-entry, so reopening it at the top on
+        -- a different entity would lose the player's place twice over.
+        reopenEtymology = trySnapshot(function()
+            local m = require("scripts.etymology_panel")
+            if not m.isOpen() then return nil end
+            local kind, id = m.currentTarget()
+            return { kind = kind, id = id,
+                     scrollOffset = m.state.scrollOffset }
         end)
     end
 
@@ -652,6 +664,34 @@ function hud.createUI()
         menuFont  = hud.menuFont,
     })
 
+    -- Name etymology (#1104): the shared panel and the minimal name
+    -- display hosting its three entry points.
+    --
+    -- Both live on global_page, NOT world_page. world_page is swapped
+    -- out by the zoom band (hud.reconcileView), and a world's own name
+    -- is not a zoomed-in concern — a plate mounted there would be
+    -- unhittable in the zoom-map band, and a panel opened from it would
+    -- render onto a hidden page. The plate additionally needs the world
+    -- page id, to resolve the current world's identity and the player's
+    -- tile selection.
+    local etymologyPanel = require("scripts.etymology_panel")
+    etymologyPanel.setup({
+        page      = hud.global_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+    })
+    local namePlate = require("scripts.name_plate")
+    namePlate.setup({
+        page      = hud.global_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+        worldId   = hud.worldId,
+    })
+
     ---------------------------------------------------------
     -- Info panel on its own dedicated page.
     -- This page is shown/hidden independently so we can
@@ -750,6 +790,20 @@ function hud.createUI()
             require("scripts.tile_editor").onTileSelected(reopenTile.gx, reopenTile.gy)
         end)
     end
+    if reopenEtymology then
+        tryReopen(function()
+            local m = require("scripts.etymology_panel")
+            m.openFor(reopenEtymology.kind, reopenEtymology.id)
+            -- openFor is the genuine fresh-open path and resets the
+            -- offset; restore the player's place afterwards, then
+            -- re-lay-out so the restored offset is what actually renders.
+            m.state.scrollOffset = reopenEtymology.scrollOffset or 0
+            m.reflow()
+        end)
+    end
+    -- The name plate has no "open for" state of its own — it mirrors
+    -- live selection — so it just rebuilds against the new geometry.
+    tryReopen(function() require("scripts.name_plate").reflow() end)
 
     hud.uiCreated = true
     engine.logDebug("HUD UI created")

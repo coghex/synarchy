@@ -317,6 +317,8 @@ function worldView.createWorld()
         worldGloss      = wp.worldGloss,
         languageSeed    = wp.languageSeed,
         languageVersion = wp.languageVersion,
+        -- #1104: same verbatim forwarding rule as the three above.
+        nameExpr        = wp.nameExpr,
         structural = worldView.structuralTextures,
         -- materials and vegetation textures sent via sendTexturesToWorld
     })
