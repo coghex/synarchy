@@ -27,12 +27,19 @@
 -- at the call site (`Unit.Thread.Movement`), since the greedy stepper
 -- reads `stepCost` only for its replan trigger, not for step length.
 --
--- Future extension points (left as TODOs in the code, NOT plumbed yet):
+-- Future extension points, not yet implemented:
 --   * Weather modifier (snow/rain slowing units)
 --   * Per-unit modifier (heavy armor slower, light units faster)
 --
--- These can be added by widening the function signature; call sites
--- pass placeholder modifiers of 1.0 today.
+-- A scalar tunable for either belongs on `PathingConfig`/
+-- `config/pathing.yaml`, the way `pcMaterialReplanMargin` already does
+-- (see `Unit.Pathing.Config`). A modifier's VALUE can derive from
+-- whatever `stepCost` already receives when that suffices — as
+-- `materialFactor` derives from `MaterialRegistry`/`WorldTileData` — but
+-- that isn't guaranteed: `MaterialRegistry` itself was a new parameter
+-- added alongside the material modifier (#312), and none of `stepCost`'s
+-- current parameters carry unit identity or state, so a per-unit
+-- modifier may need one threaded through the same way.
 module Unit.Pathing.Cost
     ( stepCost
     , lookupTerrainZ

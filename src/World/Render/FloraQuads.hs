@@ -32,11 +32,11 @@ floraToQuad
     → TextureHandle
     → Int → Int
     → Float
-    → Float
+    → (Float, Float)
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
 floraToQuad lookupSlot lookupFmSlot _textures facing
-            gx gy inst texHandle zSlice effDepth tileAlpha xOffset texSizes =
+            gx gy inst texHandle zSlice effDepth tileAlpha wrapOff texSizes =
     let floraZ = fiZ inst
         relativeZ = floraZ - zSlice
     in if floraZ > zSlice ∨ floraZ < (zSlice - effDepth)
@@ -56,6 +56,7 @@ floraToQuad lookupSlot lookupFmSlot _textures facing
 
             -- Base screen position of the tile
             (rawX, rawY) = gridToScreen facing gx gy
+            (wrapX, wrapY) = wrapOff
             heightOffset = fromIntegral relativeZ * tileSideHeight
 
             -- Sub-tile offset in isometric space
@@ -68,14 +69,14 @@ floraToQuad lookupSlot lookupFmSlot _textures facing
             baseRadius = fiBaseWidth inst * 0.5 / baseTileH * tileHeight
 
             -- Center horizontally on the tile
-            drawX = rawX + xOffset + subX + (tileWidth - quadW) * 0.5
+            drawX = rawX + wrapX + subX + (tileWidth - quadW) * 0.5
 
             -- Anchor: the point (baseRadius up from quad bottom)
             -- sits at the tile diamond center Y.
             --   tile center Y = rawY - heightOffset + tileHalfDiamondHeight
             --   anchor Y      = drawY + quadH - baseRadius
             -- Solve for drawY:
-            drawY = rawY - heightOffset + subY
+            drawY = rawY + wrapY - heightOffset + subY
                   + tileHalfDiamondHeight - quadH + baseRadius
 
             (fa, fb) = applyFacing facing gx gy
