@@ -350,7 +350,6 @@ activateChunk scs
     | otherwise =
         let terrV = scsTerrain scs
             fluidV = scsFluid scs
-            _sz = V.length fluidV
             activeFluid = V.imap (\idx mfc →
                 case mfc of
                     Nothing → Nothing

@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict #-}
--- | Pure tests for 'World.Render.GroundItemQuads.itemGeometry' at the U
---   seam (issue #1135).
+-- | Pure tests for 'World.Render.GroundItemQuads.itemGeometry' and the
+--   shared wrap OFFSET at the U seam (issues #1135 and #1176).
 --
 --   Ground items store bare float @(x, y)@ and NOTHING normalises them
 --   on the way in — @item.spawnGround@ takes arbitrary numbers and
@@ -14,6 +14,12 @@
 --   the coords also drive the screen position here and the sort key /
 --   wrap offset in the render pass, so an aliased item must resolve to
 --   exactly the geometry it would have had at its canonical coords.
+--
+--   #1176 then made the offset APPLIED after that lookup two-dimensional
+--   and facing-aware, which is what the four-facing groups below pin: a
+--   u-wrap displaces screen X at south/north but screen Y at west/east,
+--   so the old X-only offset culled or half-world-displaced everything
+--   across the seam at two of the four facings.
 module Test.Headless.World.Render.GroundItemSeam (spec, engineSpec) where
 
 import UPrelude
@@ -24,12 +30,14 @@ import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State
     (EngineEnv(..), itemManagerRef)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
+import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import World.Generate (viewDepth)
-import World.Generate.Coordinates (canonicalTileFrame)
-import World.Grid (gridToWorld, worldScreenWidth)
+import World.Grid (gridToWorld)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
-import World.Render.GroundItemQuads (hitTestGroundItemAt, itemGeometry)
+import World.Render.GroundItemQuads
+    (hitTestGroundItemAt, itemGeometry, renderGroundItemQuads)
 import World.Render.ViewBounds (computeViewBounds)
 import World.State.Types (WorldState(..), emptyWorldState)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
@@ -116,9 +124,50 @@ itemAt x y = GroundItem
     , giX = x, giY = y
     }
 
+geometryAt ∷ CameraFacing → WorldTileData → GroundItem
+           → Maybe (Int, TextureHandle, Float, Float, Float, Float, Int)
+geometryAt facing tiles =
+    itemGeometry tiles items HM.empty facing zSlice worldSize
+
 geometry ∷ WorldTileData → GroundItem
          → Maybe (Int, TextureHandle, Float, Float, Float, Float, Int)
-geometry tiles = itemGeometry tiles items HM.empty FaceSouth zSlice worldSize
+geometry = geometryAt FaceSouth
+
+-- | Every camera facing, in the game's own rotation order.
+allFacings ∷ [CameraFacing]
+allFacings = [FaceSouth, FaceWest, FaceNorth, FaceEast]
+
+zoom ∷ Float
+zoom = 4.0
+
+fbW, fbH ∷ Int
+(fbW, fbH) = (800, 600)
+
+effDepth ∷ Int
+effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+
+-- | A camera parked exactly on the ALIAS of the fixture's tile at this
+--   facing: the configuration that forces a non-zero wrap offset,
+--   because the chunk is only reachable through its wrapped image.
+cameraOnAlias ∷ CameraFacing → Camera2D
+cameraOnAlias facing =
+    let (rawX, rawY) = rawTile
+        (aliasWX, aliasWY) = gridToWorld facing rawX rawY
+    in defaultCamera { camPosition = (aliasWX, aliasWY), camZoom = zoom
+                     , camFacing = facing, camZSlice = zSlice }
+
+-- | The TRUE screen displacement of one u-wrap at this facing, taken
+--   from the projection itself rather than from any constant this
+--   fixture could restate wrongly. @gridToScreen@'s half-tile shift is
+--   common to both terms and cancels, so 'gridToWorld' is the same
+--   difference.
+wrapDisplacement ∷ CameraFacing → (Float, Float)
+wrapDisplacement facing =
+    let (rawX, rawY) = rawTile
+        (canonX, canonY) = canonTile
+        (aliasWX, aliasWY) = gridToWorld facing rawX rawY
+        (canonWX, canonWY) = gridToWorld facing canonX canonY
+    in (aliasWX - canonWX, aliasWY - canonWY)
 
 spec ∷ Spec
 spec = do
@@ -165,6 +214,55 @@ spec = do
     it "resolves an interior item unchanged" $
       geometry tiles gi `shouldSatisfy` isJust
 
+  -- #1176: the offset itself, at every facing. The pre-#1176 helper
+  -- returned a screen-X shift only — exact at south/north, and unable
+  -- to touch east/west, where the SAME u-wrap displaces screen Y
+  -- instead. Content across the seam was culled by the bounds test or
+  -- placed a half-world off in Y at those two facings.
+  describe "the wrap offset is facing-aware (#1176)" $
+    forM_ allFacings $ \facing → describe (show facing) $ do
+      let (expX, expY) = wrapDisplacement facing
+          cam = cameraOnAlias facing
+          (camWX, camWY) = camPosition cam
+          vb = computeViewBounds cam fbW fbH effDepth
+          got = isChunkVisibleWrapped facing worldSize vb camWX camWY stored
+
+      it "precondition: a u-wrap moves exactly one screen axis" $ do
+        -- A u-wrap shifts u by a whole world and PRESERVES v, so one
+        -- component is identically zero and the other is world-sized —
+        -- not a rounding artefact. WHICH axis moves is the whole bug,
+        -- so this is derived, never hardcoded to the 2:1 tile ratio.
+        min (abs expX) (abs expY) `shouldBe` 0
+        max (abs expX) (abs expY) `shouldSatisfy` (> 1.0)
+
+      it "resolves the chunk through its nearest alias" $
+        -- Requirement 2: visibility is judged against bounds translated
+        -- by the returned offset, so an offset that cannot reach the
+        -- camera culls the chunk outright. This is Nothing at
+        -- west/east before the fix.
+        got `shouldSatisfy` isJust
+
+      it "returns that displacement on both axes" $
+        case got of
+          Nothing → expectationFailure "chunk culled at its own alias"
+          Just (offX, offY) → do
+            abs (offX - expX) `shouldSatisfy` (< 0.001)
+            abs (offY - expY) `shouldSatisfy` (< 0.001)
+
+  -- Requirement 4, at every facing: nothing moves away from the seam.
+  describe "away from the seam the offset is (0, 0) at every facing" $
+    forM_ allFacings $ \facing →
+      it (show facing) $ do
+        -- Chunk (16,-15) has u = 31, inside the canonical range, and
+        -- the camera sits on its own tile — no alias is nearer.
+        let interior = ChunkCoord 16 (-15)
+            (iw, ih) = gridToWorld facing (16 * chunkSize) ((-15) * chunkSize)
+            cam = defaultCamera { camPosition = (iw, ih), camZoom = zoom
+                                , camFacing = facing, camZSlice = zSlice }
+            vb = computeViewBounds cam fbW fbH effDepth
+        isChunkVisibleWrapped facing worldSize vb iw ih interior
+            `shouldBe` Just (0, 0)
+
 
 -- | The other half of the round-2 review concern: an item drawn through
 --   its WRAPPED image across the U seam has to be clickable where it is
@@ -179,15 +277,19 @@ spec = do
 --   non-zero first, so the test cannot pass trivially by the scenario
 --   collapsing to the interior one.
 --
---   FaceSouth only, deliberately. The wrap offset is screen-X-only
---   ('World.Render.ChunkCulling.bestWrapOffset'), which is exact at
---   south/north but cannot correct east/west, where a u-wrap displaces
---   screen Y instead — a pre-existing engine-wide limitation split out
---   to #1176, which owns extending this fixture across all four facings.
+--   ALL FOUR FACINGS since #1176. The offset used to be screen-X only,
+--   which is exact at south/north but cannot correct east/west, where a
+--   u-wrap displaces screen Y instead. So the click centre here is taken
+--   from the quad 'renderGroundItemQuads' actually EMITS, not from a
+--   presumed draw position recomputed alongside it — a render pass that
+--   dropped the Y component would otherwise still agree with the test's
+--   own arithmetic and the failure would hide.
 engineSpec ∷ Spec
 engineSpec = beforeAll initEnv $
-  describe "ground-item click across the U seam (#1135)" $
-    it "hits the item where its wrapped image is actually drawn" $ \env → do
+  describe "ground-item click across the U seam (#1135, #1176)" $
+    forM_ allFacings $ \facing →
+      it ("hits the item where its wrapped image is drawn at "
+          <> show facing) $ \env → do
         ws ← emptyWorldState
         writeIORef (wsGenParamsRef ws)
             (Just defaultWorldGenParams { wgpWorldSize = worldSize })
@@ -204,46 +306,52 @@ engineSpec = beforeAll initEnv $
         -- Park the camera on the ALIAS of that tile — a whole world away
         -- along u — so the item can only be on screen via its wrapped
         -- image, which is the configuration the bug hid in.
-        let (rawX, rawY) = rawTile
-            (aliasWX, aliasWY) = gridToWorld FaceSouth rawX rawY
-            (fbW, fbH) = (800, 600)
-            (winW, winH) = (800, 600)
-            zoom = 4.0 ∷ Float
-            cam = defaultCamera
-                    { camPosition = (aliasWX, aliasWY), camZoom = zoom
-                    , camFacing = FaceSouth, camZSlice = zSlice }
+        let cam = cameraOnAlias facing
+            (camWX, camWY) = camPosition cam
+            (winW, winH) = (fbW, fbH)
         writeIORef (cameraRef env) cam
         writeIORef (windowSizeRef env) (winW, winH)
         writeIORef (framebufferSizeRef env) (fbW, fbH)
 
-        let effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
-            vb = computeViewBounds cam fbW fbH effDepth
-            (chunkCoord, _, _) =
-                canonicalTileFrame worldSize (floor (giX gi)) (floor (giY gi))
-        case ( itemGeometryOf gi, isChunkVisibleWrapped FaceSouth worldSize
-                                      vb aliasWX chunkCoord ) of
-          (Nothing, _) → expectationFailure "item geometry did not resolve"
-          (_, Nothing) → expectationFailure "item chunk not visible from the alias"
-          (Just (_, _, drawX0, drawY, quadW, quadH, _), Just xOff) → do
-            -- Precondition: the item really is being shown through its
-            -- wrapped image, one world width from its own geometry.
-            abs (abs xOff - worldScreenWidth worldSize) `shouldSatisfy` (< 1.0)
+        -- The real render pass, through EngineEnv exactly as the frame
+        -- loop drives it.
+        quads ← renderGroundItemQuads env ws 1.0
+        case V.toList quads of
+          [] → expectationFailure
+                 "the item emitted no quad — culled at its own alias"
+          (q:_) → do
+            -- Quad centre: midpoint of the two opposite corners the
+            -- pass wrote (v0 = top-left, v2 = bottom-right).
+            let Vec2 qx0 qy0 = pos (sqV0 q)
+                Vec2 qx2 qy2 = pos (sqV2 q)
+                cx = (qx0 + qx2) * 0.5
+                cy = (qy0 + qy2) * 0.5
+
+            -- Precondition, measured against the render output itself:
+            -- the emitted quad really is a whole wrap away from the
+            -- item's own unshifted geometry, on BOTH axes. This is what
+            -- catches a render pass that applied only the X component.
+            case geometryAt facing (tilesAt stored) gi of
+              Nothing → expectationFailure "item geometry did not resolve"
+              Just (_, _, drawX0, drawY0, quadW, quadH, _) → do
+                let (expX, expY) = wrapDisplacement facing
+                abs ((cx - (drawX0 + quadW * 0.5)) - expX)
+                    `shouldSatisfy` (< 0.001)
+                abs ((cy - (drawY0 + quadH * 0.5)) - expY)
+                    `shouldSatisfy` (< 0.001)
 
             -- Click dead centre of the quad AS DRAWN, converted back to a
             -- window pixel with the hit test's own pixel→world mapping.
             let aspect = fromIntegral winW / fromIntegral winH ∷ Float
                 vw = zoom * aspect
                 vh = zoom
-                cx = drawX0 + xOff + quadW * 0.5
-                cy = drawY + quadH * 0.5
                 pixX = fromIntegral winW
-                     * (((cx - aliasWX) / vw) + 1.0) / 2.0
+                     * (((cx - camWX) / vw) + 1.0) / 2.0
                 pixY = fromIntegral winH
-                     * (((cy - aliasWY) / vh) + 1.0) / 2.0
+                     * (((cy - camWY) / vh) + 1.0) / 2.0
             hit ← hitTestGroundItemAt env ws (realToFrac pixX) (realToFrac pixY)
             hit `shouldBe` Just gid
   where
     initEnv = do
         EngineInitResult env ← initializeEngineHeadless
         pure env
-    itemGeometryOf = geometry (tilesAt stored)

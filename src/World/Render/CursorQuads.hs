@@ -136,11 +136,11 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 | otherwise → V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (mdZ md) zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | ((dgx, dgy), md) ← HM.toList designations
                     , let (chunkCoord, _) = globalToChunk dgx dgy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
 
     -- Chop-designation markers (#97): world annotations like the mine
@@ -154,11 +154,11 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 | otherwise → V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (chZ cd) zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | ((dgx, dgy), cd) ← HM.toList chopDesigns
                     , let (chunkCoord, _) = globalToChunk dgx dgy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
 
     -- Till-designation markers (#333): world annotations like the chop
@@ -172,11 +172,11 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 | otherwise → V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (tlZ td) zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | ((dgx, dgy), td) ← HM.toList tillDesigns
                     , let (chunkCoord, _) = globalToChunk dgx dgy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
 
     -- Plant-designation markers (#335): world annotations like the
@@ -190,11 +190,11 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 | otherwise → V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (ptZ pd) zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | ((dgx, dgy), pd) ← HM.toList plantDesigns
                     , let (chunkCoord, _) = globalToChunk dgx dgy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
 
     -- Construction-designation ghosts (#95): world annotations like the
@@ -249,28 +249,28 @@ renderWorldCursorQuads env worldState tileAlpha = do
             | otherwise = V.fromList
                 [ worldCursorToQuad lookupSlot lookupFmSlot textures
                       facing fx fy (cdZ cd) zSlice effectiveDepth
-                      (constructAlphaFor cd) xOff tex
+                      (constructAlphaFor cd) wrapOff tex
                 | (anchor, cd) ← HM.toList constructDesigns
                 , Just tex ← [constructTexFor cd]
                 , (fx, fy) ← constructDesignationFootprint (bmDefs bm) anchor cd
                 , let (chunkCoord, _) = globalToChunk fx fy
-                , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                   vb camX chunkCoord]
+                , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                      vb camX camY chunkCoord]
                 ]
 
     -- Hover quads (bg + fg) — used by both info and mine tools.
     let hoverQuads = case hoverResult of
-            Just (gx, gy, hz, xOff, _) →
+            Just (gx, gy, hz, wrapOff, _) →
                 let fgQuad = case worldHoverTexture cs' of
                         Just tex → V.singleton $
                             worldCursorToQuad lookupSlot lookupFmSlot
                               textures facing gx gy hz zSlice effectiveDepth
-                              tileAlpha xOff tex
+                              tileAlpha wrapOff tex
                         Nothing → V.empty
                     bgQuad = case worldHoverBgTexture cs' of
                         Just tex → V.singleton $
                             worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                                gx gy hz zSlice effectiveDepth tileAlpha xOff tex
+                                gx gy hz zSlice effectiveDepth tileAlpha wrapOff tex
                         Nothing → V.empty
                 in bgQuad <> fgQuad
             _ → V.empty
@@ -279,19 +279,20 @@ renderWorldCursorQuads env worldState tileAlpha = do
     let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs', worldCursorBgTexture cs') of
             (Just (sgx, sgy, sz), _, _) →
                 let (chunkCoord, _) = globalToChunk sgx sgy
-                in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                    Just xOff →
+                in case isChunkVisibleWrapped facing worldSize vb
+                            camX camY chunkCoord of
+                    Just wrapOff →
                         let fgQuad = case worldCursorTexture cs' of
                                 Just tex → V.singleton $
                                     worldCursorToQuad lookupSlot lookupFmSlot
                                                       textures facing sgx sgy sz
                                                       zSlice effectiveDepth
-                                                      tileAlpha xOff tex
+                                                      tileAlpha wrapOff tex
                                 Nothing → V.empty
                             bgQuad = case worldCursorBgTexture cs' of
                                 Just tex → V.singleton $
                                     worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                                        sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
+                                        sgx sgy sz zSlice effectiveDepth tileAlpha wrapOff tex
                                 Nothing → V.empty
                         in bgQuad <> fgQuad
                     Nothing → V.empty
@@ -330,14 +331,14 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 in V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | gx ← [xLo .. xHi]
                     , gy ← [yLo .. yHi]
                     , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
                     , let (chunkCoord, _) = globalToChunk gx gy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
             _ → V.empty
 
@@ -370,13 +371,13 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 in V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | (gx, gy) ← tiles
                     , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
                     , let (chunkCoord, _) = globalToChunk gx gy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
             _ → V.empty
 
@@ -395,13 +396,13 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 in V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | gx ← [xLo .. xHi]
                     , gy ← [yLo .. yHi]
                     , Just z ← [surfaceZAt gx gy]
                     , let (chunkCoord, _) = globalToChunk gx gy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
             _ → V.empty
 
@@ -420,14 +421,14 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 in V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
-                          tileAlpha xOff tex
+                          tileAlpha wrapOff tex
                     | gx ← [xLo .. xHi]
                     , gy ← [yLo .. yHi]
                     , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
                     , let (chunkCoord, _) = globalToChunk gx gy
-                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                       vb camX chunkCoord]
+                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                          vb camX camY chunkCoord]
                     ]
             _ → V.empty
 

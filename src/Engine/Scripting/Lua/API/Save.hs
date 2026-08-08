@@ -90,7 +90,9 @@ import Engine.Load.Status
 --   `recovered` is `true` (otherwise omitted) when the listed metadata
 --   came from the slot's PREVIOUS generation because its authoritative
 --   generation had recoverable storage corruption (issue #762 requirement
---   8) — a machine-readable status; no save/load UI change consumes it.
+--   8). Since #1107 the save browser renders it as a "[Recovered]" row
+--   tag, beside the "[Autosave]" one — both are durable classifications
+--   of the slot, never inferred from its name.
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveListFn env = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
