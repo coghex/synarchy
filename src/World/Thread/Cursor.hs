@@ -15,7 +15,7 @@ import Engine.Core.State (EngineEnv, resolveActiveWorld)
 import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
-import World.Fluids (isOceanChunk)
+import World.Fluid.Ocean (isOceanChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Edit.Apply (replayEdits)
 import World.Generate (generateLoadedChunk)

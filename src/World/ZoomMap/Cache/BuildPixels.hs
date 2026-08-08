@@ -15,7 +15,7 @@ import World.Types
 import World.Material (MaterialRegistry)
 import World.Plate (elevationAtGlobal, isBeyondGlacier, isGlacierZone, wrapGlobalU)
 import qualified Data.Vector.Unboxed as VU
-import World.Fluids (isOceanChunk, hasAnyOceanFluid)
+import World.Fluid.Ocean (isOceanChunk, hasAnyOceanFluid)
 import World.Fluid.Lake.Types (wlByChunk)
 import qualified Data.HashMap.Strict as HM
 import World.Fluid.Lava (chunkHasLavaQuick)
