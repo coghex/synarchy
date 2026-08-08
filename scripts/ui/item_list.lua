@@ -46,7 +46,7 @@ local label         = require("scripts.ui.label")
 local scale         = require("scripts.ui.scale")
 local tabbar        = require("scripts.ui.tabbar")
 local brokenOverlay = require("scripts.ui.broken_overlay")
-local utf8Safe      = require("scripts.ui.utf8_safe")
+local textWrap      = require("scripts.ui.text_wrap")
 local responsive    = require("scripts.ui.responsive")
 
 local itemList = {}
@@ -162,30 +162,15 @@ function itemList.filterByTab(rows, activeTab)
 end
 
 -- Defensive UTF-8-safe truncation with a ".." suffix (#618's rule, as
--- implemented by the unit-info inventory before this extraction):
---   * nil or empty text returns unchanged;
---   * maxPx <= 0 returns the ORIGINAL text unchanged;
---   * text that already fits returns unchanged;
---   * a positive maxPx too narrow for ".." itself returns "";
---   * otherwise the longest complete UTF-8 prefix that fits with "..".
--- Every candidate cut is snapped to a character boundary, because
--- string.sub cuts by byte offset, not codepoint.
+-- implemented by the unit-info inventory before this extraction).
+--
+-- #1107 moved the implementation to scripts/ui/text_wrap.lua, the shared
+-- pixel-width fitting module, when the save browser's row columns needed
+-- the identical rule; this stays as the widget's own documented entry
+-- point so its hosts keep one name for it. Its contract is text_wrap's --
+-- see textWrap.truncateToWidth for the full case list.
 function itemList.truncateToWidth(text, font, fontPx, maxPx)
-    if not text or text == "" then return text end
-    if not maxPx or maxPx <= 0 then return text end
-    local full = engine.getTextWidth(font, text, fontPx) or 0
-    if full <= maxPx then return text end
-    local ellipsis = ".."
-    local ellW = engine.getTextWidth(font, ellipsis, fontPx) or 0
-    if ellW > maxPx then return "" end   -- not even the dots fit
-    local lo, hi = 0, #text
-    while lo < hi do
-        local mid = math.floor((lo + hi + 1) / 2)
-        local cut = utf8Safe.snapToCharBoundary(text, mid)
-        local w = (engine.getTextWidth(font, text:sub(1, cut), fontPx) or 0) + ellW
-        if w <= maxPx then lo = mid else hi = mid - 1 end
-    end
-    return text:sub(1, utf8Safe.snapToCharBoundary(text, lo)) .. ellipsis
+    return textWrap.truncateToWidth(text, font, fontPx, maxPx)
 end
 
 -- Normalize the host's input into the model the renderer and the

@@ -1,5 +1,5 @@
 -- | Boot-time native-exception guard shared by every 'Engine.Core.Monad.runEngineM'
---   call site (graphical, headless, dump).
+--   call site.
 module App.Exception
   ( guardNativeExceptions
   ) where

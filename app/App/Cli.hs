@@ -1,6 +1,6 @@
--- | Command-line argument parsing shared by every boot mode (graphical,
---   headless, dump): dump-layer selection, generic @--flag value@/region
---   parsing.
+-- | Command-line argument parsing shared across every boot mode: dump-layer
+--   selection, generic @--flag value@/region parsing, plus preview-target,
+--   image-size, language-report, and seed-range parsing.
 module App.Cli
   ( DumpLayers(..)
   , defaultLayers

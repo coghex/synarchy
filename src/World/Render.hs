@@ -46,7 +46,6 @@ updateWorldTiles env = do
 
     let zoom = camZoom camera
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
-        _zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
         -- Terrain's visible Z-band depth below the slice (same formula as
         -- Quads.hs). Units/buildings cull to this so a sprite is hidden
         -- exactly when its ground tile is — only ABOVE the slice (camera

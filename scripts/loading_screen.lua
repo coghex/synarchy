@@ -14,6 +14,7 @@ local responsive = require("scripts.ui.responsive")
 local panel      = require("scripts.ui.panel")
 local label      = require("scripts.ui.label")
 local bar        = require("scripts.ui.bar")
+local textWrap   = require("scripts.ui.text_wrap")
 
 local loadingScreen = {}
 
@@ -22,6 +23,13 @@ loadingScreen.panelId    = nil
 loadingScreen.barId      = nil
 loadingScreen.statusLabelId = nil
 loadingScreen.percentLabelId = nil
+-- #1107: the world being loaded, shown as its OWN label above the
+-- status line. Deliberately not folded into statusText -- update()
+-- rewrites that label on every phase transition, and the point of
+-- naming the world is that it stays readable for the whole
+-- transaction.
+loadingScreen.worldNameLabelId = nil
+loadingScreen.glossLabelId     = nil
 loadingScreen.boxTexSet  = nil
 loadingScreen.menuFont   = nil
 loadingScreen.fbW        = 0
@@ -33,6 +41,12 @@ loadingScreen.showMenuCallback = nil
 loadingScreen.phase           = "idle"  -- "idle", "loading", "done"
 loadingScreen.mode            = "worldgen"  -- "worldgen" | "startup" | "load"
 loadingScreen.statusText      = "Loading..."
+-- The identity of the world being loaded/generated, when the caller
+-- knows one (#1107). nil means the caller had NO name to show -- never
+-- a signal to synthesize one from the save slot, which is a different
+-- fact and is already in statusText.
+loadingScreen.worldName       = nil
+loadingScreen.worldGloss      = nil
 
 -- issue #763: fired once a whole-session engine.loadSave transaction
 -- reaches LoadPublished ("load" mode only) — the loaded page now exists
@@ -153,6 +167,8 @@ function loadingScreen.destroyOwned()
     loadingScreen.barId          = nil
     loadingScreen.statusLabelId  = nil
     loadingScreen.percentLabelId = nil
+    loadingScreen.worldNameLabelId = nil
+    loadingScreen.glossLabelId     = nil
 end
 
 -----------------------------------------------------------
@@ -181,16 +197,89 @@ function loadingScreen.createUI()
     loadingScreen.page = UI.newPage("loading_screen", "modal")
 
     -- No background panel — bar + labels are placed directly against
-    -- the page, centered. Layout is the same vertical stack as before:
+    -- the page, centered. Layout is the same vertical stack as before,
+    -- with #1107's optional world identity prepended:
+    --   [world name]      (only when the caller supplied one)
+    --   [world gloss]     (only when that name has a stated meaning)
     --   [status text]
     --   [spacing]
     --   [progress bar]
     --   [spacing]
     --   [percent text]
-    local stackHeight = s.fontSize + s.spacing + s.barHeight
+    local worldName = loadingScreen.worldName
+    local worldGloss = loadingScreen.worldGloss
+    local hasName  = worldName ~= nil and worldName ~= ""
+    local hasGloss = hasName and worldGloss ~= nil and worldGloss ~= ""
+    local identityGap = math.max(1, math.floor(s.spacing / 4))
+
+    local identityHeight = 0
+    if hasName then
+        identityHeight = s.fontSize + identityGap
+        if hasGloss then
+            identityHeight = identityHeight + s.barFontSize + identityGap
+        end
+    end
+
+    local stackHeight = identityHeight + s.fontSize + s.spacing + s.barHeight
                       + s.spacing + s.fontSize
-    local stackY = math.floor((loadingScreen.fbH - stackHeight) / 2)
+    -- Floored at 0: the stack got taller, so a short framebuffer at a
+    -- high scale can make it exceed the height it is being centered in,
+    -- and a negative origin would put the world's name off the top edge
+    -- rather than merely crowding the bottom.
+    local stackY = math.max(0, math.floor((loadingScreen.fbH - stackHeight) / 2))
     local baseZ  = 1
+
+    -- Everything in the stack is left-justified to the bar's left edge
+    -- so it reads as a unit. (Bar is centered horizontally below.)
+    local barLeft = math.floor((loadingScreen.fbW - s.barWidth) / 2)
+    local cursorY = stackY
+
+    -- World identity (#1107). Its OWN labels, never folded into
+    -- statusText: update() rewrites the status label on every phase
+    -- transition, and the whole point of naming the world is that the
+    -- name survives the whole transaction. Both are bounded to the
+    -- bar's width through the shared truncation helper, since a world
+    -- name carries arbitrary (and after #1100 extended-orthography)
+    -- text of no bounded length.
+    if hasName then
+        loadingScreen.worldNameLabelId = label.new({
+            name     = "loading_world_name",
+            text     = textWrap.truncateToWidth(worldName,
+                           loadingScreen.menuFont, s.fontSize, s.barWidth),
+            font     = loadingScreen.menuFont,
+            fontSize = loadingScreen.baseSizes.fontSize,
+            color    = {1.0, 1.0, 1.0, 1.0},
+            page     = loadingScreen.page,
+            uiscale  = uiscale,
+        })
+        table.insert(loadingScreen.ownedLabels, loadingScreen.worldNameLabelId)
+        UI.addToPage(loadingScreen.page,
+            label.getElementHandle(loadingScreen.worldNameLabelId),
+            barLeft, cursorY)
+        UI.setZIndex(
+            label.getElementHandle(loadingScreen.worldNameLabelId), baseZ + 1)
+        cursorY = cursorY + s.fontSize + identityGap
+
+        if hasGloss then
+            loadingScreen.glossLabelId = label.new({
+                name     = "loading_world_gloss",
+                text     = textWrap.truncateToWidth('"' .. worldGloss .. '"',
+                               loadingScreen.menuFont, s.barFontSize, s.barWidth),
+                font     = loadingScreen.menuFont,
+                fontSize = loadingScreen.baseSizes.barFontSize,
+                color    = {0.72, 0.72, 0.72, 1.0},
+                page     = loadingScreen.page,
+                uiscale  = uiscale,
+            })
+            table.insert(loadingScreen.ownedLabels, loadingScreen.glossLabelId)
+            UI.addToPage(loadingScreen.page,
+                label.getElementHandle(loadingScreen.glossLabelId),
+                barLeft, cursorY)
+            UI.setZIndex(
+                label.getElementHandle(loadingScreen.glossLabelId), baseZ + 1)
+            cursorY = cursorY + s.barFontSize + identityGap
+        end
+    end
 
     -- Status text
     loadingScreen.statusLabelId = label.new({
@@ -204,11 +293,8 @@ function loadingScreen.createUI()
     })
     table.insert(loadingScreen.ownedLabels, loadingScreen.statusLabelId)
 
-    -- Status text is left-justified to the bar's left edge so the
-    -- two read as a unit. (Bar is centered horizontally below.)
-    local barLeft = math.floor((loadingScreen.fbW - s.barWidth) / 2)
     local statusX = barLeft
-    local statusY = stackY
+    local statusY = cursorY
     UI.addToPage(loadingScreen.page,
         label.getElementHandle(loadingScreen.statusLabelId), statusX, statusY)
     UI.setZIndex(label.getElementHandle(loadingScreen.statusLabelId), baseZ + 1)
@@ -271,6 +357,11 @@ function loadingScreen.show(params)
     params = params or {}
     loadingScreen.mode       = params.mode or "worldgen"
     loadingScreen.statusText = params.statusText or "Loading..."
+    -- #1107: display-only identity of the world being loaded. Absent
+    -- keys clear the previous transaction's -- a loading screen must
+    -- never name the world the player loaded LAST time.
+    loadingScreen.worldName  = params.worldName
+    loadingScreen.worldGloss = params.worldGloss
 
     -- Always grab the latest framebuffer size from the caller
     if params.fbW and params.fbW > 0 then
