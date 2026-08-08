@@ -41,29 +41,29 @@
 --     canonical stored key -- see World/Render/HitTest.hs's contract. The
 --     AI never derives one from a pick or from arithmetic over two.
 --   * They are only ever CONSUMED by point verbs, all of which accept
---     any u-alias -- not just the designation reads/cancels but the
---     verbs that FINISH a job (world.getDigInfoAt/digTile, harvestFlora,
---     setVegAt, plantCropAt/plantRowCropAt, structure.place/hasAt/
---     floorZAt/clear). That whole set is what lets a job coord persisted
---     by a pre-#1175 save (lua.unit_ai v1-v4, possibly an alias) run to
---     COMPLETION after a load with no migration; resolving the
---     designation but then editing terrain raw would be a half-fix.
+--     any u-alias -- not just the designation reads/cancels but every
+--     verb that FINISHES a job: world.getDigInfoAt/digTile,
+--     harvestFlora, setVegAt, plantCropAt/plantRowCropAt,
+--     structure.place/hasAt/floorZAt/clear, and building.spawn/
+--     canPlaceAt for a CtBuilding stake. That set is what lets a coord
+--     persisted by a pre-#1175 save (lua.unit_ai v1-v4, possibly an
+--     alias) run to COMPLETION after a load with no migration;
+--     resolving the designation but editing terrain raw is a half-fix.
 --   * The Lua-side claim tables (digKey / chopKey / till.key) key off
 --     those same coords, so one physical tile now has exactly one claim
 --     key -- two aliases could previously hold it twice.
---
 --   * Job SELECTION range gates are the one place a canonical coord is
 --     the wrong number: from a worker, a seam-side job measures a whole
 --     world away and is rejected before it can be claimed. So
 --     construction.getPendingJobs also reports lx/ly (the same tile in
---     the scan region's own frame); unit_ai_construct.lua measures with
---     those and calls every verb with the canonical x/y.
+--     the scan region's frame); unit_ai_construct.lua measures with
+--     those, calling every verb with the canonical x/y.
 --
 -- Deliberately NOT in that contract: unit MOVEMENT. Unit positions and
 -- pathing use the plain unwrapped global frame with no seam handling, so
 -- unit.moveTo(job.x + 0.5, ...) walks the long way round rather than
--- across the seam -- a pre-existing pathing limitation, not a frame
--- mismatch: the canonical coord still names the right tile there.
+-- across the seam -- a pre-existing pathing limit, not a frame mismatch:
+-- the canonical coord still names the right tile there.
 
 local unitAi = package.loaded["scripts.unit_ai"] or {}
 package.loaded["scripts.unit_ai"] = unitAi

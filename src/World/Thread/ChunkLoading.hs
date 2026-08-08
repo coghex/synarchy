@@ -9,7 +9,7 @@ module World.Thread.ChunkLoading
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import Data.List (partition, sortOn)
+import Data.List (nub, partition, sortOn)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Parallel.Strategies (parMap, rdeepseq)
 import Control.DeepSeq (rnf)
@@ -229,6 +229,32 @@ drainInitQueues env logger = do
                         -- by-coord removal below can't clobber an append that
                         -- landed during generation (no lost update).
                         let batch = take maxChunksPerTick remaining
+                            -- Canonicalise before generating or inserting.
+                            -- Chunks are STORED u-wrapped — the whole render/
+                            -- lookup stack assumes it (World.Render.ChunkLookup,
+                            -- World.Generate.Coordinates.canonicalTileFrame) and
+                            -- the camera-driven loader below already wraps every
+                            -- coord it touches. This queue's three producers do
+                            -- NOT: world.loadChunksInRegion takes an arbitrary
+                            -- caller region, World.Load.Stage's fill is centred
+                            -- on the SAVED camera chunk, and world init's is
+                            -- centred on the origin. A seam-crossing region from
+                            -- any of them used to be generated and inserted
+                            -- under its RAW key, so the map ended up holding two
+                            -- independently generated chunks for one physical
+                            -- place — and every canonicalising lookup resolved
+                            -- to whichever of them the camera loader had put
+                            -- there, not the one this queue wrote. Wrapping HERE
+                            -- fixes all three producers at once, at the single
+                            -- point where the chunk is actually created.
+                            --
+                            -- nub because two raw coords in one batch can be
+                            -- aliases of the same canonical chunk; generating it
+                            -- twice would emit a duplicate SimChunkLoaded and
+                            -- reset its sim state. Batches are maxChunksPerTick
+                            -- long, so the quadratic scan is free.
+                            batchCanon = nub (map (wrapChunkCoordU
+                                                     (wgpWorldSize params)) batch)
                         -- Skip coords already in wsTilesRef. The camera-visible
                         -- loader (updateChunkLoading) loads chunks straight into
                         -- wsTilesRef without going through this queue, so a coord
@@ -242,7 +268,7 @@ drainInitQueues env logger = do
                         -- (already-loaded + freshly generated) is dropped from the
                         -- queue below.
                         td0 ← readIORef (wsTilesRef worldState)
-                        let (_alreadyLoaded, toGen) = partitionChunks batch td0
+                        let (_alreadyLoaded, toGen) = partitionChunks batchCanon td0
                         let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq

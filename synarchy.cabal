@@ -1079,6 +1079,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectTileZ
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
+                   Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface

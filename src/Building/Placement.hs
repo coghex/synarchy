@@ -16,7 +16,7 @@ import qualified Data.Vector.Unboxed as VU
 import Building.Types
 import World.Tile.Types (WorldTileData, lookupChunk)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
-import World.Generate (globalToChunk)
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import Location.Instance (LocationInstances)
 import Location.Placement (placedLocationBounds, nearestLocationDistance)
 import Location.Bounds (AbsBounds(..), boundsIntersect, remotePortalThresholdTiles)
@@ -64,13 +64,20 @@ checkFlatGround
     → Int
     → PlacementResult
 checkFlatGround bm wtd instances worldSize def gx gy =
+    -- #1175: a footprint is enumerated by stepping off its anchor, so
+    -- even a canonical anchor in the last column produces tiles past the
+    -- canonical u range — and the anchor itself can be an alias when it
+    -- came from a pre-#1175 construct job. Both the terrain read and the
+    -- occupancy test therefore resolve each tile into the stored frame.
+    -- Identity away from the seam and for non-wrapping worlds.
     let tiles = footprintTiles gx gy (bdTileW def) (bdTileH def)
-        zs    = traverse (lookupSurfaceZ wtd) tiles
+        zs    = traverse (lookupSurfaceZ worldSize wtd) tiles
     in case zs of
         Nothing → NotPlaceable "chunk not loaded"
         Just (z0:rest)
             | any (≠ z0) rest → NotPlaceable "ground is uneven"
-            | any (tileHasBuilding bm) tiles → NotPlaceable "tile already occupied"
+            | any (tileHasBuilding worldSize bm) tiles →
+                NotPlaceable "tile already occupied"
             | bdIsStarting def ∧ overlapsAnyLocation worldSize instances def gx gy →
                 NotPlaceable "inside a location's bounds"
             | otherwise → Placeable
@@ -126,9 +133,9 @@ isRemote (RemoteDistance (Just d)) = d > remotePortalThresholdTiles
 --   ground" — ice over ocean is still a flat surface you can put a
 --   portal on. The blanket fluid-rejection check we used initially
 --   was too strict for this world's geology (mostly ice/glaciers).
-lookupSurfaceZ ∷ WorldTileData → (Int, Int) → Maybe Int
-lookupSurfaceZ wtd (gx, gy) =
-    let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+lookupSurfaceZ ∷ Int → WorldTileData → (Int, Int) → Maybe Int
+lookupSurfaceZ worldSize wtd (gx, gy) =
+    let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
         Just lc → Just (lcSurfaceMap lc VU.! columnIndex lx ly)
@@ -136,13 +143,20 @@ lookupSurfaceZ wtd (gx, gy) =
 -- | True if any existing building's footprint covers this tile.
 --   Linear scan — fine for the handful of buildings expected in early
 --   game; if this grows, switch to a per-chunk occupancy set.
-tileHasBuilding ∷ BuildingManager → (Int, Int) → Bool
-tileHasBuilding bm (gx, gy) =
+--
+--   #1175: compared in the CANONICAL frame on both sides. A placed
+--   building's own footprint is stepped off its anchor the same way, so
+--   at the seam its far columns are aliases; comparing raw would let a
+--   new building land on top of one.
+tileHasBuilding ∷ Int → BuildingManager → (Int, Int) → Bool
+tileHasBuilding worldSize bm tile =
     any inFootprint (HM.elems (bmInstances bm))
   where
+    canon = canonicalTile worldSize
+    (cgx, cgy) = uncurry canon tile
     inFootprint inst =
         let ax = biAnchorX inst
             ay = biAnchorY inst
-            w  = biTileW inst
-            h  = biTileH inst
-        in gx ≥ ax ∧ gx < ax + w ∧ gy ≥ ay ∧ gy < ay + h
+        in or [ canon x y ≡ (cgx, cgy)
+              | x ← [ax .. ax + biTileW inst - 1]
+              , y ← [ay .. ay + biTileH inst - 1] ]

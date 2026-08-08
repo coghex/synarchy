@@ -28,6 +28,7 @@ import Building.Placement
 import Location.Bounds (remotePortalThresholdTiles)
 import Unit.Pathing.Cost (lookupTerrainZ)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
+import World.Generate.Coordinates (canonicalTile)
 import World.Tile.Types (WorldTileData)
 import Location.Instance (emptyLocationInstances)
 
@@ -68,19 +69,28 @@ buildingSpawnFn env = do
                         let locInstances = maybe emptyLocationInstances
                                                  wgpLocationInstances mParams
                             worldSizeChunks = maybe 0 wgpWorldSize mParams
+                            -- #1175: resolve the anchor into the stored
+                            -- frame BEFORE validating, reading terrain z, or
+                            -- recording the spawn. A CtBuilding construct job
+                            -- restored from a pre-#1175 save can hold an
+                            -- alias, and validating that raw reports the
+                            -- (loaded) canonical chunk as missing — the AI
+                            -- then cancels a perfectly good designation.
+                            -- Identity away from the seam.
+                            (cgx, cgy) = canonicalTile worldSizeChunks gx gy
                         case canPlaceAt
                                 (bm { bmInstances =
                                         buildingsOnPage pid (bmInstances bm) })
-                                wtd locInstances worldSizeChunks def gx gy of
+                                wtd locInstances worldSizeChunks def cgx cgy of
                             NotPlaceable _ → pure Nothing
                             Placeable → do
-                                let gz = floorZAt wtd gx gy
+                                let gz = floorZAt worldSizeChunks wtd cgx cgy
                                 bid ← atomicModifyIORef'
                                         (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
                                             let (bid', bm'') = nextBuildingId bm'
                                             in (bm'', bid')
                                 Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-                                    BuildingSpawn bid defName gx gy gz pid
+                                    BuildingSpawn bid defName cgx cgy gz pid
                                 pure (Just bid)
                     _ → pure Nothing
             case mBid of
@@ -140,10 +150,15 @@ buildingCanPlaceAtFn env = do
                                 let locInstances = maybe emptyLocationInstances
                                                          wgpLocationInstances mParams
                                     worldSizeChunks = maybe 0 wgpWorldSize mParams
+                                    -- #1175: the ghost preview must answer
+                                    -- for the tile building.spawn will
+                                    -- actually use, or the tool says
+                                    -- "placeable" and the spawn refuses.
+                                    (cgx, cgy) = canonicalTile worldSizeChunks gx gy
                                 pure (canPlaceAt
                                     (bm { bmInstances =
                                             buildingsOnPage pid (bmInstances bm) })
-                                    wtd locInstances worldSizeChunks def gx gy)
+                                    wtd locInstances worldSizeChunks def cgx cgy)
             case result of
                 Placeable → do
                     Lua.pushboolean True
@@ -188,7 +203,11 @@ buildingRemoteCheckFn env = do
                     let locInstances = maybe emptyLocationInstances
                                              wgpLocationInstances mParams
                         worldSizeChunks = maybe 0 wgpWorldSize mParams
-                    pure (remoteCheck locInstances worldSizeChunks def gx gy)
+                        -- #1175: measured against the same anchor
+                        -- canPlaceAt/spawn resolve, so the remoteness
+                        -- answer describes the tile that gets built on.
+                        (cgx, cgy) = canonicalTile worldSizeChunks gx gy
+                    pure (remoteCheck locInstances worldSizeChunks def cgx cgy)
                 _ → pure NotStartingBuilding
         _ → pure NotStartingBuilding
     Lua.pushboolean (isRemote check)
@@ -220,15 +239,21 @@ buildingSetGhostFn env = do
                 -- building will actually land. Matches the spawn
                 -- path's `floorZAt`; falls back to 0 if the chunk
                 -- isn't loaded.
+                --
+                -- #1175: the ghost is drawn at the CANONICAL tile the
+                -- spawn will use, so the preview and the building that
+                -- follows it never sit a world apart at the seam.
+                worldSize ← visibleWorldSize env
+                let (cgx, cgy) = canonicalTile worldSize gx gy
                 gz ← do
                     mWtd ← snapshotVisibleWorldTiles env
                     case mWtd of
-                        Just wtd → pure (floorZAt wtd gx gy)
+                        Just wtd → pure (floorZAt worldSize wtd cgx cgy)
                         Nothing  → pure 0
                 writeIORef (bcBuildingGhostRef (toBuildingCapability env)) $ Just BuildingGhost
                     { bgDefName = name
-                    , bgGridX   = gx
-                    , bgGridY   = gy
+                    , bgGridX   = cgx
+                    , bgGridY   = cgy
                     , bgGridZ   = gz
                     , bgValid   = validArg
                     }
@@ -255,10 +280,25 @@ snapshotVisibleWorldTiles env = do
             Nothing → pure Nothing
             Just ws → Just <$> readIORef (wsTilesRef ws)
 
+-- | The VISIBLE page's u-wrap world size (#1175), for the ghost preview:
+--   it has no page argument of its own, and must resolve its tile the
+--   same way the spawn it previews will. 0 (no wrapping) when no page is
+--   visible or it has no gen params, matching 'buildingSpawnFn'.
+visibleWorldSize ∷ EngineEnv → IO Int
+visibleWorldSize env = do
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    case wmVisible wm of
+        []         → pure 0
+        (pageId:_) → case lookup pageId (wmWorlds wm) of
+            Nothing → pure 0
+            Just ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
+
 -- | Terrain Z at the anchor tile. Falls back to 0 if the chunk isn't
 --   loaded — shouldn't happen since canPlaceAt already verified, but
 --   defensive.
-floorZAt ∷ WorldTileData → Int → Int → Int
-floorZAt wtd gx gy = case lookupTerrainZ wtd gx gy of
+floorZAt ∷ Int → WorldTileData → Int → Int → Int
+floorZAt worldSize wtd gx gy =
+    let (cgx, cgy) = canonicalTile worldSize gx gy
+    in case lookupTerrainZ wtd cgx cgy of
     Just z  → z
     Nothing → 0

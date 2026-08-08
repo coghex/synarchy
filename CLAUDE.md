@@ -814,8 +814,11 @@ before touching each area:
   any alias and returns canonical — including the verbs a worker
   FINISHES a job with (`world.getDigInfoAt`/`digTile`, `harvestFlora`,
   `setVegAt`, `plantCropAt`/`plantRowCropAt`, `structure.place`/`hasAt`/
-  `floorZAt`/`clear`), which is what lets a job coord persisted by a
-  pre-#1175 save run to completion with no migration. Rectangles are the exception that
+  `floorZAt`/`clear`, and `building.spawn`/`canPlaceAt` — whose footprint
+  walk resolves each tile, since a footprint is stepped off its anchor
+  and straddles the seam even from a canonical one), which is what lets a
+  job coord persisted by a pre-#1175 save run to completion with no
+  migration. Rectangles are the exception that
   makes it work: canonical is a STORAGE frame, not a geometry one — two
   adjacent tiles across the seam sit a whole world apart in it — so a
   drag's second endpoint is re-expressed in the anchor's local alias
@@ -832,7 +835,12 @@ before touching each area:
   than the old seam-blind behaviour; don't do it. Away from the seam,
   and in arena / non-wrapping worlds, every step is the identity.
   Persistence: `world-activity` v2 (same bytes, canonical-key
-  invariant); a v1 payload is re-keyed on load. Seam VISIBILITY is the
+  invariant); a v1 payload is re-keyed on load. The init QUEUE
+  (`world.loadChunksInRegion`, `World.Load.Stage`'s saved-camera radius,
+  world init) is wrapped at the drain, so every loader stores canonically
+  — before that, a seam-crossing region generated a SECOND chunk for one
+  physical place and canonical readers resolved to whichever the camera
+  loader had put there. Seam VISIBILITY is the
   separate axis #1176 owns — which tile a pixel NAMES is this contract,
   where that tile is DRAWN is `bestWrapOffset`'s facing-aware `(x, y)`
   offset; both hold at all four facings. Gates: hspec
