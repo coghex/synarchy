@@ -18,7 +18,12 @@ local RANDOMIZE_CALLBACK = "onRandomizeClick"
 randbox.Type = {
     -- 8-digit hex seed (e.g. "A3F7C901")
     HEX_SEED = "hex_seed",
-    -- Random name from a word list
+    -- A name. #1106 removed this type's built-in generator: a world
+    -- name now comes from the generated-language system, which needs
+    -- the world seed and lives outside this widget kit, so a NAME
+    -- randbox supplies its own `generate` (see below). The type itself
+    -- stays: it still classifies the field's input validation and
+    -- length limit.
     NAME = "name",
     -- Random integer in a range
     NUMBER = "number",
@@ -47,40 +52,14 @@ local cursorBlinkRate = 0.5
 local cursorVisible = true
 
 -----------------------------------------------------------
--- Name Generation Data
------------------------------------------------------------
-
--- Syllable-based name generator for fantasy world names
-local prefixes = {
-    "Ar", "El", "Mor", "Val", "Kor", "Thal", "Zan", "Dor",
-    "Fen", "Gal", "Har", "Ith", "Kel", "Lor", "Myr", "Nar",
-    "Oth", "Pel", "Rav", "Sil", "Tor", "Vor", "Wyn", "Xan",
-    "Bal", "Cyr", "Dra", "Eld", "Fyr", "Grim", "Hel", "Ire",
-    "Jas", "Kael", "Lum", "Mal", "Nyx", "Orm", "Pyr", "Ryn",
-    "Sol", "Tal", "Urd", "Vex", "Wyr", "Yth", "Zor", "Ash",
-    "Bel", "Cra", "Dur", "Eol", "Far", "Gor", "Hav", "Ion",
-}
-
-local middles = {
-    "an", "en", "in", "on", "un", "ar", "er", "ir", "or", "ur",
-    "al", "el", "il", "ol", "ul", "ath", "eth", "ith", "oth",
-    "and", "end", "ind", "ond", "aer", "ier", "oar", "ael",
-    "am", "em", "im", "om", "ak", "ek", "ik", "ok",
-}
-
-local suffixes = {
-    "ia", "or", "us", "is", "on", "an", "en", "ar",
-    "ium", "ion", "oth", "ath", "iel", "ael", "orn",
-    "und", "eld", "alt", "ard", "heim", "land", "gar",
-    "dal", "mir", "rin", "wen", "dor", "thos", "ros",
-    "las", "nar", "var", "mar", "ias", "eos", "yss",
-}
-
------------------------------------------------------------
 -- Random Generation
 -----------------------------------------------------------
 
-local function randomHexSeed()
+-- #1106: exported so a caller that must finalize a seed BEFORE some
+-- other control derives from it (Create World's World Name, which is
+-- generated in the seed's own language) can obtain one without first
+-- building the seed widget.
+function randbox.newHexSeed()
     local hex = ""
     local chars = "0123456789ABCDEF"
     for i = 1, 8 do
@@ -90,36 +69,36 @@ local function randomHexSeed()
     return hex
 end
 
-local function randomName()
-    local hasMiddle = math.random() > 0.4
-    local name
-    if hasMiddle then
-        name = prefixes[math.random(#prefixes)]
-             .. middles[math.random(#middles)]
-             .. suffixes[math.random(#suffixes)]
-    else
-        name = prefixes[math.random(#prefixes)]
-             .. suffixes[math.random(#suffixes)]
-    end
-    -- Capitalize first letter (already done by prefix), ensure rest is lower
-    return name:sub(1,1):upper() .. name:sub(2):lower()
-end
-
 local function randomNumber(minVal, maxVal)
     return tostring(math.random(minVal, maxVal))
 end
 
-local function generateRandom(randType, params)
-    if randType == randbox.Type.HEX_SEED then
-        return randomHexSeed()
-    elseif randType == randbox.Type.NAME then
-        return randomName()
-    elseif randType == randbox.Type.NUMBER then
+-- Produce a fresh value for one randbox, or nil when it cannot.
+--
+-- An injected `generate` (#1106) takes precedence over every built-in
+-- type: it is how a field whose values come from outside this widget
+-- kit -- the generated-language world name, which needs the world seed
+-- and the concept catalogue -- is filled without teaching randbox
+-- about any of that. It may return nil to mean "no value this time",
+-- which leaves the field untouched rather than substituting anything.
+--
+-- randbox.Type.NAME has no built-in generator at all: the fixed
+-- word-list generator that used to serve it produced text with no
+-- language, no meaning, and no gloss, and drew from Lua's global RNG,
+-- all of which #708 principle 9 and #1106 requirement 9 rule out.
+local function generateRandom(rb)
+    if rb.generate then
+        return rb.generate()
+    end
+    if rb.randType == randbox.Type.HEX_SEED then
+        return randbox.newHexSeed()
+    elseif rb.randType == randbox.Type.NUMBER then
+        local params = rb.randParams
         local minVal = (params and params.min) or 0
         local maxVal = (params and params.max) or 9999
         return randomNumber(minVal, maxVal)
     end
-    return ""
+    return nil
 end
 
 -----------------------------------------------------------
@@ -127,6 +106,12 @@ end
 -----------------------------------------------------------
 
 local function isValidChar(rb, char)
+    -- An injected validator wins, the same opt-in dropdown.lua already
+    -- offers. #1106 uses it for World Name, whose admissible characters
+    -- are the generated language's business rather than this kit's.
+    if rb.validateChar then
+        return rb.validateChar(char) and true or false
+    end
     if rb.randType == randbox.Type.HEX_SEED then
         return char:match("^[0-9a-fA-F]$") ~= nil
     elseif rb.randType == randbox.Type.NAME then
@@ -141,7 +126,11 @@ local function getMaxLength(rb)
     if rb.randType == randbox.Type.HEX_SEED then
         return 8
     elseif rb.randType == randbox.Type.NAME then
-        return 24
+        -- #1106: a generated native name runs to 32 characters
+        -- (Language.Generated.Render's own bound), so the player must
+        -- be able to type one that long too -- a 24-character cap would
+        -- make a name the game itself suggests unreachable by hand.
+        return 32
     elseif rb.randType == randbox.Type.NUMBER then
         return 10
     end
@@ -206,6 +195,21 @@ function randbox.new(params)
         randType = params.randType or randbox.Type.HEX_SEED,
         randParams = params.randParams or nil,
         onChange = params.onChange,
+        -- #1106: the two hooks a field whose values come from outside
+        -- this widget kit needs.
+        --   generate()  -> the next value, or nil to leave the field
+        --                  alone (a failure must not invent one).
+        --   onUserEdit(value, id, name) -> fired on the mutation itself
+        --                  (typing, backspace, delete), NOT on unfocus,
+        --                  so a caller tracking whether the text is
+        --                  still the generator's can drop that claim the
+        --                  instant the player takes over. Deliberately
+        --                  separate from onChange, which also fires for
+        --                  programmatic sets (restoreAll after a resize
+        --                  rebuild) and so cannot tell the two apart.
+        generate = params.generate,
+        onUserEdit = params.onUserEdit,
+        validateChar = params.validateChar,
         textColor = textColor,
         uiscale = uiscale,
         zIndex = params.zIndex or 0,
@@ -234,11 +238,23 @@ function randbox.new(params)
 
     UI.enableTextInput(rb.boxId)
 
-    -- Set initial value: generate random or use provided default
+    -- Set initial value: generate one or use the provided default. A
+    -- generator that declines (#1106: no catalogue, unbuildable
+    -- language) leaves the field empty rather than substituting text.
+    --
+    -- autoGenerate = false opts out entirely, for a field whose owner
+    -- decides when a value is due (#1106: a rebuild must not re-fill a
+    -- World Name the player deliberately emptied).
     local initValue = params.default
-    if not initValue or initValue == "" then
-        initValue = generateRandom(rb.randType, rb.randParams)
+    if (not initValue or initValue == "") and params.autoGenerate ~= false then
+        initValue = generateRandom(rb)
     end
+    -- An empty field is a real state, and everything below (the text
+    -- element, onChange, the debug line) needs a string for it. Both
+    -- ways of reaching it are ordinary: a rebuild of a World Name the
+    -- player cleared supplies no default and generates nothing, and a
+    -- generator may decline.
+    initValue = initValue or ""
     UI.setTextInput(rb.boxId, initValue)
 
     -- Display text
@@ -511,7 +527,16 @@ function randbox.randomize(id)
     local rb = randboxes[id]
     if not rb then return end
 
-    local value = generateRandom(rb.randType, rb.randParams)
+    -- A generator that declines leaves the field EXACTLY as it was
+    -- (#1106 requirement 7: a failed suggestion must not fall back to
+    -- anything). The button's click feedback is skipped too, so a press
+    -- that produced nothing doesn't look like one that succeeded.
+    local value = generateRandom(rb)
+    if value == nil then
+        engine.logDebug("RandBox randomize produced no value: " .. rb.name)
+        return
+    end
+
     UI.setTextInput(rb.boxId, value)
     randbox.updateDisplay(id)
 
@@ -570,6 +595,24 @@ end
 -- Input Event Handlers (forwarded from uiManager)
 -----------------------------------------------------------
 
+-- #1106: report a mutation the PLAYER made, immediately. Called only
+-- from the three handlers that change text in response to a keystroke —
+-- never from setValue, restoreAll, or randomize, which are the widget
+-- acting on someone else's behalf.
+--
+-- `before` is the buffer as it stood BEFORE the keystroke, and a
+-- keystroke that left it untouched is not an edit: backspace at the
+-- start and delete at the end are ordinary no-ops, and reporting them
+-- would strip a suggested name's gloss and provenance while the name on
+-- screen never changed.
+local function notifyUserEdit(id, before)
+    local rb = randboxes[id]
+    if not rb or not rb.onUserEdit then return end
+    local after = UI.getTextInput(rb.boxId) or ""
+    if after == before then return end
+    rb.onUserEdit(after, id, rb.name)
+end
+
 function randbox.onCharInput(char)
     local id = randbox.getFocusedId()
     if not id then return false end
@@ -587,6 +630,7 @@ function randbox.onCharInput(char)
 
     UI.insertChar(rb.boxId, char)
     randbox.updateDisplay(id)
+    notifyUserEdit(id, text)
     return true
 end
 
@@ -595,8 +639,10 @@ function randbox.onBackspace()
     if not id then return false end
     local rb = randboxes[id]
 
+    local before = UI.getTextInput(rb.boxId) or ""
     UI.deleteBackward(rb.boxId)
     randbox.updateDisplay(id)
+    notifyUserEdit(id, before)
     return true
 end
 
@@ -605,8 +651,10 @@ function randbox.onDelete()
     if not id then return false end
     local rb = randboxes[id]
 
+    local before = UI.getTextInput(rb.boxId) or ""
     UI.deleteForward(rb.boxId)
     randbox.updateDisplay(id)
+    notifyUserEdit(id, before)
     return true
 end
 
@@ -741,6 +789,13 @@ end
 -- cursor, and keyboard focus for World Name/Seed too, not just plain
 -- textboxes. setValue's onChange fire is harmless here: it re-sets
 -- `pending` to the same value it should already hold.
+--
+-- #1106: restore goes through setValue, NOT the user-edit path, so a
+-- rebuild can never be mistaken for the player retyping the name. The
+-- suggestion metadata a restored name carries (gloss, provenance,
+-- reroll ordinal) is not snapshotted here at all — it lives on the
+-- owning screen's own `pending` table, which the rebuild never
+-- destroys.
 function randbox.snapshotPage(page)
     local snap = {}
     for id, rb in pairs(randboxes) do

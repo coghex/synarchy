@@ -89,6 +89,7 @@ import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Network as PowerNetwork
 import qualified Test.Headless.Language.Semantic as LanguageSemantic
 import qualified Test.Headless.Language.Generated as LanguageGenerated
+import qualified Test.Headless.Language.Suggest as LanguageSuggest
 import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.Blood.Texture as BloodTexture
 import qualified Test.Headless.Blood.Impact as BloodImpact
@@ -107,6 +108,7 @@ import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
+import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
@@ -116,7 +118,9 @@ import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
+import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
+import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.World.Render.WaterSlope as RenderWaterSlope
 import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
@@ -317,6 +321,7 @@ main = hspec $ do
     describe "Power.Network" PowerNetwork.spec
     describe "Language.Semantic" LanguageSemantic.spec
     describe "Language.Generated" LanguageGenerated.spec
+    describe "Language.Suggest" LanguageSuggest.spec
     describe "Blood.Types" BloodTypes.spec
     describe "Blood.Texture" BloodTexture.spec
     describe "Blood.Impact" BloodImpact.spec
@@ -335,12 +340,16 @@ main = hspec $ do
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
+    describe "Lua.TextWrapping" LuaTextWrapping.spec
     UISlider.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec
     describe "World.Render.FrontWallLift" FrontWallLift.spec
+    describe "World.Render.GroundItemSeam" GroundItemSeam.spec
+    describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
+    describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
     describe "World.Render.WaterSlope" RenderWaterSlope.spec

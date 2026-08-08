@@ -17,8 +17,9 @@ import Engine.Core.Capability.RenderView
 import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
-import World.Generate (viewDepth, globalToChunk)
+import World.Generate (viewDepth)
 import World.Grid (zoomFadeStart, zoomFadeEnd, worldToGrid)
+import World.Generate.Coordinates (canonicalTileFrame)
 
 import World.Render.Zoom.Quads (generateZoomMapQuads)
 import World.Render.Camera (cameraChanged)
@@ -205,10 +206,21 @@ updateWorldTiles env = do
         case resolveActiveWorld worldManager' of
             Just (_, worldState) → do
                 tileData ← readIORef (wsTilesRef worldState)
+                trackParams ← readIORef (wsGenParamsRef worldState)
                 let (camX, camY) = camPosition camera
                     facing = camFacing camera
+                    worldSize' = maybe 128 wgpWorldSize trackParams
                     (gx, gy) = worldToGrid facing camX camY
-                    (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                    -- Camera-derived, so canonical only as far as the
+                    -- pan path's own wrap plus rounding: right on the
+                    -- seam boundary the rounded tile can land one past
+                    -- the canonical range and silently stall z-tracking
+                    -- for that frame. Resolve the STORED chunk instead
+                    -- (#1135). Read-only at a local index — no tile
+                    -- coord travels on from here, so the key is all
+                    -- there is to canonicalise.
+                    (chunkCoord, (lx, ly), _) =
+                        canonicalTileFrame worldSize' gx gy
                 case lookupChunk chunkCoord tileData of
                     Just lc → do
                         let surfElev = (lcSurfaceMap lc) VU.! columnIndex lx ly

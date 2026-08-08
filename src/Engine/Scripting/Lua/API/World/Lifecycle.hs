@@ -3,6 +3,12 @@ module Engine.Scripting.Lua.API.World.Lifecycle
     ( worldInitFn
     , worldGetIdentityFn
     , worldGetLanguageProvenanceFn
+    , worldSuggestNameFn
+    , worldGeneratedNameCharactersFn
+    , SuggestionStep(..)
+    , suggestionStep
+    , suggestionStepLabel
+    , readCatalogueForSuggestions
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -19,7 +25,8 @@ import qualified Data.Text as T
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.Char (isDigit)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
+import Control.Exception (IOException, evaluate, try)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
@@ -28,12 +35,19 @@ import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.State (EngineEnv, luaQueue, activeWorldStateFrom)
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
-import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Engine.Scripting.Lua.Types
+    (LuaMsg(..), LuaBackendState(..), LanguageCache(..))
 import World.Types
 import Language.Generated.Types
     ( LanguageProvenance(..), GeneratorVersion(..), LangSeed(..)
     , GeneratorError(..), generatorErrorText, currentGeneratorVersion
     , supportedGeneratorVersions, langSeedText )
+import Language.Generated.Orthography (outputInventory)
+import Language.Semantic.Types (Catalogue, catalogueErrorText)
+import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Suggest
+    ( NameSuggester, NameSuggestion(..), mkNameSuggester, suggestNameAt
+    , suggestErrorText, worldLanguageSeed )
 import World.Generate.Config
     (minimumWorldSize, normalizePlateCount, normalizeWorldSize)
 import World.Plate (defaultPlatesFor)
@@ -220,6 +234,193 @@ worldGetLanguageProvenanceFn env = do
             Lua.setfield (-2) "version"
         Nothing → Lua.pushnil
     return 1
+
+-- | world.suggestName(worldSeed [, ordinal])
+--     → { name, gloss, language = { seed, version } }
+--     → nil, errorMessage
+--
+--   The producer side of the naming arc (#1106): suggestion number
+--   @ordinal@ (0-based, defaulting to 0) of the language belonging to
+--   @worldSeed@ — the NORMALIZED numeric world seed the Create World
+--   screen is about to pass to @world.init@, so the world's own name and
+--   its locations' names come out of the same language, and two
+--   spellings of one seed identify one language.
+--
+--   Returns the native name AND its English gloss, both rendered from
+--   one semantic expression, plus the #1092 provenance to record if the
+--   player accepts the suggestion — in exactly the
+--   @{ seed = \<decimal string\>, version = \<int\> }@ shape
+--   'worldGetLanguageProvenanceFn' returns and @world.init@ accepts, for
+--   the same reason: a language seed is unsigned 64-bit and neither of
+--   Lua's numeric types carries the top of that range intact.
+--
+--   Rerolling means calling again with the NEXT ordinal. Consecutive
+--   ordinals are guaranteed a different meaning in the SAME language
+--   (see "Language.Suggest"), which is the behavior the dice button
+--   exists to show.
+--
+--   A failure — no catalogue on disk, a malformed one, an
+--   unconstructible generator version — returns @nil@ plus a
+--   descriptive message and changes nothing. There is deliberately no
+--   fallback name: the dummy word-list generator this replaced produced
+--   text with no language behind it, and quietly resurrecting that
+--   behavior is what #1106 requirement 7 forbids.
+worldSuggestNameFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
+worldSuggestNameFn backendState = do
+    seedArg ← Lua.tointeger 1
+    ordArg  ← Lua.tointeger 2
+    let seed    = maybe 0 fromIntegral seedArg ∷ Word64
+        ordinal = max 0 (maybe 0 fromIntegral ordArg) ∷ Int
+    result ← Lua.liftIO $ resolveSuggestion backendState seed ordinal
+    case result of
+        Right sug → do
+            Lua.newtable
+            Lua.pushstring (TE.encodeUtf8 (nsName sug))
+            Lua.setfield (-2) "name"
+            Lua.pushstring (TE.encodeUtf8 (nsGloss sug))
+            Lua.setfield (-2) "gloss"
+            Lua.newtable
+            Lua.pushstring (TE.encodeUtf8 (langSeedText (nsSeed sug)))
+            Lua.setfield (-2) "seed"
+            Lua.pushinteger (fromIntegral (generatorVersionInt (nsVersion sug)))
+            Lua.setfield (-2) "version"
+            Lua.setfield (-2) "language"
+            return 1
+        Left msg → do
+            Lua.pushnil
+            Lua.pushstring (TE.encodeUtf8 msg)
+            return 2
+
+-- | world.generatedNameCharacters() → string
+--
+--   Every character a generated name can ever contain
+--   ('Language.Generated.Orthography.outputInventory'), as one UTF-8
+--   string: ASCII letters in both cases, #1100's extended letters in
+--   both cases, and the two marks a rendered name may carry (the
+--   possessive apostrophe and a hyphen-joining language's separator).
+--
+--   Exists so a text field holding a world name can accept exactly what
+--   the generator can produce. #1106 requirement 4 turns on a player
+--   being able to TYPE over a suggestion, which they cannot do if the
+--   field rejects the very letters it was just filled with — and a
+--   hand-written character class in Lua would drift from the generator
+--   the first time the repertoire moved. This is the generator's own
+--   answer, so the two cannot disagree.
+worldGeneratedNameCharactersFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+worldGeneratedNameCharactersFn = do
+    Lua.pushstring (TE.encodeUtf8 (T.pack outputInventory))
+    return 1
+
+-- | What one suggestion request must do, given 'lbsLanguageCache' as it
+--   stands. Split out from the IO around it because this is exactly
+--   where a press can turn back into filesystem work: everything except
+--   'StepReadCatalogue' must complete without touching the disk.
+data SuggestionStep
+    = StepReadCatalogue
+      -- ^ Nothing cached yet — the one read a session ever needs.
+    | StepFailed !Text
+      -- ^ A cached catalogue failure, reported again as-is.
+    | StepBuild !Catalogue
+      -- ^ Catalogue cached, but the language is a different one.
+    | StepReuse !NameSuggester
+      -- ^ Cached suggester for exactly this language.
+
+suggestionStep ∷ LanguageProvenance → Maybe LanguageCache → SuggestionStep
+suggestionStep _ Nothing = StepReadCatalogue
+suggestionStep prov (Just lc) = case lcCatalogue lc of
+    Left msg  → StepFailed msg
+    Right cat → case lcSuggester lc of
+        Just (p, sgr) | p ≡ prov → StepReuse sgr
+        _                        → StepBuild cat
+
+-- | A step as report text. 'SuggestionStep' carries a 'NameSuggester'
+--   and a 'Catalogue', neither worth an 'Eq' instance of its own, so
+--   this is what a test compares.
+suggestionStepLabel ∷ SuggestionStep → Text
+suggestionStepLabel s = case s of
+    StepReadCatalogue → "read"
+    StepFailed _      → "failed"
+    StepBuild _       → "build"
+    StepReuse _       → "reuse"
+
+-- | Resolve one suggestion, reusing 'lbsLanguageCache' wherever it
+--   still applies (#1106 requirement 8: the dice button runs
+--   synchronously on the UI's own thread, so a press must not re-read
+--   and re-parse @data/language/concepts.yaml@ or re-derive 150 concept
+--   roots).
+--
+--   Rerolling within one seed reuses both levels. Editing the seed is a
+--   different language, so the suggester is rebuilt — but from the
+--   CACHED catalogue, with no filesystem access at all. Exactly one
+--   suggestion per session reads the file, whether that read SUCCEEDS
+--   or FAILS: a failure is cached and reported from the cache
+--   thereafter, so a broken installation costs one read rather than one
+--   per press (see 'LanguageCache' for why that is sticky).
+--
+--   A profile-construction failure caches the catalogue it did resolve,
+--   so an unconstructible generator version doesn't force a re-read
+--   either.
+resolveSuggestion
+    ∷ LuaBackendState → Word64 → Int → IO (Either Text NameSuggestion)
+resolveSuggestion backendState seed ordinal = do
+    cached ← readIORef (lbsLanguageCache backendState)
+    case suggestionStep prov cached of
+        StepReuse sgr  → pure (render sgr)
+        StepFailed msg → pure (Left msg)
+        StepBuild cat  → build cat
+        StepReadCatalogue → do
+            eCat ← readCatalogueForSuggestions conceptCataloguePath
+            case eCat of
+                Left msg → do
+                    writeIORef (lbsLanguageCache backendState)
+                        (Just (LanguageCache (Left msg) Nothing))
+                    pure (Left msg)
+                Right cat → build cat
+  where
+    prov = LanguageProvenance
+        { lpSeed    = worldLanguageSeed seed
+        , lpVersion = currentGeneratorVersion
+        }
+
+    build ∷ Catalogue → IO (Either Text NameSuggestion)
+    build cat = case mkNameSuggester cat prov of
+        Left sErr → do
+            writeIORef (lbsLanguageCache backendState)
+                (Just (LanguageCache (Right cat) Nothing))
+            pure (Left (suggestErrorText sErr))
+        Right sgr → do
+            writeIORef (lbsLanguageCache backendState)
+                (Just (LanguageCache (Right cat) (Just (prov, sgr))))
+            pure (render sgr)
+
+    render sgr = case suggestNameAt sgr ordinal of
+        Left sErr → Left (suggestErrorText sErr)
+        Right sug → Right sug
+
+-- | The catalogue read behind a suggestion, with BOTH of its failure
+--   modes turned into one descriptive 'Left'.
+--
+--   'loadCatalogue' only returns 'Left' for a file it could PARSE and
+--   reject; a missing or unreadable one throws out of 'BS.readFile'
+--   instead. Letting that propagate would skip the cache write, so the
+--   very case the cache exists for — a broken installation — would go
+--   back to a filesystem read per dice press (#1106 requirement 8).
+--
+--   'evaluate' forces the decode inside the handler's scope, so the
+--   result is a settled 'Either' rather than a thunk that could still
+--   fault after the caller has cached it. Only 'IOException' is caught:
+--   an async exception delivered to this thread is not a catalogue
+--   problem and must not be recorded as one.
+readCatalogueForSuggestions ∷ FilePath → IO (Either Text Catalogue)
+readCatalogueForSuggestions path = do
+    eRead ← try (loadCatalogue path ⌦ evaluate)
+    pure $ case eRead of
+        Left (ioErr ∷ IOException) → Left (describe (T.pack (show ioErr)))
+        Right (Left cErr)          → Left (describe (catalogueErrorText cErr))
+        Right (Right cat)          → Right cat
+  where
+    describe why = "concept catalogue " <> T.pack path
+        <> " could not be loaded, so no name can be suggested: " <> why
 
 -- | world.initArena(pageId) — create flat test arena, no geology
 worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

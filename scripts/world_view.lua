@@ -311,6 +311,12 @@ function worldView.createWorld()
         -- treats blank/whitespace-only as no identity, so a nil here is
         -- indistinguishable from the four-argument world.init form.
         worldName  = wp.worldName,
+        -- #1106: present only when the name is a live generated-language
+        -- suggestion, absent for a typed one — same verbatim forwarding
+        -- rule as the name itself, no default and no synthesis.
+        worldGloss      = wp.worldGloss,
+        languageSeed    = wp.languageSeed,
+        languageVersion = wp.languageVersion,
         structural = worldView.structuralTextures,
         -- materials and vegetation textures sent via sendTexturesToWorld
     })

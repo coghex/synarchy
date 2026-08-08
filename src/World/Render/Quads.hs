@@ -22,13 +22,14 @@ import World.Types
 import World.Flora.Render (resolveFloraTexture)
 import World.Flora.CropPlot (cropPlotElapsedDays, cropPlotInstance)
 import World.Generate (chunkToGlobal, viewDepth)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), ChunkStructures, spdGridZ)
 import World.Render.ViewBounds (computeViewBounds, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.FloraQuads (floraToQuad)
+import World.Render.ChunkLookup (canonicalChunkLookup)
 import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.WaterSlope (waterSlopeAt)
 import World.Render.TileQuads
@@ -73,18 +74,34 @@ renderWorldQuads env worldState zoomAlpha snap = do
                       Just params → wgpWorldSize params
     let zSlice = camZSlice camera
         zoom   = camZoom camera
+        -- Caught by the #1135 audit's search, but not a coordinate
+        -- lookup: this ENUMERATES the stored LoadedChunk values and
+        -- accepts no caller coord, so there is no key to canonicalise.
+        -- Every element is already in the stored frame — insertion keys
+        -- on the canonical lcCoord (World.Thread.ChunkLoading →
+        -- World.Tile.Types.insertChunk), and consumers below read each
+        -- chunk's own lcCoord rather than reconstructing one.
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
 
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
 
-        -- Lookup neighbor chunk fluid/terrain maps for cross-chunk water slopes
-        fluidMapLookup cc = case HM.lookup cc (wtdChunks tileData) of
-            Just lc' → Just (lcFluidMap lc')
-            Nothing  → Nothing
-        terrMapLookup cc = case HM.lookup cc (wtdChunks tileData) of
-            Just lc' → Just (lcTerrainSurfaceMap lc')
-            Nothing  → Nothing
+        -- Every cross-chunk probe in this pass goes through ONE
+        -- canonicalising boundary (#1135). Chunks are stored under
+        -- u-wrapped coords, but the callers below step one chunk outward
+        -- in their home chunk's RAW frame (waterSlopeAt, and
+        -- waterSideFaceQuads' neighborCell), which lands outside the
+        -- canonical range exactly at the cylindrical U seam — the
+        -- neighbour is loaded, the key is just an alias. Away from the
+        -- seam the wrap is the identity.
+        chunkLookup = canonicalChunkLookup worldSize (wtdChunks tileData)
+
+        -- Lookup neighbor chunk fluid/terrain maps for cross-chunk water
+        -- slopes. Both are read at a LOCAL index, which the whole-chunk
+        -- wrap leaves untouched, so canonicalising the key is the whole
+        -- fix here.
+        fluidMapLookup cc = lcFluidMap ⊚ chunkLookup cc
+        terrMapLookup cc = lcTerrainSurfaceMap ⊚ chunkLookup cc
 
         -- Chunks that actually carry structures. A sprite is only considered
         -- for the lift when its chunk is within ONE chunk of one of these, so
@@ -94,7 +111,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
         -- already resolves that wall cross-chunk).
         structureChunkCoords =
             [ lcCoord lc | lc ← chunks, not (HM.null (lcStructures lc)) ]
-        structLookup cc = lcStructures ⊚ HM.lookup cc (wtdChunks tileData)
+        -- structureFrontWallClear already canonicalises the coord it
+        -- probes with (it has to shift the structure TILE key by the same
+        -- wrap delta), so this is idempotent — routed through the shared
+        -- boundary anyway so no lookup in this pass is the raw one.
+        structLookup cc = lcStructures ⊚ chunkLookup cc
 
         -- Cached pass: widen the bounds by the pan margin so the camera
         -- can travel that far before cameraChanged forces a rebuild
@@ -390,13 +411,12 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
         seTag = fromIntegral (fromEnum SWallSE) ∷ Word8
         swTag = fromIntegral (fromEnum SWallSW) ∷ Word8
         wallKeyAt wgx wgy tag tieB = do
-            let (ccRaw@(ChunkCoord rcx rcy), _) = globalToChunk wgx wgy
-                cc@(ChunkCoord ccx ccy) = wrapChunkCoordU worldSize ccRaw
+            let (cc, _, (dgx, dgy)) = canonicalTileFrame worldSize wgx wgy
                 -- Tile key in the stored (canonical) chunk's frame. The
                 -- chunk wrap shifts u by whole worlds and preserves
                 -- v = cx + cy, so this is the identity away from the seam.
-                sgx = wgx + (ccx - rcx) * chunkSize
-                sgy = wgy + (ccy - rcy) * chunkSize
+                sgx = wgx + dgx
+                sgy = wgy + dgy
             structs ← structLookup cc
             spd ← HM.lookup (sgx, sgy, tag) structs
             -- The wall's strips sort at keys computed from its STORED

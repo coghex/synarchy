@@ -569,6 +569,7 @@ library
                      Language.Generated.Signature
                      Language.Generated.Report
                      Language.Naming
+                     Language.Suggest
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
@@ -639,6 +640,7 @@ library
                      World.Render.Camera.Types
                      World.Render.ViewBounds
                      World.Render.ChunkCulling
+                     World.Render.ChunkLookup
                      World.Render.HitTest
                      World.Render.Quads
                      World.Render.WaterSlope
@@ -1110,6 +1112,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated
+                   Test.Headless.Language.Suggest
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact
@@ -1139,7 +1142,9 @@ test-suite synarchy-test-headless
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.SideFace
+                   Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.World.Render.WaterSlope
                    Test.Headless.World.Render.ZoomBakeUV
@@ -1184,6 +1189,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
+                   Test.Headless.Lua.TextWrapping
                    Test.Headless.Graphics.BindlessRebind
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols

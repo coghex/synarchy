@@ -112,12 +112,18 @@ spec = around withHeadlessEngine $ do
         it "counts its maximum in code points and preserves surrounding Unicode while editing" $ \env → do
             ls ← widgetBackend env
             eval ls
+                -- 32, not 24, since #1106: a generated native name runs
+                -- to Language.Generated.Render's own 32-character bound,
+                -- and a player must be able to type one that long by
+                -- hand. Still counted in CODE POINTS, which is what this
+                -- case is really pinning — 31 accented letters plus one
+                -- ASCII fills the field exactly.
                 "_G.__rb=randbox.new({name='世界名🙂',page=__page,font=1,uiscale=1, \
-                \randType=randbox.Type.NAME,default=string.rep('é',23)}); \
+                \randType=randbox.Type.NAME,default=string.rep('é',31)}); \
                 \randbox.focus(__rb); randbox.onCharInput('A'); randbox.onCharInput('B'); \
                 \local v=randbox.getValue(__rb); \
                 \return utf8.len(v)..'|'..v:sub(-1)..'|'..UI.getCursor(randbox.getElementHandle(__rb))"
-                `shouldReturn` "24|A|24"
+                `shouldReturn` "32|A|32"
             eval ls
                 "randbox.setValue(__rb,'a🙂b'); local h=randbox.getElementHandle(__rb); \
                 \UI.setCursor(h,1); randbox.onDelete(); randbox.onCharInput('Z'); \

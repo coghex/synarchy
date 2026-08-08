@@ -82,6 +82,26 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
             hoverPos = worldToGridF facing worldX
                 (worldY + fromIntegral relZ * tileSideHeight)
             (chunkCoord, (lx, ly)) = globalToChunk gx gy
+        -- Raw lookup, and KNOWN INCOMPLETE at the U seam (#1135 audit,
+        -- deferred to #1175 — not a justification, a recorded finding).
+        --
+        -- The camera is wrapped into the canonical range but the
+        -- viewport around it is not, so near the seam the far half of
+        -- the screen unprojects to a coord whose chunk is stored under
+        -- the wrapped alias: this misses, and tryZ walks down to "no
+        -- tile". Canonicalising HERE is not a local fix. This function's
+        -- result is the frame every designation coord downstream lives
+        -- in — anchors, rectangle corners, cancel and read keys, and the
+        -- coords scripts/unit_ai.lua stores across ticks. Shifting only
+        -- this one end makes those frames disagree, which is strictly
+        -- worse than the current uniform-but-seam-blind behaviour: it
+        -- was measured to turn a seam-crossing two-click drag into a
+        -- cap-sized sweep of unrelated tiles, because two physically
+        -- adjacent picks come back a whole world apart. The fix is to
+        -- normalise the pick + designation frame together (form
+        -- rectangles in the anchor's local alias frame; canonicalise
+        -- per tile only at lookup/storage; do it across
+        -- create/read/cancel/nearest for all five tools) — see #1175.
         in case HM.lookup chunkCoord (wtdChunks tileData) of
             Nothing → tryZ (z - 1)
             Just lc →

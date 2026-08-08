@@ -14,6 +14,7 @@ local textbox        = require("scripts.ui.textbox")
 local scrollbar      = require("scripts.ui.scrollbar")
 local sprite         = require("scripts.ui.sprite")
 local settingsTab    = require("scripts.create_world.settings_tab")
+local nameSuggest    = require("scripts.create_world.name_suggest")
 local advancedTab    = require("scripts.create_world.advanced_tab")
 local generalTab     = require("scripts.create_world.general_tab")
 local timelineTab    = require("scripts.create_world.timeline_tab")
@@ -389,10 +390,22 @@ function createWorldMenu.createUI(opts)
     -- input (its raw filter text is discarded back to the selected
     -- option on destroy), so it needs the same preservation.
     local dropdownSnap = nil
+    -- #1106: the committed seed, the World Name, and the name's MEANING
+    -- — its gloss, the language that rendered it, and where the reroll
+    -- sequence stands — none of which any widget knows about. Captured
+    -- before destroyOwned() for the same reason the text is: tearing the
+    -- controls down unfocuses them, so an unsubmitted Seed edit submits
+    -- on the way out, commits a seed the player never accepted, and
+    -- re-suggests the name in a whole new language. Restoring only the
+    -- text afterwards would leave a name paired with another language's
+    -- gloss and provenance, or with a seed that is not the one it was
+    -- drawn from.
+    local suggestionSnap = nil
     if preserveState then
         textboxSnap = textbox.snapshotPage(createWorldMenu.page)
         randboxSnap = randbox.snapshotPage(createWorldMenu.page)
         dropdownSnap = dropdown.snapshotPage(createWorldMenu.page)
+        suggestionSnap = nameSuggest.snapshot(createWorldMenu.pending)
     end
 
     createWorldMenu.destroyOwned()
@@ -586,6 +599,11 @@ function createWorldMenu.createUI(opts)
         textbox.restoreAll(textboxSnap)
         randbox.restoreAll(randboxSnap)
         dropdown.restoreAll(dropdownSnap)
+        -- LAST: restoreAll's own onChange fires reconcile against
+        -- whatever the pending table happens to hold mid-rebuild, so
+        -- the meaning is put back after every control has settled.
+        nameSuggest.restore(createWorldMenu.pending, suggestionSnap)
+        if settingsTab.refreshGloss then settingsTab.refreshGloss() end
     end
 
     createWorldMenu.uiCreated = true
@@ -778,10 +796,14 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
     -- list under the "General" tab).
     local settingsParams = tabParamsFor("settings")
     local settingsElems, settingsRows = settingsTab.create(settingsParams)
-    -- Offset the general tab content below the settings rows
+    -- Offset the general tab content below the settings rows. Driven by
+    -- the row count settingsTab.create actually reports, so a row added
+    -- there (#1106's world-name gloss line) can't leave this stale and
+    -- overlap the two lists.
     local generalParams = {}
     for k, v in pairs(settingsParams) do generalParams[k] = v end
-    generalParams.contentY = settingsParams.contentY + s.rowSpacing * 3
+    generalParams.contentY = settingsParams.contentY
+                           + s.rowSpacing * settingsRows
     local generalElems, generalRows = generalTab.create(generalParams)
     -- Merge both element lists
     local combinedSettings = {}

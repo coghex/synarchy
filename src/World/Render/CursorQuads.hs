@@ -307,6 +307,13 @@ renderWorldCursorQuads env worldState tileAlpha = do
     let clampSide a b
             | b ≥ a     = min b (a + maxMinePreviewSide - 1)
             | otherwise = max b (a - maxMinePreviewSide + 1)
+        -- Raw lookup, deferred with the rest of the designation frame
+        -- (#1135 audit → #1175). Its inputs are a 'pickWorldTile' hover
+        -- and a designation anchor, which share whatever frame that pick
+        -- reports; canonicalising only this read would resolve tiles the
+        -- COMMIT (World.Thread.Command.Cursor.*, still raw) would then
+        -- miss, so preview and designation would disagree about what was
+        -- marked. Both ends move together in #1175 or neither does.
         surfaceZAt gx gy = do
             let (chunkCoord, (lx, ly)) = globalToChunk gx gy
             lc ← HM.lookup chunkCoord (wtdChunks tileData)

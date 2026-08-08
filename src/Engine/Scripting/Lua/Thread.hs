@@ -153,6 +153,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
   -- never touches 'lbsDebugQueue' at all, so an inert, never-fed queue
   -- here keeps their call sites unchanged.
   placeholderDebugQueue ← atomically newTQueue
+  languageCacheRef ← newIORef Nothing
   return LuaBackendState
     { lbsLuaState     = lState
     , lbsScripts      = scriptsVar
@@ -162,6 +163,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
     , lbsNextObjectId = objIdRef
     , lbsInputState   = inputSRef
     , lbsLoggerRef    = loggerR
+    , lbsLanguageCache = languageCacheRef
     , lbsDebugQueue   = placeholderDebugQueue
     }
 
