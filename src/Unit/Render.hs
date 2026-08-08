@@ -25,7 +25,8 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                           , renderFlagSelected, packWorldUV)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
+                  , worldLayer, applyFacing, applyFacingF
+                  , GridConfig(..), defaultGridConfig)
 import World.State.Types (wmVisible)
 import Unit.Types
 import Unit.Direction (mirrorDir)
@@ -287,9 +288,3 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             , sqTexture = texHandle
             , sqLayer   = worldLayer
             }
-
-applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
-applyFacingF FaceSouth gx gy = ( gx,  gy)
-applyFacingF FaceWest  gx gy = ( gy, -gx)
-applyFacingF FaceNorth gx gy = (-gx, -gy)
-applyFacingF FaceEast  gx gy = (-gy,  gx)
