@@ -8,11 +8,10 @@ module World.Render.Zoom.ViewBounds
     ) where
 
 import UPrelude
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import Engine.Graphics.Viewport (safeAspect)
-import World.Grid (tileHalfWidth, tileHalfDiamondHeight,
+import World.Grid (worldWrapPeriod,
                    chunkWorldWidth, chunkWorldDiamondHeight)
-import World.Types (chunkSize)
 
 data ZoomViewBounds = ZoomViewBounds
     { zvLeft   ∷ !Float
@@ -48,16 +47,17 @@ isChunkInView vb drawX drawY w h =
          ∨ bottom < zvTop vb
          ∨ drawY  > zvBottom vb)
 
+-- | Zoom-render twin of 'World.Render.ChunkCulling.bestWrapOffset'. The
+--   two renderers keep separate bounds types and culling, but the
+--   world's own wrap period is one fact: both read it from
+--   'World.Grid.worldWrapPeriod' (#1176) rather than restating the
+--   tile-geometry product.
 bestZoomWrapOffset ∷ CameraFacing → Int → Float → Float → Float → Float → (Float, Float)
 bestZoomWrapOffset facing worldSize camX camY centerX centerY =
-    let worldTiles = worldSize * chunkSize
-        wswX = fromIntegral worldTiles * tileHalfWidth
-        wswY = fromIntegral worldTiles * tileHalfDiamondHeight
-    in case facing of
-        FaceSouth → (pickBest wswX camX centerX, 0)
-        FaceNorth → (pickBest wswX camX centerX, 0)
-        FaceWest  → (0, pickBest wswY camY centerY)
-        FaceEast  → (0, pickBest wswY camY centerY)
+    let (wswX, wswY) = worldWrapPeriod facing worldSize
+    -- The inactive axis has period 0, which collapses pickBest's three
+    -- candidates onto 0 — so there is no per-facing case to restate.
+    in (pickBest wswX camX centerX, pickBest wswY camY centerY)
   where
     pickBest w cam center =
         let d0 = abs (center - cam)

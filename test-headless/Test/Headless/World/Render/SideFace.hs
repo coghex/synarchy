@@ -57,7 +57,7 @@ run ∷ V.Vector (Maybe FluidCell) → VU.Vector Int
 run fm tm fluidLookup terrLookup =
     waterSideFaceQuads (\_ → 0) (\_ → 1.0) defaultWorldTextures
         FaceSouth (ChunkCoord 0 0) fm tm fluidLookup terrLookup
-        10 64 1.0 0.0 allVisible
+        10 64 1.0 (0.0, 0.0) allVisible
 
 spec ∷ Spec
 spec = do
@@ -136,7 +136,7 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
         runAt coord fluidLookup terrLookup =
             waterSideFaceQuads (\_ → 0) (\_ → 1.0) defaultWorldTextures
                 FaceSouth coord homeFluid homeTerr fluidLookup terrLookup
-                10 64 1.0 0.0 allVisible
+                10 64 1.0 (0.0, 0.0) allVisible
 
     it "renders side faces over a DRY drop across the seam" $
         -- Neighbour stored under the wrapped key is dry at z=0 → z=0..9.
