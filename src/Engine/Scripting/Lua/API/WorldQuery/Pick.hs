@@ -1,12 +1,15 @@
 {-# LANGUAGE Strict #-}
 -- | Screen-pixel / cursor hit-testing queries: world.getHoverTile,
---   world.getHoverPos, world.pickTile, world.pickPos.
+--   world.getHoverPos, world.pickTile, world.pickPos — plus
+--   world.localizeTile, the Lua face of the same u-seam frame contract
+--   those picks report in (see "World.Render.HitTest").
 module Engine.Scripting.Lua.API.WorldQuery.Pick
     ( worldGetHoverTileFn
     , worldGetHoverPosFn
     , worldPickTileFn
     , worldPickPosFn
     , worldPickChunkFn
+    , worldLocalizeTileFn
     ) where
 
 import UPrelude
@@ -24,6 +27,7 @@ import World.Render.HitTest (pickWorldTile)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.Zoom.Cursor (pixelToChunkOrigin)
 import World.Generate (viewDepth)
+import World.Generate.Coordinates (localizeTileToAnchor)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup
     (mVisibleWorldState, worldStateByPage)
 
@@ -196,6 +200,42 @@ worldPickChunkFn env = do
                 Nothing → do
                     Lua.pushnil
                     return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.localizeTile(anchorX, anchorY, gx, gy) → lx, ly
+--   Re-express a tile coord in the u-alias frame LOCAL to an anchor
+--   (#1175) — the identical helper every rectangle-tool commit applies
+--   engine-side ('World.Thread.Command.Cursor.Common.designateRect').
+--
+--   Lua needs it wherever it computes rectangle GEOMETRY before handing
+--   the endpoints to the engine: @world.pickTile@ reports canonical
+--   coords, so two physically adjacent picks across the seam come back a
+--   whole world apart, and a caller that snapped an axis or scanned the
+--   span from those numbers would pick the wrong axis / walk the whole
+--   map (scripts/build_tool.lua's wire snap and structure occupancy
+--   pre-check). Resolves against the VISIBLE page's world size, like
+--   @pickTile@; identity away from the seam, in arena / non-wrapping
+--   worlds, and when no world is up.
+worldLocalizeTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldLocalizeTileFn env = do
+    mAX ← Lua.tonumber 1
+    mAY ← Lua.tonumber 2
+    mGX ← Lua.tonumber 3
+    mGY ← Lua.tonumber 4
+    case (mAX, mAY, mGX, mGY) of
+        (Just ax, Just ay, Just gx, Just gy) → do
+            manager ← Lua.liftIO $ readIORef
+                (wsWorldManagerRef (toWorldSimCapability env))
+            worldSize ← case mVisibleWorldState manager of
+                Just ws → Lua.liftIO $ pageWrapWorldSize ws
+                Nothing → pure 0
+            let (lx, ly) = localizeTileToAnchor worldSize
+                               (round ax, round ay) (round gx, round gy)
+            Lua.pushinteger (fromIntegral lx)
+            Lua.pushinteger (fromIntegral ly)
+            return 2
         _ → do
             Lua.pushnil
             return 1

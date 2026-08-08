@@ -20,7 +20,7 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv)
 import World.Types
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
                       , materialIdByName)
 import World.Gem (gemChanceAt)
@@ -41,6 +41,11 @@ import Engine.Scene.Types (SortableQuad(..))
 --   spoilBlocked is true when the material produces spoil and the
 --   surrounding piles have no room — the dig command will refuse, so
 --   the AI should skip the tile instead of digging in place forever.
+--
+--   #1175: accepts any u-alias of the tile, exactly as
+--   world.getMineDesignationAt and the dig command itself do — the three
+--   are one job's read/inspect/consume trio and must resolve the same
+--   stored key. Identity away from the seam.
 worldGetDigInfoAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetDigInfoAtFn env = do
     pageIdArg ← Lua.tostring 1
@@ -49,8 +54,8 @@ worldGetDigInfoAtFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                gx = round gxN ∷ Int
-                gy = round gyN ∷ Int
+                rawGX = round gxN ∷ Int
+                rawGY = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
@@ -59,9 +64,13 @@ worldGetDigInfoAtFn env = do
                     tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
                     registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
                     piles ← Lua.liftIO $ readIORef (wsSpoilRef ws)
-                    let mInfo = do
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (coord, (lx, ly), (dgx, dgy)) =
+                            canonicalTileFrame worldSize rawGX rawGY
+                        gx = rawGX + dgx
+                        gy = rawGY + dgy
+                        mInfo = do
                             md ← HM.lookup (gx, gy) desigs
-                            let (coord, (lx, ly)) = globalToChunk gx gy
                             lc ← lookupChunk coord tileData
                             let col = lcTiles lc V.! columnIndex lx ly
                                 relZ = mdZ md - ctStartZ col

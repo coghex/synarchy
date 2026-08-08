@@ -302,6 +302,58 @@ spec = describe "Portal location exclusion (#778)" $ do
         it "intersects once the seam wrap is considered" $
             seamCheck 2 `shouldBe` NotPlaceable "inside a location's bounds"
 
+    -- #1175: a CtBuilding construct job restored from a pre-#1175 save
+    -- can hold a u-ALIAS of its tile, and building.spawn validates
+    -- through this function before it will place anything. Left raw, the
+    -- lookup missed the (loaded) canonical chunk, reported "chunk not
+    -- loaded", and the build AI cancelled an otherwise valid
+    -- designation. A footprint is also stepped off its anchor, so even a
+    -- canonical anchor in the last column produces alias tiles.
+    describe "canPlaceAt in the canonical tile frame (#1175)" $ do
+        -- worldSize 64 chunks: chunk (17,-15) has u = 32, one past the
+        -- canonical range, and is STORED under (-15,17). Only the stored
+        -- chunk is loaded, so a raw lookup of the alias must miss.
+        let seamWorld  = 64
+            storedOnly = worldWithChunks [flatChunkAt (ChunkCoord (-15) 17) 5]
+            aliasTile  = (17 * chunkSize + 8, (-15) * chunkSize + 8)
+            canonTile  = ( fst aliasTile - 512, snd aliasTile + 512 )
+            atTile ws (gx, gy) = canPlaceAt noBuildings storedOnly
+                                     emptyLocationInstances ws ordinaryDef gx gy
+
+        it "precondition: only the canonical chunk is loaded" $ do
+            HM.member (ChunkCoord 17 (-15)) (wtdChunks storedOnly)
+                `shouldBe` False
+            HM.member (ChunkCoord (-15) 17) (wtdChunks storedOnly)
+                `shouldBe` True
+
+        it "accepts the tile named canonically" $
+            atTile seamWorld canonTile `shouldBe` Placeable
+
+        it "accepts the SAME tile named through its u-alias" $
+            -- The regression: this reported "chunk not loaded".
+            atTile seamWorld aliasTile `shouldBe` Placeable
+
+        it "still reports an unloaded chunk as unloaded" $
+            -- The negative the raw lookup could not tell an alias from.
+            canPlaceAt noBuildings (worldWithChunks [])
+                       emptyLocationInstances seamWorld ordinaryDef
+                       (fst canonTile) (snd canonTile)
+                `shouldBe` NotPlaceable "chunk not loaded"
+
+        it "sees an existing building through the alias, so nothing \
+           \stacks on it" $
+            -- Occupancy is compared canonically on BOTH sides, or a
+            -- second building lands on top of a seam-side one.
+            canPlaceAt (occupiedAt (fst canonTile) (snd canonTile))
+                       storedOnly emptyLocationInstances seamWorld
+                       ordinaryDef (fst aliasTile) (snd aliasTile)
+                `shouldBe` NotPlaceable "tile already occupied"
+
+        it "is the identity in a non-wrapping world" $
+            -- worldSize 0: the alias is genuinely a different, unloaded
+            -- place, and must still be refused.
+            atTile 0 aliasTile `shouldBe` NotPlaceable "chunk not loaded"
+
     describe "Building ghost validity tint (#778)" $ do
         it "a valid ghost is neutral white" $ do
             let Vec4 rr gg bb _ = ghostTint True

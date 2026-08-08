@@ -349,6 +349,18 @@ def _run(port: int, root: str) -> int:
         # (64,0) is far from the default spawn/camera area and its chunk
         # won't load on demand without a camera nearby — load both target
         # chunks explicitly before placing anything there.
+        #
+        # #1175: (64,0) is a u-ALIAS at this world size — u = 64 is exactly
+        # the wrap period, so the engine records the panel (and the wire
+        # beside it) at the canonical twin (0,64)/(1,64). That is the
+        # contract, not a surprise: every placement verb resolves to the
+        # frame chunks are stored under, and the coords it reports back are
+        # canonical. This phase deliberately keeps asking in the ALIAS
+        # frame, because the point of the comparison is longitude, and an
+        # alias names the same physical longitude — world.getSunAngleAt(64,0)
+        # and the panel's own local intensity have to agree precisely
+        # BECAUSE they are one place. If a future change made the alias
+        # resolve somewhere else, these checks would catch it.
         send(port, "return world.loadChunksInRegion(-1, -1, 5, 1)")
         send(port, "return world.waitForChunks(60)", timeout=65)
 

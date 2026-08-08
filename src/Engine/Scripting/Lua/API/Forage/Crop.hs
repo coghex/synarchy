@@ -19,7 +19,7 @@ import Engine.Core.State (activeWorldStateFrom)
 import World.Types
 import World.Vegetation (isTilledSoil)
 import World.Flora.CropPlot (newCropPlot)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import Engine.Scripting.Lua.API.Forage.Lookup (growthClock)
 
 -- | The one YAML worldGen category tag (World.Flora.Placement) that
@@ -56,8 +56,8 @@ worldPlantCropAtFn wsc = do
     mName ← Lua.tostring 3
     case (mGx, mGy, mName) of
         (Just gx', Just gy', Just nameBS) → do
-            let gx = fromIntegral gx'
-                gy = fromIntegral gy'
+            let rawGX = fromIntegral gx'
+                rawGY = fromIntegral gy'
                 name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ do
                 mWs ← activeWorldStateFrom (wsWorldManagerRef wsc)
@@ -65,7 +65,16 @@ worldPlantCropAtFn wsc = do
                     Nothing → pure False
                     Just ws → do
                         tileData ← readIORef (wsTilesRef ws)
-                        let (coord, (lx, ly)) = globalToChunk gx gy
+                        -- #1175: the farm AI plants at a plant-designation
+                        -- coord, which a pre-#1175 save can hold as a
+                        -- u-alias. Resolve the stored frame so the column
+                        -- read and the crop-plot key agree with everything
+                        -- else keyed by tile. Identity inland.
+                        worldSize ← pageWrapWorldSize ws
+                        let (coord, (lx, ly), (dgx, dgy)) =
+                                canonicalTileFrame worldSize rawGX rawGY
+                            gx = rawGX + dgx
+                            gy = rawGY + dgy
                             idx = ly * chunkSize + lx
                         case lookupChunk coord tileData of
                             Nothing → pure False

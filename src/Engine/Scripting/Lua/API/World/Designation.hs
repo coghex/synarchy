@@ -19,6 +19,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
+import World.Generate.Coordinates (canonicalTile, seamTileDist2)
 import World.Mine.Types (MineDesignation(..))
 
 -- * Mine designation tool
@@ -86,6 +87,11 @@ worldSetMineDesignateTextureFn wsc = do
 --   Nearest designated tile to (x, y) by Euclidean distance — the
 --   "distance to the nearest dig job" term in the dig utility. Linear
 --   scan of the designation map (synchronous read).
+--
+--   #1175: the compare is seam-aware (each key measured through its
+--   nearest u-alias), and the coords returned are the CANONICAL stored
+--   key — which the AI can hand straight back to any point verb. Both
+--   are the plain Euclidean/identity case away from the seam.
 worldNearestMineDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldNearestMineDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -100,10 +106,8 @@ worldNearestMineDesignationFn wsc = do
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
-                    let dist2 (gx, gy) =
-                            let dx = fromIntegral gx - ux
-                                dy = fromIntegral gy - uy
-                            in dx * dx + dy * dy
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let dist2 = seamTileDist2 worldSize (ux, uy)
                         best = foldl' (\acc k → case acc of
                                   Nothing → Just (k, dist2 k)
                                   Just (_, d) | dist2 k < d → Just (k, dist2 k)
@@ -128,7 +132,8 @@ worldNearestMineDesignationFn wsc = do
 -- | world.getMineDesignationAt(pageId, gx, gy)
 --     → z, cNW, cNE, cSE, cSW | nil
 --   Designation state at a tile, including corner dig progress (the
---   AI's "how far along is this tile" query).
+--   AI's "how far along is this tile" query). Accepts any u-alias of
+--   the tile (#1175); identity away from the seam.
 worldGetMineDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetMineDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -142,7 +147,9 @@ worldGetMineDesignationAtFn wsc = do
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
-                    case HM.lookup (round gxN, round gyN) m of
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    case HM.lookup (canonicalTile worldSize (round gxN)
+                                                            (round gyN)) m of
                         Nothing → Lua.pushnil >> return 1
                         Just md → do
                             let (a, b, c, d) = mdCorners md

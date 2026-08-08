@@ -31,10 +31,12 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
-import World.Types (WorldManager(..), WorldState(..))
+import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 import World.Page.Types (WorldPageId(..))
-import World.Chunk.Types (ChunkCoord(..))
-import World.Generate.Coordinates (globalToChunk)
+import World.Chunk.Types (chunkSize)
+import World.Generate.Coordinates
+    ( globalToChunk, canonicalTile, seamTileDist2, chunkInSeamRegion
+    , localizeTileToAnchor )
 import World.Command.Types (WorldCommand(..))
 import World.Construct.Types
 import World.Thread.Command.Cursor.Construct (popConstructDesignation)
@@ -121,8 +123,20 @@ constructCancelDesignationFn wsc = do
 -- | construction.getPendingJobs(cx1, cy1, cx2, cy2) → array of jobs in
 --   the chunk region on the active world. Each job:
 --     { x, y, z, category, status, progress,
+--       lx, ly                -- see below
 --       pack, kind, edge      -- structure targets
 --       building              -- building targets }
+--
+--   @x@/@y@ are the CANONICAL stored key — what every other
+--   @construction.*@ verb reports and accepts (#1175). @lx@/@ly@ are the
+--   SAME tile re-expressed in the u-alias frame local to this region's
+--   own centre, which is the scanning worker's neighbourhood: measure
+--   distances with those. A job across the seam is physically adjacent
+--   yet a whole world away in canonical numbers, so a caller that
+--   range-gated on @x@/@y@ would reject every one of them and no worker
+--   would ever claim a seam-side job. Identical to @x@/@y@ away from the
+--   seam, and in arena / non-wrapping worlds.
+--
 --   The build AI (#96) reads this to find work. Jobs a worker has
 --   claimed ARE included, carrying status "claimed" — the AI filters on
 --   status when looking for fresh work (so a second worker still can't
@@ -138,10 +152,17 @@ constructGetPendingJobsFn wsc = do
     case (mWs, cx1Arg, cy1Arg, cx2Arg, cy2Arg) of
         (Just ws, Just cx1, Just cy1, Just cx2, Just cy2) → do
             m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
+            worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+            -- #1175: the caller's region is a raw box stepped outward
+            -- from a worker's own chunk, so at the seam it names ALIASES
+            -- of the canonical keys this map holds. Containment counts
+            -- those aliases; identity away from the seam. The coords the
+            -- jobs report stay canonical, which is what every point verb
+            -- below then accepts.
             let inRegion (gx, gy) =
-                    let (ChunkCoord cx cy, _) = globalToChunk gx gy
-                    in cx ≥ round cx1 ∧ cx ≤ round cx2
-                     ∧ cy ≥ round cy1 ∧ cy ≤ round cy2
+                    let (coord, _) = globalToChunk gx gy
+                    in chunkInSeamRegion worldSize
+                           (round cx1, round cy1) (round cx2, round cy2) coord
                 -- Claimed jobs stay in the list WITH their status (#96):
                 -- consumers filter status == "pending" when scanning for
                 -- fresh work, and the AI's stale-claim sweep needs to see
@@ -149,14 +170,28 @@ constructGetPendingJobsFn wsc = do
                 -- job back to pending (acceptance: getPendingJobs shows
                 -- "claimed" while in progress, "pending" after release).
                 jobs = [ kv | kv@(k, _) ← HM.toList m, inRegion k ]
+                -- The region is stepped outward from the worker's own
+                -- chunk, so its centre IS that worker's frame.
+                centreTile =
+                    ( ((round cx1 + round cx2) `div` 2) * chunkSize
+                          + chunkSize `div` 2
+                    , ((round cy1 + round cy2) `div` 2) * chunkSize
+                          + chunkSize `div` 2 )
             Lua.newtable
             forM_ (zip [1 ∷ Int ..] jobs) $ \(i, ((gx, gy), cd)) → do
                 pushJobTable gx gy cd
+                let (lx, ly) = localizeTileToAnchor worldSize centreTile (gx, gy)
+                Lua.pushinteger (fromIntegral lx)
+                Lua.setfield (Lua.nth 2) "lx"
+                Lua.pushinteger (fromIntegral ly)
+                Lua.setfield (Lua.nth 2) "ly"
                 Lua.rawseti (Lua.nth 2) (fromIntegral i)
             return 1
         _ → Lua.pushnil >> return 1
 
 -- | construction.getDesignationAt(pageId, gx, gy) → job table | nil.
+--   Accepts any u-alias of the tile and reports the CANONICAL stored
+--   coords (#1175); identity away from the seam.
 constructGetDesignationAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructGetDesignationAtFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -165,13 +200,13 @@ constructGetDesignationAtFn wsc = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                gx = round gxN ∷ Int
-                gy = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (gx, gy) = canonicalTile worldSize (round gxN) (round gyN)
                     case HM.lookup (gx, gy) m of
                         Just cd → pushJobTable gx gy cd >> return 1
                         Nothing → Lua.pushnil >> return 1
@@ -194,13 +229,18 @@ constructCancelDesignationForRefundFn wsc = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                gx = round gxN ∷ Int
-                gy = round gyN ∷ Int
+                gxN' = round gxN ∷ Int
+                gyN' = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
                 Just ws → do
-                    mCd ← Lua.liftIO $ popConstructDesignation ws (gx, gy)
+                    -- #1175: 'popConstructDesignation' canonicalises the
+                    -- key itself (shared with the queued cancel), so the
+                    -- refund's returned job must report that same frame.
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (gx, gy) = canonicalTile worldSize gxN' gyN'
+                    mCd ← Lua.liftIO $ popConstructDesignation ws (gxN', gyN')
                     case mCd of
                         Just cd → pushJobTable gx gy cd >> return 1
                         Nothing → Lua.pushnil >> return 1
@@ -239,10 +279,8 @@ constructNearestDesignationFn wsc = do
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
-                    let dist2 (gx, gy) =
-                            let dx = fromIntegral gx - ux
-                                dy = fromIntegral gy - uy
-                            in dx * dx + dy * dy
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let dist2 = seamTileDist2 worldSize (ux, uy)
                         best = foldl' (\acc k → case acc of
                                   Nothing → Just (k, dist2 k)
                                   Just (_, d) | dist2 k < d → Just (k, dist2 k)
@@ -327,10 +365,14 @@ constructSetMaterialsPaidFn wsc = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← readIORef (wsWorldManagerRef wsc)
             case lookup pageId (wmWorlds mgr) of
-                Just ws →
+                Just ws → do
+                    -- #1175: point mutation, same alias tolerance as the
+                    -- read and both cancellation paths.
+                    worldSize ← pageWrapWorldSize ws
                     atomicModifyIORef' (wsConstructDesignationsRef ws) $ \m →
                         (HM.adjust (\cd → cd { cdMaterialsPaid = paidArg })
-                                   (round gx, round gy) m, ())
+                                   (canonicalTile worldSize (round gx)
+                                                            (round gy)) m, ())
                 Nothing → pure ()
         _ → pure ()
     return 0
