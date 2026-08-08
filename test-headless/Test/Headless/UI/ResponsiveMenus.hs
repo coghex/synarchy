@@ -22,7 +22,7 @@ module Test.Headless.UI.ResponsiveMenus (spec) where
 
 import UPrelude
 import Test.Hspec
-import Data.Aeson (FromJSON(..), decode, withObject, (.:))
+import Data.Aeson (FromJSON(..), decode, withObject, (.:), (.:?))
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
@@ -762,6 +762,300 @@ spec = around withHeadlessEngine $ do
                     sbepPanelInFrame p `shouldBe` True
                     sbepValidWidth p `shouldBe` True
 
+    -- #1107 (epic #708 Phase 2): the save browser and the loading flow
+    -- became the first consumers of the persisted world identity
+    -- engine.listSaves() has exposed since #707. Everything here is
+    -- about the identity staying DISTINCT from the save slot — three
+    -- separate facts, three separate elements, one of which (the slot
+    -- name) is still the only thing a selection dispatches.
+    describe "world identity in the save browser (#1107)" $ do
+        it "renders slot, world name and gloss as three separate fields, and degrades by absence — never by echoing the slot name" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ nonZeroMetrics 0.2
+                , listInit
+                , "local m = require('scripts.save_browser');"
+                , "m.init(1,2,3,1280,720);"
+                , "m.show({"
+                , "  {name='before_the_raid',timestamp='2026-08-08T04:13:12.407920Z',"
+                    <> "autosave=false,worldName='Karadun',worldGloss='Ashen Land'},"
+                -- A custom player-entered name (#708 principle 7) has no
+                -- language provenance, so listSaves omits worldGloss alone.
+                , "  {name='custom_slot',timestamp='2026-08-08T04:13:19.199691Z',"
+                    <> "autosave=false,worldName='Bobtown'},"
+                -- A pre-identity save: BOTH fields omitted.
+                , "  {name='ancient_slot',timestamp='2026-08-08T04:13:50.615025Z',autosave=false}"
+                , "}, function() end, function() end);"
+                , dumpRowsExpr
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [SaveRowProbe] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rows → do
+                    length rows `shouldBe` 3
+                    case rows of
+                        [named, custom, unnamed] → do
+                            srLabel named `shouldSatisfy` T.isInfixOf "before_the_raid"
+                            -- Distinct, not merged: the identity is
+                            -- nowhere in the slot line's own text.
+                            srLabel named `shouldSatisfy` (not ∘ T.isInfixOf "Karadun")
+                            srWorldName named `shouldBe` "Karadun"
+                            srGloss named `shouldBe` "\"Ashen Land\""
+
+                            srWorldName custom `shouldBe` "Bobtown"
+                            srGloss custom `shouldBe` ""
+
+                            srLabel unnamed `shouldSatisfy` T.isInfixOf "ancient_slot"
+                            srWorldName unnamed `shouldBe` ""
+                            srGloss unnamed `shouldBe` ""
+
+                            -- Requirement 4, and the reason the identity
+                            -- went on its OWN line rather than into
+                            -- columns beside the slot: the slot line
+                            -- still gets the row's WHOLE usable width
+                            -- (the identity line spans exactly the same
+                            -- span, ±rounding), so it renders the full
+                            -- slot name AND its timestamp untruncated —
+                            -- taking a share for the identity is what
+                            -- would have pushed the timestamp out.
+                            forM_ rows $ \row → do
+                                srSlotWidth row
+                                    `shouldSatisfy` (>= srIdentityWidth row - 2)
+                                srPrimary row `shouldBe` srLabel row
+                            srLabel named
+                                `shouldSatisfy` T.isInfixOf "2026-08-08T04:13:12.407920Z"
+                        _ → expectationFailure "expected exactly three rows"
+
+        it "keeps the durable [Autosave] and [Recovered] tags and the timestamp, and still dispatches the SLOT name on selection" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ listInit
+                , "local m = require('scripts.save_browser');"
+                , "local list = require('scripts.ui.list');"
+                , "_G.__picked = '';"
+                , "m.init(1,2,3,1280,720);"
+                , "m.show({"
+                , "  {name='autosave-1',timestamp='t1',autosave=true,"
+                    <> "worldName='Karadun',worldGloss='Ashen Land'},"
+                , "  {name='rescued',timestamp='t2',autosave=false,recovered=true}"
+                , "}, function(v) _G.__picked = v end, function() end);"
+                , "list.selectItem(m.listId, 1);"
+                , "local d = list.dump();"
+                , "return {row1=d[1].label, row2=d[2].label,"
+                    <> " picked=_G.__picked, value=list.getSelectedValue(m.listId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe SaveTagProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    stpRow1 p `shouldSatisfy` T.isInfixOf "[Autosave]"
+                    stpRow1 p `shouldSatisfy` T.isInfixOf "t1"
+                    stpRow2 p `shouldSatisfy` T.isInfixOf "[Recovered]"
+                    stpRow2 p `shouldSatisfy` T.isInfixOf "t2"
+                    -- The world identity is display-only: the load key
+                    -- stays the save slot.
+                    stpPicked p `shouldBe` "autosave-1"
+                    stpValue p `shouldBe` "autosave-1"
+
+        it "truncates an over-long multi-byte world name to its own column, leaving valid UTF-8" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ nonZeroMetrics 0.6
+                , listInit
+                , "local m = require('scripts.save_browser');"
+                , "m.init(1,2,3,1280,720);"
+                , "local long = '" <> longUnicodeName <> "';"
+                , "m.show({{name='s1',timestamp='t1',autosave=false,"
+                    <> "worldName=long,worldGloss='Ashen Land'}},"
+                    <> " function() end, function() end);"
+                , "local col = require('scripts.ui.list').dump()[1].columns.worldName;"
+                , "return {rendered=col.text, valid=(utf8.len(col.text) ~= nil),"
+                    <> " shorter=(#col.text < #long), fits=(col.textWidth <= col.width)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe TruncationProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    tpShorter p `shouldBe` True
+                    -- The whole point of #1107 requirement 6: a
+                    -- byte-offset cut inside a multi-byte sequence
+                    -- would leave a dangling lead byte here.
+                    tpValid p `shouldBe` True
+                    tpFits p `shouldBe` True
+                    tpRendered p `shouldSatisfy` T.isSuffixOf ".."
+
+        it "the shared truncation helper never produces invalid UTF-8, at any width" $ \env → do
+            ls ← newBareLuaBackend env
+            bad ← evalInt ls $ luaLines
+                [ nonZeroMetrics 0.6
+                , "local tw = require('scripts.ui.text_wrap');"
+                , "local s = '" <> longUnicodeName <> "';"
+                , "local bad = 0;"
+                , "for px = 1, 400 do"
+                , "  local r = tw.truncateToWidth(s, 1, 24, px);"
+                , "  if utf8.len(r) == nil then bad = bad + 1 end"
+                , "end;"
+                , "return bad"
+                ]
+            bad `shouldBe` 0
+
+        forM_ [ (800 ∷ Int, 600 ∷ Int, 0.5 ∷ Double), (800, 2160, 4.0) ] $ \(w, h, sc) →
+            it ("every row field stays inside its own column and inside the framebuffer at "
+                    ⧺ show w ⧺ "x" ⧺ show h ⧺ "@" ⧺ show sc ⧺ "x") $ \env → do
+                ls ← newBareLuaBackend env
+                r ← evalJSON ls $ luaLines
+                    [ setScaleCall sc <> ";"
+                    , nonZeroMetrics 0.6
+                    , listInit
+                    , "local m = require('scripts.save_browser');"
+                    , "m.init(1,2,3," <> tshow w <> "," <> tshow h <> ");"
+                    , "m.show({{name='before_the_raid',timestamp='2026-08-07 12:00:00',"
+                        <> "autosave=true,recovered=true,worldName='"
+                        <> longUnicodeName <> "',worldGloss='Ashen Land of the Long Winter'}},"
+                        <> " function() end, function() end);"
+                    , "local d = require('scripts.ui.list').dump()[1];"
+                    , "local fields = {d.primary, d.columns.worldName, d.columns.gloss};"
+                    , "local inFrame, fits = true, true;"
+                    , "for _, f in ipairs(fields) do"
+                    , "  if f.x < 0 or (f.x + f.width) > " <> tshow w <> " then inFrame = false end;"
+                    , "  if f.textWidth > f.width then fits = false end"
+                    , "end;"
+                    , "return {allInFrame=inFrame, allFit=fits}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RowFitProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        rfpAllInFrame p `shouldBe` True
+                        rfpAllFit p `shouldBe` True
+
+    describe "world identity in the loading flow (#1107)" $ do
+        it "the main menu resolves the listing's identity from the slot name it was handed, and passes nil when there is none" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.main_menu');"
+                , "engine.loadSave = function() return true end;"
+                , "m.setShowMenuCallback(function(name, p) _G.__p = p end);"
+                -- Both load entry points (Continue, and the browser's
+                -- onSelect) carry only the slot name; the identity has
+                -- to come back off the listing.
+                , "m.saves = {{name='before_the_raid',timestamp='t1',"
+                    <> "worldName='Karadun',worldGloss='Ashen Land'},"
+                    <> " {name='ancient_slot',timestamp='t2'}};"
+                , "m.loadAndShowSave('before_the_raid');"
+                , "local named = _G.__p;"
+                , "m.loadAndShowSave('ancient_slot');"
+                , "local unnamed = _G.__p;"
+                , "return {name=named.worldName, gloss=named.worldGloss,"
+                    <> " statusBefore=named.statusText,"
+                    <> " statusAfter=(unnamed.worldName == nil"
+                    <> " and unnamed.worldGloss == nil) and 'absent' or 'leaked'}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe LoadingIdentityProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    lipName p `shouldBe` Just "Karadun"
+                    lipGloss p `shouldBe` Just "Ashen Land"
+                    -- The slot-derived status text is a SEPARATE field,
+                    -- and it is what still names the slot.
+                    lipStatusBefore p `shouldBe` Just "Loading before_the_raid..."
+                    lipStatusAfter p `shouldBe` Just "absent"
+
+        it "keeps the world's name and gloss on screen across load-phase updates that rewrite the status line" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.loading_screen');"
+                , labelTextHelper
+                , "m.init(1,2,1280,720);"
+                , "m.show({mode='load', statusText='Loading before_the_raid...',"
+                    <> " worldName='Karadun', worldGloss='Ashen Land',"
+                    <> " fbW=1280, fbH=720});"
+                , "local statusBefore = txt(m.statusLabelId);"
+                , "engine.getLoadStatus = function() return {phase='LoadComponentsDecoded'} end;"
+                , "m.update(0.1);"
+                , "engine.getLoadStatus = function() return {phase='LoadStaged'} end;"
+                , "m.update(0.1);"
+                , "return {name=txt(m.worldNameLabelId), gloss=txt(m.glossLabelId),"
+                    <> " statusBefore=statusBefore, statusAfter=txt(m.statusLabelId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe LoadingIdentityProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    lipName p `shouldBe` Just "Karadun"
+                    lipGloss p `shouldBe` Just "\"Ashen Land\""
+                    -- The status line genuinely churned underneath it —
+                    -- otherwise this would prove nothing about
+                    -- independence.
+                    lipStatusAfter p `shouldNotBe` lipStatusBefore p
+                    lipStatusAfter p `shouldBe` Just "Rebuilding world..."
+
+        it "shows no world-name field at all for a save with no identity, rather than echoing the slot name" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.loading_screen');"
+                , labelTextHelper
+                , "m.init(1,2,1280,720);"
+                , "m.show({mode='load', statusText='Loading ancient_slot...',"
+                    <> " fbW=1280, fbH=720});"
+                , "local named = false;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "  if e.name == 'loading_world_name' or e.name == 'loading_world_gloss'"
+                , "  then named = true end"
+                , "end;"
+                , "return {hasName=(m.worldNameLabelId ~= nil),"
+                    <> " hasGloss=(m.glossLabelId ~= nil), anyElement=named,"
+                    <> " status=txt(m.statusLabelId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe LoadingAbsentProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    lapHasName p `shouldBe` False
+                    lapHasGloss p `shouldBe` False
+                    lapAnyElement p `shouldBe` False
+                    lapStatus p `shouldBe` Just "Loading ancient_slot..."
+
+        it "a named world's identity does not leak into the next transaction that has none" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.loading_screen');"
+                , labelTextHelper
+                , "m.init(1,2,1280,720);"
+                , "m.show({mode='load', statusText='a', worldName='Karadun',"
+                    <> " worldGloss='Ashen Land', fbW=1280, fbH=720});"
+                , "local first = txt(m.worldNameLabelId);"
+                , "m.show({mode='load', statusText='b', fbW=1280, fbH=720});"
+                , "return {name=first, gloss=nil, statusBefore=nil,"
+                    <> " statusAfter=(m.worldNameLabelId == nil) and 'cleared' or 'leaked'}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe LoadingIdentityProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    lipName p `shouldBe` Just "Karadun"
+                    lipStatusAfter p `shouldBe` Just "cleared"
+
+        forM_ [ (800 ∷ Int, 600 ∷ Int, 0.5 ∷ Double), (800, 2160, 4.0) ] $ \(w, h, sc) →
+            it ("the world name and gloss stay in-frame at " ⧺ show w ⧺ "x" ⧺ show h
+                    ⧺ "@" ⧺ show sc ⧺ "x") $ \env → do
+                ls ← newBareLuaBackend env
+                r ← evalJSON ls $ luaLines
+                    [ setScaleCall sc <> ";"
+                    , nonZeroMetrics 0.6
+                    , "local m = require('scripts.loading_screen');"
+                    , "local label = require('scripts.ui.label');"
+                    , "m.init(1,2," <> tshow w <> "," <> tshow h <> ");"
+                    , "m.show({mode='load', statusText='Loading before_the_raid...',"
+                        <> " worldName='" <> longUnicodeName <> "',"
+                        <> " worldGloss='Ashen Land of the Long Winter',"
+                        <> " fbW=" <> tshow w <> ", fbH=" <> tshow h <> "});"
+                    , "local ok = true;"
+                    , "for _, id in ipairs({m.worldNameLabelId, m.glossLabelId}) do"
+                    , "  local lw = label.getSize(id);"
+                    , "  local info = UI.getElementInfo(label.getElementHandle(id));"
+                    , "  if info.x < 0 or info.y < 0 or (info.x + lw) > " <> tshow w
+                        <> " then ok = false end"
+                    , "end;"
+                    , "return {allInFrame=ok, allFit=true}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RowFitProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → rfpAllInFrame p `shouldBe` True
+
     describe "settings menu's tab content stays in-frame at a narrow, high-scale supported combination" $ do
         it "800x2160@4x (the frame-limit textbox's unshrunk base width used to be positioned off the left edge)" $ \env → do
             ls ← newBareLuaBackend env
@@ -1447,6 +1741,62 @@ barInFrameExpr mVar w h = luaLines
     , "end)()"
     ]
 
+-- | This suite's Lua backend has no font atlas, so the real
+--   @engine.getTextWidth@ measures 0 and no width-driven layout rule
+--   ever fires. #1107's row columns and truncation are entirely
+--   width-driven, so every test that exercises them replaces it with
+--   proportional-per-character metrics first (@pxPerUnit@ scales the
+--   result so a case can choose whether its sample text overflows).
+nonZeroMetrics ∷ Double → Text
+nonZeroMetrics pxPerUnit =
+    "engine.getTextWidth = function(font, text, size) return #text * size * "
+        <> tshow pxPerUnit <> " end;"
+
+-- | scripts/ui/list.lua's per-row sprites (hit box, highlight) are
+--   created against the ONE chrome texture list.init() loads, and
+--   list.dump() reports a row only when its hit box resolves to a real
+--   element. Production always reaches the list through
+--   ui_manager_boot.lua's widget-init pass; this suite skips that boot
+--   (as bootCreateWorld does for randbox/textbox), so any test reading
+--   rendered rows has to run it itself.
+listInit ∷ Text
+listInit = "require('scripts.ui.list').init();"
+
+-- | Multi-byte throughout (Latin Extended + Icelandic + Old English
+--   letters), and long enough to overflow any column this suite
+--   allocates — so a byte-offset cut lands inside a UTF-8 sequence
+--   unless the truncation snaps back to a character boundary.
+longUnicodeName ∷ Text
+longUnicodeName = "Ǫrmstunga Þórsmörk Ǣthelwine Karádún Ǽsclinga Hræfnsholt"
+
+-- | Every visible row of the ONE list this suite ever builds, as the
+--   three facts #1107 requires stay distinct.
+dumpRowsExpr ∷ Text
+dumpRowsExpr = luaLines
+    [ "local out = {};"
+    , "for _, e in ipairs(require('scripts.ui.list').dump()) do"
+    , "  out[#out+1] = {label=e.label, primary=e.primary.text,"
+    , "                 slotWidth=e.primary.width,"
+    , "                 identityWidth=(e.columns.worldName.width"
+    , "                                + e.columns.gloss.width),"
+    , "                 worldName=e.columns.worldName.text,"
+    , "                 gloss=e.columns.gloss.text}"
+    , "end;"
+    , "return out"
+    ]
+
+-- | @txt(labelId)@ — the text a label widget is currently RENDERING
+--   (read back off the element, not the widget's own bookkeeping), or
+--   nil when the caller never created that label at all.
+labelTextHelper ∷ Text
+labelTextHelper = luaLines
+    [ "local __label = require('scripts.ui.label');"
+    , "local function txt(id)"
+    , "  if not id then return nil end;"
+    , "  return UI.getElementInfo(__label.getElementHandle(id)).text"
+    , "end;"
+    ]
+
 classifyCall ∷ Int → Int → Double → Text
 classifyCall w h s = "return " <> classifyExpr w h s
 
@@ -1618,6 +1968,53 @@ data ControlFocusProbe = ControlFocusProbe
 instance FromJSON ControlFocusProbe where
     parseJSON = withObject "ControlFocusProbe" $ \o →
         ControlFocusProbe <$> o .: "hadFocusBefore" <*> o .: "hasFocusAfter"
+
+-- #1107 decode targets
+
+data SaveRowProbe = SaveRowProbe
+    { srLabel ∷ Text, srPrimary ∷ Text, srWorldName ∷ Text, srGloss ∷ Text
+    , srSlotWidth ∷ Double, srIdentityWidth ∷ Double
+    } deriving Show
+instance FromJSON SaveRowProbe where
+    parseJSON = withObject "SaveRowProbe" $ \o → SaveRowProbe
+        <$> o .: "label" <*> o .: "primary"
+        <*> o .: "worldName" <*> o .: "gloss"
+        <*> o .: "slotWidth" <*> o .: "identityWidth"
+
+data SaveTagProbe = SaveTagProbe
+    { stpRow1 ∷ Text, stpRow2 ∷ Text, stpPicked ∷ Text, stpValue ∷ Text } deriving Show
+instance FromJSON SaveTagProbe where
+    parseJSON = withObject "SaveTagProbe" $ \o → SaveTagProbe
+        <$> o .: "row1" <*> o .: "row2" <*> o .: "picked" <*> o .: "value"
+
+data TruncationProbe = TruncationProbe
+    { tpRendered ∷ Text, tpValid ∷ Bool, tpShorter ∷ Bool, tpFits ∷ Bool } deriving Show
+instance FromJSON TruncationProbe where
+    parseJSON = withObject "TruncationProbe" $ \o → TruncationProbe
+        <$> o .: "rendered" <*> o .: "valid" <*> o .: "shorter" <*> o .: "fits"
+
+data RowFitProbe = RowFitProbe { rfpAllInFrame ∷ Bool, rfpAllFit ∷ Bool } deriving Show
+instance FromJSON RowFitProbe where
+    parseJSON = withObject "RowFitProbe" $ \o →
+        RowFitProbe <$> o .: "allInFrame" <*> o .: "allFit"
+
+data LoadingIdentityProbe = LoadingIdentityProbe
+    { lipName ∷ Maybe Text, lipGloss ∷ Maybe Text
+    , lipStatusBefore ∷ Maybe Text, lipStatusAfter ∷ Maybe Text
+    } deriving (Show, Eq)
+instance FromJSON LoadingIdentityProbe where
+    parseJSON = withObject "LoadingIdentityProbe" $ \o → LoadingIdentityProbe
+        <$> o .:? "name" <*> o .:? "gloss"
+        <*> o .:? "statusBefore" <*> o .:? "statusAfter"
+
+data LoadingAbsentProbe = LoadingAbsentProbe
+    { lapHasName ∷ Bool, lapHasGloss ∷ Bool, lapAnyElement ∷ Bool
+    , lapStatus ∷ Maybe Text
+    } deriving Show
+instance FromJSON LoadingAbsentProbe where
+    parseJSON = withObject "LoadingAbsentProbe" $ \o → LoadingAbsentProbe
+        <$> o .: "hasName" <*> o .: "hasGloss" <*> o .: "anyElement"
+        <*> o .:? "status"
 
 -- * Lua backend + eval helpers (mirrors Test.Headless.UI.InputOwnership)
 

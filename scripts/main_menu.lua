@@ -391,6 +391,18 @@ end
 -- Load a save and transition to world view via loading screen
 -----------------------------------------------------------
 
+-- The engine.listSaves() listing for a slot name, or nil (#1107). Both
+-- load entry points — Continue and the save browser's onSelect — carry
+-- only the slot name, which is deliberate (it is the load key, and the
+-- world identity must never replace it); this is how the display-only
+-- identity is recovered for the loading screen.
+function mainMenu.findSave(saveName)
+    for _, save in ipairs(mainMenu.saves or {}) do
+        if save.name == saveName then return save end
+    end
+    return nil
+end
+
 function mainMenu.loadAndShowSave(saveName)
     local worldView = require("scripts.world_view")
     local worldManager = require("scripts.world_manager")
@@ -445,9 +457,19 @@ function mainMenu.loadAndShowSave(saveName)
     -- every initial chunk around the loaded camera finishes loading,
     -- exactly like the create-world flow.
     if mainMenu.showMenuCallback then
+        -- #1107: the world's own identity travels alongside the
+        -- slot-derived status text as separate fields, because the
+        -- loading screen shows them as separate labels — the status
+        -- line is rewritten on every load phase, the world's name is
+        -- not. A listing with no identity passes nil, and the loading
+        -- screen then shows no world-name field at all rather than
+        -- echoing the slot name into one.
+        local listing = mainMenu.findSave(saveName)
         mainMenu.showMenuCallback("loading", {
             mode = "load",
             statusText = "Loading " .. saveName .. "...",
+            worldName  = listing and listing.worldName or nil,
+            worldGloss = listing and listing.worldGloss or nil,
         })
     end
 end
