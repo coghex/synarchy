@@ -10,7 +10,10 @@
 --   placed-location queries. WorldQuery.Lookup holds the read-only
 --   world/tile/gen-params resolution helpers shared across those
 --   submodules and stays internal (not re-exported here), matching
---   the original file's export surface.
+--   the original file's export surface. WorldQuery.Etymology (#1104)
+--   is the shared name-decomposition query plus the minimal
+--   river-segment-to-identity resolution it needs to be reachable by
+--   selection.
 module Engine.Scripting.Lua.API.WorldQuery
     ( worldGetTerrainAtFn
     , worldGetSlopeAtFn
@@ -37,6 +40,8 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetLocationAwarenessFn
     , worldHasSpawnedLocationContentsFn
     , worldHasStampedLocationFn
+    , worldGetEtymologyFn
+    , worldGetRiverAtFn
     ) where
 
 import Engine.Scripting.Lua.API.WorldQuery.Terrain
@@ -46,3 +51,4 @@ import Engine.Scripting.Lua.API.WorldQuery.River
 import Engine.Scripting.Lua.API.WorldQuery.Climate
 import Engine.Scripting.Lua.API.WorldQuery.Pick
 import Engine.Scripting.Lua.API.WorldQuery.Location
+import Engine.Scripting.Lua.API.WorldQuery.Etymology

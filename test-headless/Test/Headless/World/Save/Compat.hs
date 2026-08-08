@@ -74,10 +74,18 @@ import World.Save.Component.Page
     , PageCoreDTOv3(..), WorldPagesDTOv3(..)
     , toWorldGenParamsDTOv3
     , PageCoreDTOv4(..), WorldPagesDTOv4(..)
+    , toWorldGenParamsDTOv4
+    , PageCoreDTOv5(..), WorldPagesDTOv5(..)
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
-    , LanguageProvenanceDTO(..), basePageSnapshots
+    , WorldIdentityDTOv2(..)
+    , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
-    , migrateWorldPagesV4 )
+    , migrateWorldPagesV4, migrateWorldPagesV5 )
+import Language.Etymology.Source (EtymologySource(..))
+import Language.Etymology
+    (EtymologyResult(..), Etymology(..), decomposeName, etyTokenText)
+import Language.Semantic.Types (Catalogue, ConceptId(..), NameExpr(..))
+import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -787,7 +795,58 @@ spec = do
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
 
-        it "the CURRENT v5 page core round-trips a river's name AND gloss, \
+        it "a frozen v5 page core comes back with NO etymology source on \
+           \its page identity, its location, or its river, while every \
+           \name and gloss it stored survives EXACTLY -- a save written \
+           \before names recorded their expressions never acquires one, \
+           \and none is inferred from the text that is there" $ do
+            let dto = WorldPagesDTOv5 [legacyPageCoreV5]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv5 of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV5 dto'
+                        ident = identityOf pages "legacy_page"
+                        insts = instancesOf pages "legacy_page"
+                    -- Everything the v5 shape DID store rides across.
+                    (wiName <$> ident)  `shouldBe` Just "Legacy World"
+                    (wiGloss =≪ ident)  `shouldBe` Just "an old gloss"
+                    map liDisplayName insts `shouldBe` ["Vashenkoro"]
+                    map liGloss insts       `shouldBe` [Just "Ashen Keep"]
+                    map (rvnDisplayName ∘ snd) (riversOf pages "legacy_page")
+                        `shouldBe` ["Vashendral"]
+                    map (rvnGloss ∘ snd) (riversOf pages "legacy_page")
+                        `shouldBe` [Just "Ashen River"]
+                    -- And all three etymology sources are ABSENT.
+                    (wiEtymology =≪ ident) `shouldBe` Nothing
+                    map liEtymology insts  `shouldBe` [Nothing]
+                    map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
+                        `shouldBe` [Nothing]
+                    -- The page's own identity DOES declare a language,
+                    -- so "no etymology" here is #1104 requirement 1's
+                    -- honest absence, not an absent provenance quietly
+                    -- doing the work.
+                    (wiLanguage =≪ ident)
+                        `shouldBe` Just (LanguageProvenance
+                                            (LangSeed 0xABCDEF0123456789)
+                                            (GeneratorVersion 1))
+
+        it "the CURRENT v6 page core round-trips an etymology source on \
+           \its page identity, its location, AND its river -- so the v5 \
+           \absences above are real decode outcomes, not fields nothing \
+           \ever writes" $ do
+            let dto = WorldPagesDTO [currentPageCoreEtymology]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let pages = basePageSnapshots dto'
+                        ident = identityOf pages "legacy_page"
+                    (wiEtymology =≪ ident) `shouldBe` Just worldNameSource
+                    map liEtymology (instancesOf pages "legacy_page")
+                        `shouldBe` [Just keepSource]
+                    map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
+                        `shouldBe` [Just ashenRiverSource]
+
+        it "the CURRENT v6 page core round-trips a river's name AND gloss, \
            \keyed by its feature id -- so the v4 absence above is a real \
            \decode outcome, not a table that is always empty" $ do
             let dto = WorldPagesDTO [currentPageCoreRivers]
@@ -797,9 +856,10 @@ spec = do
                     riversOf (basePageSnapshots dto') "legacy_page"
                         `shouldBe` [ (GeoFeatureId 3
                                      , RiverName "Vashendral"
-                                           (Just "Ashen River")) ]
+                                           (Just "Ashen River")
+                                           (Just ashenRiverSource)) ]
 
-        it "the CURRENT v5 page core round-trips a location's name AND \
+        it "the CURRENT v6 page core round-trips a location's name AND \
            \gloss -- so the v3 absence above is a real decode outcome, \
            \not a field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCoreNamed]
@@ -900,6 +960,13 @@ spec = do
     -- carries a genuinely POPULATED one.
     describe "river names across baselines (issue #1102)" $ do
         let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            withSession path k = do
+                bytes ← BS.readFile path
+                case decodeSessionEnvelope luaNames luaNames bytes of
+                    Left err → expectationFailure
+                        (path <> " did not decode: " <> T.unpack err)
+                    Right (_, snap, _, _) → k (HM.elems (snapPages snap))
+
             withRivers path k = do
                 bytes ← BS.readFile path
                 case decodeSessionEnvelope luaNames luaNames bytes of
@@ -932,6 +999,67 @@ spec = do
                         `shouldSatisfy` all (not ∘ T.null)
                     map (rvnGloss ∘ snd) named `shouldSatisfy` all
                         (maybe False (not ∘ T.null))
+
+        it "a tracked baseline written BEFORE names recorded their \
+           \expressions decodes with NO etymology source anywhere -- not \
+           \on the page identity, not on a location, not on a river -- \
+           \even though those names and glosses are all still there, so \
+           \nothing is ever inferred from the text that survived" $
+            withSession
+                "test-headless/data/save-compat/j1-river-language-names.bin" $
+                \pages → do
+                    pages `shouldNotBe` []
+                    -- The names ARE present, which is what makes the
+                    -- absent sources below a real decode outcome rather
+                    -- than an empty page proving nothing.
+                    [ n | p ← pages, Just n ← [pgsIdentity p] ]
+                        `shouldSatisfy` (not ∘ null)
+                    [ () | p ← pages, Just i ← [pgsIdentity p]
+                         , Just _ ← [wiEtymology i] ]
+                        `shouldBe` []
+                    [ () | p ← pages
+                         , li ← instancesToList
+                                    (wgpLocationInstances (pgsGenParams p))
+                         , Just _ ← [liEtymology li] ]
+                        `shouldBe` []
+                    [ () | p ← pages
+                         , (_, rn) ← riverNamesToList
+                                         (wgpRiverNames (pgsGenParams p))
+                         , Just _ ← [rvnEtymology rn] ]
+                        `shouldBe` []
+
+        it "the tracked current-version baseline carries a genuine \
+           \etymology source on its page identity AND on every river it \
+           \named -- each one reconstructing the very name it is stored \
+           \beside, so this coverage can never silently decay into the \
+           \same absent default the pre-#1104 baselines already prove" $
+            withSession
+                "test-headless/data/save-compat/k1-name-etymology.bin" $
+                \pages → do
+                    let idents = [ i | p ← pages, Just i ← [pgsIdentity p] ]
+                        rivers = [ rn | p ← pages
+                                 , (_, rn) ← riverNamesToList
+                                       (wgpRiverNames (pgsGenParams p)) ]
+                    -- The world's own name.
+                    map wiEtymology idents `shouldSatisfy` any isJust
+                    -- Every river the page named.
+                    rivers `shouldSatisfy` (not ∘ null)
+                    map rvnEtymology rivers `shouldSatisfy` all isJust
+                    -- And each source really explains the name it sits
+                    -- beside: rendered through its OWN recorded
+                    -- language, the surface tokens reproduce the stored
+                    -- text exactly. A source that had been defaulted,
+                    -- swapped between entries, or carried across from
+                    -- another page could not satisfy this.
+                    cat ← loadRealCatalogue
+                    forM_ idents $ \i → forM_ (wiEtymology i) $ \_ →
+                        decomposeName cat (wiName i) (wiGloss i)
+                                      (wiEtymology i)
+                            `shouldSatisfy` isAvailableFor (wiName i)
+                    forM_ rivers $ \rn →
+                        decomposeName cat (rvnDisplayName rn) (rvnGloss rn)
+                                      (rvnEtymology rn)
+                            `shouldSatisfy` isAvailableFor (rvnDisplayName rn)
 
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
         it "refuses to migrate a legacy envelope carrying an extra \
@@ -1334,7 +1462,7 @@ legacyPageCoreV3 = PageCoreDTOv3
     , pc3TimeHour   = 12, pc3TimeMinute = 30
     , pc3DateYear   = 1, pc3DateMonth = 2, pc3DateDay = 3
     , pc3MapMode    = ZMDefault
-    , pc3Identity   = Just (WorldIdentityDTO "Legacy World"
+    , pc3Identity   = Just (WorldIdentityDTOv2 "Legacy World"
                                (Just "an old gloss")
                                (Just (LanguageProvenanceDTO
                                           0xABCDEF0123456789 1)))
@@ -1355,6 +1483,7 @@ legacyNamedInstances = LocationInstances
         , liDiscoveryMargin = 6
         , liDisplayName     = "Small Ruin"
         , liGloss           = Nothing
+        , liEtymology       = Nothing
         , liLifecycle       = LifecycleDiscovered
         , liContentsSpawned = True
         }
@@ -1379,7 +1508,7 @@ legacyPageCoreV4 = PageCoreDTOv4
     , pc4TimeHour   = 12, pc4TimeMinute = 30
     , pc4DateYear   = 1, pc4DateMonth = 2, pc4DateDay = 3
     , pc4MapMode    = ZMDefault
-    , pc4Identity   = Just (WorldIdentityDTO "Legacy World"
+    , pc4Identity   = Just (WorldIdentityDTOv2 "Legacy World"
                                (Just "an old gloss")
                                (Just (LanguageProvenanceDTO
                                           0xABCDEF0123456789 1)))
@@ -1401,13 +1530,75 @@ currentPageCoreRivers ∷ PageCoreDTO
 currentPageCoreRivers = currentPageCore
     { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
         { wgpRiverNames = RiverNames (HM.singleton (GeoFeatureId 3)
-              (RiverName "Vashendral" (Just "Ashen River"))) }
+              (RiverName "Vashendral" (Just "Ashen River")
+                   (Just ashenRiverSource))) }
     }
 
 currentPageCoreNamed ∷ PageCoreDTO
 currentPageCoreNamed = currentPageCore
     { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
         { wgpLocationInstances = namedLocationInstances }
+    }
+
+-- | #1104 fixture: a pre-#1104 (@world-pages@ v5) page core whose
+--   identity, gen params, location instance, and river name are all the
+--   frozen pre-etymology shapes — so the page genuinely has nowhere to
+--   store an expression, which is what makes the v5 migration's "no
+--   etymology source anywhere, everything else exact" contract a real
+--   decode outcome rather than three fields that were never written.
+legacyPageCoreV5 ∷ PageCoreDTOv5
+legacyPageCoreV5 = PageCoreDTOv5
+    { pc5PageId     = WorldPageId "legacy_page"
+    , pc5GenParams  = toWorldGenParamsDTOv4 defaultWorldGenParams
+                          { wgpLocationInstances = namedLocationInstances
+                          , wgpRiverNames = RiverNames
+                              (HM.singleton (GeoFeatureId 3)
+                                  (RiverName "Vashendral"
+                                      (Just "Ashen River") Nothing)) }
+    , pc5CameraX    = 1, pc5CameraY = 2
+    , pc5TimeHour   = 12, pc5TimeMinute = 30
+    , pc5DateYear   = 1, pc5DateMonth = 2, pc5DateDay = 3
+    , pc5MapMode    = ZMDefault
+    , pc5Identity   = Just (WorldIdentityDTOv2 "Legacy World"
+                               (Just "an old gloss")
+                               (Just (LanguageProvenanceDTO
+                                          0xABCDEF0123456789 1)))
+    }
+
+-- | The current page core carrying an etymology source on all three of
+--   the things that can hold one.
+currentPageCoreEtymology ∷ PageCoreDTO
+currentPageCoreEtymology = currentPageCore
+    { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
+        { wgpLocationInstances = namedLocationInstances
+            { lisById = HM.map (\i → i { liEtymology = Just keepSource })
+                               (lisById namedLocationInstances) }
+        , wgpRiverNames = RiverNames (HM.singleton (GeoFeatureId 3)
+              (RiverName "Vashendral" (Just "Ashen River")
+                  (Just ashenRiverSource))) }
+    , pcIdentity  = Just (WorldIdentityDTO "Legacy World"
+                              (Just "an old gloss")
+                              (Just (LanguageProvenanceDTO
+                                         0xABCDEF0123456789 1))
+                              (Just (toEtymologySourceDTO worldNameSource)))
+    }
+
+-- | The world-name and location expressions the current-shape fixture
+--   above stores. Distinct from each other and from
+--   'ashenRiverSource', so a decode that collapsed all three onto one
+--   value could not pass.
+worldNameSource ∷ EtymologySource
+worldNameSource = EtymologySource
+    { esExpr     = Bare (ConceptId "LAND")
+    , esLanguage = LanguageProvenance (LangSeed 0xABCDEF0123456789)
+                                      (GeneratorVersion 1)
+    }
+
+keepSource ∷ EtymologySource
+keepSource = EtymologySource
+    { esExpr     = Modifier (ConceptId "ASH") (ConceptId "KEEP")
+    , esLanguage = LanguageProvenance (LangSeed 0xABCDEF0123456789)
+                                      (GeneratorVersion 1)
     }
 
 currentPageCore ∷ PageCoreDTO
@@ -1420,7 +1611,40 @@ currentPageCore = PageCoreDTO
     , pcMapMode    = ZMDefault
     , pcIdentity   = Just (WorldIdentityDTO "Legacy World" (Just "an old gloss")
                                (Just (LanguageProvenanceDTO
-                                          0xABCDEF0123456789 1)))
+                                          0xABCDEF0123456789 1))
+                               Nothing)
+    }
+
+-- | The production concept catalogue, read from disk. The tracked
+--   fixture's sources reference real concept ids, so only the real
+--   catalogue can decompose them — a hand-built stub would prove
+--   nothing about the file the engine actually ships.
+loadRealCatalogue ∷ IO Catalogue
+loadRealCatalogue = do
+    eCat ← loadCatalogue conceptCataloguePath
+    case eCat of
+        Right cat → pure cat
+        Left err  → error ("test setup: catalogue: " <> show err)
+
+-- | Whether a decomposition succeeded AND its surface tokens
+--   concatenate back to the exact stored name — the #1104 requirement 3
+--   property, asserted here against real saved bytes rather than a
+--   constructed value.
+isAvailableFor ∷ Text → EtymologyResult → Bool
+isAvailableFor stored (EtyAvailable ety) =
+    etyName ety ≡ stored
+    ∧ T.concat (map etyTokenText (etyTokens ety)) ≡ stored
+isAvailableFor _ (EtyUnavailable _) = False
+
+-- | #1104: the etymology source the current-shape fixtures attach, so a
+--   round trip through the CURRENT wire shape is shown to carry one —
+--   which is what makes the v5 migration's "no source" a real decode
+--   outcome rather than a field nothing ever writes.
+ashenRiverSource ∷ EtymologySource
+ashenRiverSource = EtymologySource
+    { esExpr     = Modifier (ConceptId "ASH") (ConceptId "RIVER")
+    , esLanguage = LanguageProvenance (LangSeed 0xABCDEF0123456789)
+                                      (GeneratorVersion 1)
     }
 
 minimalSaveMetadataForExtra ∷ SaveMetadata

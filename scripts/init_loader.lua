@@ -27,6 +27,8 @@ local buildingInfoPanelScriptId = nil
 local itemInfoPanelScriptId = nil
 local cargoInventoryPanelScriptId = nil
 local itemContentsPanelScriptId = nil
+local etymologyPanelScriptId = nil
+local namePlateScriptId = nil
 local craftingPanelScriptId = nil
 local plantPanelScriptId = nil
 local popupScriptId = nil
@@ -207,6 +209,15 @@ function M.load()
     itemContentsPanelScriptId = engine.loadScript(
         "scripts/item_contents_panel.lua", 0.2)
 
+    -- Name etymology (#1104): the shared read-only panel explaining a
+    -- generated name's roots, and the minimal name display that hosts
+    -- its three entry points. The plate polls the player's existing tile
+    -- selection, so it ticks; the panel is opened on demand and only
+    -- refreshes when its host asks it to.
+    etymologyPanelScriptId = engine.loadScript(
+        "scripts/etymology_panel.lua", 0.5)
+    namePlateScriptId = engine.loadScript("scripts/name_plate.lua", 0.25)
+
     -- Crafting station bills popup (#330): the player-facing view onto
     -- a station's craft-bill queue — right-click "Bills" on a building
     -- offering a craft operation. 0.2s tick; the module throttles its
@@ -293,6 +304,12 @@ function M.shutdown()
     end
     if itemContentsPanelScriptId then
         engine.killScript(itemContentsPanelScriptId)
+    end
+    if etymologyPanelScriptId then
+        engine.killScript(etymologyPanelScriptId)
+    end
+    if namePlateScriptId then
+        engine.killScript(namePlateScriptId)
     end
     if craftingPanelScriptId then
         engine.killScript(craftingPanelScriptId)

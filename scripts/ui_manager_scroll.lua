@@ -63,6 +63,13 @@ function uiManager.onScrollUp(elemHandle)
         end
     end
     -- Unit info v2 has its own stats-panel scrollbar.
+    local etyPanel = package.loaded["scripts.etymology_panel"]
+    if etyPanel and etyPanel.isOpen and etyPanel.isOpen()
+       and etyPanel.handleScrollCallback then
+        if etyPanel.handleScrollCallback("onScrollUp", elemHandle) then
+            return true
+        end
+    end
     local uimod = package.loaded["scripts.unit_info_v2"]
     if uimod and uimod.handleScrollCallback then
         if uimod.handleScrollCallback("onScrollUp", elemHandle) then
@@ -107,6 +114,13 @@ function uiManager.onScrollDown(elemHandle)
     if unitLog.isVisible and unitLog.isVisible()
        and unitLog.handleScrollCallback then
         if unitLog.handleScrollCallback("onScrollDown", elemHandle) then
+            return true
+        end
+    end
+    local etyPanel = package.loaded["scripts.etymology_panel"]
+    if etyPanel and etyPanel.isOpen and etyPanel.isOpen()
+       and etyPanel.handleScrollCallback then
+        if etyPanel.handleScrollCallback("onScrollDown", elemHandle) then
             return true
         end
     end
@@ -162,6 +176,16 @@ function uiManager.onUIScroll(elemHandle, dx, dy, shiftHeld)
     if eventLog.isVisible and eventLog.isVisible()
        and eventLog.onScroll then
         if eventLog.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    -- Etymology panel (#1104): a long decomposition scrolls inside its
+    -- own clipping viewport, so the wheel must reach it rather than
+    -- falling through to the world zoom underneath.
+    local etyPanel = package.loaded["scripts.etymology_panel"]
+    if etyPanel and etyPanel.isOpen and etyPanel.isOpen()
+       and etyPanel.onScroll then
+        if etyPanel.onScroll(elemHandle, dx, dy) then
             return
         end
     end

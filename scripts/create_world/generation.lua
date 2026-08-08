@@ -118,7 +118,7 @@ function generation.start(menu, logPanel)
     -- three absent (#708 principle 7 — the game never infers a meaning
     -- or an etymology for player text). nameSuggest owns that
     -- distinction; nothing here re-derives it from the name string.
-    local nameGloss, langSeed, langVersion = nameSuggest.identity(p)
+    local nameGloss, langSeed, langVersion, nameExpr = nameSuggest.identity(p)
 
     -- Store params on worldView so textures get wired up
     local worldView = require("scripts.world_view")
@@ -130,6 +130,10 @@ function generation.start(menu, logPanel)
         worldGloss = nameGloss,
         languageSeed    = langSeed,
         languageVersion = langVersion,
+        -- #1104: the expression the name was rendered from, forwarded
+        -- with the rest of the generated identity under the same rule —
+        -- verbatim, never defaulted, absent for a player-typed name.
+        nameExpr        = nameExpr,
     }
 
     -- Kick off

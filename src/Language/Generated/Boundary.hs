@@ -58,6 +58,7 @@
 module Language.Generated.Boundary
     ( buildBoundaryPolicy
     , joinMorphemes
+    , joinMorphemesTrace
     , joinSyllables
     , boundaryNeedsRepair
     , hasTripleRun
@@ -117,6 +118,23 @@ buildBoundaryPolicy seed consonants vowels
 joinMorphemes ∷ Profile → Text → Text → Text
 joinMorphemes = mediate MorphemeScope
 
+-- | The same join, reported as the two pieces that FOLLOW the left
+--   morpheme: whatever the repair inserted between them (empty when it
+--   inserted nothing) and the right morpheme as it actually surfaces
+--   (trimmed when cluster simplification fired).
+--
+--   This exists so #1104's etymology trace can name each realized piece
+--   of a rendered name without re-deriving boundary behavior. It is not
+--   a second implementation: 'mediate' is written in terms of it, so
+--   @left <> link <> right'@ IS 'joinMorphemes'' result, and a trace
+--   built from these pieces reconstructs the stored name by
+--   construction rather than by a test that could drift. The left
+--   morpheme is absent from the result because this module never
+--   modifies it (see the module haddock) — the caller already has it
+--   exactly as it will appear.
+joinMorphemesTrace ∷ Profile → Text → Text → (Text, Text)
+joinMorphemesTrace = mediateTrace MorphemeScope
+
 -- | Join two already-rendered stretches of syllables inside ONE root.
 --
 --   Syllable concatenation is the root's own shape vocabulary, not a
@@ -154,14 +172,25 @@ hasTripleRun = go ∘ T.unpack
 data BoundaryScope = MorphemeScope | SyllableScope
     deriving (Eq)
 
+-- | Every join in this module goes through 'mediateTrace' and then
+--   concatenates, so the traced and untraced views of a boundary are
+--   one implementation with two readouts.
 mediate ∷ BoundaryScope → Profile → Text → Text → Text
-mediate scope prof left right
-    | T.null left ∨ T.null right = left <> right
+mediate scope prof left right = left <> link <> right'
+  where (link, right') = mediateTrace scope prof left right
+
+-- | The pieces following the left morpheme: @(inserted segment, right
+--   morpheme as realized)@. An unmediated boundary, an admissible one,
+--   and an empty side all report @("", right)@ — nothing inserted,
+--   nothing trimmed.
+mediateTrace ∷ BoundaryScope → Profile → Text → Text → (Text, Text)
+mediateTrace scope prof left right
+    | T.null left ∨ T.null right = ("", right)
     | otherwise = case profBoundary prof of
-        BoundaryUnmediated → left <> right
+        BoundaryUnmediated → ("", right)
         BoundaryMediated rep
             | needsRepair scope prof left right → repair scope prof rep left right
-            | otherwise                          → left <> right
+            | otherwise                          → ("", right)
 
 -- | Whether the boundary between two morphemes needs mediating, at
 --   'MorphemeScope'. Exported for the report/test layers, which assert
@@ -203,14 +232,18 @@ needsRepair scope prof left right = case scope of
 --   run, and deleting a segment there would drop material the profile's
 --   own shape vocabulary put in the root. Every other case, and every
 --   syllable-scope case, inserts.
-repair ∷ BoundaryScope → Profile → BoundaryRepair → Text → Text → Text
+--
+--   Reported in 'mediateTrace''s @(inserted, realized right)@ shape: a
+--   simplification inserts nothing and shortens the right side, an
+--   insertion adds one segment and leaves the right side whole.
+repair ∷ BoundaryScope → Profile → BoundaryRepair → Text → Text → (Text, Text)
 repair scope prof rep left right
     | scope ≡ MorphemeScope
     , brRule rep ≡ BoundarySimplifying
     , Just trimmed ← simplified prof left right
-    = left <> trimmed
+    = ("", trimmed)
     | otherwise
-    = left <> T.singleton (linkerFor prof rep left right) <> right
+    = (T.singleton (linkerFor prof rep left right), right)
 
 -- | Cluster simplification: the right morpheme without its initial
 --   segment, when that leaves it NONEMPTY (a one-letter grammatical

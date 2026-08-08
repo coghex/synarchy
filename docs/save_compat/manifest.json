@@ -997,6 +997,93 @@
       ]
     },
     {
+      "id": "k1-name-etymology",
+      "description": "Name etymology (issue #1104, epic #708): world-pages became v6, adding the optional EtymologySource (the originating NameExpr plus the LanguageProvenance that rendered it) to the page identity, to every placed location instance, and to every river name. This baseline tracks a REAL current-format session written by the live engine at world-pages v6, whose page was named through the generated-name path with world.suggestName's own reported expression -- so the new field really holds an expression that reconstructs the stored name, and its rivers carry their own sources rendered by the same language, rather than the absent case an unnamed or custom-named world produces. The pre-#1104 v5 shape stays tracked by j1, the pre-#1102 v4 shape by i1, the pre-#1101 v3 shape by g1/h1, the pre-#1092 v2 shape by d1/e1/f1, and the pre-#911 v1 shape by b2/b3/c3; every one of them decodes with NO etymology source anywhere, never inferred (#1104 requirement 1).",
+      "declaredAt": "(fill in: YYYY-MM-DD)",
+      "declaredByIssue": 1104,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldPagesV5 (v5 -> v6: every etymology source decodes ABSENT -- a save written before names recorded their expressions never acquires one), migrateWorldPagesV4 (v4 -> current), migrateWorldPagesV3 (v3 -> current), migrateWorldPagesV2 (v2 -> current), migrateWorldPagesV1 (v1 -> current) + Location.Instance.resolveLegacyLocationInstances",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "k1-name-etymology-session",
+          "path": "test-headless/data/save-compat/k1-name-etymology.bin",
+          "kind": "complete-session",
+          "sha256": "076785420b1f19472cb6ec947cd4f61637351ff64c2f02d5a5cb465ad7209e02",
+          "sizeBytes": 909488,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3, 'Janehba-fbahfahiv' named in the generated language seeded 12594706351022957199), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/k1-name-etymology.expected.json"
+        }
+      ]
+    },
+    {
       "id": "k1-canonical-designation-frame",
       "description": "Designation maps keyed in the canonical (u-wrapped) tile frame (issue #1175): world-activity became v2. The wire LAYOUT is byte-identical to v1 -- what changed is the invariant its keys carry, so a fixture registered at v2 has to actually HOLD designations, which this one does: its page carries both mine and till designations written through the live designation path. The pre-#1175 v1 shape, whose keys carried no canonical promise, stays tracked by b2/b3/c3/d1/e1/f1/g1/h1/i1/j1 and is re-keyed on load by applyWorldActivity.",
       "declaredAt": "2026-08-08",

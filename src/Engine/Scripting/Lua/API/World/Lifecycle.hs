@@ -43,7 +43,8 @@ import Language.Generated.Types
     , GeneratorError(..), generatorErrorText, currentGeneratorVersion
     , supportedGeneratorVersions, langSeedText )
 import Language.Generated.Orthography (outputInventory)
-import Language.Semantic.Types (Catalogue, catalogueErrorText)
+import Language.Semantic.Types (Catalogue, NameExpr, catalogueErrorText)
+import Language.Etymology.Source (decodeNameExpr, encodeNameExpr)
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Suggest
     ( NameSuggester, NameSuggestion(..), mkNameSuggester, suggestNameAt
@@ -53,7 +54,8 @@ import World.Generate.Config
 import World.Plate (defaultPlatesFor)
 
 -- | world.init(pageId, seed, worldSizeInChunks, plateCount
---             [, displayName[, gloss[, languageSeed[, languageVersion]]]])
+--             [, displayName[, gloss[, languageSeed[, languageVersion
+--             [, nameExpr]]]]])
 --   The optional trailing arguments (#707) give the page a player-facing
 --   identity: a display name plus an optional English gloss. They are
 --   display TEXT (spaces/punctuation welcome, no save-name rules); each
@@ -71,11 +73,23 @@ import World.Plate (defaultPlatesFor)
 --   of that range. @languageVersion@ is the generator version, defaulting
 --   to the current one.
 --
+--   @nameExpr@ (#1104) is the SEMANTIC EXPRESSION the name was rendered
+--   from, in 'Language.Etymology.Source.encodeNameExpr''s compact text
+--   form — exactly what @world.suggestName@ hands back as @expr@. It is
+--   what lets the world's own name be decomposed into roots and
+--   meanings later, and it is stored rather than recovered because a
+--   rendered name cannot be parsed back into morphemes (bound forms are
+--   shortenings and boundary repair edits letters).
+--
 --   Provenance is only ever attached to a name the caller states came
 --   from that language, and it is never inferred: with no display name
 --   there is no identity to attach it to, and a malformed seed or an
 --   unconstructible version is refused with a warning, leaving an
---   ordinary custom-named page (#708 principle 7).
+--   ordinary custom-named page (#708 principle 7). The expression
+--   follows the same rule one level down — it is honoured ONLY on the
+--   generated-name path, and a malformed one is refused with a warning,
+--   leaving a generated name whose etymology is simply unavailable
+--   rather than one explained by a guess.
 worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitFn env = do
     pageIdArg ← Lua.tostring 1
@@ -86,6 +100,7 @@ worldInitFn env = do
     glossArg  ← Lua.tostring 6
     langArg   ← Lua.tostring 7
     langVerArg ← Lua.tointeger 8
+    exprArg   ← Lua.tostring 9
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
@@ -99,8 +114,19 @@ worldInitFn env = do
                     logger ← readIORef (ccLoggerRef (toCoreCapability env))
                     parseProvenance logger raw
                         (fromIntegral ⊚ langVerArg)
+            mExpr ← case (mProv, TE.decodeUtf8Lenient ⊚ exprArg) of
+                (Just _, Just raw) → do
+                    logger ← readIORef (ccLoggerRef (toCoreCapability env))
+                    parseNameExpr logger raw
+                -- An expression with no provenance describes no
+                -- language, so there is nothing it could be checked
+                -- against or rendered through. Dropped silently: the
+                -- custom-name path is where a caller ends up when it
+                -- supplies no language, and warning there would fire on
+                -- every ordinary player-named world.
+                _                  → pure Nothing
             let identity = case mProv of
-                    Just prov → mkGeneratedWorldIdentity mName mGloss prov
+                    Just prov → mkGeneratedWorldIdentity mName mGloss prov mExpr
                     Nothing   → mkWorldIdentity mName mGloss
                 rawSize = maybe 64 fromIntegral sizeArg
             -- A provenance the caller DID supply, parsed fine, and that
@@ -175,6 +201,27 @@ parseProvenance logger raw mVer = case mSeed of
             <> "); the page keeps its custom name with no language."
         pure Nothing
 
+-- | Parse @world.init@'s optional name-expression argument (#1104).
+--   'Nothing' — with a warning — for anything that is not one of the
+--   four expression shapes
+--   'Language.Etymology.Source.encodeNameExpr' emits.
+--
+--   Refusing rather than approximating matches 'parseProvenance' one
+--   level down: a page that records no expression simply reports its
+--   etymology as unavailable, which is honest, whereas a guessed one
+--   would attach a fabricated derivation to a real world name (#1104
+--   requirement 7). The page keeps its name, its gloss, and its
+--   language either way.
+parseNameExpr ∷ LoggerState → Text → IO (Maybe NameExpr)
+parseNameExpr logger raw = case decodeNameExpr (T.strip raw) of
+    Just expr → pure (Just expr)
+    Nothing   → do
+        logWarn logger CatWorld $
+            "world.init ignoring name expression " <> T.pack (show raw)
+            <> " (not a recognized expression form); the page keeps its \
+            \generated name with no etymology."
+        pure Nothing
+
 -- | world.getIdentity(pageId) → { name, gloss? } | nil
 --   Read-only query for a page's player-facing identity (#707). Returns
 --   a table with the display name (and the gloss when one was stored)
@@ -236,7 +283,7 @@ worldGetLanguageProvenanceFn env = do
     return 1
 
 -- | world.suggestName(worldSeed [, ordinal])
---     → { name, gloss, language = { seed, version } }
+--     → { name, gloss, expr, language = { seed, version } }
 --     → nil, errorMessage
 --
 --   The producer side of the naming arc (#1106): suggestion number
@@ -247,7 +294,11 @@ worldGetLanguageProvenanceFn env = do
 --   spellings of one seed identify one language.
 --
 --   Returns the native name AND its English gloss, both rendered from
---   one semantic expression, plus the #1092 provenance to record if the
+--   one semantic expression, that EXPRESSION itself as @expr@ (#1104,
+--   in 'Language.Etymology.Source.encodeNameExpr''s compact text form —
+--   pass it straight back to @world.init@ so an accepted suggestion can
+--   later be decomposed into roots and meanings), plus the #1092
+--   provenance to record if the
 --   player accepts the suggestion — in exactly the
 --   @{ seed = \<decimal string\>, version = \<int\> }@ shape
 --   'worldGetLanguageProvenanceFn' returns and @world.init@ accepts, for
@@ -279,6 +330,8 @@ worldSuggestNameFn backendState = do
             Lua.setfield (-2) "name"
             Lua.pushstring (TE.encodeUtf8 (nsGloss sug))
             Lua.setfield (-2) "gloss"
+            Lua.pushstring (TE.encodeUtf8 (encodeNameExpr (nsExpr sug)))
+            Lua.setfield (-2) "expr"
             Lua.newtable
             Lua.pushstring (TE.encodeUtf8 (langSeedText (nsSeed sug)))
             Lua.setfield (-2) "seed"

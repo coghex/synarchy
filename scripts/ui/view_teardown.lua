@@ -101,6 +101,32 @@ local registry = {
       hudHide  = function() require("scripts.plant_panel").closeIfOpen() end,
       resize   = function() require("scripts.plant_panel").closeIfOpen() end },
 
+    -- Etymology panel + name plate (#1104): both mounted on
+    -- hud.global_page (the always-on gameplay page — a world's own name
+    -- is not a zoomed-in concern), so a page swap never destroys their
+    -- elements and their logical state would survive a transition
+    -- untouched. On a zoom-band change that is wrong for a different
+    -- reason than the world_page popups above: reconcileView's own sweep
+    -- clears the tile selection and the info panel, so the location and
+    -- river the plate was pointing at are gone and a panel still
+    -- explaining one of them describes something no longer selected. On
+    -- hudHide the gameplay view is leaving the screen entirely. The
+    -- plate mirrors live selection rather than holding one, so it only
+    -- needs its elements cleared; the panel closes. Both are idempotent.
+    --
+    -- Deliberately NOT hooked on "resize": hud.createUI() snapshots the
+    -- panel's inspected target + scroll offset and reopens it at the end
+    -- of the rebuild (#1104 requirement 11's "preserve its inspected
+    -- target and scroll state across a geometry rebuild"), which a
+    -- teardown here would defeat.
+    { name = "etymology_panel",
+      zoomBand = function() require("scripts.etymology_panel").closeIfOpen() end,
+      hudHide  = function() require("scripts.etymology_panel").closeIfOpen() end },
+
+    { name = "name_plate",
+      zoomBand = function() require("scripts.name_plate").clear() end,
+      hudHide  = function() require("scripts.name_plate").clear() end },
+
     -- Right-click context menu (#139/#86): lives on its own modal page,
     -- anchored to the tile/unit/item under the click. Page swaps never
     -- touch it, so it could survive over the wrong view or leak into the

@@ -178,8 +178,9 @@ spec = describe "Location naming" $ do
 
         it "matches what a fresh placement of the same overlay allocates" $
             namesOf builtA `shouldBe`
-                [ fst (nameLocationInstance (Just namerA) ruinDef n)
-                | n ← [1, 2, 3] ]
+                [ nm
+                | n ← [1, 2, 3]
+                , let (nm, _, _) = nameLocationInstance (Just namerA) ruinDef n ]
 
     describe "authored-scheme validation" $ do
         it "accepts the production ruin's scheme" $
