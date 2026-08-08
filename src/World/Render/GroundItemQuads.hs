@@ -193,7 +193,7 @@ renderGroundItemQuads env worldState tileAlpha = do
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera
-            (camX, _camY) = camPosition camera
+            (camX, camY) = camPosition camera
             worldSize = maybe 128 wgpWorldSize paramsM
             effectiveDepth =
                 min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
@@ -221,7 +221,7 @@ renderGroundItemQuads env worldState tileAlpha = do
                      }
 
             quadForM (gid, gi) = do
-                (tz, texHandle, drawX0, drawY, quadW, quadH, uwDepth)
+                (tz, texHandle, drawX0, drawY0, quadW, quadH, uwDepth)
                     ← itemGeometry tileData im texSizes facing zSlice
                                    worldSize gi
                 -- Same canonical frame itemGeometry drew in, so the
@@ -232,12 +232,16 @@ renderGroundItemQuads env worldState tileAlpha = do
                         canonicalTileFrame worldSize rawTX rawTY
                     tx = rawTX + dgx
                     ty = rawTY + dgy
-                xOff ← isChunkVisibleWrapped facing worldSize vb camX
-                                             chunkCoord
+                (wrapX, wrapY) ← isChunkVisibleWrapped facing worldSize vb
+                                     camX camY chunkCoord
                 if tz > zSlice ∨ tz < zSlice - effectiveDepth
                   then Nothing
                   else do
-                    let drawX = drawX0 + xOff
+                    -- BOTH components: at east/west facings the u-wrap
+                    -- displaces screen Y, so an X-only shift left the
+                    -- sprite a half-world up/down the screen (#1176).
+                    let drawX = drawX0 + wrapX
+                        drawY = drawY0 + wrapY
                         relativeZ = tz - zSlice
                         fy = giY gi - fromIntegral rawTY
                         (fa, fb) = applyFacing facing tx ty
@@ -327,30 +331,34 @@ hitTestGroundItemAt env worldState pixX pixY = do
             worldX = (normX * 2.0 - 1.0) * vw + camX
             worldY = (normY * 2.0 - 1.0) * vh + camY
 
-            -- The render pass draws at drawX0 + xOff, where xOff maps the
-            -- item's CANONICAL chunk onto the screen alias nearest the
-            -- camera. Clicks arrive in that same on-screen frame, so the
-            -- hit test has to apply the identical offset (#1135) — the
-            -- geometry alone is a whole worldScreenWidth away from the
-            -- click for anything shown through its wrapped image, i.e.
-            -- visible but unclickable. It also reproduces the render
-            -- pass's visibility gate: an item that is not drawn at all
-            -- must not be pickable.
+            -- The render pass draws at (drawX0, drawY0) shifted by the
+            -- wrap offset, which maps the item's CANONICAL chunk onto
+            -- the screen alias nearest the camera. Clicks arrive in that
+            -- same on-screen frame, so the hit test has to apply the
+            -- identical offset (#1135) — the geometry alone is a whole
+            -- wrap period away from the click for anything shown through
+            -- its wrapped image, i.e. visible but unclickable. BOTH
+            -- components, since #1176: the period lives on screen Y at
+            -- east/west facings, where an X-only shift left the click
+            -- box a half-world off the sprite. It also reproduces the
+            -- render pass's visibility gate: an item that is not drawn
+            -- at all must not be pickable.
             vb = computeViewBounds camera fbW fbH effectiveDepth
             candidates =
                 [ (tz, dist, gid)
                 | (gid, gi) ← HM.toList (gisItems gis)
-                , Just (tz, _tex, drawX0, drawY, quadW, quadH, _uw)
+                , Just (tz, _tex, drawX0, drawY0, quadW, quadH, _uw)
                     ← [itemGeometry tileData im texSizes facing zSlice
                                     worldSize gi]
                 , let (chunkCoord, _, _) =
                           canonicalTileFrame worldSize
                               (floor (giX gi)) (floor (giY gi))
-                , Just xOff ← [isChunkVisibleWrapped facing worldSize
-                                   vb camX chunkCoord]
+                , Just (wrapX, wrapY) ← [isChunkVisibleWrapped facing worldSize
+                                             vb camX camY chunkCoord]
                 , tz ≤ zSlice
                 , tz ≥ zSlice - effectiveDepth
-                , let drawX = drawX0 + xOff
+                , let drawX = drawX0 + wrapX
+                      drawY = drawY0 + wrapY
                       cx = drawX + quadW * 0.5
                       cy = drawY + quadH * 0.5
                       dx = worldX - cx
