@@ -35,11 +35,12 @@
 --   5. __Away from the seam every step above is the identity__, as it is
 --      for arena / non-wrapping worlds.
 --
--- Seam VISIBILITY is a separate, still-open axis: the wrap offset
--- 'World.Render.ChunkCulling.bestWrapOffset' returns is screen-X only,
--- which is exact at south/north and cannot correct east/west (#1176).
--- The frame contract above holds at all four facings; whether the
--- resolved chunk passes the visibility gate at east/west is #1176's.
+-- Seam VISIBILITY is the separate axis #1176 owns: the wrap offset
+-- 'World.Render.ChunkCulling.bestWrapOffset' returns is a facing-aware
+-- @(x, y)@ pair, because a u-wrap displaces screen Y rather than screen
+-- X at east/west. The two halves compose — this function resolves WHICH
+-- tile a pixel names, that one decides where the tile is drawn — and
+-- both hold at all four facings.
 module World.Render.HitTest
     ( HitResult
     , pickWorldTile
@@ -143,10 +144,10 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
                 in if i < 0 ∨ i >= colLen
                    then tryZ (z - 1)
                    else if ctMats col VU.! i ≠ 0
-                        -- The 2-D offset propagates whenever the raw
-                        -- lookup above DOES resolve (#1176); making the
-                        -- lookup itself seam-aware is #1175's job, as
-                        -- the note above records.
+                        -- The lookup above is seam-aware (#1175) and the
+                        -- offset this returns is facing-aware (#1176), so
+                        -- a seam-side pixel now both resolves its tile and
+                        -- reports where that tile is actually drawn.
                         then case isChunkVisibleWrapped facing worldSize vb
                                       camX camY chunkCoord of
                                Just wrapOff → Just (gx, gy, z, wrapOff, hoverPos)

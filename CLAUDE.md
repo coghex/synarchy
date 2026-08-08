@@ -832,10 +832,11 @@ before touching each area:
   than the old seam-blind behaviour; don't do it. Away from the seam,
   and in arena / non-wrapping worlds, every step is the identity.
   Persistence: `world-activity` v2 (same bytes, canonical-key
-  invariant); a v1 payload is re-keyed on load. Seam VISIBILITY is a
-  separate open axis — `bestWrapOffset` is screen-X only and cannot be
-  right at east/west (#1176). Gates: hspec `--match "World.Render.PickSeam"`,
-  `--match "World.DesignationSeam"`.
+  invariant); a v1 payload is re-keyed on load. Seam VISIBILITY is the
+  separate axis #1176 owns — which tile a pixel NAMES is this contract,
+  where that tile is DRAWN is `bestWrapOffset`'s facing-aware `(x, y)`
+  offset; both hold at all four facings. Gates: hspec
+  `--match "World.Render.PickSeam"`, `--match "World.DesignationSeam"`.
 - **Construction (#95/#96)** — `construction.*` designations +
   construct_job AI (claim → source materials → progress → place →
   stake); build costs in `data/structure_packs/*.yaml` `build:` blocks.

@@ -17,13 +17,13 @@
 --   whole-tile shift or a caller receives a tile and a sub-tile position
 --   naming different places.
 --
---   All four camera facings are covered. The wrap OFFSET the pick also
---   returns is screen-X only and cannot be right at east/west (#1176,
---   recorded on 'World.Render.ChunkCulling.bestWrapOffset'); these
---   examples therefore assert the coordinate frame, which #1175 owns,
---   and not that offset. The fixture keeps the resolved chunk inside the
---   view bounds at every facing so the visibility gate is never the
---   thing under test.
+--   All four camera facings are covered. These examples assert the
+--   coordinate FRAME, which is #1175's half of the seam story; where the
+--   resolved tile is then drawn is the facing-aware wrap offset #1176
+--   owns ('World.Render.ChunkCulling.bestWrapOffset', covered by
+--   'Test.Headless.World.Render.GroundItemSeam'). The fixture keeps the
+--   resolved chunk inside the view bounds at every facing so the
+--   visibility gate is never the thing under test.
 module Test.Headless.World.Render.PickSeam (spec) where
 
 import UPrelude
@@ -39,7 +39,7 @@ import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Coordinates (canonicalTile)
 import World.Grid (gridToWorld, tileHeight, worldToGridF)
-import World.Render.HitTest (pickWorldTile)
+import World.Render.HitTest (HitResult, pickWorldTile)
 import World.Render.ViewBounds (ViewBounds(..), computeViewBounds)
 import World.Tile.Types (WorldTileData(..))
 import Engine.Graphics.Camera (Camera2D(..), defaultCamera)
@@ -130,8 +130,7 @@ pixelFor facing (camX, camY) (gx, gy) =
 
 -- | Run the real pick with the camera parked ON the given tile — the
 --   configuration that puts the seam alias under the cursor.
-pickAt ∷ CameraFacing → WorldTileData → (Int, Int)
-       → Maybe (Int, Int, Int, Float, (Float, Float))
+pickAt ∷ CameraFacing → WorldTileData → (Int, Int) → Maybe HitResult
 pickAt facing tiles cameraTile =
     let (camX, camY) = gridToWorld facing (fst cameraTile) (snd cameraTile)
         cam = defaultCamera { camPosition = (camX, camY)
