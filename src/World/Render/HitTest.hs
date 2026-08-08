@@ -24,11 +24,13 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Render.ViewBounds (ViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 
--- | Resolved hit: @(gx, gy, z, xOffset, hoverPos)@ where @(gx,gy,z)@ is
---   the solid tile under the cursor, @xOffset@ is the wrapped-chunk x
---   offset, and @hoverPos@ is the fractional grid position (item/unit
---   convention) at the click point.
-type HitResult = (Int, Int, Int, Float, (Float, Float))
+-- | Resolved hit: @(gx, gy, z, wrapOffset, hoverPos)@ where @(gx,gy,z)@
+--   is the solid tile under the cursor, @wrapOffset@ is the
+--   wrapped-chunk screen shift as an @(x, y)@ pair — facing-aware since
+--   #1176, because a u-wrap displaces screen Y and not screen X at
+--   east/west facings — and @hoverPos@ is the fractional grid position
+--   (item/unit convention) at the click point.
+type HitResult = (Int, Int, Int, (Float, Float), (Float, Float))
 
 -- | Unproject a screen pixel to the tile under it. Mirror of the inline
 --   hit-test that drives @worldHoverTile@ each frame; see that comment in
@@ -113,7 +115,12 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
                 in if i < 0 ∨ i >= colLen
                    then tryZ (z - 1)
                    else if ctMats col VU.! i ≠ 0
-                        then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                               Just xOff → Just (gx, gy, z, xOff, hoverPos)
-                               Nothing   → tryZ (z - 1)
+                        -- The 2-D offset propagates whenever the raw
+                        -- lookup above DOES resolve (#1176); making the
+                        -- lookup itself seam-aware is #1175's job, as
+                        -- the note above records.
+                        then case isChunkVisibleWrapped facing worldSize vb
+                                      camX camY chunkCoord of
+                               Just wrapOff → Just (gx, gy, z, wrapOff, hoverPos)
+                               Nothing      → tryZ (z - 1)
                         else tryZ (z - 1)

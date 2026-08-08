@@ -19,6 +19,7 @@ module World.Grid
     , gridToScreen
     , worldToGrid
     , worldScreenWidth
+    , worldWrapPeriod
       -- * Camera constants
     , cameraPanSpeed
     , cameraPanAccel
@@ -154,6 +155,32 @@ worldScreenWidth ∷ Int → Float
 worldScreenWidth worldSizeChunks =
     let worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
+
+-- | Screen-space displacement of ONE u-wrap, per camera facing (#1176).
+--
+--   A u-wrap shifts u by a whole world and PRESERVES v = gx + gy, while
+--   'gridToWorld' swaps which screen axis carries u:
+--
+--     * FaceSouth / FaceNorth — sx = ±u·tileHalfWidth,
+--       sy = ±v·tileHalfDiamondHeight, so the wrap displaces screen X.
+--     * FaceWest / FaceEast — sx = ±v·tileHalfWidth,
+--       sy = ∓u·tileHalfDiamondHeight, so it displaces screen Y instead.
+--
+--   The untouched component is exactly 0, not merely small: v does not
+--   move. This is the one statement of both periods — 'worldScreenWidth'
+--   is the X one under its historical name, and
+--   'World.Render.Zoom.ViewBounds.bestZoomWrapOffset' and
+--   'World.Render.ChunkCulling.bestWrapOffset' both read them from here
+--   so the full-detail and zoom renderers cannot disagree about the
+--   world's own period.
+worldWrapPeriod ∷ CameraFacing → Int → (Float, Float)
+worldWrapPeriod facing worldSizeChunks =
+    let worldTiles = fromIntegral (worldSizeChunks * chunkSize) ∷ Float
+    in case facing of
+        FaceSouth → (worldTiles * tileHalfWidth, 0)
+        FaceNorth → (worldTiles * tileHalfWidth, 0)
+        FaceWest  → (0, worldTiles * tileHalfDiamondHeight)
+        FaceEast  → (0, worldTiles * tileHalfDiamondHeight)
 
 -- * Facing Transforms
 
