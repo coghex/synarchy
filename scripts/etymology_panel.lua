@@ -30,7 +30,8 @@
 --   reflow()               -- re-layout after hud geometry is current
 --   onFramebufferResize(w, h)
 --   handleKeyDown(key)     -- Escape closes
---   handleScroll(dy)       -- wheel over the panel
+--   onScroll(elem, dx, dy) -- mouse wheel over the panel
+--   handleScrollCallback(name, elem) -- its scrollbar's arrow buttons
 --   dump()                 -- read-only introspection (F3-style)
 --
 -- Gameplay surface, NOT a responsive menu registry member: it is
@@ -214,6 +215,7 @@ local function destroyAll()
         scrollbar.destroy(s.scrollbarId)
         s.scrollbarId = nil
     end
+    s.scrollHandles = nil
     if s.viewportId then
         UI.deleteElement(s.viewportId)
         s.viewportId = nil
@@ -285,10 +287,20 @@ local function buildLayout()
     -- clamp below only ever repositions, never shrinks.
     panelW = math.min(panelW, h.fbW)
 
-    local visibleRows = math.max(1, math.min(#s.rows, MAX_ROWS))
+    -- How many rows can actually be SHOWN. MAX_ROWS is the taste cap,
+    -- but the framebuffer is the hard one: a short screen (or a high UI
+    -- scale) caps the panel's height, and a row count derived only from
+    -- the content would then paint more rows than the box can hold. So
+    -- the fitting count is computed from the height that is really
+    -- available and the content scrolls instead — requirement 11's
+    -- "clip or scroll content that exceeds its bounds", applied to the
+    -- bound the screen imposes rather than only to the one the content
+    -- asks for.
+    local chromeH  = padTop + titleH + glossH + 8 + padBot
+    local fitRows  = math.floor(math.max(0, h.fbH - chromeH) / rowH)
+    local visibleRows = math.max(1, math.min(#s.rows, MAX_ROWS, fitRows))
     local rowsH  = visibleRows * rowH
-    local panelH = math.min(padTop + titleH + glossH + 8 + rowsH + padBot,
-                            h.fbH)
+    local panelH = math.min(chromeH + rowsH, h.fbH)
 
     -- Anchored to the top-right, clear of the left-side toolbar
     -- clusters; clamped so it never opens partly off-screen.
@@ -314,6 +326,19 @@ local function buildLayout()
     })
     -- Content geometry derives from the panel's REAL bounds, never an
     -- independently recomputed value that could drift from it.
+    -- #744/#747: declare the panel box a scroll-CAPTURING surface, so
+    -- routeScroll picks it as the topmost in-scope capturing element and
+    -- delivers the wheel to uiManager.onUIScroll (and on to this
+    -- module's own onScroll) instead of zooming the world behind it.
+    -- Pointer-blocking too, for the same reason combat_log declares
+    -- both: blank panel space must not leak clicks through to the world
+    -- underneath a read-only overlay.
+    local boxHandle = panel.getBoxHandle(s.panelId)
+    if boxHandle then
+        UI.setScrollCapture(boxHandle, true)
+        UI.setPointerBlocking(boxHandle, true)
+    end
+
     local pb = panel.getContentBounds(s.panelId)
     local cx, cy, cw = px + pb.x, py + pb.y, pb.width
 
@@ -368,6 +393,7 @@ local function buildLayout()
             end,
         })
         scrollbar.setScrollOffset(s.scrollbarId, s.scrollOffset)
+        s.scrollHandles = scrollbar.getElementHandles(s.scrollbarId)
     end
 
     s.visibleRows = visibleRows
@@ -485,20 +511,60 @@ function etymologyPanel.handleKeyDown(key)
     return false
 end
 
--- Wheel scrolling over the panel's own content. Returns true when it
--- consumed the event.
-function etymologyPanel.handleScroll(dy)
+-- Move the view by one row, re-rendering in place. Shared by both input
+-- routes below so the wheel and the scrollbar's arrows can never scroll
+-- by different amounts or leave the scrollbar's own thumb out of step
+-- with the rows.
+local function scrollBy(step)
     local s = etymologyPanel.state
     if not s.open or not s.scrollbarId then return false end
-    local step = (dy or 0) > 0 and -1 or 1
     local maxOffset = math.max(0, #s.rows - (s.visibleRows or 1))
     local next = math.max(0, math.min(maxOffset, s.scrollOffset + step))
-    if next == s.scrollOffset then return true end
-    s.scrollOffset = next
-    scrollbar.setScrollOffset(s.scrollbarId, next)
-    renderRows(s.contentX, s.contentY, s.contentW, s.visibleRows or 1,
-               s.uiscale or scale.get())
+    if next ~= s.scrollOffset then
+        s.scrollOffset = next
+        scrollbar.setScrollOffset(s.scrollbarId, next)
+        renderRows(s.contentX, s.contentY, s.contentW, s.visibleRows or 1,
+                   s.uiscale or scale.get())
+    end
+    -- True even when the offset did not move: the event was OURS (the
+    -- cursor was over this panel), and letting it fall through would
+    -- zoom the world out from under an open panel at either end of the
+    -- list.
     return true
+end
+
+-- Is this element part of the panel's own scroll surface? The panel box
+-- itself and its scrollbar both count, mirroring event_log's rule, so a
+-- wheel anywhere over the panel scrolls it rather than the world.
+local function ownsScrollElement(elemHandle)
+    local s = etymologyPanel.state
+    if not s.open or not s.scrollbarId then return false end
+    if s.panelId and panel.getBoxHandle(s.panelId) == elemHandle then
+        return true
+    end
+    return scrollbar.findByElementHandle(elemHandle) == s.scrollbarId
+end
+
+-- Mouse WHEEL over the panel (uiManager.onUIScroll). Returns true when
+-- it consumed the event.
+function etymologyPanel.onScroll(elemHandle, dx, dy)
+    if not ownsScrollElement(elemHandle) then return false end
+    if (dy or 0) > 0 then return scrollBy(-1) end
+    if (dy or 0) < 0 then return scrollBy(1) end
+    return true
+end
+
+-- The scrollbar's own up/down ARROW buttons
+-- (uiManager.onScrollUp / onScrollDown).
+function etymologyPanel.handleScrollCallback(callbackName, elemHandle)
+    local s = etymologyPanel.state
+    if not s.open or not s.scrollbarId then return false end
+    if scrollbar.findByElementHandle(elemHandle) ~= s.scrollbarId then
+        return false
+    end
+    if callbackName == "onScrollUp"   then return scrollBy(-1) end
+    if callbackName == "onScrollDown" then return scrollBy(1) end
+    return false
 end
 
 -----------------------------------------------------------
@@ -570,6 +636,12 @@ function etymologyPanel.dump()
     end
     out.viewport = s.viewportId
     out.clipsChildren = s.viewportId ~= nil
+    -- The scroll controls' own live handles, so a probe or a test can
+    -- drive the wheel and the arrows at real elements rather than at
+    -- guessed coordinates (same reason the row bounds are here).
+    out.scrollbar = s.scrollbarId
+    out.scrollHandles = s.scrollHandles or {}
+    if s.panelId then out.box = panel.getBoxHandle(s.panelId) end
     return out
 end
 

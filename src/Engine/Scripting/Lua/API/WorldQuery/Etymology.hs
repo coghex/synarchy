@@ -52,6 +52,7 @@ import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), instancesToList
     , isDiscoveredLifecycle )
+import World.Geology.Hash (wrappedDeltaUV)
 import World.River.Identity (timelineRivers)
 import World.River.Naming (RiverName(..), lookupRiverName)
 -- Re-exports 'GeoFeatureId', 'WorldIdentity', 'WorldPageId', the
@@ -146,18 +147,27 @@ recurrenceFor cat self eligible ety =
 --   Deliberately minimal, and deliberately the CHANNEL rather than the
 --   valley: the channel is where the water a player can see actually
 --   is, so a click on a river bank does not silently select the river
---   two valleys over. Geometry is read the same way
---   'World.Hydrology.River.Carving' reads it — segment endpoints are
---   global tile coordinates, and the perpendicular distance to the
---   segment axis is compared against its own half width — so this
---   cannot disagree with where the carve put the channel.
+--   two valleys over.
+--
+--   Geometry is read exactly the way
+--   'World.Hydrology.River.Carving.carveFromSegment' reads it, including
+--   'wrappedDeltaUV'. That is not a stylistic nicety: the world wraps on
+--   the u axis, so a river crossing the seam has segment endpoints whose
+--   RAW coordinate difference from a nearby tile is a whole world wide.
+--   Measuring with raw deltas would put every seam-crossing river
+--   impossibly far from its own water — resolving to no river, or to
+--   whichever unrelated river happened to be nearer in unwrapped space —
+--   and the etymology entry point for those rivers would simply not
+--   exist. Sharing the carve's own delta function is what keeps this
+--   answer and the terrain it is asking about in the same coordinate
+--   space.
 --
 --   The nearest qualifying river wins, and a river with no resolvable
 --   'GeoFeatureId' is skipped rather than reported without one: an
 --   unidentified river cannot be looked up, and a wrong id would attach
 --   another river's name to it.
-riverAtTile ∷ GeoTimeline → Int → Int → Maybe GeoFeatureId
-riverAtTile timeline gx gy =
+riverAtTile ∷ Int → GeoTimeline → Int → Int → Maybe GeoFeatureId
+riverAtTile worldSize timeline gx gy =
     fmap snd (listToMaybe (sortOn fst hits))
   where
     hits =
@@ -187,10 +197,14 @@ riverAtTile timeline gx gy =
       where
         GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
-        px = fromIntegral (gx - sx) ∷ Double
-        py = fromIntegral (gy - sy) ∷ Double
-        fdx = fromIntegral (ex - sx) ∷ Double
-        fdy = fromIntegral (ey - sy) ∷ Double
+        -- Both deltas are taken FROM the segment start, wrapped, exactly
+        -- as the carve takes them.
+        (pxi, pyi) = wrappedDeltaUV worldSize gx gy sx sy
+        (fxi, fyi) = wrappedDeltaUV worldSize ex ey sx sy
+        px = fromIntegral pxi ∷ Double
+        py = fromIntegral pyi ∷ Double
+        fdx = fromIntegral fxi ∷ Double
+        fdy = fromIntegral fyi ∷ Double
         segLen = sqrt (fdx * fdx + fdy * fdy)
         nx = fdx / segLen
         ny = fdy / segLen
@@ -247,7 +261,8 @@ worldGetRiverAtFn wsc = do
             let mPid = WorldPageId ∘ TE.decodeUtf8Lenient <$> pageArg
             mParams ← Lua.liftIO $ genParamsFor wsc mPid
             case mParams ⌦ \params →
-                    (,) params <$> riverAtTile (wgpGeoTimeline params)
+                    (,) params <$> riverAtTile (wgpWorldSize params)
+                                               (wgpGeoTimeline params)
                                                (fromIntegral gx)
                                                (fromIntegral gy) of
                 Nothing → Lua.pushnil

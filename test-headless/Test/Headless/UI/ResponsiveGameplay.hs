@@ -2902,6 +2902,45 @@ spec = aroundAll withSharedFixture $ do
                         ersRegistered p `shouldBe` False
                         ersStillOpen p `shouldBe` True
 
+        it "content is bounded by the FRAMEBUFFER, not only by the row \
+           \count: a short screen shows fewer rows and scrolls the rest, \
+           \rather than painting rows the panel box cannot hold" $
+            \(env, ls) → do
+                resetFixture env ls
+                r ← evalJSON ls $ luaLines
+                    [ stubScrollable
+                    , "local hud = require('scripts.hud');"
+                    -- Deliberately short, and inside the supported
+                    -- envelope's formal 800x600 minimum.
+                    , "hud.init(1,2,800,600);"
+                    , "hud.createUI();"
+                    , "local ep = require('scripts.etymology_panel');"
+                    , "ep.openFor('world');"
+                    , "local panel = require('scripts.ui.panel');"
+                    , "local d = ep.dump();"
+                    , "local box = panel.getBoxHandle(ep.state.panelId);"
+                    , "local bi = box and UI.getElementInfo(box);"
+                    , "local vi = d.viewport and UI.getElementInfo(d.viewport);"
+                    , "return {rowCount = d.rowCount,"
+                    , "        visibleRows = d.visibleRows,"
+                    , "        panelBottom = bi and (bi.y + bi.height) or 0,"
+                    , "        viewportBottom = vi and (vi.y + vi.height) or 0,"
+                    , "        hasScrollbar = d.scrollbar ~= nil}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EtyFitProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        -- More content than fits, so the cap is doing work.
+                        efRowCount p `shouldSatisfy` (> efVisibleRows p)
+                        efVisibleRows p `shouldSatisfy` (> 0)
+                        -- The panel stays on screen...
+                        efPanelBottom p `shouldSatisfy` (≤ 600)
+                        -- ...and its scrolling viewport stays inside it,
+                        -- which is what a row count derived only from the
+                        -- content would break.
+                        efViewportBottom p `shouldSatisfy` (≤ efPanelBottom p)
+                        efHasScrollbar p `shouldBe` True
+
         it "no-ops safely at a minimized 0x0 framebuffer, and a later \
            \real resize recovers valid geometry" $ \(env, ls) → do
             resetFixture env ls
@@ -2969,6 +3008,107 @@ spec = aroundAll withSharedFixture $ do
                     etdRowCount p `shouldBe` 0
                     etdViewportNil p `shouldBe` True
                     etdPlateRows p `shouldBe` 0
+
+        it "the mouse WHEEL scrolls it through the real routing -- \
+           \uiManager.onUIScroll over the panel moves the content and \
+           \consumes the event, so it cannot fall through to the world \
+           \zoom underneath" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ stubScrollable, bootHud
+                , "local ep = require('scripts.etymology_panel');"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "ep.openFor('world');"
+                , "local panel = require('scripts.ui.panel');"
+                , "local box = panel.getBoxHandle(ep.state.panelId);"
+                , "local info = box and UI.getElementInfo(box);"
+                , "local before = ep.state.scrollOffset;"
+                -- Wheel DOWN over the panel box: the same element
+                -- routeScroll would have picked, since it is the
+                -- capturing surface.
+                , "uiManager.onUIScroll(box, 0, -1, false);"
+                , "local afterDown = ep.state.scrollOffset;"
+                , "uiManager.onUIScroll(box, 0, 1, false);"
+                , "local afterUp = ep.state.scrollOffset;"
+                -- An element that is NOT ours must not be consumed.
+                , "local foreign = ep.state.viewportId;"
+                , "local consumedForeign = ep.onScroll(-12345, 0, -1);"
+                , "return {captures = (info and info.scrollCapturing) == true,"
+                , "        before = before, afterDown = afterDown,"
+                , "        afterUp = afterUp,"
+                , "        consumed = ep.onScroll(box, 0, -1) == true,"
+                , "        consumedForeign = consumedForeign == true,"
+                , "        rowsMoved = (ep.dump().rows[1] or {}).text}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EtyWheelProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ewCaptures p `shouldBe` True
+                    ewBefore p `shouldBe` 0
+                    -- The wheel really moved the view, both ways.
+                    ewAfterDown p `shouldSatisfy` (> 0)
+                    ewAfterUp p `shouldBe` 0
+                    ewConsumed p `shouldBe` True
+                    -- and an unrelated element is left alone.
+                    ewConsumedForeign p `shouldBe` False
+
+        -- The scrollbar's ARROW route. Its buttons are UI sprites, and
+        -- the bare Lua backend has no textures, so a real scrollbar here
+        -- owns no element handles at all (dump().scrollHandles is empty)
+        -- and the arrows cannot be clicked the way a GPU boot can. What
+        -- IS testable headlessly is the wiring the review found missing:
+        -- that uiManager's arrow routes consult this panel, and that its
+        -- handler moves the view for a handle belonging to its own
+        -- scrollbar. tools/etymology_probe.py drives the real arrows.
+        it "uiManager.onScrollUp / onScrollDown consult the panel, and \
+           \its handler moves the view for its OWN scrollbar's handle \
+           \while ignoring another widget's" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ stubScrollable, bootHud
+                , "local ep = require('scripts.etymology_panel');"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "local scrollbar = require('scripts.ui.scrollbar');"
+                , "ep.openFor('world');"
+                -- (a) The router really reaches this panel on both
+                -- arrow callbacks.
+                , "local seen = {};"
+                , "local real = ep.handleScrollCallback;"
+                , "ep.handleScrollCallback = function(name, h)"
+                , "  seen[#seen + 1] = name; return false end;"
+                , "uiManager.onScrollUp(-999);"
+                , "uiManager.onScrollDown(-999);"
+                , "ep.handleScrollCallback = real;"
+                -- (b) The handler itself: a handle that resolves to OUR
+                -- scrollbar scrolls; one that resolves elsewhere does not.
+                , "local realFind = scrollbar.findByElementHandle;"
+                , "scrollbar.findByElementHandle = function(h)"
+                , "  if h == 4242 then return ep.state.scrollbarId end"
+                , "  return realFind(h) end;"
+                , "local before = ep.state.scrollOffset;"
+                , "local downOk = ep.handleScrollCallback('onScrollDown', 4242);"
+                , "local afterDown = ep.state.scrollOffset;"
+                , "local upOk = ep.handleScrollCallback('onScrollUp', 4242);"
+                , "local afterUp = ep.state.scrollOffset;"
+                , "local foreign = ep.handleScrollCallback('onScrollDown', 7);"
+                , "scrollbar.findByElementHandle = realFind;"
+                , "return {seen = seen, before = before,"
+                , "        afterDown = afterDown, afterUp = afterUp,"
+                , "        downOk = downOk == true, upOk = upOk == true,"
+                , "        foreign = foreign == true}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EtyArrowProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- Both arrow routes reach the panel.
+                    eaSeen p `shouldBe` ["onScrollUp", "onScrollDown"]
+                    eaBefore p `shouldBe` 0
+                    eaDownOk p `shouldBe` True
+                    eaAfterDown p `shouldSatisfy` (> 0)
+                    eaUpOk p `shouldBe` True
+                    eaAfterUp p `shouldBe` 0
+                    -- Another widget's scrollbar is left alone.
+                    eaForeign p `shouldBe` False
 
         it "the name plate offers an entry point for a DISCOVERED \
            \location and for a river on the selected tile, and none for \
@@ -3575,3 +3715,31 @@ instance FromJSON EtyClickProbe where
         EtyClickProbe <$> o .: "found" <*> o .:? "x" .!= 0 <*> o .:? "y" .!= 0
                       <*> o .:? "w" .!= 0 <*> o .:? "h" .!= 0
                       <*> o .:? "openKind" <*> o .:? "openId"
+
+data EtyWheelProbe = EtyWheelProbe
+    { ewCaptures ∷ Bool, ewBefore ∷ Int, ewAfterDown ∷ Int, ewAfterUp ∷ Int
+    , ewConsumed ∷ Bool, ewConsumedForeign ∷ Bool } deriving Show
+instance FromJSON EtyWheelProbe where
+    parseJSON = withObject "EtyWheelProbe" $ \o →
+        EtyWheelProbe <$> o .: "captures" <*> o .: "before"
+                      <*> o .: "afterDown" <*> o .: "afterUp"
+                      <*> o .: "consumed" <*> o .: "consumedForeign"
+
+data EtyArrowProbe = EtyArrowProbe
+    { eaSeen ∷ [Text], eaBefore ∷ Int, eaAfterDown ∷ Int, eaAfterUp ∷ Int
+    , eaDownOk ∷ Bool, eaUpOk ∷ Bool, eaForeign ∷ Bool } deriving Show
+instance FromJSON EtyArrowProbe where
+    parseJSON = withObject "EtyArrowProbe" $ \o →
+        EtyArrowProbe <$> o .: "seen" <*> o .: "before"
+                      <*> o .: "afterDown" <*> o .: "afterUp"
+                      <*> o .: "downOk" <*> o .: "upOk"
+                      <*> o .: "foreign"
+
+data EtyFitProbe = EtyFitProbe
+    { efRowCount ∷ Int, efVisibleRows ∷ Int, efPanelBottom ∷ Int
+    , efViewportBottom ∷ Int, efHasScrollbar ∷ Bool } deriving Show
+instance FromJSON EtyFitProbe where
+    parseJSON = withObject "EtyFitProbe" $ \o →
+        EtyFitProbe <$> o .: "rowCount" <*> o .: "visibleRows"
+                    <*> o .: "panelBottom" <*> o .: "viewportBottom"
+                    <*> o .: "hasScrollbar"

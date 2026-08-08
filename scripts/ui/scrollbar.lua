@@ -484,6 +484,26 @@ function scrollbar.getTrackWidth(id)
     return sb.trackWidth
 end
 
+-- Every element handle this scrollbar owns, in a stable order:
+-- up button, down button, tab, track middle. Mirrors
+-- toggle.getElementHandles (which scripts/hud.lua already uses to union
+-- a cluster's real bounds), and exists for the same reason: a caller
+-- that needs to locate or drive a scrollbar's controls should read the
+-- live handles rather than re-derive positions that can drift.
+function scrollbar.getElementHandles(id)
+    local sb = scrollbars[id]
+    if not sb then return {} end
+    -- Appended explicitly rather than iterated over a table literal:
+    -- ipairs stops at the first nil, so a scrollbar built without one of
+    -- these would silently report none of the ones after it.
+    local out = {}
+    if sb.upButtonId   then out[#out + 1] = sb.upButtonId   end
+    if sb.downButtonId then out[#out + 1] = sb.downButtonId end
+    if sb.tabId        then out[#out + 1] = sb.tabId        end
+    if sb.trackMidId   then out[#out + 1] = sb.trackMidId   end
+    return out
+end
+
 function scrollbar.findByElementHandle(elemHandle)
     for id, sb in pairs(scrollbars) do
         if sb.upButtonId == elemHandle then

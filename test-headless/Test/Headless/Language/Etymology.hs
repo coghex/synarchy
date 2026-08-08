@@ -35,12 +35,20 @@ import Language.Generated.Render (renderNative)
 import Language.Etymology
 import Language.Etymology.Source (EtymologySource(..), decodeNameExpr, encodeNameExpr)
 import Engine.Scripting.Lua.API.WorldQuery.Etymology
-    (EtyEntity(..), eligibleEntities, recurrenceFor)
+    (EtyEntity(..), eligibleEntities, recurrenceFor, riverAtTile)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), LocationLifecycle(..) )
 import Location.Bounds (AbsBounds(..))
-import World.Base (GeoFeatureId(..))
-import World.Chunk.Types (ChunkCoord(..))
+import World.Base (GeoCoord(..), GeoFeatureId(..))
+import qualified Data.Vector as V
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import qualified Data.HashMap.Strict as HM
+import World.Geology.Timeline.Types
+    ( GeoTimeline(..), GeoPeriod(..), GeoScale(..), GeoEvent(..)
+    , FeatureShape(..), FeatureActivity(..), PersistentFeature(..)
+    , defaultErosionParams, emptyTimeline, noBBox )
+import World.Hydrology.Types
+    (HydroFeature(..), RiverParams(..), RiverSegment(..))
 import World.Page.Types (WorldIdentity(..))
 import World.River.Naming (RiverName(..))
 
@@ -573,6 +581,44 @@ spec = beforeAll loadRealCatalogue $ do
                 links = recurrenceFor cat worldE eligible ety
             concatMap snd links `shouldBe` []
 
+    -- #1104 requirement 10's river entry point is only reachable if a
+    -- visible river segment resolves to its own identity. The world
+    -- WRAPS on the u axis, so this has to be measured the way the carve
+    -- measures it — a raw coordinate delta puts a seam-crossing river a
+    -- whole world away from its own water.
+    describe "river selection resolves through the wrapped axis" $ do
+        it "resolves a tile beside an ordinary, non-seam-crossing river" $
+            \_cat →
+                riverAtTile seamWorldSize (timelineWith [innerRiver])
+                            innerTileOnChannel innerTileY
+                    `shouldBe` Just (GeoFeatureId 1)
+
+        it "resolves a tile beside a river whose segment CROSSES the wrap \
+           \seam -- the raw-delta reading would report no river at all" $
+            \_cat →
+                riverAtTile seamWorldSize (timelineWith [seamRiver])
+                            seamTileX seamTileY
+                    `shouldBe` Just (GeoFeatureId 2)
+
+        it "does not claim a tile that is genuinely far from every \
+           \channel, so the wrapped reading has not simply widened the \
+           \match" $ \_cat →
+            riverAtTile seamWorldSize (timelineWith [innerRiver, seamRiver])
+                        0 0
+                `shouldBe` Nothing
+
+        it "prefers the NEARER river when two are in range, and reports \
+           \no id for a river the timeline cannot identify" $ \_cat → do
+            riverAtTile seamWorldSize (timelineWith [innerRiver, seamRiver])
+                        innerTileOnChannel innerTileY
+                `shouldBe` Just (GeoFeatureId 1)
+            -- A timeline whose events cannot be paired with its features
+            -- yields no ids at all, so nothing resolves rather than
+            -- something wrong.
+            riverAtTile seamWorldSize (unpairedTimeline [innerRiver])
+                        innerTileOnChannel innerTileY
+                `shouldBe` Nothing
+
 -- * Fixture plumbing --------------------------------------------------
 
 loadRealCatalogue ∷ IO Catalogue
@@ -609,3 +655,99 @@ riverNameOf ∷ EtyEntity → RiverName
 riverNameOf e = RiverName
     { rvnDisplayName = eeName e, rvnGloss = eeGloss e
     , rvnEtymology = eeSource e }
+
+-- * River-selection fixtures ------------------------------------------
+
+-- | A small world, so the wrap seam is close enough to build a
+--   deliberately seam-crossing segment against.
+seamWorldSize ∷ Int
+seamWorldSize = 8
+
+-- | Half the world's U extent — where 'wrappedDeltaUV' folds. ONLY the
+--   u axis (@gx - gy@) wraps; the world is a cylinder, not a torus, so a
+--   fixture that put its endpoints far apart in v as well would not be
+--   crossing the seam at all — it would just be a long river.
+seamHalf ∷ Int
+seamHalf = seamWorldSize * chunkSize `div` 2
+
+-- | A tile from its isometric @(u, v)@ coordinates, so a seam-crossing
+--   fixture can be stated in the axis that actually wraps rather than
+--   in x\/y where the intent is invisible.
+fromUV ∷ Int → Int → GeoCoord
+fromUV u v = GeoCoord ((u + v) `div` 2) ((v - u) `div` 2)
+
+-- | An ordinary river well inside the world, running along +u.
+innerRiver ∷ (Int, RiverParams)
+innerRiver = (1, riverFrom (GeoCoord 40 40) (GeoCoord 60 60))
+
+innerTileOnChannel, innerTileY ∷ Int
+innerTileOnChannel = 50
+innerTileY = 50
+
+-- | A river whose two endpoints sit on OPPOSITE sides of the u wrap
+--   seam at the same v: raw, their u values are nearly a world apart;
+--   wrapped, they are 8 tiles apart. A tile just inside the seam is on
+--   its channel.
+--
+--   This is the case that discriminates the two readings. Wrapped, the
+--   query tile sits a quarter of the way along a short segment. Raw, the
+--   segment is ~175 tiles long pointing the other way, the projection
+--   comes out NEGATIVE, and the tile resolves to no river at all — which
+--   is exactly what a player selecting a seam-crossing river would have
+--   got.
+seamRiver ∷ (Int, RiverParams)
+seamRiver = (2, riverFrom (fromUV (seamHalf - 4) 0)
+                          (fromUV (negate seamHalf + 4) 0))
+
+seamTileX, seamTileY ∷ Int
+GeoCoord seamTileX seamTileY = fromUV (seamHalf - 2) 0
+
+riverFrom ∷ GeoCoord → GeoCoord → RiverParams
+riverFrom start end = RiverParams
+    { rpSourceRegion = start
+    , rpMouthRegion  = end
+    , rpFlowRate     = 1.0
+    , rpSegments     = V.singleton RiverSegment
+        { rsStart = start, rsEnd = end
+        , rsWidth = 6, rsValleyWidth = 12, rsDepth = 2
+        , rsFlowRate = 1.0, rsStartElev = 100, rsEndElev = 90
+        }
+    }
+
+-- | A timeline whose river EVENTS and river FEATURES agree, so
+--   "World.River.Identity" can pair them and every river has an id.
+timelineWith ∷ [(Int, RiverParams)] → GeoTimeline
+timelineWith rs = emptyTimeline
+    { gtFeatures = [ riverFeatureOf fid rp | (fid, rp) ← rs ]
+    , gtPeriods  = [ periodWith [ HydroEvent (RiverFeature rp) | (_, rp) ← rs ] ]
+    }
+
+-- | The same rivers, but with the features' stored params DISAGREEING
+--   with the emitted events, so the pairing check fails and no river is
+--   identifiable — the case that must yield no id rather than a wrong one.
+unpairedTimeline ∷ [(Int, RiverParams)] → GeoTimeline
+unpairedTimeline rs = (timelineWith rs)
+    { gtFeatures = [ riverFeatureOf fid rp { rpFlowRate = rpFlowRate rp + 99 }
+                   | (fid, rp) ← rs ] }
+
+riverFeatureOf ∷ Int → RiverParams → PersistentFeature
+riverFeatureOf fid rp = PersistentFeature
+    { pfId               = GeoFeatureId fid
+    , pfFeature          = HydroShape (RiverFeature rp)
+    , pfActivity         = FActive
+    , pfFormationPeriod  = 0
+    , pfLastActivePeriod = 0
+    , pfEruptionCount    = 0
+    , pfParentId         = Nothing
+    }
+
+periodWith ∷ [GeoEvent] → GeoPeriod
+periodWith evs = GeoPeriod
+    { gpName = "age", gpScale = Age, gpDuration = 1, gpDate = 0
+    , gpEvents = evs
+    , gpErosion = defaultErosionParams
+    , gpRegionalErosion = HM.empty
+    , gpTaggedEvents = []
+    , gpExplodedEvents = V.empty
+    , gpPeriodBBox = noBBox
+    }

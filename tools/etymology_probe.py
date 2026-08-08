@@ -33,9 +33,13 @@ Phases:
   5. Bound/free explanation and recurrence rows are visibly populated
      when the language produces them, and the free/bound relationship is
      reported as ONE morpheme rather than two.
-  6. The honest UNAVAILABLE state renders for a name with no recoverable
+  6. A long decomposition scrolls through the REAL input routing — the
+     scrollbar's own arrow buttons and a wheel event over the panel's
+     capturing box — which the bare-Lua hspec group cannot drive, since a
+     scrollbar there owns no sprite handles.
+  7. The honest UNAVAILABLE state renders for a name with no recoverable
      derivation, still showing the stored name.
-  7. A resize keeps the panel valid, reachable, and pointed at the same
+  8. A resize keeps the panel valid, reachable, and pointed at the same
      entity; close and teardown remove it cleanly with no stale handles.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated.
@@ -391,8 +395,8 @@ def phase5_bound_and_recurrence(port: int) -> None:
         print("  SKIP  no morpheme recurred across this world's eligible names")
 
 
-def phase6_unavailable(args) -> None:
-    print("\n[6] the honest UNAVAILABLE state")
+def phase7_unavailable(args) -> None:
+    print("\n[7] the honest UNAVAILABLE state")
     port = args.port
     # A CUSTOM-named page: a player-entered name has no language and no
     # expression, which is requirement 7's first case. Deliberately TINY
@@ -437,8 +441,109 @@ def phase6_unavailable(args) -> None:
                "if ep then ep.closeIfOpen() end", timeout=15)
 
 
-def phase7_lifecycle(port: int) -> None:
-    print("\n[7] resize keeps it valid and reachable; close/teardown are clean")
+def phase6_scrolling(port: int) -> None:
+    """A long decomposition must actually SCROLL through the real input
+    routing. The hspec group can only assert the wiring — a scrollbar's
+    arrows are UI sprites, and the bare Lua backend has no textures, so
+    it owns no clickable handles there. Here it does."""
+    print("\n[6] the panel scrolls through the real input routing")
+    # A generated name has only a couple of morphemes, so its
+    # decomposition fits comfortably at a normal size. Shrink the HUD to
+    # the supported envelope's formal minimum first: the panel now bounds
+    # its visible rows by the framebuffer, so the same content overflows
+    # and the real scroll controls appear.
+    # ...at a high UI scale, which is where the envelope is tightest and
+    # where a player would actually hit this.
+    send(port, "engine.setUIScale(4.0); "
+               "local hud = require('scripts.hud'); "
+               "hud.init(hud.texWorldSelect or 1, hud.boxTexSet or 2, 800, 600); "
+               "hud.createUI()", timeout=30)
+    targets = [("world", "nil")]
+    rivers = send_json(port, "return world.getRivers()", timeout=45)
+    for r in (rivers or [])[:8]:
+        if r.get("id") is not None:
+            targets.append(("river", str(r["id"])))
+    scrollable = None
+    last = None
+    for kind, ident in targets:
+        send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+                   f"if ep then ep.openFor('{kind}', {ident}) end", timeout=15)
+        d = panel_dump(port)
+        last = d if not isinstance(d, dict) else {
+            k: d.get(k) for k in ("open", "rowCount", "visibleRows",
+                                  "scrollbar", "available")}
+        if isinstance(d, dict) and (d.get("rowCount") or 0) > (
+                d.get("visibleRows") or 0):
+            scrollable = d
+            break
+    if not scrollable:
+        print(f"  SKIP  no inspected name overflowed the panel's window "
+              f"(last dump: {last!r})")
+        send(port, "engine.setUIScale(1.0)", timeout=15)
+        return
+
+    handles = scrollable.get("scrollHandles") or []
+    check(bool(handles),
+          "the panel's scrollbar owns real, clickable element handles",
+          f"scrollHandles={handles!r}")
+    if not handles:
+        return
+    # Drive the ARROWS through the real router, at the scrollbar's own
+    # handles rather than guessed coordinates.
+    moved = send_json(
+        port,
+        "local ep = package.loaded['scripts.etymology_panel']; "
+        "local ui = require('scripts.ui_manager'); "
+        "local before = ep.state.scrollOffset; "
+        "local downOk = false; "
+        "for _, h in ipairs(ep.dump().scrollHandles or {}) do "
+        "  if ui.onScrollDown(h) then downOk = true; break end end; "
+        "local afterDown = ep.state.scrollOffset; "
+        "local upOk = false; "
+        "for _, h in ipairs(ep.dump().scrollHandles or {}) do "
+        "  if ui.onScrollUp(h) then upOk = true; break end end; "
+        "return {before = before, afterDown = afterDown, "
+        "        afterUp = ep.state.scrollOffset, "
+        "        downOk = downOk, upOk = upOk}",
+        timeout=20)
+    if isinstance(moved, dict):
+        check(moved.get("downOk") is True and moved.get("upOk") is True,
+              "uiManager's arrow routes reach the panel at real handles",
+              f"got {moved!r}")
+        check((moved.get("afterDown") or 0) > (moved.get("before") or 0),
+              "the down arrow really advanced the view",
+              f"got {moved!r}")
+        check(moved.get("afterUp") == moved.get("before"),
+              "and the up arrow brought it back",
+              f"got {moved!r}")
+
+    # And the WHEEL, over the panel's own capturing box.
+    wheeled = send_json(
+        port,
+        "local ep = package.loaded['scripts.etymology_panel']; "
+        "local ui = require('scripts.ui_manager'); "
+        "local box = ep.dump().box; "
+        "local before = ep.state.scrollOffset; "
+        "ui.onUIScroll(box, 0, -1, false); "
+        "local after = ep.state.scrollOffset; "
+        "local info = box and UI.getElementInfo(box); "
+        "return {before = before, after = after, "
+        "        captures = (info and info.scrollCapturing) == true}",
+        timeout=20)
+    if isinstance(wheeled, dict):
+        check(wheeled.get("captures") is True,
+              "the panel box is a real scroll-CAPTURING surface, so the "
+              "wheel routes to it instead of zooming the world")
+        check((wheeled.get("after") or 0) > (wheeled.get("before") or 0),
+              "and a wheel event over it advanced the view",
+              f"got {wheeled!r}")
+    # Restore the scale so phase 7's resize checks run against the
+    # ordinary envelope rather than this phase's deliberate extreme.
+    send(port, "engine.setUIScale(1.0)", timeout=15)
+
+
+def phase8_lifecycle(port: int) -> None:
+    print("\n[8] resize keeps it valid and reachable; close/teardown are clean")
     send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                "if ep then ep.openFor('world') end", timeout=15)
     before = panel_dump(port)
@@ -494,8 +599,12 @@ def main() -> int:
             phase3_location(args.port)
             phase4_river(args.port)
             phase5_bound_and_recurrence(args.port)
-            phase6_unavailable(args)
-            phase7_lifecycle(args.port)
+            # Scrolling runs BEFORE the unavailable phase: that phase
+            # switches the active page to a custom-named one, and every
+            # query here resolves the ACTIVE page.
+            phase6_scrolling(args.port)
+            phase7_unavailable(args)
+            phase8_lifecycle(args.port)
     finally:
         quit_engine(args.port, proc)
 
