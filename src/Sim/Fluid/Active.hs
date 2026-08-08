@@ -74,7 +74,6 @@ simulateActiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
                     → ChunkCoord → SimChunkState → (SimChunkState, Bool)
 simulateActiveChunk _allChunks _coord scs =
     let terrainV = scsTerrain scs
-        _sz = chunkSize * chunkSize
         (newActive, newDeco, changed) = runST $ do
             mv ← V.thaw (scsActiveFluid scs)
             decoMv ← VU.thaw (scsSideDeco scs)

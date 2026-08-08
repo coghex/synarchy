@@ -90,12 +90,12 @@ discardLuaMessagesForActiveLoad env = do
         then length <$> Q.flushQueue (luaToEngineQueue env)
         else pure 0
 
--- | Run a GPU-touching action only in graphical mode; skip it when
---   headless (no device). Lets the single 'handleLuaMessage' serve both
---   the graphical loop and the headless/dump loop — the scene-graph and
---   pure-IORef cases run in both; only GPU operations are gated. (Before
---   this, a separate 'handleLuaMessageHeadless' duplicated every
---   scene-graph case and had already drifted from this one.)
+-- | Run a GPU-touching action unless the engine is headless: skipped when
+--   'ecHeadless' is true (no device), run otherwise. Lets the single
+--   'handleLuaMessage' serve every boot mode's message loop — the
+--   scene-graph and pure-IORef cases always run; only GPU operations are
+--   gated. (Before this, a separate 'handleLuaMessageHeadless' duplicated
+--   every scene-graph case and had already drifted from this one.)
 whenGraphical ∷ EngineM σ () → EngineM σ ()
 whenGraphical act = do
     env ← ask

@@ -84,7 +84,7 @@ renderSpoilQuads env worldState tileAlpha = do
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera
-            (camX, _camY) = camPosition camera
+            (camX, camY) = camPosition camera
             worldSize = maybe 128 wgpWorldSize paramsM
             effectiveDepth =
                 min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
@@ -132,8 +132,8 @@ renderSpoilQuads env worldState tileAlpha = do
                 -- arbitrary coord — the scripting API only READS this
                 -- state — so the wrap here would be the identity.
                 lc ← HM.lookup chunkCoord (wtdChunks tileData)
-                xOff ← isChunkVisibleWrapped facing worldSize vb camX
-                                             chunkCoord
+                (wrapX, wrapY) ← isChunkVisibleWrapped facing worldSize
+                                     vb camX camY chunkCoord
                 let surfZ = lcTerrainSurfaceMap lc
                                 VU.! columnIndex lx ly
                     topZ  = surfZ + lvl
@@ -145,8 +145,10 @@ renderSpoilQuads env worldState tileAlpha = do
                         relativeZ = topZ - zSlice
                         heightOffset =
                             fromIntegral relativeZ * tileSideHeight
-                        drawX = rawX + xOff
-                        drawY = rawY - heightOffset
+                        -- Both axes: the u-wrap moves screen Y, not
+                        -- screen X, at east/west facings (#1176).
+                        drawX = rawX + wrapX
+                        drawY = rawY + wrapY - heightOffset
                         -- Just above the terrain tile at this cell
                         -- (terrain 0.0), below fluid (0.0005).
                         sortKey = fromIntegral (fa + fb)

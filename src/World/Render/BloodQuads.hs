@@ -254,7 +254,7 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera
-            (camX, _camY) = camPosition camera
+            (camX, camY) = camPosition camera
             worldSize = maybe 128 wgpWorldSize paramsM
             effectiveDepth =
                 min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
@@ -269,8 +269,8 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
                 if tz > zSlice ∨ tz < zSlice - effectiveDepth
                   then Nothing
                   else do
-                    xOff ← isChunkVisibleWrapped facing worldSize vb camX
-                                                 chunkCoord
+                    (wrapX, wrapY) ← isChunkVisibleWrapped facing worldSize
+                                         vb camX camY chunkCoord
                     let (texW, texH) = case HM.lookup texHandle texSizes of
                             Just (w, h) → (fromIntegral w, fromIntegral h)
                             Nothing     → (24.0, 24.0)
@@ -290,8 +290,11 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
                         (rawX, rawY) = gridToScreen facing tx ty
                         heightOffset = fromIntegral relativeZ * tileSideHeight
 
-                        drawX = rawX + subX + (tileWidth - quadW) * 0.5 + xOff
-                        drawY = rawY - heightOffset + subY
+                        -- Both axes: the u-wrap moves screen Y, not
+                        -- screen X, at east/west facings (#1176).
+                        drawX = rawX + subX + (tileWidth - quadW) * 0.5
+                              + wrapX
+                        drawY = rawY + wrapY - heightOffset + subY
                               + tileHalfDiamondHeight - quadH * 0.5
 
                         cx = drawX + quadW * 0.5

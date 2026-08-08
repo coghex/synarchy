@@ -39,12 +39,12 @@ waterSideFaceQuads ∷ (TextureHandle → Int)
                    → (ChunkCoord → Maybe (VU.Vector Int))
                                                  -- ^ neighbour-chunk terrain lookup
                    → Int → Int                   -- ^ zSlice, effectiveDepth
-                   → Float → Float               -- ^ tileAlpha, xOffset
+                   → Float → (Float, Float)      -- ^ tileAlpha, wrap (x,y)
                    → ViewBounds
                    → [SortableQuad]
 waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
                    fluidMap terrainSurfMap fluidLookup terrLookup
-                   zSlice effDepth tileAlpha xOffset vb =
+                   zSlice effDepth tileAlpha wrapOff vb =
     [ sq
     | lx ← [0 .. chunkSize - 1]
     , ly ← [0 .. chunkSize - 1]
@@ -77,7 +77,7 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
     , let (gx, gy) = chunkToGlobal coord lx ly
     , sq ← maybeToList (waterSideQuad lookupSlot lookupFmSlot textures facing
                             (fcType fc) gx gy z isLeftFace
-                            zSlice effDepth tileAlpha xOffset vb)
+                            zSlice effDepth tileAlpha wrapOff vb)
     ]
   where
     -- Resolve a cardinal neighbor's (fluid cell, terrain surface z),
@@ -132,18 +132,19 @@ waterSideQuad ∷ (TextureHandle → Int)
               → Int             -- ^ z-level of this side face
               → Bool            -- ^ True = left face, False = right face
               → Int → Int       -- ^ zSlice, effectiveDepth
-              → Float → Float   -- ^ tileAlpha, xOffset
+              → Float → (Float, Float)  -- ^ tileAlpha, wrap (x,y)
               → ViewBounds
               → Maybe SortableQuad
 waterSideQuad lookupSlot lookupFmSlot textures facing ftype gx gy z isLeft
-              zSlice _effDepth tileAlpha xOffset vb =
+              zSlice _effDepth tileAlpha wrapOff vb =
     let (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
         relativeZ = z - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
 
-        drawX = rawX + xOffset
-        drawY = rawY - heightOffset
+        (wrapX, wrapY) = wrapOff
+        drawX = rawX + wrapX
+        drawY = rawY + wrapY - heightOffset
 
         -- Check side face map is loaded before rendering
         fmHandle0 = if isLeft
