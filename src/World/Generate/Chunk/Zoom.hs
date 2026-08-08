@@ -57,7 +57,6 @@ generateZoomTerrain registry params mBorderedCache coord =
         worldSize = wgpWorldSize params
         timeline  = wgpGeoTimeline params
         plates    = wgpPlates params
-        _oceanMap  = wgpOceanMap params
         wsc       = computeWorldScale worldSize
 
         borderSize = chunkSize + 2 * chunkBorder

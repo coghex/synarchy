@@ -38,8 +38,7 @@ worldGetChunkInfoFn wsc = do
                     Lua.setfield (Lua.nth 2) "loaded"
                     return 1
                 Just lc → do
-                    let _sz = chunkSize * chunkSize
-                        surfMap = lcSurfaceMap lc
+                    let surfMap = lcSurfaceMap lc
                         terrMap = lcTerrainSurfaceMap lc
                         fluidMap = lcFluidMap lc
                         -- Count fluids

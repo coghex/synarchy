@@ -7,8 +7,11 @@ the live code and the agent memory notes instead.
 
 - **`fluid_audit_2026-04.md`** — fluid generation/sim audit (2026-04-13).
   SUPERSEDED by the late-May 2026 fluid rewrite ("fluid rewrite 3").
-  References functions that no longer exist (`drainOceanLakes`,
-  `waterSideFaceQuads`). Its concrete bugs are obsolete; the durable
+  References `drainOceanLakes`, which no longer exists; `waterSideFaceQuads`
+  is still live (`src/World/Render/SideDecoQuads.hs`) — its chunk-boundary
+  complaint was fixed by cross-chunk neighbor resolution (#26), and the
+  residual U-wrap seam-alias case that fix left behind was closed
+  separately (#1135). Its concrete bugs are obsolete; the durable
   fluid/water-table state lives in the agent memory notes
   (`plan_fluid_system`, `plan_water_table_rework`,
   `gotcha_ocean_chunk_boundary` — ocean chunk-boundary fix landed save

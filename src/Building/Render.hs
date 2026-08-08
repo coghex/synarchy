@@ -24,7 +24,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                           , renderFlagSelected, packWorldUV)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, GridConfig(..), defaultGridConfig)
+                  , worldLayer, applyFacingF, GridConfig(..), defaultGridConfig)
 import Unit.Direction (Direction(..))
 import Unit.Types (Animation(..))
 import World.State.Types (wmVisible)
@@ -326,9 +326,3 @@ renderGhostQuad env facing zSlice = do
                                 , sqTexture = texHandle
                                 , sqLayer   = worldLayer
                                 }
-
-applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
-applyFacingF FaceSouth gx gy = ( gx,  gy)
-applyFacingF FaceWest  gx gy = ( gy, -gx)
-applyFacingF FaceNorth gx gy = (-gx, -gy)
-applyFacingF FaceEast  gx gy = (-gy,  gx)

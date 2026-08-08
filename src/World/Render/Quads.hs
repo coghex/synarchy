@@ -140,7 +140,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
             let (wrapX, wrapY) = wrapOff
                 coord  = lcCoord lc
                 tileMap = lcTiles lc
-                surfMap = lcSurfaceMap lc
                 fluidMap = lcFluidMap lc
                 iceMap   = lcIceMap lc
                 chunkHasFluid = V.any isJust fluidMap
@@ -271,7 +270,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let idx = columnIndex lx ly
-                          _surfZ = surfMap VU.! idx
                           terrainZ = terrainSurfMap VU.! idx
                     , terrainZ > zSlice
                     , let col = tileMap V.! idx
@@ -477,7 +475,6 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
 findTopSolid ∷ ColumnTiles → Int
 findTopSolid col =
     let mats = ctMats col
-        _start = ctStartZ col
         len = VU.length mats
     in go (len - 1)
   where
