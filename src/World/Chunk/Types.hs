@@ -119,7 +119,7 @@ data LoadedChunk = LoadedChunk
       --   is saturated. When wt ≥ terrain[t] the tile shows surface
       --   water; subsurface query for digging: position (lx, ly, z) is
       --   wet iff z ≤ lcWaterTableMap[ly*chunkSize+lx]. Computed by
-      --   World.Hydrology.WaterTable, see DESIGN.md in that folder.
+      --   World.Hydrology.WaterTable; see docs/hydrology_pipeline.md §11.
       --   Not consumed by 'composeFluidMap's surface-fluid placement
       --   (that reads the global lake/river/ocean/lava tables instead);
       --   it stays computed and stored here so the subsurface dig path

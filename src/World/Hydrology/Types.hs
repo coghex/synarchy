@@ -58,10 +58,10 @@ instance NFData RiverParams where
 -- | A single segment of a river between two waypoints.
 --
 --   Segments describe channel geometry only. The water-surface
---   elevation is no longer carried here; it is computed per chunk
---   from the segment's channel-floor (rsEndElev / rsStartElev minus
---   rsDepth) by the water-table compute. See
---   @src\/World\/Hydrology\/DESIGN.md@.
+--   elevation is not carried here: the rendered surface is per-tile
+--   data on the global river table (@rcePerTileSurfZ@ on each
+--   RiverChunkEntry, produced by World.Fluid.River.Identify), which
+--   composeFluidMap reads directly. See docs/hydrology_pipeline.md §10.
 data RiverSegment = RiverSegment
     { rsStart       ∷ !GeoCoord  -- ^ Segment start (global tile coords)
     , rsEnd         ∷ !GeoCoord  -- ^ Segment end
