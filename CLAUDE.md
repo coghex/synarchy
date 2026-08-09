@@ -473,6 +473,24 @@ cabal run exe:synarchy -- --headless --port 9008 > /tmp/engine.log 2>&1 &
 until grep -q "READY" /tmp/engine.log 2>/dev/null; do sleep 0.2; done
 ```
 
+**The console is required in `--headless`/`--offscreen` (#1190).** They
+have no window, so it is their only interactive control surface: if the
+listener can't start — an occupied or unbindable port, or `--port 0`
+(issue #46's "no TCP listener at all" sentinel, which belongs to
+`--dump` alone) — the boot ABORTS. It exits non-zero, prints no `READY`
+marker, names the mode / effective port / cause on stderr, and tears
+down what it had already built (the pre-thread Lua state, plus
+offscreen's input worker), each cleanup step announcing itself on
+stderr. So the wait loop above fails fast instead of hanging forever on
+a live process with no reachable `engine.quit()`. `--dump`,
+`--graphical` and `--preview` keep their existing tolerance unchanged,
+port-0 behavior included. The per-mode decision is
+`Engine.Scripting.Lua.DebugServer.debugConsolePolicy`, keyed on
+`EngineConfig`'s `ecBootMode` — `ecHeadless` can't tell dump from
+headless and is `False` for offscreen. Gates: hspec
+`--match "debug-console listener policy"`,
+`tools/debug_console_boot_probe.py` (CI-eligible).
+
 ### Offscreen render mode (#650)
 
 `--offscreen` is the third boot mode: **GPU on, window off** — the full

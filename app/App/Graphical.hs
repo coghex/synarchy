@@ -10,7 +10,7 @@ import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO, modifyGraphicsState)
 import Engine.Core.State (EngineEnv(..), glfwWindow)
-import Engine.Core.Types (BootProfile(..))
+import Engine.Core.Types (BootProfile(..), BootMode(..))
 import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
@@ -26,7 +26,8 @@ import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
-import App.Boot (FatalStream(..), bootConfig, handleBootResult)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult
+                , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine with full graphics (GLFW window + Vulkan)
@@ -35,10 +36,15 @@ runGraphical bootProfile mPort = do
   -- Initialize engine
   EngineInitResult env ← initializeEngine
 
-  let env' = bootConfig bootProfile mPort env
+  let env' = bootConfig ModeGraphical bootProfile mPort env
 
   inputThreadState ← startInputThread env'
+  -- Graphical keeps its long-standing tolerance of a failed listener
+  -- (it has a window and a keyboard), so this can only ever take the
+  -- Right branch -- every mode routes through the one tail so a future
+  -- policy change cannot be missed here (#1190).
   luaThreadState   ← startLuaThread env'
+      ⌦ luaThreadOrAbort env' [("input", Just inputThreadState)]
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'

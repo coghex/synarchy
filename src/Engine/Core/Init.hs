@@ -367,5 +367,13 @@ initializeEngineHeadlessWith ∷ LogBackend → IO EngineInitResult
 initializeEngineHeadlessWith logBackend = do
   result ← initializeEngineWith logBackend
   let env = eirEnv result
-      headlessEnv = env { engineConfig = (engineConfig env) { ecHeadless = True } }
+      headlessEnv = env { engineConfig = (engineConfig env)
+                            { ecHeadless = True
+                            -- Keep 'ecBootMode' honest for anything that
+                            -- reads this env before a boot path stamps
+                            -- its own (the headless test harness never
+                            -- calls App.Boot.bootConfig at all); --dump
+                            -- shares this initializer and overwrites it
+                            -- with 'ModeDump'.
+                            , ecBootMode = ModeHeadless } }
   pure $ result { eirEnv = headlessEnv }

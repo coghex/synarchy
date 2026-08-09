@@ -10,7 +10,7 @@ import Data.IORef (readIORef, writeIORef)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Types (BootProfile(..))
+import Engine.Core.Types (BootProfile(..), BootMode(..))
 import Engine.Core.Log (LogCategory(..), shutdownLogger)
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Loop.Headless (headlessLoop)
@@ -21,7 +21,8 @@ import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
-import App.Boot (FatalStream(..), bootConfig, handleBootResult)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult
+                , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine in headless mode (no window, no GPU)
@@ -31,9 +32,13 @@ runHeadless ∷ BootProfile → Maybe Int → IO ()
 runHeadless bootProfile mPort = do
   EngineInitResult env ← initializeEngineHeadless
 
-  let env' = bootConfig bootProfile mPort env
+  let env' = bootConfig ModeHeadless bootProfile mPort env
 
-  luaThreadState   ← startLuaThread env'
+  -- The debug console is headless's ONLY control surface, so a listener
+  -- that never came up aborts the boot (#1190) instead of continuing
+  -- with an inert command queue. Nothing has started yet — Lua is this
+  -- mode's first worker — hence the empty already-started set.
+  luaThreadState   ← startLuaThread env' ⌦ luaThreadOrAbort env' []
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'

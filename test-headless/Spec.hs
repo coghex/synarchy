@@ -134,6 +134,7 @@ import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
+import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
@@ -368,6 +369,7 @@ main = hspec $ do
     LogMonad.spec
     LogParity.spec
     LoopStartup.spec
+    DebugListener.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec
     describe "Scene.BatchMerge" BatchMerge.spec

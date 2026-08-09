@@ -27,7 +27,8 @@ import Engine.Loop (mainLoop)
 import Engine.Loop.Shutdown (ShutdownTargets(..), shutdownEngine, checkStatus)
 import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Scripting.Lua.Thread (startLuaThread)
-import App.Boot (FatalStream(..), previewBootConfig, handleBootResult)
+import App.Boot (FatalStream(..), previewBootConfig, handleBootResult
+                , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
@@ -45,7 +46,11 @@ runPreview target mBrowse mPort = do
   let env' = previewBootConfig target mBrowse mPort env
 
   inputThreadState ← startInputThread env'
+  -- Preview keeps graphical's tolerance of a failed listener (#1190
+  -- amendment): it has a real window, so a missing console degrades it
+  -- rather than stranding it. Routed through the shared tail anyway.
   luaThreadState   ← startLuaThread env'
+      ⌦ luaThreadOrAbort env' [("input", Just inputThreadState)]
 
   -- Preview's whole point is the trimmed topology: no world, unit, sim
   -- or combat thread ever starts.
