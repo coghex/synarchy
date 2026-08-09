@@ -22,7 +22,10 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
-import Engine.Scripting.Lua.DebugServer (DebugCommand(..), startDebugServer, pollDebugCommand)
+import Engine.Scripting.Lua.DebugServer
+    ( DebugCommand(..), startDebugServer, pollDebugCommand
+    , DebugListenerFailure(..), ListenerAction(..), listenerAction
+    , reportDebugListenerFailure, reportBootCleanup )
 import Engine.Scripting.Lua.Thread.Console (processDebugCommands, debugBuiltin)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
 import Engine.Asset.Types (AssetPool)
@@ -44,14 +47,26 @@ import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch, finally)
 
-startLuaThread ∷ EngineEnv → IO ThreadState
+-- | Start the Lua scripting thread, or refuse to when the boot mode
+--   requires a debug console it cannot have (#1190).
+--
+--   'Left' is reachable only for a 'ConsoleRequired' mode
+--   (@--headless@, @--offscreen@); the other three tolerate a dead
+--   listener exactly as before and always get a 'Right'. By the time a
+--   'Left' is returned the cause has been reported on stderr and the
+--   Lua state allocated for the thread has been closed — no scripting
+--   thread was forked, so there is nothing for the caller to stop. What
+--   the caller still owns is whatever workers it had started BEFORE
+--   this call; @App.Boot.luaThreadOrAbort@ is the shared tail that
+--   stops those and exits non-zero.
+startLuaThread ∷ EngineEnv → IO (Either DebugListenerFailure ThreadState)
 startLuaThread env = do
     let apRef     = assetPoolRef env
         objIdRef  = nextObjectIdRef env
         inputSRef = inputStateRef env
     stateRef ← newIORef ThreadRunning
     doneVar ← newEmptyMVar
-    threadId ← catch
+    startResult ← catch
         (do
             logger ← readIORef (loggerRef env)
             logInfo logger CatLua "Starting Lua scripting thread..."
@@ -103,41 +118,70 @@ startLuaThread env = do
                         "Failed to load Lua script: " <> T.pack scriptPath
                         <> " - " <> errMsg
 
-            let port = ecDebugPort (engineConfig env)
-            eDebugQueue ← startDebugServer port (debugBuiltin env)
-            debugQueue ← case eDebugQueue of
-                Right q → do
+            let mode = ecBootMode (engineConfig env)
+                port = ecDebugPort (engineConfig env)
+                -- Shared by both branches that actually touch a socket.
+                attemptBind = startDebugServer port (debugBuiltin env)
+                listening q = do
                     logInfo logger CatLua $
                         "Debug server listening on port " <> T.pack (show port)
-                    return q
-                Left err → do
-                    -- Engine keeps running without a console; the queue
-                    -- is inert (nothing ever feeds it).
-                    logWarn logger CatLua $
-                        "Debug server failed to start on port "
-                        <> T.pack (show port) <> ": " <> err
-                    atomically newTQueue
-            -- Issue #763: the real debug queue only
-            -- exists once 'startDebugServer' above returns, but
-            -- 'backendState' was constructed earlier (so registerLuaAPI/
-            -- script init could run against it) with the throwaway
-            -- placeholder 'createLuaBackendState' makes internally.
-            -- Splice the real queue in now via record update so
-            -- 'Engine.Scripting.Lua.Thread.Dispatch's 'LuaSaveLoaded'
-            -- handler can reach it as 'lbsDebugQueue' — cheaper than
-            -- threading 'debugQueue' through 'createLuaBackendState'
-            -- and its dozen-plus test call sites, none of which
-            -- exercise real debug-command handling.
-            let backendState' = backendState { lbsDebugQueue = debugQueue }
-            tid ← forkIO $ runLuaLoop env backendState' stateRef debugQueue `finally` putMVar doneVar ()
-            return tid
+                    return (Right q)
+            -- #1190: whether a dead listener is survivable is a per-MODE
+            -- decision, made here (with the mode in hand) rather than
+            -- inside 'startDebugServer', which sees only a number and so
+            -- cannot tell --dump's deliberate port-0 sentinel from the
+            -- same 0 reaching a mode whose only control surface it is.
+            eDebugQueue ← case listenerAction mode port of
+                TolerateListener → attemptBind ⌦ \case
+                    Right q  → listening q
+                    Left err → do
+                        -- Engine keeps running without a console; the
+                        -- queue is inert (nothing ever feeds it).
+                        logWarn logger CatLua $
+                            "Debug server failed to start on port "
+                            <> T.pack (show port) <> ": " <> err
+                        Right ⊚ atomically newTQueue
+                RequireListener → attemptBind ⌦ \case
+                    Right q  → listening q
+                    Left err → return (Left (ListenerBindFailed err))
+                -- No socket is touched at all, so no READY marker is
+                -- emitted on either handle.
+                RejectPortZero → return (Left ListenerPortZero)
+            case eDebugQueue of
+                Left failure → do
+                    reportDebugListenerFailure mode port failure
+                    -- The Lua state was allocated (and the API
+                    -- registered, and scripts/init.lua run) before the
+                    -- listener was ever attempted, so it is live here
+                    -- and nothing else will ever close it: no loop was
+                    -- forked, so 'runLuaLoop's own teardown close can
+                    -- never run.
+                    Lua.close (lbsLuaState backendState)
+                    reportBootCleanup
+                        "closed the Lua state (no scripting thread was started)"
+                    return (Left failure)
+                Right debugQueue → do
+                    -- Issue #763: the real debug queue only
+                    -- exists once 'startDebugServer' above returns, but
+                    -- 'backendState' was constructed earlier (so registerLuaAPI/
+                    -- script init could run against it) with the throwaway
+                    -- placeholder 'createLuaBackendState' makes internally.
+                    -- Splice the real queue in now via record update so
+                    -- 'Engine.Scripting.Lua.Thread.Dispatch's 'LuaSaveLoaded'
+                    -- handler can reach it as 'lbsDebugQueue' — cheaper than
+                    -- threading 'debugQueue' through 'createLuaBackendState'
+                    -- and its dozen-plus test call sites, none of which
+                    -- exercise real debug-command handling.
+                    let backendState' = backendState { lbsDebugQueue = debugQueue }
+                    tid ← forkIO $ runLuaLoop env backendState' stateRef debugQueue `finally` putMVar doneVar ()
+                    return (Right tid)
         )
         (\(e ∷ SomeException) → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatLua $ "Lua thread failed to start: " <> T.pack (show e)
             error "Lua thread failed to start."
         )
-    return $ ThreadState stateRef threadId doneVar
+    return $ (\tid → ThreadState stateRef tid doneVar) ⊚ startResult
 
 createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
                       → IORef AssetPool → IORef Word32

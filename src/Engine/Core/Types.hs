@@ -1,6 +1,8 @@
 module Engine.Core.Types
   ( BootProfile(..)
   , bootProfileTag
+  , BootMode(..)
+  , bootModeName
   , EngineConfig(..)
   , PreviewEntry(..)
   , PreviewFrameDir(..)
@@ -23,6 +25,37 @@ bootProfileTag ∷ BootProfile → Text
 bootProfileTag BootNormal  = "normal"
 bootProfileTag BootArena   = "arena"
 bootProfileTag BootPreview = "preview"
+
+-- | The boot mode @app\/Main.hs@ selected from argv.
+--
+--   Deliberately a type of its own rather than a reading of something
+--   that already existed (#1190): 'BootProfile' names the world
+--   topology a mode boots with (normal\/arena\/preview), not the mode,
+--   and 'ecHeadless' cannot tell @--dump@ from @--headless@ — it is
+--   'True' for both and 'False' for @--offscreen@. The debug-console
+--   listener policy needs all five distinguished, because whether a
+--   dead listener is fatal is exactly a per-mode question:
+--   'Engine.Scripting.Lua.DebugServer.debugConsolePolicy'.
+--
+--   @--language-report@ is deliberately absent: it boots no engine and
+--   starts no Lua thread, so it never reaches a listener policy at all.
+data BootMode
+  = ModeDump
+  | ModeHeadless
+  | ModeOffscreen
+  | ModeGraphical
+  | ModePreview
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | The mode's name in a diagnostic — the SAME vocabulary
+--   @app\/Main.hs@'s incompatible-flag rejections already print
+--   (@"... is not supported in headless mode"@).
+bootModeName ∷ BootMode → Text
+bootModeName ModeDump      = "dump"
+bootModeName ModeHeadless  = "headless"
+bootModeName ModeOffscreen = "offscreen"
+bootModeName ModeGraphical = "graphical"
+bootModeName ModePreview   = "preview"
 
 -- | One discovered/resolved texture entry for the @--preview@ simple-
 --   category browser (#886). 'peLabel' is the category-relative path
@@ -144,6 +177,11 @@ data EngineConfig = EngineConfig
   { ecHeadless      ∷ Bool
   , ecDebugPort     ∷ Int
   , ecBootProfile   ∷ BootProfile
+  -- | Which boot mode argv selected (#1190). Every boot path stamps its
+  --   own through @App.Boot.bootConfig@\/@previewBootConfig@; see
+  --   'BootMode' for why this is not derivable from the two fields
+  --   above it.
+  , ecBootMode      ∷ BootMode
   -- | (category, item) requested via @--preview category[/item]@.
   --   'Nothing' outside 'BootPreview'; item is 'Nothing' for a bare
   --   category (e.g. @--preview icons@).

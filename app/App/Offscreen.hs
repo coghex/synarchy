@@ -16,7 +16,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Types (BootProfile(..))
+import Engine.Core.Types (BootProfile(..), BootMode(..))
 import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
@@ -31,7 +31,8 @@ import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
-import App.Boot (FatalStream(..), bootConfig, handleBootResult)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult
+                , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine offscreen: GPU on, window off. The render size
@@ -43,10 +44,16 @@ runOffscreen ∷ BootProfile → Maybe Int → Maybe (Int, Int) → IO ()
 runOffscreen bootProfile mPort mSize = do
   EngineInitResult env ← initializeEngine
 
-  let env' = bootConfig bootProfile mPort env
+  let env' = bootConfig ModeOffscreen bootProfile mPort env
 
   inputThreadState ← startInputThread env'
+  -- Offscreen has no window either, so the debug console is likewise
+  -- its only control surface and a dead listener aborts the boot
+  -- (#1190) — here with a genuinely partial worker set: the input
+  -- thread is already running and has to be stopped, and Vulkan is
+  -- never initialized because that happens inside 'engineAction' below.
   luaThreadState   ← startLuaThread env'
+      ⌦ luaThreadOrAbort env' [("input", Just inputThreadState)]
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'

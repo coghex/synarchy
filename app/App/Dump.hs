@@ -28,7 +28,7 @@ import Engine.Core.Init (initializeEngineHeadlessWith, EngineInitResult(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Types (BootProfile(..))
+import Engine.Core.Types (BootProfile(..), BootMode(..))
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
                                    , SystemError(..), mkErrorContext)
 import Engine.Core.Log (LogBackend(..), shutdownLogger)
@@ -46,7 +46,8 @@ import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
 import App.Cli (DumpLayers(..))
 import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
-import App.Boot (FatalStream(..), bootConfig, handleBootResult)
+import App.Boot (FatalStream(..), bootConfig, handleBootResult
+                , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine in dump mode: generate world, load chunks, dump tile
@@ -67,9 +68,13 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
 
   -- Port 0 is dump's own contract, not a CLI default: it tells
   -- startDebugServer to open no TCP listener at all.
-  let env' = bootConfig BootNormal (Just 0) env
+  let env' = bootConfig ModeDump BootNormal (Just 0) env
 
-  luaThreadState   ← startLuaThread env'
+  -- 'ModeDump' is what keeps issue #46's port-0 sentinel meaning "no
+  -- TCP listener" here while the same 0 is refused in the two modes
+  -- that depend on one (#1190); dump therefore never takes the Left
+  -- branch, and starts no worker before Lua to tear down if it did.
+  luaThreadState   ← startLuaThread env' ⌦ luaThreadOrAbort env' []
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'

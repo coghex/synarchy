@@ -18,6 +18,12 @@ defaultEngineConfig = EngineConfig
   { ecHeadless   = False
   , ecDebugPort  = 8008
   , ecBootProfile = BootNormal
+  -- Matches 'ecHeadless' above: the mode argv selects when it names no
+  -- selector flag at all. Every real boot immediately stamps its own
+  -- over this (App.Boot.bootConfig / previewBootConfig), and
+  -- 'Engine.Core.Init.initializeEngineHeadlessWith' corrects it
+  -- alongside 'ecHeadless' for the windowless initializer.
+  , ecBootMode = ModeGraphical
   , ecPreviewTarget = Nothing
   , ecPreviewBrowse = Nothing
   }

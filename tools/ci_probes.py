@@ -54,6 +54,12 @@ CI_ELIGIBLE = {
     # pairs.
     "content_registry",
     "craft",
+    # #1190: the only automated proof that --headless/--offscreen refuse
+    # to boot without their one control surface. Deterministic (no AI, no
+    # world, no GPU — every failing boot dies before the engine action),
+    # broad (both required modes, both failure kinds, plus the --dump #46
+    # sentinel and the successful-bind regressions), and ~13 s.
+    "debug_console_boot",
     "medic_coord",
     "persistence_contract",
     "preview_cli",

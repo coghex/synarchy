@@ -103,6 +103,11 @@ PROBES = [
      "craft-bill backend + craft_job AI: queue/claim/progress, source (ground+cargo) -> work -> produce loop (#329)"),
     ("crop", "crop_probe.py",
      "row-crop natural placement + groundcover world.plantCropAt into a CropPlot, growth/harvest/save-load (#334)"),
+    ("debug_console_boot", "debug_console_boot_probe.py",
+     "required-debug-console boot contract: --headless/--offscreen refuse port 0 and a "
+     "failed bind, exit non-zero with a mode/port/cause diagnostic and a cleanup trace, "
+     "no READY, no offscreen Vulkan; --dump's #46 port-0 sentinel and a successful "
+     "bind unchanged (#1190)"),
     ("disarm", "disarm_probe.py",
      "disabled-hand auto-drop must re-fire (#193)"),
     ("expedition_loop", "expedition_loop_probe.py",
