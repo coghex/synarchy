@@ -25,14 +25,16 @@ under `World.Fluid`.
 The pipeline is **not** one linear evolution → identification → carving
 sequence. There are two distinct hydrology stages running on two distinct
 inputs — a per-Age geological stage inside the timeline loop, and a global
-identification stage on the settled terrain that loop produced — followed by
-per-chunk composition and, only at runtime, an actual fluid simulation.
+identification stage whose main identifiers run on the settled terrain that
+loop produced — followed by per-chunk composition and, only at runtime, an
+actual fluid simulation. Two of stage 3's products are prepared from earlier
+grids rather than the settled terrain; §5 separates them.
 
 | # | Stage | Runs | Owning namespace | Entry point |
 |---|---|---|---|---|
 | 1 | Per-Age geological hydrology | once per Age, inside the eon loop | `World.Hydrology.Simulation`, `World.Geology.Timeline.River`/`RiverTrace`, `World.Hydrology.River`, `World.Hydrology.Glacier` | `World.Geology.Timeline.Loop.buildEonLoop` |
 | 2 | Compaction + stitched terrain | once, after the loop | `World.Geology.Timeline.Compact`, `World.Geology.Timeline.Stitch` | `World.Geology.Timeline.buildTimeline` |
-| 3 | Global identification | once, on settled terrain | `World.Fluid.*` (`Ocean`, `Lake.Identify`, `River.Identify`, `Seabed`, `OceanMask`, `IceLevel`) | `World.Geology.Timeline.buildTimeline` |
+| 3 | Global identification (mostly on settled terrain — see §5) | once, after the loop | `World.Fluid.*` (`Ocean`, `Lake.Identify`, `River.Identify`, `Seabed`, `OceanMask`, `IceLevel`) | `World.Geology.Timeline.buildTimeline` |
 | 4 | Per-chunk composition | per chunk, at chunk gen | `World.Generate.Chunk`, `World.Generate.Chunk.Fluid`, `World.Hydrology.WaterTable`, `World.Fluid.Ice` | `World.Generate.Chunk.generateChunk` |
 | 5 | Runtime fluid simulation | per tick, on loaded chunks | `Sim.Thread`, `Sim.Fluid.Active` | `Sim.Fluid.Active.simulateActiveTick` |
 
@@ -61,12 +63,19 @@ Inside `World.Geology.Timeline.Loop.buildEonLoop`, each Age runs, in order:
    polyline is `World.Geology.Timeline.RiverTrace` and its submodules
    (`.Unwrap`, `.Subdivide`, `.Coast`, `.Noise`, `.Build`).
 3. **`World.Geology.Timeline.River.mergeConvergingRivers`** — tributary
-   merging (`.River.Merge`).
+   merging (`.River.Merge`), a `TimelineBuildState → TimelineBuildState`
+   rewrite of the river features.
 4. **Glaciers** — `World.Hydrology.Glacier.generateGlaciers` /
    `evolveGlacier` (`.Glacier.Generation`, `.Glacier.Evolution`).
 
-Each of these emits `HydroEvent`s onto the Age's period. The terrain effect of
-an event is applied later, per column, through
+Only some of those produce events. `reconcileHydrology` returns a `[GeoEvent]`
+alongside its features and updated build state, and glacier generation and
+evolution emit their own `HydroEvent`s; both land on the Age's period.
+`simulateHydrology` produces a `FlowResult` and no events, and
+`mergeConvergingRivers` only rewrites the build state — their effect on terrain
+is indirect, through the river features reconciliation later turns into events.
+
+The terrain effect of an event is applied later, per column, through
 `World.Hydrology.Event.applyHydroFeature` / `applyHydroEvolution`, dispatched
 from `World.Geology.Event`. River carving itself is
 `World.Hydrology.River` (`.River.Carving`, with `.River.Meander` and
@@ -86,29 +95,38 @@ After the eon loop, still in `World.Geology.Timeline.buildTimeline`:
 - **`World.Geology.Timeline.Stitch`** builds the per-chunk timeline windows and
   stitches their interiors into an unambiguous global grid; the global coastal
   pass runs on that grid, and `stitchWorldTerrain` yields the settled
-  `worldTerrain` stage 3 identifies against.
+  `worldTerrain` the §5 identifiers run against.
 
-## 5. Stage 3 — global identification on settled terrain
+## 5. Stage 3 — global identification
 
-Still inside `buildTimeline`, the `World.Fluid.*` identifiers run on the
-settled terrain as the final placement authority, and write their results onto
-`GeoTimeline`. They are ordered by data dependency, not by textual order in the
-`let`:
+Still inside `buildTimeline`, the `World.Fluid.*` identifiers decide where
+water finally is, and write their results onto `GeoTimeline`. They are ordered
+by data dependency, not by textual order in the `let`.
+
+**Prepared from earlier grids, not from the settled terrain.** These two are
+inputs to the identifiers below and predate the stitch, so despite living in
+the same stage they are not settled-terrain work:
+
+| Produces | Module | Reads | Timeline field |
+|---|---|---|---|
+| Ice-level grid | `World.Fluid.IceLevel.computeIceLevelGrid` | the eon loop's final `ElevGrid` | `gtIceLevel` |
+| `OceanMap` + `OceanDistMap` (chunk resolution) | `World.Fluid.Ocean.computeOceanMap` | the pre-lake timeline, sampled through `applyTimelineFast` | returned alongside the timeline |
+
+**The identifiers proper, all reading the settled `worldTerrain`:**
 
 | Produces | Module | Timeline field |
 |---|---|---|
-| `OceanMap` + `OceanDistMap` (chunk resolution, BFS from the world edge) | `World.Fluid.Ocean.computeOceanMap` | returned alongside the timeline |
 | Final lakes, incl. rift-lake bed carves | `World.Fluid.Lake.Identify.identifyWorldLakes`, `World.Fluid.Lake.Graben.grabenCarveIndex` | `gtWorldLakes` |
 | Final rivers, incl. channel-bed fit | `World.Fluid.River.Identify.identifyWorldRivers` | `gtWorldRivers` |
 | Continental-margin seabed relief and materials | `World.Fluid.Seabed.identifySeabed` | `gtSeabed` |
 | Tile-resolution rendered-ocean bitmask | `World.Fluid.OceanMask.buildWorldOceanMask` over `Lake.Identify.Ocean.computeRenderedOcean` | `gtWorldOcean` |
-| Ice-level grid | `World.Fluid.IceLevel.computeIceLevelGrid` | `gtIceLevel` |
 | Lava pools (see §1) | `World.Magma.Pool.identifyLavaPools` | `gtWorldLavaPools` |
 
 Lake identification is split across `World.Fluid.Lake.Identify` (the pipeline),
-`.Identify.Ocean` (ocean BFS and coastal-basin detection), `.Identify.Flood`
-(bucket-queue priority flood), `.Identify.Components` (basin labelling and
-lake construction), and `.Identify.ChunkIndex` (per-chunk index). River
+`.Identify.Ocean` (world-edge ocean BFS and coastal-basin detection),
+`.Identify.Flood` (bucket-queue priority flood), `.Identify.Components`
+(basin labelling and lake construction), and `.Identify.ChunkIndex`
+(per-chunk index). River
 identification splits the same way: `World.Fluid.River.Identify` plus
 `.Identify.Flow`, `.Identify.Components`, `.Identify.BedDepth`,
 `.Identify.Breakthrough`, `.Identify.ChunkIndex` and `.Identify.Common`.
@@ -167,17 +185,24 @@ already shaped.
 
 ## 9. Ocean and lake ownership
 
-Ocean is split by resolution and purpose:
+Ocean is split by resolution, seeding, and purpose. The two floods start from
+completely different places — do not conflate them:
 
 - **`World.Fluid.Ocean`** — `computeOceanMap`, the coarse **chunk-resolution**
-  BFS from the world edge, plus per-chunk distance-from-ocean. Its types
-  (`OceanMap`, `OceanDistMap`, `oceanDistAt`) live in **`World.Ocean.Types`**,
-  separately, so they can be depended on without the computation.
-- **`World.Fluid.Lake.Identify.Ocean`** — the **tile-resolution** ocean work:
-  `computeWorldEdgeOcean` (the edge-connected ocean that seeds the priority
-  flood and is excluded from basin labelling) and `computeRenderedOcean` (the
-  wider "renders as ocean anywhere" flood, including enclosed inland seas with
-  an oceanic core).
+  flood, plus per-chunk distance-from-ocean. It is **seeded from tectonic
+  plates**, not from the world edge: each non-land plate contributes its centre
+  chunk, spiralling outward up to 4 chunks if that chunk is above sea level (so
+  an ocean plate with a volcanic island centre still gets a seed). The BFS then
+  propagates through chunks whose *median* elevation over five sample points is
+  at or below sea level, which is what stops ocean bleeding inland through a
+  single low corner. Its types (`OceanMap`, `OceanDistMap`, `oceanDistAt`) live
+  in **`World.Ocean.Types`**, separately, so they can be depended on without
+  the computation.
+- **`World.Fluid.Lake.Identify.Ocean`** — the **tile-resolution** ocean work,
+  and the only **world-edge** flood: `computeWorldEdgeOcean` (the
+  edge-connected ocean that seeds the priority flood and is excluded from
+  basin labelling) and `computeRenderedOcean` (the wider "renders as ocean
+  anywhere" flood, including enclosed inland seas with an oceanic core).
 - **`World.Fluid.OceanMask`** — packs `computeRenderedOcean`'s grid into the
   per-chunk bitmask stored as `gtWorldOcean`, which is what lets chunk gen fix
   sea areas that used to stop dead at a chunk boundary.
