@@ -1,6 +1,12 @@
 -- Shell module for debug console
 local boxTextures = require("scripts.ui.box_textures")
 local textWrap = require("scripts.ui.text_wrap")
+-- #1187: cursorPos/inputScrollOffset below are zero-based Unicode CODE-POINT
+-- offsets into inputBuffer, the same contract UI.TextBuffer and the editable
+-- widgets use (#746). Lua's # and string.sub count BYTES, so every slice,
+-- measurement and cursor step goes through this helper -- a byte-stepping
+-- cursor leaves a stray fragment of a multi-byte character in the buffer.
+local utf8Safe = require("scripts.ui.utf8_safe")
 local shell = {}
 
 -- Script ID (passed from engine)
@@ -74,8 +80,15 @@ local objCursor = nil
 local cursorVisible = true
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5 -- seconds
+-- Both are zero-based CODE-POINT offsets into inputBuffer -- see the
+-- utf8_safe note at the top of this file.
 local cursorPos = 0
 local inputScrollOffset = 0
+
+-- Length of the input buffer in code points.
+local function bufferLength()
+    return utf8Safe.codepointLength(inputBuffer)
+end
 
 -- Configuration
 local tileSize = 64
@@ -101,12 +114,27 @@ local function loadArrowHistoryFromDisk()
     local f = io.open(historyFilePath, "r")
     if not f then return end
     arrowHistory = {}
+    local dropped = 0
     for line in f:lines() do
         if line ~= "" then
-            table.insert(arrowHistory, line)
+            -- #1187: arrow-up drops a stored line straight into
+            -- inputBuffer, whose editing contract is code-point based.
+            -- This file is plain text a user can hand-edit or truncate,
+            -- and it is the ONE ingress that isn't engine-delivered
+            -- text, so a line that isn't valid UTF-8 is refused here
+            -- rather than left to blow up mid-edit.
+            if utf8.len(line) then
+                table.insert(arrowHistory, line)
+            else
+                dropped = dropped + 1
+            end
         end
     end
     f:close()
+    if dropped > 0 then
+        engine.logWarn("Shell history: skipped " .. tostring(dropped)
+            .. " line(s) of invalid UTF-8 in " .. historyFilePath)
+    end
     while #arrowHistory > historyMaxLines do
         table.remove(arrowHistory, 1)
     end
@@ -290,21 +318,32 @@ function shell.getFocusId()
     return focusId
 end
 
+-- Read-only introspection of the input line: the raw buffer text plus the
+-- cursor and scroll offsets, both zero-based CODE-POINT offsets into it
+-- (#1187). Exists so the editing contract can be asserted from the debug
+-- console and from headless tests without reaching into these upvalues.
+function shell.getInputState()
+    return inputBuffer, cursorPos, inputScrollOffset
+end
+
 function shell.onChar(char)
     historyIndex = 0
     savedInputBuffer = ""
-    -- Insert at cursor position
-    local before = inputBuffer:sub(1, cursorPos)
-    local after = inputBuffer:sub(cursorPos + 1)
+    -- Insert at cursor position. `char` arrives from LuaCharInput as one
+    -- Haskell Char (Engine.Scripting.Lua.Thread.Dispatch), so it is one
+    -- code point of one to four bytes -- advance by code points, not by 1
+    -- byte, or the next edit cuts the character in half.
+    local before = utf8Safe.prefix(inputBuffer, cursorPos)
+    local after = utf8Safe.suffix(inputBuffer, cursorPos)
     inputBuffer = before .. char .. after
-    cursorPos = cursorPos + 1
+    cursorPos = cursorPos + utf8Safe.codepointLength(char)
     shell.updateDisplay()
 end
 
 function shell.onBackspace()
     if cursorPos > 0 then
-        local before = inputBuffer:sub(1, cursorPos - 1)
-        local after = inputBuffer:sub(cursorPos + 1)
+        local before = utf8Safe.prefix(inputBuffer, cursorPos - 1)
+        local after = utf8Safe.suffix(inputBuffer, cursorPos)
         inputBuffer = before .. after
         cursorPos = cursorPos - 1
         shell.updateDisplay()
@@ -558,8 +597,9 @@ function shell.updateCursorPos()
     local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
     local bufferX = promptX + promptWidth + 10
     
-    -- Only measure text up to cursor position
-    local textBeforeCursor = inputBuffer:sub(inputScrollOffset + 1, cursorPos)
+    -- Only measure text up to cursor position, as whole code points --
+    -- a byte slice here would hand engine.getTextWidth half a character.
+    local textBeforeCursor = utf8Safe.slice(inputBuffer, inputScrollOffset, cursorPos)
     local textWidth = engine.getTextWidth(shellFont, textBeforeCursor, fontSize)
     local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
     local cursorX = bufferX + textWidth - cursorWidth / 2
@@ -610,24 +650,31 @@ function shell.updateInputScroll()
         return
     end
     
-    -- Check if cursor is past right edge
-    local widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos), fontSize)
-    
-    -- If cursor goes past right edge, scroll right
-    while widthFromScrollToCursor > maxWidth do
+    -- Check if cursor is past right edge. The scroll offset advances one
+    -- CODE POINT at a time so every measured slice is whole characters.
+    local widthFromScrollToCursor = engine.getTextWidth(shellFont,
+        utf8Safe.slice(inputBuffer, inputScrollOffset, cursorPos), fontSize)
+
+    -- If cursor goes past right edge, scroll right. Bounded by the cursor:
+    -- once the slice is empty there is nothing left to scroll away, and a
+    -- degenerate (non-positive) maxWidth must not spin forever.
+    while widthFromScrollToCursor > maxWidth and inputScrollOffset < cursorPos do
         inputScrollOffset = inputScrollOffset + 1
-        widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos), fontSize)
+        widthFromScrollToCursor = engine.getTextWidth(shellFont,
+            utf8Safe.slice(inputBuffer, inputScrollOffset, cursorPos), fontSize)
     end
 end
 
 -- Get the visible portion of input buffer
 function shell.getVisibleInput()
     local maxWidth = shell.getMaxInputWidth()
-    local visibleText = inputBuffer:sub(inputScrollOffset + 1)
-    
-    -- Trim to fit width
-    for i = #visibleText, 1, -1 do
-        local test = visibleText:sub(1, i)
+    local visibleText = utf8Safe.suffix(inputBuffer, inputScrollOffset)
+
+    -- Trim to fit width, testing whole-code-point prefixes only: a
+    -- byte-length prefix walk hands partial sequences to getTextWidth and
+    -- can return a fragment for the buffer text element to render.
+    for i = utf8Safe.codepointLength(visibleText), 1, -1 do
+        local test = utf8Safe.prefix(visibleText, i)
         if engine.getTextWidth(shellFont, test, fontSize) <= maxWidth then
             return test
         end
@@ -658,21 +705,41 @@ function shell.calculateBoxHeight()
     return math.min(neededHeight, maxHeight)
 end
 
+-- Longest common prefix of the completion candidates, cut at a code-point
+-- boundary. Two candidates can agree on part of a multi-byte character --
+-- `a🙂x` and `a🙃y` share three of the emoji's four bytes -- so the raw
+-- byte-wise agreement point is snapped back to the last whole character
+-- before it becomes ghost text, a Tab insertion, or a measured string.
+-- The candidates come from _G/sandbox key names and past commands, so
+-- snapping (which never raises) is used rather than utf8_safe's asserting
+-- code-point walk.
 function shell.longestCommonPrefix(strings)
     if #strings == 0 then return "" end
     if #strings == 1 then return strings[1] end
-    
-    local prefix = strings[1]
+
+    local base = strings[1]
+    local n = #base
     for i = 2, #strings do
         local s = strings[i]
-        local j = 1
-        while j <= #prefix and j <= #s and prefix:sub(j, j) == s:sub(j, j) do
+        local j = 0
+        while j < n and j < #s and base:byte(j + 1) == s:byte(j + 1) do
             j = j + 1
         end
-        prefix = prefix:sub(1, j - 1)
-        if prefix == "" then return "" end
+        n = j
+        if n == 0 then return "" end
     end
-    return prefix
+    return base:sub(1, utf8Safe.snapToCharBoundary(base, n))
+end
+
+-- The part of `completion` past the already-typed `prefix`, which
+-- getCurrentWord only ever produces as an ASCII run. longestCommonPrefix
+-- has already cut at a character boundary; refusing a fragment that isn't
+-- valid UTF-8 on its own additionally keeps a hand-installed non-UTF-8
+-- global name out of the input buffer and away from engine.getTextWidth.
+local function completionSuffix(completion, prefix)
+    local addition = completion:sub(#prefix + 1)
+    if addition == "" or utf8.len(addition) == nil then return "" end
+    return addition
 end
 
 -- Get the current word being typed (handles engine.xxx)
@@ -787,7 +854,7 @@ end
 -- Update ghost text showing completion hint
 function shell.updateGhostText()
     if not shellvisible then return end
-    if cursorPos ~= #inputBuffer then
+    if cursorPos ~= bufferLength() then
         if ghostText then
             UI.setVisible(ghostText, false)
         end
@@ -809,12 +876,13 @@ function shell.updateGhostText()
     
     if #currentCompletions > 0 then
         local commonPrefix = shell.longestCommonPrefix(currentCompletions)
-        local ghostPart = commonPrefix:sub(#prefix + 1)
+        local ghostPart = completionSuffix(commonPrefix, prefix)
         local maxWidth = shell.getMaxInputWidth()
-        local currentWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1), fontSize)
+        local currentWidth = engine.getTextWidth(shellFont,
+            utf8Safe.suffix(inputBuffer, inputScrollOffset), fontSize)
         local ghostWidth = engine.getTextWidth(shellFont, ghostPart, fontSize)
 
-        if #ghostPart > 0 and (currentWidth + ghostWidth) <= maxWidth then
+        if ghostPart ~= "" and (currentWidth + ghostWidth) <= maxWidth then
             if not ghostText then
                 ghostText = UI.newText("shell_ghost", ghostPart, shellFont, fontSize, 0.5, 0.5, 0.5, 0.5, shellPage)
                 UI.addToPage(shellPage, ghostText, 0, 0)
@@ -834,7 +902,8 @@ function shell.updateGhostText()
             local promptY = row2Y - fontSize
             local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
             local bufferX = promptX + promptWidth + 10
-            local textWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1), fontSize)
+            local textWidth = engine.getTextWidth(shellFont,
+                utf8Safe.suffix(inputBuffer, inputScrollOffset), fontSize)
             local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
             local cursorX = bufferX + textWidth
             
@@ -860,13 +929,15 @@ function shell.onTab()
     if #completions == 0 then return end
     
     local commonPrefix = shell.longestCommonPrefix(completions)
-    local addition = commonPrefix:sub(#prefix + 1)
-    
-    if #addition > 0 then
-        local before = inputBuffer:sub(1, cursorPos)
-        local after = inputBuffer:sub(cursorPos + 1)
+    local addition = completionSuffix(commonPrefix, prefix)
+
+    if addition ~= "" then
+        local before = utf8Safe.prefix(inputBuffer, cursorPos)
+        local after = utf8Safe.suffix(inputBuffer, cursorPos)
         inputBuffer = before .. addition .. after
-        cursorPos = cursorPos + #addition
+        -- Code points, not #addition: a completion can carry multi-byte
+        -- characters (a past command, a non-ASCII table key).
+        cursorPos = cursorPos + utf8.len(addition)
         shell.updateDisplay()
     end
 end
@@ -891,7 +962,7 @@ function shell.onCursorUp(fid)
     if historyIndex < #arrowHistory then
         historyIndex = historyIndex + 1
         inputBuffer = arrowHistory[#arrowHistory - historyIndex + 1]
-        cursorPos = #inputBuffer
+        cursorPos = bufferLength()
         shell.updateDisplay()
     end
 end
@@ -903,13 +974,13 @@ function shell.onCursorDown(fid)
         -- Move down in history (towards newer commands)
         historyIndex = historyIndex - 1
         inputBuffer = arrowHistory[#arrowHistory - historyIndex + 1]
-        cursorPos = #inputBuffer
+        cursorPos = bufferLength()
         shell.updateDisplay()
     elseif historyIndex == 1 then
         -- Back to saved input
         historyIndex = 0
         inputBuffer = savedInputBuffer
-        cursorPos = #inputBuffer
+        cursorPos = bufferLength()
         shell.updateDisplay()
     end
 end
@@ -926,7 +997,7 @@ function shell.onCursorLeft(fid)
 end
 
 function shell.onCursorRight(fid)
-    if fid == focusId and cursorPos < #inputBuffer then
+    if fid == focusId and cursorPos < bufferLength() then
         cursorPos = cursorPos + 1
         shell.updateCursorPos()
         shell.updateDisplay()
@@ -944,19 +1015,27 @@ end
 
 function shell.onCursorEnd(fid)
     if fid == focusId then
-        cursorPos = #inputBuffer
+        cursorPos = bufferLength()
         shell.updateCursorPos()
         shell.updateDisplay()
     end
 end
 
 function shell.onDelete(fid)
-    if fid == focusId and cursorPos < #inputBuffer then
-        local before = inputBuffer:sub(1, cursorPos)
-        local after = inputBuffer:sub(cursorPos + 2)
+    if fid == focusId and cursorPos < bufferLength() then
+        local before = utf8Safe.prefix(inputBuffer, cursorPos)
+        local after = utf8Safe.suffix(inputBuffer, cursorPos + 1)
         inputBuffer = before .. after
         shell.updateDisplay()
     end
+end
+
+-- The Delete key's production entry point: Engine.Scripting.Lua.Thread.Dispatch
+-- broadcasts LuaTextDelete as "onTextDelete", matching the onTextBackspace /
+-- onCharInput naming above. onDelete stays the implementation (and keeps its
+-- own focus check) so console-driven callers keep working.
+function shell.onTextDelete(fid)
+    shell.onDelete(fid)
 end
 
 function shell.onInterrupt(fid)

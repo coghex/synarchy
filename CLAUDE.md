@@ -244,7 +244,16 @@ InteractiveBounds, ResponsiveMenus, ResponsiveGameplay). Contracts:
 **Text coordinates:** `UI.TextBuffer`/`UI.getCursor`/`UI.setCursor` use
 zero-based Unicode code-point offsets. Lua strings are UTF-8 byte
 arrays — editable widgets must use `scripts/ui/utf8_safe.lua`, never
-`#text` or byte-based `string.sub`.
+`#text` or byte-based `string.sub`. Since #1187 the debug console's own
+input line (`scripts/shell.lua`) holds the same contract: `cursorPos`
+and `inputScrollOffset` are code-point offsets into `inputBuffer`, and
+that includes the derived paths — tab completion (`longestCommonPrefix`
+snaps its byte-wise agreement point back to a character boundary, since
+two candidates can agree on part of one emoji), the ghost hint, and the
+scroll/measure walk. The Delete key arrives as `onTextDelete`
+(`LuaTextDelete`), not `onDelete`. `config/shell_history.txt` is the one
+buffer ingress that isn't engine-delivered text, so a line that isn't
+valid UTF-8 is dropped at load. Gate: hspec `--match "Lua.ShellInput"`.
 
 **Text display (#1159):** the same rule binds read-only DISPLAY paths —
 wrapping, truncation, and any other per-character walk advances one code
