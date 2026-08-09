@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""--preview CLI-contract probe (#886, Phase 2 of the --preview epic #427).
+"""No-boot CLI-contract probe (#886 --preview epic #427; #1012 CH-58; #1191).
 
 Every check here is a PRE-BOOT rejection or exit — no GPU, no window, no
 engine thread ever starts (App.Main/App.Cli/Engine.Preview.Discovery
@@ -7,6 +7,11 @@ reject before 'App.Preview.runPreview' is ever called). This is what makes
 the probe CI-eligible: a classifier or path-containment regression fails
 PRs directly instead of waiting for a manual, needs-gpu dev-machine run
 (tools/preview_probe.py, which keeps the real-boot browser checks).
+
+It started as the --preview contract (#886), which is still checks 1-8,
+and now covers the whole argv-to-dispatch layer: mode compatibility
+(#1012/CH-58, check 9) and handled-value validation (#1191, check 10).
+The filename predates that widening.
 
 Checks:
   1. A bare --preview (no target at all) errors and exits 1, no silent
@@ -45,6 +50,22 @@ Checks:
      both the flag and the selected mode in stderr — one case per row
      of the table, including the distinct --plates/--ages spellings and
      the --language-report/--seeds pairing.
+ 10. Present-but-malformed values (#1191): every affected spelling
+     (--seed/--worldSize/--plates/--ages/--port), an empty and an
+     unknown --dump= layer selection plus empty segments, and a
+     malformed and a non-positive --size all exit 1 pre-boot naming the
+     flag and the offending token — never the silent fall-through to a
+     default that made `--seed not-a-number` produce a full, valid,
+     WRONG dump at seed 42. Also pins the two orderings the fix has to
+     preserve: validation runs ahead of mode-specific early exits and
+     regardless of whether the value would be consumed (a malformed
+     --port fails even for a bare grouped --preview; a malformed --ages
+     fails even when a valid --plates wins), while check 9's
+     mode-compatibility rejection still takes priority over it (a
+     malformed --seed given to --headless is reported as unsupported in
+     headless mode, not as malformed). Omitting a flag entirely still
+     keeps its documented default. The pure four-outcome parser
+     coverage is hspec `--match "App.Cli"`.
 
 Usage:
   python3 tools/preview_cli_probe.py
@@ -54,6 +75,7 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -296,6 +318,140 @@ def check_incompatible_flags() -> bool:
     return all(results)
 
 
+# (label, extra args, substrings every one of which must appear in stderr).
+# Each case exits 1 pre-boot with NO READY on stdout and NO dump JSON on
+# stdout. Modes are chosen so check 9's compatibility table does not fire
+# first: the numeric flags ride --dump (which honours them), --port rides
+# --headless/--offscreen/--preview, and --size rides --offscreen.
+MALFORMED_VALUE_CASES = [
+    ("--seed",
+     ["--dump", "--seed", "not-a-number", "--worldSize", "16",
+      "--region", "0,0,0,0"],
+     ["--seed", "not-a-number"]),
+    ("--worldSize",
+     ["--dump", "--worldSize", "sixteen", "--region", "0,0,0,0"],
+     ["--worldSize", "sixteen"]),
+    ("--plates",
+     ["--dump", "--worldSize", "16", "--plates", "many",
+      "--region", "0,0,0,0"],
+     ["--plates", "many"]),
+    ("--ages",
+     ["--dump", "--worldSize", "16", "--ages", "many",
+      "--region", "0,0,0,0"],
+     ["--ages", "many"]),
+    ("--port",
+     ["--headless", "--port", "not-a-port"],
+     ["--port", "not-a-port"]),
+    # A handled flag with no operand at all is present-but-invalid, not
+    # absence — it must name the flag rather than silently default.
+    ("--port with no operand", ["--headless", "--port"], ["--port"]),
+    ("--size", ["--offscreen", "--size", "not-a-size"],
+     ["--size", "not-a-size"]),
+    # Positivity stays a --size-specific rule, and rejects rather than
+    # falling back to the video-config resolution.
+    ("--size non-positive", ["--offscreen", "--size", "0x100"],
+     ["--size", "0x100"]),
+    ("--dump= empty selection", ["--dump="], ["--dump=", "terrain"]),
+    ("--dump= unknown layer",
+     ["--dump=bogus_layer_typo", "--worldSize", "16", "--region", "0,0,0,0"],
+     ["--dump=", "bogus_layer_typo"]),
+    # An empty SEGMENT is reported as empty, not as an unknown layer "".
+    ("--dump= trailing empty segment",
+     ["--dump=terrain,", "--worldSize", "16", "--region", "0,0,0,0"],
+     ["--dump=", "empty"]),
+    ("--dump= interior empty segment",
+     ["--dump=terrain,,fluid", "--worldSize", "16", "--region", "0,0,0,0"],
+     ["--dump=", "empty"]),
+    # #1191 eager validation: a malformed value must fail even when the
+    # selected mode would exit before ever consuming it. A bare grouped
+    # --preview otherwise prints its guidance and exits 0.
+    ("--port for a bare grouped --preview (never consumed)",
+     ["--preview", "units", "--port", "not-a-port"],
+     ["--port", "not-a-port"]),
+    # ...and even when a valid --plates takes precedence over --ages.
+    ("--ages while a valid --plates wins",
+     ["--dump", "--worldSize", "16", "--plates", "3", "--ages", "nonsense",
+      "--region", "0,0,0,0"],
+     ["--ages", "nonsense"]),
+]
+
+# Mode compatibility (check 9) must keep its priority over value
+# validation: these name the MODE, and must NOT report the value as
+# malformed.
+MALFORMED_IN_WRONG_MODE_CASES = [
+    (["--headless", "--seed", "not-a-number"], "--seed", "headless"),
+    (["--dump", "--port", "not-a-port"], "--port", "dump"),
+]
+
+
+def check_malformed_values() -> bool:
+    print("10. present-but-malformed values rejected pre-boot (#1191): "
+          "exit 1, flag + offending token named, no default substituted")
+    results = []
+    for label, extra_args, expected in MALFORMED_VALUE_CASES:
+        try:
+            r = run_cli(*extra_args, timeout=30.0)
+        except subprocess.TimeoutExpired:
+            results.append(check(f"malformed {label}", False,
+                                 "process did not exit within 30s — a "
+                                 "malformed value reached a real boot"))
+            continue
+        problems = []
+        if r.returncode == 0:
+            problems.append("exit 0")
+        if "READY" in r.stdout:
+            problems.append("a READY marker reached stdout")
+        if r.stdout.strip():
+            problems.append(f"stdout was not empty: {r.stdout.strip()[:60]!r}")
+        for want in expected:
+            if want not in r.stderr:
+                problems.append(f"stderr never names {want!r}")
+        results.append(check(f"malformed {label}", not problems,
+                             f"rc={r.returncode} " + ("; ".join(problems)
+                             if problems else r.stderr.strip()[:80])))
+    return all(results)
+
+
+def check_mode_priority_over_value() -> bool:
+    print("10b. mode compatibility still outranks value validation: a "
+          "malformed value in a mode that ignores the flag names the MODE")
+    results = []
+    for extra_args, flag, mode in MALFORMED_IN_WRONG_MODE_CASES:
+        r = run_cli(*extra_args, timeout=30.0)
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and f"{flag} is not supported in {mode} mode" in r.stderr
+              and "invalid value" not in r.stderr)
+        results.append(check(f"{flag} malformed in {mode} mode", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+    return all(results)
+
+
+def check_omission_still_defaults() -> bool:
+    """#1191 requirement 4: only a PRESENT malformed value is an error."""
+    print("10c. omitting a flag still keeps its documented default")
+    try:
+        r = run_cli("--dump", "--worldSize", "16", "--region", "0,0,0,0",
+                    timeout=180.0)
+    except subprocess.TimeoutExpired:
+        return check("omission defaults", False, "dump did not finish in 180s")
+    problems = []
+    if r.returncode != 0:
+        problems.append(f"exit status {r.returncode} (want 0)")
+    # The dump banner echoes the effective values; an omitted --seed must
+    # still be 42 and an omitted --plates must still be derived.
+    if "seed=42" not in r.stderr:
+        problems.append("omitted --seed no longer defaults to 42")
+    try:
+        parsed = json.loads(r.stdout)
+        if not parsed:
+            problems.append("dump produced no tiles")
+    except (json.JSONDecodeError, ValueError) as e:
+        problems.append(f"stdout is not valid JSON: {e}")
+    return check("omission defaults", not problems,
+                 f"rc={r.returncode} " + "; ".join(problems))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     # Every registered probe accepts --port (#723) so tools/run_probes.py
@@ -318,9 +474,12 @@ def main() -> int:
     results.append(check_unit_targets())
     results.append(check_grouped_item_targets())
     results.append(check_incompatible_flags())
+    results.append(check_malformed_values())
+    results.append(check_mode_priority_over_value())
+    results.append(check_omission_still_defaults())
 
     passed = all(results)
-    print(f"\n  {'PASS' if passed else 'FAIL'}: --preview CLI contract"
+    print(f"\n  {'PASS' if passed else 'FAIL'}: no-boot CLI contract"
           + ("" if passed else " — see failures above"))
     return 0 if passed else 1
 

@@ -1,11 +1,24 @@
 -- | Command-line argument parsing shared across every boot mode: dump-layer
 --   selection, generic @--flag value@/region parsing, plus preview-target,
 --   image-size, language-report, and seed-range parsing.
+--
+--   Absence and malformed presence are DIFFERENT answers (#1191). A
+--   parser here returns @'Either' 'CliError' ('Maybe' a)@: 'Right'
+--   'Nothing' means the flag never appeared and the caller's documented
+--   default applies, while 'Left' means the user typed the flag with a
+--   value that cannot mean what they wrote. Collapsing the two — which
+--   is what every one of these did before — turns a typo into a silent
+--   substitution: @--seed not-a-number@ generated seed 42 and exited 0
+--   with a full, valid, wrong dump.
 module App.Cli
   ( DumpLayers(..)
   , defaultLayers
+  , dumpLayerNames
+  , CliError(..)
+  , cliErrorMessage
   , parseDump
   , parseArg
+  , lookupFlagValue
   , parseStrArg
   , parseRegion
   , parseSize
@@ -20,7 +33,7 @@ module App.Cli
 
 import UPrelude
 import Data.Char (toLower)
-import Data.List (isPrefixOf)
+import Data.List (intercalate, isPrefixOf)
 
 -- | Which layers to include in dump output.
 data DumpLayers = DumpLayers
@@ -47,43 +60,136 @@ defaultLayers = DumpLayers
     , dlSlope    = False
     }
 
--- | Parse --dump or --dump=layer1,layer2,... from args.
---   Returns Nothing if --dump not present, Just layers otherwise.
-parseDump ∷ [String] → Maybe DumpLayers
-parseDump [] = Nothing
+-- | Every layer name @--dump=@ accepts, in the order an error message
+--   lists them. @elevation@ is a historical alias for @terrain@ and is
+--   deliberately part of the accepted set, not a separate layer.
+dumpLayerNames ∷ [String]
+dumpLayerNames =
+    ["terrain", "elevation", "material", "fluid", "ice", "ore", "slope"]
+
+-- | A flag the user actually typed, carrying a value that cannot mean
+--   what they wrote (#1191). Absence is never one of these — it is
+--   'Right' 'Nothing' from the parser, and the caller's default applies.
+data CliError
+    = MissingFlagValue !String
+      -- ^ The flag was the LAST token in argv, with no operand after
+      --   it. Distinct from absence: the user asked for something.
+    | BadNumericValue !String !String
+      -- ^ Flag, then the offending token verbatim (as typed, so the
+      --   message can quote what the user will recognize).
+    | BadSizeValue !String
+      -- ^ @--size@'s own @WxH@ syntax, which additionally requires both
+      --   dimensions positive. Its own constructor rather than a shared
+      --   one carrying an expectation string: there is exactly one flag
+      --   with this shape, and the message differs entirely.
+    | EmptyDumpSelection
+      -- ^ @--dump=@ with nothing after the @=@ at all.
+    | EmptyDumpLayerName !Int
+      -- ^ A 1-based empty segment INSIDE a non-empty selection
+      --   (@--dump=terrain,@ or @--dump=terrain,,fluid@). Reported as
+      --   empty explicitly rather than as an unknown layer @""@.
+    | UnknownDumpLayer !String
+      -- ^ A non-empty token naming no layer in 'dumpLayerNames'.
+    deriving (Eq, Show)
+
+-- | The stderr line a 'CliError' is reported with. Always names the
+--   flag, and — where there is one — the offending token exactly as
+--   typed, since a value that survived the shell is what the user has
+--   to go looking for in their command line.
+cliErrorMessage ∷ CliError → String
+cliErrorMessage (MissingFlagValue flag) =
+    flag ⧺ " requires a value, but no value followed it"
+cliErrorMessage (BadNumericValue flag raw) =
+    flag ⧺ ": invalid value " ⧺ show raw ⧺ " (expected a whole number)"
+cliErrorMessage (BadSizeValue raw) =
+    "--size: invalid value " ⧺ show raw
+        ⧺ " (expected WxH with a positive width and height, e.g. 1280x720)"
+cliErrorMessage EmptyDumpSelection =
+    "--dump= requires at least one layer name" ⧺ expectedLayers
+cliErrorMessage (EmptyDumpLayerName i) =
+    "--dump=: layer " ⧺ show i ⧺ " is empty -- an empty layer name "
+        ⧺ "selects nothing" ⧺ expectedLayers
+cliErrorMessage (UnknownDumpLayer tok) =
+    "--dump=: unknown layer " ⧺ show tok ⧺ expectedLayers
+
+expectedLayers ∷ String
+expectedLayers = " (expected one or more of: "
+    ⧺ intercalate ", " dumpLayerNames ⧺ ")"
+
+-- | Parse @--dump@ or @--dump=layer1,layer2,...@ from args.
+--   'Right' 'Nothing' if @--dump@ is not present; 'Left' if it is
+--   present with a selection naming no layer, an unknown layer, or an
+--   empty segment — each of which used to be accepted silently,
+--   producing FEWER layers than asked for (a bare @--dump=@ produced
+--   none at all, and still exited 0 with tile records carrying nothing
+--   but coordinates).
+parseDump ∷ [String] → Either CliError (Maybe DumpLayers)
+parseDump [] = Right Nothing
 parseDump (a:rest)
-    | a ≡ "--dump" = Just defaultLayers
-    | "--dump=" `isPrefixOf` a =
-        let flags = map (map toLower) $ splitOn ',' (drop 7 a)
-        in Just DumpLayers
-            { dlTerrain  = "terrain"  `elem` flags ∨ "elevation" `elem` flags
-            , dlMaterial = "material" `elem` flags
-            , dlFluid    = "fluid"    `elem` flags
-            , dlIce      = "ice"      `elem` flags
-            , dlOre      = "ore"      `elem` flags
-            , dlSlope    = "slope"    `elem` flags
-            }
+    | a ≡ "--dump" = Right (Just defaultLayers)
+    | "--dump=" `isPrefixOf` a = Just ⊚ parseDumpSelection (drop 7 a)
     | otherwise = parseDump rest
 
--- | Parse --flag N from args
-parseArg ∷ Read a ⇒ String → [String] → Maybe a
-parseArg _ [] = Nothing
-parseArg flag (f:n:rest)
-    | f ≡ flag  = case reads n of
-        [(v, "")] → Just v
-        _         → parseArg flag rest
-    | otherwise = parseArg flag (n:rest)
-parseArg _ [_] = Nothing
+-- | Validate every token of a @--dump=@ selection, then build the
+--   layer set from it. Matching stays case-insensitive and keeps the
+--   @elevation@ alias; only the silent acceptance of unmatched tokens
+--   is gone.
+parseDumpSelection ∷ String → Either CliError DumpLayers
+parseDumpSelection "" = Left EmptyDumpSelection
+parseDumpSelection sel = do
+    -- Left to right, so a command line with several bad tokens always
+    -- names the first one.
+    forM_ (zip [1 ∷ Int ..] raw) $ \(i, tok) →
+        if null tok
+            then Left (EmptyDumpLayerName i)
+            else when (map toLower tok `notElem` dumpLayerNames) $
+                     Left (UnknownDumpLayer tok)
+    pure DumpLayers
+        { dlTerrain  = "terrain"  `elem` flags ∨ "elevation" `elem` flags
+        , dlMaterial = "material" `elem` flags
+        , dlFluid    = "fluid"    `elem` flags
+        , dlIce      = "ice"      `elem` flags
+        , dlOre      = "ore"      `elem` flags
+        , dlSlope    = "slope"    `elem` flags
+        }
+  where
+    raw   = splitOn ',' sel
+    flags = map (map toLower) raw
 
--- | Parse --flag VALUE from args, returning the raw token. Unlike
+-- | The one raw @--flag VALUE@ lookup every value parser here is built
+--   on. 'Right' 'Nothing' = the flag never appeared; 'Left' = it
+--   appeared as the last token, with nothing to be its value.
+lookupFlagValue ∷ String → [String] → Either CliError (Maybe String)
+lookupFlagValue _ [] = Right Nothing
+lookupFlagValue flag [f]
+    | f ≡ flag  = Left (MissingFlagValue flag)
+    | otherwise = Right Nothing
+lookupFlagValue flag (f:v:rest)
+    | f ≡ flag  = Right (Just v)
+    | otherwise = lookupFlagValue flag (v:rest)
+
+-- | Parse @--flag N@ from args. The FIRST occurrence decides: a
+--   malformed one is an error rather than something to skip past in
+--   search of a later well-formed occurrence (which is how a typo used
+--   to become 'Nothing', indistinguishable from absence).
+parseArg ∷ Read a ⇒ String → [String] → Either CliError (Maybe a)
+parseArg flag args = lookupFlagValue flag args ⌦ \case
+    Nothing  → Right Nothing
+    Just raw → case reads raw of
+        [(v, "")] → Right (Just v)
+        _         → Left (BadNumericValue flag raw)
+
+-- | Parse @--flag VALUE@ from args, returning the raw token. Unlike
 --   'parseArg' there's no 'reads' round-trip — a filepath would need
 --   Haskell string quoting to survive one.
+--
+--   Deliberately keeps the pre-#1191 lenient shape, in which a trailing
+--   flag with no operand is indistinguishable from absence: its only
+--   caller is 'parseSeeds', whose own 'Nothing' already covers absence,
+--   a malformed range and an out-of-range bound alike, and whose caller
+--   reports one error for all of them.
 parseStrArg ∷ String → [String] → Maybe String
-parseStrArg _ [] = Nothing
-parseStrArg flag (f:v:rest)
-    | f ≡ flag  = Just v
-    | otherwise = parseStrArg flag (v:rest)
-parseStrArg _ [_] = Nothing
+parseStrArg flag = either (const Nothing) id ∘ lookupFlagValue flag
 
 -- | Parse --region cx1,cy1,cx2,cy2 from args
 parseRegion ∷ [String] → (Int, Int, Int, Int)
@@ -95,17 +201,20 @@ parseRegion ("--region":s:_) =
         _ → (-8, -8, 8, 8)
 parseRegion (_:rest) = parseRegion rest
 
--- | Parse --size WxH from args (offscreen render size, #650).
---   Nothing on absence or malformed/non-positive values — the caller
---   falls back to the video-config resolution.
-parseSize ∷ [String] → Maybe (Int, Int)
-parseSize args = do
-    s ← parseStrArg "--size" args
-    case splitOn 'x' (map toLower s) of
+-- | Parse @--size WxH@ from args (offscreen render size, #650).
+--   'Right' 'Nothing' ONLY on absence — the caller still falls back to
+--   the video-config resolution there. A malformed or non-positive
+--   value is a 'Left' (#1191): it used to be the same 'Nothing', so
+--   @--size not-a-size@ rendered at the local config's resolution and
+--   silently defeated the whole point of pinning a size.
+parseSize ∷ [String] → Either CliError (Maybe (Int, Int))
+parseSize args = lookupFlagValue "--size" args ⌦ \case
+    Nothing  → Right Nothing
+    Just raw → case splitOn 'x' (map toLower raw) of
         [ws, hs] → case (reads ws, reads hs) of
-            ([(w, "")], [(h, "")]) | w > 0 ∧ h > 0 → Just (w, h)
-            _ → Nothing
-        _ → Nothing
+            ([(w, "")], [(h, "")]) | w > 0 ∧ h > 0 → Right (Just (w, h))
+            _ → Left (BadSizeValue raw)
+        _ → Left (BadSizeValue raw)
 
 -- | Parse --preview category[/item] from args.
 --   Nothing = --preview not present at all (normal dispatch continues).

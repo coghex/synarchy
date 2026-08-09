@@ -1027,9 +1027,16 @@ test-suite synarchy-test-graphical
 test-suite synarchy-test-headless
     import: warnings, lang, build-policy
     type: exitcode-stdio-1.0
-    hs-source-dirs: test-headless
+    -- `app` is here for ONE module: App.Cli, the pure CLI parser (#1191).
+    -- It lives in the executable rather than the library and has no
+    -- app-local imports of its own, so compiling it into this suite is
+    -- what lets the absence-vs-malformed contract be tested without
+    -- booting a process. `test-headless` stays FIRST so main-is resolves
+    -- to test-headless/Spec.hs, not app/Main.hs.
+    hs-source-dirs: test-headless, app
     main-is: Spec.hs
-    other-modules: Test.Headless.Harness
+    other-modules: App.Cli
+                   Test.Headless.Harness
                    Test.Headless.WorldGen
                    Test.Headless.WorldGen.Geology
                    Test.Headless.WorldGen.Parity
@@ -1157,6 +1164,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Core.ConfigState
                    Test.Headless.Core.DebugListener
+                   Test.Headless.App.Cli
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup

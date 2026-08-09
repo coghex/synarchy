@@ -1443,9 +1443,12 @@ Because the return type is a bare tuple rather than `Maybe`, the caller cannot
 distinguish "user asked for the default" from "user's input was rejected" — so
 a typo in a long-running dump silently produces the wrong data.
 
-Contrast `parseSize`, which correctly returns `Maybe`, and
-`App.ResourceRoot`/`parsePreview`, which explicitly treat a bare flag as an
-error rather than an absence. `parseRegion` is the odd one out.
+Contrast `App.ResourceRoot`/`parsePreview`, which explicitly treat a bare flag
+as an error rather than an absence, and — since #1191 — `parseArg`,
+`parseDump` and `parseSize`, which all return `Either CliError (Maybe a)` so
+absence and malformed presence are different answers. `parseRegion` is now the
+only silent-default parser left in the file; #1191 deliberately left it for
+this finding, sequenced after #1081's named-region type.
 
 ### CH-68. Two module haddocks enumerate the boot modes and both are stale
 - `App/Cli.hs:1` — "shared by every boot mode (graphical, headless, dump)"

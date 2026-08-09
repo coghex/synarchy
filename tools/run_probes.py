@@ -198,9 +198,12 @@ PROBES = [
      "units animation viewer (#887), buildings viewer + flora/structures dispatch "
      "into the shared simple browser + the every-category no-placeholder sweep (#888)"),
     ("preview_cli", "preview_cli_probe.py",
-     "--preview CLI contract, no boot: canonical category classification (unexposed names, "
-     "grouped-no-item guidance), pre-boot item-path rejection (nonexistent/containment/directory) "
-     "for simple items (#886), units (#887), and flora/buildings/structures items (#888)"),
+     "argv-to-dispatch CLI contract, no boot: canonical --preview category classification "
+     "(unexposed names, grouped-no-item guidance), pre-boot item-path rejection "
+     "(nonexistent/containment/directory) for simple items (#886), units (#887), and "
+     "flora/buildings/structures items (#888); mode-incompatible flags (#1012/CH-58); and "
+     "present-but-malformed values for every numeric flag, --dump= layer selection and --size, "
+     "with omission still defaulting (#1191)"),
     ("remote_warning_page_guard", "remote_warning_page_guard_probe.py",
      "remote-warning establishHere() revalidation guard against an active-world switch (#844)"),
     ("repair_item", "repair_item_probe.py",

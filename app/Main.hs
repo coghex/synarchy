@@ -20,7 +20,8 @@ import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
                , simplePreviewCategories, groupedPreviewCategories
-               , parseLanguageReport, parseSeeds)
+               , parseLanguageReport, parseSeeds
+               , CliError, cliErrorMessage)
 import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
@@ -48,20 +49,40 @@ main = do
   -- (CH-58) before any normalization warning or boot dispatch, so an
   -- ignored value can never appear to have taken effect.
   rejectIncompatibleFlags args
+  -- Every handled value is parsed and validated HERE (#1191), after the
+  -- mode-compatibility rejection above and before any mode-specific
+  -- early exit, boot, or normalization warning. Two consequences are
+  -- deliberate:
+  --
+  --   * Validation does not depend on whether the selected mode would
+  --     go on to CONSUME the value. A malformed --port fails even for a
+  --     bare grouped `--preview units`, which exits before ever using a
+  --     port; a malformed --ages fails even when a valid --plates takes
+  --     precedence over it below.
+  --   * 'rejectIncompatibleFlags' keeps its priority. A flag the
+  --     selected mode does not honour is still reported as unsupported
+  --     in that mode — naming the mode, not the value — because it
+  --     already exited above. So anything reaching this point is a flag
+  --     the mode really does honour.
+  --
+  -- Order here is the order errors are reported in; only the first is
+  -- shown, exactly like 'rejectIncompatibleFlags'.
+  mDump   ← orExitCli (parseDump args)
+  port    ← orExitCli (parseArg "--port" args)
+  seed    ← orExitCli (parseArg "--seed" args)
+  worldSz ← orExitCli (parseArg "--worldSize" args)
+  -- `--plates` is the canonical flag; `--ages` is a legacy alias
+  -- (its original name was misleading — the value is the plate
+  -- count, not number of geological ages, which is rolled
+  -- randomly inside buildTimeline).
+  plates  ← orExitCli (parseArg "--plates" args)
+  agesLeg ← orExitCli (parseArg "--ages" args)
+  mSize   ← orExitCli (parseSize args)
+
   let headless = "--headless" `elem` args
       offscreen = "--offscreen" `elem` args
       bootProfile = if "--arena" `elem` args then BootArena else BootNormal
-      mDump    = parseDump args
       mPreview = parsePreview args
-      port = parseArg "--port" args
-      seed = parseArg "--seed" args
-      worldSz = parseArg "--worldSize" args
-      -- `--plates` is the canonical flag; `--ages` is a legacy alias
-      -- (its original name was misleading — the value is the plate
-      -- count, not number of geological ages, which is rolled
-      -- randomly inside buildTimeline).
-      plates  = parseArg "--plates" args
-      agesLeg = parseArg "--ages" args
       region = parseRegion args
       rawWorldSize = fromMaybe 256 worldSz
       worldSize = normalizeWorldSize rawWorldSize
@@ -141,7 +162,7 @@ main = do
           -- Offscreen (#650) wins over --headless if both are given:
           -- it is the strictly more capable mode (GPU on, window off).
           | offscreen → runOffscreen bootProfile (Just (fromMaybe 8008 port))
-                                     (parseSize args)
+                                     mSize
           | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
           | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
 
@@ -185,6 +206,17 @@ runGroupedPreview cat item port
             ⧺ T.unpack msg
         exitWith (ExitFailure 1)
 
+-- | Take a parsed CLI value, or exit 1 reporting what the user actually
+--   typed (#1191). The same pre-boot-rejection shape
+--   'rejectIncompatibleFlags' and the @--preview@ target errors already
+--   use: stderr, exit 1, nothing started.
+orExitCli ∷ Either CliError a → IO a
+orExitCli = either report pure
+  where
+    report err = do
+        hPutStrLn stderr (cliErrorMessage err)
+        exitWith (ExitFailure 1)
+
 -- | The boot mode argv selects, by the SAME precedence as the dispatch
 --   above (language-report, then dump, then preview, then offscreen,
 --   then headless, else graphical) — used only to name the selected mode
@@ -192,11 +224,19 @@ runGroupedPreview cat item port
 selectedBootModeName ∷ [String] → String
 selectedBootModeName args
     | parseLanguageReport args   = "language-report"
-    | isJust (parseDump args)    = "dump"
+    | dumpSelected args          = "dump"
     | isJust (parsePreview args) = "preview"
     | "--offscreen" `elem` args  = "offscreen"
     | "--headless" `elem` args   = "headless"
     | otherwise                  = "graphical"
+
+-- | Whether argv selects dump mode, INDEPENDENT of whether its layer
+--   selection parses. Mode compatibility is decided before value
+--   validation (#1191), so @--dump=bogus --port 9@ must still report
+--   @--port@ as unsupported in dump mode rather than fall through to
+--   another mode's name because the selection was malformed.
+dumpSelected ∷ [String] → Bool
+dumpSelected = either (const True) isJust ∘ parseDump
 
 -- | Every ancillary (non-mode-selecting) flag Main parses, paired with
 --   the boot mode(s) that actually honour it (CH-58) — everything else
