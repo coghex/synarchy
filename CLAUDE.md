@@ -448,6 +448,22 @@ is validated before every mode.
 The rejection table lives in `app/Main.hs`'s `incompatibleFlagTable`;
 `tools/preview_cli_probe.py` is the no-boot gate covering it.
 
+**A present-but-malformed value is an error, not a default (#1191).** In
+a mode that honours it, `--seed`/`--worldSize`/`--plates`/`--ages`/
+`--port` that isn't a whole number, a `--size` that isn't `WxH` with both
+dimensions positive, a `--dump=` selection naming an unknown layer, and
+an empty selection or empty segment (`--dump=`, `--dump=terrain,`) each
+exit 1 pre-boot naming the flag and the offending token. **Omitting** a
+flag still keeps its documented default — only a value the user actually
+typed can fail. Validation runs after the mode-compatibility rejection
+above (which keeps its priority: a malformed `--seed` given to
+`--headless` still reports as unsupported in headless mode) and before
+every mode-specific early exit, regardless of whether the selected mode
+would consume the value. `--region` is deliberately excluded — its
+identical silent default is `docs/code_health_findings.md` CH-67,
+sequenced after #1081. Gates: hspec `--match "App.Cli"`,
+`tools/preview_cli_probe.py`.
+
 ## Headless Mode & Debug Console
 
 Headless mode: no GPU, no window, no focus stealing — for automated
