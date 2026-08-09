@@ -231,9 +231,11 @@ it as `rcePerTileSurfZ` on each `RiverChunkEntry`, and
 Segment geometry still has to be self-consistent, which is what
 `World.Fluid.River.fixupSegmentContinuity` enforces — adjacent segments share
 endpoints and elevations are monotonically non-increasing downstream. Despite
-its namespace it is a **stage 1/2 helper**, called from
-`World.Geology.Timeline.RiverTrace.Build` and
-`World.Geology.Timeline.Compact`, never from chunk generation.
+its namespace it is a **stage 1/2 helper**, never called from chunk
+generation. Its three callers are `World.Geology.Timeline.RiverTrace.Build`
+(building a traced path's segments), `World.Geology.Timeline.River.Evolve`
+(after a meander and after a deepen/widen), and
+`World.Geology.Timeline.Compact` (after resampling a compacted river).
 
 ## 11. Subsurface water table
 

@@ -7,8 +7,8 @@
 --   (World.Fluid.River.Identify) writing a per-tile surface that
 --   World.Generate.Chunk.Fluid.composeFluidMap places at chunk gen —
 --   see docs/hydrology_pipeline.md §5 and §6. What remains is segment
---   continuity, used by the timeline river trace and event compaction,
---   not by chunk generation:
+--   continuity, used by the timeline river trace, per-Age river
+--   evolution and event compaction — not by chunk generation:
 --
 --     * @fixupSegmentContinuity@ — geometric/elevation continuity for
 --       the segment polyline. Water surfaces are no longer carried on
