@@ -214,10 +214,22 @@ Vulkan-based renderer with GLFW windowing. Key subsystems:
 Procedural world with geological simulation in `World/`:
 - `World.Generate` — terrain generation, chunk creation
 - `World.Geology` — tectonic plates, erosion, volcanism, timeline evolution
-- `World.Hydrology` — rivers, glaciers, lakes
-- `World.Fluid` — ocean/river/lake/lava fluid simulation
+- `World.Hydrology` — per-Age geological hydrology: flow accumulation,
+  river/glacier carving, and the subsurface water table
+- `World.Fluid` — global identification of the FINAL rivers, lakes, ocean,
+  seabed and ice. The main identifiers read the stitched, settled terrain,
+  but `Ocean` and `IceLevel` are prepared earlier from pre-stitch grids
+  (`docs/hydrology_pipeline.md` §5). Not runtime simulation: fluid only
+  moves in `Sim.Thread` / `Sim.Fluid.Active`
 - `World.Flora` — vegetation placement
 - Chunk-based with zoom-level LOD system (`World.Render.Zoom.*`, `World.ZoomMap`)
+
+[`docs/hydrology_pipeline.md`](docs/hydrology_pipeline.md) is the
+namespace-ownership map for water: the five pipeline stages in order, which
+namespace owns each, the two distinct river-carving mechanisms, where ocean
+and lake logic live, and a "where does X live?" index. Read it before adding
+river, lake, ocean, ice, or water-table logic — the namespaces do not divide
+the way their names suggest.
 
 ### Lua scripting
 `Engine.Scripting.Lua.*` provides a Lua API for game logic. Lua scripts

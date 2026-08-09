@@ -1,11 +1,14 @@
 {-# LANGUAGE Strict #-}
 
--- | Helpers around river data for chunk generation and zoom rendering.
+-- | River segment-geometry helper for the timeline stages.
 --
---   The full chunk-level river-fluid placement used to live here; it
---   has been replaced by the water-table-driven pipeline in
---   `World.Generate.Chunk` (see @src\/World\/Hydrology\/DESIGN.md@).
---   What remains is segment continuity:
+--   The full chunk-level river-fluid placement used to live here. It
+--   has been replaced by global river identification
+--   (World.Fluid.River.Identify) writing a per-tile surface that
+--   World.Generate.Chunk.Fluid.composeFluidMap places at chunk gen —
+--   see docs/hydrology_pipeline.md §5 and §6. What remains is segment
+--   continuity, used by the timeline river trace, per-Age river
+--   evolution and event compaction — not by chunk generation:
 --
 --     * @fixupSegmentContinuity@ — geometric/elevation continuity for
 --       the segment polyline. Water surfaces are no longer carried on
@@ -32,8 +35,9 @@ import World.Hydrology.Types (RiverSegment(..))
 --
 --   Before the Phase B rework this also stitched the legacy
 --   @rsWaterStart@\/@rsWaterEnd@ fields. Those have been removed; the
---   water surface is now derived per-chunk by the water-table compute
---   from segment geometry alone (see DESIGN.md §5.4).
+--   rendered water surface no longer comes from segment geometry at
+--   all, but from the global river table's per-tile surface (see
+--   docs/hydrology_pipeline.md §10).
 fixupSegmentContinuity ∷ V.Vector RiverSegment → V.Vector RiverSegment
 fixupSegmentContinuity v
     | V.length v ≤ 1 = v

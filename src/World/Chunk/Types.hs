@@ -115,15 +115,18 @@ data LoadedChunk = LoadedChunk
     , lcFlora      ∷ !FloraChunkData
     , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
     , lcWaterTableMap ∷ !(VU.Vector Int)
-      -- ^ Per-tile water-table elevation. Below this z value the ground
-      --   is saturated. When wt ≥ terrain[t] the tile shows surface
-      --   water; subsurface query for digging: position (lx, ly, z) is
-      --   wet iff z ≤ lcWaterTableMap[ly*chunkSize+lx]. Computed by
-      --   World.Hydrology.WaterTable, see DESIGN.md in that folder.
-      --   Not consumed by 'composeFluidMap's surface-fluid placement
-      --   (that reads the global lake/river/ocean/lava tables instead);
-      --   it stays computed and stored here so the subsurface dig path
-      --   can still ask "is this buried tile saturated?"
+      -- ^ Per-tile SUBSURFACE water-table elevation. Below this z value
+      --   the ground is saturated; the query for digging is: position
+      --   (lx, ly, z) is wet iff z ≤ lcWaterTableMap[ly*chunkSize+lx].
+      --   Computed by World.Hydrology.WaterTable; see
+      --   docs/hydrology_pipeline.md §11.
+      --   This value does NOT decide surface water. Surface fluid is
+      --   placed by 'composeFluidMap' from the global
+      --   lake/river/ocean/lava tables, which never read the water
+      --   table; the dependency runs the other way, with 'applyFluidWt'
+      --   lifting this map to match the fluid already placed. It stays
+      --   computed and stored here so the subsurface dig path can still
+      --   ask "is this buried tile saturated?"
     , lcMagma      ∷ !(Maybe MagmaOverlay)
       -- ^ Sparse magma overlay produced by 'discoverChunkLava' at chunk
       --   gen. Nothing in nearly every chunk; when present, the
