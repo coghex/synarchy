@@ -1251,7 +1251,7 @@ don't narrow, no refactor can be reasoned about locally.
 Fix: two issues — delete kind (a); shrink the export lists for kind (b).
 
 ### [no-issue] CH-55. `Engine.Core.Init`'s three exports have no callers
-> **Disposition:** No issue as a separate item — the defect is real but is a single export-list line, and CH-57 is the bundle for exactly this class. Verified: the module exports **seven** names (not three), and only `initializeEngineWith` is unreferenced — the string appears nowhere outside its own module, where `initializeEngine` (`Init.hs:135`) and `initializeEngineHeadlessWith` (`:364`) call it. The body's 2026-07-25 correction holds: `resolveConfigPath` and `migrateLegacyConfig` are each used by `test-headless/Test/Headless/Core/ConfigState.hs`, `initializeEngineHeadless` by `app/App/Headless.hs` plus five test modules, and `initializeEngineHeadlessWith` by `app/App/Dump.hs`. CH-57 already lists five bullets of the identical shape (`Loop/Resource.hs`'s `safeVector*`, `Font/Util.hs`'s `calculateTextWidth`, `Scene/Graph.hs`'s `withSceneGraph*`, `Input/Thread/Mouse.hs`'s `uiDragThresholdPx`, `Preview/Discovery.hs`'s `isSupportedTextureFile`/`sortEntries`); **un-exporting `initializeEngineWith` is a sixth bullet and must be folded into CH-57 when CH-57 is processed**. A standalone PR for one export-list line would fragment that bundle — the same reasoning that closed CH-44 in favour of CH-120. It cannot fold into #1010, whose Out of scope excludes every other module in CH-54's inventory.
+> **Disposition:** No issue — the defect is real but is a single export-list line, and CH-57 is the bundle for exactly this class. Verified: the module exports **seven** names (not three), and only `initializeEngineWith` is unreferenced — the string appears nowhere outside its own module, where `initializeEngine` (`Init.hs:135`) and `initializeEngineHeadlessWith` (`:364`) call it. The body's 2026-07-25 correction holds: `resolveConfigPath` and `migrateLegacyConfig` are each used by `test-headless/Test/Headless/Core/ConfigState.hs`, `initializeEngineHeadless` by `app/App/Headless.hs` plus five test modules, and `initializeEngineHeadlessWith` by `app/App/Dump.hs`. CH-57 already lists five bullets of the identical shape (`Loop/Resource.hs`'s `safeVector*`, `Font/Util.hs`'s `calculateTextWidth`, `Scene/Graph.hs`'s `withSceneGraph*`, `Input/Thread/Mouse.hs`'s `uiDragThresholdPx`, `Preview/Discovery.hs`'s `isSupportedTextureFile`/`sortEntries`); **un-exporting `initializeEngineWith` is a sixth bullet and must be folded into CH-57 when CH-57 is processed**. A standalone PR for one export-list line would fragment that bundle — the same reasoning that closed CH-44 in favour of CH-120. It cannot fold into #1010, whose Out of scope excludes every other module in CH-54's inventory.
 
 **Corrected 2026-07-25:** only `initializeEngineWith` is genuinely
 unreferenced — `resolveConfigPath` and `migrateLegacyConfig` each have one
@@ -3755,7 +3755,7 @@ than per-site fixes:
 
 ## Batch 17 — `docs/` markdown (swept 2026-07-25; CLAUDE.md excluded at owner's request)
 
-10 live docs, 5,167 lines (excluding `docs/history/`, which is explicitly
+9 live docs, 4,381 lines (excluding `docs/history/`, which is explicitly
 labelled "superseded — context only", and this report).
 
 Every code reference in every live doc was checked against the tree. **The
@@ -3768,7 +3768,13 @@ as unbuilt.**
 ### [#1161] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped
 > **Note:** Verified 2026-08-06 — status line, shipped modules (`PlayerEvent.hs` 105, `Emit.hs` 173, `Lua/API/PlayerEvent.hs` **293** not 290), and the phantom manifest entries all confirmed: `git log --all` returns nothing for `src/Engine/Event.hs` or `src/Engine/Scripting/Lua/API/Event.hs`, so they never existed under any name. **But this entry misses that the doc already declares itself history**: `:9-19` carries a dated note — "**Note (2026-06, issue #37):** this is the original design record… **treat this doc as design history, not a current API reference**" — four lines below the stale Status line. So "a reader planning work against it would rebuild something that exists" overstates it; what is actually wrong is narrower and sharper, and #1161 scopes to it. (1) `:7` **contradicts** `:9`, two dated statements four lines apart disagreeing about whether the system is built. (2) The note corrects the DESIGN (retired `PopupButton`/`PopupAction`, the removed `buttons:` key) but says nothing about MODULE NAMES, so a reader who has accepted it still hunts `Engine/Event.hs`. Also: three of the manifest's six entries are correct (`YamlNotifications.hs`, `popup.lua`, `notification_categories.yaml` all exist). The fix follows an established precedent rather than inventing one — `docs/history/` exists with a curated README ("Do not treat them as the current state of the system"), and closed **#1108** moved `river_rework.md` there for exactly this situation.
 
-Line 7: `Status: design accepted 2026-05-18. Phase 1 ready to implement.`
+> **Disposition:** #1161 archives the document as
+> `docs/history/player_events.md`, marks it as an implemented historical design
+> record, and corrects its phantom module names while preserving the useful
+> divergence note.
+
+Before archival, line 7 read:
+`Status: design accepted 2026-05-18. Phase 1 ready to implement.`
 
 The player-event system is fully built: `src/Engine/PlayerEvent.hs`,
 `src/Engine/PlayerEvent/Emit.hs`,
@@ -3789,9 +3795,9 @@ future tense (`-- src/Engine/Event.hs (new module)`, `(new)`), and the design
 table repeatedly qualifies decisions with "in Phase 1" as though Phase 1 were
 pending.
 
-So the largest unenforced doc in the tree is out of sync three ways at once:
-status, module names, and tense. A reader planning work against it would
-rebuild something that exists.
+Before archival, the largest unenforced live doc was out of sync three ways at
+once: status, module names, and tense. A reader planning work against it would
+have rebuilt something that exists.
 
 ### [no-issue] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem
 > **Disposition:** No issue — already fixed. `docs/blood_decals.md:3-6` now reads "**Status: implemented** — this is the final documentation/verification gate for epic #603 … **This is the as-built record**", not "design draft, written 2026-07-07". `git log -S'Status: design draft'` shows that string entered at `b09c1518` (2026-07-07) and was replaced by `c8884cb4` (2026-08-01, "Finalize blood decal documentation and gate the bleeding arc for epic closure"), with two further review-fix commits to the same file that day. The parenthetical resolves too: `Blood.Types.BloodStore` exists — `src/Blood/Types.hs:52` exports `BloodStore(..)`, `:53` `emptyBloodStore`, and the module haddock at `:9` describes it. Everything measured has also grown: the doc is **461** lines not 445, `src/Blood/` is **6** modules and **1787** lines not 5/1413, `Lua/API/Blood.hs` is **538** not 519, and there are **four** blood probes not three — `bleeding_trail_probe.py` (the #882/#883 gate) is missing from the list. CLAUDE.md:987 cites the doc as the "full architecture record", now consistent with its own status line. **NB CH-135's table row for `blood_decals.md` ("design draft" ✗) is stale for the same reason.**
@@ -3816,7 +3822,7 @@ resolve against the current `Blood/Types.hs`.)
 | `persistence_state_inventory.md` | **Status:** Authoritative ✓ |
 | `engineenv_capability_inventory.md` | **Status:** Authoritative ✓ |
 | `texture_infrastructure.md` | **Status:** Pre-implementation, 2026-05-24 ✓ |
-| `player_events.md` | "Phase 1 ready to implement" ✗ (CH-133) |
+| `history/player_events.md` | **Status:** Historical design record — implemented with divergence; archived 2026-08-09 ✓ (CH-133 / #1161) |
 | `blood_decals.md` | "design draft" ✗ (CH-134) |
 | `expedition_gameplay_loop.md` | — none — (has its own status *section*) |
 | `asset_generation.md` | — none — |

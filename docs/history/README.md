@@ -57,3 +57,11 @@ the live code and the agent memory notes instead.
   which no production module ever imported). Rivers still work the way the
   brief proposed to replace; the river work that actually shipped on that
   model is #221 and #223.
+
+- **`player_events.md`** — original player-event and notification design
+  (accepted 2026-05-18, moved down from `docs/` on 2026-08-09 by #1161).
+  **IMPLEMENTED WITH DIVERGENCE** — the event store, notification registry,
+  settings, event log, pause routing, and popups shipped, while #37 retired
+  the proposed per-category popup buttons in favor of clickable event lines
+  and a single OK button. The archived brief preserves the original decisions
+  and its own divergence note; it is not a current API reference.

@@ -4,7 +4,7 @@ Design for the player-facing event-notification system. Replaces the
 informal "engine.logWarn isn't visible to the player" pattern with a
 proper events pipeline that the player controls.
 
-Status: design accepted 2026-05-18. Phase 1 ready to implement.
+**Status:** Historical design record — implemented with divergence; archived 2026-08-09.
 
 > **Note (2026-06, issue #37):** this is the original design record.
 > The shipped popup diverged from it in a few places. In particular the
@@ -300,9 +300,10 @@ the log panel.
 ### 5.2 Haskell API — `emitEvent`
 
 ```haskell
--- src/Engine/Event.hs (new module)
+-- Original proposal; shipped across src/Engine/PlayerEvent.hs and
+-- src/Engine/PlayerEvent/Emit.hs.
 
-module Engine.Event
+module Engine.PlayerEvent.Emit
   ( Event(..)
   , PopupButton(..)
   , PopupAction(..)
@@ -363,7 +364,7 @@ unknown-category warnings can be filtered separately from `CatLua`.
 ### 5.3 Lua API — `engine.emitEvent`
 
 ```haskell
--- src/Engine/Scripting/Lua/API/Event.hs (new)
+-- Shipped as src/Engine/Scripting/Lua/API/PlayerEvent.hs
 
 emitEventFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 emitEventFn env = do
@@ -664,13 +665,13 @@ Everything else stays:
 ### 8.1 Files
 
 **New:**
-- `src/Engine/Event.hs` — `Event`/`PopupButton`/`PopupAction` types,
-  `emitEvent`, `readEventLog`
+- `src/Engine/PlayerEvent.hs` — shipped player-event and notification types
+- `src/Engine/PlayerEvent/Emit.hs` — shipped `emitEvent` and `readEventLog` implementation
 - `src/Engine/Asset/YamlNotifications.hs` — loader for the two YAMLs
-- `src/Engine/Scripting/Lua/API/Event.hs` — Lua API binding
+- `src/Engine/Scripting/Lua/API/PlayerEvent.hs` — shipped Lua API binding
 - `data/notification_categories.yaml` — content registry
 - `scripts/popup.lua` — popup display module
-- `docs/player_events.md` — this file
+- `docs/history/player_events.md` — this archived design record
 
 **Modified:**
 - `src/Engine/Core/State.hs` — add `eventStoreRef`, `notificationCfg`,
