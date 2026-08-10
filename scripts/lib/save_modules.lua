@@ -843,6 +843,43 @@ function saveModules.applyEntityRows(live, rows, entities, opts)
     return dropped
 end
 
+-- Issue #1200: the ONE place a load-abort diagnostic is worded, so the
+-- "the old session was restored" and "the live Lua session may be
+-- MIXED" dispositions can never drift apart between `applyAll`'s abort
+-- paths. `failures` is `rollbackApplied`'s aggregate -- an EMPTY list
+-- means every restore actually completed, which is the only condition
+-- under which `restoredClaim` (the historical complete-rollback wording,
+-- preserved verbatim per requirement 1) may be asserted at all.
+--
+-- The `ROLLBACK FAILED` token is a deliberate, stable contract with the
+-- Haskell load path, not incidental prose: `applyLuaLoad` propagates
+-- this whole message into `engine.getLoadStatus()`'s failure text and
+-- the `CatWorld` warning, and that token is what tells an operator (and
+-- the gate in Test.Headless.Lua.SaveModules) that the process is now
+-- running an OLD Haskell session against partly-NEW Lua singletons
+-- rather than a cleanly aborted load. Don't reword it casually.
+--
+-- Every value is stringified HERE, after the caller has already cleared
+-- its transaction bookkeeping, so a component whose error object has a
+-- throwing `__tostring` cannot escape mid-unwind and strand the registry
+-- (issue #864's recovery contract) -- exactly why `rollbackApplied`
+-- aggregates raw error VALUES rather than formatting them as it goes.
+local function abortMessage(prefix, restoredClaim, failures, forwardErr)
+    if #failures == 0 then
+        return prefix .. ", " .. restoredClaim .. ": " .. tostring(forwardErr)
+    end
+    local named = {}
+    for i = 1, #failures do
+        named[#named + 1] = tostring(failures[i].id)
+            .. " (" .. tostring(failures[i].err) .. ")"
+    end
+    return prefix .. " and ROLLBACK FAILED -- the live Lua session may be "
+        .. "MIXED (the old Haskell session paired with partly-new Lua "
+        .. "state); restore failed for " .. #failures .. " component(s): "
+        .. table.concat(named, "; ")
+        .. " -- original failure: " .. tostring(forwardErr)
+end
+
 -- Apply the load prepared by the most recent successful `prepareLoad`,
 -- in dependency order, then run every registered reset hook (session-
 -- replacement for modules with no durable state). Only reachable after
@@ -864,6 +901,15 @@ end
 -- already-applied component from that capture, in reverse order,
 -- before re-raising -- the caller sees the same hard load-abort as
 -- before, but the live Lua session is left exactly as it was.
+--
+-- Issue #1200 bounds that guarantee honestly, in two ways. It covers
+-- registered COMPONENTS only: a failing reset hook's own non-durable
+-- effects are never compensated, because `registerResetHook` accepts
+-- no compensation function to do it with. And a restore is ordinary
+-- Lua that can throw on its own, so it is no longer assumed to
+-- succeed -- when one does fail, the raised diagnostic says so and
+-- names every component left unrestored (`abortMessage`) instead of
+-- claiming a clean abort over a live session that is really MIXED.
 --
 -- Issue #900: the forward pass hands each apply() the restored-entity
 -- context prepareLoad stashed, so a per-entity component can resolve
@@ -922,14 +968,35 @@ function saveModules.applyAll()
     -- is what makes it a reset hook rather than a component), but the
     -- persistent components it runs after certainly do, via the SAME
     -- `rollback` captures taken above -- so a reset-hook failure now
-    -- unwinds those too, making the whole call atomic: either every
-    -- persistent component AND every reset hook completes, or the live
-    -- Lua session is left exactly as it was found.
+    -- unwinds those too: either every persistent component AND every
+    -- reset hook completes, or every persistent COMPONENT is left
+    -- exactly as it was found. That claim stops at components on
+    -- purpose (issue #1200): `registerResetHook` takes a callback and
+    -- no compensation function, so a hook that mutated its own
+    -- non-durable state before throwing is not (and cannot be) undone
+    -- here, and nothing below ever claims otherwise.
+    --
+    -- Issue #1200: a rollback restore is ordinary Lua too and can throw
+    -- exactly like the forward apply that got us here. Attempt EVERY
+    -- remaining restore rather than short-circuiting (reverse
+    -- application order preserved), and aggregate the ones that failed
+    -- so the surfaced diagnostic can name them. Before this, each
+    -- restore was an unchecked `pcall` whose result was discarded, and
+    -- the abort still claimed a complete rollback, leaving the process
+    -- running an old Haskell session against partly-new Lua state while
+    -- reporting a cleanly aborted load. Raw error VALUES are collected,
+    -- never formatted here: see `abortMessage`.
     local function rollbackApplied(applied)
+        local failures = {}
         for i = #applied, 1, -1 do
             local rid = applied[i]
-            pcall(saveModules.registry[rid].apply, rollback[rid])
+            local restored, restoreErr =
+                pcall(saveModules.registry[rid].apply, rollback[rid])
+            if not restored then
+                failures[#failures + 1] = { id = rid, err = restoreErr }
+            end
         end
+        return failures
     end
 
     local applied = {}
@@ -945,16 +1012,30 @@ function saveModules.applyAll()
                 -- alone would skip it, leaving that partial mutation
                 -- live. Restore its own pre-load snapshot first, then
                 -- unwind every component applied before it.
-                pcall(saveModules.registry[id].apply, rollback[id])
-                rollbackApplied(applied)
+                --
+                -- Issue #1200: that own-restore is checked like every
+                -- other one and joins the SAME aggregate -- it is a
+                -- restore of a component that had already started
+                -- mutating itself, so it is if anything the likeliest
+                -- of them to fail.
+                local failures = {}
+                local ownRestored, ownErr =
+                    pcall(saveModules.registry[id].apply, rollback[id])
+                if not ownRestored then
+                    failures[#failures + 1] = { id = id, err = ownErr }
+                end
+                for _, failed in ipairs(rollbackApplied(applied)) do
+                    failures[#failures + 1] = failed
+                end
                 saveModules._pendingApply = nil
                 saveModules._pendingRequestId = nil
                 saveModules._pendingEntities = nil
                 saveModules._loadActive = false
-                error("saveModules.applyAll: '" .. id .. "'.apply() failed, "
-                    .. "rolled back every already-applied component "
-                    .. "(including its own partial mutation): "
-                    .. tostring(err))
+                error(abortMessage(
+                    "saveModules.applyAll: '" .. id .. "'.apply() failed",
+                    "rolled back every already-applied component "
+                        .. "(including its own partial mutation)",
+                    failures, err))
             end
             applied[#applied + 1] = id
         end
@@ -968,14 +1049,15 @@ function saveModules.applyAll()
     for _, id in ipairs(sortedIds(saveModules.resetHooks)) do
         local ok, err = pcall(saveModules.resetHooks[id])
         if not ok then
-            rollbackApplied(applied)
+            local failures = rollbackApplied(applied)
             saveModules._pendingApply = nil
             saveModules._pendingRequestId = nil
             saveModules._pendingEntities = nil
             saveModules._loadActive = false
-            error("saveModules.applyAll: reset hook '" .. id
-                .. "' failed after every component committed, rolled back "
-                .. "every applied component: " .. tostring(err))
+            error(abortMessage(
+                "saveModules.applyAll: reset hook '" .. id
+                    .. "' failed after every component committed",
+                "rolled back every applied component", failures, err))
         end
     end
 
