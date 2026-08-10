@@ -451,13 +451,24 @@ DOCS_WT="$(git worktree list --porcelain \
                        git worktree add "$DOCS_WT" -b docs-wip origin/master; }
 ```
 
-Docs land on master by direct push, not a PR:
+Docs land on master by direct push, not a PR. Landing ONE document while others
+are still being written is the normal case, so the rebase must tolerate a dirty
+tree — a plain `git rebase` aborts with "cannot rebase: You have unstaged
+changes" and strands the landing:
 
 ```bash
 cd "$DOCS_WT" && git add -- <paths> && git commit -m "…" \
-  && git fetch origin && git rebase origin/master \
+  && git fetch origin && git rebase --autostash origin/master \
   && git push origin docs-wip:master
 ```
+
+`--autostash` is required, not decorative. Should ITS restore conflict, the
+damage is confined to this worktree and surfaces immediately in front of you —
+it cannot wedge the drainer, which is the whole point of doing the work here.
+
+A bare `git push` from this worktree fails safe: `docs-wip` tracks
+`origin/master`, and the differing name makes `push.default=simple` refuse. Use
+the explicit refspec above.
 
 That push prints `Cannot update this protected ref` and
 `N of N required status checks are expected` and then **succeeds anyway** under
