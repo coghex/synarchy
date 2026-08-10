@@ -293,7 +293,7 @@ _PORTAL_ACCEPTED_ANCHOR = r"building\.spawn\(target\.def, igx, igy\)"
 
 
 def _portal_accepted_body(text: str) -> str | None:
-    """Everything from the portal's building.spawn call up to (not
+    r"""Everything from the portal's building.spawn call up to (not
     including) the branch's own "else" — the whole `if id then ... else`
     body, not just the span up to outcome="accepted". Bounded the same
     structural way as _game_chain_check's routes: `(?:(?!else)[\s\S])*`
