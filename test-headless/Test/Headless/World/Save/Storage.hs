@@ -269,6 +269,38 @@ corruptEnvelopeVersion bytes =
         bumped = BS.map (`xor` 0xFF) versionBytes
     in BS.take 4 bytes <> bumped <> BS.drop 8 bytes
 
+-- | Put a slot into the exact recovery topology issue #1203 is about: a
+--   STORAGE-corrupt authoritative generation (one flipped checksum byte —
+--   the same corruption the 'selectLoadGeneration' fallback tests below
+--   use, so it is classified 'GenerationCorrupt', never
+--   'GenerationIncompatible') sitting on top of a fully valid previous
+--   generation. In that state 'selectLoadGeneration' is right now serving
+--   the slot from 'previousGenerationFileName' — verified as a
+--   precondition by every caller, never assumed. Returns the previous
+--   generation's exact bytes, so a later assertion can prove it was
+--   neither staged aside nor overwritten by rotation.
+corruptAuthOverValidPrev ∷ FilePath → IO BS.ByteString
+corruptAuthOverValidPrev dir = do
+    _ ← publishOK dir "slot" 1 "slot" "t1"
+    _ ← publishOK dir "slot" 2 "slot" "t2"
+    whole ← BS.readFile (authPath dir)
+    BS.writeFile (authPath dir) (flipByteAt (BS.length whole - 1) whole)
+    BS.readFile (prevPath dir)
+
+-- | Assert through the PRODUCTION selector both which generation slot a
+--   load resolves to AND which complete generation is actually sitting
+--   there, via the fixture's distinctive seed — never merely that
+--   selection returned 'Right' (a file existing on disk somewhere is not
+--   the invariant; being SELECTED is).
+shouldSelect ∷ FilePath → GenerationSource → Word64 → Expectation
+shouldSelect dir source seed = do
+    sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+    case sel of
+        Right s → do
+            lsSource s `shouldBe` source
+            smSeed (sdMetadata (lsSaveData s)) `shouldBe` seed
+        Left err → expectationFailure (T.unpack err)
+
 -- | A throwaway logger for the 'listSaves' tests below (they only need
 --   somewhere for its 'logWarn' calls to go).
 testLogger ∷ IO LoggerState
@@ -550,6 +582,149 @@ spec = do
                 _ ← publishOK dir "slot" 2 "slot" "t2"
                 BS.readFile (dir </> "notes.txt")
                     `shouldReturn` "an unrelated user file"
+
+    -- Issue #1203. Before this, 'publishValidated' decided whether to
+    -- stage + rotate solely from @doesFileExist authPath@, so a publish
+    -- over a CORRUPT authoritative generation staged the valid .prev (the
+    -- slot's live recovery source) aside and rotated the corrupt file onto
+    -- .prev. An interruption between that rotation's directory sync and
+    -- the publish rename then left NO selectable generation at all, with
+    -- the only complete one stranded under a staged name selection never
+    -- consults. Publication now classifies the authoritative file with the
+    -- loader's own 'decodeGenerationFile', and skips staging/rotation
+    -- entirely in the topologies where .prev is what the slot is loading
+    -- from -- so the sequence produces exactly TWO durable states here
+    -- (pre-rename and post-rename), each asserted below through the
+    -- production selector.
+    describe "publishing over a corrupt authoritative generation \
+             \(issue #1203)" $ do
+        it "leaves the valid previous generation selectable when the \
+           \publish is interrupted before the publish rename -- the \
+           \revised sequence stages nothing and rotates nothing in this \
+           \topology, so every pre-rename interruption point is this one \
+           \durable state" $
+            withTempSlotDir $ \dir → do
+                prevBefore ← corruptAuthOverValidPrev dir
+                -- Precondition: the slot really is recovering from .prev.
+                shouldSelect dir FromPrevious 1
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                    failCreate _ _ = ioError (userError "injected interruption")
+                r ← publishGenerationWithCandidateCreator failCreate dir
+                        "slot" metaC bytesC HS.empty HS.empty
+                case r of
+                    Left f  → pfPhase f `shouldBe` PhaseCandidateCreate
+                    Right _ → expectationFailure
+                        "expected the injected interruption to abort the publish"
+                -- The recovery source is byte-identical and STILL what a
+                -- real load resolves to.
+                BS.readFile (prevPath dir) `shouldReturn` prevBefore
+                shouldSelect dir FromPrevious 1
+
+        it "takes neither the staging nor the rotation branch at all -- \
+           \proven by blocking the rotation TARGET, which a pre-#1203 \
+           \publish would have tripped over on its way to overwriting the \
+           \recovery source, and which this one never reaches" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir)
+                    (flipByteAt (BS.length whole - 1) whole)
+                -- A directory at the previous-generation path makes the
+                -- rotate rename fail outright (the same block the
+                -- PhaseRotatePrevious test above relies on), so REACHING
+                -- rotation at all is directly observable from outside.
+                createDirectoryIfMissing True (prevPath dir)
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesC
+                doesDirectoryExist (prevPath dir) `shouldReturn` True
+
+        it "selects the newly published generation when the publish is \
+           \interrupted immediately after the publish rename, before the \
+           \final directory sync and cleanup sweep -- the only other \
+           \durable state this sequence produces" $
+            withTempSlotDir $ \dir → do
+                prevBefore ← corruptAuthOverValidPrev dir
+                let (_, bytesC) = buildEncoded 3 "slot" "t3"
+                -- Reproduce that exact durable state: the validated
+                -- candidate atomically renamed onto the authoritative
+                -- path (a rename is never observed half-applied), the
+                -- previous generation still exactly where it was.
+                BS.writeFile (authPath dir) bytesC
+                shouldSelect dir FromAuthoritative 3
+                BS.readFile (prevPath dir) `shouldReturn` prevBefore
+
+        it "publishes without staging, rotating, or overwriting the valid \
+           \previous generation the slot is recovering from -- which stays \
+           \a complete, retained previous generation afterwards" $
+            withTempSlotDir $ \dir → do
+                prevBefore ← corruptAuthOverValidPrev dir
+                shouldSelect dir FromPrevious 1
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesC
+                -- The corrupt authoritative file was never rotated ONTO
+                -- .prev, and .prev was never staged aside: byte-identical,
+                -- still in place, and no staged artifact was ever created.
+                BS.readFile (prevPath dir) `shouldReturn` prevBefore
+                entries ← listDirectory dir
+                entries `shouldMatchList`
+                    [authoritativeFileName, previousGenerationFileName]
+                shouldSelect dir FromAuthoritative 3
+                -- The formerly recovered generation is still a REAL
+                -- retained previous generation, not merely a leftover
+                -- file: prove it through the production selector by making
+                -- the new authoritative generation unavailable.
+                forceRemoveFile (authPath dir)
+                shouldSelect dir FromPrevious 1
+
+        it "publishes over a corrupt authoritative generation that has no \
+           \previous generation at all, leaving the new generation \
+           \selectable and never manufacturing a previous generation out \
+           \of the corrupt bytes" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir)
+                    (flipByteAt (BS.length whole - 1) whole)
+                doesFileExist (prevPath dir) `shouldReturn` False
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesC
+                doesFileExist (prevPath dir) `shouldReturn` False
+                shouldSelect dir FromAuthoritative 3
+
+        it "still stages and rotates when the authoritative generation is \
+           \coherent but semantically INCOMPATIBLE rather than corrupt -- \
+           \selectLoadGeneration never falls back past one, so .prev is \
+           \NOT serving this slot and ordinary rotation applies exactly as \
+           \it did before #1203" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                whole ← BS.readFile (authPath dir)
+                let incompatible = corruptEnvelopeVersion whole
+                BS.writeFile (authPath dir) incompatible
+                -- Precondition: this really is the no-fallback case.
+                sel0 ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel0 of
+                    Left err → T.unpack err `shouldContain` "incompatible"
+                    Right s  → expectationFailure
+                        ("expected no fallback, got " <> show (lsSource s))
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGeneration dir "slot" metaC bytesC HS.empty HS.empty
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesC
+                -- Rotated, not preserved: the incompatible generation is
+                -- what now sits at .prev, and the staged old one is swept.
+                BS.readFile (prevPath dir) `shouldReturn` incompatible
+                entries ← listDirectory dir
+                entries `shouldMatchList`
+                    [authoritativeFileName, previousGenerationFileName]
+                shouldSelect dir FromAuthoritative 3
 
     describe "selectLoadGeneration" $ do
         it "selects the authoritative generation when both generations \
