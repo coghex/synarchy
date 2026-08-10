@@ -427,6 +427,47 @@ end-to-end UI verification.
 - `assets/` — Images and graphical resources
 - `scripts/` — Lua scripts for game logic
 
+## Working-tree discipline
+
+**`~/work/synarchy` is the PRIMARY checkout and must be left CLEAN.** The PR
+drainer fast-forwards it after every merge, which means it autostashes whatever
+uncommitted work it finds there and restores it afterwards. A restore that
+CONFLICTS leaves unmerged entries in the index, and every later drainer pass
+then refuses to run — post-merge cleanup wedges until a human resolves it. That
+happened four times (2026-08-01, 08-03, 08-05, 08-09), every single time on
+`docs/code_health_findings.md`, because report-processing writes long-lived
+uncommitted edits into the one file that merged PRs also rewrite.
+
+So: **any file you write into the repo but do not commit belongs in the docs
+worktree, never the primary checkout.** That covers report annotation
+(`/process-report`), findings documents, design-doc drafts, and anything else a
+workflow leaves sitting for review. Resolve it by BRANCH — never hard-code the
+path, and never assume the current directory is right:
+
+```bash
+DOCS_WT="$(git worktree list --porcelain \
+  | awk '/^worktree /{p=substr($0,10)} /^branch refs\/heads\/docs-wip$/{print p; exit}')"
+[ -n "$DOCS_WT" ] || { DOCS_WT=~/work/synarchy-docs
+                       git worktree add "$DOCS_WT" -b docs-wip origin/master; }
+```
+
+Docs land on master by direct push, not a PR:
+
+```bash
+cd "$DOCS_WT" && git add -- <paths> && git commit -m "…" \
+  && git fetch origin && git rebase origin/master \
+  && git push origin docs-wip:master
+```
+
+That push prints `Cannot update this protected ref` and
+`N of N required status checks are expected` and then **succeeds anyway** under
+admin bypass — judge it by
+`git rev-list --left-right --count HEAD...origin/master`, not by the warning.
+
+Exempt, because they either create their own worktree or must operate on the
+primary checkout: `solve`, `pr-revise`, `repair`, the read-only `pr-review` /
+`pr-rereview` / `issue-review` reviewers, `drain-prs`, `janitor`, `finalize`.
+
 ## Resource Root
 
 Every runtime resource family (`scripts/`, `assets/`, `data/`,
