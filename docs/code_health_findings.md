@@ -7,6 +7,18 @@ world → gameplay → Lua → tools → docs.
 
 Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` reviewed and deliberately never to be filed · `[deferred]` blocked on a stated precondition
 
+A finding only PARTLY covered by a merged issue carries **no heading marker** and a
+`> **Partial:**` note naming what landed and what remains. Do not put `[#N]` on its
+heading: processing skips `[#N]` findings outright, so a partial-coverage marker there
+strands the uncovered remainder permanently.
+
+That rule governs a finding whose partial coverage is still *open*. A `>
+**Partial:**` note that is followed by a later terminal disposition — the case
+in CH-43 and CH-54 — is historical: it records what the entry looked like
+before the remainder was dispositioned, and the heading marker beside it states
+that later disposition, not the partial one. Read the marker, not the note, for
+an entry's current status.
+
 > **Methodology note (corrected 2026-07-25).** The "unreferenced export" scans
 > in batches 2-11 originally searched `src/`, `app/`, and `test/` only, and
 > **omitted `test-headless/` — 124 files, the project's main test suite**. All
@@ -34,7 +46,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-3. Vulkan reports the application name as "Vulkan Device Test" — [#933]
 - [x] CH-4. `EngineEnv.inputThreadActiveRef` carries `gameTimeRef`'s haddock — [#934]
 - [x] CH-5. Two record fields share one source line in `GraphicsState` — [#936, closed obsolete]
-- [x] CH-6. Three of four `LogBackend` constructors are never constructed — [#942]
+- [x] CH-6. Two of four `LogBackend` constructors are never constructed — [#942]
 - [x] CH-7. Large dead surface in `Engine.Core.Log` / `Engine.Core.Log.Monad` — [#943]
 - [x] CH-8. `logMessage` and `logThreadMessage` are duplicated verbatim — [#944]
 - [x] CH-9. `extractCallSite`'s skip-list is an untested, order-sensitive trap — [#945]
@@ -71,7 +83,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-40. `currentSaveVersion` carries a 296-line changelog for a superseded scheme — [#984]
 - [x] CH-41. The 500-line module budget doesn't constrain function size — [no-issue]
 - [x] CH-42. Three different facade idioms across nine sibling API domains — [no-issue]
-- [ ] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090 — [#985] covers `Save.hs`'s State-free extraction only
+- [x] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090 — [#985] split `Save.hs`; remainder [no-issue]
 - [x] CH-44. Two `Focus` modules, neither of which says which focus it means — [no-issue]
 - [x] CH-45. `ScriptFunction` is a dead constructor with a silent-failure handler — [#992]
 - [x] CH-46. The Lua API tree holds 57% of the engine's unrestricted-`EngineEnv` surface — [no-issue]
@@ -82,7 +94,7 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator — [#1007]
 - [x] CH-52. 14 verbatim copies of the same YAML loader — [#1008]
 - [x] CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things — [#1009]
-- [ ] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module — [#1010] covers only the `Window/GLFW.hs` cluster
+- [x] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module — [#1083] covers the surviving 64
 - [x] CH-55. `Engine.Core.Init`'s three exports have no callers — [no-issue]
 - [x] CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout — [no-issue]
 - [x] CH-57. Minor remaining-Engine defects for one cleanup issue — [#1011]
@@ -94,75 +106,75 @@ Status legend: `[ ]` not filed · `[#N]` filed as issue N · `[no-issue]` review
 - [x] CH-63. Three separate main loops — [#1022]
 - [x] CH-64. `--dump` emits three fields that no documentation mentions — [#1040]
 - [x] CH-65. `App/Dump.hs` hand-concatenates JSON — [#1058]
-- [ ] CH-66. Primitive-obsession in the dump signatures
-- [ ] CH-67. `parseRegion` silently substitutes a default for malformed input
-- [ ] CH-68. Two module haddocks enumerate the boot modes and both are stale
-- [ ] CH-69. Minor `app/` defects for one cleanup issue
-- [ ] CH-70. The save system's item enumeration is implemented three times
-- [ ] CH-71. `WorldPageId` has no accessor, so ten sites hand-write one
-- [ ] CH-72. Nine near-identical `Missing*Ref` types, misplaced in `Types.hs`
+- [x] CH-66. Primitive-obsession in the dump signatures — [#1081]
+- [ ] CH-67. `parseRegion` silently substitutes a default for malformed input — [deferred]: #1081 retypes the region
+- [x] CH-68. Two module haddocks enumerate the boot modes and both are stale — [#1084]
+- [x] CH-69. Minor `app/` defects for one cleanup issue — [#1086]
+- [x] CH-70. The save system's item enumeration is implemented three times — [#1090]
+- [x] CH-71. `WorldPageId` has no accessor, so ten sites hand-write one — [#1091]
+- [x] CH-72. Nine near-identical `Missing*Ref` types, misplaced in `Types.hs` — [no-issue]
 - [x] CH-73. `serializeCodec` cannot express the migration the component system exists for — [#1093]
-- [ ] CH-74. `Component/Entities.hs` is five components in one 1139-line module
-- [ ] CH-75. `tshow` is invented four times, while 570 sites don't use it
-- [ ] CH-76. Envelope compat is named after the epic's internal phase letters
-- [ ] CH-77. `LuaComponentSpec` is a bare 4-tuple
-- [ ] CH-78. `Envelope.hs` is 860 lines beside an `Envelope/` directory
+- [x] CH-74. `Component/Entities.hs` is five components in one 1139-line module — [no-issue]
+- [x] CH-75. `tshow` is invented four times, while 570 sites don't use it — [#1099]
+- [x] CH-76. Envelope compat is named after the epic's internal phase letters — [no-issue]
+- [x] CH-77. `LuaComponentSpec` is a bare 4-tuple — [#1103]
+- [x] CH-78. `Envelope.hs` is 860 lines beside an `Envelope/` directory — [no-issue]
 - [x] CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current — [#1108]
-- [ ] CH-80. "River" logic lives in four unrelated namespaces
-- [ ] CH-81. `World.Fluids` and `World.Fluid.*` differ by one letter
-- [ ] CH-82. The per-tile fluid-surface fold is written five times in one file
-- [ ] CH-83. The river-flat surface rule is written four times, and its comment overstates its own coverage
-- [ ] CH-84. `floorDivCS` is hand-rolled five times, with an unreachable branch, next to a correct helper
-- [ ] CH-85. `moSurface` is always empty, its lookup can never succeed, and two comments say it drives lava placement
-- [ ] CH-86. `composeFluidMap`'s haddock documents a parameter it does not have
-- [ ] CH-87. 43 modules carry `-fprof-auto`, defeating the cabal's `-fprof-late` profiling strategy
-- [ ] CH-88. Four dead bindings that `Strict` actually evaluates
-- [ ] CH-89. Material IDs are a hardcoded Haskell table mirroring `data/materials/*.yaml`
-- [ ] CH-90. 194 unreferenced exports in `src/World/`
-- [ ] CH-91. Minor worldgen defects for one cleanup issue
-- [ ] CH-92. `baseTileW` / `baseTileH` are defined identically in eight modules
-- [ ] CH-93. `World.ZoomMap` is a facade that inverts its own dependency direction
-- [ ] CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped
+- [x] CH-80. "River" logic lives in four unrelated namespaces — [#1109]
+- [x] CH-81. `World.Fluids` and `World.Fluid.*` differ by one letter — [#1110]
+- [x] CH-82. The per-tile fluid-surface fold is written five times in one file — [#1111]
+- [x] CH-83. The river-flat surface rule is written four times, and its comment overstates its own coverage — [#1112]
+- [x] CH-84. `floorDivCS` is hand-rolled five times, with an unreachable branch, next to a correct helper — [#1113]
+- [x] CH-85. `moSurface` is always empty, its lookup can never succeed, and two comments say it drives lava placement — [#1114]
+- [x] CH-86. `composeFluidMap`'s haddock documents a parameter it does not have — [#1115]
+- [x] CH-87. 43 modules carry `-fprof-auto`, defeating the cabal's `-fprof-late` profiling strategy — [#1116]
+- [x] CH-88. Four dead bindings that `Strict` actually evaluates — [#1117]
+- [x] CH-89. Material IDs are a hardcoded Haskell table mirroring `data/materials/*.yaml` — [#1118]
+- [x] CH-90. 194 unreferenced exports in `src/World/` — [#1119]
+- [x] CH-91. Minor worldgen defects for one cleanup issue — [#1131]
+- [x] CH-92. `baseTileW` / `baseTileH` are defined identically in eight modules — [#1132]
+- [x] CH-93. `World.ZoomMap` is a facade that inverts its own dependency direction — [#1133]
+- [x] CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped — [#1135]
 - [ ] CH-95. Two zoom namespaces with a real but unstated split
-- [ ] CH-96. `docs/history/README.md` justifies an archive with a false claim
-- [ ] CH-97. Duplicate module basenames across the render stack
-- [ ] CH-98. A fifth dead binding in `BuildPixels.hs` (extends CH-88)
-- [ ] CH-99. Minor Thread/Render/ZoomMap defects for one cleanup issue
-- [ ] CH-100. The save-critical enums tell you to bump the wrong version, and CLAUDE.md agrees with them
-- [ ] CH-101. Two components store the same enum two different ways; only one is order-safe
-- [ ] CH-102. The codebase's only `TODO` is a comment claiming TODOs exist
-- [ ] CH-103. `Unit.Types.Combat` holds anatomy, not combat
-- [ ] CH-104. The append-only enum policy is unenforced, in a codebase full of enforcement
-- [ ] CH-105. Minor Unit/Combat defects for one cleanup issue
-- [ ] CH-106. Six worker threads hand-implement one identical lifecycle
-- [ ] CH-107. 22 directories exist solely to hold a single `Types.hs`
-- [ ] CH-108. Power hardware is hardcoded in Haskell while 16 other content categories are YAML
-- [ ] CH-109. Nineteen lines of reasoning prove two functions are dead, and they are still there
-- [ ] CH-110. Minor Sim/Power/Infection/Craft defects for one cleanup issue
-- [ ] CH-111. `applyFacingF` — the camera rotation — is defined three times, identically
-- [ ] CH-112. `validRelBounds` documents a validation it doesn't perform
-- [ ] CH-113. Quad vertex construction is written out longhand in eight places
-- [ ] CH-114. Minor Building/Structure/Location defects for one cleanup issue
-- [ ] CH-115. The `synarchy-test-graphical` suite is built by CI but never run
-- [ ] CH-116. The four largest files in the project are test modules
-- [ ] CH-117. Seven test modules bypass the shared engine harness
-- [ ] CH-118. `test/` and `test-headless/` were absent from this audit's own tooling
-- [ ] CH-119. Minor remaining-Haskell defects for one cleanup issue
-- [ ] CH-120. Five focus modules, and three have no module haddock at all
-- [ ] CH-121. `src/UI` is the densest concentration of review-round archaeology
-- [ ] CH-122. Verified: the UI tree's "single source of truth" claims are true
-- [ ] CH-123. Minor UI defects for one cleanup issue
-- [ ] CH-124. `truncateToWidth` has five divergent implementations, and users can see the difference
-- [ ] CH-125. `clamp` is defined 11 times; `formatGameTimeHMS` 4 times, identically
-- [ ] CH-126. `shell.wrapText` says "by character" and iterates by byte
-- [ ] CH-127. Four features are split across both a flat file and a same-named directory
-- [ ] CH-128. Five Lua modules sit at exactly the 500-line cap
-- [ ] CH-129. `probelib` is imported by 71 of 72 probes and then reimplemented
-- [ ] CH-130. The seven largest files in the project are all tests and tooling
-- [ ] CH-131. `tools/` is 122 flat files that divide cleanly by role
-- [ ] CH-132. Minor `tools/` defects for one cleanup issue
-- [ ] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped
-- [ ] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem
+- [x] CH-96. `docs/history/README.md` justifies an archive with a false claim — [#1136]
+- [x] CH-97. Duplicate module basenames across the render stack — [no-issue]
+- [x] CH-98. A fifth dead binding in `BuildPixels.hs` (extends CH-88) — [#1137]
+- [x] CH-99. Minor Thread/Render/ZoomMap defects for one cleanup issue — [#1138]
+- [x] CH-100. The save-critical enums tell you to bump the wrong version, and CLAUDE.md agrees with them — [#1139]
+- [x] CH-101. Two components store the same enum two different ways; only one is order-safe — [no-issue]
+- [x] CH-102. The codebase's only `TODO` is a comment claiming TODOs exist — [#1144]
+- [x] CH-103. `Unit.Types.Combat` holds anatomy, not combat — [no-issue]
+- [x] CH-104. The append-only enum policy is unenforced, in a codebase full of enforcement — [#1145]
+- [x] CH-105. Minor Unit/Combat defects for one cleanup issue — [#1146]
+- [x] CH-106. Six worker threads hand-implement one identical lifecycle — [#1147]
+- [x] CH-107. 22 directories exist solely to hold a single `Types.hs` — [no-issue]
+- [x] CH-108. Power hardware is hardcoded in Haskell while 16 other content categories are YAML — [#1148]
+- [x] CH-109. Nineteen lines of reasoning prove two functions are dead, and they are still there — [#1149]
+- [x] CH-110. Minor Sim/Power/Infection/Craft defects for one cleanup issue — [no-issue]
+- [x] CH-111. `applyFacingF` — the camera rotation — is defined three times, identically — [#1150]
+- [x] CH-112. `validRelBounds` documents a validation it doesn't perform — [#1151]
+- [x] CH-113. Quad vertex construction is written out longhand in eight places — [#1152]
+- [x] CH-114. Minor Building/Structure/Location defects for one cleanup issue — [no-issue]
+- [x] CH-115. The `synarchy-test-graphical` suite is built by CI but never run — [#1153]
+- [x] CH-116. The four largest files in the project are test modules — [no-issue]
+- [x] CH-117. Seven test modules bypass the shared engine harness — [no-issue]
+- [x] CH-118. `test/` and `test-headless/` were absent from this audit's own tooling — [no-issue]
+- [x] CH-119. Minor remaining-Haskell defects for one cleanup issue — [#1154]
+- [x] CH-120. Five focus modules, and three have no module haddock at all — [#1155]
+- [x] CH-121. `src/UI` is the densest concentration of review-round archaeology — [#949]
+- [x] CH-122. Verified: the UI tree's "single source of truth" claims are true — [no-issue]
+- [x] CH-123. Minor UI defects for one cleanup issue — [#1156]
+- [x] CH-124. `truncateToWidth` has five divergent implementations, and users can see the difference — [#1157]
+- [x] CH-125. `clamp` is defined 11 times; `formatGameTimeHMS` 4 times, identically — [#1158]
+- [x] CH-126. `shell.wrapText` says "by character" and iterates by byte — [#1159]
+- [x] CH-127. Four features are split across both a flat file and a same-named directory — [no-issue]
+- [x] CH-128. Five Lua modules sit at exactly the 500-line cap — [no-issue]
+- [x] CH-129. `probelib` is imported by 71 of 72 probes and then reimplemented — [#1160]
+- [x] CH-130. The seven largest files in the project are all tests and tooling — [no-issue]
+- [x] CH-131. `tools/` is 122 flat files that divide cleanly by role — [no-issue]
+- [x] CH-132. Minor `tools/` defects for one cleanup issue — [no-issue]
+- [x] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped — [#1161]
+- [x] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem — [no-issue]
 - [ ] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
 - [ ] CH-136. Minor doc defects for one cleanup issue
 - [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
@@ -388,6 +400,14 @@ file"); the same principle applies in source. The *invariant* should stay, the
 *provenance* should go (an issue number alone is fine).
 
 ### [#950] CH-16. Cross-cutting: 555 files repeat a global `LANGUAGE` pragma
+> **Note:** #950 itself is closed **not planned**, but the finding was not
+> dropped — a single-PR cleanup touched ~695 files and GitHub's pull-request
+> diff API refuses more than 300, so no reviewer could ever see it. #950 was
+> closed in favour of three disjoint scoped issues on directory boundaries —
+> #969 (`src/World/`), #970 (`src/Engine/`), #971 (everything else) — all three
+> of which are merged. The marker stays `[#950]` because that is where this
+> finding was filed; follow it to those three for the outcome.
+
 `UnicodeSyntax` is in `common lang`'s `default-extensions`, imported by all
 four cabal components — yet 555 modules re-declare it in a `{-# LANGUAGE #-}`
 pragma. `OverloadedStrings` (also global) is re-declared in 66. Pure noise on
@@ -503,6 +523,14 @@ in its own right.)
 
 ### [no-issue] CH-23. Oversized Haskell modules are now concentrated in `World/Save/`
 > **Disposition:** No issue — this is a size count, not a defect. The 500-line limit is an explicit per-split ratchet (`tools/haskell_module_budget.py` guards three named splits) and no persistence module carries a split agreement, the same policy that closed CH-22 and CH-41. Its actionable content is owned elsewhere, not discarded: `Component/Entities.hs` by CH-74 ("the largest single win available against CH-23"), `Types.hs` by CH-72, `Envelope.hs` by CH-78, and `Lua/API/Save.hs` by #985. The residue (`Storage.hs` 819, `Component/WorldGen.hs` 830, `Component/Page.hs` 792, `Integrity.hs` 531) is size-only with no identified boundary defect. The table is also stale: 19 modules now exceed 500, not 17; `Types.hs` is 1102 after #984 archived its changelog, so it is neither the largest module in the tree (`Entities.hs` 1139, `Lua/API/Save.hs` 1126) nor growing; `WorldGen.hs`/`Page.hs` were already 830/792 at the sweep commit.
+> **Correction (2026-08-03):** two of the numbers above have since moved and one pointer
+> is dead. `Lua/API/Save.hs` is now **858** (not 1126) — #985's split landed — and
+> `Types.hs` grew to **1146**, so it IS now the largest module in the tree, narrowly over
+> `Entities.hs` (1139); `Storage.hs` is 821, not 819. The "19 modules exceed 500" count
+> still holds. Separately, CH-72 closed `[no-issue]`, so `Types.hs`'s size is no longer
+> owned by any finding. Neither change affects this disposition: size alone remains a
+> count rather than a defect under the same per-split-ratchet policy, and `Types.hs`'s
+> bulk is the nine-validator family #764 deliberately declined to rewrite.
 
 The 2026-07-07 triage (`docs/history/haskell_large_file_submodule_triage_2026-07.md`)
 found 43 modules over 500 lines. That is down to **17** — good progress — but
@@ -919,13 +947,18 @@ by simply not re-exporting that one.
 Fix: pick one idiom (module re-exports, with internal submodules omitted) and
 apply it to all nine.
 
-### [#985] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
+### [no-issue] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
 > **Partial:** #985 (merged) extracted only `API/Save.hs`'s `EngineEnv`-free
 > definitions into `API/Save/{Bridge,Config,Integrity,Page}.hs`, leaving the
 > facade at 859 lines; its Out of scope defers `API/Blood.hs`, `API/Power.hs`,
 > `API/YamlTextures.hs`, `API/Construct.hs`, and `API/InputInject.hs`, and its
 > approved issue review requires this entry stay unchecked until those are
-> dispositioned.
+> dispositioned. **Historical (superseded 2026-08-06):** that condition has
+> since been met — the remainder was dispositioned `[no-issue]` below, which is
+> why the heading now carries a terminal marker and the entry is checked. Kept
+> for the #985 scope facts it records, not as an active partial finding.
+
+> **Disposition:** No issue — `Save.hs` was split by #985 (merged, 1090 → 858, four `API/Save/*` submodules); the remainder is a size complaint with no policy behind it. `tools/haskell_module_budget.py`'s `BUDGETS` lists three module families and none of these five; CLAUDE.md states the 500-line limits "are per-split ratchets… not a tree-wide size policy." Re-measured 2026-08-03: three of the five are already under 500 (YamlTextures 435, Construct 407, InputInject 402) and only Blood 538 and Power 521 exceed it. #985's actual driver does not transfer either — it reduced code under the save path's PERMANENT full-access exception, and none of these five holds unrestricted access (Blood/Power/YamlTextures/InputInject import `Engine.Core.State` narrowly; Construct doesn't import `EngineEnv` at all). The testability argument is unproven: no test imports #985's own `API/Save/{Bridge,Config,Integrity,Page}.hs`. Both Blood (a contiguous `EngineEnv`-free tail at `:396-538`) and Power (~6 scattered free helpers incl. a generic `insertAt`) remain extractable if a tree-wide size policy is ever adopted — that is a separate, larger decision, not this finding.
 
 Nine domains were split into facade + subdirectory. These were not:
 
@@ -1167,13 +1200,28 @@ Compare the sibling naming: `YamlItems` loads items, `YamlFlora` loads flora,
 Fix: split into `YamlMaterials.hs`, `YamlVegetation.hs`, and
 `Engine/Asset/TextureNameRegistry.hs`.
 
-### [#1010] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module
+### [#1083] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module
 > **Partial:** #1010's Out of scope excludes "any other module in CH-54's
 > inventory", so it settles only the `Window/GLFW.hs` wrappers. Its body says the
 > rest of kind (a) is tracked by #1007, #1006, #943, #946, #972, #947, #1009 and
 > CH-55, and that kind (b) is excluded because the `Loop/Camera.hs` exemplar is
 > wrong (four of its eight names are used by `test-headless/Test/Headless/Camera/`).
 > Re-process to confirm that set closes the finding before checking it off.
+> **Historical (superseded 2026-08-03):** that re-processing happened and is
+> recorded below — the twelve tracking issues did NOT close the finding, and the
+> surviving remainder is now filed as #1083. Kept for the #1010 scope facts it
+> records, not as an active partial finding.
+
+> **Note:** All twelve tracking issues (#943, #946, #947, #972, #978, #980, #1006,
+> #1007, #1009, #1010, #1011, #1077) are now closed, and they did NOT close this
+> finding. Scan re-run 2026-08-03: **64 names across 35 modules** survive, and
+> #1083 covers that remainder. Confirmed landed: `Graphics/Transform.hs` gone,
+> `fontFragmentShaderCode` gone, `Window/GLFW.hs`'s eleven gone, `Asset/Manager.hs`
+> 23 → 2, `Core/Log.hs` 5 → 1, `Core/Error/Exception.hs`'s two gone. The body's
+> `Loop/Camera.hs` exemplar was indeed wrong — 4 of its 8, not 8, are unreferenced.
+> One survivor is more than an export-list defect: `API/Log.hs`'s `registerLogAPI`
+> is a registrar nothing calls, leaving `engine.setDebugCategory` /
+> `getDebugCategories` unreachable from Lua; #1083 requires that be decided, not swept.
 
 Full inventory captured by scan (qualified uses counted, so no
 `import qualified … as GLFW` false positives). It splits into two kinds:
@@ -1418,7 +1466,12 @@ function twice — identical `go n` recursion, identical timeout arithmetic, and
 the second's comment literally defers to the first ("see 'waitForInit'"). Only
 the readiness predicate and two log strings differ.
 
-### CH-66. Primitive-obsession in the dump signatures
+### [#1081] CH-66. Primitive-obsession in the dump signatures
+> **Note:** Two corrections. `dumpTilesJSON` takes FIVE bare `Int`s, not four —
+> `worldSize` sits immediately before the four region bounds. And the region tuple is
+> not destructured "purely to be re-spread": `runDump` also uses the components at
+> `Dump.hs:59-61` and `:125`. #1081 excludes `parseRegion`'s malformed-input defaulting,
+> which is CH-67 below.
 ```haskell
 runDump      ∷ DumpLayers → Int → Int → Int → (Int,Int,Int,Int) → IO ()
 dumpTilesJSON ∷ DumpLayers → MaterialRegistry → Int → ClimateState
@@ -1430,7 +1483,21 @@ and it compiles and generates a different world. `dumpTilesJSON` takes the
 region as four loose `Int`s even though `parseRegion` already produced it as a
 tuple, so the tuple is destructured purely to be re-spread positionally.
 
-### CH-67. `parseRegion` silently substitutes a default for malformed input
+### [deferred] CH-67. `parseRegion` silently substitutes a default for malformed input
+> **Deferred:** #1081 retypes `parseRegion`'s bare `(Int,Int,Int,Int)` return and
+> rewrites the `Main.hs:94-95` call site this fix must change, and its Out-of-scope
+> section states the named region type should be shaped so this finding can wrap it
+> in `Maybe`/`Either` — precondition: **#1081 merges**, then file against the landed shape.
+
+> **Note (2026-08-03, since superseded):** the 2026-08-03 verification widened this
+> entry to every value-carrying flag — `--seed`/`--worldSize`/`--plates`/`--ages`/
+> `--port` were observed defaulting just as silently via `fromMaybe` at their
+> `Main.hs` call sites. That widening is **obsolete**: #1191 (`2046a8c3`, merged
+> 2026-08-09) made all of them reject a present-but-malformed value, and
+> deliberately left `--region` for this finding. A bare `--region` with no value
+> still defaults silently, and `app/App/Cli.hs:195` still returns the bare tuple,
+> so the finding itself — and its #1081 deferral — stand unchanged in the narrower
+> form the body below now states.
 ```haskell
 parseRegion ("--region":s:_) =
     case map reads (splitOn ',' s) of
@@ -1450,7 +1517,15 @@ absence and malformed presence are different answers. `parseRegion` is now the
 only silent-default parser left in the file; #1191 deliberately left it for
 this finding, sequenced after #1081's named-region type.
 
-### CH-68. Two module haddocks enumerate the boot modes and both are stale
+### [#1084] CH-68. Two module haddocks enumerate the boot modes and both are stale
+> **Note:** Verified 2026-08-03 — both quoted haddocks are stale verbatim, and #1084
+> folds in two refinements. `App/Exception.hs`'s *claim* is accurate (all five
+> `runEngineM` sites are wrapped; language-report never boots an engine), so only its
+> parenthetical is wrong. `App/Cli.hs` is stale a second way: its content summary
+> predates `parseSize`/`parsePreview`/`classifyPreviewCategory`/`parseLanguageReport`/
+> `parseSeeds`. A THIRD instance outside `app/` is included —
+> `Lua/Message.hs:94-99`'s `whenGraphical` comment is wrong, not merely outdated:
+> it gates on `ecHeadless`, so it also runs in offscreen and preview.
 - `App/Cli.hs:1` — "shared by every boot mode (graphical, headless, dump)"
 - `App/Exception.hs:2` — "shared by every `runEngineM` call site (graphical,
   headless, dump)"
@@ -1459,7 +1534,15 @@ There are six: graphical, headless, offscreen, dump, preview, language-report.
 `guardNativeExceptions` is in fact used by five of them. Enumerating a list
 that grows is the failure mode; say "every boot mode" and stop.
 
-### CH-69. Minor `app/` defects for one cleanup issue
+### [#1086] CH-69. Minor `app/` defects for one cleanup issue
+> **Note:** Verified 2026-08-03. #1086 covers four of the six bullets. Two need no
+> work: the ASCII `/=` was already normalised by #1005, and the hand-rolled `splitOn`
+> is a non-defect by this finding's own wording ("fine as the only copy"). Line drift:
+> `drop 7` is at `Cli.hs:57` (not `:48`), `splitOn` at `:191` (not `:175`). The
+> `main`-length bullet is reframed — at 128 lines (not 110) it is unremarkable against
+> CH-41's no-issue disposition on function length, so #1086 targets the REAL defect
+> #1012 introduced: the six-way precedence is encoded twice, in the dispatch and again
+> in `selectedBootModeName`, held in sync only by a comment.
 - `Main.hs` — `fromMaybe 8008 port` appears **six times**. Given CLAUDE.md
   warns agents at length that 8008 collides with the user's GUI instance, the
   default port deserves one named constant.
@@ -1491,7 +1574,19 @@ several times.
 See also **CH-40** (`currentSaveVersion`'s 296-line changelog) and **CH-23**
 (eight of the tree's seventeen oversized modules live here).
 
-### CH-70. The save system's item enumeration is implemented three times
+### [#1090] CH-70. The save system's item enumeration is implemented three times
+> **Note:** Verified 2026-08-03 — confirmed in full, including the consequence: the
+> record and DTO codec fail loudly under `-Werror`, but all three enumerations are
+> `concatMap` chains where an omission is silent, and nothing catches it (no test
+> asserts the three agree; `tools/persistence_inventory_audit.py` has no field-level
+> coverage). Two location corrections: the primed copy moved to
+> `API/Save/Integrity.hs:35` (#985's split, not `API/Save.hs:417`), and
+> `flattenItemInstances` is at `Types.hs:773` (not `:987`). The third entry is
+> UNDERSOLD here — `missingItemDefReferences` (`Types.hs:783-806`) is a full third
+> enumeration of the same six containers, not merely a different return type. The
+> suggested fix is sound and needs no shape adaptation: the three item-bearing fields
+> have identical types on both page records (`GroundItems`/`BuildingSnapshot`/
+> `UnitSnapshot`).
 The recursive walk over every item instance in a session — the basis of both
 the id-allocator check and load-time integrity validation — exists in three
 places:
@@ -1521,7 +1616,19 @@ failure, corrupt saves accepted.
 Fix: one traversal, parameterised over the page accessor (or run after the
 `SaveData` to `SessionSnapshot` adaptation so only one shape exists).
 
-### CH-71. `WorldPageId` has no accessor, so ten sites hand-write one
+### [#1091] CH-71. `WorldPageId` has no accessor, so ten sites hand-write one
+> **Note:** Verified 2026-08-03 — ten sites confirmed, but they are not ten copies of
+> one line. NINE are that `where` clause in `World/Save/Types.hs` (`:723, 769, 822,
+> 855, 889, 931, 990, 1043, 1127`, one per `renderMissing*Ref`); the TENTH
+> (`World/Thread/Helpers.hs:74-75`) is an exported top-level accessor that 17 modules
+> import (95 uses across 19 files), so "costs nothing" understates it — though all 17
+> already import `World.Types`/`World.Page.Types`, so no module gains a dependency.
+> The finding misses the root cause: `Save/Types.hs` CANNOT reuse the canonical
+> accessor, because `Thread/Helpers.hs` carries `EngineEnv` and Lua types; the newtype
+> lives in `World/Page/Types.hs:17`, which has no local imports at all. The nine
+> copies are a layering workaround, which is the real argument for the fix. The nine
+> call sites are also CH-72's territory — the two are independent, and whichever lands
+> second has less to delete.
 ```haskell
 newtype WorldPageId = WorldPageId Text
     deriving (Show, Eq, Ord)
@@ -1538,7 +1645,22 @@ No field label. Consequence — this exact line appears **ten times** across
 Adding `{ unWorldPageId :: Text }` to the newtype deletes all ten and costs
 nothing (the `deriving newtype` clauses are unaffected).
 
-### CH-72. Nine near-identical `Missing*Ref` types, misplaced in `Types.hs`
+### [no-issue] CH-72. Nine near-identical `Missing*Ref` types, misplaced in `Types.hs`
+> **Disposition:** No issue — both stated problems fail. Claim 1's premise is false:
+> `World/Save/Integrity.hs:36-47`'s haddock states the placement rule and rejects this
+> exact fix — the `missingDefReferences` family is "deliberately NOT folded into this
+> module's Haskell types … 9 already-working, already-tested validators against 9
+> different IO-loaded registries, rewritten onto one generic traversal, would be a large
+> rewrite of working code for a vocabulary-only gain", and both halves already report
+> through `continueLoad`'s single rejection gate (#764). That heterogeneity is real: the
+> nine scans take `HS.HashSet Text` ×5, `MaterialRegistry`, `FloraCatalog`,
+> `InfectionManager`, and `missingDefReferences` takes TWO registries over a different
+> page tuple — so "one renderer" understates the scans, which are most of the bulk.
+> Claim 2 is stale: #984 archived the 296-line changelog, and CH-23 already dispositioned
+> the size dimension no-issue (no persistence module carries a split agreement). Counts
+> corrected: the family spans `:711-1146` (~436 lines, 38%), not `:925-1316`/390/30%;
+> `Integrity.hs` is 531 lines, not 477; `API/Save.hs` imports nine SCANS plus nine
+> renderers, not nine types.
 `World/Save/Types.hs:925-1316` — roughly 390 lines, 30% of the file — is nine
 repetitions of one shape:
 
@@ -1566,7 +1688,19 @@ Two problems beyond the repetition:
 Fix: one `MissingRef { mrKind, mrSource, mrPage, mrEntity, mrName }` with one
 renderer, moved to `Integrity.hs`.
 
-### CH-73. `serializeCodec` cannot express the migration the component system exists for
+### [#1093] CH-73. `serializeCodec` cannot express the migration the component system exists for
+> **Note (pre-resolution verification, 2026-08-03):** confirmed, and stronger than stated. The helper
+> ALREADY takes a `migrate ∷ Word32 → d → …` seam, and all six call sites pass
+> `(\_ d → Right d)`: it is vestigial, which the finding misses. The proposed fix is
+> also insufficient alone — real multi-version decode reads a DIFFERENT frozen DTO type
+> per version (`CraftBillsDTOv1` vs `CraftBillsDTO`), which one `S.Serialize d`
+> constraint cannot express, so #1093 requires a per-version decoder table rather than
+> just widening `ccInputVers`. Counts corrected: **6** use the helper and **4**
+> hand-roll (ten codecs total), not 7/5; the workaround is documented FOUR times
+> (`Page.hs:540-543`, `Entities.hs:658-661`, `:912-920`, `:1106-1109`), not twice; and
+> all six call sites are opaque, not just `buildingsCodec`. No prior decision protects
+> this — unlike CH-72, #766 never mentions the helper and `Entities.hs:914-918` calls
+> it a gap ("no real multi-version dispatch wired up despite the seam being documented").
 ```haskell
 serializeCodec :: S.Serialize d => ComponentId -> Word32 -> Bool -> [ComponentId] -> ...
 serializeCodec cid ver req deps toDTO migrate validate = ComponentCodec
@@ -1616,7 +1750,21 @@ derived from those same declarations. All eleven registered gameplay codecs
 (including the four that hand-rolled multi-version decode) now go through it,
 and no codec hand-writes either universal decode error.
 
-### CH-74. `Component/Entities.hs` is five components in one 1139-line module
+### [no-issue] CH-74. `Component/Entities.hs` is five components in one 1139-line module
+> **Disposition:** No issue — the counts are right (1139 lines, 69 top-level declarations,
+> five codecs at :243/:476/:662/:921/:1110) but both structural claims fail. The module
+> is not misnamed for its contents: its haddock opens "Entity + entity-ADJACENT page-scoped
+> components", documents all five with owners and dependencies, and states the organizing
+> principle they all satisfy — "all page-scoped, all validated against the `world-pages`
+> authority (requirement 8)". And the split is not purely mechanical: `orderedPages`
+> (`:161`) and `tshow` (`:164`) are file-local helpers used by all five and would need
+> relocating (`applyPageSlices` is already shared from `Component/Types.hs:296`). What
+> remains is size, which this repo has declined as a policy four times in this report
+> (CH-22, CH-23, CH-41, CH-43) and in CLAUDE.md — the 500-line limits are per-split
+> ratchets for named families, and this module has no budget entry. The one comparable
+> split, #985 on `API/Save.hs`, was driven by the save path's permanent full-access
+> exception; this module is pure DTO/codec with no `EngineEnv` access, so that driver
+> does not transfer. CH-23 forwarded Entities.hs here; this is its answer.
 It defines five independent codecs:
 
 | Line | Codec | What it is |
@@ -1635,7 +1783,19 @@ already drawn.
 
 This is the largest single win available against CH-23.
 
-### CH-75. `tshow` is invented four times, while 570 sites don't use it
+### [#1099] CH-75. `tshow` is invented four times, while 570 sites don't use it
+> **Note:** Verified 2026-08-03 — undercounted on both numbers. **Seven** definitions,
+> not four: the four in `src/` (`Page.hs` is at `:161`, not `:148`) plus three the
+> finding missed in `test-headless/` — `UI/ResponsiveMenus.hs:1460`,
+> `UI/TutorialHud.hs:123` (monomorphic `Int → Text`), and
+> `World/Save/Integrity.hs:628` (`where`-bound, so it shadows silently instead of
+> conflicting — the one that needs deleting by hand). The hand-written form is at
+> **618** sites across 123 files, not 570. Also not in the finding, and what makes the
+> sweep safe: all seven defining modules use a bare `import UPrelude`, so exporting
+> `tshow` there turns each top-level copy into an ambiguous occurrence — GHC forces the
+> deletions and blocks re-divergence, so no CI guard is needed. The "same pass as
+> CH-49" suggestion is moot: #1005 landed (84 files, 156/156), and is the precedent
+> that makes a 123-file mechanical sweep normal practice here.
 ```haskell
 tshow :: Show a => a -> Text
 ```
@@ -1650,7 +1810,23 @@ Fix: one `tshow` in `UPrelude` (which exists to carry exactly this kind of
 shared vocabulary), delete the four local copies, and optionally sweep the 570
 call sites in the same pass as the CH-49 operator normalisation.
 
-### CH-76. Envelope compat is named after the epic's internal phase letters
+### [no-issue] CH-76. Envelope compat is named after the epic's internal phase letters
+> **Disposition:** No issue — the escalation that carries this finding is false and its
+> second claim is already fixed. NONE of the four names is exported: `Envelope.hs`'s
+> export list (`:59-75`) holds 16 names and includes none of them, and none is
+> referenced outside the module — so this is not "promoted into the API surface", and
+> "over-exports per CH-54" is wrong in the opposite direction. The finding is
+> self-contradictory on this point, calling them API surface with call sites and then
+> stating none is referenced outside `Envelope.hs`. They are also not unresolvable: each
+> haddock defines the shorthand in place — `b1LegacyIds` (`:392`) "the exact frozen B1
+> component-id set: precisely {metadata, session}", `b2Ids` (`:442`) "the exact #760-era
+> ("B2") component-id set", `decodeB2SessionMetadata` (`:511`) "…for the B1 case: a
+> #760-era save" — tying B2 to its issue number and enumerating the contents. The
+> 25-review-round-comments claim was resolved by #949: re-measured 2026-08-03,
+> `src/World/Save/`, `src/World/Load/`, and `src/Engine/Save/` each have ZERO, including
+> all three files named as densest. What remains is a naming preference for four private
+> helpers that document themselves; if CH-78's `Envelope.hs` split is ever filed, a
+> rename rides along there for free.
 `World/Save/Envelope.hs` defines `b1LegacyIds`, `b2Ids`,
 `decodeB2SessionMetadata`, and `decodeLegacySessionMetadata`. "B1" and "B2" are
 the save-overhaul epic's internal milestone labels (#759 = B1, #761 = B3) —
@@ -1667,7 +1843,22 @@ Rename to what the formats are — e.g. `preLuaComponentIds`,
 25 review-round comments also remain in this subsystem, densest in
 `Component/Entities.hs` (6), `Save/Types.hs` (4), and `Load/Publish.hs` (4).
 
-### CH-77. `LuaComponentSpec` is a bare 4-tuple
+### [#1103] CH-77. `LuaComponentSpec` is a bare 4-tuple
+> **Note:** Verified 2026-08-03 — right defect class, WRONG TUPLE. Every specific claim
+> about `LuaComponentSpec` is false: its haddock (`Envelope.hs:139-144`) does name all
+> four fields in order, and its slots are `Text`/`Word32`/`Bool`/`ByteString` — mutually
+> DISTINCT types, so every permutation is already a compile error. It is therefore not
+> the same defect class as `inpPendingUIClick` (CH-27, two `Text` + two `Double`) or
+> `runDump`'s three bare `Int`s (CH-66), which are genuinely swappable. The real hazard
+> is one line below it in `WorldSave`: the reference-edge payload
+> `[(Text, Text, Int, Maybe Int, Text, Maybe Text)]`, whose slots 1/2/5 are all `Text`,
+> which has NO alias at all and is spelled verbatim five times (`Bridge.hs:220`, `:344`,
+> `:409`, `WriteWorld.hs:58`, `Command/Types.hs:229`), and which
+> `Bridge.hs:344-371` assembles POSITIONALLY from named Lua fields with the three
+> decoded `Text`s adjacent — a swap there mis-keys `luaReferenceErrors` and can
+> reclassify a hard wrong-page error as a tolerated dangling diagnostic. #1103 covers
+> both, and preserves `Command/Types.hs:235-236`'s documented reason for spelling the
+> shape inline (keeping the Save/Envelope module graph out of `World.Command.Types`).
 ```haskell
 type LuaComponentSpec = (Text, Word32, Bool, BS.ByteString)
 ```
@@ -1681,7 +1872,25 @@ silent field transposition is hardest to detect.
 Same defect class as `inpPendingUIClick` (CH-27) and `runDump`'s three bare
 `Int`s (CH-66). Should be a record.
 
-### CH-78. `Envelope.hs` is 860 lines beside an `Envelope/` directory
+### [no-issue] CH-78. `Envelope.hs` is 860 lines beside an `Envelope/` directory
+> **Disposition:** No issue — the layout is documented and deliberate, and two of the
+> numbers are wrong. `Envelope.hs:2-3` states the relationship outright: it "ties the
+> generic tagged-envelope codec (`World.Save.Envelope.Codec`) to this codebase's
+> concrete save components" — `Codec.hs` is the GENERIC codec, the parent is the
+> CONCRETE binding, so it never purported to be a facade and its size follows from that
+> role. The one plausible cohesion violation was checked and does not exist: legacy
+> handling is split exactly as the haddock documents, with `Envelope.hs` owning the
+> fallback DISPATCH ("every decode entry point below falls back to
+> `decodeLegacySessionEnvelope`") and `World/Save/Compat/` owning payload MIGRATION
+> (`SessionV90`, `MetadataV1`). Re-measured 2026-08-03: `Envelope.hs` is **905** beside
+> **396** — 2.3×, not "four times"; and `Component.hs` (347) beside `Component/`
+> (**3322**) is the INVERSE shape, a small parent with large children, i.e. the very
+> facade layout this finding says is absent — not "same". The remaining convention
+> complaint is answered by CH-56, which measured 69 such pairs and found both shapes
+> deliberate, documented (CLAUDE.md:172), and CI-enforced; its forward of CH-78 as
+> "where the layout genuinely costs something" does not survive inspection. NB: CH-76's
+> note offers a B1/B2 rename "if CH-78's split is ever filed" — that ride-along will
+> not occur.
 `World/Save/Envelope.hs` (860) sits next to `Envelope/Types.hs` (173) and
 `Envelope/Codec.hs` (223) — so the parent module is four times the size of the
 subdirectory it appears to head, and is not a facade for it.
@@ -1702,6 +1911,16 @@ save concern, there is no rule saying whether it lives in `X.hs`,
 The fluid surface is the densest and, as suspected, holds the most gaps.
 
 ### [#1108] CH-79. An abandoned river redesign is still compiled, plus a design doc that reads as current
+> **Note:** Verified 2026-08-03. **Owner decision: ARCHIVE, not adopt** — #1108 removes
+> the module and archives the doc. The 2026-07-25 correction below is itself HALF WRONG:
+> tests do NOT exercise `RiverGraph`. The only external `RiverGraph` token is
+> `Spec.hs:322`'s `RiverGraph.spec`, the test module's own qualified alias — a grep false
+> positive. Measured per export: **7 of 9 have zero external references** (`RiverGraph`,
+> `RiverRoute`, `RiverNodeId`, `RiverNode`, `NodeKind`, `buildRiverGraph`,
+> `emptyRiverGraph`); only `classifyMouth` and the `SinkType` it returns are referenced,
+> by one test. Dormancy dated: module created 2026-04-18, last substantive change
+> 2026-06-26, every touch since mechanical (#435 warnings sweep, #950 pragmas);
+> `docs/river_rework.md` added 2026-06-25 in one commit and never edited.
 `src/World/River/Graph.hs` (257 lines) — `RiverGraph`, `RiverRoute`,
 `RiverNode`, `buildRiverGraph`, `classifyMouth` — was listed in
 `synarchy.cabal` and **imported by no production module**.
@@ -1736,7 +1955,20 @@ Adopting the redesign instead would have been a worldgen rework needing its own
 epic. CH-80 and CH-90 were out of scope there and still name the module as it
 stood at their sweep.
 
-### CH-80. "River" logic lives in four unrelated namespaces
+### [#1109] CH-80. "River" logic lives in four unrelated namespaces
+> **Note:** Verified 2026-08-03 — scatter confirmed and LARGER than the table says:
+> `World/Fluid/River/` is 8 modules/1921 lines (not 7/1245), and
+> `World/Hydrology/River/` is a 4-module directory/420 lines (not one `Carving.hs`/285);
+> Timeline River+RiverTrace 9 modules/1125 ✓. The finding does not reach the concrete
+> defect underneath: `src/World/Hydrology/DESIGN.md` (327 lines) — the ONLY design doc
+> for this pipeline — is gitignored (`.gitignore:30`) and untracked, yet three tracked
+> production modules cite it four times (`Chunk/Types.hs:122`, `Hydrology/Types.hs:64`,
+> `Fluid/River.hs:7` and `:36`, the last naming "§5.4"). In a fresh clone all four
+> dangle, and it is the only `.md` cited from `src/` at all. The local copy also
+> self-declares "⚠️ STALE … Do NOT treat as the current state of the system" and
+> redirects to agent memory notes that are not in the repo either. #1109 covers the
+> tracked stage-boundary doc plus those four references; directory renaming is
+> explicitly out of scope, as the finding itself allows.
 | Path | Role |
 |---|---|
 | `World/Fluid/River/` (7 modules, 1245 lines) | identify rivers from terrain |
@@ -1754,7 +1986,19 @@ Not necessarily a refactor — but the pipeline's stage boundaries (timeline
 evolution → identification → carving → per-chunk composition → sim) should be
 stated once, in a doc or module headers, and the directories named for them.
 
-### CH-81. `World.Fluids` and `World.Fluid.*` differ by one letter
+### [#1110] CH-81. `World.Fluids` and `World.Fluid.*` differ by one letter
+> **Note:** Verified 2026-08-03. Severity OVERSTATED: `src/World/Fluid.hs` does not
+> exist, so the confusable pair is `World.Fluids` vs `World.Fluid.<Sub>` and a typo
+> either way is a module-not-found COMPILE ERROR, never a silent mis-resolution — it is
+> a legibility problem, not a trap. Direct `World.Fluid.*` imports are **115 across 65
+> files**, not 97. Two stronger arguments are missing from the finding: the shape is
+> UNIQUE in the tree (zero singular/plural sibling `.hs` pairs anywhere under `src/`;
+> `Fluids.hs` beside `Fluid/` is the only plural-facade-beside-singular-directory, which
+> is why CH-56's facade disposition does not cover it), and two of the three importers
+> (`BuildPixels.hs`, `Build.hs`) already import `World.Fluid.*` directly as well, so
+> they reach the same subsystem two ways in one file. Only 2 of the facade's 11
+> re-exported names are ever used through it. #1110 deletes rather than promotes —
+> promoting would mean rewriting all 115 imports through an 11-name facade.
 `src/World/Fluids.hs` is a 20-line facade re-exporting from `World.Fluid.*`.
 `import World.Fluids` and `import World.Fluid.Types` sit one keystroke apart and
 resolve to different modules.
@@ -1764,7 +2008,20 @@ for the same two ocean predicates) against **97 imports of `World.Fluid.*`
 directly**. Either promote it to the real entry point or delete it; as a
 one-letter-different module used by 3% of consumers it is a trap with no payoff.
 
-### CH-82. The per-tile fluid-surface fold is written five times in one file
+### [#1111] CH-82. The per-tile fluid-surface fold is written five times in one file
+> **Note:** Verified 2026-08-03 — all five sites confirmed at the cited lines, and the
+> load-bearing claim is confirmed by the code's OWN haddock (`:178-184`): the merge
+> "mirrors `composeFluidMap`" and exists to stop "emitting lava into the water column".
+> Two additions. The five are TWO shapes, not one: lake-keyed (`lakeSurfMap`,
+> `lavaSurfMap`, `chunkWaterSurfMap`'s lake block — a single `lkSurface` per lake) and
+> river-keyed (`riverSurfMap`, `chunkWaterSurfMap`'s river block — per-tile
+> `rcePerTileSurfZ`), so `chunkWaterSurfMap` duplicates BOTH. And `chunkWaterSurfMap`
+> has two production callers (`Chunk.hs:308`, `Chunk/Zoom.hs:193`), so a drift hits the
+> main chunk path and the zoom path alike. The proposed fix carries a TRAP recorded in
+> #1111: `chunkWaterSurfMap` folds lakes and rivers into ONE vector, and merging two
+> separately-built vectors with `VU.zipWith min` would blank every tile — `minBound` is
+> the absent sentinel AND the smallest `Int`; the current code is safe only because each
+> write is bitmask-gated.
 `World/Generate/Chunk/Fluid.hs` contains the same "fold this chunk's entries
 into a per-tile lowest-wins surface vector" loop five times:
 
@@ -1788,7 +2045,18 @@ is — lava emitted into a lake.
 One `perTileLowestSurface ∷ WorldLakes → ChunkCoord → VU.Vector Int` (plus a
 river variant) replaces all five.
 
-### CH-83. The river-flat surface rule is written four times, and its comment overstates its own coverage
+### [#1112] CH-83. The river-flat surface rule is written four times, and its comment overstates its own coverage
+> **Note:** Verified 2026-08-03 — all four rule sites confirmed, and the `WeAddTile`
+> safety argument holds exactly as argued (the `:132` guard makes `max` collapse to
+> `fcSurface`). Three additions. There is a THIRD non-applying path the finding misses:
+> `recomputeColumnSurface` (`Apply.hs:308-322`), reached via `WeSetCell`, same shape and
+> no guard. Reachability is better than "narrow": `WeDeleteTile` is the MINING path
+> (`Mine/Types.hs:10`, `Terrain.hs:48`) and `WeSetCell` the location-carving primitive
+> (`Terrain.hs:199,216`) — what is narrow is the terrain precondition, not the edit. And
+> the divergence PERSISTS: `mkSurfaceMap`'s comment ends "ChunkLoading uses
+> mkSurfaceMap's output directly — no re-derivation", and a load regenerates chunks then
+> replays edits, so a replayed `WeDeleteTile` re-applies the wrong value after every
+> load. #1112 routes all seven sites through one shared rule.
 `mkSurfaceMap`'s comment names the other copies:
 
 > Same rule lives in Sim/Thread.hs::writeDirtyFluids (sim writeback) and
@@ -1822,7 +2090,17 @@ an inconsistency to confirm-and-fix rather than a known visible bug. The durable
 fix is one shared `renderedSurface ∷ Int → Maybe FluidCell → Int` used by all
 four.
 
-### CH-84. `floorDivCS` is hand-rolled five times, with an unreachable branch, next to a correct helper
+### [#1113] CH-84. `floorDivCS` is hand-rolled five times, with an unreachable branch, next to a correct helper
+> **Note:** Verified 2026-08-03 — both substantive claims hold. The dead guard is
+> confirmed EMPIRICALLY (`divMod (-33) 16 = (-3,15)`, `divMod (-1) 16 = (-1,15)`) with
+> `chunkSize = 16` at `Chunk/Types.hs:95`, and `globalToChunk`
+> (`Generate/Coordinates.hs:16-22`) uses plain `div`/`floorMod` with no guard, which
+> independently corroborates it. The NAMING here is wrong in a way that matters: the five
+> copies carry THREE names — `floorDivCS` (`Fluid.hs:288`), `fd` (`Pool.hs:170`), and
+> `floorDiv` (`Field.hs:64`, `Init.hs:271` — not `:272` — and `Lookup.hs:31`) — so
+> grepping `floorDivCS` finds one site and reads as stale. One nuance added: the three
+> generic `floorDiv a b` copies are not dead by TYPE (a negative divisor would fire the
+> guard), only because every call site passes `chunkSize`.
 ```haskell
 floorDivCS a = let (q, r) = a `divMod` chunkSize
                in if r < 0 then q - 1 else q
@@ -1842,7 +2120,18 @@ Two problems:
 2. **`World.Generate.Coordinates.globalToChunk` already exists** and does this
    correctly (`div` + an explicit `floorMod`). Five modules reimplemented it.
 
-### CH-85. `moSurface` is always empty, its lookup can never succeed, and two comments say it drives lava placement
+### [#1114] CH-85. `moSurface` is always empty, its lookup can never succeed, and two comments say it drives lava placement
+> **Note:** Verified 2026-08-03 — confirmed, plus three additions. There is a THIRD
+> construction site the field-name grep cannot see: `emptyMagmaOverlay = MagmaOverlay
+> HM.empty HM.empty HM.empty` (`Overlay.hs:41`, positional). There is also a THIRD stale
+> doc, and it is the worst one — the field's OWN haddock (`Overlay.hs:22-25`) still
+> describes it as a live mechanism. And two constraints the finding omits, both of which
+> shape the fix: `MagmaOverlay` is NOT serialized (`Show, Eq, Generic, NFData` only, and
+> it lives on `LoadedChunk`, which regenerates on load), so removal is save-safe and
+> needs no version bump; and the sibling field `moRevealed` is ALSO always empty but
+> DELIBERATELY so ("Reserved for future dig integration. ALWAYS EMPTY in phase 1 + 2"),
+> so it must survive a fix that removes `moSurface`. #384 touched this area and noted the
+> overlay is "caps-only now" but never ruled on the field.
 `MagmaOverlay.moSurface ∷ HM.HashMap (Int, Int) FluidCell` is written at exactly
 two sites, both `HM.empty` (`Generate/Chunk/Fluid.hs:327`, `Magma/Init.hs:362`),
 and read at one: `World/Magma/Lookup.hs:64`
@@ -1862,7 +2151,17 @@ So the codebase simultaneously documents this field as dead and as the mechanism
 for surface lava. Surface lava actually comes from `gtWorldLavaPools`. Delete the
 field, its lookup branch, and fix the two comments.
 
-### CH-86. `composeFluidMap`'s haddock documents a parameter it does not have
+### [#1115] CH-86. `composeFluidMap`'s haddock documents a parameter it does not have
+> **Note:** Verified 2026-08-03 — confirmed (signature at `:60-63` binds `params coord
+> terrainMap`, no water-table arg). One correction that changes the fix: the paragraph's
+> SUBSTANCE is still entirely true, only its subject is wrong. `lcWaterTableMap` really is
+> still computed and stored on `LoadedChunk` (`Chunk/Types.hs:117`, populated at
+> `Generate/Chunk.hs:69`, `Init.hs:308`, `Load/Stage.hs:339`, `Arena.hs:40,107`) and
+> really is still read by the subsurface saturation query (`Hydrology/WaterTable.hs:93`
+> `waterTableAtTile`). So #1115 re-anchors the explanation rather than deleting it —
+> deleting three lines would discard a correct account of why the field still exists.
+> Provenance: #384 dropped `_channelMask`/`_mMagma`/`oceanDist` from this same function;
+> the paragraph outlived that cleanup.
 ```haskell
 -- The 'waterTableMap' arg is no longer used for surface placement;
 -- it stays computed and stored on 'LoadedChunk' so that the
@@ -1874,7 +2173,7 @@ composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
 Three arguments, none of them a water-table map. The paragraph survived the
 signature change that removed it.
 
-### CH-87. 43 modules carry `-fprof-auto`, defeating the cabal's `-fprof-late` profiling strategy
+### [#1116] CH-87. 43 modules carry `-fprof-auto`, defeating the cabal's `-fprof-late` profiling strategy
 `synarchy.cabal` defines the profiling contract in one place:
 
 ```
@@ -1906,7 +2205,19 @@ They are inert in a non-profiling build (GHC ignores `-fprof-auto` without
 Fix: delete all 43 pragmas and let the flag do its job, or document why these
 files need pre-optimisation instrumentation.
 
-### CH-88. Four dead bindings that `Strict` actually evaluates
+### [#1117] CH-88. Four dead bindings that `Strict` actually evaluates
+> **Note:** Verified 2026-08-04. The load-bearing `Strict` claim was checked
+> EXPERIMENTALLY, not assumed: a minimal `{-# LANGUAGE Strict #-}` program with one unused
+> `let` binding calling `trace`, compiled at `-O2`, printed its trace — so the forcing
+> survives optimisation. Cost confirmed (`isOceanChunk` = one `HS.member`,
+> `Ocean.hs:157`; `hasAnyOceanFluid` = 25 lookups over the 5×5 Chebyshev-2 grid,
+> `:160-169`), with one honest qualification: ≤104 per chunk is an UPPER BOUND — the `∨`
+> short-circuits to 4 when the chunk is itself ocean. #1117 also covers CH-98's fifth
+> binding, since `_wrapC` sits in the same `let` block (`:72`) and splitting nine lines
+> across two PRs makes no sense — but `_wrapC` is a partial application of a 2-arity
+> function, so it costs a PAP, NOT lookups; it is a legibility defect. CH-98 keeps its own
+> disposition for its tree-wide sweep suggestion: `src/` holds 16 underscore-silenced
+> local bindings, of which these five are one file's worth.
 `World/ZoomMap/Cache/BuildPixels.hs:73-80` (a `{-# LANGUAGE Strict #-}` module):
 
 ```haskell
@@ -1923,7 +2234,18 @@ They are not cheap: `hasAnyOceanFluid` scans a 5×5 chunk neighbourhood (25
 wrapped `HashSet` lookups), so the four bindings cost up to ~104 lookups per
 chunk that are discarded. The zoom cache is rebuilt per world init and load.
 
-### CH-89. Material IDs are a hardcoded Haskell table mirroring `data/materials/*.yaml`
+### [#1118] CH-89. Material IDs are a hardcoded Haskell table mirroring `data/materials/*.yaml`
+> **Note:** Verified 2026-08-04 — every claim holds, including the exact count. Compared
+> all 73 YAML entries against the Haskell table by BOTH id and name: zero mismatches, zero
+> orphans either way, sole Haskell-only entry `matAir = MaterialId 0`. So it is a
+> structural hazard, not a live defect. The unreferenced figure is **exactly 51** of 74
+> (no consumer outside `Material.hs`). No gate exists: 14 `*_audit.py` tools ship, none
+> for materials, and no hspec test asserts the mapping. One addition — the mapping is
+> written in a THIRD place: the test suites hardcode bare ids (`WrapSeam.hs:110,125`,
+> `CoastBreach.hs:42,83`, and `Spoil.hs:22`'s `granite = MaterialId 1`), which a YAML
+> renumber would leave wrong while those tests still pass. #1118 takes the audit route
+> rather than codegen: the repo has an established `*_audit.py` + `test_*_audit.py`
+> pattern and no codegen step, and codegen would have to special-case `matAir` anyway.
 `src/World/Material.hs` hardcodes 74 numeric ids:
 
 ```haskell
@@ -1946,7 +2268,18 @@ Same class as CH-31 (the five-way `16384`) but with content authors in the
 loop. Fix: generate the constants from the YAML, or add a startup/CI check that
 every `mat*` constant matches its YAML `id`/`name` pair.
 
-### CH-90. 194 unreferenced exports in `src/World/`
+### [#1119] CH-90. 194 unreferenced exports in `src/World/`
+> **Note:** Verified 2026-08-04 — re-scanned with #1083's stated convention (value-level
+> exports only; types/constructors and export-list-less modules excluded): **186 names
+> across 58 modules**, and the concentrations match this table almost exactly (Material 51
+> ✓, Vegetation 18 ✓, Volcano 7 ✓, Fluid/Internal 6 ✓, Strata 6 ✓; Magma/Init 7→6,
+> Entities.hs **17→5**). Counting types and constructors as well gives 252, so 194 sits
+> between the two conventions. BOTH "genuinely dead" cross-references are now stale:
+> `World/Log.hs` no longer exists (#972 deleted it from disk and cabal) and
+> `World/River/Graph.hs` is removed by #1108. One interaction worth recording:
+> `Material.hs`'s 51 are a KEEP-WITH-REASON block, not an un-export block — #1118's audit
+> pins them to `data/materials/*.yaml`, so #1119 retains them with that reason and the
+> real edit surface is ~135 names across 57 modules.
 Same scan as CH-54. Largest concentrations, and what they mean:
 
 | Count | Module | Kind |
@@ -1967,7 +2300,18 @@ can be refactored without a whole-tree grep.
 Genuinely dead here: `World/Log.hs`'s five exports (CH-28 — the module is not
 in the cabal at all) and `World/River/Graph.hs`'s three (CH-79).
 
-### CH-91. Minor worldgen defects for one cleanup issue
+### [#1131] CH-91. Minor worldgen defects for one cleanup issue
+> **Note:** Verified 2026-08-05 — THREE of five bullets survive and are covered by #1131:
+> the crossed index-builder prefixes (confirmed; 12 external refs, so contained), and both
+> `smoothIslandColumns` items. Two are closed by precedent and excluded: the
+> `X.hs`-beside-`X/` bullet (Material/Slope/Plate/Seabed) and `World/Ocean/Types.hs`'s
+> 23-line namespace are the size/layout category CH-56 and CH-78 both dispositioned
+> `no-issue` as discretionary churn, with the ocean half's actionable content owned by
+> #1109. Two qualifications on the survivors: the "O(n²) dedup" is over a **≤4-element**
+> list (≤16 comparisons) so it is legibility, NOT performance; and the aliasing fix is
+> provably behaviour-preserving — `mTerr[idx]` is written only alongside
+> `mFluid[idx] = Just …`, and the loop skips any tile whose fluid is already `Just _`, so
+> a written tile is never re-read.
 - **Parallel modules, swapped prefixes.** `Lake/Identify/ChunkIndex.hs` exports
   `buildChunkIndex` + `buildLakeCarveIndex`; the parallel
   `River/Identify/ChunkIndex.hs` exports `buildRiverChunkIndex` +
@@ -1996,7 +2340,20 @@ so far**: only 11 unreferenced exports between them (against 194 in the rest of
 are a tidy loop + flat dispatch, and `World/Render.hs` is a proper two-export
 facade. The findings below are correspondingly narrower.
 
-### CH-92. `baseTileW` / `baseTileH` are defined identically in eight modules
+### [#1132] CH-92. `baseTileW` / `baseTileH` are defined identically in eight modules
+> **Note:** Verified 2026-08-05 — all sixteen definitions confirmed at the eight listed
+> modules, every one `∷ Float` and textually identical. One OVERSTATEMENT corrected: "eight
+> places to check when anything about tile geometry changes" is not right — all eight
+> DERIVE from `defaultGridConfig`, so a config change propagates correctly and there is no
+> latent correctness hazard. The real argument is stronger and comes from `World/Grid.hs`'s
+> own header ("Changing the sprite size or proportions only requires editing
+> `defaultGridConfig` — everything else is derived"): Grid already exports that derived
+> family (`tileWidth`, `tileHeight`, `tileSideHeight`, `tileDiamondHeight`,
+> `tileHalfWidth`, `chunkWorldWidth`) and ALL EIGHT modules already import from it, so
+> these two are the only members living privately. They are NOT redundant with
+> `tileWidth`/`tileHeight`, which are world-space (0.15) against these pixels (96/64) —
+> the pair is used as a ratio at `FloraQuads:51-55`. The live defect is FloraQuads'
+> `-- 96`/`-- 64` annotations, accurate today and silently stale on any config change.
 ```haskell
 baseTileW = fromIntegral (gcTilePixelWidth  defaultGridConfig)
 baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
@@ -2024,7 +2381,20 @@ stale the moment `defaultGridConfig` changes, and nothing will flag it.
 
 Fix: export them once (`World.Grid` already owns `defaultGridConfig`).
 
-### CH-93. `World.ZoomMap` is a facade that inverts its own dependency direction
+### [#1133] CH-93. `World.ZoomMap` is a facade that inverts its own dependency direction
+> **Note:** Verified 2026-08-05 — the inversion is real, and the facade is doing something
+> WORSE than the finding describes. It has only three importers, each taking one name
+> (`Render.hs:22` the inverted one; `Load/Stage.hs:51` and `Thread/Command/Init.hs:48` the
+> cache one), and **two of its four re-exports have no consumer at all**. One of those,
+> `generateBackgroundQuads`, means `World/Render/Zoom/Background.hs` — the whole
+> background layer — is DEAD: the facade is its only importer anywhere, and
+> `World/Render.hs` never mentions background. Git history shows a regression, not an
+> abandoned experiment: #127 fixed a divide-by-zero in it while it still ran, the call was
+> dropped during earlier visual/perf work, and `c89b0fca` (#435's `-Wall` sweep) then
+> removed the dangling import from `Render.hs`. Because the facade still imports it, no
+> unused-import warning has fired since — the shim is precisely why nobody noticed, and it
+> also masks the module from #1119's scan. #1133 requires that be resolved as one decision
+> (delete or re-wire), not swept.
 ```haskell
 -- | Thin facade – re-exports the public entry points so that
 --   existing call sites ('World.Render') need no import changes.
@@ -2046,7 +2416,21 @@ that now makes the module graph read backwards.
 Fix: have `World.Render` import `World.Render.Zoom.*` directly and let
 `World.ZoomMap` cover only the cache.
 
-### CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped
+### [#1135] CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped
+> **Note:** Verified 2026-08-06 — every code claim confirmed, and the seam confirmation
+> this entry asked for is now SUPPLIED, arithmetically rather than visually: replicating
+> `wrapChunkCoordU` (`Chunk/Types.hs:45-56`) over a 64-chunk world (canonical u range
+> `[-32,32)`), at u=31 the stored chunk `(16,-15)` has its +u neighbour built as
+> `(17,-15)` while that chunk is stored as `(-15,17)` — the `HM.lookup` cannot match. No
+> GPU needed. `ChunkLoading.hs:78-84` states the violated contract outright ("so
+> insert-time and lookup-time wrapping can't diverge"). The `SideDecoQuads.hs:83-87`
+> comment is demonstrably false: it says Nothing happens "only when that neighbor chunk
+> isn't loaded", but at the seam the neighbour IS loaded. Provenance: #26 added this
+> cross-chunk lookup and **#423 fixed this exact bug class in this exact file** —
+> prescribing `wrapChunkCoordU` canonicalisation and producing the `Quads.hs:394` wrap —
+> but missed these two siblings. #1135 also requires `GroundItemQuads.hs:102` and
+> `CursorQuads.hs:312` (same raw-lookup shape, input canonicality unestablished) be
+> examined rather than assumed safe.
 `World/Render/Quads.hs:82-85`:
 
 ```haskell
@@ -2080,6 +2464,28 @@ topology flags this exact hazard class), but the inconsistency inside one file
 is plain either way.
 
 ### CH-95. Two zoom namespaces with a real but unstated split
+> **Deferral discharged (2026-08-07) — reopened for processing.** This entry was
+> `[deferred]` on "**#1133 merges**, then state the boundary against the settled
+> shape". #1133 has since merged (`34b9354f`, PR #1164) and its implementation
+> commit `75f9224a` removed `src/World/ZoomMap.hs` and `Render/Zoom/Background.hs`,
+> so the precondition is met and the module counts below are stale: `Render/Zoom/`
+> is now 8 modules and `World/ZoomMap/` no longer has a facade. The finding
+> therefore returns to unprocessed `[ ]` rather than staying deferred; it is not
+> dispositioned here.
+
+> **Note:** Verified 2026-08-06 — the split is real, but two of this entry's premises need
+> correcting. "Nothing states it" is partly FALSE: `World/ZoomMap/Cache.hs:13-14` says
+> "Pure world-generation logic – no rendering imports." And the proposed fix is
+> inapplicable as written — `src/World/Render/Zoom.hs` DOES NOT EXIST, so the render tree
+> has no top module to put a sentence in. Counts: `Render/Zoom/` is **9** modules, not 10.
+> The `Bake.hs` example is weak — its haddock already reads "Bake `ZoomChunkEntry` vectors
+> into render-ready `BakedZoomEntry` vectors." The substantive finding is one this entry
+> misses: `ZoomChunkEntry`, the CACHE's output type built at `ZoomMap/Cache/Build.hs:109`,
+> is defined in `World/Render/Zoom/Types.hs:36` and reaches the cache via
+> `World/Types.hs:22`'s `module World.Render.Zoom.Types` re-export — so "no rendering
+> imports" holds only because the dependency is laundered through `World.Types`. Whether
+> that type moves is the real question, and it should be scoped once #1133 settles the
+> tree's shape.
 `World/ZoomMap/` (8 modules) builds the zoom **cache**: entries, per-chunk
 pixels, the texture atlas, the colour palette, classification, ice noise.
 `World/Render/Zoom/` (10 modules) **renders** from it: background, bake, quads,
@@ -2093,7 +2499,19 @@ rule.
 
 One sentence in each tree's top module would fix it.
 
-### CH-96. `docs/history/README.md` justifies an archive with a false claim
+### [#1136] CH-96. `docs/history/README.md` justifies an archive with a false claim
+> **Note:** Verified 2026-08-06 — confirmed. `waterSideFaceQuads` is live
+> (`SideDecoQuads.hs:3,30,45`, imported `Quads.hs:32`, called `:234`), while
+> `drainOceanLakes` really is gone and the bullet's OTHER claim — "the side-face subsystem
+> now lives in `src/World/SideFace/`" — is also TRUE (`Base.hs`/`Compute.hs`/`Types.hs`).
+> So the bullet is two-thirds right. Likely cause, which makes the correction more useful:
+> the side-face COMPUTE moved to `World/SideFace/` while the RENDER entry point stayed
+> under `World/Render/`, so the function looked like it had moved with the subsystem. This
+> entry's reasoning holds — the audit's complaint was fixed by `neighborCell`'s cross-chunk
+> resolution (`:83-101`) — but the corrected note must not overcorrect: that resolution
+> still fails at the U seam (#1135). The error is durable: `b4004a12` (an explicit
+> "archive-accuracy" review pass) and `29748160` (#1108, merged 2026-08-05) each edited
+> this file and left it standing.
 It marks the 2026-04 fluid audit superseded because it
 
 > References functions that no longer exist (`drainOceanLakes`,
@@ -2114,7 +2532,22 @@ an archived audit's findings are still live. A wrong reason here is how a
 still-open finding gets dismissed; note that this same function retains the
 separate seam defect in CH-94.
 
-### CH-97. Duplicate module basenames across the render stack
+### [no-issue] CH-97. Duplicate module basenames across the render stack
+> **Disposition:** No issue — duplicate basenames are this codebase's dominant convention,
+> not a render-stack anomaly. Measured across `src/`: **119 of 412 distinct basenames are
+> duplicated, spanning 408 modules** — roughly half the tree. `Types` alone appears **79**
+> times, `Render` 13, `Thread` 7, `Query`/`Config`/`Base` 6 each,
+> `Manager`/`Constants`/`Common`/`Camera`/`Texture` 5 each. The four clusters listed here
+> are ordinary instances of hierarchical namespacing with short leaf names, which is
+> standard Haskell practice and what this tree does everywhere. The proposed remedy
+> ("prefix by role: `ZoomViewBounds`, `RenderCamera`") applied consistently would rename a
+> large share of those 408 modules and contradict the convention — nobody would rename
+> `Unit/Types.hs` to `UnitTypes.hs`. The counts are also wrong: there are **5** `Camera.hs`
+> files, not 4 (it misses `Lua/API/Camera.hs` and `Lua/API/Register/Camera.hs`), so its
+> headline cluster is neither complete nor the notable one. And the stated harm is weak —
+> GHC diagnostics and stack traces identify modules by full module name
+> (`World.Render.Camera`), not by file basename. The entry itself concedes "Not all are
+> wrong." Same category as CH-22, CH-23, CH-41, CH-42, CH-43, CH-56, CH-74, and CH-78.
 | Basename | Modules |
 |---|---|
 | `Camera` | `Engine/Graphics/Camera.hs`, `Engine/Loop/Camera.hs`, `World/Render/Camera.hs`, `World/Render/Camera/Types.hs` |
@@ -2130,7 +2563,18 @@ Not all are wrong — `Zoom/ViewBounds` genuinely differs from `ViewBounds` — 
 the pattern deserves one pass with a naming rule (prefix by role:
 `ZoomViewBounds`, `RenderCamera`, …).
 
-### CH-98. A fifth dead binding in `BuildPixels.hs` (extends CH-88)
+### [#1137] CH-98. A fifth dead binding in `BuildPixels.hs` (extends CH-88)
+> **Note:** Verified 2026-08-06 — this entry has two halves and both are now covered. The
+> `_wrapC` binding itself rides in **#1117**, folded there when CH-88 was processed because
+> splitting nine adjacent lines across two PRs made no sense. The "broader sweep" half is
+> **#1137**, and I ran the sweep: **16** underscore-silenced local bindings in `src/` — 5 in
+> BuildPixels (→ #1117) and 11 elsewhere, of which **9 are genuinely dead** and **2 are
+> NOT**. `_debugLandCount` and `_debugGridW` (`Timeline/Loop.hs:337-338`) are USED three
+> lines below at `:341-343`, formatted into the geo-period label — so this entry's proposed
+> grep produces false positives, and the underscore prefix is also a legitimate naming
+> convention for debug values. Unlike CH-88's, the nine dead ones are all CHEAP (field
+> reads, arithmetic, an O(1) length, an index, one hash), so the case is code health — dead
+> code hidden from a `-Werror` build — not performance.
 `World/ZoomMap/Cache/BuildPixels.hs:72`:
 
 ```haskell
@@ -2148,7 +2592,18 @@ this is dead" into "this is deliberate", and five accumulated in one file.
 Worth a broader sweep: `grep -rn "^\s*_[a-z]" src --include='*.hs'` for other
 underscore-silenced bindings that are dead rather than intentionally ignored.
 
-### CH-99. Minor Thread/Render/ZoomMap defects for one cleanup issue
+### [#1138] CH-99. Minor Thread/Render/ZoomMap defects for one cleanup issue
+> **Note:** Verified 2026-08-06 — bullets 1 and 2 are ALREADY COVERED and are not new work:
+> all twelve named exports are confirmed unreferenced outside their own module, sit in
+> explicit export lists, and live under `src/World/`, which is exactly #1119's inventory
+> (`emitQuadBg` additionally rides on #1133's decision about `Zoom/Background.hs`).
+> Bullet 3 is real but reframed by #1138. "Nine producers share no common entry shape"
+> overstates — seven top-level producers already take 1-2 arguments. The defect is TWO
+> 14-parameter producers with same-typed positional runs disambiguated only by comment:
+> `TileQuads.tileToQuad` (`Int → Int → Int` worldX/worldY/worldZ, plus `Int → Int` and
+> `Float → Float`) and `SideDecoQuads.waterSideFaceQuads` (`Int → Int`, `Float → Float`).
+> Swapping `worldX`/`worldY` compiles and silently misplaces every tile — the CH-66/CH-77
+> class already filed as #1081 and #1103.
 - Only 11 unreferenced exports across all three trees, but they cluster in the
   zoom render path: `Zoom/Bake.hs` (`bakeEntries`, `zoomQuadWorldUVs`),
   `Zoom/Cursor.hs` (`makeHoverQuad`, `makeSelectQuad`), `Zoom/Quads.hs`
@@ -2183,7 +2638,21 @@ every declaration site.
 The findings are therefore few but sharp — the first is the most consequential
 single defect in the audit so far.
 
-### CH-100. The save-critical enums tell you to bump the wrong version, and CLAUDE.md agrees with them
+### [#1139] CH-100. The save-critical enums tell you to bump the wrong version, and CLAUDE.md agrees with them
+> **Note:** Verified 2026-08-06 — every element confirmed, and the DECISIVE evidence is one
+> this entry does not cite: `currentSaveVersion`'s OWN haddock
+> (`World/Save/Types.hs:101-107`) already says it is "a developer-maintained bookkeeping
+> marker … **It does not govern on-disk save compatibility**". So the constant the three
+> comments send you to bump documents at its definition that bumping it achieves nothing
+> here. Confirmed: the three comments verbatim; all three enums inside `UnitSimStateDTO`
+> (`Entities.hs:516-525`); `unitSimCodec` at `ccVersion = 2` / `ccInputVers = [1,2]`;
+> the failure path (bump 92→93, v2 payloads still accepted, tags remapped silently).
+> CLAUDE.md's self-contradiction is at **`:1113`** vs **`:1135`** — **22** lines apart, not
+> 738/755/17; the second is blunter than quoted ("is bumped freely — don't trust any number
+> written in docs"). And the correct mitigation has a working exemplar in the SAME codec:
+> `unitSimCodec`'s v1→v2 path decodes the frozen `UnitSimDTOv1` (`:640`) via
+> `migrateUnitSimDTOv1` (`:655`). #1139 also requires the append-only warnings themselves
+> be PRESERVED — they are correct, and only the mitigation clause is wrong.
 `Direction`, `Pose`, and `UnitActivity` are positional-by-constructor-tag under
 `Generic Serialize`. All three carry a clear, correct append-only warning — and
 all three end with the same mitigation instruction:
@@ -2225,7 +2694,22 @@ line), all pointing at a lever that is no longer connected.
 Fix: correct all four to name the owning component's `ccVersion`/`ccInputVers`
 plus a migration from a frozen DTO. See also CH-101.
 
-### CH-101. Two components store the same enum two different ways; only one is order-safe
+### [no-issue] CH-101. Two components store the same enum two different ways; only one is order-safe
+> **Disposition:** No issue — the premise is a misreading. The two DTO fields are not
+> competing designs for one value; each faithfully mirrors a DIFFERENT source record, which
+> is exactly what `Entities.hs`'s own haddock requires ("EVERY evolving live gameplay record
+> … is mirrored by a component-owned DTO with an explicit, reviewable field-by-field
+> conversion"). `UnitSimState.usPose ∷ Pose` (`Unit/Sim/Types.hs:31`) is authoritative;
+> `UnitInstance.uiPose ∷ Text` (`Unit/Types/Instance.hs:58`) is its published tag —
+> `Unit/Thread.hs:228` sets `uiPose = poseTag (usPose ss)` — consumed as a string by render,
+> Lua (`parsePose`), and healing (`uiPose == "sleeping"`). Three specific errors: the
+> proposed fix would make the `unit-sim` DTO stop mirroring its record AND add a fallible
+> `Text → Pose` parse; "one of the two already solved the problem" is false because
+> `Direction` is stored as an ENUM in both components (`uidFacing` `:377`, `simFacing`
+> `:519`), so no name-based alternative exists for facing at all; and the Text side is not
+> safer — `uiPose ∷ Text` accepts any string with no compile-time check, trading a
+> reordering hazard for a spelling one. The genuine positional hazard is CH-100's, filed as
+> #1139.
 In the same file, `World/Save/Component/Entities.hs`:
 
 ```haskell
@@ -2246,7 +2730,19 @@ either style is fine.
 Fix: make `unit-sim` store names too (with a v2→v3 migration), or document why
 the sim path must stay positional.
 
-### CH-102. The codebase's only `TODO` is a comment claiming TODOs exist
+### [#1144] CH-102. The codebase's only `TODO` is a comment claiming TODOs exist
+> **Note:** Verified 2026-08-06 — both stated claims confirmed (exactly **1** `TODO` in
+> `src/`+`app/`, and it is this sentence; `stepCost` takes five args at `:77` with no
+> modifier, and `AStar.hs:112` / `PathAdvance.hs:209` each pass exactly those five). A
+> THIRD inaccuracy is the one that would actually mislead an implementer: "These can be
+> added by widening the function signature" is contradicted by the extension that already
+> shipped — material scaling needed NO signature change, via `materialFactor`
+> (`Cost.hs:249`) derived from `MaterialRegistry`/`WorldTileData` (already parameters) plus
+> the `pcMaterialReplanMargin` config scalar. `Config.hs:12-15` documents that mechanism
+> and says the opposite of this comment ("appended as new fields … WITHOUT reshaping the
+> call sites"). #1144 also requires the useful half — weather and per-unit as intended
+> extension points — be preserved. NB: `materialFactor` is a FUNCTION, not a
+> `PathingConfig` field; I assumed otherwise and corrected it on checking.
 `src/Unit/Pathing/Cost.hs:30` is the sole occurrence of the string `TODO` in
 all of `src/` and `app/` — a genuinely clean discipline. It reads:
 
@@ -2269,7 +2765,22 @@ Both factual claims are false:
 
 A reader looking for the placeholder to fill in will not find it.
 
-### CH-103. `Unit.Types.Combat` holds anatomy, not combat
+### [no-issue] CH-103. `Unit.Types.Combat` holds anatomy, not combat
+> **Disposition:** No issue — the premise is inaccurate and the proposed rename would be
+> worse. All four exported types are combat-scoped, including the one that sounds
+> anatomical: `BodyPart`'s haddock defines it as "a TARGETABLE body part" whose "numeric
+> fields feed the RESOLUTION formulas" — `area_weight` is hit probability,
+> `tactical_value` is picker bias, `bleed_factor` is the per-wound bleed rate,
+> `height_low/high` drives the reach-band filter, `vital` is instant death; `bpName` is the
+> "display name for the combat log"; `bpLayers` is what "a strike penetrates"; and its
+> fields cite `Combat.Wounds.propagateSevering`, `Combat.Resolution`, and
+> `Unit.Fall.fallInjuries`. `NaturalWeapon`/`StrikeProfile`/`NaturalResistance` are
+> plainly combat data. So the module holds COMBAT body/weapon records, which is exactly
+> what its own haddock says and what `Unit/Types.hs:7` documents; renaming it to
+> `Unit.Types.Body`/`.Anatomy` would misdescribe it, since no general anatomy model exists.
+> The `Unit/Fall.hs` vs `Unit/Thread/Movement/Fall.hs` paragraph is self-identified as
+> CH-97's class, which closed `no-issue`: `Fall` appears twice and `Combat` three times,
+> unremarkable against the 119 duplicated basenames across 408 modules measured there.
 It defines `BodyPart`, `NaturalWeapon`, `StrikeProfile`, `NaturalResistance` —
 the unit's body composition and innate attack data. `Combat.Types` (a separate
 tree) defines `AttackMode`, `CombatCommand`, `CombatEvent` — the combat
@@ -2284,7 +2795,21 @@ physics — energy, fractures, concussion) versus
 `Unit/Thread/Movement/Fall.hs` (fall *motion* — z-interpolation, duration,
 initiation). Genuinely different concerns, identical basename.
 
-### CH-104. The append-only enum policy is unenforced, in a codebase full of enforcement
+### [#1145] CH-104. The append-only enum policy is unenforced, in a codebase full of enforcement
+> **Note:** Verified 2026-08-06 — the concern is right but "unenforced" is OVERSTATED, and
+> the scope is wider. It is PARTIALLY enforced: the manifest-driven compat gate
+> (`Test.Headless.World.Save.Compat`, blocking) records enum values BY NAME in its
+> canonical summaries (`unitSimStates[0].pose = 'Standing'`, `.state = 'Idle'`,
+> `.facing = 'DirS'`), so a reorder disturbing a fixture-carried constructor fails today.
+> Coverage measured across every `*.expected.json` is thin: **`Pose` 1 of 8** (`Standing`),
+> **`UnitActivity` 2 of 7** (`Idle`, `Walking`), **`Direction` 1 of 8** (`DirS`) — so a
+> reorder confined to e.g. `Climbing`/`Falling` or `Drinking`/`Eating` passes every gate.
+> Scope: at least TWO more persisted positional enums exist and carry NO append-only
+> warning at all — `BillMode` (`Craft/Bills.hs:64`, in `CraftBillDTO.bilMode`) and
+> `PowerRole` (`Power/Types.hs:46`, a power-nodes leaf). `save_compat_audit.py`'s frozen-DTO
+> fingerprint does not reach them (it walks `Compat/SessionV90.hs` and the
+> `World.Save.Component.*` leaf DTOs, not `src/Unit/`). #1145 adds the golden-list audit and
+> records the existing partial coverage so it is not duplicated.
 No tool, test, or CI step checks that `Direction`/`Pose`/`UnitActivity` (or any
 other `Generic Serialize` enum) stays append-only. Compare what *is* automated:
 the persistence-inventory audit, EngineEnv-capability audit, save-compat audit,
@@ -2298,7 +2823,20 @@ A guard is cheap: parse the named enums' constructor lists, compare against a
 checked-in golden file, and fail on any change that is not a pure append —
 exactly the shape `tools/engine_env_capability_audit.py` already uses.
 
-### CH-105. Minor Unit/Combat defects for one cleanup issue
+### [#1146] CH-105. Minor Unit/Combat defects for one cleanup issue
+> **Note:** Verified 2026-08-06 — TWO of five bullets survive into #1146 (the
+> `gravity`/`metresPerZ` home, confirmed at `Unit/Fall.hs:62,65` with importers
+> `Movement/Types.hs:18` and `Movement/Leap.hs:18`; and the unreferenced exports, measured
+> at **19** not 17). Three are excluded. Bullet 2 is self-declared "deliberate and
+> documented (#593)". Bullet 3 is the naming/layout category closed ten times here
+> (CH-22/23/41/42/43/56/74/78/97/103), and its counts are off — `Resolution/Constants.hs`
+> has **27** exports, not 24. Bullet 5 is **REFUTED**: `synarchy.cabal:85,100` enable
+> `-Wincomplete-patterns` with `-Werror`, so `poseDepth` being a total function means a
+> missing clause for a new `Pose` is a BUILD FAILURE — the compiler already enforces the
+> coupling the bullet calls unenforced, the opposite of the tag-order hazard (#1145).
+> Bullet 4's distribution has also moved: `Unit/Transfer.hs` (**5**, from the transfer arc)
+> is now the largest cluster and is unmentioned; `Unit/Injury.hs` dropped 8→**3**; and
+> `Combat/Thread.hs`'s `combatTickRate` has gained a consumer.
 - **Shared physics constants live in the injury module.** `gravity` and
   `metresPerZ` are defined in `Unit/Fall.hs` (the *injury* model) and imported
   by `Unit/Thread/Movement/Types.hs` and `Unit/Thread/Movement/Leap.hs` (the
@@ -2339,7 +2877,19 @@ sim-vs-worldgen fluid boundary is clean (shared `FluidType`/`FluidCell` with
 explicit `fluidCellToActive`/`activeToFluidCell` conversions rather than a
 parallel type). Three findings reach beyond these trees.
 
-### CH-106. Six worker threads hand-implement one identical lifecycle
+### [#1147] CH-106. Six worker threads hand-implement one identical lifecycle
+> **Note:** Verified 2026-08-06 — confirmed: six `start*Thread ∷ EngineEnv → IO
+> ThreadState`, the stack-growth comment present in exactly those six files, and
+> `Engine/Core/Thread.hs` is 36 lines holding only `ThreadState`/`ThreadControl`/
+> `shutdownThread`, so the shutdown-without-startup asymmetry is exactly as described.
+> Three corrections. The bare `error` IS in all six, but Lua's reads `"Lua thread failed to
+> start."` (`:138`), so a grep on the finding's string finds only five. "All built the same
+> way" oversimplifies: the threads share a SHAPE, not text — each does its own setup inside
+> the `catch`, and the **Lua thread is a genuine outlier** whose startup creates the backend
+> state, registers the Lua API, sets up the shell sandbox, and loads `scripts/init.lua`, so
+> a shared helper must take a per-thread startup ACTION, not just a per-tick body. The
+> template snippet is also not literal (it shows `ccLoggerRef (toCoreCapability env)`;
+> `Unit/Thread.hs:39` uses `readIORef (loggerRef env)`).
 `startUnitThread`, `startCombatThread`, `startWorldThread`, `startSimThread`,
 `startLuaThread`, `startInputThread` — all `EngineEnv → IO ThreadState`, all
 built the same way:
@@ -2380,7 +2930,9 @@ failure."` — a bare `error` call in the engine's startup path, six times, in a
 codebase that has an `EngineException` hierarchy (CH-10) and a
 `guardNativeExceptions` boot wrapper (CH-61).
 
-### CH-107. 22 directories exist solely to hold a single `Types.hs`
+### [no-issue] CH-107. 22 directories exist solely to hold a single `Types.hs`
+> **Disposition:** No issue — the proposed flatten would make naming worse, not better, and the finding's own exemplar is gone. The count holds (27 dirs whose only `.hs` is `Types.hs`, 5 with a sibling, **22** without) but the membership drifted: `Engine/Scripting/Types.hs` was deleted by `822e29b4` (2026-08-02, item 3 of closed #1059) and `src/Tutorial/Types.hs` (145 lines) — the second-largest — is missing from the table, making the single-file top-level namespaces four, not three. That one fold also disproves "every one could be `X.hs`": it was a content merge, and its commit had to declare the fields explicitly lazy because the destination enables `StrictData` while the former home did not, so even the 14-line case was not a free move. `.Types` is a documented tree-wide convention rather than a directory artefact — 82 `.Types` modules in `synarchy.cabal`, and 52 of the 79 `Types.hs` files sit beside other `.hs` files (CLAUDE.md:137-138, the Base/Types split). Flattening deletes the only disambiguator: `Infection.Types` → `Infection` collides in meaning with `Combat.Wounds.Infection`, and likewise `World.Ocean.Types` vs `World.Fluid.Ocean`, `World.{Chop,Till,Plant}.Types` vs `World.Thread.Command.Cursor.*` and `Engine.Scripting.Lua.API.*`, `World.Chunk.Types` vs `World.Generate.Chunk`, `World.Command.Types` vs `World.Thread.Command`, `World.Cursor.Types` vs `World.Thread.Cursor`, `World.Page.Types` vs `World.Save.Component.Page`. Cost is 448 references across 248 files plus 22 cabal entries — one review round short of the >300-file cap that makes a PR unreviewable — with no defect behind it, and none of the 22 is dead (the three least-referenced, `World.Texture.Types`/`Sim.State.Types`/`World.Region.Types`, all have live importers). CH-56 is the mirror image, closed for the same reason.
+
 A directory `X/` containing nothing but `Types.hs`, with **no sibling `X.hs`**:
 
 | Lines | Path |
@@ -2417,7 +2969,9 @@ Because both shapes exist, `X/Types.hs` carries no information — you cannot
 tell from the path whether `X.hs` exists. Flattening the 22 makes the
 remaining five meaningful (CH-56's rule, applied).
 
-### CH-108. Power hardware is hardcoded in Haskell while 16 other content categories are YAML
+### [#1148] CH-108. Power hardware is hardcoded in Haskell while 16 other content categories are YAML
+> **Note:** Verified. Two corrections: neither YAML carries a **build cost** — both are instant-placed with `build_work` at its 0 default and no `materials` block, as each file's own comment states — and the category count is conservative (`data/` holds 16 content directories plus two loose YAMLs, `buildings` among them). Two constraints the fix must respect, both recorded in #1148: `powerNodeSpecFor` is *also* the placeability registry behind `power.isPlaceable`, which `scripts/build_tool.lua:854,964` uses to route a placement through the item-consuming `power.placeNode` rather than the free `building.spawn` path (Lua holds no second list); and the refusal currently happens in `powerPlaceNodeFn` (`API/Power.hs:99-101`) **before** `placeNodeOn` pops the item, so moving the check inside `placeNodeOn` — which pops first and looks the building def up second — would pop-then-roll-back on every rejection. The consumer half is already YAML-driven (`power_drain`, `YamlBuildings.hs:84`), and `placeNodeOn` already looks the building def up on the same `defName` key it pops the item by, so the value is reachable where the code already goes.
+
 `src/Power/Types.hs:88`:
 
 ```haskell
@@ -2447,7 +3001,9 @@ side is the outlier.
 Fix: add `power_role` / `power_capacity` fields to the building schema and
 delete `powerNodeSpecFor`.
 
-### CH-109. Nineteen lines of reasoning prove two functions are dead, and they are still there
+### [#1149] CH-109. Nineteen lines of reasoning prove two functions are dead, and they are still there
+> **Note:** The open question — is the scenario reachable? — is answered NO, on two independent grounds, so the deletion branch is the right one and #1149 files it. (1) `missingDefReferences` (`World/Save/Types.hs:747-761`) rejects the whole load via `Engine/Scripting/Lua/API/Save.hs:722` if any saved building names an unregistered def, and its own haddock (`:720-726`) already states the conclusion independently: "the load boundary rejects a save carrying any such reference before publishing any live state, so that pruning path is unreachable in normal play." (2) **Neither function implements the scenario its doc names.** Both filter on a `BuildingId` *instance-id* set (`Craft/Bills.hs:396-399`, `Power/Types.hs:136-139`); deregistering a *definition* removes no instance ids, so the only set a caller could build is "ids that survived" — exactly the tolerated demolished-before-save case #763 forbids pruning. They cannot distinguish the two cases at all. Orphans are documented tolerated state for nodes as well as bills (`docs/persistence_state_inventory.md:301`, "`pnBuilding` absent from the whole session is tolerated (#758)"); `BuildingDestroy` (`Building/Thread/Command.hs:115-126`) deliberately leaves them, and `Power.Network.positionsOf` already skips nodes whose building doesn't resolve. The contract is pinned by `Test/Headless/World/Identity.hs:350` ("dangling craft bills / power nodes survive staging"), which stays. Line reference correction: the comment is at `:243-261`, not `:225-243`.
+
 `World/Load/Stage.hs:225-243` is a carefully argued comment concluding that
 `Craft.Bills.pruneToStations` and `Power.Types.pruneToBuildings` must **not** be
 called during load, because:
@@ -2480,7 +3036,9 @@ restore-verbatim is deliberate).
 
 That question is the issue worth filing — not the deletion itself.
 
-### CH-110. Minor Sim/Power/Infection/Craft defects for one cleanup issue
+### [no-issue] CH-110. Minor Sim/Power/Infection/Craft defects for one cleanup issue
+> **Disposition:** No issue — one bullet is already filed, one is false, one rests on a large overcount, and one is self-declared not a defect. **Bullet 1** is real (43 files confirmed carry `-fprof-auto`, `Sim/Thread.hs` among them) but is #1116, filed from CH-87. **Bullet 2 is wrong on all three names**: `solarIntensity` and `wireComponents` each own a `describe` in `Test/Headless/Power/Network.hs` (`:55-64`, `:66-79`, plus the adjacency case at `:112`), and `takeItemsByName` is imported by name at `Test/Headless/Craft/Execute.hs:14` with a `describe` at `:249` — all three are test seams, the category #1083/#1119/#1146 preserve deliberately. (Four names spot-checked from #1146's inventory appear in neither test tree, so those scans were test-aware; this is a CH-110-specific error.) **Bullet 3's "~20 modules" is 6.** Tree-wide, 14 files match any traversal token, two of them prose only; genuine connected-component labelling lives in `Power/Network.hs`, `World/Fluid/Ocean.hs`, `World/Fluid/Lake/Identify/{Ocean,Components}.hs`, `World/Fluid/River/Identify/Components.hs`, and `World/Geology/Coastal/Breach.hs`. They are not unifiable as posed: `Ocean.hs:87` keys its visited set on wrap-seam-canonicalised global coords, `Breach.hs:181-183` uses a generation-stamped mutable `VUM` reused across basins, the Lake/River labellers run over chunk-local vectors fused with domain aggregation, and `PriorityFlood.hs` is a different algorithm. The union-find is confirmed the tree's only one — a single instance is not duplication — and "a survey to see whether a helper is warranted" has no observable outcome to gate on. **Bullet 4** states outright it is a positive reference point, not a defect.
+
 - `Sim/Thread.hs` and `World/ZoomMap/*`, `World/Plate/*`, etc. carry
   `{-# OPTIONS_GHC -fprof-auto #-}` — `Sim/Thread.hs` is one of the 43 files in
   CH-87.
@@ -2507,7 +3065,9 @@ across all four trees, and the module boundaries are deliberate
 `Building.Placement.canPlaceAt` could reuse it purely). Two findings reach
 beyond these trees.
 
-### CH-111. `applyFacingF` — the camera rotation — is defined three times, identically
+### [#1150] CH-111. `applyFacingF` — the camera rotation — is defined three times, identically
+> **Note:** Verified 2026-08-06 — all three definitions compared line-by-line and confirmed character-identical (`World/Grid.hs:177-181`, `Unit/Render.hs:291-295`, `Building/Render.hs:330-334`). The strongest evidence is not in this entry: **three modules already import `applyFacingF` from `World.Grid`** — `Unit/HitTest.hs:31`, `Building/HitTest.hs:28`, `Structure/Render.hs:45` — so each private copy sits beside a hit-test sibling that imports the canonical one, and the pair must agree numerically or a click resolves to a different tile than the renderer drew. `Unit/Render.hs:26-28` already imports `applyFacing` (the `Int` variant) from `World.Grid` on the same line, then defines the `Float` variant privately 260 lines later. Two corrections: the transform is NOT "copy-pasted across `Unit`, `Building`, `Structure`, and `World/Render`" — `Structure/Render.hs` imports it, and the private copies are exactly two; and `unapplyFacingF` is not unreferenced — `Grid.hs:197` uses it inside `worldToGridF`, so it is an over-export with no consumer outside its module, the category #1119 tracks. Filed separately from #1132 rather than combined: #1132 already carries `reviewed:approve`, and the two overlap only in two import lines.
+
 ```haskell
 applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
 applyFacingF FaceSouth gx gy = ( gx,  gy)
@@ -2534,7 +3094,9 @@ projection has to be found in eleven places across four subsystems.
 
 Fix these two together in one pass: export from `World.Grid`, delete the copies.
 
-### CH-112. `validRelBounds` documents a validation it doesn't perform
+### [#1151] CH-112. `validRelBounds` documents a validation it doesn't perform
+> **Note:** Core claim verified 2026-08-06 — `validRelBounds` has zero references beyond its own export (`Location/Bounds.hs:21`) and definition, and the haddock's enforcement claim is false. One structural fact this entry misses changes what the fix looks like: **the loader physically cannot call it.** `validRelBounds ∷ RelBounds → Bool`, while `YamlLocations.hs:162-169` validates `LocationYamlBounds` (`:56-`, fields `lybMinX`/`lybMaxX`/…) — a different type with no conversion at the validation point, so "call the canonical one" is a design choice, not a substitution. Also: the *working* check is the tested one (`Test/Headless/Location/Bounds.hs:63-73` covers both axes), while the documented canonical predicate is neither called nor tested; the two agree today (`>` is exactly `not (≤)`), so this is a canonicality defect, not a bug. **Two of the four sibling "dead exports" are wrong:** `distanceBoundsToBounds` is LIVE — `Bounds.hs:143` (`nearestBoundsDistance`) → `Location/Placement.hs:30`, the #779 chain — and `distancePointToBounds` is a test seam (`Test/Headless/Location/Bounds.hs:145-154`, `:183-184`, incl. a wrap-seam case). `Structure/Palette.hs:68` `lookupId` and `Location/Overlay/Types.hs:30` `overlayLookup` are confirmed unused and ride along in #1151.
+
 ```haskell
 -- | True iff min ≤ max on both axes — the shape every location's
 --   authored bounds must satisfy. 'Engine.Asset.YamlLocations' rejects
@@ -2568,7 +3130,9 @@ helpers with no callers — discovery uses the `expandBounds` +
 code rather than a seam bug), `Structure/Palette.hs`'s `lookupId`, and
 `Location/Overlay/Types.hs`'s `overlayLookup`.
 
-### CH-113. Quad vertex construction is written out longhand in eight places
+### [#1152] CH-113. Quad vertex construction is written out longhand in eight places
+> **Note:** Verified 2026-08-06 — exactly eight sites (`Building/Render.hs:222,312`, `Structure/Render.hs:174,274,365`, `Unit/Render.hs:272`, `GroundItemQuads.hs:247`, `BloodQuads.hs:318`), each repeating the same five-value tail across four vertices. **Correction: they are NOT "identical UV corners, differing only in the position arithmetic", and the proposed `makeQuad origin size` signature covers only 5 of 8.** Three parameterise more, each load-bearing: `Unit/Render.hs:268-270` varies U by `flipX` (`(1,0,0,1)` vs `(0,1,1,0)`) to draw SW/W/NW from the SE/E/NE sprites; `Structure/Render.hs:264-280`'s `strip i` slices a front wall into `k` depth-sorted strips (#415) so `xa`/`xb` and `ua`/`ub` move together; and `BloodQuads.hs:300-321` builds four independently rotated corners via `rotateAround cx cy rot`, so there is no origin+size to pass. A helper taking four positions plus a UV rect covers all eight. Also relevant: a ninth builder already exists — `UI/Render.hs:389-394` `makeQuadVertices` takes exactly a UV rect — but it emits a 6-vertex triangle list, hardcodes `faceMapId = 0`, and takes no render flags or world UV, so it is evidence for the shape rather than a drop-in.
+
 Every sprite renderer builds its four vertices by hand:
 
 ```haskell
@@ -2589,7 +3153,9 @@ Word32 → (Vertex,Vertex,Vertex,Vertex)` would reduce each site to one line and
 make the UV winding a single fact. Pairs with CH-99's observation that the nine
 `*Quads` producers share no common entry shape.
 
-### CH-114. Minor Building/Structure/Location defects for one cleanup issue
+### [no-issue] CH-114. Minor Building/Structure/Location defects for one cleanup issue
+> **Disposition:** No issue — one bullet is contradicted by the report's own batch header, one defers to a finding already closed, one is already filed twice over, and one is explicitly a positive example. **Bullet 1**: `Location/Placement.hs` is 32 lines whose haddock states it was "Factored out here so `Building.Placement.canPlaceAt` can reuse it purely", and its sole consumer is exactly that module — `Building/Placement.hs:21` importing both names, `:87` for the #778 portal-exclusion intersection and `:111` for the #779 remote-start distance. Batch 12's own header (`:3006-3010`) already records this: "the module boundaries are deliberate (`Location.Placement`'s haddock explains it was factored out specifically so `Building.Placement.canPlaceAt` could reuse it purely)." **Bullet 2** says outright that both directories are instances of CH-107, which closed `[no-issue]` — and `Building.Command.Types` → `Building.Command` colliding in meaning with `Building.Thread.Command` was one of the named reasons it closed. **Bullet 3** is filed twice: #1132 lists `Building/Render.hs:34,37` among its eight `baseTileW`/`baseTileH` modules, and #1150 names `Building/Render.hs:330-334` as one of its two private `applyFacingF` copies. **Bullet 4** describes `ghostTint` as the right pattern, "worth preserving as-is".
+
 - **`Location.Placement` doesn't place anything.** It derives the absolute
   bounds of already-placed locations (`placedLocationBounds`,
   `nearestLocationDistance`) — a *query*, sitting beside `Location.Bounds`
@@ -2622,7 +3188,9 @@ modules).
 The real gap is the test tree: **134 files, 34,293 lines — never audited, and
 larger than any production subsystem except `World/`.**
 
-### CH-115. The `synarchy-test-graphical` suite is built by CI but never run
+### [#1153] CH-115. The `synarchy-test-graphical` suite is built by CI but never run
+> **Note:** Verified 2026-08-06. The core claim holds, but the MECHANISM is different and stronger than stated: the blocker is inside the suite, not in CI. `test/Spec.hs` calls `GLFW.init` and `error`s on failure (`:31-33`), then creates a real window and `error`s on failure (`:43-50`), both **before `hspec` runs** — so `cabal test synarchy-test-graphical` on a headless box yields no assertions at all, and moving CI would not be enough. Four corrections. (1) **`Test.Engine.Core.Var` no longer exists** — CH-12 was filed as #947, which is CLOSED and deleted `src/Engine/Core/Var.hs`, so consequence 2 is already resolved, not live work. (2) The GPU-free set is three but a DIFFERENT three: `Test.UPrelude` (44), `Test.Engine.Core.Queue` (69), and **`Test.Engine.Input.State` (95)** — 208 of 609 lines. The "zero GLFW/Vulkan imports" criterion wrongly excludes `Input.State`, which imports `Graphics.UI.GLFW` only for enum constructors and tests pure functions. (3) **`test/Spec.hs:53-57` already groups exactly those three** under `describe "Core Tests"` with the comment "(no graphics dependencies)" — the suite itself names the movable set. (4) `test/` is 609 lines across 9 files including `Spec.hs`, not 682; and GitHub CI's graphical *build* is path-conditional (`ci.yml:279-283`), not the unconditional pair shown here, so on a non-graphics PR the suite is not even compiled.
+
 `.github/workflows/ci.yml` and `tools/ci-local.sh` (the `make ci` gate) both do:
 
 ```
@@ -2654,7 +3222,9 @@ Fix: run the graphical suite where a display exists, or state plainly in
 CLAUDE.md and the cabal stanza that it is a build-only target, and move the
 GPU-free specs to the suite that runs.
 
-### CH-116. The four largest files in the project are test modules
+### [no-issue] CH-116. The four largest files in the project are test modules
+> **Disposition:** No issue — the premise is denied by CLAUDE.md, the fix would cost engine boots, and every number has drifted. **CLAUDE.md:38-43 states outright** that "the 500-line Haskell/Lua limits are per-split ratchets, enforced only for module families explicitly listed in the relevant budget tool. **They are not a tree-wide size policy.**" So there is no convention that "applies most weakly where the largest files actually are" — the three `BUDGETS` entries (#787, #588, #575, all production, no test code — that part of the finding is correct) are ratchets on specific reviewability splits, never a tree-wide rule. **A split would multiply engine boots**: `ResponsiveGameplay.hs:99` is `spec = aroundAll withSharedFixture`, `withSharedFixture` (`:85-86`) calls `withHeadlessEngine`, and that is a `bracket` around `initializeEngineHeadless` (`Harness.hs:30-37`) — a fresh boot per call. One module = one boot for 16 describes; a per-surface split into N modules = N boots, against the "one engine, booted in `Spec.hs`" convention. The proposed per-screen axis also doesn't match the file: the 16 describes are keyed by Lua surface AND review round (round-1/2/4/6/7/15), with `popup.lua` and `build_tool` each spanning two. Counts measured 2026-08-06: ResponsiveGameplay **2805**, SaveModules **2021** (not 1728), ResponsiveMenus **1673**, Save/Components **1533** (not 1448); `World/Save/Types.hs` is **1172**, not 1316 (it shrank, and is still the largest production module, so "more than double" now holds at 2.39×); a fifth test module, `World/Save/Compat.hs` (1291), also exceeds it; and **28** test-headless files exceed 500 lines, not 15 — against 21 in `src`/`app`.
+
 | Lines | File |
 |---:|---|
 | 2806 | `test-headless/Test/Headless/UI/ResponsiveGameplay.hs` |
@@ -2676,7 +3246,9 @@ But a 2806-line spec is past the point where a reader can find the case they
 broke, and `ResponsiveMenus`/`ResponsiveGameplay` (4480 lines combined) cover
 one epic that already has a natural per-screen split.
 
-### CH-117. Seven test modules bypass the shared engine harness
+### [no-issue] CH-117. Seven test modules bypass the shared engine harness
+> **Disposition:** No issue — the private boots are a documented isolation pattern, and the convention cited is scoped to worldgen. `withHeadlessEngine` (`Harness.hs:30-43`) is not a thin wrapper: beyond `initializeEngineHeadless` it sets `camZoom`/`lifecycleRef`, **spawns a world thread** (`startWorldThread`), and tears down with a 100 ms `threadDelay`. The private-boot modules avoid exactly that, and name it as an established pattern — `Asset/TextureFallback.hs:125-137`: "A private, lightweight `initializeEngineHeadless` env (the same primitive `Test.Headless.World.LocationDiscovery`/`CursorInfo`/`Unit.LineOfSight` already use for exactly this 'needs its own throwaway engine state' case, no world/unit thread spawned)… the aroundAll-shared `_sharedEnv` above is **deliberately unused**", adopted after a round-7 review found reverting shared-env mutations (asset pool, texture-name registry, queue) error-prone; `World/LocationDiscovery.hs:9-13` records the same rationale. The "one engine, booted in `Spec.hs`" line is scoped: `sharedWorld`'s own haddock (`Harness.hs:52-54`) reads "Works because Spec.hs boots ONE engine **for all worldgen specs** (a single top-level `aroundAll withHeadlessEngine`)", and CLAUDE.md:73-77 is likewise about `sharedWorld` and the ~10 s `WorldInit` — not a rule that every spec route through the harness. `Spec.hs` itself calls `aroundAll withHeadlessEngine` **five times** (`:169, 220, 226, 232, 237`), so a general single-entry-point rule would already be broken four times over. Two corrections: it is **eight** modules, not seven (`Core/LoopStartup.hs:34` is absent from the list), and **`World/SelectChunk.hs` does not bypass the harness** — `Spec.hs:237` runs `aroundAll withHeadlessEngine SelectChunk.sharedSpec`, so it uses both. Converting the eight would spawn eight unwanted world threads, add ~800 ms of teardown delay, and reintroduce the contamination the pattern prevents.
+
 `Test.Headless.Harness` exports `withHeadlessEngine ∷ (EngineEnv → IO α) → IO α`,
 and CLAUDE.md states the convention: "one engine, booted in `Spec.hs`".
 
@@ -2695,7 +3267,9 @@ eight places to reach.
 `World/SelectChunk.hs` is the one to check first: it does reference worldgen
 (3 sites) while booting privately.
 
-### CH-118. `test/` and `test-headless/` were absent from this audit's own tooling
+### [no-issue] CH-118. `test/` and `test-headless/` were absent from this audit's own tooling
+> **Disposition:** No issue — the audit half is already discharged and the actionable tail checks out, with all three named candidates being the wrong candidates. The methodology note at `:15-30` records the correction, the corrected-totals table, and the three findings fixed in place, so the first paragraph is a record rather than outstanding work. The tail — "worth checking `engine_env_capability_audit.py`, `persistence_inventory_audit.py`, `action_outcome_coverage.py`" — was verified 2026-08-06: **none of the three reasons about "is this used?"**. `engine_env_capability_audit.py`'s `src/`+`app/` scope is a documented CONTRACT, not an omission — its header (`:54-55`) states "`test/` sources remain outside this ratchet entirely (§6.3's test-only exception)", matching CLAUDE.md's "production-only (`src/`+`app/`, `test/` exempt) full-access boundary"; widening it would break the contract. `persistence_inventory_audit.py` takes specific named files matched by `^data X = X` regexes and asks whether every declared state owner has a classification row. `action_outcome_coverage.py` reads named `src/Engine/Input/*.hs` files. Beyond those three, **no tool in `tools/` performs a cross-root usage scan at all** — no script globs `**/*.hs`/`rglob('*.hs')` — and the four mentioning unreferenced/unused/dead each declare a deliberate narrower scope: `cabal_module_audit.py` is `SOURCE_ROOT = REPO_ROOT / "src"` because it audits the *library* stanza (a test-suite module there would be a category error), `material_id_audit.py` lists "the bare `MaterialId n` literals in the test suites" under Out of scope, and `test_save_compat_audit.py`/`pack_atlas.py` are unrelated.
+
 Recorded here as a finding against the audit, not the code: every
 "unreferenced export" scan in batches 2-11 searched `src/ app/ test/` and
 omitted `test-headless/` — the suite holding 124 of the project's 134 test
@@ -2708,7 +3282,9 @@ checking `tools/engine_env_capability_audit.py`,
 `tools/persistence_inventory_audit.py`, and `tools/action_outcome_coverage.py`
 for the same omission before trusting their coverage claims.
 
-### CH-119. Minor remaining-Haskell defects for one cleanup issue
+### [#1154] CH-119. Minor remaining-Haskell defects for one cleanup issue
+> **Note:** Bullets 2 and 3 are **already #1119** — `Geology`, `Magma`, `Plate`, `Weather`, `Flora`, and `Slope` all live under `src/World/`, and #1119's own table names the same two clusters verbatim (`World/Geology/Volcano.hs`'s 7 `apply*` dispatched by `applyVolcanicFeature`; `World/Magma/Init.hs`'s geometry helpers), with `Geology/Generate.hs` in the same tree. Bullet 1 is filed as #1154 after re-measuring all four source roots with line comments stripped: **16** in-module-only exports across `src/Blood` (12), `src/Language` (3), `src/Item` (1); `src/Equipment`/`src/Substance` have none. **Three of bullet 1's eleven names are wrong** and must keep their exports — `trailModerateVolume` is imported and used by `Blood/Pool.hs:60,115`, and `generateRoot`/`minNativeWordLength` are used by `test-headless/Test/Headless/Language/Generated.hs:512,533,761,777,804` (batch 13's header repeats this error, calling the severity ladder and `generateRoot` "both used within their own modules"). It also omits eight: `catastrophicBluntThreshold`, `poolStyleVolume`, `poolFootprintFor`, `decalTint`, `bloodRenderRecord`, `shapeLength`, `formKindText`, `domainText`. Two names on the list are referenced only from OTHER modules' haddock — `trailBloodForVolume` (`Combat/Wounds/Bleed.hs:101`) and `removeDecalsForTexture` (`Blood/Render.hs:65`, `Lua/API/Blood.hs:303`) — so they belong on it, but un-exporting them leaves dangling documentation links.
+
 - `Item`/`Language`/`Blood` over-exports (used only in-module):
   `Blood/Trail.hs`'s `trailModerateVolume`/`trailSevereVolume`/
   `trailCatastrophicVolume`/`trailBloodForVolume`,
@@ -2740,7 +3316,9 @@ Most of this batch is verification. The #742-#750 UI epic's contracts are the
 most heavily documented in the codebase, and — unlike the comparable claims in
 worldgen (CH-83) and locations (CH-112) — **they hold.**
 
-### CH-120. Five focus modules, and three have no module haddock at all
+### [#1155] CH-120. Five focus modules, and three have no module haddock at all
+> **Note:** Verified 2026-08-06 — the header table is exactly right (three open straight into `module … (`, `Lua/API/UI/Focus.hs`'s "Lua bindings for keyboard/input focus management" names no system, `UI/FocusNavigation.hs`'s is the model), and the vocabulary collision is real (`UI/Focus.hs:13-15` vs `UI/Manager/Focus.hs:2-13`). Two corrections that change the fix. (1) **There are THREE systems, not two, and two modules span two each**: `UI/Manager/Focus.hs` holds element TEXT focus (`setElementFocus`/`getPageFocus`/`validateFocus`) AND keyboard CONTROL focus (`setControlFocus`… under its own `-- * Control focus (#745)` section), and `Lua/API/UI/Focus.hs` splits the same way — so "one shared sentence per module naming its system" is wrong for those two. (2) **The paragraph named as "the missing header" is incomplete**: `Engine/Input/Thread/Keyboard.hs:99-101` (not `:97`) reads "Two independent focus systems checked here: 1. FocusManager — shell/console text input; 2. UIPageManager — UI widget text input" — correct where it sits, since control focus is not text routing, but copying it into all five would mis-describe `FocusNavigation` and both control-focus halves. Rename scope measured: `UI.Focus` has 18 importers (23 references); `Engine.Scripting.Lua.API.Focus` has 3 sites. NB CH-44 closed `[no-issue]` *because* this finding carries its rename, so #1155 is what discharges it.
+
 | Module | Governs | Header? |
 |---|---|---|
 | `UI/Focus.hs` | `FocusManager` — shell/console text focus | **none** |
@@ -2767,7 +3345,9 @@ Fix: one shared sentence per module naming its system, and rename the two
 `Focus.hs` files to say which they are (`UI/ShellFocus.hs`,
 `Engine/Scripting/Lua/API/ShellFocus.hs`).
 
-### CH-121. `src/UI` is the densest concentration of review-round archaeology
+### [#949] CH-121. `src/UI` is the densest concentration of review-round archaeology
+> **Note:** Already done. CH-15 was filed as #949 ("Remove review-round provenance from production comments"), **closed 2026-08-03**, nine days after this report was written. CH-15's own regex — `rg -ni 'round [0-9]+ (review|of review)|review round [0-9]+' src app --glob '*.hs'` — now returns **0** across `src/` and `app/`, and `src/UI` has none under any `round <n>` variant, so this finding's 31 is now zero. (The five surviving `round [0-9]` matches tree-wide are all `around` in ordinary prose: "around 18 s", "around 30–50 J", "around 0", "around 1440 minutes", "around 0°C".) The sweep did exactly what this entry asked — kept the invariant, dropped the round number, retained the issue number: `UI/Types.hs:146` now reads `-- ^ #745: bumped ONLY by a route-affecting` (was `#745 review round 12: …`) and `UI/Manager/Property.hs:50` reads `--   #745: only bumps when 'visible' actually differs`.
+
 31 comments citing PR review rounds — the highest of any tree, confirming
 CH-15's identification:
 
@@ -2790,7 +3370,9 @@ This is the best tree to do the CH-15 sweep in first: the invariants are
 already well written, so the edit is purely deleting `review round N` and
 keeping the sentence.
 
-### CH-122. Verified: the UI tree's "single source of truth" claims are true
+### [no-issue] CH-122. Verified: the UI tree's "single source of truth" claims are true
+> **Disposition:** No issue — a positive-result record, re-verified 2026-08-06 rather than taken on the entry's word, and all five claims still hold. `uiLayerBand` has one definition (`UI/Types.hs:75`) reached by rendering (`Render.hs:58`) and hit-testing (`Query.hs:194`, `:322`); `effectiveClip` one (`Clipping.hs:86`) with all four consumers present (`Render.hs:163`, `Query.hs:161`, `InteractiveBounds.hs:182`, `API/UI/Property.hs:283`); `interactiveRect` one (`InteractiveBounds.hs:139`) with hit-testing through it (`Query.hs:159`). Paint-order parity confirmed at the current lines: `Render.hs:165` computes `elemLayerId = baseLayerId + ueZIndex elem` and `:172` recurses passing it as the child's base, so the render path accumulates through the ancestor chain exactly as `Query.hs:322`'s `elementPaintKey`. `bumpPageEpoch` still has exactly two call sites, `Page.hs:72` in `showPage` (`if upVisible page then id else bumpPageEpoch`) and `:87` in `hidePage` (the mirror) — each bumping only on a real value change; its definition has since moved to `UI/Manager/Core.hs:80-81`. Line drift since the sweep, for anyone navigating by number: the `uiLayerBand` render consumer is `:58` not `:56`, `effectiveClip`'s render/Lua consumers are `:163`/`:283` not `:161`/`:281`, and the paint-order pair is `:165`/`:172` not `:163`/`:170`.
+
 Recorded as a positive result, because three comparable claims elsewhere in the
 audit turned out to be false (CH-83 `mkSurfaceMap`, CH-112 `validRelBounds`,
 CH-85 `moSurface`). Each of these was checked against the live code:
@@ -2817,7 +3399,9 @@ CH-85 `moSurface`). Each of these was checked against the live code:
 No action needed. Worth keeping in the document so a future reader knows these
 were checked rather than assumed.
 
-### CH-123. Minor UI defects for one cleanup issue
+### [#1156] CH-123. Minor UI defects for one cleanup issue
+> **Note:** Verified 2026-08-06 — and this is the one export bundle in the report whose list measures **exactly** right: an independent scan of `src/UI` across all four roots with line comments stripped reproduces the same 11 names in the same 8 modules, so the batch's tokenizer caveat and re-check did their job. **One correction, to the methodology note itself**: "all 11 are genuine over-exports (used within their own module), none are dead" holds for ten, not eleven. **`submitBuffer` is dead** — checked separately for in-module usage, it has zero references beyond its export line (`:13`), signature (`:64`), and equation (`:65`), and across `src/`, `app/`, `test/`, `test-headless/`, and `scripts/` the only file mentioning it is `src/UI/TextBuffer.hs`. The bullet above the note says as much ("a text-submission entry point … that nothing calls"), so the two contradict each other. Consequence for the fix: `submitBuffer` is `clearBuffer`'s only caller, so deleting it makes `clearBuffer` unreferenced in-module too and the pair must be decided together. The other ten each have a real in-module call site (spot-verified `showTooltip` at `Tooltip/State.hs:116`, `hitsAtPointBy` at `Manager/Query.hs:218`). Bullet 2 confirmed: `UI/Focus.hs:20` imports and `:4`/`:9` re-export `TextBuffer(..)`/`emptyBuffer`, defined at `UI/Types.hs:225,231`. Bullet 3's count has drifted — `UI/Types.hs` is now **496** lines, not 488. NB #1155 renames `UI/Focus.hs`, the same file #1156's re-export requirement edits.
+
 - **11 over-exported internals** (no consumer outside their own module):
   `UI/InputOwnership.hs` (`inputBoundaryPage`, `pagesInScope`),
   `UI/TextBuffer.hs` (`clearBuffer`, `submitBuffer`),
@@ -2851,7 +3435,9 @@ over-exports (used within their own module), none are dead.
 178 files, **59,531 lines** — the largest single-language surface in the
 project. The problems here are duplication and layout, not dead code.
 
-### CH-124. `truncateToWidth` has five divergent implementations, and users can see the difference
+### [#1157] CH-124. `truncateToWidth` has five divergent implementations, and users can see the difference
+> **Note:** The conclusion holds — five copies, visibly different output — but the evidence table is wrong in three of four columns and the sharpest claim is stale. **All five are BINARY SEARCH**, not "linear" (event_log, whose own comment says "Binary search the cut length"; unit_info) or "drop one char at a time" (cargo_inventory_panel — whose *comment* says that above a binary search, which is its own defect and almost certainly what misled this table). **Two ellipsis cells are wrong**: `popup.lua` appends `"..."` and `item_contents_panel.lua` appends `".."`, both listed as "—". **The UTF-8 claim is FALSE**: all five `require("scripts.ui.utf8_safe")` and call `utf8Safe.snapToCharBoundary(text, mid)` before slicing and again on the final cut — `#text` is only the binary search's upper bound, so nothing can cut mid-codepoint. Closed #618 fixed that class of bug. What genuinely diverges: the ellipsis (`...` in popup/event_log vs `..` in the three panels — the real user-visible defect), three different loop formulations, two different width measurements (four measure `sub .. ellipsis`; `unit_info` measures `sub` and adds a precomputed `ellW`, not equivalent under kerning), and three guard sets. **Dedup:** #1088 (open, C0 of epic #1013) extracts `scripts/ui/item_list.lua` from three of the five hosts and owns the row structure where truncation happens — but cannot fix the inconsistency, which is between those three and `popup`/`event_log`.
+
 Five modules each define a private `truncateToWidth`, and unlike the other
 duplicates in this batch **they have drifted**:
 
@@ -2876,7 +3462,9 @@ This is the sharpest illustration in the audit of why duplication matters: the
 identical copies (below) are merely wasteful; this one already produces
 different behaviour in shipped UI.
 
-### CH-125. `clamp` is defined 11 times; `formatGameTimeHMS` 4 times, identically
+### [#1158] CH-125. `clamp` is defined 11 times; `formatGameTimeHMS` 4 times, identically
+> **Note:** Both headline claims verified exactly 2026-08-06 — `clamp` in precisely the 11 listed modules (ten one-liners plus `movement_speed.lua:21-23`'s three-line form), and all four `formatGameTimeHMS` bodies compared byte-for-byte and found identical. `scripts/lib/` confirmed to hold only `save_modules.lua`/`data_codec.lua`, with `require("scripts.lib.…")` already the established form. **Correction: the "also duplicated 3+ times" list counts NAMES, not duplicate code**, and splits three ways. Only `clamp` and `formatGameTimeHMS` are true copy-paste. `worldId` (4: the mine/chop/till/plant tools) and `destroyChrome` (4: the three log panels + `crafting_panel`) share a shape but each closes over its OWN module table (`mineTool.hud` vs `chopTool.hud`; `combatLog.chromeLabels` vs `injuryLog.chromeLabels`), so no shared function absorbs them unchanged. And `destroyAll`, `destroyOwned`, `active`, `displayName` are same-name-different-function: `destroyAll` alone appears in **17** files as unrelated per-module teardowns (`toggle.destroyAll`, `shell.destroyAllElements`, `bottomButtons.destroyAll(menu)`, …). #1158 is scoped to the two verified cases and excludes the rest explicitly.
+
 ```lua
 local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
 ```
@@ -2913,6 +3501,8 @@ only persistence code (`save_modules.lua`, `data_codec.lua`). A
 above.
 
 ### [#1159] CH-126. `shell.wrapText` says "by character" and iterates by byte
+> **Note (pre-resolution verification, 2026-08-06):** all three defects verified, and — unlike CH-124's UTF-8 claim, which #618 had already fixed — this one is **live and current**. `shell.wrapText` has four call sites, all in `shell.lua` (`:419` wrapping `entry.result`, `:438` the typed command, `:745`/`:748` line counts), so the byte iteration runs on every console line. `shell.lua` has **no** `utf8_safe` import at all against 25 `string.sub`/`:sub(` sites; `textbox.lua` is confirmed as the model (`utf8Safe.prefix`/`suffix`/`codepointLength`, its one `string.sub` mention being the comment at `:278`). **Two additions this entry misses.** (1) The same mid-codepoint split exists in **three more modules**: the log panels' private `wrapText` is word-based and safe normally, but its hard-break fallback for an over-wide word uses `word:gmatch(".")` — Lua patterns are byte-oriented, so `.` matches one byte — at `combat_log.lua:706`, `injury_log_panel.lua:573`, `unit_log.lua:244`. (2) **`shell.wrapTextByWord` (`:712`) is dead** — zero callers — and it is the word-based variant that would be safe on the normal path, sitting unused beside the broken one in use. Trivia: the comment is `:682`, the function `:683`.
+
 `scripts/shell.lua:682`:
 
 ```lua
@@ -2953,7 +3543,9 @@ asserting like `utf8_safe`. `shell.wrapTextByWord`, the never-called
 word-wrapping twin, is gone. CLAUDE.md's text contract now covers display as
 well as editable widgets.
 
-### CH-127. Four features are split across both a flat file and a same-named directory
+### [no-issue] CH-127. Four features are split across both a flat file and a same-named directory
+> **Disposition:** No issue — the four pairs are one coherent pattern, not two competing conventions, and the finding's own precedent closed for this reason. Reading what each flat file does: `settings_menu.lua:16-20` requires `scripts.settings.{data,general_tab,graphics_tab,notifications_tab,input_tab}`, `create_world_menu.lua:16-20` requires `scripts.create_world.{settings_tab,advanced_tab,general_tab,timeline_tab,log_panel}`, `hud.lua:7` requires `scripts.hud.info_panel`, and `debug.lua:31-33` requires `scripts.debug.{mode,layout,modes}` — every one an entry point requiring its own parts. **"Same-named" is wrong for half the table**: `settings_menu.lua` ≠ `settings/` and `create_world_menu.lua` ≠ `create_world/`, so only `hud` and `debug` qualify. **The flat underscore families are deliberate and CI-enforced**: `tools/lua_module_budget.py` guards six of them by their flat names (#538 unit-AI, #541 unit-resource, #542 unit-info-v2, #543 init.lua router, #544 ui_manager, #545 debug overlay), and CLAUDE.md:228-234 documents the `unit_ai.lua` + `unit_ai_*.lua` shape explicitly — converting them would fight a checked-in guard. **CH-25, cited here as the same finding, closed `[no-issue]`** on the reasoning that the filename prefix already gives the grouping a directory would; `ls scripts/unit_ai_*.lua` is exactly `scripts/unit_ai/`. Counts measured 2026-08-06, all drifted upward: **189** files not 178, **142** flat not 134, **47,327** lines not 43,695, `unit_ai*` **25** not 23, `unit_*` **16,718** lines across 53 files not 16,077, `scripts/ui/` **29** not 27, `scripts/settings/` **5** not 4. Churn if reorganised: **464 of 794** `require("scripts.…")` sites name a flat module.
+
 `scripts/` has 178 files, **134 of them flat in the root** (43,695 lines), and
 uses two different namespacing conventions simultaneously — sometimes for the
 same feature:
@@ -2974,7 +3566,9 @@ So the answer to "where does script X live?" depends on which convention its
 epic happened to use. Same finding as CH-25 (`tools/` is 122 flat Python
 files), one level larger.
 
-### CH-128. Five Lua modules sit at exactly the 500-line cap
+### [no-issue] CH-128. Five Lua modules sit at exactly the 500-line cap
+> **Disposition:** No issue — the second half is a finding already closed, and the new half describes the ratchet working. "Extends CH-22" restates CH-22, which is `[no-issue]`: "the 500-line Lua guard is an intentional per-split ratchet, documented as applying only to module families with an explicit split agreement; 33 unrelated scripts exceeding 500 lines do not violate that contract." CLAUDE.md:38-43 says the same and adds these are "not a tree-wide size policy." A ratchet sitting at its limit is the mechanism functioning — the finding concedes "the guard is working" and then treats that as the symptom; forcing the next split when the next line arrives is the whole point. The two unguarded near-misses argue against the criticism rather than for it: `loading_screen.lua` and `item_contents_panel.lua` are in no budgeted family and both reached 499 anyway, so the norm is being self-applied, not imposed. There is also no single fix — splitting six modules at cohesive boundaries is six independent design judgments, and CLAUDE.md's guidance for this case is to extract the cohesive boundary rather than force a fit. Counts measured 2026-08-06: **six** files sit at exactly 500, not five — `unit_ai_core.lua` is missing from the list. The 494-499 band is four files but not the same four: `unit_ai_save_refs.lua` (499) is missed and **`settings/data.lua` is now 677**, well outside it. **35** files exceed 500, not 30; the four largest are exact. All six at 500 are in guarded families (#538 ×3, #542 ×2, #543 ×1), as are two of the four near-misses (#538, #544), so the claim that only `loading_screen` and `item_contents_panel` are unguarded holds.
+
 `unit_ai_construct.lua`, `unit_info_v2_status.lua`, `init_mouse.lua`,
 `unit_info_v2.lua`, `unit_ai_craft.lua` — all **exactly 500**. Four more are
 within six lines: `ui_manager_boot.lua` (499), `loading_screen.lua` (499),
@@ -2999,7 +3593,9 @@ including the four largest (`ui/dropdown.lua` 1399, `hud.lua` 1321,
 `scripts/` — `probelib` exists and 71 of 72 probes import it — but the library
 is routinely imported and then bypassed.
 
-### CH-129. `probelib` is imported by 71 of 72 probes and then reimplemented
+### [#1160] CH-129. `probelib` is imported by 71 of 72 probes and then reimplemented
+> **Note:** The `jget` half is exact and is filed as #1160. Verified 2026-08-06: **77 of 78** probes import `probelib` (drift from 71/72, same ratio); exactly **20** define a local `jget`; all 20 import `probelib` and **none** references `send_json` — checked file by file. The three behavioural differences all hold, and there is a **fourth**: `send_json` catches `(ValueError, TypeError)` while `jget` catches only `json.JSONDecodeError`, a strict subclass of `ValueError`, so a `TypeError` out of `json.loads` kills the probe instead of returning the raw value. On difference 3, precisely: `send`'s own `DEFAULT_IDLE` still applies, so behaviour is correct today; what is lost is the ability to tune it. **Correction to the secondary list: those helpers have already DIVERGED, so they are a reconciliation, not a move.** `make_isolated_root` — called "the notable one" here — is **16 definitions in 12 distinct bodies**, not 13 copies; `as_int` is 9 in 5; `ai_off` 4 in 3. Other counts drifted up too (`expect` 5→10, `boot_probe` 5→7, `num` 4→5). That strengthens the underlying argument while invalidating "move the 13-plus common helpers into `probelib`" as the method, so #1160 scopes to `jget` and records the measured divergence for whoever scopes the rest.
+
 `tools/probelib.py` is a real shared library with a documented purpose,
 including the debug-console idle-read gotcha its module header explains at
 length ("The console keeps the TCP connection open … idle gap and returns the
@@ -3050,7 +3646,9 @@ Fix: move the 13-plus common helpers into `probelib`, then replace the local
 `jget` definitions with `send_json` — the semantic differences above have to be
 reconciled deliberately, not by blind substitution.
 
-### CH-130. The seven largest files in the project are all tests and tooling
+### [no-issue] CH-130. The seven largest files in the project are all tests and tooling
+> **Disposition:** No issue — the size family is settled policy and the one distinctive claim has a good explanation. CLAUDE.md:38-43 states the 500-line limits are per-split ratchets and "not a tree-wide size policy"; CH-22, CH-116, and CH-128 all closed on that, and "nothing bounds file size outside the six Lua and three Haskell families" is a restatement of it. The distinctive part — `test_persistence_inventory_audit.py` at **2.03×** its subject while siblings sit at **0.97×** and **0.63×** — is real but proportionate: the file is **164 test functions** over ~840 lines of fixtures, and its names are mutation cases against a regex parser for Haskell record declarations (`stray_brace_in_comment_is_harmless`, `unbalanced_brace_in_comment_does_not_truncate`, `nested_block_comment_does_not_truncate`, `survives_brace_in_string_literal_type`). A parser whose silent failure is truncating a record and under-reporting fields earns enumerated cases; the two siblings are smaller because they parse less. Counts measured 2026-08-06 and the table is now wrong in four rows: `save_compat_audit.py` **2138** (was 1951), `SaveModules.hs` **2021** (was 1728), `persistence_inventory_audit.py` **1707** (was 1689), and a file it does not list — `tools/expedition_loop_probe.py` at **2093** — now ranks 4th, making it eight files, not seven. "No production source until rank 8" is now **rank 11**, and the file there is `scripts/ui/dropdown.lua` (1399); `World/Save/Types.hs` has shrunk to **1172** and left the top thirteen.
+
 | Lines | File |
 |---:|---|
 | 3430 | `tools/test_persistence_inventory_audit.py` |
@@ -3074,7 +3672,9 @@ Nothing bounds file size outside the six Lua and three Haskell families the
 budget scripts name (CH-21, CH-22, CH-116, CH-128). The three guards cover
 neither `tools/` nor any test tree — i.e. none of the seven files above.
 
-### CH-131. `tools/` is 122 flat files that divide cleanly by role
+### [no-issue] CH-131. `tools/` is 122 flat files that divide cleanly by role
+> **Disposition:** No issue — a restatement of CH-25, whose `[no-issue]` disposition names this finding directly ("CH-131 restates this finding and needs the matching disposition"). The premise is unchanged, only the counts. Its decisive argument re-verified independently 2026-08-06 and now larger: **126** distinct `tools/*.py` paths are cited at **449** sites outside `tools/` across 75 files, plus **393** inside (CH-25 measured 124/407/385). The "one atomic sweep" this entry says the move needs is not achievable, because part of the invocation surface is outside the repository where a PR cannot reach it — `~/.codex/rules/default.rules` cites `tools/*.py` paths, as do at least five files in this project's agent memory; a stale path there fails as `No such file` exactly when an agent runs a gate. The partition argument stands too: the role split already exists in the filenames, which is why this entry can classify every file "without ambiguity" from names alone — `ls tools/*_probe.py` is `tools/probes/`, and directories would make the suffixes redundant — while the two navigation surfaces cited as evidence of a gap are the deliberate answer (`tools/README.md`'s curated table; `ci_probes.py --status`, which CLAUDE.md declares authoritative over any prose list). Counts drifted again: **144** Python files (**136** flat), **78** probes, **15** audits, 6 checks, **17** `test_*` — against this entry's 130/72/10/6/14 and CH-25's own 127/76.
+
 Confirmed and quantified from CH-25: 130 Python files, only `playtest/` and
 `baselines/` as subdirectories. The flat 122 partition without ambiguity:
 
@@ -3092,7 +3692,9 @@ self-evident. The move touches every `python3 tools/x_probe.py` invocation in
 CLAUDE.md, CI, and the skills, so it needs one atomic sweep — but the
 categories are already unambiguous, which is the hard part.
 
-### CH-132. Minor `tools/` defects for one cleanup issue
+### [no-issue] CH-132. Minor `tools/` defects for one cleanup issue
+> **Disposition:** No issue — all three bullets resolve, and the one actionable request is already satisfied. **Bullet 1** is confirmed (of **78** probes, exactly one omits `probelib`) but the comment it asks for already exists: `preview_cli_probe.py`'s module docstring opens "Every check here is a PRE-BOOT rejection or exit — no GPU, no window, no engine thread ever starts … This is what makes the probe CI-eligible", which is precisely why a boot-and-console library is irrelevant to it. Two corrections: the file is **329** lines, not 158, and it is 1 of 78 probes, not 72. **Bullet 2** declares itself no action and verifies: `tools/.gitignore` carries `__pycache__/` and `*.pyc`, and `git check-ignore -v tools/__pycache__` resolves to that rule. **Bullet 3** is answered, and needed one check CH-118 did not cover — that entry's tail named `action_outcome_coverage` as its third tool while this one names **`save_compat_audit`**. Checked fresh: `save_compat_audit` does no "is this used?" scanning; it is fixture-driven, and `test-headless/` is not omitted from it but is its entire data source (`FIXTURE_DATA_DIR = REPO_ROOT / "test-headless" / "data" / "save-compat"`). CH-118 already verified the other two. CH-104's recommended fourth audit is filed as #1145.
+
 - `tools/preview_cli_probe.py` (158 lines) is the only probe of 72 that does
   not import `probelib` — legitimate (it is the CI-eligible no-boot probe and
   never opens a console), but worth a one-line comment saying so, since "every
@@ -3163,7 +3765,9 @@ cross-references resolve exactly, and `README.md` is accurate. The problem is
 narrower and specific — **two large design docs still describe shipped systems
 as unbuilt.**
 
-### CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped
+### [#1161] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped
+> **Note:** Verified 2026-08-06 — status line, shipped modules (`PlayerEvent.hs` 105, `Emit.hs` 173, `Lua/API/PlayerEvent.hs` **293** not 290), and the phantom manifest entries all confirmed: `git log --all` returns nothing for `src/Engine/Event.hs` or `src/Engine/Scripting/Lua/API/Event.hs`, so they never existed under any name. **But this entry misses that the doc already declares itself history**: `:9-19` carries a dated note — "**Note (2026-06, issue #37):** this is the original design record… **treat this doc as design history, not a current API reference**" — four lines below the stale Status line. So "a reader planning work against it would rebuild something that exists" overstates it; what is actually wrong is narrower and sharper, and #1161 scopes to it. (1) `:7` **contradicts** `:9`, two dated statements four lines apart disagreeing about whether the system is built. (2) The note corrects the DESIGN (retired `PopupButton`/`PopupAction`, the removed `buttons:` key) but says nothing about MODULE NAMES, so a reader who has accepted it still hunts `Engine/Event.hs`. Also: three of the manifest's six entries are correct (`YamlNotifications.hs`, `popup.lua`, `notification_categories.yaml` all exist). The fix follows an established precedent rather than inventing one — `docs/history/` exists with a curated README ("Do not treat them as the current state of the system"), and closed **#1108** moved `river_rework.md` there for exactly this situation.
+
 Line 7: `Status: design accepted 2026-05-18. Phase 1 ready to implement.`
 
 The player-event system is fully built: `src/Engine/PlayerEvent.hs`,
@@ -3189,7 +3793,9 @@ So the largest unenforced doc in the tree is out of sync three ways at once:
 status, module names, and tense. A reader planning work against it would
 rebuild something that exists.
 
-### CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem
+### [no-issue] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem
+> **Disposition:** No issue — already fixed. `docs/blood_decals.md:3-6` now reads "**Status: implemented** — this is the final documentation/verification gate for epic #603 … **This is the as-built record**", not "design draft, written 2026-07-07". `git log -S'Status: design draft'` shows that string entered at `b09c1518` (2026-07-07) and was replaced by `c8884cb4` (2026-08-01, "Finalize blood decal documentation and gate the bleeding arc for epic closure"), with two further review-fix commits to the same file that day. The parenthetical resolves too: `Blood.Types.BloodStore` exists — `src/Blood/Types.hs:52` exports `BloodStore(..)`, `:53` `emptyBloodStore`, and the module haddock at `:9` describes it. Everything measured has also grown: the doc is **461** lines not 445, `src/Blood/` is **6** modules and **1787** lines not 5/1413, `Lua/API/Blood.hs` is **538** not 519, and there are **four** blood probes not three — `bleeding_trail_probe.py` (the #882/#883 gate) is missing from the list. CLAUDE.md:987 cites the doc as the "full architecture record", now consistent with its own status line. **NB CH-135's table row for `blood_decals.md` ("design draft" ✗) is stale for the same reason.**
+
 Line 3: `Status: design draft, written 2026-07-07.`
 
 Shipped: `src/Blood/` (5 modules, 1413 lines), `Engine/Scripting/Lua/API/Blood.hs`
