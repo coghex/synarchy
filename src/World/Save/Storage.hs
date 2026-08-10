@@ -31,22 +31,29 @@
 --      re-read metadata is EXACTLY the metadata this publish intended —
 --      an in-memory encode success is never sufficient on its own to
 --      publish.
---   5. Only once validated: if an authoritative generation currently
---      exists, stage the existing previous generation (if any) out of
---      the way under a fresh unique name FIRST (never destroying it
---      outright yet — requirement 5's "older generations are removed
---      only after the new publication is durable"), THEN SYNC THE
---      DIRECTORY so that staging handoff is itself a confirmed-durable
---      recovery point; rotate the CURRENT authoritative generation into
---      the now-free previous-generation slot, THEN SYNC AGAIN. If NO
---      authoritative generation currently exists — a "previous-only"
---      recovery state — staging/rotation are skipped entirely and the
---      existing previous generation (the slot's ONLY known-valid
---      generation right now) is left completely untouched, never at
---      risk of being destroyed before the new candidate is durable; see
---      'publishValidated'. Either way, finally atomically rename the
---      validated candidate into the authoritative path, THEN SYNC A
---      FINAL TIME. Every rename uses 'System.Directory.renameFile',
+--   5. Only once validated: classify the slot's CURRENT authoritative
+--      file with the loader's own 'decodeGenerationFile'
+--      ('classifyAuthoritative'), and rotate ONLY when that
+--      classification says a generation is there worth retaining
+--      ('AuthoritativeRetained' — a complete generation, or a coherent-
+--      but-incompatible one the loader never falls back past). Then:
+--      stage the existing previous generation (if any) out of the way
+--      under a fresh unique name FIRST (never destroying it outright
+--      yet — requirement 5's "older generations are removed only after
+--      the new publication is durable"), THEN SYNC THE DIRECTORY so
+--      that staging handoff is itself a confirmed-durable recovery
+--      point; rotate the CURRENT authoritative generation into the
+--      now-free previous-generation slot, THEN SYNC AGAIN. In the two
+--      topologies where the previous generation is instead the slot's
+--      LIVE load source — no authoritative file at all (a
+--      "previous-only" recovery state), or a present-but-STORAGE-CORRUPT
+--      one the loader is already falling back past (issue #1203) —
+--      staging and rotation are skipped ENTIRELY and the existing
+--      previous generation is left completely untouched, never at risk
+--      of being destroyed or overwritten before the new candidate is
+--      durable; see 'publishValidated'. Either way, finally atomically
+--      rename the validated candidate into the authoritative path, THEN
+--      SYNC A FINAL TIME. Every rename uses 'System.Directory.renameFile',
 --      which is POSIX @rename(2)@ — a single atomic filesystem
 --      operation that either fully replaces the destination or doesn't
 --      happen at all; there is no filesystem-level "partway through a
@@ -87,23 +94,46 @@
 --   validation, after validation but before staging/rotation, mid-
 --   staging, mid-rotation, mid-publish, after publish but before the
 --   directory syncs, or during the final best-effort cleanup sweep —
---   always leaves AT LEAST ONE of the old or the new generation fully
---   intact and selectable ('selectLoadGeneration'), NEVER a partial/
---   hybrid result:
+--   always leaves AT LEAST ONE fully intact generation that
+--   'selectLoadGeneration' actually SELECTS (not merely one that exists
+--   on disk somewhere), NEVER a partial/hybrid result. Which phases even
+--   run depends on 'classifyAuthoritative''s topology, so the guarantee
+--   is stated per topology (issue #1203):
 --
---   * Anything before the publish rename completes: the authoritative
---     path is untouched (or, if the rotate rename already ran, the OLD
---     generation is sitting at the previous-generation path instead) —
---     either way a complete old generation is selectable. Staging a
---     previous generation out of the way never destroys it — it only
---     moves to a differently-named file, still fully intact on disk,
---     until cleanup removes it after the durability boundary.
---   * Anything from the publish rename onward: the authoritative path
---     already holds the complete NEW generation (a rename is atomic; it
---     cannot be observed half-applied).
+--   * 'AuthoritativeRetained' (the ordinary case — a valid, or a
+--     coherent-but-incompatible, authoritative generation) runs the full
+--     stage → rotate → publish sequence. Anything before the publish
+--     rename completes: the authoritative path is untouched (or, if the
+--     rotate rename already ran, the OLD generation is sitting at the
+--     previous-generation path instead, where the loader's own
+--     authoritative-missing fallback reads it) — either way a complete
+--     old generation is SELECTED. Staging a previous generation out of
+--     the way never destroys it — it only moves to a differently-named
+--     file, still fully intact on disk, until cleanup removes it after
+--     the durability boundary. It is not selectable while staged, which
+--     is exactly why staging is confined to this topology: the
+--     generation it displaces is never the one the slot is currently
+--     loading from.
+--   * 'AuthoritativeAbsent' and 'AuthoritativeRecovering' (the two
+--     topologies where 'previousGenerationFileName' IS the slot's live
+--     load source) skip staging and rotation altogether, so the ONLY
+--     durable state change this transaction makes is the publish rename
+--     itself. Before it, the previous generation is still exactly where
+--     it was and still what 'selectLoadGeneration' recovers — for
+--     'AuthoritativeRecovering' through its 'GenerationCorrupt'
+--     fallback, unchanged by anything publication did. There is no
+--     intermediate state in between to be interrupted in.
+--   * Anything from the publish rename onward, in every topology: the
+--     authoritative path already holds the complete NEW generation (a
+--     rename is atomic; it cannot be observed half-applied), and the
+--     previous generation retained beside it — whether rotated there or
+--     never moved — is still a complete generation the loader falls back
+--     to if the new authoritative one is ever lost.
 --
 --   A leftover, unpublished temporary or staged-previous file is always
---   harmless dead weight — never consulted by 'selectLoadGeneration' or
+--   harmless dead weight — genuinely harmless, because per the topology
+--   split above a staged file is never the generation the slot was
+--   loading from. It is never consulted by 'selectLoadGeneration' or
 --   "World.Save.Serialize"'s listing (it lives under a name other than
 --   @world.synworld@/@world.synworld.prev@) — and is swept on the NEXT
 --   successful publish to this slot, or left for a future explicit
@@ -456,7 +486,8 @@ writeValidateAndPublish dir slotName expectedMeta encoded
                                     pure (Left (fail' PhaseCandidateValidate
                                                     (Just tempPath) reason))
                                 Right () →
-                                    publishValidated dir slotName tempPath
+                                    publishValidated dir slotName
+                                        luaKnownNames luaRequiredNames tempPath
   where
     fail' = publishFailureFor slotName
 
@@ -534,29 +565,51 @@ validateCandidate expectedMeta luaKnownNames luaRequiredNames bytes = do
 --   AFTER the FINAL directory sync (following the publish rename)
 --   confirms the new generation's own durability, never before.
 --
---   Staging and rotation happen ONLY when an authoritative generation
---   currently exists to rotate out of the way. When it does not — a
---   \"previous-only\" recovery state, e.g. the slot's own authoritative
---   file was already lost to an earlier interruption and
---   'selectLoadGeneration' has been recovering from
---   'previousGenerationFileName' alone — there is nothing for rotation
---   to displace, so 'previousGenerationFileName' is left COMPLETELY
---   untouched all the way through the publish rename below: staging it
---   away regardless (as an earlier revision of this function did) would
---   itself have destroyed the ONLY known-valid generation before the
---   new candidate became durably selectable, opening exactly the
---   destroy-before-recoverable window requirement 6 forbids. Left
---   untouched, that pre-existing file simply continues to serve as the
---   previous generation once the new candidate publishes — no explicit
---   rotation needed, since it was never moved out of that slot at all.
-publishValidated ∷ FilePath → Text → FilePath → IO (Either PublishFailure [Text])
-publishValidated dir slotName tempPath = do
+--   Staging and rotation happen ONLY when the slot's CURRENT
+--   authoritative file is a generation actually worth retaining — i.e.
+--   only when 'classifyAuthoritative' reports 'AuthoritativeRetained'.
+--   In the other two topologies 'previousGenerationFileName' is the
+--   slot's live load source, so it is left COMPLETELY untouched all the
+--   way through the publish rename below (issue #1203):
+--
+--   * 'AuthoritativeAbsent' — a \"previous-only\" recovery state, e.g.
+--     the slot's own authoritative file was already lost to an earlier
+--     interruption and 'selectLoadGeneration' has been recovering from
+--     'previousGenerationFileName' alone. There is nothing for rotation
+--     to displace, and staging the previous generation away regardless
+--     (as an early revision of this function did) would itself have
+--     destroyed the ONLY known-valid generation before the new
+--     candidate became durably selectable.
+--   * 'AuthoritativeRecovering' — the authoritative file is PRESENT but
+--     storage-corrupt, so 'selectLoadGeneration' is right now serving
+--     this slot from 'previousGenerationFileName' via its
+--     'GenerationCorrupt' fallback. Rotating the corrupt authoritative
+--     file ONTO that path (which is what this function did before
+--     #1203, deciding solely from @doesFileExist authPath@) would
+--     overwrite the slot's only valid generation with garbage while the
+--     valid copy sat under a staged name 'selectLoadGeneration' never
+--     consults — an interruption in the window between that rotation's
+--     directory sync and the publish rename left NOTHING selectable
+--     despite complete save data on disk. Skipping both staging and
+--     rotation closes that window: the recovery source never moves, and
+--     the corrupt authoritative file is simply replaced outright by the
+--     atomic publish rename (its bytes were already worthless).
+--
+--   Left untouched, that pre-existing previous generation simply
+--   continues to serve as the previous generation once the new
+--   candidate publishes — no explicit rotation needed, since it was
+--   never moved out of that slot at all.
+publishValidated
+    ∷ FilePath → Text → HS.HashSet Text → HS.HashSet Text → FilePath
+    → IO (Either PublishFailure [Text])
+publishValidated dir slotName luaKnownNames luaRequiredNames tempPath = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
-    authExists ← doesFileExist authPath
-    if not authExists
-        then publish authPath Nothing
-        else do
+    topology ← classifyAuthoritative luaKnownNames luaRequiredNames authPath
+    case topology of
+        AuthoritativeAbsent     → publish authPath Nothing
+        AuthoritativeRecovering → publish authPath Nothing
+        AuthoritativeRetained   → do
             stageResult ← stageOldPrevious dir prevPath
             case stageResult of
                 Left (e ∷ IOException) →
@@ -584,6 +637,63 @@ publishValidated dir slotName tempPath = do
             Left (e ∷ IOException) →
                 pure (Left (fail' PhasePublishRename (Just tempPath) (showT e)))
             Right () → afterSync (Right ⊚ cleanupAfterPublish dir mStaled)
+
+-- | What the slot's CURRENT authoritative file means for this
+--   publication's rotation topology (issue #1203). Deliberately mirrors
+--   the THREE outcomes 'selectLoadGeneration' already distinguishes, so
+--   publication's judgement and the loader's can never drift
+--   (requirement 4).
+data AuthoritativeTopology
+    = AuthoritativeAbsent
+      -- ^ No authoritative file at all — the slot's first-ever publish,
+      --   or an earlier interruption's \"previous-only\" recovery state.
+      --   'selectLoadGenerationUnsafe' serves such a slot from
+      --   'previousGenerationFileName'; nothing exists to rotate.
+    | AuthoritativeRecovering
+      -- ^ Present, but STORAGE-corrupt ('GenerationCorrupt': symlinked,
+      --   unreadable, truncated, bad framing, or a failed checksum) —
+      --   the ONE classification 'selectLoadGenerationUnsafe' falls back
+      --   past, so 'previousGenerationFileName' is this slot's LIVE load
+      --   source right now and must not be disturbed until the new
+      --   candidate is durably authoritative.
+    | AuthoritativeRetained
+      -- ^ A complete generation worth keeping as the next previous
+      --   generation, OR a coherent-but-INCOMPATIBLE one
+      --   ('GenerationIncompatible': unsupported schema version, failed
+      --   content validation). Incompatible belongs here, NOT with
+      --   'AuthoritativeRecovering', precisely because
+      --   'selectLoadGenerationUnsafe' never falls back past it
+      --   (requirement 3's preserved corrupt-vs-incompatible
+      --   distinction): 'previousGenerationFileName' is not serving that
+      --   slot, so ordinary staging + rotation applies exactly as before
+      --   #1203.
+    deriving (Show, Eq)
+
+-- | Classify the slot's current authoritative file for
+--   'publishValidated'. Runs the loader's OWN 'decodeGenerationFile' —
+--   the same Lua known/required component sets, the same symlink,
+--   envelope, component and world-count validation — rather than a
+--   cheaper structural approximation, so a file publication treats as
+--   retainable is exactly a file 'selectLoadGeneration' would select,
+--   and a file publication treats as a live recovery topology is exactly
+--   one the loader would fall back past (requirement 4). The added cost
+--   is one decode of a file every publish ALREADY reads and inspects
+--   ('foreignOptionalDataCheck'), against a candidate this same
+--   transaction already decodes and deep-forces in full
+--   ('validateCandidate') — and it is skipped entirely when no
+--   authoritative file exists.
+classifyAuthoritative
+    ∷ HS.HashSet Text → HS.HashSet Text → FilePath → IO AuthoritativeTopology
+classifyAuthoritative luaKnownNames luaRequiredNames authPath = do
+    authExists ← doesFileExist authPath
+    if not authExists
+        then pure AuthoritativeAbsent
+        else do
+            decoded ← decodeGenerationFile luaKnownNames luaRequiredNames authPath
+            pure $ case decoded of
+                Left (GenerationCorrupt _)      → AuthoritativeRecovering
+                Left (GenerationIncompatible _) → AuthoritativeRetained
+                Right _                         → AuthoritativeRetained
 
 -- | If a previous generation exists, move it onto a freshly claimed
 --   unique name and return that path; 'Nothing' when there was none to
