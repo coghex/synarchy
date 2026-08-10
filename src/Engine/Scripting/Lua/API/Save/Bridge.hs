@@ -31,10 +31,21 @@ import World.Save.Payload (LuaComponentSpec(..), LuaRefEdge(..))
 --   below to surface pcall failures that would otherwise be silent.
 luaLogPcallError ∷ LoggerState → Text → Lua.LuaE Lua.Exception ()
 luaLogPcallError logger ctx = do
+    _ ← luaPcallErrorText logger ctx
+    return ()
+
+-- | 'luaLogPcallError''s logging, plus the rendered message RETURNED
+--   (issue #1200) for the one caller that must PROPAGATE a Lua
+--   diagnostic rather than merely log it: a @save_modules.applyAll@
+--   failure decides whether the load aborted cleanly or left the live
+--   Lua session mixed, and only Lua knows which — see 'applyLuaLoad'.
+luaPcallErrorText ∷ LoggerState → Text → Lua.LuaE Lua.Exception Text
+luaPcallErrorText logger ctx = do
     err ← Lua.tostring (-1)
     Lua.pop 1
-    Lua.liftIO $ logWarn logger CatLua $
-        ctx <> ": " <> maybe "<no message>" TE.decodeUtf8Lenient err
+    let rendered = maybe "<no message>" TE.decodeUtf8Lenient err
+    Lua.liftIO $ logWarn logger CatLua $ ctx <> ": " <> rendered
+    return rendered
 
 -- | require("scripts.lib.save_modules") and call one of its functions,
 --   pushing the arguments @pushArgs@ leaves on the stack (must push
@@ -79,8 +90,12 @@ callSaveModules1 logger fnName nargs pushArgs = do
             return False
 
 -- | Same as 'callSaveModules1', but for a call with no arguments and no
---   return value the caller cares about (@applyAll@).
-callSaveModules0 ∷ LoggerState → Text → Lua.LuaE Lua.Exception Bool
+--   return value the caller cares about (@applyAll@). Reports the
+--   failure REASON rather than a bare 'False' (issue #1200): its one
+--   caller must distinguish a cleanly aborted load from one whose Lua
+--   rollback itself failed, and that distinction exists only inside the
+--   Lua error object. Every reason is still logged exactly as before.
+callSaveModules0 ∷ LoggerState → Text → Lua.LuaE Lua.Exception (Either Text ())
 callSaveModules0 logger fnName = do
     _ ← Lua.getglobal "require"
     Lua.pushstring "scripts.lib.save_modules"
@@ -92,24 +107,25 @@ callSaveModules0 logger fnName = do
             if not isFun
                 then do
                     Lua.pop 2
-                    Lua.liftIO $ logWarn logger CatLua $
-                        "save_modules." <> fnName <> " is not a function"
-                    return False
+                    let reason = "save_modules." <> fnName
+                                    <> " is not a function"
+                    Lua.liftIO $ logWarn logger CatLua reason
+                    return (Left reason)
                 else do
                     callStatus ← Lua.pcall 0 0 Nothing
                     case callStatus of
                         Lua.OK → do
                             Lua.pop 1  -- module table
-                            return True
+                            return (Right ())
                         _ → do
-                            luaLogPcallError logger
+                            reason ← luaPcallErrorText logger
                                 ("save_modules." <> fnName <> " crashed")
                             Lua.pop 1
-                            return False
+                            return (Left reason)
         _ → do
-            luaLogPcallError logger
+            reason ← luaPcallErrorText logger
                 "require scripts.lib.save_modules failed"
-            return False
+            return (Left reason)
 
 -- | Read every element of the Lua array at the top of the stack (NOT
 --   popped) via @readElem@, which must read whatever is at the NEW
@@ -459,11 +475,25 @@ prepareLuaLoad logger requestId components isMigratingLegacyBaseline known = do
 --   ('Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged') aborts the
 --   whole load rather than queuing the Haskell-side restore on top of a
 --   Lua state that only partially applied.
+--
+--   Carries Lua's OWN diagnostic into the 'Left' (issue #1200) instead
+--   of the previous fixed \"see engine log\" text. @applyAll@ rolls the
+--   already-applied components back before it raises, and a rollback
+--   restore can itself throw — in which case the live Lua session is
+--   left MIXED (old Haskell session, partly-new Lua singletons) and the
+--   message says so, tagged @ROLLBACK FAILED@ and naming every
+--   component it could not restore. That distinction is exactly what a
+--   fixed string erased: 'Engine.Scripting.Lua.Thread.Dispatch' passes
+--   this text verbatim to both 'failLoad' (so @engine.getLoadStatus()@
+--   reports it) and its @CatWorld@ warning, so surfacing it here is all
+--   the plumbing the distinction needs. The log line the failure already
+--   produced is unchanged; this only stops the text being thrown away.
 applyLuaLoad ∷ LoggerState → Lua.LuaE Lua.Exception (Either Text ())
 applyLuaLoad logger = do
-    ok ← callSaveModules0 logger "applyAll"
-    return $ if ok then Right ()
-             else Left "save_modules.applyAll() failed (see engine log)"
+    result ← callSaveModules0 logger "applyAll"
+    return $ case result of
+        Right () → Right ()
+        Left reason → Left ("save_modules.applyAll() failed: " <> reason)
 
 -- | Call @saveModules.abortPreparedLoad(requestId)@:
 --   every failure path that can occur AFTER a successful 'prepareLuaLoad'

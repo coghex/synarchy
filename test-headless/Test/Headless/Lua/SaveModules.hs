@@ -26,6 +26,11 @@ import qualified HsLua as Lua
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import System.IO (stderr)
+
+import Engine.Core.Log
+    (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..))
+import Engine.Scripting.Lua.API.Save.Bridge (applyLuaLoad)
 
 -- | A minimal @engine@ global -- the only thing these two modules call
 --   outside of a real engine boot (@engine.logWarn@ from
@@ -94,6 +99,65 @@ validSpecLua ident = lns
     , "  decode = function(v, d) return d end,"
     , "  validate = function(d) return nil end,"
     , "  apply = function(d) _G['" <> ident <> "_applied'] = d end }"
+    ]
+
+-- | Issue #1200: drive the REAL Haskell bridge
+--   ('Engine.Scripting.Lua.API.Save.Bridge.applyLuaLoad') against a
+--   standalone VM whose registry @setupChunk@ has already registered and
+--   prepared, returning exactly the 'Either' the load path receives. A
+--   Lua-only @pcall(saveModules.applyAll)@ assertion cannot cover
+--   requirement 3: the bridge is precisely where the Lua diagnostic used
+--   to be replaced by a fixed \"see engine log\" string, so only calling
+--   it proves what actually reaches @engine.getLoadStatus()@ and the
+--   @CatWorld@ warning —
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged' hands this
+--   text to both verbatim.
+applyViaBridge ∷ Text → IO (Either Text ())
+applyViaBridge setupChunk = do
+    logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+    Lua.run @Lua.Exception $ do
+        Lua.openlibs
+        _ ← Lua.dostring (TE.encodeUtf8 engineStub)
+        status ← Lua.dostring (TE.encodeUtf8 setupChunk)
+        case status of
+            Lua.OK → applyLuaLoad logger
+            _ → do
+                err ← Lua.tostring (-1)
+                Lua.pop 1
+                return (Left ("test setup chunk failed: "
+                    <> maybe "<no message>" TE.decodeUtf8Lenient err))
+
+-- | Issue #1200: three components whose rollback restores can be ARMED
+--   to throw. Each @apply@ counts its own calls, so a component can
+--   succeed on the forward pass (call 1) and fail on its rollback
+--   restore (call 2) -- the double fault this gate exists for -- while a
+--   LATER successful load (call 3+) still recovers, which is what keeps
+--   #864's recovery contract testable across the same fixture. A restore
+--   that throws does so BEFORE writing its live value, so the live
+--   singleton keeps the NEW session's row: that is the mixed state, and
+--   the tests assert it directly rather than inferring it.
+rollbackFixtureLua ∷ Text
+rollbackFixtureLua = lns
+    [ "local codec = require('scripts.lib.data_codec')"
+    , "local live = { a='old-a', b='old-b', c='old-c' }"
+    , "local calls = { a=0, b=0, c=0 }"
+    , "local armed = {}"
+    , "local function comp(key)"
+    , "  return { version=1, inputVersions={1}, required=true,"
+    , "    scope='global', deps={},"
+    , "    snapshot = function() return { v = live[key] } end,"
+    , "    decode = function(v, d) return d end,"
+    , "    validate = function(d) return nil end,"
+    , "    apply = function(d)"
+    , "      calls[key] = calls[key] + 1"
+    , "      if armed[key] == calls[key] then"
+    , "        error('RESTORE_FAIL_' .. key)"
+    , "      end"
+    , "      live[key] = d.v"
+    , "    end }"
+    , "end"
+    , "_G.live, _G.calls, _G.armed, _G.comp = live, calls, armed, comp"
+    , "_G.payloadFor = function(v) return codec.encode({ v = v }) end"
     ]
 
 spec ∷ Spec
@@ -1007,6 +1071,299 @@ spec = do
     -- while those modules need unit.exists/building.getInfo and the wider
     -- script graph. Their own per-entity apply is gated end-to-end by
     -- tools/lua_orphan_prune_probe.py against a real engine instead.
+    -- Issue #1200. Every rollback restore used to be an unchecked
+    -- `pcall` whose result was discarded, after which the raised
+    -- diagnostic claimed unconditionally that it had "rolled back every
+    -- already-applied component". A restore that threw was therefore
+    -- silently swallowed, leaving the process running the OLD Haskell
+    -- session against partly-NEW Lua singletons -- the exact
+    -- mixed-generation session rollback exists to prevent -- while both
+    -- engine.getLoadStatus() and the CatWorld warning reported a cleanly
+    -- aborted load. These cases arm restores to throw and assert BOTH
+    -- the live disposition and the reported text.
+    describe "rollback double faults (issue #1200)" $ do
+        it "keeps unwinding after a restore throws, names EVERY component \
+           \it could not restore, and still attempts the restores behind \
+           \them -- while preserving #864's recovery contract so the same \
+           \session loads successfully afterwards" $ runsOk $ lns
+            [ rollbackFixtureLua
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "saveModules.register('rb_a', comp('a'))"
+            , "saveModules.register('rb_b', comp('b'))"
+            , "saveModules.register('rb_c', comp('c'))"
+            , "-- Sorts last, so it applies after all three and its"
+            , "-- failure unwinds them in reverse: c, b, a."
+            , "local boomCalls = 0"
+            , "saveModules.register('rb_z_boom', { version=1,"
+            , "  inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function()"
+            , "    boomCalls = boomCalls + 1"
+            , "    if boomCalls == 1 then error('FORWARD_BOOM_1200') end"
+            , "  end })"
+            , "-- Arm the two restores that unwind FIRST (c, then b) to"
+            , "-- throw, leaving rb_a's restore -- which runs last -- as"
+            , "-- the proof that one failure never short-circuits the rest."
+            , "armed.c, armed.b = 2, 2"
+            , "local function payloads()"
+            , "  return { { id='rb_a', version=1, payload=payloadFor('new-a') },"
+            , "           { id='rb_b', version=1, payload=payloadFor('new-b') },"
+            , "           { id='rb_c', version=1, payload=payloadFor('new-c') },"
+            , "           { id='rb_z_boom', version=1, payload=codec.encode({}) } }"
+            , "end"
+            , "assert(saveModules.prepareLoad(payloads(), 1, false, nil).ok)"
+            , "local ok, err = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'the forward failure must still abort the load')"
+            , "local msg = tostring(err)"
+            , "assert(string.find(msg, 'FORWARD_BOOM_1200', 1, true) ~= nil,"
+            , "  'the ORIGINAL forward failure must survive: ' .. msg)"
+            , "assert(string.find(msg, 'ROLLBACK FAILED', 1, true) ~= nil,"
+            , "  'a failed rollback must never report as a clean abort: ' .. msg)"
+            , "assert(string.find(msg, 'MIXED', 1, true) ~= nil,"
+            , "  'the mixed-session disposition must be stated: ' .. msg)"
+            , "assert(string.find(msg, 'rolled back every', 1, true) == nil,"
+            , "  'a complete rollback must NOT be claimed: ' .. msg)"
+            , "assert(string.find(msg, 'rb_b', 1, true) ~= nil"
+            , "  and string.find(msg, 'rb_c', 1, true) ~= nil,"
+            , "  'every unrestored component must be named: ' .. msg)"
+            , "-- The live disposition, not just the wording: the two"
+            , "-- failed restores kept the NEW rows (this is the mix)..."
+            , "assert(live.b == 'new-b' and live.c == 'new-c',"
+            , "  'an unrestored component keeps the new session row')"
+            , "-- ...while the restore BEHIND them still ran and won."
+            , "assert(live.a == 'old-a',"
+            , "  'unwinding must not stop at the first failed restore')"
+            , "assert(calls.a == 2, 'rb_a restore must have been ATTEMPTED')"
+            , "-- #864 recovery across a DOUBLE fault: bookkeeping is"
+            , "-- clear, a stale re-apply still refuses, registration"
+            , "-- works again, and a fresh load recovers the session."
+            , "local ok2, err2 = pcall(saveModules.applyAll)"
+            , "assert(not ok2, 'a stale re-applyAll must still fail')"
+            , "assert(string.find(tostring(err2), 'no prepared load', 1, true)"
+            , "  ~= nil, 'expected the no-prepared-load diagnostic: '"
+            , "  .. tostring(err2))"
+            , "saveModules.register('rb_late', " <> validSpecLua "rb_late" <> ")"
+            , "armed.b, armed.c = nil, nil"
+            , "local second = payloads()"
+            , "second[#second + 1] ="
+            , "  { id='rb_late', version=1, payload=codec.encode({ x = 1 }) }"
+            , "local prep2 = saveModules.prepareLoad(second, 2, false, nil)"
+            , "assert(prep2.ok, 'prepareLoad must work again after the double fault')"
+            , "saveModules.applyAll()"
+            , "assert(live.a == 'new-a' and live.b == 'new-b'"
+            , "  and live.c == 'new-c', 'a later load must recover the session')"
+            , "assert(_G.rb_late_applied.x == 1, 'late registration must apply')"
+            ]
+
+        it "reports the FAILING component's own restore when that throws \
+           \too, leaving its half-applied singleton live -- and still \
+           \unwinds the components behind it" $ runsOk $ lns
+            [ rollbackFixtureLua
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "saveModules.register('own_a', comp('a'))"
+            , "local ownCalls = 0"
+            , "local ownLive = 'old-own'"
+            , "saveModules.register('own_z_boom', { version=1,"
+            , "  inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return { v = ownLive } end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(d)"
+            , "    ownCalls = ownCalls + 1"
+            , "    if ownCalls == 1 then"
+            , "      -- Mutate PART of its own singleton, then throw: this"
+            , "      -- is why the failing component's own pre-load"
+            , "      -- restore exists at all."
+            , "      ownLive = 'half-applied'"
+            , "      error('OWN_FORWARD_BOOM_1200')"
+            , "    end"
+            , "    -- ...and that own restore throws in turn."
+            , "    error('OWN_RESTORE_BOOM_1200')"
+            , "  end })"
+            , "assert(saveModules.prepareLoad("
+            , "  { { id='own_a', version=1, payload=payloadFor('new-a') },"
+            , "    { id='own_z_boom', version=1, payload=codec.encode({}) } },"
+            , "  1, false, nil).ok)"
+            , "local ok, err = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'the forward failure must still abort the load')"
+            , "local msg = tostring(err)"
+            , "assert(string.find(msg, 'OWN_FORWARD_BOOM_1200', 1, true) ~= nil,"
+            , "  'the ORIGINAL forward failure must survive: ' .. msg)"
+            , "assert(string.find(msg, 'ROLLBACK FAILED', 1, true) ~= nil,"
+            , "  'the failed own-restore must be reported: ' .. msg)"
+            , "assert(string.find(msg, 'own_z_boom', 1, true) ~= nil,"
+            , "  'the component left unrestored must be named: ' .. msg)"
+            , "assert(ownLive == 'half-applied',"
+            , "  'the half-applied singleton is exactly what stays live')"
+            , "assert(live.a == 'old-a',"
+            , "  'a failed own-restore must not stop the unwind behind it')"
+            ]
+
+        it "still reports the aggregate when a failed restore raised a \
+           \value that cannot even be rendered -- error() takes any Lua \
+           \value, and a throwing __tostring must not replace the whole \
+           \diagnostic with its own error" $ runsOk $ lns
+            [ rollbackFixtureLua
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "saveModules.register('vile_a', comp('a'))"
+            , "-- Restores after vile_b, so vile_a's restore still runs."
+            , "local vileCalls = 0"
+            , "saveModules.register('vile_b', { version=1,"
+            , "  inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function()"
+            , "    vileCalls = vileCalls + 1"
+            , "    if vileCalls == 2 then"
+            , "      -- A rollback restore raising a table whose own"
+            , "      -- __tostring throws: rendering it is what used to"
+            , "      -- take the aggregate diagnostic down with it."
+            , "      error(setmetatable({}, { __tostring = function()"
+            , "        error('TOSTRING_ITSELF_EXPLODES') end }))"
+            , "    end"
+            , "  end })"
+            , "saveModules.register('vile_z_boom', { version=1,"
+            , "  inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() error('VILE_FORWARD_BOOM_1200') end })"
+            , "assert(saveModules.prepareLoad("
+            , "  { { id='vile_a', version=1, payload=payloadFor('new-a') },"
+            , "    { id='vile_b', version=1, payload=codec.encode({}) },"
+            , "    { id='vile_z_boom', version=1, payload=codec.encode({}) } },"
+            , "  1, false, nil).ok)"
+            , "local ok, err = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'the forward failure must still abort the load')"
+            , "local msg = tostring(err)"
+            , "assert(string.find(msg, 'TOSTRING_ITSELF_EXPLODES', 1, true)"
+            , "  == nil, 'the render failure must NOT become the surfaced "
+              <> "error: ' .. msg)"
+            , "assert(string.find(msg, 'VILE_FORWARD_BOOM_1200', 1, true)"
+            , "  ~= nil, 'the ORIGINAL forward failure must survive: ' .. msg)"
+            , "assert(string.find(msg, 'ROLLBACK FAILED', 1, true) ~= nil"
+            , "  and string.find(msg, 'MIXED', 1, true) ~= nil,"
+            , "  'the mixed-session distinction must survive: ' .. msg)"
+            , "assert(string.find(msg, 'vile_b', 1, true) ~= nil,"
+            , "  'the unrestored component must still be named: ' .. msg)"
+            , "assert(string.find(msg, 'unrenderable', 1, true) ~= nil,"
+            , "  'the unrenderable value must degrade to a placeholder: ' .. msg)"
+            , "assert(live.a == 'old-a',"
+            , "  'the restore behind the unrenderable failure still ran')"
+            , "-- #864: an unrenderable double fault must still leave the"
+            , "-- registry usable rather than wedged mid-transaction."
+            , "local ok2, err2 = pcall(saveModules.applyAll)"
+            , "assert(not ok2 and string.find(tostring(err2),"
+            , "  'no prepared load', 1, true) ~= nil,"
+            , "  'the transaction must still have been cleared: ' .. tostring(err2))"
+            ]
+
+        it "reports a failed unwind on the RESET-HOOK path too, where \
+           \every component had already committed" $ runsOk $ lns
+            [ rollbackFixtureLua
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "saveModules.register('hook_a', comp('a'))"
+            , "saveModules.register('hook_b', comp('b'))"
+            , "-- hook_b's restore throws while unwinding after the hook"
+            , "-- fails; hook_a's (which unwinds after it) must still run."
+            , "armed.b = 2"
+            , "saveModules.registerResetHook('hook_boom', function()"
+            , "  error('RESET_BOOM_1200')"
+            , "end)"
+            , "assert(saveModules.prepareLoad("
+            , "  { { id='hook_a', version=1, payload=payloadFor('new-a') },"
+            , "    { id='hook_b', version=1, payload=payloadFor('new-b') } },"
+            , "  1, false, nil).ok)"
+            , "local ok, err = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'a failing reset hook must abort the load')"
+            , "local msg = tostring(err)"
+            , "assert(string.find(msg, 'RESET_BOOM_1200', 1, true) ~= nil,"
+            , "  'the ORIGINAL reset-hook failure must survive: ' .. msg)"
+            , "assert(string.find(msg, 'ROLLBACK FAILED', 1, true) ~= nil,"
+            , "  'the failed unwind must be reported: ' .. msg)"
+            , "assert(string.find(msg, 'hook_b', 1, true) ~= nil,"
+            , "  'the unrestored component must be named: ' .. msg)"
+            , "assert(string.find(msg, 'rolled back every', 1, true) == nil,"
+            , "  'a complete rollback must NOT be claimed: ' .. msg)"
+            , "assert(live.b == 'new-b', 'the unrestored component stays new')"
+            , "assert(live.a == 'old-a', 'the restore behind it still ran')"
+            ]
+
+    -- Issue #1200 requirement 3: the distinction has to survive the
+    -- HASKELL boundary, not just exist inside Lua. applyLuaLoad used to
+    -- discard every Lua diagnostic and return a fixed "see engine log"
+    -- string, so engine.getLoadStatus() and the CatWorld warning could
+    -- not tell a clean abort from a mixed session no matter what
+    -- save_modules said. These drive the real bridge.
+    describe "applyLuaLoad load-failure reporting (issue #1200)" $ do
+        it "carries the ROLLBACK FAILED distinction and the original \
+           \forward failure into the Left the load path reports" $ do
+            result ← applyViaBridge $ lns
+                [ rollbackFixtureLua
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "saveModules.register('bridge_a', comp('a'))"
+                , "armed.a = 2"
+                , "saveModules.register('bridge_z_boom', { version=1,"
+                , "  inputVersions={1}, required=true, scope='global', deps={},"
+                , "  snapshot=function() return {} end,"
+                , "  decode=function(v,d) return d end,"
+                , "  validate=function() return nil end,"
+                , "  apply=function() error('BRIDGE_FORWARD_BOOM_1200') end })"
+                , "assert(saveModules.prepareLoad("
+                , "  { { id='bridge_a', version=1, payload=payloadFor('new-a') },"
+                , "    { id='bridge_z_boom', version=1, payload=codec.encode({}) } },"
+                , "  1, false, nil).ok)"
+                ]
+            case result of
+                Right () → expectationFailure
+                    "expected applyLuaLoad to report the failed load"
+                Left err → do
+                    T.unpack err `shouldContain` "BRIDGE_FORWARD_BOOM_1200"
+                    T.unpack err `shouldContain` "ROLLBACK FAILED"
+                    T.unpack err `shouldContain` "bridge_a"
+
+        it "still reports a CLEAN abort as a clean abort when every \
+           \restore succeeded -- the two dispositions must not collapse \
+           \into one message" $ do
+            result ← applyViaBridge $ lns
+                [ rollbackFixtureLua
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "saveModules.register('clean_a', comp('a'))"
+                , "local cleanCalls = 0"
+                , "saveModules.register('clean_z_boom', { version=1,"
+                , "  inputVersions={1}, required=true, scope='global', deps={},"
+                , "  snapshot=function() return {} end,"
+                , "  decode=function(v,d) return d end,"
+                , "  validate=function() return nil end,"
+                , "  -- Throws on the FORWARD pass only: its own pre-load"
+                , "  -- restore (call 2) succeeds, as does every other"
+                , "  -- restore, which is what makes this the clean case."
+                , "  apply=function()"
+                , "    cleanCalls = cleanCalls + 1"
+                , "    if cleanCalls == 1 then error('CLEAN_FORWARD_BOOM_1200') end"
+                , "  end })"
+                , "assert(saveModules.prepareLoad("
+                , "  { { id='clean_a', version=1, payload=payloadFor('new-a') },"
+                , "    { id='clean_z_boom', version=1, payload=codec.encode({}) } },"
+                , "  1, false, nil).ok)"
+                ]
+            case result of
+                Right () → expectationFailure
+                    "expected applyLuaLoad to report the failed load"
+                Left err → do
+                    T.unpack err `shouldContain` "CLEAN_FORWARD_BOOM_1200"
+                    T.unpack err `shouldContain`
+                        "rolled back every already-applied component"
+                    T.unpack err `shouldNotContain` "ROLLBACK FAILED"
+
     describe "per-entity component application (issue #900)" $ do
         let perEntitySpec name live = T.concat
                 [ "{ version=1, inputVersions={1}, required=true, "
