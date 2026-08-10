@@ -1203,6 +1203,67 @@ spec = do
             , "  'a failed own-restore must not stop the unwind behind it')"
             ]
 
+        it "still reports the aggregate when a failed restore raised a \
+           \value that cannot even be rendered -- error() takes any Lua \
+           \value, and a throwing __tostring must not replace the whole \
+           \diagnostic with its own error" $ runsOk $ lns
+            [ rollbackFixtureLua
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "saveModules.register('vile_a', comp('a'))"
+            , "-- Restores after vile_b, so vile_a's restore still runs."
+            , "local vileCalls = 0"
+            , "saveModules.register('vile_b', { version=1,"
+            , "  inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function()"
+            , "    vileCalls = vileCalls + 1"
+            , "    if vileCalls == 2 then"
+            , "      -- A rollback restore raising a table whose own"
+            , "      -- __tostring throws: rendering it is what used to"
+            , "      -- take the aggregate diagnostic down with it."
+            , "      error(setmetatable({}, { __tostring = function()"
+            , "        error('TOSTRING_ITSELF_EXPLODES') end }))"
+            , "    end"
+            , "  end })"
+            , "saveModules.register('vile_z_boom', { version=1,"
+            , "  inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() error('VILE_FORWARD_BOOM_1200') end })"
+            , "assert(saveModules.prepareLoad("
+            , "  { { id='vile_a', version=1, payload=payloadFor('new-a') },"
+            , "    { id='vile_b', version=1, payload=codec.encode({}) },"
+            , "    { id='vile_z_boom', version=1, payload=codec.encode({}) } },"
+            , "  1, false, nil).ok)"
+            , "local ok, err = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'the forward failure must still abort the load')"
+            , "local msg = tostring(err)"
+            , "assert(string.find(msg, 'TOSTRING_ITSELF_EXPLODES', 1, true)"
+            , "  == nil, 'the render failure must NOT become the surfaced "
+              <> "error: ' .. msg)"
+            , "assert(string.find(msg, 'VILE_FORWARD_BOOM_1200', 1, true)"
+            , "  ~= nil, 'the ORIGINAL forward failure must survive: ' .. msg)"
+            , "assert(string.find(msg, 'ROLLBACK FAILED', 1, true) ~= nil"
+            , "  and string.find(msg, 'MIXED', 1, true) ~= nil,"
+            , "  'the mixed-session distinction must survive: ' .. msg)"
+            , "assert(string.find(msg, 'vile_b', 1, true) ~= nil,"
+            , "  'the unrestored component must still be named: ' .. msg)"
+            , "assert(string.find(msg, 'unrenderable', 1, true) ~= nil,"
+            , "  'the unrenderable value must degrade to a placeholder: ' .. msg)"
+            , "assert(live.a == 'old-a',"
+            , "  'the restore behind the unrenderable failure still ran')"
+            , "-- #864: an unrenderable double fault must still leave the"
+            , "-- registry usable rather than wedged mid-transaction."
+            , "local ok2, err2 = pcall(saveModules.applyAll)"
+            , "assert(not ok2 and string.find(tostring(err2),"
+            , "  'no prepared load', 1, true) ~= nil,"
+            , "  'the transaction must still have been cleared: ' .. tostring(err2))"
+            ]
+
         it "reports a failed unwind on the RESET-HOOK path too, where \
            \every component had already committed" $ runsOk $ lns
             [ rollbackFixtureLua

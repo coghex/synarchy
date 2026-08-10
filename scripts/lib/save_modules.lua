@@ -859,25 +859,45 @@ end
 -- running an OLD Haskell session against partly-NEW Lua singletons
 -- rather than a cleanly aborted load. Don't reword it casually.
 --
--- Every value is stringified HERE, after the caller has already cleared
--- its transaction bookkeeping, so a component whose error object has a
--- throwing `__tostring` cannot escape mid-unwind and strand the registry
--- (issue #864's recovery contract) -- exactly why `rollbackApplied`
--- aggregates raw error VALUES rather than formatting them as it goes.
+-- Every value is stringified HERE rather than as `rollbackApplied`
+-- collects them, so nothing can throw mid-unwind and strand the registry
+-- before the caller has cleared its transaction bookkeeping (issue
+-- #864's recovery contract) -- which is why that function aggregates raw
+-- error VALUES. Deferring the rendering is only half of it though:
+-- `abortMessage` builds the argument to `error(...)`, so a render that
+-- threw HERE would propagate in place of this whole diagnostic and lose
+-- exactly what #1200 exists to report. `safeText` below is what makes
+-- that impossible.
+--
+-- `error()` accepts ANY Lua value, so an error object can be a table or
+-- userdata whose `__tostring` metamethod itself throws (or returns a
+-- non-string, which Lua then raises on). Rendering one must therefore
+-- never be able to fail: an unrenderable value degrades to a placeholder
+-- so the surrounding aggregate -- the ROLLBACK FAILED tag, the
+-- mixed-session statement, every other component's id, and the original
+-- forward failure -- still reaches the load path intact.
+local function safeText(value)
+    local rendered, text = pcall(tostring, value)
+    if rendered and type(text) == "string" then
+        return text
+    end
+    return "<unrenderable error value>"
+end
+
 local function abortMessage(prefix, restoredClaim, failures, forwardErr)
     if #failures == 0 then
-        return prefix .. ", " .. restoredClaim .. ": " .. tostring(forwardErr)
+        return prefix .. ", " .. restoredClaim .. ": " .. safeText(forwardErr)
     end
     local named = {}
     for i = 1, #failures do
-        named[#named + 1] = tostring(failures[i].id)
-            .. " (" .. tostring(failures[i].err) .. ")"
+        named[#named + 1] = safeText(failures[i].id)
+            .. " (" .. safeText(failures[i].err) .. ")"
     end
     return prefix .. " and ROLLBACK FAILED -- the live Lua session may be "
         .. "MIXED (the old Haskell session paired with partly-new Lua "
         .. "state); restore failed for " .. #failures .. " component(s): "
         .. table.concat(named, "; ")
-        .. " -- original failure: " .. tostring(forwardErr)
+        .. " -- original failure: " .. safeText(forwardErr)
 end
 
 -- Apply the load prepared by the most recent successful `prepareLoad`,
