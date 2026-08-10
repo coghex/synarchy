@@ -1,6 +1,710 @@
-# Portable loot containers
+# Portable loot containers design
 
-## Status
+This document is the durable design authority for portable, data-driven loot
+containers. It preserves the original physical, population, interaction, and
+knowledge model while separating it from the newer unified-transfer work that
+has landed since the design was written.
+
+Design state: `ready for issue processing`
+
+Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
+reviewed and deliberately not tracked separately · `[deferred]` blocked on a
+concrete precondition
+
+## Processing status
+
+- [ ] EPIC. Add portable, data-driven loot containers
+- [ ] PLC-1. Load item definitions from logical subdirectories
+- [ ] PLC-2. Add physical bulk and portable-storage capacity data
+- [ ] PLC-3. Centralize recursive item materialization and safe ownership moves
+- [ ] PLC-4. Add lazy, deterministic loot-profile realization
+- [ ] PLC-5. Persist player knowledge of portable containers
+- [ ] PLC-6. Add unit-mediated opening and capacity-aware ground pickup
+- [ ] PLC-7. Extend unified transfers to portable item-container endpoints
+- [ ] PLC-8. Author the first wooden-crate ruin content
+- [ ] PLC-9. Gate the complete portable-container lifecycle
+
+## Epic contract
+
+- **Goal:** Let a location contain a portable physical container whose exact,
+  contextual cargo is realized once, can be inspected and transferred through
+  ordinary unit commands, and remains the same nested item tree wherever the
+  player carries, drops, stores, or saves it.
+- **Done when:** A wooden crate spawned from `ruin_small` retains one stable
+  item identity from unopened ground shell through realization, opening,
+  transfer, pickup, carrying, nesting, dropping, and save/load; its cargo is
+  seed-stable and capacity-valid; player knowledge is distinct from live state;
+  and the shared transfer UI moves exact contents without a container-specific
+  parallel interaction system.
+- **Users and operators:** Players recovering and organizing expedition
+  salvage; content authors pairing physical containers with contextual loot;
+  maintainers of item identity, persistence, transfer, and location-content
+  integrity.
+- **Arc label:** `item-instance`
+
+## Current state and evidence
+
+- `Item.Types.ItemInstance` already owns stable `iiInstanceId` identity and a
+  recursively nested `iiContents` tree. `itemTotalWeight` includes nested
+  contents, and `Item.Ground.GroundItem` persists the complete instance when it
+  is on the ground.
+- Ground pickup preserves the exact instance, uses the real recursive weight,
+  and rechecks carrying capacity at command time and arrival. Its current
+  player gesture requires selected units, compares only two-dimensional
+  distance, and has no `Open` path.
+- `item.spawnGround` constructs an instance directly with empty `iiContents`.
+  It therefore does not materialize an item definition's authored
+  `idDefaultContents`, while unit spawning has a separate default-content
+  materializer. There is no single canonical creation boundary today.
+- The existing YAML `container:` component describes fillable fluid or pill
+  capacity (`capacity`, `holds`, `fill_weight`, and `default_fill`). There is no
+  authored physical bulk, internal item-storage weight limit, or internal item-
+  storage bulk limit.
+- `scripts/startup_loader.lua` calls flat `engine.listFiles` enumeration for
+  `data/items`; logical item subdirectories are not loaded.
+- Location content supports independent `item` and `loot_table` entries. It
+  cannot author a container-definition/loot-profile pair or persist a pending,
+  unrealized profile descriptor. Closed #948 supplies seed-stable per-location
+  loot selection, but not delayed container realization.
+- Closed #921 made `ruin_small` random-only and guarantees no specific salvage.
+  Portable crate cargo remains contextual random loot and does not replace the
+  separate guaranteed expedition progression reward.
+- Closed #1085 generalized the strict player transfer core to ordered exact-
+  instance batches, but its endpoint vocabulary remains units and built
+  buildings. Closed #1088 supplies the shared item-list widget.
+- Closed #1087 added page-scoped, player-global stale knowledge for building
+  containers keyed by `BuildingId`. Portable items can move between pages and
+  owners, and no equivalent knowledge owner keyed by item-instance ID exists.
+- Open epic #1013 owns the remaining unified unit/building transfer windows and
+  movement modes. It explicitly excludes item-containers as transfer endpoints,
+  so it is adjacent upstream work rather than a duplicate portable-container
+  epic.
+- No open tracker epic currently owns portable physical containers, lazy
+  container loot realization, or their ground/carried interaction lifecycle.
+
+## Desired experience
+
+A player reaches a ruin and finds a wooden crate whose contents have not been
+precomputed merely because its chunk loaded. The player may send an appropriate
+unit to open it or attempt to carry it. The first successful physical handling
+realizes one deterministic cargo set for that exact crate.
+
+Opening reveals its actual contents and weight. Pickup reveals its total weight
+without granting contents knowledge; a crate that proves too heavy stays on the
+ground with the same now-realized hidden cargo. The player can later inspect,
+empty, refill, carry, nest, drop, and reopen it without rerolls or identity
+changes. Stale remembered contents never override current physical truth.
+
+The crate uses the same item list, transfer policy, feedback, and eventual
+container-window conventions as ordinary unit/building transfers. Portable
+containers add endpoint and lifecycle behavior; they do not create a competing
+inventory interface.
+
+## Scope
+
+### In scope
+
+- Portable item-container definitions in the canonical item registry.
+- Logical item subdirectories whose paths do not affect definition identity.
+- Explicit physical bulk plus internal weight and bulk capacity.
+- Arbitrary finite, acyclic nesting with stable instance identity and atomic
+  ownership moves.
+- A contextual loot-profile registry and location-authored pairing with a
+  physical container definition.
+- Pending shells realized exactly once on first successful `Open` or physical
+  `Pick up`, with deterministic lot admission and exact persistence.
+- Player-global, persistent weight and contents observations keyed by portable
+  item-instance identity.
+- Ground, carried, and nested opening plus transfer interactions through shared
+  UI and strict player-transfer policy.
+- One wooden crate, one industrial-salvage profile, `ruin_small` integration,
+  and focused lifecycle verification.
+
+### Out of scope
+
+- Locks, keys, lockpicking, traps, trap detection, and forced entry beyond a
+  stable future-result boundary on `Open`.
+- Bulk-limited unit inventories, dynamic packing geometry, item orientation, or
+  shape-aware fit.
+- Counted runtime stacks, numeric `Grab amount`, unique-item allocation,
+  rarity tracks, lore sequences, or procedural dungeon layout.
+- Profile-level `empty_chance`/`full_chance`, forced stock states, or guaranteed
+  repayment of expedition supplies.
+- Unloading or compacting realized-container state.
+- Replacing #917's guaranteed progression reward with random crate loot.
+- Changing the lax AI transfer verbs or making all ground piles generalized
+  transfer endpoints.
+- Reimplementing the unit/building transfer modes still owned by epic #1013.
+
+## Design
+
+### Identity and ownership
+
+A portable loot container is one ordinary `ItemInstance` with a physical-
+storage capability. Its stable item-instance ID survives ground, unit,
+building, and nested ownership. Actual contents form an acyclic tree: every
+instance has one owner, an insertion cannot create self/descendant cycles, and
+moving a container moves its complete subtree without minting new identities.
+
+The mutation boundary validates the immediate destination's remaining internal
+bulk, every containing storage ancestor's internal weight capacity, and an
+outer carrier's weight capacity. A failed move leaves the source order,
+destination, ancestors, and instance allocator unchanged.
+
+### Physical data
+
+Every physical item has explicit positive finite external bulk in liters.
+Portable storage separately authors empty weight, external bulk, internal
+weight capacity, and internal bulk capacity. Direct children consume their own
+external bulk; descendant contents add weight through the ancestor chain but do
+not expand a nested container's fixed external bulk.
+
+The present `container:` YAML component is a fillable-substance model, not an
+item-storage model. Physical item storage therefore uses a sibling `storage:`
+component rather than overloading fluid/pill capacity semantics, per D-12.
+
+### Lazy contextual population
+
+A location content entry pairs one physical container definition with one loot
+profile and a stable source identity. Chunk materialization creates a live
+unrealized shell with its normal item identity plus a lightweight pending
+descriptor; it does not roll contents.
+
+The first successful `Open` or physical `Pick up` atomically changes
+`Pending(profile, source) → Realized(exact contents)`. The random stream is a
+pure function of the world seed, placed-location identity, content-entry
+identity, and profile inputs. Entry appearance and quantity lots are rolled
+once, lots are considered in deterministic seed-shuffled order, and only whole
+lots that fit both capacities are admitted. Empty is a realized outcome, not a
+reason to reroll.
+
+After realization the profile/source descriptor is discarded. The exact item
+tree is authoritative thereafter. Concurrent actions converge on one committed
+result, while save/load preserves either the pending descriptor or the realized
+tree without consulting current chunk-load order.
+
+### Actual state and knowledge
+
+Physical contents are authoritative. Player knowledge is a separate durable
+record keyed by the crate's stable item-instance ID:
+
+- a pickup attempt realizes the shell when necessary and records total weight,
+  even if the carrier cannot lift it;
+- successful `Open` records current contents and total weight;
+- later player-controlled insert/remove interactions refresh both observations;
+- simulation or non-player mutation changes actual state without granting new
+  knowledge; and
+- contents and weight retain independent game-time observation timestamps.
+
+The owner is a session-level portable-item knowledge component rather than
+`Building.Knowledge`'s page-scoped `BuildingId` map. Both expose a common UI
+projection, but a carried item does not have to migrate a knowledge record each
+time its page or owner changes, per D-13.
+
+### Commands and transfer integration
+
+`Open` and `Pick up` follow one unit-assignment rule. A nonempty selected set is
+the explicit candidate set and chooses its nearest eligible member by current
+three-dimensional straight-line distance with a deterministic unit-ID
+tiebreak. With no selected player unit, the nearest eligible player-controlled
+unit on the target page is assigned. An unreachable job cancels with the
+existing unit-warning path; it is not silently reassigned.
+
+Pending pickup bypasses the command-time weight refusal because truthful weight
+does not exist yet. On arrival it realizes the crate, records the observed
+weight, and then either moves the exact tree or leaves it at the interaction
+point with a capacity warning. Already-realized crates keep both capacity
+checks.
+
+Portable contents should extend #1085's exact endpoint identity and #1088's
+shared item-list widget. They should not add a fourth transfer policy or list
+renderer. PLC-7 waits for #1013's shared transfer surfaces and adopts its
+partial-batch semantics, per D-14 and D-15.
+
+### Extensible open boundary
+
+The successful-open result owns the transition that reveals contents. Future
+locks, traps, perception checks, or forced entry may deny or alter that result
+before knowledge is granted, without moving realization into chunk loading or
+bypassing the unit-mediated command. Those outcomes are not part of this arc.
+
+### First authored content
+
+The first vertical slice places one wooden crate in a fixed corner of
+`ruin_small` and pairs it with an industrial-salvage profile over existing
+materials and supplies. Capacity filtering follows the accepted original
+calibration: a `4 kg` empty crate, `30 L` external bulk, `30 kg` internal weight
+capacity, and `23 L` internal bulk capacity. The approximately 19% empty and
+19% saturated results remain measured tuning baselines, not runtime quotas or
+schema fields.
+
+## Decisions
+
+### D-1. Model a portable container as one ordinary item instance
+
+The container keeps one stable identity and one exact recursive contents tree
+through every owner and placement. There is no parallel container registry or
+static-furniture runtime type.
+
+### D-2. Pair physical containers with contextual loot profiles at locations
+
+Container appearance/capacity and contextual cargo distribution are separate
+authored concepts. A location selects both; neither definition path becomes
+part of an item ID.
+
+### D-3. Realize generated cargo lazily and exactly once
+
+Chunk loading creates a pending shell. First successful open or physical pickup
+consumes its descriptor atomically; movement, save/load, and reopening never
+reroll it.
+
+### D-4. Use explicit weight and bulk as separate physical constraints
+
+Bulk is authored packing space in liters, not geometric volume. Containers
+have distinct external bulk and internal weight/bulk capacities, while unit
+inventories remain weight-limited in this arc.
+
+### D-5. Permit arbitrary finite acyclic nesting
+
+No gameplay depth limit is imposed. Unique ownership, cycle rejection, direct-
+child bulk, recursive weight, and atomic failure are the invariants.
+
+### D-6. Admit deterministic whole generation lots
+
+Loot profiles roll entry appearance and factor-sized lots. Seed-shuffled order
+is the sole admission priority; a rejected lot does not evict accepted cargo,
+and empty/full distributions emerge from entries and capacity.
+
+### D-7. Separate actual contents from durable player observations
+
+Pickup reveals weight, open reveals contents, and each observation has its own
+persisted game-time. Knowledge may be stale and never authorizes mutation.
+
+### D-8. Use one deterministic unit-assignment rule for world interactions
+
+Selected player units constrain the candidates; otherwise the nearest eligible
+player unit on the page is used. Distance is three-dimensional and ties break
+by stable unit ID.
+
+### D-9. Keep `Open` extensible without implementing locks or traps now
+
+Access effects run at a result boundary before contents become known. The first
+slice implements only ordinary successful opening.
+
+### D-10. Prove the system with contextual industrial salvage
+
+One wooden crate in `ruin_small` provides the first vertical slice. Its random
+cargo creates options but guarantees neither expedition-supply repayment nor
+the separate progression reward.
+
+### D-11. Extend the unified player-transfer substrate
+
+Portable containers reuse exact-instance endpoint requests, structured
+outcomes, the shared item-list widget, and the eventual container-window
+manager from epic #1013. Container-specific interaction code owns realization
+and knowledge refresh, not a competing transfer stack.
+
+### D-12. Keep fillable containers and physical item storage separate
+
+Top-level `bulk` records the external packing space of every physical item. A
+sibling optional `storage:` component records internal item-storage weight and
+bulk capacities. The existing `container:` component and `iiCurrentFill` retain
+their homogeneous fluid/pill meaning unchanged. An item may eventually possess
+both components without either capacity inheriting the other's defaults or
+validation.
+
+### D-13. Persist portable-container knowledge at session scope
+
+A separately versioned session component maps stable item-instance IDs to
+independent weight and contents observations with their own game-time
+timestamps. The record follows the crate across page and owner changes, remains
+outside live ownership/allocator accounting, and is pruned when the live crate
+is permanently gone. Building and portable knowledge expose one presentation
+projection without sharing an incompatible durable owner.
+
+### D-14. Make the shared transfer surfaces an external precondition for PLC-7
+
+PLC-1 through PLC-6 may proceed while epic #1013 remains open. PLC-7 stops until
+#1013 has supplied its container window and persisted unit/building order
+lifecycle, unless those phases are explicitly reassigned. Portable containers
+then extend the settled surfaces with an item-container endpoint instead of
+shipping temporary or duplicate transfer UI.
+
+### D-15. Use per-item atomic partial batches for portable transfers
+
+`Grab all` targets the observed row's exact instance IDs in stable order. Every
+individually valid item moves; missing, stale, or over-capacity items remain and
+receive structured outcomes. The batch reports complete, partial, or no
+fulfillment. No individual item is partly moved, newly matching items are never
+swept in, and a failed move restores that item to its original source position.
+
+## Accepted proposals and rejected alternatives
+
+### P-1. Add a sibling `storage:` item component
+
+Accepted by D-12.
+
+Keep the existing fillable `container:` vocabulary intact and put physical
+item-storage capacity in a distinct optional component. The two concepts use
+some of the same words but have different state and rules:
+
+- today's `container:` means one homogeneous scalar fill such as two liters of
+  water or sixty pills; it drives `iiCurrentFill`, `holds`, `fill_weight`, and
+  `default_fill`;
+- proposed `storage:` means an inventory of exact nested `ItemInstance` values;
+  it drives `iiContents`, internal weight capacity, internal bulk capacity,
+  ownership, and transfer validation; and
+- top-level `bulk` remains the external packing space the item itself occupies,
+  whether or not the item can store anything.
+
+An illustrative definition would therefore read:
+
+```yaml
+weight: 4
+bulk: 30
+storage:
+  weight_capacity: 30
+  bulk_capacity: 23
+```
+
+The spelling remains subject to the repository's loader conventions, but the
+separation is the decision. A future item could legally have both capabilities
+if the design ever needs it—for example, a liquid tank with a separate tool
+compartment—without making one capacity field mean two things.
+
+The alternative is to extend the existing `container:` object with nested-item
+fields. That saves one top-level YAML key and one optional Haskell component,
+but every consumer must then distinguish fill-only, storage-only, and combined
+containers. Validation defaults become hazardous: a canteen's two-liter liquid
+capacity must never become two liters of nested inventory, and a wooden crate
+must not acquire `iiCurrentFill` semantics merely because it stores items.
+That coupling would also make later schema and error messages harder to read.
+
+### P-2. Give portable knowledge a session-level sibling component
+
+Accepted by D-13.
+
+Store item-container observations by stable item-instance ID in one separately
+versioned persisted session component. A record needs four independently
+optional facts: known total weight, when that weight was learned, an observed
+contents snapshot, and when those contents were seen. The record is player
+knowledge only; it neither owns the live item nor participates in duplicate-ID
+or allocator checks as though its historical snapshot were another inventory.
+
+Session scope matches the lifecycle. The same crate may move from ground on
+page A, into a unit, into a building, inside another crate, through a portal,
+and onto page B without changing its item-instance ID. Its observation should
+follow that identity without copying a record between `WorldState` values on
+every move. When the live crate is permanently destroyed, the record can be
+pruned against the canonical live-item enumeration with a diagnostic rather
+than making load fail.
+
+This does not require duplicating UI behavior. Building and portable knowledge
+can expose the same presentation projection—state, remembered items and weight,
+observation times, and live capacity—even though their durable owners differ.
+The shared container window consumes that projection and does not need to know
+which save component supplied it.
+
+The alternative is to generalize the landed `Building.Knowledge` component.
+That component is page-scoped, keyed only by `BuildingId`, assumes capacity is
+always live and known, and stores one contents-derived weight with one reveal
+time. Supporting portable items there would require a tagged key, independent
+weight/content timestamps, cross-page movement semantics, and a migration of
+the already-shipped building save component. It would produce one type named
+"container knowledge," but the apparent unification would sit above two
+different lifecycles and make the completed building feature riskier.
+
+### P-3. Follow #1013's partial-batch transfer semantics
+
+Accepted by D-15.
+
+When an observed row names several exact instances and only some still fit,
+process them in stable request order, move each capacity-valid instance, and
+report each instance that remained. "Partial" applies to the batch, never to an
+individual item: one ration, tool, or nested crate is still moved atomically or
+not moved at all.
+
+For example, suppose an observed row represents twelve exact ration instances:
+
+- if the unit has room for eight at command time, eight queue and four report
+  `receiver_full`; the unit makes one trip for the accepted eight;
+- if capacity changes en route and only six fit on arrival, those six commit
+  individually and the remaining two accepted requests fail as stale capacity;
+- if one observed instance has already gone, that instance fails without
+  retargeting another ration, while other still-valid instances may move; and
+- the event log reports complete, partial, or no fulfillment so the player
+  knows whether anything remains.
+
+Stable request order matters because it decides which exact instances win when
+capacity runs out. The request uses the observed row's explicit instance-ID
+order; it never sweeps in newly added matching items. Source and destination
+order remain deterministic, and a failed individual move restores that item to
+its original source position.
+
+The legacy alternative is a batch-wide transaction: if any requested instance
+is missing or any capacity check fails, nothing moves. That is easy to explain
+as "all means all," but it forces the player to estimate capacity, refresh the
+container, and issue smaller requests. More importantly, #1085 has already
+implemented per-item atomic partial batches for unit/building endpoints. Making
+portable endpoints all-or-nothing would require a second policy or new batch-
+wide prepare/rollback machinery solely for crates.
+
+### P-4. Let #1013 finish the shared window and movement modes first
+
+Accepted by D-14.
+
+Portable foundations can land independently, but PLC-7 should extend the
+settled container-window and order lifecycle after #1013 supplies them. The
+completed #1013 foundations already provide exact endpoint requests (#1085),
+building-container knowledge (#1087), and the shared item-list widget (#1088).
+Its remaining phases own the window manager, persisted walk-then-transfer
+orders, paired adjacent transfer session, cancellation/error presentation, and
+unit↔unit coordination.
+
+PLC-1 through PLC-6 do not need those surfaces. They can deliver data loading,
+physical capacity, safe nested ownership, lazy realization, portable
+knowledge, and ground `Open`/`Pick up`. PLC-7 is the first slice that needs a
+player to move individual contents, so it is the natural dependency boundary.
+Once the shared surfaces exist, PLC-7 adds an `item-container` endpoint kind,
+its accessibility/capacity rules, and its knowledge refresh hooks without
+inventing another window or order state machine.
+
+The cost is schedule coupling: the portable arc can reach an openable and
+carryable crate but cannot finish contents transfer until #1013 reaches the
+needed phases. The alternative is to move those #1013 phases—or a temporary
+subset of them—into this epic. That could reach the crate UI sooner if #1013 is
+stalled, but it would split ownership of one transfer experience across two
+epics, create duplicate tracker scope, and likely leave temporary UI to remove
+later. Reassignment is viable only if it is explicit; silent duplication is
+not.
+
+## Open questions
+
+### Q-1. Does physical item storage use a sibling component?
+
+Resolved by D-12: use top-level external `bulk` plus a separate optional
+physical-storage component. Existing fillable definitions and `iiCurrentFill`
+keep their meaning unchanged.
+
+### Q-2. Does portable-container knowledge use a session-level sibling owner?
+
+Resolved by D-13: use a separately versioned durable map keyed by item-instance
+ID, independent weight/content observations, and one common read shape for the
+shared UI.
+
+### Q-3. Does PLC-7 wait for epic #1013's shared transfer surfaces?
+
+Resolved by D-14: PLC-1 through PLC-6 can proceed independently, but processing
+PLC-7 stops until #1013's container window and persisted unit/building order
+lifecycle exist or are explicitly reassigned to this arc.
+
+### Q-4. Is `Grab all` partial or all-or-nothing when capacity changed?
+
+Resolved by D-15: process the snapshot's exact instance IDs in stable order,
+commit every individually valid move, and report what remained. This preserves
+one contract across every endpoint without weakening per-item atomicity.
+
+## Verification strategy
+
+- Add focused pure coverage for bulk/capacity validation, recursive weight,
+  cycle rejection, ancestor checks, exact-instance preservation, source-order
+  rollback, and deterministic materialization.
+- Add fixed-vector population coverage for stable context derivation,
+  appearance/quantity rolls, shuffled lot order, capacity rejection, empty
+  realization, and concurrent exactly-once transitions.
+- Exercise pending and realized shells, nested item trees, portable knowledge,
+  independent timestamps, allocator bounds, and invalid ownership through the
+  repository's persistence inventory, save compatibility, and integrity gates.
+- Preserve and extend the focused item-instance, location-content, pickup,
+  cargo-capacity, transfer-contract, and shared item-list suites rather than
+  relying on a whole-suite run as an iteration loop.
+- Add headless interaction coverage for selected/no-selection assignment,
+  three-dimensional nearest choice and ties, arrival-range revalidation,
+  pending over-capacity pickup, stale observed contents, and warning paths.
+- Add a manual offscreen UI probe for ground and carried `Open`, relative-age
+  presentation, nested traversal, exact transfer actions, partial feedback if
+  D-15 applies, and resize/focus preservation through the shared widget.
+- Extend `tools/location_content_probe.py` for the authored container/profile
+  pair and exactly-once save/load behavior. Extend the expedition regression
+  only after the portable lifecycle is independently pinned.
+- Run `world_check.py` or regenerate world baselines only if the authored
+  location change alters worldgen output; do not treat new randomized crate
+  cargo as a replacement for #948's deterministic mapping contract.
+
+## Delivery plan
+
+### PLC-1. Load item definitions from logical subdirectories
+
+- **Outcome:** Item YAML can be organized recursively without changing item
+  IDs, loader routing, duplicate validation, or startup determinism.
+- **Scope:** Recursive deterministic discovery for normal and arena startup,
+  canonical relative paths, duplicate-ID behavior, loader diagnostics, and
+  focused registry/probe coverage.
+- **Phase:** Data loading foundation
+- **Depends on:** `none`
+- **Ordering:** `can land first`
+- **Relevant decisions:** D-2
+- **Acceptance signals:** Nested YAML is loaded through `engine.loadItemYaml` in
+  deterministic order; moving a definition between item directories does not
+  change its ID; duplicate IDs retain one documented validation policy.
+- **Out of scope:** New container data or gameplay behavior.
+- **Open questions:** None
+
+### PLC-2. Add physical bulk and portable-storage capacity data
+
+- **Outcome:** Every physical item has validated bulk and portable storage can
+  author distinct external bulk plus internal weight/bulk limits.
+- **Scope:** Definition/YAML representation, explicit item-data migration,
+  finite-positive validation, runtime projection, compatibility/persistence
+  treatment, documentation, and calibration fixtures.
+- **Phase:** Physical data foundation
+- **Depends on:** `none`
+- **Ordering:** `can land first`
+- **Relevant decisions:** D-4, D-12
+- **Acceptance signals:** Missing/invalid physical bulk is rejected; fillable
+  containers retain their behavior; the wooden-crate calibration is representable;
+  save/load cannot silently reinterpret a materialized physical item.
+- **Out of scope:** Ownership mutation, loot realization, and UI.
+- **Open questions:** None
+
+### PLC-3. Centralize recursive item materialization and safe ownership moves
+
+- **Outcome:** Every creation path mints one valid item tree and every nested
+  move preserves identity while enforcing physical invariants.
+- **Scope:** One canonical item materializer, recursive default contents, stable
+  ID allocation, cycle/duplicate rejection, capacity-safe insert/remove,
+  ancestor and carrier checks, atomic rollback, and integrity enumeration.
+- **Phase:** Runtime ownership foundation
+- **Depends on:** `PLC-2`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-4, D-5
+- **Acceptance signals:** Ground, unit, crafted, and content-created instances
+  share the materializer; no path drops defaults; valid nested trees round-trip;
+  failed moves mutate nothing and never duplicate or lose an ID.
+- **Out of scope:** Random profiles, player knowledge, and transfer panels.
+- **Open questions:** None
+
+### PLC-4. Add lazy, deterministic loot-profile realization
+
+- **Outcome:** A location-authored container shell realizes one seed-stable,
+  capacity-valid cargo set only when physically handled.
+- **Scope:** Loot-profile data/registry, container/profile location entry,
+  pending descriptor and source identity, deterministic lot algorithm, atomic
+  realization, concurrent callers, and pending/realized persistence.
+- **Phase:** Population
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-2, D-3, D-6
+- **Acceptance signals:** Chunk loading does not roll; open/pickup yields the
+  same fixed-vector contents across process and load order; one empty result is
+  permanent; concurrent attempts cannot roll twice; every accepted lot fits.
+- **Out of scope:** Player-facing commands, knowledge UI, and crate tuning.
+- **Open questions:** None
+
+### PLC-5. Persist player knowledge of portable containers
+
+- **Outcome:** Weight and contents observations follow a portable crate's
+  stable identity without becoming authoritative state.
+- **Scope:** Durable record/model, independent game-time timestamps, weight-
+  only and contents observations, stale snapshots, nested-container isolation,
+  query/refresh surfaces, lifecycle cleanup, and persistence documentation.
+- **Phase:** Knowledge
+- **Depends on:** `PLC-3`
+- **Ordering:** `can land in parallel with PLC-4`
+- **Relevant decisions:** D-1, D-7, D-13
+- **Acceptance signals:** Never-weighed, weight-only, known-empty, and known-
+  contents states remain distinct; records survive moves and save/load; stale
+  IDs never enter live allocator/integrity ownership; destroyed instances clean
+  up without corrupting loads.
+- **Out of scope:** Windows and transfer actions.
+- **Open questions:** None
+
+### PLC-6. Add unit-mediated opening and capacity-aware ground pickup
+
+- **Outcome:** Ground containers can be opened or physically picked up through
+  deterministic unit jobs with correct realization and knowledge effects.
+- **Scope:** Context actions, unit assignment, floating arrival range, progress-
+  based cancellation, open result boundary, pending-pickup exception, arrival
+  capacity check, knowledge refresh, event feedback, and carried/nested open.
+- **Phase:** World interaction
+- **Depends on:** `PLC-4`, `PLC-5`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-3, D-7, D-8, D-9
+- **Acceptance signals:** No-selection and selected-set assignment are
+  deterministic; unrealized weight is not pre-rejected; arrival realizes once;
+  an overweight crate stays put but becomes weighed; open reveals exact
+  contents; unreachable jobs warn and do not reassign.
+- **Out of scope:** Moving individual contents between endpoints.
+- **Open questions:** None
+
+### PLC-7. Extend unified transfers to portable item-container endpoints
+
+- **Outcome:** Players move exact items between units and ground, carried, or
+  nested portable containers through the shared transfer experience.
+- **Scope:** Tagged item-container endpoints, accessibility/proximity, strict
+  request validation, item-container capacity and ancestor checks, stale
+  observation revalidation, shared container window/list, feedback, and
+  knowledge refresh after player-controlled commits.
+- **Phase:** Transfer integration
+- **Depends on:** `PLC-3`, `PLC-5`, `PLC-6`
+- **Ordering:** `critical path after external transfer-surface precondition`
+- **Relevant decisions:** D-1, D-5, D-7, D-11, D-14, D-15
+- **Acceptance signals:** Ground and carried containers use the same endpoint
+  request/outcome vocabulary and item-list widget as unit/building transfers;
+  stale missing items cannot mutate live state; capacity failures follow one
+  settled batch policy; nested traversal never flattens ownership.
+- **Out of scope:** Rebuilding #1013's unit/building modes, lax AI verbs,
+  numeric quantity pickers, and generalized ground piles.
+- **Open questions:** None
+
+### PLC-8. Author the first wooden-crate ruin content
+
+- **Outcome:** `ruin_small` produces one legible portable wooden crate with a
+  tuned industrial-salvage profile.
+- **Scope:** Crate definition/texture, accepted capacities and bulk values,
+  profile entries/quantity factors, fixed location position, distribution
+  simulator/fixture, and authored-data validation.
+- **Phase:** Content vertical slice
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-4`, `PLC-6`, `PLC-7`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-2, D-4, D-6, D-10
+- **Acceptance signals:** The profile references canonical item IDs; the crate
+  appears exactly once at the authored ruin position; measured empty/saturated
+  distributions remain near the documented tuning baselines without quota
+  fields; cargo is not a guaranteed expedition reimbursement.
+- **Out of scope:** Additional container art, profile families, and progression
+  rewards.
+- **Open questions:** None
+
+### PLC-9. Gate the complete portable-container lifecycle
+
+- **Outcome:** Focused automated and UI-capable scenarios prove one crate's
+  identity, realization, knowledge, transfer, movement, nesting, and persistence.
+- **Scope:** Targeted hspec groups, integrity/save fixtures, one focused
+  headless lifecycle probe, one manual offscreen interaction probe, probe
+  registration, and load-bearing documentation updates.
+- **Phase:** Integration gate
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`, `PLC-4`, `PLC-5`, `PLC-6`,
+  `PLC-7`, `PLC-8`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8, D-9,
+  D-10, D-11, D-12, D-13, D-14, D-15
+- **Acceptance signals:** A pending shell survives save/load, realizes once,
+  rejects an overweight pickup without rerolling, opens to an exact observed
+  snapshot, transfers contents safely, survives carry/drop/nesting, and reloads
+  with the same identities, actual state, and knowledge.
+- **Out of scope:** Broad balance gates and unrelated full-probe sweeps.
+- **Open questions:** None
+
+## Source notes
+
+The detailed original design follows. It remains authoritative where it does
+not conflict with the canonical decisions and open questions above. In
+particular, its all-or-nothing `Grab all` rule is intentionally unresolved by
+Q-4 because the later signed-off unified-transfer contract uses partial
+batches.
+
+### Legacy status
 
 This document records the agreed foundation and first vertical slice for
 portable, data-driven loot containers. It is the design authority from which

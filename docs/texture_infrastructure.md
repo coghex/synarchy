@@ -1,6 +1,646 @@
-# Texture Infrastructure Plan
+# Unit animation atlas infrastructure design
 
-**Status:** Pre-implementation, written 2026-05-24.
+This design consolidates the unit animation corpus into validated runtime
+atlases while preserving the current authoring, animation, and preview
+experience.
+
+Design state: `ready for issue processing`
+
+Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
+reviewed and deliberately not tracked separately · `[deferred]` blocked on a
+concrete precondition
+
+## Processing status
+
+- [ ] EPIC. Compile unit animations into validated runtime atlases
+- [ ] TEX-1. Make the unit asset inventory authoritative and enforceable
+- [ ] TEX-2. Build the deterministic per-animation atlas compiler and index
+- [ ] TEX-3. Add atlas-frame storage and sampling to the unit runtime
+- [ ] TEX-4. Migrate acolyte as the end-to-end atlas pilot
+- [ ] TEX-5. Add portable KTX2 atlas loading when the memory budget requires it — [deferred]: resume after TEX-4 establishes the baseline and projected unit content would exceed its unit-texture memory budget
+- [ ] TEX-6. Migrate the remaining units and retire per-frame runtime loading
+- [ ] TEX-7. Close the pipeline with documentation and focused regression gates
+
+## Epic contract
+
+- **Goal:** Compile unit animation sources into deterministic per-animation
+  atlases that materially reduce runtime images and registrations while
+  preserving every existing animation and preview behavior.
+- **Done when:** Every tracked unit uses the lossless PNG atlas format; gameplay and
+  preview preserve timing, direction, looping, mirroring, dimensions, and frame
+  choice; strict validation and freshness checks pass from a fresh checkout; the
+  per-frame unit-animation runtime path is retired; and before/after resource
+  measurements are recorded. The explicitly deferred KTX2 slice does not block
+  this epic's PNG-atlas completion condition.
+- **Users and operators:** Unit-art authors, gameplay and rendering maintainers,
+  contributors running previews or validation, CI, and players loading units.
+- **Arc label:** None proposed
+
+## Problem
+
+Unit animation content has outgrown the original single-unit loading model. The
+repository now contains four unit definitions and 3,925 distinct animation frame
+PNGs referenced by `data/units/*.yaml`. At runtime, every referenced path is
+decoded through JuicyPixels, uploaded as its own Vulkan image, and assigned its
+own bindless texture slot. The current assets consume about 70.8 MiB as decoded
+RGBA pixels before image-allocation overhead, despite occupying only about 7.3
+MiB as PNG files on disk.
+
+The repository already has several pieces of the intended system: per-animation
+frame rate, looping and horizontal mirroring are data-driven; directions can be
+mirrored at render time; the preview browser understands unit animations; and
+`tools/pack_atlas.py` validates some of the unit asset inventory. It does not,
+however, pack atlases, produce a runtime index, or participate in CI. Its strict
+mode currently reports 120 orphan-file warnings, so it is not yet an enforceable
+gate.
+
+The legacy plan also predates the current asset contract. Unit animation metadata
+now lives in `data/units/*.yaml`, not a separate `animations.yaml`, and some
+animations legitimately have different frame counts by direction. A viable
+atlas pipeline must consolidate runtime images without weakening that existing
+authoring model, breaking asymmetric animations, or introducing generated files
+whose freshness cannot be verified.
+
+## Scope
+
+### In scope
+
+- Compile the existing per-frame unit artwork into deterministic per-animation
+  atlases with an explicit machine-readable index.
+- Reduce runtime image, allocation, descriptor, and file-load counts while
+  preserving the visible timing, dimensions, direction, looping, reversal,
+  stride, force-loop, and mirroring behavior of every animation.
+- Establish one authoritative animation manifest and make every compiled
+  artifact mechanically traceable to it.
+- Turn unit-asset validation into a clean, actionable gate that rejects missing,
+  malformed, inconsistent, or stale assets before runtime.
+- Preserve the current unit preview workflow and make it exercise the same atlas
+  metadata and sampling path as gameplay.
+- Make atlas metadata and runtime selection format-neutral, and preserve a
+  durable deferred slice for eventual GPU-compressed KTX2 artifacts without
+  assuming that every target device exposes BC7.
+- Keep the migration incremental: one unit can prove the complete path before
+  legacy per-frame loading is retired.
+
+### Out of scope
+
+- Changing animation names, state-selection semantics, frame timing, or combat
+  animation-class ownership.
+- Per-frame anchors, equipment overlays, palette swaps, shader-driven color
+  replacement, or paper-doll composition.
+- Texture streaming, asynchronous loading, world LOD, or mipmapped unit sprites.
+- Replacing the current bindless handle-to-slot indirection or the existing
+  deduplication and batched-upload infrastructure.
+- General-purpose atlas packing for UI, terrain, flora, buildings, or arbitrary
+  texture families.
+- Live repacking or hot reload while the engine is running; restarting the
+  relevant preview or game session is acceptable.
+- Deleting source-frame PNGs after compilation.
+
+## Desired experience
+
+### Content author
+
+1. Generate or edit individual PNG frames in the established
+   `assets/textures/units/<unit>/animations/...` hierarchy.
+2. Update the unit's authoritative animation declarations when frames,
+   directions, timing, looping, or mirroring change.
+3. Run one compiler command that validates the source inventory and regenerates
+   only affected atlas artifacts and indices.
+4. Use `--preview units/<unit>` to inspect animation names, directions, playback,
+   mirroring, dimensions, and atlas sampling before committing the change.
+5. Receive a specific build or CI error when a source, declaration, index, or
+   compiled artifact is missing, orphaned, malformed, or stale.
+
+### Runtime
+
+1. Load one compiled index for the selected unit definition.
+2. Load one image per animation instead of one image per frame.
+3. Select a logical direction and frame using the existing animation state and
+   timing rules.
+4. Resolve that frame to an atlas cell and optional horizontal mirror.
+5. Draw and hit-test using the cell's dimensions and UV rectangle, never the
+   dimensions of the full atlas.
+
+### Fresh checkout and CI
+
+1. A fresh checkout has everything necessary to run the game and previews; it
+   does not silently depend on an unrecorded local asset-generation step.
+2. CI validates manifest/source consistency and proves that checked-in compiled
+   artifacts match their recorded source digest.
+3. The validation path is quick enough to run selectively when unit definitions,
+   unit animation sources, the compiler, or compiled artifacts change.
+
+## Current state and repository evidence
+
+- `data/units/acolyte.yaml`, `bear_brown.yaml`, `red_squirrel.yaml`, and
+  `technomule.yaml` embed the current animation declarations. Each declaration
+  carries `fps`, `loop`, `flip`, and explicit per-direction frame lists; richer
+  state-to-animation selection also lives in these unit definitions.
+- The four definitions reference 3,925 unique frame PNGs. Their decoded RGBA
+  footprint is approximately 70.8 MiB: 20.3 MiB for acolyte, 44.9 MiB for brown
+  bear, 1.4 MiB for red squirrel, and 4.2 MiB for technomule.
+- `Engine.Scripting.Lua.API.Units.Yaml` currently calls `loadAndRegister` for
+  each referenced frame. `Engine.Scripting.Lua.Message.Texture` decodes each
+  path with JuicyPixels and creates a distinct Vulkan image for every new path.
+- `Unit.Direction.mirrorDir` and `Unit.Render.pickFrame` already implement the
+  five-authored-direction mirroring convention and per-animation `flip` choice.
+  Asymmetric animations may author all eight directions.
+- Four existing acolyte animations have different frame counts across their
+  authored directions. An atlas format therefore cannot assume one common
+  frame count for every row; it must record each direction's real count and pad
+  unused cells deterministically.
+- `tools/pack_atlas.py` is currently a validator despite its name. Running
+  `python3 tools/pack_atlas.py --validate-only --strict` reports 120 orphan
+  warnings and exits nonzero. It is not referenced by `Makefile`, the CI
+  workflow, or the local CI driver.
+- `docs/asset_generation.md` documents the live source layout and mirroring
+  convention. The legacy proposal for a separate
+  `assets/units/<unit>/animations.yaml` was never adopted.
+- Unit preview issue #887 is closed, and `tools/preview_probe.py` already checks
+  unit animation enumeration, timing, loop behavior, mirrored directions, and
+  playback. Atlas migration must preserve that coverage.
+- No KTX2 decoder or upload path exists in the repository. KTX2 Basis Universal
+  payloads require a runtime transcode target selected from device-supported
+  formats; the official
+  [KTX library](https://github.khronos.org/KTX-Software/libktx/index.html)
+  supplies KTX loading, transcoding, and Vulkan integration. The Vulkan sample
+  likewise selects ASTC, ETC2, or BC according to device features rather than
+  assuming a single universal GPU format.
+- The current bindless shaders declare arrays of `sampler2D`, and the bindless
+  descriptor set stores combined image samplers. Vulkan permits independently
+  created sampled-image views in those descriptor entries when each selected
+  format supports sampled-image use and matches the shader's floating-point
+  sampled type. Therefore decoded RGBA PNG atlases and supported compressed
+  KTX2-transcode targets can coexist across different bindless slots in one
+  session; they do not need separate render pipelines.
+- A broad tracker search found no dedicated open or closed atlas/KTX texture
+  infrastructure issue. Closed epic #427 and child #887 cover asset preview,
+  not this runtime consolidation.
+
+## Design
+
+### Constraints and invariants
+
+- Source frame PNGs remain editable, tracked inputs even after the runtime stops
+  loading them individually.
+- An animation is the compilation boundary. Its atlas contains only that
+  animation's frames, so changing one animation need not rebuild an entire unit
+  or unrelated asset family.
+- The index records each authored direction explicitly, including its row,
+  actual frame count, cell dimensions, and whether runtime mirroring is allowed.
+- Rows use a deterministic direction order; shorter directions are padded with
+  transparent cells to the animation's maximum authored frame count.
+- Every frame in one animation must have the same dimensions and pixel format.
+  A mismatch is a validation error, not an implicit rescale or crop.
+- Existing animation selection and `pickFrame` time arithmetic remain the source
+  of truth. Atlas adoption changes frame storage and UV resolution, not which
+  logical frame should play.
+- Runtime horizontal mirroring remains an animation-level declaration. The
+  compiler must not silently infer mirroring by deleting asymmetric source rows.
+- Atlas UV selection must compose with render clipping, hit testing, texture
+  handle indirection, and nearest-neighbor filtering.
+- Unit sprites remain non-mipmapped unless a later design establishes an
+  art-safe sampling policy.
+- A missing, stale, unsupported, or corrupt compiled artifact fails with the unit
+  and animation named. There is no silent substitution of an unrelated texture.
+- The migration may temporarily support both legacy frame lists and compiled
+  atlases, but each animation resolves through exactly one storage mode.
+- Legacy loading is removed only after every tracked unit and preview path has
+  migrated and parity checks pass.
+- Any KTX2 path must negotiate a device-supported transcode target and retain an
+  intentional uncompressed fallback for unsupported hardware or development
+  configurations. BC7 support is never assumed merely because Vulkan is present.
+
+### Dual-format runtime contract
+
+- The generated index names all available encodings for an atlas and their
+  shared logical identity, dimensions, rows, and frame counts. Animation
+  metadata and renderer frame selection do not depend on the encoded image type.
+- The loader chooses exactly one resident representation for each atlas. Once
+  KTX2 support exists, it prefers KTX2 only when the artifact is present, the
+  payload can be transcoded, and the resulting `VkFormat` supports sampled-image
+  use on the active physical device; otherwise it loads the PNG atlas.
+- Different animations may resolve to different representations in the same
+  session and occupy ordinary slots in the existing bindless array. This permits
+  incremental KTX2 adoption and an uncompressed compatibility path.
+- Loading both representations of the same logical atlas simultaneously is not
+  normal gameplay behavior because it duplicates image memory and a descriptor
+  slot. An explicit diagnostic comparison mode may do so, but the production
+  selection contract exposes only one handle for that logical atlas.
+
+## Decisions
+
+### D-1. Preserve individual PNGs as source artwork
+
+Individual lossless PNG frames remain the editing inputs and are not replaced by
+hand-edited atlas sheets. Compiled atlases are derived runtime artifacts, so art
+can still be generated, reviewed, and corrected frame by frame.
+
+### D-2. Use one atlas per animation
+
+Atlas granularity is one image per animation, not one atlas per unit and not one
+image per frame. This contains rebuilds and dimensions to one animation while
+removing the dominant per-frame image/descriptor overhead.
+
+### D-3. Preserve playback semantics
+
+Per-animation `fps`, `loop`, and `flip` semantics remain exact. The existing
+frame-choice arithmetic, including reversal, stride, and force-loop behavior,
+continues to decide the logical frame; atlas work only changes its storage and
+UV resolution.
+
+### D-4. Preserve both direction-authoring modes
+
+The established five-direction convention remains valid, with runtime mirroring
+for west-facing views only when the animation opts in. Artwork that is not
+mirror-safe may continue to author all eight directions.
+
+### D-5. Record unequal direction lengths
+
+Atlas rows may have different logical frame counts. The compiled index records
+the real count per direction, and transparent row padding is never exposed as an
+animation frame.
+
+### D-6. Retain nearest-neighbor sampling without mipmaps
+
+Unit atlases use nearest-neighbor sampling and no mipmaps in this arc, preserving
+the current pixel-art presentation.
+
+### D-7. Require restart-to-reload
+
+Runtime hot reload is out of scope. Source or compiled-asset changes take effect
+after restarting the preview or game session, avoiding a second asset-lifecycle
+problem inside the atlas migration.
+
+### D-8. Keep composition and streaming outside the arc
+
+Per-frame anchors, equipment overlays, palette swaps, texture streaming, and
+general-purpose non-unit atlas support remain outside this arc.
+
+### D-9. Keep preview on the production asset path
+
+The current unit preview remains a first-class acceptance surface and must use
+the production atlas/index path rather than a preview-only decoder. It therefore
+detects the same malformed metadata and sampling regressions gameplay would see.
+
+### D-10. Defer implementation but require eventual KTX2 support
+
+The immediate critical path ships deterministic PNG atlases and measures their
+real resource cost. KTX2 remains an explicit required future capability rather
+than an abandoned experiment, but TEX-5 is deferred until the acolyte pilot has
+produced a trustworthy PNG-atlas baseline and the projected unit-content plan
+would exceed the unit-texture memory budget established from that baseline.
+
+When resumed, KTX2 support is additive: the loader accepts both PNG and KTX2
+atlas artifacts, chooses exactly one representation per logical atlas, and may
+use different representations for different animations in the same Vulkan
+session. KTX2 is preferred when it can be transcoded to a sampled format the
+device supports; PNG is the compatibility fallback. Loading both copies of the
+same atlas is reserved for an explicit diagnostic comparison because doing so
+would duplicate resident image memory and a bindless slot.
+
+### D-11. Keep unit YAML authoritative and generate runtime metadata
+
+Each `data/units/*.yaml` remains the only human-edited semantic declaration for
+animation names, source frames, direction ownership, timing, looping, mirroring,
+and state selection. The compiler transforms that authority into a versioned
+runtime atlas index. Atlas geometry, storage choices, freshness digests, and
+other mechanically derivable metadata are generated, then parsed into memory;
+contributors do not maintain a second `animations.yaml` or hand-edit the index.
+
+### D-12. Track generated artifacts behind size and churn guardrails
+
+Generated PNG atlases and indices are tracked with their source frames so a
+fresh checkout can run without an unrecorded asset-generation prerequisite.
+Per-animation atlas granularity also bounds ordinary churn: editing one
+animation may change that animation's atlas and its unit index, but must not
+rewrite unrelated atlases.
+
+The acolyte pilot is the tracking gate. Before the remaining units migrate, it
+must report derived bytes, source bytes, and changed-file locality. The initial
+repository budget is that tracked derived PNG artifacts remain no more than two
+times the corresponding source-frame PNG footprint. If the pilot exceeds that
+ratio or rewrites unrelated artifacts, TEX-4 stops before mass migration and the
+team chooses a distribution strategy such as Git LFS, release artifacts, or a
+reproducible build cache. A later KTX2 artifact set is measured separately and
+must not silently expand this budget.
+
+## Proposals
+
+### P-1. Keep unit YAML as the semantic authority
+
+Accepted by D-11.
+
+Keep each existing `data/units/*.yaml` file as the sole human-edited semantic
+manifest. The compiler would read its explicit frame lists and emit a generated
+per-unit atlas index containing UV cells, direction counts, dimensions, storage
+format, and a digest of all relevant source declarations and pixels. The legacy
+plan's second hand-edited `animations.yaml` would not be introduced.
+
+### P-2. Make PNG atlases required and KTX2 evidence-gated
+
+Accepted and strengthened by D-10: KTX2 is eventually required, but its
+implementation is deferred behind an explicit resource-budget trigger.
+
+Make deterministic PNG atlases the required consolidation outcome. Treat KTX2
+as a measured extension: first land a small portable runtime spike using device
+feature negotiation, then adopt compressed shipping artifacts only if measured
+memory/load improvements justify the native dependency and cross-platform
+packaging cost.
+
+### P-3. Track reproducible runtime artifacts
+
+Accepted with the size and churn guardrails in D-12.
+
+Track generated runtime atlases and indices in Git while retaining all source
+PNGs. Pin compiler/tool versions and make CI compare recorded source digests or
+deterministically regenerated output. A fresh checkout would then run without a
+locally installed packer or prior `toktx` invocation.
+
+## Open questions
+
+### Q-1. Is KTX2 compression required to complete this epic?
+
+Resolved by D-10. KTX2 is an eventual required capability but is deliberately
+deferred from the PNG-atlas completion path. TEX-5 owns its later implementation
+after the pilot and memory-budget trigger.
+
+This question distinguished immediate epic completion from long-term scale. The
+chosen answer makes PNG atlas consolidation independently useful now while
+retaining an explicit KTX2 obligation once measured memory pressure justifies
+the native loader and packaging work.
+
+### Q-2. Which file is the human-edited animation authority?
+
+Resolved by D-11. Unit YAML remains authoritative and the runtime atlas index is
+generated from it.
+
+The rejected alternative was a second editable `animations.yaml`; it would
+duplicate names, paths, timing, looping, and mirroring and create an avoidable
+synchronization problem.
+
+### Q-3. Where do compiled atlases and indices live?
+
+Resolved by D-12. Generated artifacts are tracked while they remain within the
+pilot's explicit size and locality guardrails.
+
+Local/CI-only build outputs were rejected for the initial pipeline because
+runtime resources are cwd-relative and expected to work from a fresh checkout.
+The size gate preserves a route to external artifact storage if repository cost
+eventually outweighs that convenience.
+
+## Delivery plan
+
+### TEX-1. Make the unit asset inventory authoritative and enforceable
+
+- **Outcome:** Strict unit-animation validation is clean, self-tested, and
+  selectively enforced in CI.
+- **Scope:** Extend `tools/pack_atlas.py`; classify every current orphan warning
+  as referenced art, non-runtime source material, or genuinely obsolete content;
+  validate names, containment, duplicate paths, direction sets, asymmetric
+  exceptions, dimensions, numbering, and exact orphan ownership; add self-tests
+  and path-selective CI wiring.
+- **Phase:** 1 — establish trustworthy inputs
+- **Depends on:** `none`
+- **Ordering:** `can land first`
+- **Relevant decisions:** D-1, D-4, D-5
+- **Acceptance signals:** Strict validation succeeds with zero unexplained
+  warnings, and each guarded invariant has a negative self-test that fails for
+  the intended reason.
+- **Out of scope:** Atlas generation and runtime loading.
+- **Open questions:** None
+
+### TEX-2. Build the deterministic per-animation atlas compiler and index
+
+- **Outcome:** One command produces reproducible lossless atlases and versioned
+  runtime indices from the authoritative source declarations.
+- **Scope:** Pack directions in fixed order; preserve each real direction count;
+  pad only unused row cells; record rows, counts, cell dimensions, mirroring,
+  storage paths, source digest, and tool version; rebuild changed animations;
+  reject stale output and unsafe paths.
+- **Phase:** 2 — compile assets
+- **Depends on:** TEX-1
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-2, D-4, D-5, D-6, D-11, D-12
+- **Acceptance signals:** Compiler self-tests cover unequal lengths, five-way
+  mirroring, eight-way artwork, determinism across clean and incremental runs,
+  stale output, dimensions, and containment.
+- **Out of scope:** Runtime atlas sampling and KTX2 encoding.
+- **Open questions:** None
+
+### TEX-3. Add atlas-frame storage and sampling to the unit runtime
+
+- **Outcome:** The engine can load one image per animation and render any logical
+  frame from indexed atlas metadata while legacy animations remain temporarily
+  compatible.
+- **Scope:** Add an explicit format-neutral atlas storage mode; retain current
+  frame-time arithmetic; return cell UVs and horizontal flip; use cell
+  dimensions for rendering, clipping, hit testing, and debug data; reject
+  malformed indices; choose one resident representation per logical atlas; keep
+  a narrow whole-animation legacy mode for migration.
+- **Phase:** 3 — runtime capability
+- **Depends on:** TEX-2
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-2, D-3, D-4, D-5, D-6, D-10, D-11
+- **Acceptance signals:** Focused headless tests cover loop/reverse/stride,
+  mirroring, asymmetric directions, unequal counts, UV bounds, dimensions,
+  storage-mode separation, and corrupt-index errors.
+- **Out of scope:** Migrating a production unit or removing legacy loading.
+- **Open questions:** None
+
+### TEX-4. Migrate acolyte as the end-to-end atlas pilot
+
+- **Outcome:** Every acolyte animation uses the production atlas path in gameplay
+  and preview with recorded behavior and resource parity evidence.
+- **Scope:** Compile and select acolyte atlas metadata; preserve state animation
+  selection and all-direction weapon artwork; make unit preview use the same
+  metadata; record image count, slot count, uploaded bytes, load time, and
+  representative screenshot or frame-hash comparisons; record source and
+  derived artifact bytes and prove an animation edit does not rewrite unrelated
+  atlas artifacts.
+- **Phase:** 4 — production pilot
+- **Depends on:** TEX-3
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-9, D-11, D-12
+- **Acceptance signals:** Gameplay and preview parity checks pass; every acolyte
+  animation is discoverable; measurements show the expected reduction in images
+  and registrations; tracked derived PNG artifacts are no more than twice their
+  source-frame PNG footprint; and an isolated animation edit changes only its
+  atlas plus the generated unit index. Exceeding either artifact guardrail stops
+  mass migration for an explicit storage-strategy decision.
+- **Out of scope:** Other units, legacy-path removal, and final compression choice.
+- **Open questions:** None
+
+### TEX-5. Add portable KTX2 atlas loading when the memory budget requires it
+
+- **Outcome:** The deferred capability is resumed when its trigger is met, after
+  which the engine can choose KTX2 or PNG independently per atlas and different
+  encodings can coexist safely in one bindless session.
+- **Scope:** Integrate a KTX2 loader/transcoder; negotiate ASTC, ETC2, BC, or an
+  uncompressed target from actual device features; prefer supported KTX2 while
+  falling back to PNG; preserve one logical atlas handle and one resident image;
+  provide an explicit diagnostic-only dual-copy comparison; compare package
+  size, uploaded memory, load time, visual fidelity, native dependency, and
+  platform packaging costs; measure the additional tracked KTX2 artifacts
+  separately against the repository budget.
+- **Phase:** Deferred compression capability
+- **Depends on:** TEX-4
+- **Ordering:** `not on the critical path`
+- **Relevant decisions:** D-6, D-10, D-11, D-12
+- **Acceptance signals:** Selected macOS and Linux configurations have recorded
+  results; format selection is derived from device support; unsupported or
+  failed KTX2 transcodes fall back to PNG; different atlas records can
+  simultaneously occupy PNG-backed and compressed bindless slots; ordinary
+  loading never retains duplicate representations of one atlas; and artifact
+  size/churn evidence is recorded.
+- **Out of scope:** Replacing the format-neutral animation/index model or
+  requiring every atlas to use the same encoding.
+- **Open questions:** None. Deferral precondition: TEX-4 has established the
+  baseline and the projected unit-content plan would exceed the resulting
+  unit-texture memory budget. Until then this ledger entry remains `[deferred]`.
+
+### TEX-6. Migrate the remaining units and retire per-frame runtime loading
+
+- **Outcome:** Brown bear, red squirrel, and technomule use the approved atlas
+  representation, and no unit animation loads one image per frame.
+- **Scope:** Compile and migrate every remaining state-selected and asymmetric
+  animation using tracked PNG atlases; preserve the format-neutral index and
+  loader boundary needed by deferred TEX-5; remove unit-animation legacy loading
+  and compatibility metadata; leave unrelated direct single-texture loading
+  unchanged.
+- **Phase:** 6 — complete migration
+- **Depends on:** TEX-4
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8, D-9,
+  D-10, D-11, D-12
+- **Acceptance signals:** All unit previews and focused gameplay tests pass; no
+  unit animation registers per-frame images; and no referenced or compiled unit
+  artifact is stale or orphaned.
+- **Out of scope:** Atlasing any non-unit texture family.
+- **Open questions:** None. D-10 fixes PNG as the current representation and
+  preserves a format-neutral boundary for deferred TEX-5.
+
+### TEX-7. Close the pipeline with documentation and focused regression gates
+
+- **Outcome:** Contributors can regenerate, validate, inspect, and review unit
+  atlases from a fresh checkout, with regressions caught by focused automation.
+- **Scope:** Update asset-generation and recovery documentation; extend preview
+  and runtime probes for indices, mirroring, unequal counts, and format fallback;
+  add a cheap per-unit image/slot-count budget; record pilot and full-migration
+  measurements; record the unit-texture memory budget that activates TEX-5;
+  report tracked derived bytes and changed-artifact locality; complete
+  path-selective CI coverage.
+- **Phase:** 7 — operational closure
+- **Depends on:** TEX-6
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8, D-9,
+  D-10, D-11, D-12
+- **Acceptance signals:** The documented fresh-checkout workflow validates and
+  previews every unit, relevant changes select the expected checks, and stale or
+  behaviorally invalid atlas changes fail automatically.
+- **Out of scope:** Broad full-probe or full-CI expansion beyond path-relevant
+  gates.
+- **Open questions:** None
+
+## Verification strategy
+
+- Every unit animation is loaded from one image per animation rather than one
+  image per logical frame.
+- The current 3,925-frame corpus renders with the same animation choices, timing,
+  dimensions, direction, looping, and horizontal mirroring as before migration.
+- Animations with unequal per-direction counts never expose padding as frames and
+  never index outside their atlas.
+- Five-direction mirrorable animations and all-eight-direction asymmetric
+  animations are both covered by automated tests and the production preview.
+- Strict validation has zero unexplained warnings and is enforced selectively in
+  CI with its own self-tests.
+- The compiler detects stale artifacts and produces deterministic results under
+  the recorded toolchain.
+- A fresh checkout can run the game and unit preview without an undocumented
+  prior generation step.
+- The acolyte pilot reports source and derived bytes; tracked PNG atlases remain
+  within D-12's two-times-source budget; and changing one animation does not
+  rewrite unrelated atlas artifacts.
+- Runtime image count, bindless registrations, uploaded pixel bytes, and unit-load
+  time are measured before and after the acolyte pilot and full migration.
+- PNG atlases remain the complete supported path while TEX-5 is deferred. When
+  TEX-5 is resumed, runtime transcode format is selected from actual device
+  support, PNG fallback is tested, mixed PNG/KTX2 atlas residency works in one
+  session, and one logical atlas does not retain duplicate production images.
+- The legacy per-frame unit-animation runtime path is removed only after every
+  unit and preview path has migrated successfully.
+
+## Risks and mitigations
+
+- Risk: duplicated human-edited manifests drift.
+  - Mitigation: D-11 keeps unit YAML authoritative and generates the runtime
+    index with a source digest.
+- Risk: an atlas row assumes equal frame counts and plays transparent padding.
+  - Mitigation: index real counts per direction and cover the four current
+    unequal-count animations in compiler and runtime tests.
+- Risk: atlas dimensions accidentally become sprite dimensions or hit bounds.
+  - Mitigation: make cell size explicit in the runtime frame result and test
+    render/hit-test geometry separately from image extent.
+- Risk: mass migration hides behavioral regressions or exhausts review scope.
+  - Mitigation: keep a temporary explicit legacy storage mode and prove acolyte
+    end to end before migrating the remaining units.
+- Risk: generated files are stale or depend on a contributor's local tool version.
+  - Mitigation: pin tools, record digests/tool versions, and validate deterministic
+    output or freshness in path-selective CI. D-12 additionally caps initial
+    tracked artifact size and unrelated-file churn.
+- Risk: KTX2 integration hard-codes a compression format unavailable on a target
+  GPU or adds disproportionate native packaging complexity.
+  - Mitigation: D-10 defers the work until the measured budget activates it,
+    selects transcode targets from device features, retains PNG fallback, and
+    permits mixed encodings without retaining duplicate copies of one atlas.
+- Risk: the validator's current 120 warnings are silenced without understanding
+  whether the files are unused, unreferenced future art, or missing declarations.
+  - Mitigation: require an explicit classification during TEX-1 and keep original
+    sources until their approved disposition is implemented.
+
+## Rollout and rollback
+
+- Land validation first so later artifact and manifest mistakes fail early.
+- Add compiler outputs without changing runtime behavior.
+- Add the atlas runtime behind an explicit per-animation storage mode.
+- Migrate acolyte and collect parity, performance, artifact-size, and churn
+  evidence before expanding migration.
+- Migrate the remaining units after the PNG pilot passes; do not wait for the
+  deferred KTX2 capability.
+- Retire legacy per-frame loading last.
+- Resume TEX-5 after the pilot baseline exists and projected unit content would
+  exceed the documented unit-texture memory budget. Its format-neutral loader
+  work must preserve existing PNG assets as the fallback and rollback path.
+- Before retirement, rollback is per animation or per unit: select its legacy
+  frame-list storage while preserving generated artifacts for diagnosis.
+- After retirement, rollback is a normal code/data revert restoring both the
+  compatible loader and manifest form; compiled indices are versioned so an
+  incompatible runtime rejects them rather than misrendering silently.
+
+## Issue-processing handoff
+
+- Proposed epic title: Compile unit animations into validated runtime atlases
+- Proposed epic labels: none
+- Process the epic first, then one dependency-ready slice per invocation.
+- TEX-1 is the first dependency-ready child.
+- TEX-2 has no remaining design-question gate.
+- TEX-5 is deliberately deferred under D-10 and does not block TEX-6 or epic
+  completion; resume it only when its recorded pilot-and-memory-budget
+  precondition is met.
+- The design is ready for one-at-a-time processing under the ledger above.
+
+## Source notes
+
+The remainder of this document preserves the 2026-05-24 plan as source material.
+It is not the current design contract where it conflicts with the decisions,
+proposals, open questions, or delivery slices above.
+
+---
+
+# Legacy texture infrastructure plan
+
+**Legacy status:** Pre-implementation, written 2026-05-24.
 
 ## Goals
 

@@ -1,6 +1,104 @@
-# Expedition Gameplay Loop
+# Expedition gameplay loop design
 
-## Purpose
+This document is the durable design authority for completing Synarchy's first
+expedition arc. Most of the playable loop has shipped; the remaining design
+work adds a real confrontation, a capability-changing reward, and integrated
+verification of those two verbs.
+
+Design state: `ready for issue processing`
+
+Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
+reviewed and deliberately not tracked separately · `[deferred]` blocked on a
+concrete precondition
+
+## Processing status
+
+- [ ] EPIC. Complete the expedition gameplay loop
+- [x] EXP-1. Add hostile location occupants and the first combat encounter — [#916]
+- [ ] EXP-4. Add information-revealed locations and staged map icons
+- [x] EXP-2. Add a transformational expedition reward — [#917]
+- [ ] EXP-5. Extend the first-session tutorial through confrontation and advancement
+- [ ] EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
+
+## Epic contract
+
+- **Goal:** Extend the shipped prepare → travel → discover → extract → return
+  loop so a normal expedition includes an understandable confrontation and a
+  guaranteed reward that visibly expands colony capability.
+- **Done when:** One authored ruin encounter can arise through ordinary play
+  and clear only when every assigned hostile is dead or incapacitated; its
+  guaranteed location-intelligence reward can be returned to built colony cargo
+  and explicitly analyzed to reveal nearby instances of a separate hidden-by-
+  default location definition as anonymous map hints that become type-specific
+  on approach; and the tutorial plus end-to-end gate prove the completed loop
+  across a fresh save/load process without regressing survival and retrieval.
+- **Users and operators:** Players running the first expedition; content
+  authors adding locations, occupants, and rewards; maintainers operating the
+  location, combat, tutorial, and persistence gates.
+- **Arc label:** `expedition`
+
+## Current state and evidence
+
+- The location foundation and embark-to-discovery slice shipped under closed
+  epic #159 and issues #777–#782. `Location.Instance` now owns stable placed
+  identities, bounds, content-spawn state, and the persisted lifecycle added by
+  closed issue #911.
+- Per-unit experiential location knowledge shipped in closed issue #915 and is
+  persisted through `lua.unit_ai`; the global discovery lifecycle remains a
+  separate cartographic layer.
+- Typed faction properties and relations shipped in closed issue #912, removing
+  that original prerequisite for hostile occupants.
+- `LocationLifecycle` already contains the append-only progression `unknown →
+  hinted → discovered → active → cleared → depleted`, and proximity discovery
+  already promotes both `unknown` and `hinted` to `discovered`. `hinted` has no
+  producer today. The zoom-map renderer currently draws every mapped instance
+  and selects the same definition-specific `undiscovered` texture for both
+  `unknown` and `hinted`, then the `discovered` texture for every later state.
+- Survival calibration, direct retrieval and return, ruin loot, the
+  first-session tutorial foundation, and the integrated man-versus-nature gate
+  shipped in closed issues #919–#923. `tools/expedition_loop_probe.py` is the
+  current end-to-end authority.
+- The current gate deliberately substitutes **survive the journey** for
+  confrontation and **bank ordinary colony stock** for advancement. Open issue
+  #916 owns the hostile-encounter slice and remains blocked on unit art; open
+  issue #917 owns the transformational reward and remains blocked on choosing
+  something meaningful to reveal or gate.
+- No open tracker epic exactly owns the remaining pair plus their integration.
+  Closed epic #918 covers survival calibration only and explicitly defers
+  #916/#917; closed epic #159 covers the location foundation.
+
+## Scope
+
+### In scope
+
+- One authored hostile occupant type and one reliable ruin encounter.
+- Hostility detection, bounded pursuit/disengagement, explicit attack/retreat,
+  outcome feedback, loot, and a persisted location outcome.
+- One guaranteed reward, distinct from random ruin loot and the existing
+  communications `radio`, that reveals eligible hidden locations within a
+  finite radius of the cleared source location.
+- At least one separate location definition authored as hidden by default, so
+  the new information loop can be observed without changing existing mapped
+  ruins or the starting-site-selection experience.
+- A backwards-compatible location-visibility policy and staged zoom-map icon
+  behavior: invisible while unknown, generic while hinted, type-specific while
+  discovered/active, and completed when cleared/depleted.
+- A separate tutorial extension built only after the encounter and reward own
+  durable predicates.
+- Extending the existing end-to-end expedition gate and player-facing guidance
+  to prove the completed confront and invest verbs across save/load.
+
+### Out of scope
+
+- Procedural or multi-level dungeons, encounter respawning, formations,
+  diplomacy, faction reputation, quests, and settlement simulation.
+- A generalized caravan or world-scale logistics interface.
+- Full fog of war or hiding every existing surface ruin; current always-mapped
+  definitions retain their existing behavior by default.
+- Large loot-tier systems, complex shelter requirements, or balancing every
+  possible thirty-minute expedition.
+
+## Desired experience
 
 Synarchy's first complete gameplay slice should be one expedition, not a
 general-purpose expansion of the location framework.
@@ -100,8 +198,8 @@ and usable*, which is what the step-9 gate asserts.
 
 The first-session milestone might be:
 
-> Settlement established — the recovered radio is operational. Two distant
-> signals have been located.
+> Settlement established — recovered location intelligence has identified new
+> signals near the cleared ruin.
 
 The sandbox continues after this milestone, but the player has completed a
 recognizable arc.
@@ -306,7 +404,363 @@ feed does not exist. Together they would add the **confront** verb and turn
 colony can do". Everything else in the first-30-minutes sequence is
 implemented.
 
-## Implementation order
+## Design
+
+### Encounter ownership and completion
+
+Each authored encounter owns a fixed, durable membership set established when
+the location spawns its hostile occupants. A hostile leaving the location's
+bounds remains a member; merely fleeing or being driven away cannot clear the
+site. The encounter promotes to `active` when ordinary hostility begins and to
+`cleared` only when every assigned hostile is dead or incapacitated. The
+promotion is one-way and exactly once, so returning later cannot recreate or
+re-clear the encounter.
+
+Encounter membership and its terminal result must survive save/load. Adding
+that durable state follows the component-version and frozen-DTO migration rules
+in `docs/persistence_contract.md`; it must not overload the independent
+contents-spawned or geometry-stamped flags.
+
+### Information-revealed locations and map icons
+
+Location definitions gain an explicit map-visibility policy. The compatibility
+default preserves today's always-mapped behavior; only definitions authored as
+information-revealed begin absent from the player-facing map.
+
+For an information-revealed location, lifecycle and map presentation mean:
+
+| Lifecycle | Player-facing map state |
+|---|---|
+| `unknown` | No icon; the player has no cartographic knowledge of the instance. |
+| `hinted` | A shared generic **Unknown location** icon; definition, name, and contents remain concealed. |
+| `discovered` / `active` | The correct definition-specific **uncompleted** icon. |
+| `cleared` / `depleted` | The definition-specific completed icon when authored, otherwise the uncompleted icon as a compatibility fallback. |
+
+The existing proximity-discovery path already accepts `hinted → discovered`;
+that remains the one transition that replaces the anonymous hint with the
+correct type-specific icon. Existing always-mapped definitions continue using
+their current definition-specific icon before discovery, so old worlds and the
+starting-site-selection experience do not silently lose every known ruin.
+
+The icon schema may add an optional completed texture, but absence must remain
+valid. A hidden location's generic hinted icon is shared rather than authored
+per definition, because per-definition art at that state would leak the very
+identity the hint is intended to withhold.
+
+### Radius reveal transaction
+
+Activating location intelligence promotes eligible `unknown` instances to
+`hinted` on the same world page when their anchors fall within an authored,
+finite radius of the cleared source location. Distance is shortest cylindrical-
+world tile distance, so the U seam cannot hide a nearby target. Candidate
+enumeration is ordered by stable location-instance ID; already hinted or later
+states are idempotent no-ops.
+
+The whole reveal is a world-thread-owned lifecycle transaction. It records only
+the durable promotions and emits one player-facing summary, rather than a
+separate popup for every location. Save/load preserves the hinted instances
+through the existing location lifecycle wire field.
+
+### Reward activation
+
+The guaranteed reward is location intelligence distinct from the existing
+unit-communications `radio`. It needs a durable association with its source
+`(world page, location instance)` so the reveal radius remains centered on the
+cleared site after the item is moved, saved, and loaded.
+
+The intelligence does not activate when the encounter clears or merely when the
+item enters a unit inventory. After the recovered item is deposited into a
+built colony cargo store, its inventory entry offers an explicit **Analyze
+intelligence** action. Successful analysis records a durable, one-shot result,
+performs the radius reveal, and leaves the item stored as an analyzed artifact;
+repeating the action cannot reveal or notify twice. This keeps the return-and-
+invest verb visible without inventing a second project system or a synthetic
+"home radius" around the starting portal.
+
+### Tutorial ownership
+
+The tutorial extension is a separate delivery slice, not part of the behavior
+or integration-gate PRs. It extends the existing `first_session` tree with
+objectives backed by the durable encounter, reward-source, return/deposit, and
+reveal state. The final gate depends on that slice so it can verify the complete
+player-facing arc without making the gate itself own UI or objective behavior.
+
+## Decisions
+
+### D-1. Prove one expedition before generalizing locations
+
+The arc optimizes for one coherent, understandable expedition rather than a
+general expansion of locations, survival, combat, trade, or procedural
+generation in isolation. Every included system must strengthen prepare,
+travel, discover, confront, extract, return, or invest.
+
+### D-2. Keep four kinds of location knowledge distinct
+
+Physical visibility, cartographic knowledge, semantic knowledge, and per-unit
+experiential knowledge are separate. Surface ruins may be visible on the map
+before the player or any unit knows what is inside them.
+
+### D-3. Preserve free starting-site choice
+
+Portal overlap with a location is invalid, but a remote start remains legal
+after a warning. The game provides strategic information and feedback without
+choosing a starting site for the player.
+
+### D-4. Treat the shipped survival loop as a deliberate intermediate slice
+
+Until EXP-1 and EXP-2 land, survival supplies are the expedition's risk and
+ordinary recovered stock is its payoff. The existing integrated gate is valid
+for that shipped slice; it is not evidence that confrontation or advancement
+already exists.
+
+### D-5. Build one reliable encounter, not a general aggression system
+
+The first confrontation uses one authored hostile unit type, bounded pursuit
+and disengagement, the existing player attack/retreat surfaces, and a durable
+location outcome. Diplomacy, formations, reputation, and procedural encounter
+generation remain outside this arc.
+
+### D-6. Make the progression reward guaranteed and capability-changing
+
+Random loot may surround the reward but cannot replace it. The reward is a
+distinct item—not the existing `radio` used for unit communication—and must
+visibly enable or reveal something the colony could not do before.
+
+### D-7. Keep retrieval in the direct RTS interaction model
+
+Pickup, carrier visibility, ordered return, and deposit use existing unit
+commands. A caravan or generalized logistics surface is added only if direct
+retrieval is later proven inadequate.
+
+### D-8. Author tutorial objectives only over durable predicates
+
+The tutorial system may gain investigate, recover, return, or advancement rows
+only after the runtime can answer them from durable state. UI rows must not be
+used to invent progression state that gameplay and persistence do not own.
+
+### D-9. Clear an encounter only when every assigned hostile is dead or incapacitated
+
+Being driven away, leaving the location bounds, or temporarily disengaging does
+not complete the encounter. The fixed membership set makes completion
+observable and prevents a retreat from silently converting into a cleared site.
+
+### D-10. Use location intelligence to reveal nearby hidden locations in stages
+
+The reward promotes eligible hidden locations within a seam-aware radius of the
+cleared source from `unknown` to `hinted`. Hinted locations use one generic
+unknown icon; proximity changes them to the correct definition-specific
+uncompleted icon. Cleared locations may use an authored completed icon. Existing
+always-mapped definitions retain their current visibility by default.
+
+### D-11. Deliver tutorial expansion as its own slice
+
+The first-session tutorial extension follows the durable encounter and reward
+behavior and lands before the final integrated gate. Keeping it separate avoids
+mixing UI/objective work into either gameplay ownership or test infrastructure.
+
+### D-12. Activate recovered intelligence through an explicit cargo action
+
+Depositing the source-associated item into built colony cargo exposes one
+**Analyze intelligence** action. Analysis, not encounter clear or deposit alone,
+performs the one-shot radius reveal. The analyzed item remains in storage as an
+artifact, while a durable activation record makes retries and save/load
+idempotent.
+
+### D-13. Author a separate hidden-by-default location definition
+
+The first reveal population comes from at least one distinct location
+definition whose map-visibility policy begins hidden. Existing mapped ruin
+definitions retain their current behavior, including their role in choosing a
+starting site. The new definition may reuse the common placement and content
+substrate, but it has its own stable definition identity and the icon states
+required by D-10.
+
+## Open questions
+
+### Q-1. Which hostile unit art and definition unblock the first encounter?
+
+Issue #916 requires a purpose-built hostile humanoid content package with the
+states and directional animations needed by ordinary combat. Reusing a passive
+animal would technically exercise combat but violates D-5's intended encounter.
+This question blocks EXP-1 until the owner-provided art and unit definition are
+available.
+
+### Q-2. What exact outcome completes the first encounter?
+
+Resolved by D-9: every hostile assigned to the encounter must be dead or
+incapacitated. Driving the occupants away does not clear the location.
+
+### Q-3. Which colony capability does the guaranteed reward change?
+
+Resolved by D-10: recovered location intelligence reveals eligible locations
+within a radius of the cleared source. They first appear anonymously and become
+type-specific only when a player-owned unit approaches.
+
+### Q-4. Should the first-session tutorial expand when the two deferred verbs land?
+
+Resolved by D-11: add a separate tutorial delivery slice after the durable
+encounter/reward behavior and before the final integrated gate.
+
+### Q-5. When does recovered location intelligence activate?
+
+Resolved by D-12: after the item is deposited into built colony cargo, the
+player explicitly selects **Analyze intelligence**. Deposit alone does not
+activate it, and the analyzed artifact remains in storage.
+
+### Q-6. What supplies the first information-revealed location population?
+
+Resolved by D-13: a separate authored location definition begins hidden by
+default. Existing mapped ruins and their starting-site behavior remain
+unchanged.
+
+## Verification strategy
+
+- Preserve the focused location-instance, discovery, map-icon, faction, Lua
+  persistence, and save-compatibility hspec coverage that owns the existing
+  substrate.
+- Extend the relevant combat and location-content behavior probes so the
+  encounter begins through ordinary hostility, refuses to clear while any
+  assigned hostile remains capable, resolves once after all are dead or
+  incapacitated, and remains resolved after save/load.
+- Add pure lifecycle/icon coverage for always-mapped versus information-
+  revealed definitions, including invisible `unknown`, anonymous `hinted`,
+  type-specific uncompleted, optional completed-icon fallback, and proximity
+  promotion without identity leakage.
+- Verify radius selection at the boundary and across the cylindrical seam,
+  deterministic instance-ID ordering, one-way/idempotent promotion, and a
+  save/load round trip with hinted targets.
+- Verify that encounter clear, unit pickup, and cargo deposit do not activate
+  the intelligence; the explicit cargo action does so once, retains the analyzed
+  artifact, and remains idempotent across a save/load round trip.
+- Extend the tutorial's focused evaluator, persistence, and HUD coverage for
+  the new durable objective predicates before adding them to the integrated
+  scenario.
+- Extend `tools/expedition_loop_probe.py` rather than creating a second whole-
+  arc scenario. It must place the encounter between travel and extraction and
+  replace the current deposit-only payoff with an observable radius reveal.
+- Continue reporting stages independently so a failure distinguishes encounter,
+  reward, return, save, and fresh-process load behavior.
+- Use offscreen/manual verification only for player-facing feedback that cannot
+  be established headlessly. Keep exact issue-level commands for later
+  `process-design-doc` runs.
+
+## Delivery plan
+
+### EXP-1. Add hostile location occupants and the first combat encounter
+
+- **Outcome:** A normal expedition to the authored ruin can trigger, resolve,
+  and persist one understandable hostile encounter.
+- **Scope:** The hostile unit content package; location spawning; hostility
+  detection; bounded pursuit and disengagement; attack/retreat behavior;
+  durable encounter membership; outcome feedback; loot; and promotion of the
+  owning location's lifecycle.
+- **Phase:** Confront
+- **Depends on:** `none` (typed faction relations and location instances are
+  already shipped); Q-1 is an external content precondition.
+- **Ordering:** `independent`
+- **Relevant decisions:** D-1, D-2, D-5, D-9
+- **Acceptance signals:** The occupant spawns exactly once; ordinary hostility
+  starts the encounter; retreat and re-entry are coherent; the location does
+  not clear while any assigned hostile remains capable; all assigned hostiles
+  dead or incapacitated advances it exactly once; and membership plus outcome
+  survive save/load.
+- **Out of scope:** Diplomacy, formations, reputation, respawning encounters,
+  and procedural dungeons.
+- **Open questions:** Q-1
+
+### EXP-4. Add information-revealed locations and staged map icons
+
+- **Outcome:** Authored hidden locations move from absent, to anonymous map
+  hints, to type-specific uncompleted icons, while existing mapped definitions
+  retain their current behavior.
+- **Scope:** A backwards-compatible visibility policy; a shared unknown-location
+  icon; optional completed icons; lifecycle-aware rendering; player-facing
+  identity concealment at `hinted`; and focused map/discovery/save coverage.
+- **Phase:** Location-intelligence substrate
+- **Depends on:** `none`
+- **Ordering:** `can land first`
+- **Relevant decisions:** D-2, D-10, D-13
+- **Acceptance signals:** An information-revealed `unknown` instance draws
+  nothing; `hinted` draws only the generic icon; proximity selects the correct
+  uncompleted icon; cleared/depleted selects the completed icon or documented
+  fallback; at least one separate hidden-by-default definition supplies an
+  eligible instance; an always-mapped legacy definition renders as before; and
+  every state survives save/load without changing stored enum order.
+- **Out of scope:** The reward that creates hints, full fog of war, hiding all
+  existing surface ruins, or changing physical location visibility.
+- **Open questions:** None
+
+### EXP-2. Add a transformational expedition reward
+
+- **Outcome:** The cleared ruin guarantees recoverable location intelligence
+  whose investment reveals eligible hidden locations around that source.
+- **Scope:** The guaranteed item; its durable association with the source page
+  and location instance; one-shot activation; seam-aware radius selection;
+  deterministic `unknown → hinted` promotion; player feedback; coexistence with
+  random loot; and save/load behavior.
+- **Phase:** Invest
+- **Depends on:** `EXP-1`, `EXP-4`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-6, D-7, D-8, D-9, D-10, D-12, D-13
+- **Acceptance signals:** The item is guaranteed but not duplicated; remains
+  distinct from random loot and the communications radio; retains its cleared-
+  location source through movement and save/load; does not activate on clear,
+  pickup, or deposit; exposes an explicit action only from built cargo; remains
+  as an analyzed artifact afterward; reveals exactly the eligible in-radius
+  instances once, including across the U seam; and leaves out-of-radius and
+  already-known instances unchanged.
+- **Out of scope:** A general technology tree, large loot tiers, quests, and
+  replacing random salvage with fixed rewards.
+- **Open questions:** None
+
+### EXP-5. Extend the first-session tutorial through confrontation and advancement
+
+- **Outcome:** The existing tutorial tree presents and durably tracks the
+  confrontation, recovery, return, and location-intelligence payoff.
+- **Scope:** New data-authored rows and evaluator keys over encounter clear,
+  reward recovery, return/investment, and successful radius reveal; persistence
+  of full-objective latches; live recomputation of subobjectives; HUD behavior;
+  and focused tests.
+- **Phase:** Player guidance
+- **Depends on:** `EXP-1`, `EXP-2`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-8, D-9, D-10, D-11, D-12
+- **Acceptance signals:** Every row is answerable from durable gameplay state;
+  full objectives latch, subobjectives recompute, save/load preserves only the
+  intended latches, and no objective itself mutates encounter or reward state.
+- **Out of scope:** A quest framework, objective rewards unrelated to location
+  intelligence, or a second onboarding system.
+- **Open questions:** None
+
+### EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
+
+- **Outcome:** The existing end-to-end scenario proves the completed prepare →
+  travel → discover → confront → extract → return → invest loop across two
+  engine processes.
+- **Scope:** Extend `tools/expedition_loop_probe.py`, its stage diagnostics,
+  probe registration/documentation, fresh-process identity checks, and the new
+  tutorial objectives.
+- **Phase:** Integration gate
+- **Depends on:** `EXP-1`, `EXP-4`, `EXP-2`, `EXP-5`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-4, D-6, D-7, D-8, D-9, D-10, D-11,
+  D-12, D-13
+- **Acceptance signals:** The scenario exercises the real encounter; proves it
+  remains uncleared until every hostile is dead or incapacitated; returns and
+  deposits and explicitly analyzes the real intelligence reward; observes
+  anonymous in-radius hints from the separate hidden definition; verifies the
+  analyzed artifact plus encounter, reward, hint, and tutorial state in a fresh
+  process; and retains the existing prepared-versus-unprepared survival
+  comparison.
+- **Out of scope:** A second location type, repeated-run balance thresholds,
+  and combat balancing beyond the authored encounter.
+- **Open questions:** None
+
+## Historical delivery rationale
+
+The following numbered sequence is retained as source context for the shipped
+arc. Steps 1–3 and 6–9 have landed; current issue processing follows the
+five-slice delivery plan above.
 
 ### 1. Make one ruin reliable
 
