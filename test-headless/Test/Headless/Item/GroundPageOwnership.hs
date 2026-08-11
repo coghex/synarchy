@@ -296,11 +296,19 @@ spec = describe "ground item page ownership" $ do
                                       [mkItem "copper_bar" 200] [] HM.empty
                 beforeA ← groundOf (scActive scene)
                 beforeO ← groundOf (scOwned scene)
+                -- Both live pages hold a selection of the gid being
+                -- asked for, so a stray deselect anywhere shows up.
+                selectGround (scActive scene) (Just 0)
+                selectGround (scOwned scene) (Just 0)
                 r ← evalDebug ls "return item.pickupGround(3, 0)"
                 r `shouldBe` "false"
                 groundOf (scActive scene) `shouldReturn` beforeA
                 groundOf (scOwned scene) `shouldReturn` beforeO
+                cursorSelection (scActive scene) `shouldReturn` Just 0
+                cursorSelection (scOwned scene) `shouldReturn` Just 0
                 invOf env strandedUid `shouldReturn` [(300, "steel_axe")]
+                equipOf env strandedUid
+                    `shouldReturn` [("hand_right", 301)]
 
         it "fails with no mutation when the unit does not exist" $
             \env → do
@@ -361,22 +369,30 @@ spec = describe "ground item page ownership" $ do
         -- dead-page scenarios below run the SAME call against the same
         -- holdings, differing only in which unit — and so which page —
         -- it names.
-        let dropCases ∷ [(Text, Text → Text, Word64)]
+        -- Each row also carries what the SOURCE unit must be left
+        -- holding, so both sides of the move are pinned: the verb has
+        -- to take the instance out of exactly one place and put it in
+        -- exactly one other. The traveller starts with steel_axe 300
+        -- loose and steel_axe 301 in hand_right — same def in both, so
+        -- a verb that reached for the wrong one would look right on
+        -- the ground and wrong here.
+        let dropCases ∷ [( Text, Text → Text, Word64
+                         , [(Word64, Text)], [(Text, Word64)] )]
             dropCases =
                 [ ( "unit.dropEquipmentToGround"
                   , \u → "return unit.dropEquipmentToGround("
                              <> u <> ", 'hand_right')"
-                  , 301 )
+                  , 301, [(300, "steel_axe")], [] )
                 , ( "unit.dropItemToGround"
                   , \u → "return unit.dropItemToGround(" <> u
                              <> ", 'steel_axe')"
-                  , 300 )
+                  , 300, [], [("hand_right", 301)] )
                 , ( "unit.dropItemById"
                   , \u → "return unit.dropItemById(" <> u <> ", 300)"
-                  , 300 )
+                  , 300, [], [("hand_right", 301)] )
                 ]
 
-        forM_ dropCases $ \(label, call, droppedIid) →
+        forM_ dropCases $ \(label, call, droppedIid, restInv, restEquip) →
             it (T.unpack label <> " lands on the unit's own page only") $
                 \env → do
                     ls ← newBareLuaBackend env
@@ -391,13 +407,18 @@ spec = describe "ground item page ownership" $ do
                     -- the coordinates the unit's own frame gave it.
                     groundRows (scOwned scene) `shouldReturn`
                         [(0, "steel_axe", droppedIid, travellerAt)]
+                    -- …and left the unit: the source side of the move,
+                    -- with the unit's other same-def instance still in
+                    -- place.
+                    invOf env travellerUid `shouldReturn` restInv
+                    equipOf env travellerUid `shouldReturn` restEquip
                     -- The active page is untouched, id allocator and all.
                     groundOf (scActive scene) `shouldReturn` beforeActive
                     -- So is the bystander standing on it.
                     invOf env bystanderUid
                         `shouldReturn` [(900, "bystander_pack")]
 
-        forM_ dropCases $ \(label, call, _) →
+        forM_ dropCases $ \(label, call, _, _, _) →
             it (T.unpack label
                     <> " fails with no mutation off a live page") $
                 \env → do
@@ -406,12 +427,16 @@ spec = describe "ground item page ownership" $ do
                                 HM.empty
                     beforeA ← groundOf (scActive scene)
                     beforeO ← groundOf (scOwned scene)
+                    selectGround (scActive scene) (Just 0)
+                    selectGround (scOwned scene) (Just 0)
                     -- Same call, same holdings, aimed at the unit whose
                     -- page has no live world.
                     r ← evalDebug ls (call "3")
                     r `shouldBe` "false"
                     groundOf (scActive scene) `shouldReturn` beforeA
                     groundOf (scOwned scene) `shouldReturn` beforeO
+                    cursorSelection (scActive scene) `shouldReturn` Just 0
+                    cursorSelection (scOwned scene) `shouldReturn` Just 0
                     invOf env strandedUid
                         `shouldReturn` [(300, "steel_axe")]
                     equipOf env strandedUid
