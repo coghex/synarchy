@@ -7,16 +7,28 @@ has landed since the design was written.
 
 Design state: `ready for issue processing`
 
+> **2026-08-11 — PLC-3 was split, and the new boundaries were signed off the same
+> day.** Repository investigation showed the original slice spanned eight
+> workstreams across seven files, three of which are subsystems that do not exist
+> at all, and could not be one reviewable PR (D-16). It is now PLC-3A (converge
+> creation, no new invariant), PLC-3B (invariant enforcement on mutation) and
+> PLC-3C (integrity enumeration only). PLC-4, PLC-5, PLC-7 and PLC-9 are
+> re-pointed at the specific parts they need; PLC-1, PLC-2, PLC-6 and PLC-8 are
+> unchanged, and no existing slice ID was renumbered. Epic #1231 and issues
+> #1232/#1233 were updated to match.
+
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
 concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Add portable, data-driven loot containers
-- [ ] PLC-1. Load item definitions from logical subdirectories
-- [ ] PLC-2. Add physical bulk and portable-storage capacity data
-- [ ] PLC-3. Centralize recursive item materialization and safe ownership moves
+- [x] EPIC. Add portable, data-driven loot containers — [#1231]
+- [x] PLC-1. Load item definitions from logical subdirectories — [#1232]
+- [x] PLC-2. Add physical bulk and portable-storage capacity data — [#1233]
+- [ ] PLC-3A. Converge every item-creation path on one materializer
+- [ ] PLC-3B. Enforce capacity-safe, acyclic nested ownership moves
+- [ ] PLC-3C. Enumerate nested item trees in the save integrity graph
 - [ ] PLC-4. Add lazy, deterministic loot-profile realization
 - [ ] PLC-5. Persist player knowledge of portable containers
 - [ ] PLC-6. Add unit-mediated opening and capacity-aware ground pickup
@@ -79,6 +91,28 @@ concrete precondition
   movement modes. It explicitly excludes item-containers as transfer endpoints,
   so it is adjacent upstream work rather than a duplicate portable-container
   epic.
+- **Eight independent item-creation sites exist** and none materializes authored
+  default contents: `Unit/Thread/Command/Spawn.hs:314/386/449`,
+  `World/Thread/Command/Edit/Dig.hs:248`,
+  `Engine/Scripting/Lua/API/Forage/Harvest.hs:180`,
+  `.../Craft/Execute.hs:250`, `.../Units/Inventory.hs:81`, and
+  `.../Items/Ground.hs:103`. Each hardcodes `iiContents = []` and duplicates the
+  fill/quality/condition/weight-roll assembly with small divergences.
+- **ID allocation is already centralised.** Every one of those sites calls
+  `Engine.Core.State.freshItemInstanceId` (`:688`), whose counter persists as
+  `sdNextItemInstanceId`.
+- **`idDefaultContents` is flat and unused.** It is
+  `[(Text, Int, Maybe Float)]` (`Item/Types.hs:192`), read in exactly one place
+  (`Spawn.hs:309`), with three references repo-wide and **no `data/` file
+  authoring `default_contents`**.
+- **Nothing enforces acyclicity or ancestry.** No cycle, acyclic, or ancestor
+  logic exists under `src/Item/` or in `Unit/Transfer.hs`.
+- **The integrity graph does not see nested items.** `World/Save/Integrity.hs`
+  (511 lines) never walks `iiContents`, though `RefItemInstance` already exists
+  in the reference vocabulary.
+- **Capacity machinery exists but only flat and only by weight.**
+  `Unit/Transfer.hs` (690 lines) has per-item capacity remeasurement and
+  `tpIndex` splice-back rollback, scoped to unit and building endpoints.
 - No open tracker epic currently owns portable physical containers, lazy
   container loot realization, or their ground/carried interaction lifecycle.
 
@@ -338,6 +372,34 @@ receive structured outcomes. The batch reports complete, partial, or no
 fulfillment. No individual item is partly moved, newly matching items are never
 swept in, and a failed move restores that item to its original source position.
 
+### D-16. Split PLC-3 into creation, ownership rules, and integrity
+
+PLC-3 as originally written could not be one reviewable PR. Measured against the
+current tree it spanned eight workstreams across seven files (~2,680 lines of
+touched surface), three of which are subsystems that do not exist at all. It is
+split into PLC-3A (converge creation), PLC-3B (capacity-safe acyclic moves) and
+PLC-3C (integrity enumeration).
+
+The seam is real rather than arithmetic: PLC-3A is a behaviour-preserving
+convergence that introduces no new invariant, while PLC-3B is invariant
+enforcement on mutation and is the first thing that makes PLC-2's bulk actually
+bite. PLC-3C only observes; it enforces nothing.
+
+*Consequence:* no existing slice ID was renumbered. PLC-4 now depends on PLC-3A
+and PLC-3B (its "every accepted lot fits" signal needs capacity enforcement);
+PLC-5 on PLC-3A alone (it keys on instance identity, not on capacity); PLC-7 on
+PLC-3B (its endpoint checks are the ancestor and capacity rules); PLC-9 on all
+three. PLC-1, PLC-2, PLC-6 and PLC-8 are untouched.
+
+*Two findings that made the split cheaper than expected, and are recorded so
+they are not rediscovered:* item-instance ID allocation is ALREADY centralised —
+all eight mint sites call `Engine.Core.State.freshItemInstanceId` — so PLC-3A
+preserves that discipline rather than building it. And `default_contents` has
+ZERO authored users in `data/`, so reshaping `idDefaultContents` from a flat
+tuple list to a recursive one carries no migration cost, though it also means
+"no path drops defaults" is currently unobservable in shipped data and needs a
+fixture to test against.
+
 ## Accepted proposals and rejected alternatives
 
 ### P-1. Add a sibling `storage:` item component
@@ -567,21 +629,68 @@ one contract across every endpoint without weakening per-item atomicity.
 - **Out of scope:** Ownership mutation, loot realization, and UI.
 - **Open questions:** None
 
-### PLC-3. Centralize recursive item materialization and safe ownership moves
+### PLC-3A. Converge every item-creation path on one materializer
 
-- **Outcome:** Every creation path mints one valid item tree and every nested
-  move preserves identity while enforcing physical invariants.
-- **Scope:** One canonical item materializer, recursive default contents, stable
-  ID allocation, cycle/duplicate rejection, capacity-safe insert/remove,
-  ancestor and carrier checks, atomic rollback, and integrity enumeration.
+- **Outcome:** Every path that mints an item does so through one boundary that
+  materializes the definition's authored default contents.
+- **Scope:** One canonical materializer; recursive default contents replacing
+  the flat `idDefaultContents` tuple list; migration of all eight mint sites;
+  preservation of the existing `freshItemInstanceId` allocation discipline; and
+  unification of the divergent fill/quality/condition/weight-roll logic those
+  sites currently duplicate.
 - **Phase:** Runtime ownership foundation
 - **Depends on:** `PLC-2`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-4, D-5
-- **Acceptance signals:** Ground, unit, crafted, and content-created instances
-  share the materializer; no path drops defaults; valid nested trees round-trip;
-  failed moves mutate nothing and never duplicate or lose an ID.
-- **Out of scope:** Random profiles, player knowledge, and transfer panels.
+- **Relevant decisions:** D-1, D-4, D-5, D-16
+- **Acceptance signals:** Ground, unit, crafted, dug, foraged and
+  content-created instances all mint through the materializer; no path drops
+  authored defaults; every minted id is unique and comes from the existing
+  allocator; recursive default trees materialize to the authored depth; and
+  existing shipped content produces the same instances it does today apart from
+  defaults now being present.
+- **Out of scope:** Capacity enforcement, ancestor and cycle rules, rollback,
+  integrity enumeration, loot profiles, knowledge, and UI.
+- **Open questions:** None
+
+### PLC-3B. Enforce capacity-safe, acyclic nested ownership moves
+
+- **Outcome:** Every nested insert and remove preserves exact instance identity,
+  respects both capacities, and fails atomically.
+- **Scope:** Capacity-safe insert/remove enforcing PLC-2's internal weight AND
+  bulk limits; weight-bearing ancestor and carrier revalidation; cycle and
+  duplicate-instance rejection; and atomic rollback generalized from flat
+  inventories to nested trees.
+- **Phase:** Runtime ownership foundation
+- **Depends on:** `PLC-2`, `PLC-3A`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-4, D-5, D-16
+- **Acceptance signals:** A move that would exceed either capacity is refused;
+  a move that would create a cycle or a duplicate id is refused; a refused move
+  mutates nothing and never duplicates or loses an instance; every
+  weight-bearing ancestor and the carrying unit are revalidated, not just the
+  immediate parent; and valid nested trees round-trip unchanged.
+- **Out of scope:** The materializer itself, integrity enumeration, transfer UI
+  and endpoints, and loot realization.
+- **Open questions:** None
+
+### PLC-3C. Enumerate nested item trees in the save integrity graph
+
+- **Outcome:** The shared integrity graph sees every nested item instance rather
+  than only top-level ones.
+- **Scope:** Walking `iiContents` during integrity enumeration at both the save
+  and load boundaries, duplicate-instance-id detection across the whole tree,
+  and invalid-ownership diagnostics consistent with the existing reference
+  vocabulary.
+- **Phase:** Runtime ownership foundation
+- **Depends on:** `PLC-3A`
+- **Ordering:** `not on the critical path` — lands in parallel with PLC-3B
+- **Relevant decisions:** D-1, D-5, D-16
+- **Acceptance signals:** A nested instance is enumerated at the same depth it
+  is stored; a duplicate id anywhere in a tree is reported; enumeration is
+  deterministic; and the existing wrong-page hard error versus dangling-target
+  tolerance is unchanged for the references that already had it.
+- **Out of scope:** Enforcing the invariants it reports (PLC-3B owns that),
+  and any new reference kind.
 - **Open questions:** None
 
 ### PLC-4. Add lazy, deterministic loot-profile realization
@@ -592,7 +701,7 @@ one contract across every endpoint without weakening per-item atomicity.
   pending descriptor and source identity, deterministic lot algorithm, atomic
   realization, concurrent callers, and pending/realized persistence.
 - **Phase:** Population
-- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3A`, `PLC-3B`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-2, D-3, D-6
 - **Acceptance signals:** Chunk loading does not roll; open/pickup yields the
@@ -609,7 +718,7 @@ one contract across every endpoint without weakening per-item atomicity.
   only and contents observations, stale snapshots, nested-container isolation,
   query/refresh surfaces, lifecycle cleanup, and persistence documentation.
 - **Phase:** Knowledge
-- **Depends on:** `PLC-3`
+- **Depends on:** `PLC-3A`
 - **Ordering:** `can land in parallel with PLC-4`
 - **Relevant decisions:** D-1, D-7, D-13
 - **Acceptance signals:** Never-weighed, weight-only, known-empty, and known-
@@ -646,7 +755,7 @@ one contract across every endpoint without weakening per-item atomicity.
   observation revalidation, shared container window/list, feedback, and
   knowledge refresh after player-controlled commits.
 - **Phase:** Transfer integration
-- **Depends on:** `PLC-3`, `PLC-5`, `PLC-6`
+- **Depends on:** `PLC-3B`, `PLC-5`, `PLC-6`
 - **Ordering:** `critical path after external transfer-surface precondition`
 - **Relevant decisions:** D-1, D-5, D-7, D-11, D-14, D-15
 - **Acceptance signals:** Ground and carried containers use the same endpoint
@@ -684,8 +793,8 @@ one contract across every endpoint without weakening per-item atomicity.
   headless lifecycle probe, one manual offscreen interaction probe, probe
   registration, and load-bearing documentation updates.
 - **Phase:** Integration gate
-- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`, `PLC-4`, `PLC-5`, `PLC-6`,
-  `PLC-7`, `PLC-8`
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3A`, `PLC-3B`, `PLC-3C`, `PLC-4`,
+  `PLC-5`, `PLC-6`, `PLC-7`, `PLC-8`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8, D-9,
   D-10, D-11, D-12, D-13, D-14, D-15
