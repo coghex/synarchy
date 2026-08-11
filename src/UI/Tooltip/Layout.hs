@@ -7,7 +7,6 @@ module UI.Tooltip.Layout
   ( -- * Section gaps
     hintLineGap
   , titleLeadingPx
-  , hintLeadingPx
     -- * Hint text
   , hintLines
   , hintLineHeight
@@ -17,7 +16,6 @@ module UI.Tooltip.Layout
     -- * Box size
   , computeBoxSize
   , textPixelWidth
-  , hintPixelWidth
   , measureText
     -- * Style predicates
   , isFontSet

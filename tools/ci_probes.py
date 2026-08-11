@@ -46,6 +46,14 @@ ALL_KEYS = {p[0] for p in PROBES}
 # their subsystem.
 # --------------------------------------------------------------------------
 CI_ELIGIBLE = {
+    # #1220: the only automated proof that the two water AI actions mutate
+    # the canteen instance they selected. Deterministic by construction —
+    # the unit_ai tick is neutralised and the sim is PAUSED, so the two
+    # execute functions are the only things that move a fill — one arena
+    # boot, no worldgen, no GPU. Same shape as cargo_capacity: a narrow
+    # item-instance regression whose call sites (scripts/unit_ai_*.lua)
+    # already route to the full set through CORE_GLOBS.
+    "canteen_instance",
     "cargo_capacity",
     "consumable_effects",
     # #890 (E2): the only gate covering all seven content registries —

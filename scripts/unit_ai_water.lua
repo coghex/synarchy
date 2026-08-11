@@ -129,7 +129,14 @@ local function refillExecute(uid, s, params)
             if canteen then
                 local headroom = canteen.capacity - canteen.currentFill
                 if headroom > 0 then
-                    unit.modifyItemFill(uid, params.canteen_def, headroom)
+                    -- Fill the EXACT instance the headroom was measured
+                    -- on (#1220). unit.modifyItemFill writes to the
+                    -- first item matching defName, so an earlier FULL
+                    -- canteen would absorb the write as a clamped no-op
+                    -- and the empty one would never fill — while the
+                    -- pickup anim below still played and the AI moved on
+                    -- believing it had refilled.
+                    unit.modifyItemFillById(uid, canteen.instanceId, headroom)
                     -- Brief "picking up" animation; the fill itself is
                     -- instant (matches real-world canteen dipping).
                     unit.pickup(uid)
