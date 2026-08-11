@@ -19,12 +19,14 @@ Design state: `ready for issue processing`
 >
 > **Q-12 is deliberately open** and is the one thing a solver must stop on: the
 > shared question-mark texture does not exist. The project owner is making it.
-> EXP-4's issue must carry that as an explicit art blocker — build and test
-> everything the texture does not gate, then stop and ask. Do not placeholder,
-> do not reuse the ruin sprite, and do not assume a generation method.
+> #1230 carries it as an explicit art blocker — build and test everything the
+> texture does not gate, then stop and ask. Do not placeholder, do not reuse the
+> ruin sprite, and do not assume a generation method.
 >
-> **#917 and epic #1229 are still stale** and must be corrected per D-21 before
-> either is worked.
+> **Processing state (2026-08-11).** D-21's corrections are APPLIED: #917 and
+> epic #1229 were both rewritten to this design. EXP-4 is filed as #1230. EXP-5
+> is `[deferred]` until #916 and #917 close by merged PRs, which leaves EXP-3
+> dependency-blocked behind it — so the arc currently has no selectable entry.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -34,9 +36,9 @@ concrete precondition
 
 - [x] EPIC. Complete the expedition gameplay loop — [#1229]
 - [x] EXP-1. Add hostile location occupants and the first combat encounter — [#916]
-- [ ] EXP-4. Mark every location unknown and reveal its type by unit sight
+- [x] EXP-4. Mark every location unknown and reveal its type by unit sight — [#1230]
 - [x] EXP-2. Gate location clearing on guaranteed significant loot — [#917]
-- [ ] EXP-5. Extend the first-session tutorial through confrontation and advancement
+- [ ] EXP-5. Extend the first-session tutorial through confrontation and advancement — [deferred]: #916 and #917 must be closed by merged PRs first
 - [ ] EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
 
 ## Epic contract
@@ -104,14 +106,19 @@ concrete precondition
 - The current gate deliberately substitutes **survive the journey** for
   confrontation and **bank ordinary colony stock** for advancement. Open issue
   #916 owns the hostile-encounter slice and remains blocked on unit art.
-- **Open issue #917's body is stale and its premise was rejected (2026-08-11).**
-  It was written around a recovered radio core that reveals distant locations;
-  D-17 retires that idea outright. The issue number is still the right home for
-  EXP-2, but its body must be rewritten to the guaranteed-significant-loot
-  design before any solver reads it. See Q-9.
-- Epic #1229 tracks this arc. **Its body is also stale in the same way** — its
-  goal and `Done when` describe the location-intelligence radius reveal — and
-  needs the same correction.
+- **#917 carries EXP-2, rewritten 2026-08-11.** It was originally filed around a
+  recovered radio core that reveals distant locations; D-17 retires that idea
+  outright. Per D-21 the issue kept its number and was rewritten in place to the
+  guaranteed-significant-loot design, opening with a dated banner recording the
+  rejected premise. Title is now *Gate location clearing on guaranteed
+  significant loot*. It remains `blocked`, now on #916 and #1230 rather than on
+  "nothing to reveal".
+- **Epic #1229 tracks this arc**, corrected the same day and the same way: its
+  goal, `Done when`, background, dependency structure and checklist titles were
+  all rewritten off the retired design.
+- **#1230 carries EXP-4** (*Mark every location unknown on the zoom map and
+  reveal its type by unit sight*), filed 2026-08-11 with the question-mark
+  texture recorded as an explicit stop-and-ask art blocker.
 - No other open tracker epic owns this arc. Closed epic #918 covers survival
   calibration only and explicitly defers #916/#917; closed epic #159 covers the
   location foundation.
@@ -460,9 +467,9 @@ currently visible.
 combat encounter) is blocked on unit art. #917 keeps step 5's slot but its
 premise changed on 2026-08-11: it is no longer "a reward that changes what the
 colony can do" but "guaranteed significant contents that must be taken before a
-location counts as cleared" (D-17, D-18) — its issue body still describes the
-retired version and must be rewritten (Q-9). Together they add the **confront**
-verb and give **invest** an objective rather than a stockpile entry. Everything
+location counts as cleared" (D-17, D-18). Its issue body was rewritten to match
+on the same day (D-21). Together they add the **confront** verb and give
+**invest** an objective rather than a stockpile entry. Everything
 else in the first-30-minutes sequence is implemented.
 
 ## Design
@@ -731,10 +738,10 @@ split into two classes:
 - **Guaranteed significant** — authored to always appear: story-progression
   items and valuable unique equipment. The reason to go.
 
-*Consequence:* #917 keeps its slot in the arc but its entire body is obsolete
-and must be rewritten (Q-9). The "invest" verb changes meaning: the payoff is
-the significant item itself and the site it completes, not a map-wide power the
-item confers.
+*Consequence:* #917 keeps its slot in the arc, and its entire body — obsolete
+the moment this decision landed — was rewritten in place the same day (D-21,
+Q-9). The "invest" verb changes meaning: the payoff is the significant item
+itself and the site it completes, not a map-wide power the item confers.
 
 ### D-18. Clear a location on hostiles down AND significant items taken
 
@@ -803,7 +810,8 @@ Epic #1229's `## Goal`, `## Done when`, and the EXP-4/EXP-2 checklist titles are
 corrected the same way, since they were written against the retired design.
 
 Both edits are tracker mutations and therefore belong to `/process-design-doc`,
-under its normal per-artifact approval — not to this design pass.
+under its normal per-artifact approval — not to this design pass. **They were
+applied on 2026-08-11.**
 
 ### D-22. Remove `discovery_margin` everywhere (resolves Q-11)
 
@@ -885,9 +893,12 @@ unclearable if the item were lost or destroyed.
 
 **Resolved by D-21 (2026-08-11), at the project owner's delegation:** rewrite
 #917 in place, keeping its number and its dated record of the rejected premise,
-and correct #1229's goal, `Done when`, and affected checklist titles. Both are
-tracker mutations for `/process-design-doc` to apply under its normal per-
-artifact approval.
+and correct #1229's goal, `Done when`, and affected checklist titles.
+
+**Applied 2026-08-11.** Both edits landed through `/process-design-doc` under
+its per-artifact approval. #917 is now *Gate location clearing on guaranteed
+significant loot*; #1229 is now *[epic] Complete the expedition gameplay loop:
+confrontation and a location worth clearing*.
 
 ### Q-10. Which locations does the lore/NPC stretch goal reveal, and does `hinted` survive?
 
@@ -933,8 +944,8 @@ convention (`skill_unknown.png`, `injury_unknown.png`,
 
 **Resolved 2026-08-11: the project owner will make this icon themselves.**
 
-It nonetheless stays recorded as an explicit **blocker in EXP-4's issue** rather
-than being resolved ahead of time. The standing workflow rule is that a solver
+It is nonetheless recorded as an explicit **art blocker in #1230** rather than
+resolved ahead of time. The standing workflow rule is that a solver
 reaching an art blocker STOPS and asks, and that stopping is the default: unless
 the owner has already stated a method for that specific asset, the agent must
 not assume either "the owner will supply it" or "generate it via PixelLab". A
@@ -1069,6 +1080,16 @@ type icon its reveal resolves to.
   must already have been corrected per D-21 before this slice is worked.
 
 ### EXP-5. Extend the first-session tutorial through confrontation and advancement
+
+> **Deferred (2026-08-11) — precondition: #916 and #917 are both closed by
+> merged PRs.** All four rows this slice adds read durable state that does not
+> exist yet: encounter membership and outcome (#916), and guaranteed significant
+> contents plus their per-item taken flag (#917). `cleared` is currently
+> reachable only through the `world.setLocationLifecycle` debug verb, and
+> `tutorial_eval.lua` treats an evaluator key with no bound predicate as a
+> warn-once no-op — so rows authored now would never tick. D-8 forbids authoring
+> them ahead of the state that answers them. Re-select this slice once both
+> prerequisites have merged.
 
 - **Outcome:** The existing tutorial tree presents and durably tracks the
   confrontation, recovery, return, and cleared-location payoff.
