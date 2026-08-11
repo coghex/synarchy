@@ -1121,6 +1121,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
+                   Test.Headless.Power.Placement
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated

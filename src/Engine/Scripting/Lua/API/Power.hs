@@ -83,7 +83,9 @@ powerIsPlaceableFn _env = do
 --   validates placement — a rejected placement splices the item back
 --   at its original index (mirrors unit.transferItemToBuilding's
 --   rollback). An explicit pageId behaves like building.spawn's (pins
---   the target page instead of the active world, #76).
+--   the target page instead of the active world, #76), and the
+--   supplying unit must live on whichever page that resolves to
+--   (#1205).
 powerPlaceNodeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 powerPlaceNodeFn env = do
     uidArg  ← Lua.tointeger 1
@@ -127,21 +129,38 @@ powerPlaceNodeFn env = do
 
 -- | The pop → validate → (rollback | commit) core, isolated so the Lua
 --   glue above only handles argument marshalling.
+--
+--   The unit's own 'uiPage' is compared with the resolved destination
+--   @pid@ INSIDE the same 'atomicModifyIORef'' that pops the item
+--   (#1205). A unit only supplies its own world: terrain, occupancy,
+--   the building spawn and the node registry are all destination-page
+--   things, and without this the inventory owner was the one
+--   unjoined party — an item could be popped out of a hidden page's
+--   unit and reappear as a placed node in the active one. Reading the
+--   page in a separate pass, or popping and rolling back on mismatch,
+--   would both leave a window where a concurrent page change makes the
+--   check answer about a unit that is no longer the one being emptied,
+--   so the comparison and the removal have to be the one critical
+--   section. 'Unit.Selection.onActivePage' enforces the same equality
+--   for selection.
 placeNodeOn ∷ EngineEnv → WorldState → WorldPageId → Text → UnitId → Int → Int
             → PowerRole → Float → IO (Either Text (PowerNodeId, BuildingId))
 placeNodeOn env ws pid defName uid gx gy role param = do
-    mPopped ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+    ePopped ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
-            Nothing → (um, Nothing)
-            Just u  → case popItemByName defName (uiInventory u) of
-                Nothing → (um, Nothing)
-                Just (item, ix, newInv) →
-                    let u' = u { uiInventory = newInv }
-                    in ( um { umInstances = HM.insert uid u' (umInstances um) }
-                       , Just (item, ix) )
-    case mPopped of
-        Nothing → pure (Left ("unit has no " <> defName))
-        Just (item, ix) → do
+            Nothing → (um, Left ("unit has no " <> defName))
+            Just u
+                | uiPage u ≢ pid →
+                    (um, Left ("unit is not on page " <> pidText))
+                | otherwise → case popItemByName defName (uiInventory u) of
+                    Nothing → (um, Left ("unit has no " <> defName))
+                    Just (item, ix, newInv) →
+                        let u' = u { uiInventory = newInv }
+                        in ( um { umInstances = HM.insert uid u' (umInstances um) }
+                           , Right (item, ix) )
+    case ePopped of
+        Left err → pure (Left err)
+        Right (item, ix) → do
             bm  ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
             wtd ← readIORef (wsTilesRef ws)
             case HM.lookup defName (bmDefs bm) of
@@ -177,6 +196,7 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                                 addPowerNode bid role param
                             pure (Right (nid, bid))
   where
+    WorldPageId pidText = pid
     -- Splice the popped instance back at its ORIGINAL index — list
     -- order is gameplay/UI-visible (unit.getInventory), so a rejected
     -- placement must leave the unit's inventory exactly as it was.
