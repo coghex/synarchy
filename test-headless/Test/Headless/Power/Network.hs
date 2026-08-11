@@ -15,9 +15,19 @@ import Test.Hspec
 import Data.List (find)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Power.Types
 import Power.Network
 import Building.Types (BuildingId(..))
+import Structure.Types (StructureSlot(..), emptyChunkStructures)
+import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..),
+                           chunkSize)
+import World.Edit.Apply (replayEdits)
+import World.Edit.Types (WorldEdit(..), WorldEdits)
+import World.Flora.Types (emptyFloraChunkData)
+import World.Fluid.Types (emptyIceMap)
+import World.Tile.Types (WorldTileData(..))
 
 panel, battery, battery2, farPanel, workshop, workshop2 ∷ BuildingId
 panel     = BuildingId 1
@@ -49,6 +59,92 @@ dusk     = 0.75
 --   exactly when u = 0), independent of this particular choice.
 testWorldSize ∷ Int
 testWorldSize = 4
+
+-- Residency-independent wire topology (#1207) -------------------------
+--
+-- Wire is persistent: every placement/clear writes the loaded chunk's
+-- structure overlay AND the per-chunk edit log, and chunks evict by
+-- camera distance. So a page's wire set has to read the same whether or
+-- not its chunks are resident. The fixtures below express EXACTLY that
+-- pairing: one ordered edit log, viewed twice — once with its chunk
+-- resident (built by the real 'replayEdits', the same function chunk
+-- regeneration uses, so the overlay can't be hand-tuned into agreement)
+-- and once with nothing resident at all.
+
+wireTag, floorTag ∷ Word8
+wireTag  = fromIntegral (fromEnum SWire)
+floorTag = fromIntegral (fromEnum SFloor)
+
+-- | A wire placement. @palette@ stands in for the texture/facemap ids
+--   scripts/wire.lua bakes in per autotile variant — a recap re-places
+--   the same tile with DIFFERENT ids, which must still be one wire tile.
+setWire ∷ Int → (Int, Int) → WorldEdit
+setWire palette (gx, gy) = WeSetStructure gx gy wireTag palette palette 0
+
+clearWire ∷ (Int, Int) → WorldEdit
+clearWire (gx, gy) = WeClearStructure gx gy wireTag
+
+-- | One contiguous wire run STRADDLING a chunk boundary, so a partially-
+--   resident page is testable: x = 13..15 lives in chunk (0,0), x =
+--   16..18 in chunk (1,0), and the whole run is a single network.
+homeChunk, farChunk ∷ ChunkCoord
+homeChunk = ChunkCoord 0 0
+farChunk  = ChunkCoord 1 0
+
+homeRun, farRun ∷ [(Int, Int)]
+homeRun = [(13, 5), (14, 5), (15, 5)]
+farRun  = [(chunkSize, 5), (chunkSize + 1, 5), (chunkSize + 2, 5)]
+
+-- | A blank generated chunk — what regeneration hands 'replayEdits'.
+--   Columns are 20 cells deep so a slope/veg edit sharing the log lands
+--   in range instead of no-oping for the wrong reason.
+blankChunk ∷ ChunkCoord → LoadedChunk
+blankChunk coord =
+    let area = chunkSize * chunkSize
+        col  = ColumnTiles { ctStartZ = 0
+                           , ctMats   = VU.replicate 20 1
+                           , ctSlopes = VU.replicate 20 0
+                           , ctVeg    = VU.replicate 20 0
+                           }
+    in LoadedChunk
+        { lcCoord = coord
+        , lcTiles = V.replicate area col
+        , lcSurfaceMap = VU.replicate area 19
+        , lcTerrainSurfaceMap = VU.replicate area 19
+        , lcFluidMap = V.replicate area Nothing
+        , lcIceMap = emptyIceMap, lcFlora = emptyFloraChunkData
+        , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
+        , lcMagma = Nothing, lcStructures = emptyChunkStructures
+        }
+
+-- | The page with @resident@ chunks loaded (each one regenerated blank
+--   and replayed, exactly as 'World.Thread.ChunkLoading' does) and every
+--   other chunk in @log'@ evicted.
+pageWith ∷ [ChunkCoord] → WorldEdits → (WorldTileData, WorldEdits)
+pageWith resident log' =
+    ( WorldTileData
+        { wtdChunks = HM.fromList
+            [ (coord, replayEdits log' (blankChunk coord)) | coord ← resident ]
+        , wtdMaxChunks = 200 }
+    , log' )
+
+-- | The same wire set seen with @resident@ chunks loaded.
+wireWith ∷ [ChunkCoord] → WorldEdits → HS.HashSet (Int, Int)
+wireWith resident = uncurry pageWireTiles . pageWith resident
+
+-- | Node membership for a wire set — the connectivity question
+--   requirement 1 actually asks, not just the tile set behind it.
+--   The source sits beside the run's near end (in the home chunk), the
+--   battery beside its far end (in the far chunk), so they share a
+--   network only while the whole run is visible to topology.
+membershipFor ∷ HS.HashSet (Int, Int) → [HS.HashSet PowerNodeId]
+membershipFor wire =
+    let (n1, srcId) = addPowerNode panel PowerSource 400 emptyPowerNodes
+        (n2, batId) = addPowerNode battery PowerStorage 5000 n1
+        positions   = HM.fromList [ (srcId, (13, 4))
+                                  , (batId, (chunkSize + 2, 4)) ]
+    in map (HS.fromList . pnwNodeIds)
+           (computeSnapshots testWorldSize noon HM.empty wire n2 positions HM.empty)
 
 spec ∷ Spec
 spec = do
@@ -330,6 +426,97 @@ spec = do
             let active = HM.singleton workshop ((2, 0), 150)
             combineConsumers HM.empty active `shouldBe` active
             combineConsumers active HM.empty `shouldBe` active
+
+    describe "pageWireTiles — residency independence (#1207)" $ do
+        let fullRun  = homeRun ⧺ farRun
+            placeAll = HM.fromList
+                [ (homeChunk, map (setWire 0) homeRun)
+                , (farChunk,  map (setWire 0) farRun) ]
+            bothChunks = [homeChunk, farChunk]
+
+        it "a resident chunk contributes EXACTLY its lcStructures wire set" $ do
+            -- Requirement 4: no second authority. With everything
+            -- resident the page view must not add, drop, or relabel a
+            -- single tile relative to the overlay topology used to read.
+            let (td, edits) = pageWith bothChunks placeAll
+            pageWireTiles td edits `shouldBe` wireTilesOn td
+            wireTilesOn td `shouldBe` HS.fromList fullRun
+
+        it "an evicted page reports the same wire set as a fully resident one" $
+            wireWith [] placeAll `shouldBe` wireWith bothChunks placeAll
+
+        it "a partially resident page reports the same wire set as either extreme" $ do
+            wireWith [homeChunk] placeAll `shouldBe` HS.fromList fullRun
+            wireWith [farChunk]  placeAll `shouldBe` HS.fromList fullRun
+
+        it "network MEMBERSHIP is identical loaded, half-loaded and evicted" $ do
+            let loadedNets = membershipFor (wireWith bothChunks placeAll)
+            length loadedNets `shouldBe` 1
+            membershipFor (wireWith [homeChunk] placeAll) `shouldBe` loadedNets
+            membershipFor (wireWith [farChunk]  placeAll) `shouldBe` loadedNets
+            membershipFor (wireWith []          placeAll) `shouldBe` loadedNets
+
+        it "repeated sets of one tile (autotile recapping) stay one wire tile" $ do
+            -- scripts/wire.lua re-places a neighbour to update its
+            -- connection variant, so the log carries several sets of the
+            -- same tile with DIFFERENT palette ids.
+            let recapped = HM.fromList
+                    [ (homeChunk, map (setWire 0) homeRun
+                                    ⧺ map (setWire 7) homeRun
+                                    ⧺ [setWire 9 (14, 5)]) ]
+            wireWith []          recapped `shouldBe` HS.fromList homeRun
+            wireWith [homeChunk] recapped `shouldBe` HS.fromList homeRun
+
+        it "a cleared tile stays cleared once its chunk evicts" $ do
+            -- Requirement 3: the ordered set/clear semantics decide, so
+            -- the earlier set can never resurrect connectivity.
+            let cleared = HM.fromList
+                    [ (homeChunk, map (setWire 0) homeRun ⧺ [clearWire (14, 5)]) ]
+                expected = HS.fromList [(13, 5), (15, 5)]
+            wireWith []          cleared `shouldBe` expected
+            wireWith [homeChunk] cleared `shouldBe` expected
+
+        it "a set AFTER a clear puts the tile back, evicted or resident" $ do
+            let reset = HM.fromList
+                    [ (homeChunk, map (setWire 0) homeRun
+                                    ⧺ [clearWire (14, 5), setWire 3 (14, 5)]) ]
+            wireWith []          reset `shouldBe` HS.fromList homeRun
+            wireWith [homeChunk] reset `shouldBe` HS.fromList homeRun
+
+        it "clearing the whole run disconnects the network while evicted" $ do
+            let wiped = HM.fromList
+                    [ (homeChunk, map (setWire 0) homeRun ⧺ map clearWire homeRun)
+                    , (farChunk,  map (setWire 0) farRun  ⧺ map clearWire farRun) ]
+            wireWith [] wiped `shouldBe` HS.empty
+            membershipFor (wireWith [] wiped) `shouldBe` []
+
+        it "a log stripped of its structure edits (clearAll) yields no wire" $ do
+            -- structure.clearAll empties every loaded overlay AND strips
+            -- WeSetStructure/WeClearStructure from the log. What's left
+            -- must leave nothing derivable — connectivity cannot come
+            -- back from the surrounding terrain edits.
+            let strippedLog = HM.fromList
+                    [ (homeChunk, [WeSetSlope 13 5 19 1, WeSetVeg 14 5 19 3]) ]
+            wireWith []          strippedLog `shouldBe` HS.empty
+            wireWith [homeChunk] strippedLog `shouldBe` HS.empty
+
+        it "non-wire structure pieces never read as wire, on either side" $ do
+            -- A floor laid over the exact same tiles is a different slot
+            -- tag; the filter is by SLOT, not by tile.
+            let floors = HM.fromList
+                    [ (homeChunk, [ WeSetStructure gx gy floorTag 0 0 0
+                                  | (gx, gy) ← homeRun ]) ]
+            wireWith []          floors `shouldBe` HS.empty
+            wireWith [homeChunk] floors `shouldBe` HS.empty
+
+        it "an unrelated chunk's edits contribute nothing to another's wire" $ do
+            -- A page whose only evicted history is non-structure edits
+            -- adds nothing to the resident chunk's wire.
+            let mixed = HM.fromList
+                    [ (homeChunk, map (setWire 0) homeRun)
+                    , (farChunk,  [WeSetSlope (chunkSize + 1) 5 19 2]) ]
+            wireWith [homeChunk] mixed `shouldBe` HS.fromList homeRun
+            wireWith []          mixed `shouldBe` HS.fromList homeRun
 
     describe "local solar phasing (#794)" $ do
         it "two otherwise-identical panels read local noon vs. local midnight under the same global clock" $ do
