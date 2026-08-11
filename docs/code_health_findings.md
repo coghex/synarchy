@@ -94,7 +94,7 @@ an entry's current status.
 - [x] CH-51. `Engine.Asset.Manager` is a 470-line abstraction used as an ID generator — [#1007]
 - [x] CH-52. 14 verbatim copies of the same YAML loader — [#1008]
 - [x] CH-53. `Engine.Asset.YamlTextures` loads no textures and holds three unrelated things — [#1009]
-- [x] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module — [#1083] covers the surviving 64
+- [x] CH-54. 97 exported names in `src/Engine/` have no consumer outside their module — [#1083]
 - [x] CH-55. `Engine.Core.Init`'s three exports have no callers — [no-issue]
 - [x] CH-56. `Engine/Scene` has the `X.hs` + `X/` + `Types/X.hs` triple layout — [no-issue]
 - [x] CH-57. Minor remaining-Engine defects for one cleanup issue — [#1011]
@@ -135,7 +135,7 @@ an entry's current status.
 - [x] CH-92. `baseTileW` / `baseTileH` are defined identically in eight modules — [#1132]
 - [x] CH-93. `World.ZoomMap` is a facade that inverts its own dependency direction — [#1133]
 - [x] CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped — [#1135]
-- [ ] CH-95. Two zoom namespaces with a real but unstated split
+- [x] CH-95. Two zoom namespaces with a real but unstated split — [#1222]
 - [x] CH-96. `docs/history/README.md` justifies an archive with a false claim — [#1136]
 - [x] CH-97. Duplicate module basenames across the render stack — [no-issue]
 - [x] CH-98. A fifth dead binding in `BuildPixels.hs` (extends CH-88) — [#1137]
@@ -948,6 +948,8 @@ Fix: pick one idiom (module re-exports, with internal submodules omitted) and
 apply it to all nine.
 
 ### [no-issue] CH-43. Five Lua API modules are 400-520 lines with no split, while `Save.hs` is 1090
+> **Disposition:** No issue — `Save.hs` was split by #985 (merged, 1090 → 858, four `API/Save/*` submodules); the remainder is a size complaint with no policy behind it. `tools/haskell_module_budget.py`'s `BUDGETS` lists three module families and none of these five; CLAUDE.md states the 500-line limits "are per-split ratchets… not a tree-wide size policy." Re-measured 2026-08-03: three of the five are already under 500 (YamlTextures 435, Construct 407, InputInject 402) and only Blood 538 and Power 521 exceed it. #985's actual driver does not transfer either — it reduced code under the save path's PERMANENT full-access exception, and none of these five holds unrestricted access (Blood/Power/YamlTextures/InputInject import `Engine.Core.State` narrowly; Construct doesn't import `EngineEnv` at all). The testability argument is unproven: no test imports #985's own `API/Save/{Bridge,Config,Integrity,Page}.hs`. Both Blood (a contiguous `EngineEnv`-free tail at `:396-538`) and Power (~6 scattered free helpers incl. a generic `insertAt`) remain extractable if a tree-wide size policy is ever adopted — that is a separate, larger decision, not this finding.
+
 > **Partial:** #985 (merged) extracted only `API/Save.hs`'s `EngineEnv`-free
 > definitions into `API/Save/{Bridge,Config,Integrity,Page}.hs`, leaving the
 > facade at 859 lines; its Out of scope defers `API/Blood.hs`, `API/Power.hs`,
@@ -957,8 +959,6 @@ apply it to all nine.
 > since been met — the remainder was dispositioned `[no-issue]` below, which is
 > why the heading now carries a terminal marker and the entry is checked. Kept
 > for the #985 scope facts it records, not as an active partial finding.
-
-> **Disposition:** No issue — `Save.hs` was split by #985 (merged, 1090 → 858, four `API/Save/*` submodules); the remainder is a size complaint with no policy behind it. `tools/haskell_module_budget.py`'s `BUDGETS` lists three module families and none of these five; CLAUDE.md states the 500-line limits "are per-split ratchets… not a tree-wide size policy." Re-measured 2026-08-03: three of the five are already under 500 (YamlTextures 435, Construct 407, InputInject 402) and only Blood 538 and Power 521 exceed it. #985's actual driver does not transfer either — it reduced code under the save path's PERMANENT full-access exception, and none of these five holds unrestricted access (Blood/Power/YamlTextures/InputInject import `Engine.Core.State` narrowly; Construct doesn't import `EngineEnv` at all). The testability argument is unproven: no test imports #985's own `API/Save/{Bridge,Config,Integrity,Page}.hs`. Both Blood (a contiguous `EngineEnv`-free tail at `:396-538`) and Power (~6 scattered free helpers incl. a generic `insertAt`) remain extractable if a tree-wide size policy is ever adopted — that is a separate, larger decision, not this finding.
 
 Nine domains were split into facade + subdirectory. These were not:
 
@@ -2463,7 +2463,7 @@ Needs confirmation at the seam before fixing (the memory note on wrap-seam
 topology flags this exact hazard class), but the inconsistency inside one file
 is plain either way.
 
-### CH-95. Two zoom namespaces with a real but unstated split
+### [#1222] CH-95. Two zoom namespaces with a real but unstated split
 > **Deferral discharged (2026-08-07) — reopened for processing.** This entry was
 > `[deferred]` on "**#1133 merges**, then state the boundary against the settled
 > shape". #1133 has since merged (`34b9354f`, PR #1164) and its implementation
