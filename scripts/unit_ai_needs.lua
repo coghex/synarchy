@@ -118,7 +118,14 @@ local function drinkExecute(uid, s, params)
     -- Apply effects synchronously — engine drink command is just for
     -- the anim + state-block. If the anim is interrupted (it shouldn't
     -- be, since Drinking blocks movement) the unit still drank.
-    unit.modifyItemFill(uid, params.drink_canteen_def, -sip)
+    --
+    -- Drain the EXACT instance the sip was computed from (#1220), the
+    -- same reason consumable.lua does: unit.modifyItemFill drains the
+    -- first item matching defName, so an earlier already-empty canteen
+    -- would swallow the drain (clamped to zero) while the hydration
+    -- below is still credited — conjuring water and leaving the sipped
+    -- canteen full.
+    unit.modifyItemFillById(uid, canteen.instanceId, -sip)
     unit.setStat(uid, "hydration", hyd + sip * k)
     unit.drink(uid)
 end
