@@ -25,7 +25,6 @@ module UI.Types
   , TooltipStyle(..)
   , TooltipState(..)
   , defaultTooltipStyle
-  , emptyTooltipState
     -- * Manager
   , UIPageManager(..)
   , emptyUIPageManager

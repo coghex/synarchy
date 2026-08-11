@@ -1,12 +1,10 @@
 module UI.Focus
   ( -- * Core Types
     FocusId(..)
-  , TextBuffer(..)
   , FocusTarget(..)
   , FocusManager(..)
   , InputMode(..)
     -- * Constructors
-  , emptyBuffer
   , createFocusManager
   -- * focus operation
   , getInputMode
@@ -17,7 +15,6 @@ module UI.Focus
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import UI.Types (TextBuffer(..), emptyBuffer)
 
 -- | Unique identifier for focusable elements
 newtype FocusId = FocusId { unFocusId ∷ Word32 }

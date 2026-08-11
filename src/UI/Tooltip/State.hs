@@ -6,7 +6,6 @@
 module UI.Tooltip.State
   ( updateTooltipState
   , setTooltipStyle
-  , showTooltip
   , hideTooltip
   ) where
 

@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module UI.Render
   ( renderUIPages
-  , uiLayerToLayerId
   , clipGlyphInstance
   , makeBoxBatches
   , renderSpriteBatch
