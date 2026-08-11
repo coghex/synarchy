@@ -645,6 +645,7 @@ library
                      World.Render.ChunkCulling
                      World.Render.ChunkLookup
                      World.Render.HitTest
+                     World.Render.QuadContext
                      World.Render.Quads
                      World.Render.WaterSlope
                      World.Render.CursorQuads

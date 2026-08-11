@@ -26,6 +26,8 @@ import Engine.Scene.Types (SortableQuad(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Render.ChunkLookup (canonicalChunkLookup)
+import World.Render.QuadContext (QuadContext(..), ZSlice(..)
+                                , EffectiveDepth(..))
 import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.Textures.Types (defaultWorldTextures)
 import World.Render.ViewBounds (ViewBounds(..))
@@ -46,18 +48,31 @@ terrMapWith base overrides =
 allVisible ∷ ViewBounds
 allVisible = ViewBounds (-1.0e9) 1.0e9 (-1.0e9) 1.0e9
 
--- | Drive the generator with a fixed camera/world setup. Slot lookup
---   returns 0 (any tile texture) and the face-map slot a non-zero stub
---   (so 'waterSideQuad' doesn't early-out), zSlice 10 / depth 64 so the
---   whole drop is inside the rendered z-window.
+-- | Drive the generator over the home chunk (0,0) with 'testCtx'.
 run ∷ V.Vector (Maybe FluidCell) → VU.Vector Int
     → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
     → (ChunkCoord → Maybe (VU.Vector Int))
     → [SortableQuad]
 run fm tm fluidLookup terrLookup =
-    waterSideFaceQuads (\_ → 0) (\_ → 1.0) defaultWorldTextures
-        FaceSouth (ChunkCoord 0 0) fm tm fluidLookup terrLookup
-        10 64 1.0 (0.0, 0.0) allVisible
+    waterSideFaceQuads testCtx (ChunkCoord 0 0) fm tm
+        fluidLookup terrLookup allVisible
+
+-- | The shared render context every case here drives the generator with
+--   (#1138). Slot lookup returns 0 (any tile texture) and the face-map
+--   slot a non-zero stub (so 'waterSideQuad' doesn't early-out); zSlice
+--   10 / effective depth 64 puts the whole drop inside the rendered
+--   z-window; opaque, unwrapped.
+testCtx ∷ QuadContext
+testCtx = QuadContext
+    { qcLookupSlot     = \_ → 0
+    , qcLookupFmSlot   = \_ → 1.0
+    , qcTextures       = defaultWorldTextures
+    , qcFacing         = FaceSouth
+    , qcZSlice         = ZSlice 10
+    , qcEffectiveDepth = EffectiveDepth 64
+    , qcTileAlpha      = 1.0
+    , qcWrapOffset     = (0.0, 0.0)
+    }
 
 spec ∷ Spec
 spec = do
@@ -134,9 +149,8 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
         lookupVia m = canonicalChunkLookup seamWorld
                           (HM.fromList [(seamStored, m)])
         runAt coord fluidLookup terrLookup =
-            waterSideFaceQuads (\_ → 0) (\_ → 1.0) defaultWorldTextures
-                FaceSouth coord homeFluid homeTerr fluidLookup terrLookup
-                10 64 1.0 (0.0, 0.0) allVisible
+            waterSideFaceQuads testCtx coord homeFluid homeTerr
+                fluidLookup terrLookup allVisible
 
     it "renders side faces over a DRY drop across the seam" $
         -- Neighbour stored under the wrapped key is dry at z=0 → z=0..9.

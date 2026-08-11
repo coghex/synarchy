@@ -30,6 +30,8 @@ import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.FloraQuads (floraToQuad)
 import World.Render.ChunkLookup (canonicalChunkLookup)
+import World.Render.QuadContext (QuadContext(..), WorldX(..), WorldY(..)
+                                , WorldZ(..), ZSlice(..), EffectiveDepth(..))
 import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.WaterSlope (waterSlopeAt)
 import World.Render.TileQuads
@@ -138,6 +140,19 @@ renderWorldQuads env worldState zoomAlpha snap = do
             -- screen axes by it, because at east/west facings the
             -- u-wrap displaces screen Y and not screen X at all.
             let (wrapX, wrapY) = wrapOff
+                -- One named context for the two producers that take it
+                -- (#1138), built here rather than once per frame because
+                -- 'qcWrapOffset' is the one per-chunk member.
+                ctx = QuadContext
+                    { qcLookupSlot     = lookupSlot
+                    , qcLookupFmSlot   = lookupFmSlot
+                    , qcTextures       = textures
+                    , qcFacing         = facing
+                    , qcZSlice         = ZSlice zSlice
+                    , qcEffectiveDepth = EffectiveDepth effectiveDepth
+                    , qcTileAlpha      = zoomAlpha
+                    , qcWrapOffset     = wrapOff
+                    }
                 coord  = lcCoord lc
                 tileMap = lcTiles lc
                 fluidMap = lcFluidMap lc
@@ -188,9 +203,9 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                    then acc2
                                    else let slopeId = ctSlopes col VU.! (z - ctStartZ col)
                                             tile = Tile mat slopeId
-                                            tq = tileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy z tile zSlice effectiveDepth zoomAlpha wrapOff
-                                                    mFluid chunkHasFluid
+                                            tq = tileToQuad ctx
+                                                    (WorldX gx) (WorldY gy) (WorldZ z)
+                                                    tile mFluid chunkHasFluid
 
                                             -- Vegetation: only on surface tile, only when
                                             -- surface is above the fluid level
@@ -258,10 +273,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 -- Water side-face quads: fill elevation gaps where water
                 -- drops over cliff edges
                 !waterSideQuads = if chunkHasFluid
-                    then waterSideFaceQuads lookupSlot lookupFmSlot textures facing
-                             coord fluidMap terrainSurfMap
-                             fluidMapLookup terrMapLookup zSlice effectiveDepth
-                             zoomAlpha wrapOff vb
+                    then waterSideFaceQuads ctx coord fluidMap terrainSurfMap
+                             fluidMapLookup terrMapLookup vb
                     else []
 
                 !blankQuads =
