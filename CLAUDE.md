@@ -1528,12 +1528,18 @@ hangs the world thread on load — never use arenas as a save-test page.
 **Art is tracked work, exactly like code.** A texture, icon, sprite, or
 animation that does not exist yet is a first-class blocker, not a detail to
 route around: it gets its own issue and its own PR, and the project owner signs
-off on every texture before it lands. When you reach an art blocker, STOP and
-return to the owner with the exact list of missing assets and what each is for.
-They will either supply the file themselves or direct you to generate it via
-PixelLab. Never choose between those yourself, never ship a `wtNoTexture` or
-reused-sprite placeholder as if the work were done, and never quietly narrow a
-slice to avoid the art.
+off on every texture before it lands. An issue whose work needs missing art
+NAMES it as a blocker in the body rather than resolving it in advance, so the
+solver hits it deliberately.
+
+**Stopping is the default.** When you reach an art blocker, STOP and return to
+the owner with the exact list of missing assets and what each is for. They will
+either supply the file themselves or direct you to generate it via PixelLab.
+Unless the owner has ALREADY stated which method they want for that specific
+asset, assume neither — assume they want to stop and think about it. Never
+choose between those yourself, never ship a `wtNoTexture` or reused-sprite
+placeholder as if the work were done, and never quietly narrow a slice to avoid
+the art.
 
 Textures (flora, units, buildings, tiles) can be generated via the PixelLab MCP server.
 **Read `docs/asset_generation.md` before generating** — it has the validated pipelines
