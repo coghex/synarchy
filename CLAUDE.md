@@ -11,7 +11,7 @@ referenced issues/PRs when you need the full story behind a contract stated here
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat / enum-append-only / cabal-library-module-inventory / material-id audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat / enum-append-only / cabal-library-module-inventory / material-id / findings-report-status audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
 - **Debug output:** `ENGINE_DEBUG=Vulkan,Graphics,...` environment variable
 
 ## Testing Tiers
@@ -31,7 +31,8 @@ seconds and the expensive gates at the end.
    inventory docs change; the EngineEnv capability audit only when
    `EngineEnv`'s field set or `docs/engineenv_capability_inventory.md`
    changes; a module-budget guard only when changing a capped module;
-   `test_audit.py` only when changing `world_audit.py`/`world_check.py`.
+   `test_audit.py` only when changing `world_audit.py`/`world_check.py`;
+   `findings_report_audit.py` only when editing a findings report.
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
 
@@ -478,6 +479,41 @@ admin bypass — judge it by
 Exempt, because they either create their own worktree or must operate on the
 primary checkout: `solve`, `pr-revise`, `repair`, the read-only `pr-review` /
 `pr-rereview` / `issue-review` reviewers, `drain-prs`, `janitor`, `finalize`.
+
+## Findings-report field ownership
+
+A findings report (`docs/code_health_findings.md` and its siblings) is written
+by two independent lanes, and they own DIFFERENT FIELDS of the same entry.
+
+**The report-processing lane (`/process-report`) exclusively owns an entry's
+status fields:** the checklist checkbox, the trailing checklist marker, and the
+heading marker (`[#N]`, `[#N, <note>]`, `[no-issue]`, `[deferred]`, or none).
+It is the only lane that may add, remove, or change any of the three, and it
+changes them together in one edit.
+
+**An implementation PR may add to or update a finding's narrative body, and
+nothing else.** Landing the fix for a finding does not disposition it — a PR
+that marks the entry it resolves has answered a question the processing lane
+had not asked yet. Say what changed in the body if it helps; leave the box, the
+checklist marker, and the heading marker exactly as you found them.
+
+That split is not stylistic. The two lanes had already drifted an entry in each
+direction — `82607204` marked CH-126's heading while landing the fix and left
+its checklist bare, `89b015d3` marked CH-73's checklist and left its heading
+bare — and each drift re-files merged work, because the processor selects a
+bare-headed finding as unprocessed and the "headings win, correct the
+checklist" tie-break then unchecks a finding an issue already resolved. The
+cost lands on other people's PRs too:
+`.github/workflows/review-gate.yml:106-116` strips `reviewed:approve` when a
+push touches a file an open PR also owns, so every master-side report edit
+costs an open PR that touches the report its approval.
+
+`tools/findings_report_audit.py` (CI + `make ci`, with its own
+`tools/test_findings_report_audit.py` self-test) fails when a CH item's heading
+marker and checklist marker disagree, and when the two sides do not declare the
+same set of CH numbers exactly once each. It audits AGREEMENT only — whether a
+marker is the right one, and whether the box matches its terminality, stay the
+processing lane's judgement.
 
 ## Resource Root
 
