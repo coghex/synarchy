@@ -89,6 +89,7 @@ import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
+import qualified Test.Headless.Power.Demolition as PowerDemolition
 import qualified Test.Headless.Power.Network as PowerNetwork
 import qualified Test.Headless.Language.Semantic as LanguageSemantic
 import qualified Test.Headless.Language.Generated as LanguageGenerated
@@ -253,6 +254,10 @@ main = hspec $ do
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
     aroundAll withHeadlessEngine PowerPlacement.spec
+    -- Own engine for the same reason (#1206): the demolition gate
+    -- installs its own two-page world manager and drives the real
+    -- building-command drain, which would disturb the shared engine.
+    aroundAll withHeadlessEngine PowerDemolition.spec
     -- Own engine for the same reason: the #1208 ground-ownership gate
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.

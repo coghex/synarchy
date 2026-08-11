@@ -529,6 +529,7 @@ library
                      Engine.Scripting.Lua.API.Craft.Execute
                      Engine.Scripting.Lua.API.Craft.Bill
                      Power.Types
+                     Power.Live
                      Power.Network
                      Engine.Scripting.Lua.API.Power
                      Engine.Scripting.Lua.API.Repair
@@ -1124,6 +1125,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
+                   Test.Headless.Power.Demolition
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated
