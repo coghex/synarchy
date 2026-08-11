@@ -79,7 +79,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Set as Set
 import Engine.Save.Barrier
 import Engine.Load.Status
-    ( LoadPhase(..), LoadStatus(..)
+    ( LoadPhase(..), LoadStatus(..), ReconciliationFailure(..)
     , beginLoad, advanceLoad, failLoad, readLoadStatus, loadInProgress )
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
@@ -198,6 +198,27 @@ loadStatusFn env = do
             forM_ (lsFailedAtPhase s) $ \phase → do
                 Lua.pushstring . TE.encodeUtf8 . T.pack . show $ phase
                 Lua.setfield (-2) "failedAtPhase"
+            -- Issue #1204: a post-publication reconciliation failure
+            -- reports through its OWN terminal phase
+            -- ('LoadReconciliationFailed') and outcome
+            -- ('LoadReconciliationIncomplete'), never through
+            -- 'failedAtPhase' above — that field's presence is what
+            -- promises the old session survived unchanged, which a
+            -- failure past the session swap cannot promise. This array
+            -- (absent unless a callback actually raised) carries the
+            -- unambiguous module-to-error association the flattened
+            -- outcome string can only summarize: one @{module, error}@
+            -- entry per failing Lua module, in broadcast order.
+            unless (null (lsReconciliationFailures s)) $ do
+                Lua.newtable
+                forM_ (zip [1 ∷ Int ..] (lsReconciliationFailures s)) $ \(i, f) → do
+                    Lua.newtable
+                    Lua.pushstring (TE.encodeUtf8 (rfModule f))
+                    Lua.setfield (-2) "module"
+                    Lua.pushstring (TE.encodeUtf8 (rfError f))
+                    Lua.setfield (-2) "error"
+                    Lua.rawseti (-2) (fromIntegral i)
+                Lua.setfield (-2) "reconciliationFailures"
     pure 1
 
 -- | The full save/load-transaction owner set, minus

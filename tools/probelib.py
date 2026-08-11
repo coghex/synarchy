@@ -231,7 +231,9 @@ def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2
     Returns ``(published: bool, status: dict | None)`` — ``status`` is
     the last observed ``engine.getLoadStatus()`` table matching
     ``request_id`` when given (``None`` only if the debug console never
-    returned a matching one at all).
+    returned a matching one at all). ``True`` means a fully reconciled
+    ``LoadPublished``; both failure dispositions (issue #1204) return
+    ``False`` with the status that names which one.
     """
     deadline = time.time() + seconds
     last = None
@@ -244,6 +246,16 @@ def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2
             if phase == "LoadPublished":
                 return True, status
             if phase == "LoadFailed":
+                return False, status
+            # Issue #1204: the session published, but a Lua
+            # ``onSaveLoaded`` reconciliation callback raised, so it is
+            # only partially reconciled. Terminal (so this never spins
+            # to the deadline) and UNSUCCESSFUL (so no probe builds
+            # assertions on a session whose Lua-side state was never
+            # finished reconciling); ``status`` carries the per-module
+            # ``reconciliationFailures`` breakdown for the caller's
+            # failure message.
+            if phase == "LoadReconciliationFailed":
                 return False, status
         time.sleep(interval)
     return False, last

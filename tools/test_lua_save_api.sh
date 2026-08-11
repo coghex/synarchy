@@ -91,6 +91,12 @@ wait_load_published() {
         case "$status" in
             '"LoadPublished"') return 0 ;;
             '"LoadFailed"') return 1 ;;
+            # issue #1204: the session published but a Lua onSaveLoaded
+            # callback raised, so it is only partially reconciled --
+            # terminal (never spin to the deadline on it) and
+            # unsuccessful (the assertions after this wait would be
+            # reading half-reconciled state).
+            '"LoadReconciliationFailed"') return 1 ;;
         esac
         sleep 0.25
     done

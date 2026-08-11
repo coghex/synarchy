@@ -9,7 +9,8 @@ module Engine.Scripting.Lua.Thread.Dispatch
 import UPrelude
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
-import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
+import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules
+                                 , broadcastToModulesReportingErrors)
 import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
@@ -28,7 +29,8 @@ import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
-import Engine.Load.Status (advanceLoad, failLoad, finishLoad, LoadPhase(..))
+import Engine.Load.Status (advanceLoad, failLoad, finishLoad, failReconciliation
+                          , ReconciliationFailure(..), LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
 import World.Command.Types (WorldCommand(..))
@@ -284,17 +286,33 @@ processLuaMsg env ls stateRef msg = case msg of
                         \session while this command was queued"
                     cancelStaleDebugCommands
     cancelStaleDebugCommands
-    broadcastToModules ls "onSaveLoaded"
+    reconcileFailures ← broadcastToModulesReportingErrors ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
       , intsToScriptArray survBuildingIds ]
     -- The transaction is reported
     -- 'LoadPublished' only NOW, once this reconciliation broadcast has
     -- actually run — not the instant the Haskell-side ref swap
     -- happened (World.Load.Publish.publishStagedSession, well before
-    -- this message was even drained). 'broadcastToModules' never
-    -- throws (each module call is pcall-guarded internally), so this
-    -- always runs.
-    finishLoad (loadStatusRef env) requestId
+    -- this message was even drained). The broadcast never
+    -- throws (each module call is pcall-guarded internally), so exactly
+    -- one of the two terminations below always runs.
+    --
+    -- Issue #1204: that pcall guard used to SWALLOW what it caught, so
+    -- a callback that partially reconciled its singleton and then
+    -- raised still reported an unqualified 'LoadSucceeded'. The
+    -- shipped callbacks do correctness-critical work (scripts/
+    -- unit_ai.lua and building_spawn.lua prune orphaned rows and scrub
+    -- typed references, unit_resources.lua rebuilds derived body
+    -- statistics, ui_manager_menu.lua rebinds Lua's world/HUD ids to
+    -- the published session), so an incompletely reconciled session is
+    -- not a presentation-only concern. It gets its own honest terminal
+    -- disposition instead — see 'failReconciliation', which is
+    -- deliberately not 'failLoad'.
+    if null reconcileFailures
+      then finishLoad (loadStatusRef env) requestId
+      else failReconciliation (loadStatusRef env) requestId
+             [ ReconciliationFailure (T.pack scriptPath') err
+             | (scriptPath', err) ← reconcileFailures ]
   LuaHudLogInfo text1 text2 kind →
     broadcastToModules ls "onSetInfoText"
       [ScriptString text1, ScriptString text2, ScriptString kind]

@@ -37,6 +37,25 @@ log.
   component succeed. A load that fails partway must not leave the live
   session half-replaced (see [Content-integrity
   behavior](#content-integrity-behavior) for what "fails" means).
+- **A post-publication reconciliation failure is its own disposition
+  (#1204).** The step above is not the last one: publication is
+  followed by the Lua `onSaveLoaded` reconciliation broadcast, which
+  prunes orphaned rows, scrubs typed references, rebuilds derived
+  statistics, and rebinds Lua's world/HUD identifiers to the published
+  session. Each callback is isolated (one that raises can neither crash
+  the Lua thread nor stop the callbacks after it), but a callback that
+  partially mutates its own state and *then* raises leaves the
+  already-published session incompletely reconciled. That state fits
+  neither existing terminal — it is not a success, and it cannot claim
+  the unchanged-old-session promise a pre-publication failure makes —
+  so it reports as its own terminal phase,
+  `Engine.Load.Status.LoadReconciliationFailed`, with a
+  `LoadReconciliationIncomplete` outcome aggregating **every** failing
+  module paired with its own error text (`engine.getLoadStatus()`
+  exposes that as `reconciliationFailures`). `failedAtPhase` stays
+  reserved for pre-publication failures, precisely because its presence
+  is what says the old session survived. Recovery is loading again;
+  nothing rolls the published session back.
 - **Save leaves the session paused; load starts paused.** Both
   directions land on the same paused state, so a save is always a safe,
   quiescent point to resume from. Unpausing after a load uses the

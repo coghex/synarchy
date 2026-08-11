@@ -1,6 +1,7 @@
 module Engine.Scripting.Lua.Util
   ( isValidRef
   , broadcastToModules
+  , broadcastToModulesReportingErrors
   , nowSeconds
   , tableEntryCount
   , isDenseArray
@@ -8,7 +9,7 @@ module Engine.Scripting.Lua.Util
 
 import UPrelude
 import Engine.Scripting.Lua.Types (ScriptValue, LuaBackendState(..), LuaScript(..))
-import Engine.Scripting.Lua.Script (callModuleFunction)
+import Engine.Scripting.Lua.Script (callModuleFunctionReportingError)
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
@@ -65,8 +66,25 @@ nowSeconds = realToFrac ∘ utcTimeToPOSIXSeconds ⊚ getCurrentTime
 --   in runLuaLoop). The Lua.State is never touched from other threads;
 --   inter-thread communication uses STM queues (luaQueue, debugQueue).
 broadcastToModules ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
-broadcastToModules ls funcName args = do
+broadcastToModules ls funcName args =
+    void $ broadcastToModulesReportingErrors ls funcName args
+
+-- | 'broadcastToModules', additionally RETURNING every callback that
+--   raised paired with its module's 'scriptPath' (issue #1204), in
+--   broadcast order. Isolation is unchanged: each callback is still
+--   pcall-guarded and still logged individually, and one that raises
+--   never stops the ones after it — failures are AGGREGATED across the
+--   whole broadcast rather than short-circuiting at the first, which is
+--   what lets a caller report the complete set. An empty result means
+--   every registered module's callback completed.
+broadcastToModulesReportingErrors
+    ∷ LuaBackendState → T.Text → [ScriptValue] → IO [(FilePath, T.Text)]
+broadcastToModulesReportingErrors ls funcName args = do
     scriptsMap ← readTVarIO (lbsScripts ls)
-    forM_ (Map.elems scriptsMap) $ \script →
-        when (isValidRef (scriptModuleRef script)) $ do
-            callModuleFunction ls (scriptModuleRef script) funcName args
+    fmap catMaybes $ forM (Map.elems scriptsMap) $ \script →
+        if isValidRef (scriptModuleRef script)
+            then do
+                mErr ← callModuleFunctionReportingError
+                           ls (scriptModuleRef script) funcName args
+                pure $ (,) (scriptPath script) ⊚ mErr
+            else pure Nothing

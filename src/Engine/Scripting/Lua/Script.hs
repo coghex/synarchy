@@ -1,6 +1,7 @@
 module Engine.Scripting.Lua.Script
   ( loadModuleRef
   , callModuleFunction
+  , callModuleFunctionReportingError
   , callLuaFunction
   ) where
 
@@ -48,7 +49,21 @@ loadModuleRef path = do
 --   are logged (they carry file:line) and the offending callback is
 --   skipped; the engine keeps running.
 callModuleFunction ∷ LuaBackendState → Lua.Reference → T.Text → [ScriptValue] → IO ()
-callModuleFunction ls modRef funcName args = do
+callModuleFunction ls modRef funcName args =
+    void $ callModuleFunctionReportingError ls modRef funcName args
+
+-- | 'callModuleFunction', additionally RETURNING the error text of a
+--   callback that raised (issue #1204) instead of only warning about
+--   it. Isolation and logging are identical — this is the same call,
+--   with the diagnostic the pcall already produced handed back to the
+--   caller as well, so a caller that must report the failure onward
+--   (the post-load @onSaveLoaded@ reconciliation broadcast, whose
+--   result decides the load transaction's terminal disposition) can.
+--   'Nothing' when the callback completed, or when the module has no
+--   such function at all.
+callModuleFunctionReportingError
+    ∷ LuaBackendState → Lua.Reference → T.Text → [ScriptValue] → IO (Maybe T.Text)
+callModuleFunctionReportingError ls modRef funcName args = do
     mErr ← Lua.runWith (lbsLuaState ls) $ do
         _ ← Lua.getref Lua.registryindex modRef ∷ Lua.LuaE Lua.Exception Lua.Type
         _ ← Lua.getfield (-1) (Lua.Name $ TE.encodeUtf8 funcName)
@@ -73,6 +88,7 @@ callModuleFunction ls modRef funcName args = do
         Just msg → do
             logger ← readIORef (lbsLoggerRef ls)
             logWarn logger CatLua $ "Lua error in " <> funcName <> "(): " <> msg
+    pure mErr
 
 -- | Call a global Lua function
 callLuaFunction ∷ T.Text → [ScriptValue] → Lua.LuaE Lua.Exception Lua.Status

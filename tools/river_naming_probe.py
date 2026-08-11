@@ -208,8 +208,18 @@ def main() -> int:
     proc = boot(port, LOG)
     try:
         send(port, f"engine.loadSave('{SLOT}'); return 'ok'", timeout=30.0)
-        if not wait_load_published(port, seconds=240.0):
-            return fail_out(["phase 4: the load never reached LoadPublished"])
+        # Unpack: wait_load_published returns a (published, status)
+        # TUPLE, which is truthy even when published is False -- so
+        # `if not wait_load_published(...)` never fired for ANY
+        # unsuccessful terminal, and this phase went on to query a
+        # session that had not published. Both failure dispositions stop
+        # it now: LoadFailed, and #1204's LoadReconciliationFailed
+        # (published, but a Lua onSaveLoaded callback raised, so the
+        # river names read below would come off half-reconciled state).
+        published, load_status = wait_load_published(port, seconds=240.0)
+        if not published:
+            return fail_out(["phase 4: the load did not reach a fully "
+                             f"reconciled LoadPublished ({load_status})"])
         active = send(port, "return world.getActiveWorldId()").strip().strip('"')
         send(port, f"world.show('{active}'); return 'ok'")
         loaded = rivers(port)
