@@ -30,22 +30,33 @@ contract. Tracker duplication was not evaluated here; that belongs to
 
 ## Status
 
-- [ ] SURV-1. Low-capacity acolytes can lack expedition-supply headroom
-- [ ] SURV-2. The calibration transfer helper can overshoot carrying capacity
-- [ ] SURV-3. Spawn-time capacity checks ignore innate capacity modifiers
-- [ ] SURV-4. Completed move orders immediately release units back to wander
-- [ ] SURV-5. Ambient wander can select routes across damaging drops
-- [ ] SURV-6. The first-aid scenario races live AI before its baseline
-- [ ] SURV-7. A discrete meal can consume and waste an entire food reserve
-- [ ] SURV-8. Canteen drinking can drain a different instance than it selected
-- [ ] SURV-9. Imminent blood loss does not constrain locomotion above the collapse threshold
-- [ ] SURV-10. Post-fix multi-wound treatment lacks a stabilization observation
+- [x] SURV-1. Low-capacity acolytes can lack expedition-supply headroom — [no-issue]
+- [x] SURV-2. The calibration transfer helper can overshoot carrying capacity — [#1212]
+- [x] SURV-3. Spawn-time capacity checks ignore innate capacity modifiers — [#1213]
+- [x] SURV-4. Completed move orders immediately release units back to wander — [#1216]
+- [x] SURV-5. Ambient wander can select routes across damaging drops — [#1217]
+- [x] SURV-6. The first-aid scenario races live AI before its baseline — [#1218]
+- [x] SURV-7. A discrete meal can consume and waste an entire food reserve — [#1219]
+- [x] SURV-8. Canteen drinking can drain a different instance than it selected — [#1220]
+- [x] SURV-9. Imminent blood loss does not constrain locomotion above the collapse threshold — [no-issue]
+- [x] SURV-10. Post-fix multi-wound treatment lacks a stabilization observation — [#1221]
 
 ---
 
 ## Expedition load and provisioning
 
-### SURV-1. Low-capacity acolytes can lack expedition-supply headroom
+### [no-issue] SURV-1. Low-capacity acolytes can lack expedition-supply headroom
+
+> **Disposition:** No issue — the ~11 kg weak-roll tail sitting just under the
+> ~12 kg full kit is an explicitly recorded design decision
+> (`Body.hs:185-194`: shed pick/shovel "instead of flooring the formula"),
+> with mule dependence as the documented logistics answer
+> (`acolyte.yaml` starting_inventory, the `unit_ai_fetch.lua` ladder). The
+> remaining concern — identifying low-capacity units during party
+> preparation — is existing scope of open epic #1013, whose Mode A panels
+> show weight/capacity and whose landed strict policy (`Unit/Transfer.hs`)
+> refuses over-capacity per item, so provisioning can neither overload a
+> weak acolyte nor fail invisibly.
 
 The body-derived carrying-capacity range intentionally permits weak acolytes
 whose capacity is below the complete starting loadout. Spawn shedding removes
@@ -82,7 +93,7 @@ a severe travel penalty.
 - **Remaining uncertainty:** The current distribution of post-shedding headroom
   across randomized acolyte rolls has not been recomputed.
 
-### SURV-2. The calibration transfer helper can overshoot carrying capacity
+### [#1212] SURV-2. The calibration transfer helper can overshoot carrying capacity
 
 The calibration runner describes its legacy unit-to-unit provisioning as
 capacity-gated, but its check only asks whether the receiver is already at
@@ -116,7 +127,7 @@ contract. It does show that the scenario’s local guard is insufficient.
 - **Remaining uncertainty:** No fresh scenario run measured how often the
   current provisioning set crosses capacity on its final transfer.
 
-### SURV-3. Spawn-time capacity checks ignore innate capacity modifiers
+### [#1213] SURV-3. Spawn-time capacity checks ignore innate capacity modifiers
 
 Spawn-time shedding compares load against `carrying_capacity` in the base
 `initialStats` map. Innate and accessory modifiers are not attached until the
@@ -155,7 +166,12 @@ spawn warning with nothing eligible to remove.
 
 ## Movement and scenario control
 
-### SURV-4. Completed move orders immediately release units back to wander
+### [#1216] SURV-4. Completed move orders immediately release units back to wander
+
+> **Decision (2026-08-10):** hold position — an arrived unit stands at its
+> commanded destination (wander and autonomous work suppressed; survival
+> interrupts stay live and return to the anchor) until a new command or an
+> explicit release. Filed as #1216.
 
 A commanded task is deleted as soon as the unit enters the arrival radius.
 Nothing records a post-arrival hold or formation intent. On the next AI
@@ -187,7 +203,7 @@ coherent multi-unit observations.
 - **Remaining uncertainty:** Whether immediate return to wander is still the
   desired default is a product decision.
 
-### SURV-5. Ambient wander can select routes across damaging drops
+### [#1217] SURV-5. Ambient wander can select routes across damaging drops
 
 Ambient wander chooses an arbitrary radial destination without inspecting
 terrain or hazard. Pathing assigns an exponential cost to falls, but a fall is
@@ -218,7 +234,7 @@ off the ridge before receiving the commanded descent.
 - **Remaining uncertainty:** A fresh run has not measured the current frequency
   of hazardous wander outside the artificial ridge scenario.
 
-### SURV-6. The first-aid scenario races live AI before its baseline
+### [#1218] SURV-6. The first-aid scenario races live AI before its baseline
 
 The scenario spawns the party onto a prepared ridge, waits 1.5 seconds for
 materialization, clears one standing goal, transfers the kit, and reads the
@@ -254,7 +270,11 @@ the baseline while the scenario continues.
 
 ## Food and container consumption
 
-### SURV-7. A discrete meal can consume and waste an entire food reserve
+### [#1219] SURV-7. A discrete meal can consume and waste an entire food reserve
+
+> **Decision (2026-08-10):** stop before waste — a meal still feeds to full
+> from bulk food, but another DISCRETE item is opened only when the stomach
+> can hold at least a tunable fraction of its calories. Filed as #1219.
 
 Once the stomach falls below the eating threshold, `eatExecute` repeatedly
 consumes food until the stomach reaches 99% or inventory runs out. Discrete
@@ -288,7 +308,12 @@ one decision, even though some of the final ration is wasted.
 - **Remaining uncertainty:** The desired tradeoff among meal fullness, ration
   indivisibility, reserve protection, and calorie overflow is a design decision.
 
-### SURV-8. Canteen drinking can drain a different instance than it selected
+### [#1220] SURV-8. Canteen drinking can drain a different instance than it selected
+
+> **Verification note (2026-08-10):** the refill path
+> (`unit_ai_water.lua`, `refillExecute`) has the same wrong-instance
+> defect — headroom measured on the selected canteen, fill applied to the
+> first same-def match. #1220 covers both call sites.
 
 The drinking action locates a specific filled canteen and calculates the sip
 from that instance. It then mutates inventory by definition name, which drains
@@ -329,7 +354,17 @@ consumable path for precisely this reason.
 
 ## Injury behavior and verification
 
-### SURV-9. Imminent blood loss does not constrain locomotion above the collapse threshold
+### [no-issue] SURV-9. Imminent blood loss does not constrain locomotion above the collapse threshold
+
+> **Disposition:** No issue — project-owner decision (2026-08-10): the
+> straight cliff (full capability above the 30% blood threshold, collapse
+> below it) is the intended behavior for now. Graduated pre-collapse
+> weakness is planned as part of separate, not-yet-implemented work and is
+> deliberately out of this finding's scope. Verified state: collapse is
+> `unconsciousFraction = 0.30` on current blood (`Combat/Wounds/Tick.hs`),
+> injury knockout is concussion-only, crawl is leg-damage-only, and
+> `brain.lua`'s consciousness reads core temp / blood oxygen / salt — no
+> blood-volume or bleed-rate input anywhere.
 
 Blood loss collapses a unit only after current blood falls below 30% of maximum.
 The injury locomotion state separately considers concussion and disabling
@@ -369,7 +404,7 @@ underlying rule still applies to severe combat or multi-wound bleeding.
 - **Remaining uncertainty:** Whether this is desired dramatic behavior or a
   missing shock/triage mechanic requires product judgment.
 
-### SURV-10. Post-fix multi-wound treatment lacks a stabilization observation
+### [#1221] SURV-10. Post-fix multi-wound treatment lacks a stabilization observation
 
 The corrected fall tests verify wound count, injury kinds, aggregate bleed, and
 fracture thresholds, but not whether the starting party’s medic can stabilize a

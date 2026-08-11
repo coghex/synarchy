@@ -2,10 +2,29 @@
 
 This document is the durable design authority for completing Synarchy's first
 expedition arc. Most of the playable loop has shipped; the remaining design
-work adds a real confrontation, a capability-changing reward, and integrated
+work adds a real confrontation, a location worth clearing, and integrated
 verification of those two verbs.
 
 Design state: `ready for issue processing`
+
+> **2026-08-11 — material design change, re-signed-off the same day.** The
+> location-visibility and reward design below was rewritten against new
+> decisions D-14 to D-22. Reveal is now by unit line of sight, every location is
+> marked from world generation by a shared question-mark icon, a cleared
+> location's icon is tinted, clearing is gated on guaranteed significant loot,
+> and the "recovered radio core reveals distant locations" reward is
+> **retired**. D-6 is partially superseded; D-10, D-12 and D-13 are fully
+> superseded, retained with their rationale. EXP-4 and EXP-2 changed shape.
+> Q-1 through Q-11 are resolved.
+>
+> **Q-12 is deliberately open** and is the one thing a solver must stop on: the
+> shared question-mark texture does not exist. The project owner is making it.
+> EXP-4's issue must carry that as an explicit art blocker — build and test
+> everything the texture does not gate, then stop and ask. Do not placeholder,
+> do not reuse the ruin sprite, and do not assume a generation method.
+>
+> **#917 and epic #1229 are still stale** and must be corrected per D-21 before
+> either is worked.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -13,10 +32,10 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Complete the expedition gameplay loop
+- [x] EPIC. Complete the expedition gameplay loop — [#1229]
 - [x] EXP-1. Add hostile location occupants and the first combat encounter — [#916]
-- [ ] EXP-4. Add information-revealed locations and staged map icons
-- [x] EXP-2. Add a transformational expedition reward — [#917]
+- [ ] EXP-4. Mark every location unknown and reveal its type by unit sight
+- [x] EXP-2. Gate location clearing on guaranteed significant loot — [#917]
 - [ ] EXP-5. Extend the first-session tutorial through confrontation and advancement
 - [ ] EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
 
@@ -24,14 +43,16 @@ concrete precondition
 
 - **Goal:** Extend the shipped prepare → travel → discover → extract → return
   loop so a normal expedition includes an understandable confrontation and a
-  guaranteed reward that visibly expands colony capability.
-- **Done when:** One authored ruin encounter can arise through ordinary play
-  and clear only when every assigned hostile is dead or incapacitated; its
-  guaranteed location-intelligence reward can be returned to built colony cargo
-  and explicitly analyzed to reveal nearby instances of a separate hidden-by-
-  default location definition as anonymous map hints that become type-specific
-  on approach; and the tutorial plus end-to-end gate prove the completed loop
-  across a fresh save/load process without regressing survival and retrieval.
+  location the player can genuinely finish — its type learned by looking at it,
+  its hostiles put down, and its guaranteed significant contents carried home.
+- **Done when:** One authored ruin encounter can arise through ordinary play;
+  every location is marked on the zoom map by a shared question-mark symbol from
+  world generation, resolves to its type icon only once a player-owned unit
+  actually sees a tile the location occupies, and tints to a cleared state once
+  every assigned hostile is dead or incapacitated **and** every guaranteed
+  significant item has been taken from it; and the tutorial plus end-to-end gate
+  prove the completed loop across a fresh save/load process without regressing
+  survival and retrieval.
 - **Users and operators:** Players running the first expedition; content
   authors adding locations, occupants, and rewards; maintainers operating the
   location, combat, tutorial, and persistence gates.
@@ -54,18 +75,46 @@ concrete precondition
   producer today. The zoom-map renderer currently draws every mapped instance
   and selects the same definition-specific `undiscovered` texture for both
   `unknown` and `hinted`, then the `discovered` texture for every later state.
+- **Discovery is proximity, not sight.** `Location.Discovery.haloContactsWhere`
+  tests `boundsContainsPoint worldSize (expandBounds (liDiscoveryMargin inst)
+  (liBounds inst))` against each player-owned unit's tile — a location-owned
+  halo that ignores facing, terrain and time of day. Both the player-wide
+  `findDiscoveries` and #915's per-unit `findAwareness` are built on that ONE
+  enumeration, deliberately, so the two layers cannot drift.
+- **Per-unit sight already exists and is unused by locations.**
+  `Unit.LineOfSight.unitVisibleTiles` returns the tiles a unit can actually
+  see: a `perception × awareRangeTiles` (6.0) radius, intersected with a 120°
+  cone on the unit's facing, intersected with terrain-Z line of sight, with a
+  `nightPerceptionFactor`. Its own docstring names driving fog of war as its
+  intended future use.
+- **RGB tinting of world quads is established practice, not a new exception.**
+  `World/Render/TileQuads.hs` tints underwater terrain (`Vec4 0.7 0.8 1.0`),
+  lake/river surfaces, and lava. Zoom-map icons are the outlier: `emitIconQuad`
+  pins `color = Vec4 1.0 1.0 1.0 alpha`, using only the alpha channel for the
+  zoom fade.
+- **Only one location definition exists.** `data/locations/` contains exactly
+  `ruin_small.yaml`, and `assets/textures/icons/location/` exactly
+  `ruin_hidden.png` and `ruin_discovered.png`. `Location.Overlay` already places
+  every definition with `ldMaxCount > 0` at its own `ldMinSpacing`, so more
+  definitions are content work, not engine work.
 - Survival calibration, direct retrieval and return, ruin loot, the
   first-session tutorial foundation, and the integrated man-versus-nature gate
   shipped in closed issues #919–#923. `tools/expedition_loop_probe.py` is the
   current end-to-end authority.
 - The current gate deliberately substitutes **survive the journey** for
   confrontation and **bank ordinary colony stock** for advancement. Open issue
-  #916 owns the hostile-encounter slice and remains blocked on unit art; open
-  issue #917 owns the transformational reward and remains blocked on choosing
-  something meaningful to reveal or gate.
-- No open tracker epic exactly owns the remaining pair plus their integration.
-  Closed epic #918 covers survival calibration only and explicitly defers
-  #916/#917; closed epic #159 covers the location foundation.
+  #916 owns the hostile-encounter slice and remains blocked on unit art.
+- **Open issue #917's body is stale and its premise was rejected (2026-08-11).**
+  It was written around a recovered radio core that reveals distant locations;
+  D-17 retires that idea outright. The issue number is still the right home for
+  EXP-2, but its body must be rewritten to the guaranteed-significant-loot
+  design before any solver reads it. See Q-9.
+- Epic #1229 tracks this arc. **Its body is also stale in the same way** — its
+  goal and `Done when` describe the location-intelligence radius reveal — and
+  needs the same correction.
+- No other open tracker epic owns this arc. Closed epic #918 covers survival
+  calibration only and explicitly defers #916/#917; closed epic #159 covers the
+  location foundation.
 
 ## Scope
 
@@ -74,15 +123,15 @@ concrete precondition
 - One authored hostile occupant type and one reliable ruin encounter.
 - Hostility detection, bounded pursuit/disengagement, explicit attack/retreat,
   outcome feedback, loot, and a persisted location outcome.
-- One guaranteed reward, distinct from random ruin loot and the existing
-  communications `radio`, that reveals eligible hidden locations within a
-  finite radius of the cleared source location.
-- At least one separate location definition authored as hidden by default, so
-  the new information loop can be observed without changing existing mapped
-  ruins or the starting-site-selection experience.
-- A backwards-compatible location-visibility policy and staged zoom-map icon
-  behavior: invisible while unknown, generic while hinted, type-specific while
-  discovered/active, and completed when cleared/depleted.
+- A two-class split of location contents: incidental items (materials, ordinary
+  loot) that have no bearing on clearing, and **guaranteed significant items**
+  — story-progression items and valuable unique equipment — that must be taken
+  from the location before it can be cleared.
+- Uniform zoom-map icon behavior for every location, surface and underground
+  alike: a shared question-mark symbol from world generation, the definition's
+  type icon once a player-owned unit sees a tile the location occupies, and that
+  same type icon tinted dark once the location is cleared.
+- Reveal driven by real per-unit line of sight rather than a proximity halo.
 - A separate tutorial extension built only after the encounter and reward own
   durable predicates.
 - Extending the existing end-to-end expedition gate and player-facing guidance
@@ -198,8 +247,12 @@ and usable*, which is what the step-9 gate asserts.
 
 The first-session milestone might be:
 
-> Settlement established — recovered location intelligence has identified new
-> signals near the cleared ruin.
+> Settlement established — the ruin has been swept and what it was holding is
+> ours.
+
+*(Superseded 2026-08-11: the original wording read "recovered location
+intelligence has identified new signals near the cleared ruin", from the
+retired reward — see D-17.)*
 
 The sandbox continues after this milestone, but the player has completed a
 recognizable arc.
@@ -266,6 +319,14 @@ The first icon pair is for ruins. Additional types can provide their own pairs
 later. A future **cleared** texture may indicate that enemies have been
 eliminated and/or the location objective has been attained, but cleared-state
 rules and art are outside the first map-discovery slice.
+
+> **Superseded 2026-08-11 by D-14, D-15 and D-16.** The paragraphs above
+> describe what #781 shipped and remain accurate as history. The design going
+> forward is three states, not a pair: one shared unknown symbol for every
+> definition until its type is seen, then the definition's type icon, then that
+> same icon tinted dark when cleared. The trigger is line of sight, not
+> approach, and the cleared state is a tint rather than a third authored
+> texture. See "Map icons: unknown, typed, cleared" under Design.
 
 ### Spatial bounds and discovery
 
@@ -395,14 +456,14 @@ currently visible.
   runs the whole loop as one session, described under "9. Gate the full slice"
   below.
 
-**Steps 4 and 5 remain future work, and are deliberate deferrals rather than
-oversights.** #916 (one hostile occupant and the first combat encounter) is
-blocked on unit art; #917 (a transformational reward) has nothing to reveal or
-gate yet, because the location-intelligence system a recovered radio core would
-feed does not exist. Together they would add the **confront** verb and turn
-**invest** from "the loot is banked and usable" into "the loot changed what the
-colony can do". Everything else in the first-30-minutes sequence is
-implemented.
+**Steps 4 and 5 remain future work.** #916 (one hostile occupant and the first
+combat encounter) is blocked on unit art. #917 keeps step 5's slot but its
+premise changed on 2026-08-11: it is no longer "a reward that changes what the
+colony can do" but "guaranteed significant contents that must be taken before a
+location counts as cleared" (D-17, D-18) — its issue body still describes the
+retired version and must be rewritten (Q-9). Together they add the **confront**
+verb and give **invest** an objective rather than a stockpile entry. Everything
+else in the first-30-minutes sequence is implemented.
 
 ## Design
 
@@ -421,61 +482,72 @@ that durable state follows the component-version and frozen-DTO migration rules
 in `docs/persistence_contract.md`; it must not overload the independent
 contents-spawned or geometry-stamped flags.
 
-### Information-revealed locations and map icons
+### Map icons: unknown, typed, cleared
 
-Location definitions gain an explicit map-visibility policy. The compatibility
-default preserves today's always-mapped behavior; only definitions authored as
-information-revealed begin absent from the player-facing map.
+Every placed location is marked on the zoom map from world generation onward.
+There is no per-definition visibility policy and no class of locations that
+begins absent from the map. What changes as the player learns about a location
+is *which* icon it draws, in three states:
 
-For an information-revealed location, lifecycle and map presentation mean:
-
-| Lifecycle | Player-facing map state |
+| State | Player-facing map icon |
 |---|---|
-| `unknown` | No icon; the player has no cartographic knowledge of the instance. |
-| `hinted` | A shared generic **Unknown location** icon; definition, name, and contents remain concealed. |
-| `discovered` / `active` | The correct definition-specific **uncompleted** icon. |
-| `cleared` / `depleted` | The definition-specific completed icon when authored, otherwise the uncompleted icon as a compatibility fallback. |
+| Type not yet seen | One **shared question-mark symbol**, identical for every definition, so the marker says "something is here" without saying what. |
+| Type known | The definition's own type icon, drawn normally. |
+| Cleared | The definition's own type icon, **tinted dark**, so a swept location reads at a glance as holding nothing further of value. |
 
-The existing proximity-discovery path already accepts `hinted → discovered`;
-that remains the one transition that replaces the anonymous hint with the
-correct type-specific icon. Existing always-mapped definitions continue using
-their current definition-specific icon before discovery, so old worlds and the
-starting-site-selection experience do not silently lose every known ruin.
+The unknown symbol is shared rather than authored per definition for the same
+reason the superseded design gave: per-definition art at that state would leak
+the identity the marker is meant to withhold. It is the arc's one new required
+texture.
 
-The icon schema may add an optional completed texture, but absence must remain
-valid. A hidden location's generic hinted icon is shared rather than authored
-per definition, because per-definition art at that state would leak the very
-identity the hint is intended to withhold.
+The cleared state is a **tint of the type icon**, not a second authored
+texture. `emitIconQuad` already carries a per-quad `Vec4` colour and currently
+pins RGB to white; darkening is a constant there. This deliberately avoids
+doubling the art bill for every location type the game will eventually carry
+(D-16).
 
-### Radius reveal transaction
+### Reveal by line of sight
 
-Activating location intelligence promotes eligible `unknown` instances to
-`hinted` on the same world page when their anchors fall within an authored,
-finite radius of the cleared source location. Distance is shortest cylindrical-
-world tile distance, so the U seam cannot hide a nearby target. Candidate
-enumeration is ordered by stable location-instance ID; already hinted or later
-states are idempotent no-ops.
+A location's type becomes known when a **player-owned unit can actually see a
+tile the location occupies** — not when a unit wanders inside a proximity halo.
+The predicate is the intersection of `Unit.LineOfSight.unitVisibleTiles` with
+the location's own defined tiles: perception radius, 120° facing cone, terrain
+line of sight, and the existing night factor all apply. A ruin behind a hill
+stays unknown; a unit walking past facing away does not reveal it.
 
-The whole reveal is a world-thread-owned lifecycle transaction. It records only
-the durable promotions and emits one player-facing summary, rather than a
-separate popup for every location. Save/load preserves the hinted instances
-through the existing location lifecycle wire field.
+This replaces the `discovery_margin` halo as the trigger for **both** layers.
+`findDiscoveries` and #915's `findAwareness` keep deriving from ONE shared
+enumeration — precisely so the map layer and per-unit `knownLocations` cannot
+drift — which now enumerates sight contacts instead of halo contacts (D-15,
+resolving Q-7). Nothing consumes `discovery_margin` afterwards; Q-11 decides
+whether the field is kept, narrowed, or removed.
 
-### Reward activation
+Everything else about discovery is unchanged: the promotion is one-way, fires
+exactly one player-facing event, is page-scoped, and persists.
 
-The guaranteed reward is location intelligence distinct from the existing
-unit-communications `radio`. It needs a durable association with its source
-`(world page, location instance)` so the reveal radius remains centered on the
-cleared site after the item is moved, saved, and loaded.
+### Clearing a location
 
-The intelligence does not activate when the encounter clears or merely when the
-item enters a unit inventory. After the recovered item is deposited into a
-built colony cargo store, its inventory entry offers an explicit **Analyze
-intelligence** action. Successful analysis records a durable, one-shot result,
-performs the radius reveal, and leaves the item stored as an analyzed artifact;
-repeating the action cannot reveal or notify twice. This keeps the return-and-
-invest verb visible without inventing a second project system or a synthetic
-"home radius" around the starting portal.
+A location is **cleared** when both halves hold:
+
+1. every hostile assigned to it is dead or incapacitated (D-9); and
+2. every **guaranteed significant item** it spawned has been taken — picked up
+   at least once by any unit of any faction, latched per item and never
+   un-latched (D-20).
+
+Location contents therefore fall into two classes (D-17). *Incidental* contents
+— materials, ordinary loot-table draws — are what a location is worth to
+scavenge and have no bearing on clearing. *Guaranteed significant* contents are
+authored to always appear: story-progression items and valuable unique
+equipment. They are the reason to go, and recovering them is half of what
+completes the site.
+
+This is what replaces the retired radio-core reward (D-17). The "invest" verb
+stops meaning "an artifact grants a map-wide power" and starts meaning "the
+thing worth having is out there, and getting it home is the objective."
+
+A location with no guaranteed significant contents authored clears on the
+hostile condition alone; a location with no hostiles clears on the loot
+condition alone.
 
 ### Tutorial ownership
 
@@ -520,11 +592,14 @@ and disengagement, the existing player attack/retreat surfaces, and a durable
 location outcome. Diplomacy, formations, reputation, and procedural encounter
 generation remain outside this arc.
 
-### D-6. Make the progression reward guaranteed and capability-changing
+### D-6. Make the progression reward guaranteed ~~and capability-changing~~
 
-Random loot may surround the reward but cannot replace it. The reward is a
-distinct item—not the existing `radio` used for unit communication—and must
-visibly enable or reveal something the colony could not do before.
+**Partially superseded 2026-08-11 by D-17.** The surviving half: random loot may
+surround a guaranteed item but cannot replace it, and that item is distinct from
+the existing `radio` used for unit communication. The retired half: the reward
+does **not** have to "visibly enable or reveal something the colony could not do
+before". A guaranteed significant item earns its place by being worth the trip
+and by gating the location's cleared state — not by granting a new capability.
 
 ### D-7. Keep retrieval in the direct RTS interaction model
 
@@ -544,13 +619,13 @@ Being driven away, leaving the location bounds, or temporarily disengaging does
 not complete the encounter. The fixed membership set makes completion
 observable and prevents a retreat from silently converting into a cleared site.
 
-### D-10. Use location intelligence to reveal nearby hidden locations in stages
+### D-10. ~~Use location intelligence to reveal nearby hidden locations in stages~~
 
-The reward promotes eligible hidden locations within a seam-aware radius of the
-cleared source from `unknown` to `hinted`. Hinted locations use one generic
-unknown icon; proximity changes them to the correct definition-specific
-uncompleted icon. Cleared locations may use an authored completed icon. Existing
-always-mapped definitions retain their current visibility by default.
+**Superseded 2026-08-11 by D-14, D-15 and D-16.** The staged reveal was built on
+a reward that no longer exists and on a hidden-by-default location class the
+project owner does not want. Recorded because the *shared anonymous icon* idea
+survived into D-14 — what was rejected is the radius reveal that produced it and
+the per-definition visibility policy underneath it.
 
 ### D-11. Deliver tutorial expansion as its own slice
 
@@ -558,22 +633,194 @@ The first-session tutorial extension follows the durable encounter and reward
 behavior and lands before the final integrated gate. Keeping it separate avoids
 mixing UI/objective work into either gameplay ownership or test infrastructure.
 
-### D-12. Activate recovered intelligence through an explicit cargo action
+### D-12. ~~Activate recovered intelligence through an explicit cargo action~~
 
-Depositing the source-associated item into built colony cargo exposes one
-**Analyze intelligence** action. Analysis, not encounter clear or deposit alone,
-performs the one-shot radius reveal. The analyzed item remains in storage as an
-artifact, while a durable activation record makes retries and save/load
-idempotent.
+**Superseded 2026-08-11 by D-17.** There is no location intelligence to
+activate, so there is no Analyze action, no durable item-to-source association,
+and no one-shot activation record. Recorded because the underlying instinct —
+that recovering an item should *do* something observable rather than silently
+enter a stockpile — survives in D-18, where taking the guaranteed significant
+items is half of what clears the location.
 
-### D-13. Author a separate hidden-by-default location definition
+### D-13. ~~Author a separate hidden-by-default location definition~~
 
-The first reveal population comes from at least one distinct location
-definition whose map-visibility policy begins hidden. Existing mapped ruin
-definitions retain their current behavior, including their role in choosing a
-starting site. The new definition may reuse the common placement and content
-substrate, but it has its own stable definition identity and the icon states
-required by D-10.
+**Superseded 2026-08-11 by D-14.** With every location marked from the start,
+there is no hidden-by-default class for a definition to belong to, so no
+definition needs authoring to serve a visibility mechanic. New location
+definitions remain wanted (D-19) — as *content*, sequenced by what the world
+should contain, not by what the map machinery needs to demonstrate itself.
+
+### D-14. Mark every location from the start with one shared question-mark icon
+
+Every placed location draws a zoom-map icon from world generation onward, and
+until its type is known that icon is a single shared **question-mark** symbol,
+identical across every definition. There is no per-definition visibility policy
+and no unmarked location class — **surface and underground alike**, every
+location is on the map as a question mark from the beginning and is resolved by
+going and looking.
+
+*Consequence:* the player can always see that something is out there, which
+keeps starting-site selection strategic (D-3), while what it *is* stays
+genuinely unknown until someone goes and looks. This makes the map a list of
+leads rather than a catalogue. It also means the arc needs exactly one new
+shared texture rather than a per-definition art matrix.
+
+*Consequence:* **`LifecycleHinted` now has no planned producer, ever.** It was
+reserved for a class of locations revealed by information rather than
+proximity; D-14 and D-21 remove that class from the design entirely. The state
+nonetheless stays in the enum: `LocationLifecycle` derives `Serialize` and is
+guarded by `tools/enum_append_only_audit.py`, so deleting a constructor is a
+wire-format break the audit refuses to record. Leave it in place and leave the
+`Location.Instance` comment explaining it, corrected to say the reserved use was
+dropped rather than that it is pending.
+
+*Out of scope but recorded:* how an underground location at depth is drawn on
+what is currently a surface zoom map is a real problem, and it belongs to D-19's
+long-term work, not to this arc.
+
+### D-15. Reveal a location's type by real per-unit line of sight
+
+A location's type becomes known when a player-owned unit can see a tile the
+location occupies, using the full `Unit.LineOfSight.unitVisibleTiles`
+predicate — perception radius, 120° facing cone, terrain line of sight, and the
+night factor. Seeing any single occupied tile is enough.
+
+*Consequence:* terrain and facing become meaningful for exploration — a ruin
+behind a hill stays unknown, and scouting means pointing units at things.
+Rejected alternative: reusing the existing `discovery_margin` proximity halo,
+which ignores facing, terrain and time of day and would reveal a location the
+unit demonstrably cannot see. The cost is that discovery stops being a cheap
+point-in-box test.
+
+*Consequence (resolves Q-7):* **both** layers move to sight. The player-wide
+cartographic layer (`findDiscoveries`) and #915's per-unit experiential layer
+(`findAwareness`, backing `aiState[uid].knownLocations`) keep deriving from ONE
+shared enumeration, which now enumerates sight contacts instead of halo
+contacts. The unsplittable-enumeration contract in `CLAUDE.md` survives intact,
+and a unit can no longer "know" a location it never saw. #915's own gates and
+`location_content_probe.py`'s per-unit-knowledge checks must be re-verified
+against the new trigger, and the two layers keep their existing differences —
+awareness reports every qualifying unit and ignores lifecycle, discovery reports
+the first qualifying unit and only while the instance can still promote.
+
+*Consequence:* `ldDiscoveryMargin` / `liDiscoveryMargin` lose their only
+consumer. What happens to the field is Q-11.
+
+### D-16. Draw a cleared location as its type icon, tinted dark
+
+Clearing does not swap in a separate authored texture. It tints the
+definition's own type icon darker, via the per-quad colour `emitIconQuad`
+already carries.
+
+*Consequence:* this is an explicit, enumerated exception to the project's
+no-tinting rule, alongside the existing underwater, fluid-surface and lava
+tints in `World/Render/TileQuads.hs`. The rule's purpose is to stop agents
+tinting things that should have their colour baked in; map-state annotation is
+not that. The alternative — a per-definition "cleared" texture — was rejected
+because it doubles the art bill for every location type the game will ever
+carry (D-19 names a dozen).
+
+### D-17. Retire the location-intelligence reward; gate clearing on guaranteed loot
+
+The "recovered radio core reveals distant locations" reward is **rejected
+outright** as a bad idea, not deferred. In its place, a location's contents
+split into two classes:
+
+- **Incidental** — materials and ordinary loot-table draws. What the site is
+  worth to scavenge; no bearing on clearing.
+- **Guaranteed significant** — authored to always appear: story-progression
+  items and valuable unique equipment. The reason to go.
+
+*Consequence:* #917 keeps its slot in the arc but its entire body is obsolete
+and must be rewritten (Q-9). The "invest" verb changes meaning: the payoff is
+the significant item itself and the site it completes, not a map-wide power the
+item confers.
+
+### D-18. Clear a location on hostiles down AND significant items taken
+
+A location is cleared when every assigned hostile is dead or incapacitated
+(D-9) **and** every guaranteed significant item it spawned has been taken from
+it. A location authored with only one of the two conditions clears on that one.
+
+*Consequence:* clearing becomes a genuine objective rather than a combat
+outcome, and a player who wins the fight but leaves the prize has not finished.
+It also gives the `cleared` lifecycle state its first real producer.
+
+### D-19. Locations own everything outside world-generator scope
+
+Long-term, "location" covers every authored or assembled place the world
+generator does not itself produce, both surface and underground:
+
+- **Surface** — towns, villages, ruins, camps, fortresses, castles, stray
+  containers, and eventually enemy-faction holdings.
+- **Underground** — small loot rooms, and the arc's real destination: large
+  sprawling dungeons with enemies and loot, which are intended to be where the
+  main gameplay happens.
+
+The intended underground approach is a bounding volume per feature so placements
+cannot collide, then random assembly of dungeon sections into a dungeon. The
+engine already handles arbitrary depth well.
+
+*Consequence:* this is direction, not scope. None of the underground work is in
+this arc. It is recorded because it decides that `ruin_small`'s single 5×5 room
+is the trivial case of a much larger system, so nothing in this arc may assume
+a location is small, single-level, or surface.
+
+### D-20. "Taken" means picked up by any unit, of any faction, once
+
+A guaranteed significant item counts as taken the first time **any** unit picks
+it up — the player's units, a hostile occupant, wildlife, anything. Faction is
+irrelevant.
+
+The flag is **per item and latched**: each guaranteed significant item records
+that it has been taken the first time it leaves the ground into any inventory,
+and nothing un-records it. Clearing then tests that every one of them is
+latched, which sidesteps the simultaneity problem — the player does not have to
+be holding all of them at the same instant.
+
+*Consequence:* dropping an item back inside the location does not un-clear the
+site, and neither does losing it afterwards. This is consistent with the
+existing lifecycle machinery: `promoteLifecycle` refuses backward and same-state
+transitions, so `cleared` is already one-way and fires exactly once.
+
+*Consequence:* a hostile that loots the prize and is then killed still leaves
+the location cleared, and the item recoverable from its corpse or the ground.
+That was judged acceptable — the site really has been emptied of what mattered.
+It also means clearing is evaluable entirely from location-local state, with no
+dependency on colony storage, so a lost or destroyed item can never leave a site
+permanently unclearable.
+
+### D-21. Correct #917 in place and correct epic #1229 (resolves Q-9)
+
+#917 keeps its number and its slot as EXP-2. Its body is rewritten to the
+guaranteed-significant-loot design, opening with a dated note recording that its
+original premise — a recovered radio core revealing distant locations — was
+rejected on 2026-08-11 and why. Keeping the number preserves the ledger link and
+the epic checklist entry; keeping the note preserves the rejected premise on the
+record, which closing and refiling would scatter across two issues.
+
+Epic #1229's `## Goal`, `## Done when`, and the EXP-4/EXP-2 checklist titles are
+corrected the same way, since they were written against the retired design.
+
+Both edits are tracker mutations and therefore belong to `/process-design-doc`,
+under its normal per-artifact approval — not to this design pass.
+
+### D-22. Remove `discovery_margin` everywhere (resolves Q-11)
+
+With both layers on sight (D-15), nothing consumes the field. It is removed from
+`LocationDef`/`ldDiscoveryMargin`, from the location YAML schema, from
+`LocationInstance`/`liDiscoveryMargin`, and from the CURRENT `world-pages`
+component DTO, with a component version bump and a migration that drops the
+value when decoding the previous shape.
+
+The frozen historical DTOs keep their field and keep decoding, per
+`docs/persistence_contract.md` — freezing them is what makes the removal safe.
+Chosen over leaving a dead field on the record and in the authoring schema,
+which would invite a content author to set a number that does nothing.
+
+*Consequence:* EXP-4 carries a `world-pages` schema change and therefore the
+persistence-inventory audit and save-compatibility gates, not just render and
+discovery tests.
 
 ## Open questions
 
@@ -592,9 +839,10 @@ incapacitated. Driving the occupants away does not clear the location.
 
 ### Q-3. Which colony capability does the guaranteed reward change?
 
-Resolved by D-10: recovered location intelligence reveals eligible locations
-within a radius of the cleared source. They first appear anonymously and become
-type-specific only when a player-owned unit approaches.
+~~Resolved by D-10~~ — **reopened and re-resolved by D-17 (2026-08-11).** The
+answer is now *none*: the premise that a guaranteed reward must change a colony
+capability is itself rejected. A guaranteed significant item is worth having on
+its own terms and gates the location's cleared state.
 
 ### Q-4. Should the first-session tutorial expand when the two deferred verbs land?
 
@@ -603,15 +851,98 @@ encounter/reward behavior and before the final integrated gate.
 
 ### Q-5. When does recovered location intelligence activate?
 
-Resolved by D-12: after the item is deposited into built colony cargo, the
-player explicitly selects **Analyze intelligence**. Deposit alone does not
-activate it, and the analyzed artifact remains in storage.
+**Moot as of 2026-08-11.** D-17 retired location intelligence; nothing
+activates. ~~Resolved by D-12.~~
 
 ### Q-6. What supplies the first information-revealed location population?
 
-Resolved by D-13: a separate authored location definition begins hidden by
-default. Existing mapped ruins and their starting-site behavior remain
-unchanged.
+**Moot as of 2026-08-11.** D-14 marks every location from the start, so there is
+no information-revealed population to supply. ~~Resolved by D-13.~~
+
+### Q-7. Does per-unit location knowledge also move to line of sight?
+
+**Resolved by D-15 (2026-08-11): both layers move to sight.** The shared
+`Location.Discovery` enumeration keeps deriving both `findDiscoveries` and
+#915's `findAwareness`, but now enumerates sight contacts rather than halo
+contacts. The unsplittable-enumeration contract survives, and a unit can no
+longer know a location it never saw.
+
+Rejected: moving only the map layer, which would have split the one enumeration
+`CLAUDE.md` documents as unsplittable and left units "knowing" ruins they never
+laid eyes on.
+
+### Q-8. What does "taken" mean for a guaranteed significant item?
+
+**Resolved by D-20 (2026-08-11): picked up by any unit, of any faction, once,
+latched per item.** Not "removed from bounds" and not "deposited in colony
+storage" — a hostile looting the prize counts, and the flag never clears.
+
+Rejected: the colony-storage reading, which would have made a location's cleared
+state depend on distant colony state and could leave a site permanently
+unclearable if the item were lost or destroyed.
+
+### Q-9. How do #917 and epic #1229 get corrected?
+
+**Resolved by D-21 (2026-08-11), at the project owner's delegation:** rewrite
+#917 in place, keeping its number and its dated record of the rejected premise,
+and correct #1229's goal, `Done when`, and affected checklist titles. Both are
+tracker mutations for `/process-design-doc` to apply under its normal per-
+artifact approval.
+
+### Q-10. Which locations does the lore/NPC stretch goal reveal, and does `hinted` survive?
+
+**Resolved by D-14 (2026-08-11): neither.** There is no information-revealed
+location class at any depth — surface and underground alike, every location is a
+question mark on the map from world generation and is resolved by going and
+looking. A lore or NPC reveal has nothing left to reveal, so it is dropped as a
+location mechanic rather than deferred.
+
+Consequently `LifecycleHinted` has **no planned producer, ever**. It stays in the
+enum anyway: `LocationLifecycle` derives `Serialize` and
+`tools/enum_append_only_audit.py` refuses to record a constructor removal as
+anything but a wire-format break. The `Location.Instance` comment reserving it
+for a future class must be corrected to say the reserved use was dropped.
+
+### Q-11. What happens to `discovery_margin` once nothing consumes it?
+
+D-15 moves both layers to sight, leaving `ldDiscoveryMargin` (the YAML/def
+field) and `liDiscoveryMargin` (the persisted per-instance field) with no
+consumer. The frozen `world-pages` v1/v2 DTOs must keep decoding it regardless —
+they are frozen. The live record and current DTO are the choice:
+
+1. **Keep both, unused.** Zero migration, zero risk, one dead field on the
+   record and in the YAML schema.
+2. **Drop it from `LocationDef`/YAML, keep the persisted field.** Stops content
+   authors setting a value that does nothing; no component version bump.
+3. **Remove it everywhere,** with a `world-pages` component version bump and a
+   migration from the current DTO.
+
+**Resolved by D-22 (2026-08-11): option 3 — remove it everywhere,** with a
+`world-pages` component version bump and a migration. The frozen historical DTOs
+keep the field and keep decoding.
+
+### Q-12. Who makes the shared question-mark location icon?
+
+D-14 requires exactly one new texture: a shared question-mark map symbol drawn
+for every location whose type is not yet known, at the same 32 logical pixels
+`locationIconTargetPixels` uses. It does not exist —
+`assets/textures/icons/location/` holds only `ruin_hidden.png` and
+`ruin_discovered.png`. The sibling icon families use a `*_unknown.png`
+convention (`skill_unknown.png`, `injury_unknown.png`,
+`infection_unknown.png`), so `location_unknown.png` is the name that fits.
+
+**Resolved 2026-08-11: the project owner will make this icon themselves.**
+
+It nonetheless stays recorded as an explicit **blocker in EXP-4's issue** rather
+than being resolved ahead of time. The standing workflow rule is that a solver
+reaching an art blocker STOPS and asks, and that stopping is the default: unless
+the owner has already stated a method for that specific asset, the agent must
+not assume either "the owner will supply it" or "generate it via PixelLab". A
+placeholder or a reused ruin sprite is never an acceptable substitute.
+
+No other art is required by this arc. D-16 deliberately makes the cleared state
+a tint rather than a per-definition texture, and `ruin_small` already ships the
+type icon its reveal resolves to.
 
 ## Verification strategy
 
@@ -622,22 +953,35 @@ unchanged.
   encounter begins through ordinary hostility, refuses to clear while any
   assigned hostile remains capable, resolves once after all are dead or
   incapacitated, and remains resolved after save/load.
-- Add pure lifecycle/icon coverage for always-mapped versus information-
-  revealed definitions, including invisible `unknown`, anonymous `hinted`,
-  type-specific uncompleted, optional completed-icon fallback, and proximity
-  promotion without identity leakage.
-- Verify radius selection at the boundary and across the cylindrical seam,
-  deterministic instance-ID ordering, one-way/idempotent promotion, and a
-  save/load round trip with hinted targets.
-- Verify that encounter clear, unit pickup, and cargo deposit do not activate
-  the intelligence; the explicit cargo action does so once, retains the analyzed
-  artifact, and remains idempotent across a save/load round trip.
+- Add pure icon-selection coverage for the three map states — shared unknown
+  symbol, definition type icon, tinted cleared — extending
+  `Test.Headless.Location.MapIcons` (`describe "Location map icons"`) rather
+  than adding a parallel spec.
+- Add focused sight-reveal coverage: an occupied tile inside the cone and within
+  the perception radius reveals; the same tile behind blocking terrain, outside
+  the cone, or beyond the radius does not; one-way and page-scoped promotion and
+  the exactly-one-event contract still hold. Extend
+  `Test.Headless.Location.Discovery` and `Test.Headless.World.LocationDiscovery`.
+- Cover D-22's removal of `discovery_margin` as a persistence change, not just a
+  deletion: the `world-pages` component version bump, a migration that drops the
+  value when decoding the previous shape, the frozen historical DTOs still
+  decoding, and the persistence-inventory / save-compatibility audits.
+- Re-verify the per-unit awareness layer against the same trigger, since D-15
+  moves both layers together: `--match "unit location knowledge"` and
+  `location_content_probe.py`'s per-unit-knowledge phases must still pass, with
+  awareness keeping its existing differences from discovery (every qualifying
+  unit, lifecycle ignored).
+- Verify the compound clear predicate at both partial states (hostiles down with
+  loot remaining; loot taken with a hostile still capable), the single-condition
+  authoring cases, exactly-once promotion, and a save/load round trip carrying
+  per-item taken state.
 - Extend the tutorial's focused evaluator, persistence, and HUD coverage for
   the new durable objective predicates before adding them to the integrated
   scenario.
 - Extend `tools/expedition_loop_probe.py` rather than creating a second whole-
-  arc scenario. It must place the encounter between travel and extraction and
-  replace the current deposit-only payoff with an observable radius reveal.
+  arc scenario. It must place the encounter between travel and extraction, and
+  replace the current deposit-only payoff with an observable cleared location
+  whose guaranteed significant item came home.
 - Continue reporting stages independently so a failure distinguishes encounter,
   reward, return, save, and fresh-process load behavior.
 - Use offscreen/manual verification only for player-facing feedback that cannot
@@ -668,68 +1012,80 @@ unchanged.
   and procedural dungeons.
 - **Open questions:** Q-1
 
-### EXP-4. Add information-revealed locations and staged map icons
+### EXP-4. Mark every location unknown and reveal its type by unit sight
 
-- **Outcome:** Authored hidden locations move from absent, to anonymous map
-  hints, to type-specific uncompleted icons, while existing mapped definitions
-  retain their current behavior.
-- **Scope:** A backwards-compatible visibility policy; a shared unknown-location
-  icon; optional completed icons; lifecycle-aware rendering; player-facing
-  identity concealment at `hinted`; and focused map/discovery/save coverage.
-- **Phase:** Location-intelligence substrate
+- **Outcome:** Every location draws a shared unknown symbol from world
+  generation, resolves to its own type icon once a player-owned unit actually
+  sees a tile it occupies, and draws that type icon tinted dark once cleared.
+- **Scope:** The shared question-mark icon; sight-based reveal replacing the
+  proximity halo in the ONE shared enumeration, moving both the cartographic and
+  the #915 per-unit awareness layers together; the cleared tint; lifecycle-aware
+  icon selection; the corrected `LifecycleHinted` comment; and focused
+  map/discovery/awareness/save coverage.
+- **Phase:** Location visibility
 - **Depends on:** `none`
 - **Ordering:** `can land first`
-- **Relevant decisions:** D-2, D-10, D-13
-- **Acceptance signals:** An information-revealed `unknown` instance draws
-  nothing; `hinted` draws only the generic icon; proximity selects the correct
-  uncompleted icon; cleared/depleted selects the completed icon or documented
-  fallback; at least one separate hidden-by-default definition supplies an
-  eligible instance; an always-mapped legacy definition renders as before; and
-  every state survives save/load without changing stored enum order.
-- **Out of scope:** The reward that creates hints, full fog of war, hiding all
-  existing surface ruins, or changing physical location visibility.
-- **Open questions:** None
+- **Relevant decisions:** D-2, D-14, D-15, D-16, D-22
+- **Acceptance signals:** An unseen instance of any definition draws the shared
+  question-mark symbol, never its type icon; a unit that can see one occupied tile
+  reveals the type, and a unit whose line of sight to every occupied tile is
+  blocked by terrain or falls outside its facing cone does not; the reveal
+  remains one-way, fires exactly one player event, is page-scoped, and survives
+  save/load; a cleared instance draws the type icon tinted; and no stored enum
+  order changes.
+- **Out of scope:** The clear condition itself (EXP-2 owns it — this slice only
+  renders the state), full fog of war, changing physical location visibility,
+  new location definitions, and the lore/NPC reveal.
+- **Open questions:** Q-12 is a deliberate **art blocker carried into the
+  issue**: the shared question-mark texture does not exist. The solver must stop
+  and ask the owner for it rather than placeholder, reuse the ruin sprite, or
+  assume a generation method. Everything else in this slice can be built and
+  tested before the texture arrives.
 
-### EXP-2. Add a transformational expedition reward
+### EXP-2. Gate location clearing on guaranteed significant loot
 
-- **Outcome:** The cleared ruin guarantees recoverable location intelligence
-  whose investment reveals eligible hidden locations around that source.
-- **Scope:** The guaranteed item; its durable association with the source page
-  and location instance; one-shot activation; seam-aware radius selection;
-  deterministic `unknown → hinted` promotion; player feedback; coexistence with
-  random loot; and save/load behavior.
+- **Outcome:** A location authors guaranteed significant contents alongside its
+  incidental loot, and only clears once its hostiles are down and every
+  guaranteed significant item has been taken from it.
+- **Scope:** The two-class content split in the location schema; guaranteed
+  (not rolled) spawning that coexists with loot-table draws; durable per-item
+  tracking of whether each has been taken; the compound clear predicate; the
+  `cleared` lifecycle promotion and its player feedback; and save/load behavior.
 - **Phase:** Invest
 - **Depends on:** `EXP-1`, `EXP-4`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-6, D-7, D-8, D-9, D-10, D-12, D-13
-- **Acceptance signals:** The item is guaranteed but not duplicated; remains
-  distinct from random loot and the communications radio; retains its cleared-
-  location source through movement and save/load; does not activate on clear,
-  pickup, or deposit; exposes an explicit action only from built cargo; remains
-  as an analyzed artifact afterward; reveals exactly the eligible in-radius
-  instances once, including across the U seam; and leaves out-of-radius and
-  already-known instances unchanged.
-- **Out of scope:** A general technology tree, large loot tiers, quests, and
-  replacing random salvage with fixed rewards.
-- **Open questions:** None
+- **Relevant decisions:** D-1, D-6, D-7, D-9, D-17, D-18, D-20
+- **Acceptance signals:** A guaranteed significant item appears exactly once per
+  instance and is never duplicated by a reload or a re-entered chunk; it is
+  distinguishable from incidental loot in both data and runtime state; a
+  location with hostiles down but a significant item still in place does NOT
+  clear; taking the last one clears it exactly once; a location authored with
+  only one of the two conditions clears on that one; and the cleared state plus
+  the per-item taken state survive save/load.
+- **Out of scope:** The map rendering of the cleared state (EXP-4 owns it), a
+  technology tree, loot tiers, quests, replacing incidental salvage with fixed
+  rewards, and any map-reveal effect of a recovered item.
+- **Open questions:** None. Q-8 is settled by D-20 and Q-9 by D-21; #917's body
+  must already have been corrected per D-21 before this slice is worked.
 
 ### EXP-5. Extend the first-session tutorial through confrontation and advancement
 
 - **Outcome:** The existing tutorial tree presents and durably tracks the
-  confrontation, recovery, return, and location-intelligence payoff.
+  confrontation, recovery, return, and cleared-location payoff.
 - **Scope:** New data-authored rows and evaluator keys over encounter clear,
-  reward recovery, return/investment, and successful radius reveal; persistence
+  significant-item recovery, return, and the location reaching `cleared`;
+  persistence
   of full-objective latches; live recomputation of subobjectives; HUD behavior;
   and focused tests.
 - **Phase:** Player guidance
 - **Depends on:** `EXP-1`, `EXP-2`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-8, D-9, D-10, D-11, D-12
+- **Relevant decisions:** D-8, D-9, D-11, D-15, D-17, D-18
 - **Acceptance signals:** Every row is answerable from durable gameplay state;
   full objectives latch, subobjectives recompute, save/load preserves only the
-  intended latches, and no objective itself mutates encounter or reward state.
-- **Out of scope:** A quest framework, objective rewards unrelated to location
-  intelligence, or a second onboarding system.
+  intended latches, and no objective itself mutates encounter or loot state.
+- **Out of scope:** A quest framework, objective rewards, or a second onboarding
+  system.
 - **Open questions:** None
 
 ### EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
@@ -743,15 +1099,15 @@ unchanged.
 - **Phase:** Integration gate
 - **Depends on:** `EXP-1`, `EXP-4`, `EXP-2`, `EXP-5`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-4, D-6, D-7, D-8, D-9, D-10, D-11,
-  D-12, D-13
-- **Acceptance signals:** The scenario exercises the real encounter; proves it
-  remains uncleared until every hostile is dead or incapacitated; returns and
-  deposits and explicitly analyzes the real intelligence reward; observes
-  anonymous in-radius hints from the separate hidden definition; verifies the
-  analyzed artifact plus encounter, reward, hint, and tutorial state in a fresh
-  process; and retains the existing prepared-versus-unprepared survival
-  comparison.
+- **Relevant decisions:** D-1, D-4, D-6, D-7, D-8, D-9, D-11, D-14, D-15,
+  D-16, D-17, D-18
+- **Acceptance signals:** The scenario exercises the real encounter; observes
+  the location as a shared unknown symbol before it is seen and as its type icon
+  after; proves the location remains uncleared both while any hostile is capable
+  and while any guaranteed significant item remains in place; recovers and
+  returns the real significant item; observes the cleared state; verifies
+  encounter, per-item taken, cleared and tutorial state in a fresh process; and
+  retains the existing prepared-versus-unprepared survival comparison.
 - **Out of scope:** A second location type, repeated-run balance thresholds,
   and combat balancing beyond the authored encounter.
 - **Open questions:** None
@@ -818,6 +1174,11 @@ Implement only what the first expedition needs:
 Diplomacy and sophisticated formations are later systems.
 
 ### 5. Create one transformational reward
+
+**Superseded 2026-08-11 by D-17** — the radio core and the location-
+intelligence chain below were rejected outright. Retained as the historical
+sketch. What replaced it: guaranteed significant contents whose recovery is half
+of what clears a location.
 
 Add a guaranteed item, such as a salvaged radio core, with one initial purpose:
 complete a colony project that reveals or enables the next destinations.
@@ -922,9 +1283,12 @@ by classification in `tools/ci_probes.py`: a real worldSize-64 generation plus
 two travellers walking ~30 tiles each way is too slow for a blocking per-PR
 gate, and it leans on AI arbitration timing.
 
-When #916 and #917 land, this scenario is where their verbs join the loop:
-the encounter belongs between travel and extract, and the progression project
-turns the existing deposit assertion into a capability change.
+When #916 and #917 land, this scenario is where their verbs join the loop: the
+encounter belongs between travel and extract, and the guaranteed significant
+item turns the existing deposit assertion into a location that reaches
+`cleared`. (As of 2026-08-11 this replaces the earlier wording, "the progression
+project turns the existing deposit assertion into a capability change" — see
+D-17.)
 
 ## Deferred systems
 
