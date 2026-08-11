@@ -15,6 +15,8 @@ module Unit.Stats
     , effectiveStat
     , applySkillXP
     , applyItemBuffs
+    , applyAccessoryBuffs
+    , refreshAccessoryBuffs
     , pickName
     ) where
 
@@ -22,7 +24,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import System.Random (StdGen, randomR)
-import Item.Types (ItemBuff(..))
+import Item.Types (ItemBuff(..), ItemInstance(..), ItemManager,
+                   lookupItemDef, idDisplayName, idBuffs)
 import Unit.Types (StatModifier(..), NamePool(..))
 
 -- | One standard-normal sample via Box-Muller. Returns (z, newGen).
@@ -100,6 +103,43 @@ applyItemBuffs src cond buffs mods0 = foldl' applyOne mods0 buffs
             existing = HM.lookupDefault [] (ibStat b) acc
             others   = filter (\x → smSource x ≢ src) existing
         in HM.insert (ibStat b) (m : others) acc
+
+-- | Apply one accessory's buffs to a modifier map: def lookup + the
+--   shared 'applyItemBuffs'. The modifier source is the item's
+--   display_name and same-source modifiers on a stat collapse, so this
+--   REPLACES that source's stale modifier rather than stacking. A no-op
+--   for items with no buffs (or no def in scope).
+applyAccessoryBuffs ∷ ItemManager → ItemInstance
+                    → HM.HashMap T.Text [StatModifier]
+                    → HM.HashMap T.Text [StatModifier]
+applyAccessoryBuffs itemMgr inst mods =
+    case lookupItemDef (iiDefName inst) itemMgr of
+        Nothing   → mods
+        Just iDef → applyItemBuffs (idDisplayName iDef)
+                                   (iiCondition inst)
+                                   (idBuffs iDef) mods
+
+-- | Re-derive worn-accessory buffs into a unit's `uiModifiers`, so a
+--   condition-scaled buff (e.g. technogoggles' perception) tracks
+--   whatever changed the worn set. Folds the buffs of EVERY worn
+--   accessory over the modifier map IN LIST ORDER, exactly as a fresh
+--   sequence of `equipAccessory` calls would: same-source modifiers
+--   collapse per stat (dedup by display_name) so the LAST-equipped copy
+--   of a duplicated accessory wins, while a non-overlapping stat buffed
+--   only by an EARLIER copy survives the fold.
+--
+--   This is an ADDITIVE fold: it never removes a source absent from
+--   @accs@. A caller whose change DROPS an accessory (unequip) must
+--   therefore clear that accessory's display-name source from @mods0@
+--   first, so the fold rebuilds only what is still worn — re-deriving
+--   from the whole list is what keeps a duplicate's remaining copy
+--   live (#1209) and keeps repairing an *older* duplicate from
+--   silently switching the live buff to its condition (#299).
+refreshAccessoryBuffs ∷ ItemManager → [ItemInstance]
+                      → HM.HashMap T.Text [StatModifier]
+                      → HM.HashMap T.Text [StatModifier]
+refreshAccessoryBuffs itemMgr accs mods0 =
+    foldl' (\mods inst → applyAccessoryBuffs itemMgr inst mods) mods0 accs
 
 {-# NOINLINE rollStat #-}
 rollStat ∷ Float → Float → StdGen → (Float, StdGen)

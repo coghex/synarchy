@@ -18,7 +18,7 @@ import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Unit.Types
-import Unit.Stats (applyItemBuffs)
+import Unit.Stats (refreshAccessoryBuffs)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..), ItemManager(..), lookupItemDef)
 
 
@@ -213,21 +213,6 @@ repairInEquip iid condD sharpD eq =
             in Just (HM.insert slot it' eq, it', r)
         [] → Nothing
 
--- | Re-derive worn-accessory buffs into the unit's `uiModifiers` after a
---   repair changed one accessory's condition, so a condition-scaled buff
---   (e.g. technogoggles' perception) tracks the repair. Folds the buffs
---   of EVERY worn accessory over the modifier map IN LIST ORDER, exactly
---   as a fresh sequence of `equipAccessory` calls would: same-source
---   modifiers collapse (dedup by display_name) so the LAST-equipped copy
---   of a duplicated accessory wins. Re-deriving from the whole list — not
---   just the repaired instance — is what keeps repairing an *older*
---   duplicate from silently switching the live buff to its condition.
-refreshAccessoryBuffs ∷ ItemManager → [ItemInstance]
-                      → HM.HashMap Text [StatModifier]
-                      → HM.HashMap Text [StatModifier]
-refreshAccessoryBuffs itemMgr accs mods0 =
-    foldl' (\mods inst → applyAccessoryBuffs itemMgr inst mods) mods0 accs
-
 -- | The pure core of unit.repairItem (#300) and the repair.repairAt
 --   policy layer (#301): search inventory, then equipment, then worn
 --   accessories for `iid` and apply the deltas there, refreshing
@@ -249,21 +234,6 @@ applyRepairToUnit iid condD sharpD itemMgr inst =
                     in Just (inst { uiAccessories = accs'
                                   , uiModifiers   = mods' }, r)
                 Nothing → Nothing
-
--- | Apply one accessory's buffs to a modifier map: def lookup + the
---   shared Unit.Stats.applyItemBuffs. The modifier source is the item's
---   display_name and same-source modifiers on a stat collapse, so this
---   REPLACES that source's stale modifier rather than stacking. A no-op
---   for items with no buffs (or no def in scope).
-applyAccessoryBuffs ∷ ItemManager → ItemInstance
-                    → HM.HashMap Text [StatModifier]
-                    → HM.HashMap Text [StatModifier]
-applyAccessoryBuffs itemMgr inst mods =
-    case lookupItemDef (iiDefName inst) itemMgr of
-        Nothing   → mods
-        Just iDef → applyItemBuffs (idDisplayName iDef)
-                                   (iiCondition inst)
-                                   (idBuffs iDef) mods
 
 -- | Helper: adjust the fill of the first ItemInstance matching defName.
 --   Clamps to [0, capacity] looked up via the ItemManager. Returns the

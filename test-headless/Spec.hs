@@ -25,6 +25,7 @@ import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
+import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
 import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.NightPerception as NightPerception
@@ -280,6 +281,7 @@ main = hspec $ do
     describe "Unit.InjurySpeed" InjurySpeedTest.spec
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
+    AccessoryUnequip.spec
     UnitTransfer.spec
     describe "Unit.NightPerception" NightPerception.spec
     describe "Unit.LineOfSight (multi-world page ownership)" LineOfSightTest.spec
