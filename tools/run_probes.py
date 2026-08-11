@@ -64,6 +64,9 @@ PROBES = [
     ("bleeding_trail", "bleeding_trail_probe.py",
      "ongoing bleeding-trail emission: distance/cadence-gated marks, timescale invariance, "
      "clot/internal-wound/death cutoffs (#882)"),
+    ("canteen_instance", "canteen_instance_probe.py",
+     "the water AI drains/fills the exact canteen instance it selected, not the "
+     "first same-def match (#1220)"),
     ("cargo_capacity", "cargo_capacity_probe.py",
      "depositToCargo weighs the actual ItemInstance, not the def base weight (#189)"),
     ("chop", "chop_probe.py",
