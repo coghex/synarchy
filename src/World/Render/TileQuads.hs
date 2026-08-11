@@ -23,20 +23,32 @@ import World.Material (matOcean, matLava, matIce, unMaterialId)
 import World.Vegetation (getVegTexture)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
 import World.Types
+import World.Render.QuadContext (QuadContext(..), WorldX(..), WorldY(..)
+                                , WorldZ(..), ZSlice(..), EffectiveDepth(..))
 import World.Render.Textures (getTileTexture, getTileFaceMapTexture
                              , getVegFaceMapTexture)
 
 -- * Convert Tile to Quad
 
-tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
-           → WorldTextures → CameraFacing
-           → Int → Int → Int        -- ^ worldX, worldY, worldZ
-           → Tile → Int → Int       -- ^ tile, zSlice, effDepth
-           → Float → (Float, Float)          -- ^ tileAlpha, wrap (x,y)
-           → Maybe FluidCell → Bool -- ^ fluid at tile, chunk has fluid
+tileToQuad ∷ QuadContext
+           → WorldX → WorldY → WorldZ
+           → Tile
+           → Maybe FluidCell
+           → Bool                   -- ^ chunk has fluid
            → SortableQuad
-tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha wrapOff mFluid chunkHasFluid =
-    let (rawX, rawY) = gridToScreen facing worldX worldY
+tileToQuad ctx wx wy wz tile mFluid chunkHasFluid =
+    let lookupSlot   = qcLookupSlot ctx
+        lookupFmSlot = qcLookupFmSlot ctx
+        textures     = qcTextures ctx
+        facing       = qcFacing ctx
+        worldX       = unWorldX wx
+        worldY       = unWorldY wy
+        worldZ       = unWorldZ wz
+        zSlice       = unZSlice (qcZSlice ctx)
+        effDepth     = unEffectiveDepth (qcEffectiveDepth ctx)
+        tileAlpha    = qcTileAlpha ctx
+        wrapOff      = qcWrapOffset ctx
+        (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight

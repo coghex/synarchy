@@ -6,7 +6,6 @@ module World.Render.SideDecoQuads
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
@@ -18,6 +17,8 @@ import World.Material (matOcean, matLava, unMaterialId)
 import World.Generate (chunkToGlobal)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , worldLayer, applyFacing)
+import World.Render.QuadContext (QuadContext(..), WorldX(..), WorldY(..)
+                                , WorldZ(..), ZSlice(..), EffectiveDepth(..))
 import World.Render.Textures.Types (WorldTextures(..))
 import World.Render.ViewBounds (ViewBounds, isTileVisible)
 
@@ -27,10 +28,7 @@ import World.Render.ViewBounds (ViewBounds, isTileVisible)
 --   2. Water-to-dry drops (dry neighbor with terrain below water)
 --   In case 2, terrain cliff faces cover up to terrain level;
 --   water side faces cover terrain level to water surface.
-waterSideFaceQuads ∷ (TextureHandle → Int)
-                   → (TextureHandle → Float)
-                   → WorldTextures
-                   → CameraFacing
+waterSideFaceQuads ∷ QuadContext
                    → ChunkCoord
                    → V.Vector (Maybe FluidCell)  -- ^ this chunk's fluid map
                    → VU.Vector Int               -- ^ this chunk's terrain surface map
@@ -38,13 +36,10 @@ waterSideFaceQuads ∷ (TextureHandle → Int)
                                                  -- ^ neighbour-chunk fluid lookup
                    → (ChunkCoord → Maybe (VU.Vector Int))
                                                  -- ^ neighbour-chunk terrain lookup
-                   → Int → Int                   -- ^ zSlice, effectiveDepth
-                   → Float → (Float, Float)      -- ^ tileAlpha, wrap (x,y)
                    → ViewBounds
                    → [SortableQuad]
-waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
-                   fluidMap terrainSurfMap fluidLookup terrLookup
-                   zSlice effDepth tileAlpha wrapOff vb =
+waterSideFaceQuads ctx coord
+                   fluidMap terrainSurfMap fluidLookup terrLookup vb =
     [ sq
     | lx ← [0 .. chunkSize - 1]
     , ly ← [0 .. chunkSize - 1]
@@ -75,11 +70,14 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
     , z ≥ zSlice - effDepth
     , z ≤ zSlice
     , let (gx, gy) = chunkToGlobal coord lx ly
-    , sq ← maybeToList (waterSideQuad lookupSlot lookupFmSlot textures facing
-                            (fcType fc) gx gy z isLeftFace
-                            zSlice effDepth tileAlpha wrapOff vb)
+    , sq ← maybeToList (waterSideQuad ctx (fcType fc)
+                            (WorldX gx) (WorldY gy) (WorldZ z) isLeftFace vb)
     ]
   where
+    facing   = qcFacing ctx
+    zSlice   = unZSlice (qcZSlice ctx)
+    effDepth = unEffectiveDepth (qcEffectiveDepth ctx)
+
     -- Resolve a cardinal neighbor's (fluid cell, terrain surface z),
     -- following a step out of this chunk into the adjacent one. Returns
     -- Nothing only when that neighbor chunk isn't loaded — then the drop
@@ -123,21 +121,28 @@ neighborDirs facing lx ly = case facing of
     FaceWest  → [(lx - 1, ly, True),  (lx, ly + 1, False)]
 
 -- | Create a single fluid side-face quad at a given z-level.
-waterSideQuad ∷ (TextureHandle → Int)
-              → (TextureHandle → Float)
-              → WorldTextures
-              → CameraFacing
+--
+--   Takes the same 'QuadContext' its caller was handed rather than the
+--   unpacked slice\/depth\/alpha\/offset values (#1138): forwarding those
+--   positionally would just move the transposition hazard one level down.
+waterSideQuad ∷ QuadContext
               → FluidType       -- ^ owning fluid (texture choice)
-              → Int → Int       -- ^ global x, y
-              → Int             -- ^ z-level of this side face
+              → WorldX → WorldY → WorldZ
               → Bool            -- ^ True = left face, False = right face
-              → Int → Int       -- ^ zSlice, effectiveDepth
-              → Float → (Float, Float)  -- ^ tileAlpha, wrap (x,y)
               → ViewBounds
               → Maybe SortableQuad
-waterSideQuad lookupSlot lookupFmSlot textures facing ftype gx gy z isLeft
-              zSlice _effDepth tileAlpha wrapOff vb =
-    let (rawX, rawY) = gridToScreen facing gx gy
+waterSideQuad ctx ftype wx wy wz isLeft vb =
+    let lookupSlot   = qcLookupSlot ctx
+        lookupFmSlot = qcLookupFmSlot ctx
+        textures     = qcTextures ctx
+        facing       = qcFacing ctx
+        gx           = unWorldX wx
+        gy           = unWorldY wy
+        z            = unWorldZ wz
+        zSlice       = unZSlice (qcZSlice ctx)
+        tileAlpha    = qcTileAlpha ctx
+        wrapOff      = qcWrapOffset ctx
+        (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
         relativeZ = z - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
