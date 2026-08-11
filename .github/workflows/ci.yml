@@ -401,6 +401,20 @@ jobs:
           python3 tools/material_id_audit.py --self-test
           python3 tools/material_id_audit.py
 
+      # Cheap, no-engine guard (issue #1196): fails if a CH item's
+      # `## Status` checklist marker and its `### ` heading marker
+      # disagree. Two independent lanes write the findings report --
+      # the processing lane owns the status fields, an implementation
+      # PR owns only the narrative body -- and both drift directions
+      # have already happened (82607204, 89b015d3), each of which
+      # re-files merged work. Unconditional rather than
+      # path-selective: it is a single-file comparison costing
+      # milliseconds, and it must fire on the report edit itself.
+      - name: Findings report status audit
+        run: |
+          python3 tools/test_findings_report_audit.py
+          python3 tools/findings_report_audit.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
