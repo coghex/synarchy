@@ -88,6 +88,7 @@ import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
+import qualified Test.Headless.Power.Placement as PowerPlacement
 import qualified Test.Headless.Power.Network as PowerNetwork
 import qualified Test.Headless.Language.Semantic as LanguageSemantic
 import qualified Test.Headless.Language.Generated as LanguageGenerated
@@ -248,6 +249,10 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#1205): the live power.placeNode path WRITES the
+    -- unit/building manager refs and installs its own two-page world
+    -- manager, so it cannot share the worldgen engine above.
+    aroundAll withHeadlessEngine PowerPlacement.spec
     -- Own engine for the same reason: the #1208 ground-ownership gate
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
