@@ -8,12 +8,23 @@ remaining six slices existed only as an unnumbered work order in the epic body.
 
 Design state: `ready for issue processing`
 
-> **2026-08-11 — D-9 amended, D-12/D-13 added, and UIT-1 split three ways.** The
-> one-window rule is now per nesting LEVEL rather than global. UIT-1 became
-> UIT-1A (generalize to any endpoint kind, structure only), UIT-1B (render
-> last-known contents with an age — the first consumer of A3's dormant knowledge
-> layer) and UIT-1C (the nesting stack, absorbing `item_contents_panel.lua`).
-> UIT-2 through UIT-6 are unchanged and were not renumbered.
+> **2026-08-11 — D-9 amended, D-12/D-13 added, and the arc split from 6 slices
+> to 12.** The one-window rule is now per nesting LEVEL rather than global.
+> UIT-1 → 1A/1B/1C, UIT-2 → 2A/2B/2C, UIT-3 → 3A/3B, UIT-5 → 5A/5B; UIT-4 and
+> UIT-6 are single concerns and were left whole.
+>
+> Two findings drove the shape. **The transfer core is an unwired policy
+> library** — `QueuedTransfer`, `TransferBatch` and `TransferScene` exist only in
+> `src/Unit/Transfer.hs` and its Lua wrapper, nothing stores them, and no save
+> component carries them — so Mode B needs order state, persistence, an executor
+> and a gesture, which are four separable things rather than one. And **UIT-5's
+> vocabulary already exists** (`TransferCancelled`, `TransferFailed`, all ten
+> `TransferReason` values), so it splits by MODE rather than by failure kind:
+> splitting by kind would have produced slices that all edit the same two files.
+>
+> Two slices now need no predecessor at all — **UIT-3A** (fixes landed code) and
+> **UIT-2A** (engine-side, independent of the window) — so three slices are
+> workable in parallel with UIT-1A rather than one.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -22,19 +33,24 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Unified player-managed item transfers — [#1013]
-- [ ] UIT-1A. Generalize the container window to any endpoint kind
+- [x] UIT-1A. Generalize the container window to any endpoint kind — [#1234]
 - [ ] UIT-1B. Render last-known container contents with an age indicator
 - [ ] UIT-1C. Add the nested container-window stack
-- [ ] UIT-2. Add Mode B, the persisted order-at-a-distance transfer
-- [ ] UIT-3. Add Mode A, the escort transfer session
+- [ ] UIT-3A. Select the nearest of several units instead of requiring exactly one
+- [ ] UIT-2A. Give transfer orders durable state and persistence
+- [ ] UIT-2B. Execute a transfer order as a unit job that commits on arrival
+- [ ] UIT-2C. Promote "Store in cargo" to a queued order-at-a-distance
+- [ ] UIT-3B. Add the escort transfer session
 - [ ] UIT-4. Extend escort transfers to unit-to-unit two-sided holds
-- [ ] UIT-5. Handle cancellation, obstruction, stale items, and failed commits
+- [ ] UIT-5A. Handle Mode B order failures
+- [ ] UIT-5B. Handle Mode A session failures
 - [ ] UIT-6. Gate the unified transfer system end to end
 
 **Slice-ID mapping.** Epic #1013's work order names these C1, C2, C3, C4, C5 and
 D1. This document renumbers them `UIT-1` … `UIT-6` because a slice called `D1`
 would collide with the `D-N` decision identifiers the document contract uses.
-The mapping is C1→UIT-1A/1B/1C, C2→UIT-2, C3→UIT-3, C4→UIT-4, C5→UIT-5, D1→UIT-6.
+The mapping is C1→UIT-1A/1B/1C, C2→UIT-2A/2B/2C, C3→UIT-3A/3B, C4→UIT-4,
+C5→UIT-5A/5B, D1→UIT-6.
 
 ## Epic contract
 
@@ -434,42 +450,108 @@ None currently blocking. Every decision above carries prior signoff from epic
   panels; any transfer gesture.
 - **Open questions:** None
 
-### UIT-2. Add Mode B, the persisted order-at-a-distance transfer
+### UIT-3A. Select the nearest of several units instead of requiring exactly one
 
-- **Outcome:** A player selects a unit, right-clicks an item row, and the unit
-  walks over and commits once on arrival — surviving save/load.
-- **Scope:** The persisted deferred store/retrieve order and its AI order,
-  modeled on #920's `commandPickup`; commit-time revalidation; the partial-batch
-  outcome; and promoting "Store in \<cargo\>" to this path.
-- **Phase:** 2 — deferred orders
-- **Depends on:** `UIT-1A`, `UIT-1B`, `UIT-1C`
-- **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-3, D-7, D-10
-- **Acceptance signals:** An order survives save/load and commits on arrival; a
-  snapshot that went stale fails as `ReasonBecameStale`; twelve items into room
-  for eight stores eight and reports the rest; the lax AI verbs are unchanged;
-  and the wander tick cannot walk the unit away mid-order.
-- **Out of scope:** The escort session, camera snap, and unit-to-unit holds.
+- **Outcome:** The existing Transfer gesture accepts a multi-unit selection and
+  sends the nearest, breaking exact ties on lowest uid.
+- **Scope:** Replace `scripts/transfer_session.lua`'s
+  `#selectedUids ~= 1` rule with nearest-of-N plus the lowest-uid tiebreak, and
+  correct the comment at `:155-156` that currently asserts the single-unit
+  behavior as deliberate.
+- **Phase:** 2 — selection policy
+- **Depends on:** `none`
+- **Ordering:** `not on the critical path` — fixes landed code and can land at
+  any time
+- **Relevant decisions:** D-8, D-11
+- **Acceptance signals:** A multi-unit selection offers Transfer where it is
+  currently omitted; the nearest selected unit is chosen; an exact distance tie
+  resolves to the lowest uid deterministically; a self-transfer is still
+  excluded; and the misleading comment no longer contradicts D-8.
+- **Out of scope:** The escort session itself, and any change to what happens
+  after the source is resolved.
 - **Open questions:** None
 
-### UIT-3. Add Mode A, the escort transfer session
+### UIT-2A. Give transfer orders durable state and persistence
 
-- **Outcome:** A player right-clicks a container with units selected, the nearest
-  walks over, and two flanking panels commit transfers immediately while adjacent.
-- **Scope:** The escort session; camera snap; flanking mutually-avoiding panels;
-  coupled close that releases the unit; **nearest-of-N with the lowest-uid
-  tiebreak, replacing `transfer_session.lua`'s single-unit rule and correcting
-  its comment**; and the unit hold and release.
-- **Phase:** 3 — escort
-- **Depends on:** `UIT-1C`, `UIT-2`
+- **Outcome:** A queued transfer order exists as live state and survives
+  save/load.
+- **Scope:** A live owner for `QueuedTransfer`/`TransferBatch`, which today
+  exist only as types in `src/Unit/Transfer.hs` with nothing storing them; a new
+  save component for them following `docs/persistence_contract.md`'s
+  component-version and frozen-DTO rules; and the reset behavior that keeps a
+  Mode A session transient while a Mode B order persists (D-3).
+- **Phase:** 3 — order foundation
+- **Depends on:** `none`
+- **Ordering:** `can land first` — engine-side, independent of the window
+- **Relevant decisions:** D-1, D-3, D-10
+- **Acceptance signals:** An order created programmatically survives a save/load
+  round trip with its state, endpoints and exact instance ids intact; a Mode A
+  session does not survive; the component is absent-tolerant or required by an
+  explicit, documented choice; and the persistence-inventory and
+  save-compatibility audits pass.
+- **Out of scope:** Anything that creates or executes an order — no unit job, no
+  player gesture, no UI.
+- **Open questions:** None
+
+### UIT-2B. Execute a transfer order as a unit job that commits on arrival
+
+- **Outcome:** A queued order makes its unit walk to the endpoint and commit
+  once, revalidated on arrival.
+- **Scope:** The unit job that drives an order through `queued → in_transit →
+  ready_to_commit → completed`, modeled on #920's `commandPickup`: capacity
+  gated at command time AND again on arrival, and a stall timeout that resets on
+  closest approach rather than a total-trip budget. Commit-time revalidation and
+  the partial-batch outcome are A1/A2's and are consumed, not rebuilt.
+- **Phase:** 3 — order foundation
+- **Depends on:** `UIT-2A`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-4, D-8, D-9, D-11
-- **Acceptance signals:** Multiple selected units are accepted and the nearest
-  goes; an exact distance tie breaks on lowest uid deterministically; closing
-  either panel closes both and releases the unit; the camera snaps on Mode A only;
-  the session does not persist; and `transfer_session.lua:155-158`'s rule and
-  comment both reflect D-8.
-- **Out of scope:** Unit-to-unit two-sided holds.
+- **Relevant decisions:** D-1, D-3, D-7
+- **Acceptance signals:** An order drives a real walk and commits exactly once on
+  arrival; the wander tick cannot take the unit away mid-order; twelve items into
+  room for eight commits eight and reports the rest; a snapshot that went stale
+  fails as `ReasonBecameStale`; and the lax AI verbs are untouched.
+- **Out of scope:** The player gesture that creates an order, and every failure
+  path beyond the ones commit already returns (UIT-5A).
+- **Open questions:** None
+
+### UIT-2C. Promote "Store in cargo" to a queued order-at-a-distance
+
+- **Outcome:** The player right-clicks an item row with a unit selected and gets
+  a queued, persisted order instead of an immediate lax deposit.
+- **Scope:** Repoint `scripts/unit_info_v2_context_menu.lua:234`'s "Store in
+  \<cargo\>" from "each adjacent built cargo" to "the open container window",
+  and its action from `unit.depositToCargo` to a queued order — which also drops
+  its adjacency requirement; retire "Withdraw with \<unit\>"
+  (`scripts/cargo_inventory_panel.lua:436`) in favour of retrieve; and the
+  right-click hooks on container rows.
+- **Phase:** 3 — order foundation
+- **Depends on:** `UIT-1A`, `UIT-2B`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-7, D-9
+- **Acceptance signals:** The gesture creates a persisted order rather than a lax
+  deposit; it works without adjacency; both retired paths are gone and their
+  replacements reachable; and the lax AI verbs still exist untouched for the AI
+  ladders that depend on them.
+- **Out of scope:** The escort session, and Mode B failure handling.
+- **Open questions:** None
+
+### UIT-3B. Add the escort transfer session
+
+- **Outcome:** Right-clicking a container with units selected walks the nearest
+  over and opens two flanking panels that commit immediately while adjacent.
+- **Scope:** The escort session lifecycle; camera snap centring the pair; two
+  mutually-avoiding framebuffer-clamped panels via `UI.placePopup` and
+  `reserved_regions`; coupled close that releases the unit; and the unit hold.
+- **Phase:** 4 — escort
+- **Depends on:** `UIT-1A`, `UIT-2C`, `UIT-3A`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-4, D-9
+- **Acceptance signals:** The nearest selected unit walks and is held; two panels
+  open flanking the pair without overlapping; closing either closes both and
+  releases the unit; the camera snaps on Mode A only; the session does not
+  persist; and the two panels count as ONE nesting level (D-9's stated
+  exception).
+- **Out of scope:** Unit-to-unit two-sided holds, and session failure handling.
 - **Open questions:** None
 
 ### UIT-4. Extend escort transfers to unit-to-unit two-sided holds
@@ -478,8 +560,8 @@ None currently blocking. Every decision above carries prior signoff from epic
   both endpoints held.
 - **Scope:** The two-sided hold and its release, since unit-to-unit is the only
   case where **both** endpoints can walk away.
-- **Phase:** 4 — unit-to-unit
-- **Depends on:** `UIT-3`
+- **Phase:** 5 — unit-to-unit
+- **Depends on:** `UIT-3B`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-6, D-8, D-10
 - **Acceptance signals:** Both units hold for the session and both release on
@@ -488,22 +570,42 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Out of scope:** Multi-unit transfer to one receiver in a single session.
 - **Open questions:** None
 
-### UIT-5. Handle cancellation, obstruction, stale items, and failed commits
+### UIT-5A. Handle Mode B order failures
 
-- **Outcome:** Every way a transfer can fail resolves predictably, leaving no
-  half-moved item and no stranded held unit.
-- **Scope:** Explicit cancellation; an obstructed or unreachable endpoint; items
-  that vanished between snapshot and commit; and commit failures across both
-  modes and both endpoint kinds.
-- **Phase:** 5 — failure handling
-- **Depends on:** `UIT-2`, `UIT-3`, `UIT-4`
+- **Outcome:** Every way a queued order can fail resolves predictably, leaving no
+  half-moved item and no unit stuck on a dead order.
+- **Scope:** Explicit cancellation of a queued order; an unreachable or
+  obstructed endpoint reported through the existing `unit_warning` path rather
+  than retried forever; an instance that vanished between snapshot and commit;
+  and a commit that fails outright. The states and reasons already exist —
+  `TransferCancelled`, `TransferFailed`, and all ten `TransferReason` values —
+  so this slice handles and surfaces them rather than inventing vocabulary.
+- **Phase:** 6 — failure handling
+- **Depends on:** `UIT-2B`, `UIT-2C`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-2, D-3
 - **Acceptance signals:** A cancelled order releases its unit and mutates
-  nothing; an unreachable endpoint reports rather than retrying forever; a stale
-  instance fails with the structured reason and cause; and no failure path leaves
-  an item half-moved or a unit held indefinitely.
-- **Out of scope:** New failure vocabulary beyond A1's `TransferReason` set.
+  nothing; an unreachable endpoint warns and gives up rather than looping; a
+  stale instance fails with the structured reason and cause; and no failure path
+  leaves an item half-moved.
+- **Out of scope:** Session failures (UIT-5B) and new failure vocabulary.
+- **Open questions:** None
+
+### UIT-5B. Handle Mode A session failures
+
+- **Outcome:** An escort session that is interrupted ends cleanly, releasing
+  every held unit.
+- **Scope:** An endpoint that disappears or dies mid-session; a held unit that
+  becomes uncommandable; interruption by another gesture; and the coupled close
+  path under each, including the two-sided hold from UIT-4.
+- **Phase:** 6 — failure handling
+- **Depends on:** `UIT-3B`, `UIT-4`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-9
+- **Acceptance signals:** No interruption leaves a unit held indefinitely or a
+  panel orphaned; both holds release in the unit-to-unit case; and the nesting
+  stack is left consistent after an abnormal close.
+- **Out of scope:** Queued-order failures (UIT-5A).
 - **Open questions:** None
 
 ### UIT-6. Gate the unified transfer system end to end
@@ -513,9 +615,9 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Scope:** Acceptance coverage across the arc, probe registration, and the
   load-bearing documentation updates the retirements imply.
 - **Phase:** 6 — integration gate
-- **Depends on:** `UIT-5`
+- **Depends on:** `UIT-5A`, `UIT-5B`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-1 through D-11
+- **Relevant decisions:** D-1 through D-13
 - **Acceptance signals:** An exact instance moves in both directions between all
   three endpoint kinds; both modes reach the same commit policy; batches
   partially succeed with a report; contents read last-known and refresh on a
