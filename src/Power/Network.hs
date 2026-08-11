@@ -60,6 +60,7 @@ module Power.Network
     , computeSnapshots
     , tickPowerNodes
     , wireTilesOn
+    , pageWireTiles
     , positionsOf
     , consumersOn
     , activeCraftConsumersOn
@@ -77,6 +78,7 @@ import Craft.Bills (BillId, CraftBill(..), CraftBills(..))
 import Craft.Types (RecipeManager, RecipeDef(..), lookupRecipe)
 import Structure.Types (StructureSlot(..))
 import World.Chunk.Types (LoadedChunk(..))
+import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Page.Types (WorldPageId)
 import World.Tile.Types (WorldTileData(..))
 import World.Time.Local (localSunAngle)
@@ -344,10 +346,10 @@ wireSlotTag ∷ Word8
 wireSlotTag = fromIntegral (fromEnum SWire)
 
 -- | Every (gx, gy) carrying a wire piece across a page's LOADED chunks —
---   the shared glue between the world-thread tick ('World.Thread.Power')
---   and a live Lua query, so both see identically-defined connectivity.
---   A chunk that hasn't loaded contributes no wire, matching how
---   scripts/wire.lua itself only ever sees loaded-chunk state.
+--   the resident half of 'pageWireTiles'. Exposed on its own so the
+--   residency-independence regression can state the two halves' exact
+--   agreement for a loaded chunk (requirement 4 of #1207); every
+--   topology CONSUMER goes through 'pageWireTiles' instead, never this.
 wireTilesOn ∷ WorldTileData → HS.HashSet (Int, Int)
 wireTilesOn td = HS.fromList
     [ (gx, gy)
@@ -355,6 +357,61 @@ wireTilesOn td = HS.fromList
     , ((gx, gy, slotTag), _) ← HM.toList (lcStructures lc)
     , slotTag ≡ wireSlotTag
     ]
+
+-- | Every (gx, gy) carrying a wire piece on a page, INDEPENDENT of which
+--   of its chunks the tile cache happens to hold right now (#1207) —
+--   the ONE wire set every topology consumer reads (the world-thread
+--   tick 'World.Thread.Power.tickPowerNetworks' and the three live Lua
+--   queries behind @power.listNetworks@ / @power.getNetworkForNode@ /
+--   @power.isBuildingPowered@ / @power.isStationPoweredForRecipe@).
+--
+--   Wire is persistent: 'World.Thread.Command.Edit.Structure' writes
+--   every placement/clear to the loaded overlay AND to the per-chunk
+--   edit log, and chunks evict by camera distance with edited chunks
+--   included ('World.Tile.Types.evictDistantChunks'). Reading only the
+--   resident overlay therefore made merely LOOKING somewhere else
+--   dismantle a network and freeze its batteries until the player
+--   looked back.
+--
+--   LOADED-CHUNK PRECEDENCE, so there is no second drifting authority:
+--   a resident chunk contributes exactly its current @lcStructures@
+--   wire entries (already the product of generation + replay + every
+--   live edit since), while a chunk that is NOT resident contributes
+--   the result of folding its own ordered @WeSetStructure@ /
+--   @WeClearStructure@ history for the wire slot — the same ordered
+--   semantics 'World.Edit.Apply.replayEdits' would produce were it
+--   reloaded. A stale historical set can therefore never outvote a
+--   clear, and @structure.clearAll@ (which wipes overlays AND strips
+--   structure edits) empties both halves at once.
+--
+--   Recomputed fresh per call like the rest of this module — the
+--   unloaded scan touches only evicted chunks' edit lists, the same
+--   order of magnitude as the resident scan above it (#360's
+--   recompute-cadence tuning knob stays open).
+pageWireTiles ∷ WorldTileData → WorldEdits → HS.HashSet (Int, Int)
+pageWireTiles td edits = HS.union (wireTilesOn td) evictedWire
+  where
+    evictedWire = HS.unions
+        [ replayWireEdits es
+        | (coord, es) ← HM.toList edits
+        , not (HM.member coord (wtdChunks td))
+        ]
+
+-- | Fold one chunk's ordered edit log down to the wire tiles a replay of
+--   it would leave behind. Order decides: a repeated set (scripts/
+--   wire.lua re-places a piece to recap its autotile neighbours) is
+--   idempotent, a clear removes, and a later set after a clear puts it
+--   back — exactly 'World.Edit.Apply.applyEdit's structure semantics,
+--   narrowed to the wire slot. Non-wire structure slots and every
+--   terrain/flora/fluid edit sharing the log are ignored.
+replayWireEdits ∷ [WorldEdit] → HS.HashSet (Int, Int)
+replayWireEdits = foldl' step HS.empty
+  where
+    step acc (WeSetStructure gx gy slotTag _ _ _)
+        | slotTag ≡ wireSlotTag = HS.insert (gx, gy) acc
+    step acc (WeClearStructure gx gy slotTag)
+        | slotTag ≡ wireSlotTag = HS.delete (gx, gy) acc
+    step acc _                  = acc
 
 -- | Every node's tile, resolved via the building it rides on and
 --   restricted to one page. A node whose building isn't on this page is

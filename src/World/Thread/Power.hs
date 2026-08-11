@@ -31,7 +31,7 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Power.Types (PowerNodes(..))
-import Power.Network (tickPowerNodes, wireTilesOn, positionsOf, consumersOn,
+import Power.Network (tickPowerNodes, pageWireTiles, positionsOf, consumersOn,
                       activeCraftConsumersOn, combineConsumers)
 import World.Time.Types (WorldTime, worldTimeToSunAngle)
 import World.Types (WorldPageId, WorldState(..), WorldGenParams(..))
@@ -51,6 +51,10 @@ tickPowerNetworks env pageId ws dtGame = do
     when (not (HM.null (pnsNodes nodes0))) $ do
         wt      ← readIORef (wsTimeRef ws)
         td      ← readIORef (wsTilesRef ws)
+        -- #1207: wire topology is read from the page, not the tile
+        -- cache, so a network keeps ticking while its chunks are
+        -- evicted (see 'pageWireTiles').
+        edits   ← readIORef (wsEditsRef ws)
         bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         -- Per-bill electrical load lives on the recipe, read through
@@ -67,7 +71,7 @@ tickPowerNetworks env pageId ws dtGame = do
             -- hasn't populated params yet — localSunAngle's own ≤0
             -- fallback (a 1-chunk circumference) covers it.
             worldSize   = maybe 0 wgpWorldSize mParams
-            wireTiles   = wireTilesOn td
+            wireTiles   = pageWireTiles td edits
             drainByNode = HM.empty
             consumers   = combineConsumers (consumersOn pageId now bm)
                             (activeCraftConsumersOn Nothing pageId now bm rm bills)
