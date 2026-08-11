@@ -8,6 +8,13 @@ remaining six slices existed only as an unnumbered work order in the epic body.
 
 Design state: `ready for issue processing`
 
+> **2026-08-11 — D-9 amended, D-12/D-13 added, and UIT-1 split three ways.** The
+> one-window rule is now per nesting LEVEL rather than global. UIT-1 became
+> UIT-1A (generalize to any endpoint kind, structure only), UIT-1B (render
+> last-known contents with an age — the first consumer of A3's dormant knowledge
+> layer) and UIT-1C (the nesting stack, absorbing `item_contents_panel.lua`).
+> UIT-2 through UIT-6 are unchanged and were not renumbered.
+
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
 concrete precondition
@@ -15,7 +22,9 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Unified player-managed item transfers — [#1013]
-- [ ] UIT-1. Add the container-window manager for any endpoint kind
+- [ ] UIT-1A. Generalize the container window to any endpoint kind
+- [ ] UIT-1B. Render last-known container contents with an age indicator
+- [ ] UIT-1C. Add the nested container-window stack
 - [ ] UIT-2. Add Mode B, the persisted order-at-a-distance transfer
 - [ ] UIT-3. Add Mode A, the escort transfer session
 - [ ] UIT-4. Extend escort transfers to unit-to-unit two-sided holds
@@ -25,7 +34,7 @@ concrete precondition
 **Slice-ID mapping.** Epic #1013's work order names these C1, C2, C3, C4, C5 and
 D1. This document renumbers them `UIT-1` … `UIT-6` because a slice called `D1`
 would collide with the `D-N` decision identifiers the document contract uses.
-The mapping is C1→UIT-1, C2→UIT-2, C3→UIT-3, C4→UIT-4, C5→UIT-5, D1→UIT-6.
+The mapping is C1→UIT-1A/1B/1C, C2→UIT-2, C3→UIT-3, C4→UIT-4, C5→UIT-5, D1→UIT-6.
 
 ## Epic contract
 
@@ -119,8 +128,8 @@ schedules.
 
 ### In scope
 
-- A container-window manager that renders any endpoint kind, enforces
-  one-window-at-a-time, and distinguishes stale from live.
+- A container-window manager that renders any endpoint kind, enforces one window
+  per nesting level, and distinguishes stale from live.
 - Both interaction modes over the shared commit policy.
 - Batch operations (1 / N / all) in both directions, partially succeeding with a
   report.
@@ -252,9 +261,60 @@ fetch, deliver, repair, and medic ladders depend on exactly that — see
 Multiple selected units are allowed; the nearest goes. Exact distance ties break
 on lowest uid so two equidistant acolytes cannot race.
 
-### D-9. One container window at a time
+### D-9. One container window per nesting level
 
-Broken only by a Mode A session, which owns two panels.
+As filed on #1013 this read *"one container window at a time, broken only by a
+Mode A session, which owns two panels."* **Amended 2026-08-11:** the rule is per
+nesting **level**, not global.
+
+- Opening a container that lives **inside** an open container pushes a new
+  level rather than replacing the current one; the nesting path is remembered.
+- Two container windows at the **same** level may never be shown together.
+- When a deeper level opens, the shallower one stays **visible but
+  unclickable**, and closing the deeper level returns interactivity to it.
+
+*Consequence:* UIT-1 owns a window **stack** with a remembered nesting path, not
+a single window slot.
+
+*This is existing machinery, not new work.* It is #742's modal boundary:
+`UI.setPageInputExclusive` is registered, and a `LayerModal` page defaults to
+input-exclusive, so a child level simply KEEPS that default and the parent below
+it becomes non-interactive while still painting. `scripts/popup.lua:796-801` is
+the inverse precedent — it explicitly opts OUT because notification cards are
+stacking-only. Container levels want the default.
+
+Mode A's two flanking panels remain the one exception: they are a single level
+owning two panels.
+
+### D-12. Generalize `cargo_inventory_panel`, do not add a fourth panel
+
+`scripts/cargo_inventory_panel.lua` already is a container-window manager in
+everything but name — `openFor(bid, mx, my)`, `reopenWithTab`, `closeIfOpen`,
+`isOpen`, `showRowMenu(item)` — just hardwired to `BuildingId`. UIT-1
+generalizes it to any endpoint kind rather than building a new manager beside
+it.
+
+*Rationale:* #1013's Vision states it directly — *"where a near-identical
+implementation already exists, it is generalized rather than copied."*
+
+*Consequence:* the diff lands in the live building-storage UI, so a regression
+is immediately player-visible and UIT-1's acceptance must prove the existing
+building path still behaves.
+
+### D-13. Fold `item_contents_panel.lua` into the window manager in UIT-1
+
+Item-container contents are rendered by the same window manager from the start,
+rather than left in a separate panel until the portable-container arc needs them.
+
+*Rationale:* D-5 already says the widget renders item-container contents "so
+`item_contents_panel.lua` collapses into it", and leaving it separate would ship
+a D-9 that is demonstrably false — today `cargo_inventory_panel` and
+`item_contents_panel` are independent modules with independent lifecycles and
+can both be open at once.
+
+*Consequence:* UIT-1 touches a HUD entry point (`scripts/hud.lua:228`), and
+item-containers become renderable levels in the stack **without** becoming
+transfer endpoints — D-5's exclusion is unchanged.
 
 ### D-10. Building-to-building is expressible in the contract
 
@@ -305,23 +365,73 @@ None currently blocking. Every decision above carries prior signoff from epic
 
 ## Delivery plan
 
-### UIT-1. Add the container-window manager for any endpoint kind
+### UIT-1A. Generalize the container window to any endpoint kind
 
-- **Outcome:** One floating container window renders any endpoint kind, enforces
-  one-at-a-time, and shows last-known versus live contents honestly.
-- **Scope:** The window manager over `scripts/ui/item_list.lua`; endpoint-kind
-  dispatch; the one-window rule; stale-versus-live presentation with an "as of…"
-  age from `container-knowledge`'s `revealedAt`; and placement through
-  `UI.placePopup` and `reserved_regions`.
+- **Outcome:** One window manager opens for a building or a unit endpoint, with
+  the existing building-storage experience unchanged.
+- **Scope:** Generalize `scripts/cargo_inventory_panel.lua` from `BuildingId` to
+  an endpoint identity (D-12) — `openFor`, `reopenWithTab`, `closeIfOpen`,
+  `isOpen`, `showRowMenu` all become endpoint-kind agnostic; unit endpoints read
+  through `unit.transferEndpointInfo`; placement stays on `UI.placePopup` and
+  `reserved_regions`.
 - **Phase:** 1 — window foundation
 - **Depends on:** `none` (C0 #1088 and A3 #1087 both landed)
 - **Ordering:** `can land first`
-- **Relevant decisions:** D-2, D-5, D-9
-- **Acceptance signals:** Every endpoint kind renders through the one widget; a
-  second window cannot open; a never-inspected container reads as such rather
-  than as empty; capacity always shows while contents may be stale; and
-  item-container contents render without becoming a transfer endpoint.
-- **Out of scope:** Any transfer gesture, order, or commit.
+- **Relevant decisions:** D-5, D-12
+- **Acceptance signals:** A building endpoint renders exactly as it does today,
+  including tabs, capacity and stored weight; a unit endpoint renders through the
+  same manager and widget; no fourth panel is introduced; and contents are still
+  read live, so this slice changes structure without changing what the player
+  sees for a building.
+- **Out of scope:** Stale contents and the age indicator (UIT-1B), nesting
+  (UIT-1C), and any transfer gesture.
+- **Open questions:** None
+
+### UIT-1B. Render last-known container contents with an age indicator
+
+- **Outcome:** A container shows what the player last observed, with an "as of…"
+  age, instead of live truth.
+- **Scope:** Consume `building.getContainerKnowledge` — its `state`, `items`,
+  `storedWeight` and `revealedAt` — as the window's contents source; render
+  never-inspected distinctly from known-empty; keep capacity live and always
+  known; and apply the reveal rule so a completed movement by a player-
+  commandable unit refreshes the snapshot while proximity alone does not.
+- **Phase:** 1 — window foundation
+- **Depends on:** `UIT-1A`
+- **Ordering:** `not on the critical path` — parallel with UIT-1C
+- **Relevant decisions:** D-2, D-5
+- **Acceptance signals:** A never-inspected container reads as such and never as
+  empty; a known-empty one reads as empty; capacity always shows even when
+  contents are unknown; the age is derived from `revealedAt` on the same game
+  clock `unit.getInfo`'s `animStart` uses; walking past does not reveal; a
+  completed movement does; and a unit endpoint still reports live, since a unit
+  knows its own contents.
+- **Out of scope:** Any write to the knowledge layer beyond what A3 already
+  records, per-unit knowledge, and nesting.
+- **Open questions:** None
+
+### UIT-1C. Add the nested container-window stack
+
+- **Outcome:** Opening a container inside an open container pushes a level, and
+  only the deepest level is interactive.
+- **Scope:** A remembered nesting stack (D-9); a deeper level input-exclusive on
+  `LayerModal` with shallower levels painted but unclickable; closing a level
+  restoring its parent's interactivity; refusing a second window at the SAME
+  level; and absorbing `scripts/item_contents_panel.lua` with its
+  `scripts/hud.lua:228` entry point so an item-container is a level rather than a
+  rival window (D-13).
+- **Phase:** 1 — window foundation
+- **Depends on:** `UIT-1A`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-5, D-9, D-13
+- **Acceptance signals:** A second window at the same level cannot open; opening
+  a nested container leaves the parent visible and unclickable; closing it
+  restores the parent; the nesting path is remembered across levels;
+  `item_contents_panel.lua` no longer owns a window lifecycle; and an
+  item-container renders as a level without becoming a transfer endpoint (D-5
+  unchanged).
+- **Out of scope:** Mode A's two flanking panels, which are one level owning two
+  panels; any transfer gesture.
 - **Open questions:** None
 
 ### UIT-2. Add Mode B, the persisted order-at-a-distance transfer
@@ -332,7 +442,7 @@ None currently blocking. Every decision above carries prior signoff from epic
   modeled on #920's `commandPickup`; commit-time revalidation; the partial-batch
   outcome; and promoting "Store in \<cargo\>" to this path.
 - **Phase:** 2 — deferred orders
-- **Depends on:** `UIT-1`
+- **Depends on:** `UIT-1A`, `UIT-1B`, `UIT-1C`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-3, D-7, D-10
 - **Acceptance signals:** An order survives save/load and commits on arrival; a
@@ -351,7 +461,7 @@ None currently blocking. Every decision above carries prior signoff from epic
   tiebreak, replacing `transfer_session.lua`'s single-unit rule and correcting
   its comment**; and the unit hold and release.
 - **Phase:** 3 — escort
-- **Depends on:** `UIT-1`, `UIT-2`
+- **Depends on:** `UIT-1C`, `UIT-2`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-4, D-8, D-9, D-11
 - **Acceptance signals:** Multiple selected units are accepted and the nearest
