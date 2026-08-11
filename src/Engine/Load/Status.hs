@@ -30,18 +30,23 @@
 --   since a single 'IORef' read/write is never torn.
 module Engine.Load.Status
     ( LoadPhase(..), LoadOutcome(..), LoadStatus(..)
+    , ReconciliationFailure(..), renderReconciliationFailures
     , LoadStatusRef, newLoadStatusRef
-    , beginLoad, advanceLoad, failLoad, finishLoad
+    , beginLoad, advanceLoad, failLoad, finishLoad, failReconciliation
     , readLoadStatus, loadInProgress
     ) where
 
 import UPrelude
 import Data.IORef
+import qualified Data.Text as T
 
 -- | The 12 phases requirement 2 lists, in the order a successful load
---   moves through them. 'LoadFailed' is terminal and reachable from any
---   non-terminal phase; 'LoadPublished' is the only other terminal
---   phase.
+--   moves through them, plus the 13th 'LoadReconciliationFailed' added
+--   by issue #1204. 'LoadFailed' is terminal and reachable from any
+--   non-terminal phase; 'LoadPublished' and 'LoadReconciliationFailed'
+--   are the other two terminal phases, both reachable only from
+--   'LoadWaitingPublish' (they are the two ways the post-publication
+--   Lua reconciliation broadcast can end).
 data LoadPhase
     = LoadRequested
     | LoadPaused
@@ -55,15 +60,60 @@ data LoadPhase
     | LoadWaitingPublish
     | LoadPublished
     | LoadFailed
+    | LoadReconciliationFailed
+      -- ^ Issue #1204: publication SUCCEEDED (the session swap and
+      --   barrier release already happened — this phase is only
+      --   reachable past them) but at least one Lua @onSaveLoaded@
+      --   reconciliation callback raised, so the live session is
+      --   incompletely reconciled. Deliberately NOT 'LoadPublished'
+      --   (which every consumer treats as an unqualified success) and
+      --   deliberately NOT 'LoadFailed', whose
+      --   @docs/persistence_contract.md@ promise that a failed load
+      --   leaves the old session unchanged this state cannot honor.
     deriving (Eq, Show, Enum, Bounded)
 
-data LoadOutcome = LoadSucceeded | LoadAborted !Text deriving (Eq, Show)
+-- | One Lua @onSaveLoaded@ callback that raised, and the error text it
+--   raised with (issue #1204). 'rfModule' is the failing module's
+--   'Engine.Scripting.Lua.Types.scriptPath', which is what makes the
+--   module-to-error association unambiguous even when several modules
+--   fail with similar-looking messages — a single flattened string
+--   cannot promise that, since a Lua error message may itself contain
+--   whatever separator the flattening picked.
+data ReconciliationFailure = ReconciliationFailure
+    { rfModule ∷ !Text
+    , rfError  ∷ !Text
+    } deriving (Eq, Show)
+
+-- | Human-readable one-line summary of a reconciliation failure set,
+--   used as the 'LoadReconciliationIncomplete' payload. The structured
+--   'lsReconciliationFailures' list — not this string — is the
+--   authoritative module-to-error association.
+renderReconciliationFailures ∷ [ReconciliationFailure] → Text
+renderReconciliationFailures fs =
+    T.intercalate "; " [ rfModule f <> ": " <> rfError f | f ← fs ]
+
+data LoadOutcome
+    = LoadSucceeded
+    | LoadAborted !Text
+    | LoadReconciliationIncomplete !Text
+      -- ^ Issue #1204: the terminal outcome paired with
+      --   'LoadReconciliationFailed'. Non-'Nothing' like every other
+      --   outcome, so 'loadInProgress' reports the transaction as over
+      --   and a subsequent save/load request is not blocked forever.
+    deriving (Eq, Show)
 
 data LoadStatus = LoadStatus
     { lsRequestId ∷ !Int
     , lsSaveName  ∷ !Text
     , lsPhase     ∷ !LoadPhase
     , lsOutcome   ∷ !(Maybe LoadOutcome)
+    , lsReconciliationFailures ∷ ![ReconciliationFailure]
+        -- ^ Issue #1204: every Lua @onSaveLoaded@ callback that raised
+        --   during this load's post-publication reconciliation
+        --   broadcast, in broadcast order. Empty for a load that is
+        --   still in flight, that failed before publication, or whose
+        --   reconciliation completed cleanly — so a non-empty list is
+        --   exactly the 'LoadReconciliationFailed' state.
     , lsFailedAtPhase ∷ !(Maybe LoadPhase)
         -- ^ 'failLoad' unconditionally overwrites
         --   'lsPhase' to the terminal 'LoadFailed' value, so whatever
@@ -74,7 +124,11 @@ data LoadStatus = LoadStatus
         --   failure and is never touched by 'advanceLoad'/'finishLoad',
         --   so it survives 'lsPhase' becoming 'LoadFailed'. 'Nothing'
         --   before any load has failed, or for a load that is still in
-        --   flight or that published successfully.
+        --   flight or that published successfully. Issue #1204 keeps it
+        --   reserved for PRE-publication 'failLoad' attempts:
+        --   'failReconciliation' never populates it, since its presence
+        --   is what tells a consumer the old session was left unchanged
+        --   — which a post-publication failure cannot claim.
     } deriving (Eq, Show)
 
 data LoadStatusRef = LoadStatusRef !(IORef Int) !(IORef (Maybe LoadStatus))
@@ -101,6 +155,7 @@ beginLoad (LoadStatusRef nextR statusR) saveName = do
             writeIORef statusR $ Just LoadStatus
                 { lsRequestId = n, lsSaveName = saveName
                 , lsPhase = LoadRequested, lsOutcome = Nothing
+                , lsReconciliationFailures = []
                 , lsFailedAtPhase = Nothing }
             pure $ Right n
 
@@ -130,6 +185,38 @@ finishLoad (LoadStatusRef _ statusR) n =
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
                s { lsPhase = LoadPublished, lsOutcome = Just LoadSucceeded }
+           | otherwise = s
+
+-- | Issue #1204: terminate a load that PUBLISHED successfully but whose
+--   post-publication Lua @onSaveLoaded@ reconciliation broadcast had at
+--   least one callback raise. The counterpart to 'finishLoad' on the
+--   same handoff — the caller (see
+--   "Engine.Scripting.Lua.Thread.Dispatch") picks between them by
+--   whether the broadcast reported any failure, and every callback has
+--   already been attempted by the time either runs.
+--
+--   Deliberately NOT 'failLoad': that records the pre-publication
+--   'LoadFailed' shape, whose contract ('docs/persistence_contract.md')
+--   is that the old session survived unchanged. Here the session swap
+--   and the barrier release already happened, so the honest report is a
+--   published-but-incompletely-reconciled session — hence its own
+--   terminal phase, its own outcome, and 'lsFailedAtPhase' left alone.
+--
+--   A no-op on an empty failure list (nothing failed, so there is
+--   nothing to report) and, like its siblings, on a request id that no
+--   longer names the current transaction or one that already reached a
+--   terminal outcome.
+failReconciliation ∷ LoadStatusRef → Int → [ReconciliationFailure] → IO ()
+failReconciliation (LoadStatusRef _ statusR) n failures
+    | null failures = pure ()
+    | otherwise     = atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
+  where
+    step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
+               s { lsPhase = LoadReconciliationFailed
+                 , lsOutcome = Just
+                     (LoadReconciliationIncomplete
+                        (renderReconciliationFailures failures))
+                 , lsReconciliationFailures = failures }
            | otherwise = s
 
 readLoadStatus ∷ LoadStatusRef → IO (Maybe LoadStatus)

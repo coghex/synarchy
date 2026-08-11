@@ -441,6 +441,12 @@ function mainMenu.loadAndShowSave(saveName)
         worldManager.active = true
         worldView.sendTexturesToWorld(activeId)
     end)
+    -- Reached by BOTH terminal failure dispositions (#1204): a
+    -- pre-publication LoadFailed, and a LoadReconciliationFailed whose
+    -- session did publish but whose Lua reconciliation was incomplete.
+    -- The menu treats them identically on purpose -- neither produced a
+    -- session this flow is willing to hand the player -- and `reason`
+    -- (the raw outcome string) is what tells them apart in the log.
     loadingScreen.setOnLoadFailed(function(reason)
         engine.logError("Failed to load save: " .. saveName
             .. (reason and (" (" .. tostring(reason) .. ")") or ""))

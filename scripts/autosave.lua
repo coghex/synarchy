@@ -132,6 +132,14 @@ end
 -- load are mutually exclusive engine-side for their whole durations, so
 -- an autosave that started during either would simply be rejected --
 -- skipping keeps that out of the failure channel entirely.
+--
+-- Keying on `outcome` rather than on a list of terminal phase names is
+-- what makes this total: every disposition the engine can end a
+-- transaction with sets one, including #1204's post-publication
+-- LoadReconciliationFailed / LoadReconciliationIncomplete. That load is
+-- OVER (the engine's own loadInProgress agrees -- it tests exactly this
+-- field), so autosaves resume rather than being blocked forever by a
+-- transaction nothing will ever advance.
 local function transactionRunning(status)
     return status ~= nil and status.outcome == nil
 end

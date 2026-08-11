@@ -1390,7 +1390,8 @@ adding state to `EngineEnv`, `WorldState`, `World.Save.Types`, or
 echo 'engine.saveWorld("test", "my_save"); return "saved"' | nc -w 2 localhost 9008
 echo 'engine.loadSave("my_save"); return "queued"' | nc -w 2 localhost 9008
 # loadSave only ACCEPTS synchronously (#763) — poll engine.getLoadStatus()
-# for phase == "LoadPublished" (or "LoadFailed") before touching anything.
+# for phase == "LoadPublished" (or "LoadFailed", or #1204's
+# "LoadReconciliationFailed") before touching anything.
 # Loaded pages keep their saved ids (no main_world remap) —
 # world.getActiveWorldId() to find the active one.
 echo 'return engine.getLoadStatus()' | nc -w 2 localhost 9008
@@ -1486,7 +1487,18 @@ attribution because there is nothing left to walk.
   Save and load mutually exclude for their whole duration; a failed
   load leaves the old session unchanged and paused (pause is a one-way
   ratchet per attempt). `engine.getLoadStatus()` exposes the 12-phase
-  lifecycle.
+  lifecycle, plus #1204's 13th terminal phase
+  `LoadReconciliationFailed`: publication SUCCEEDED but a Lua
+  `onSaveLoaded` callback raised, so the live session is incompletely
+  reconciled. It is a THIRD terminal disposition, not a flavour of
+  either existing one — every poller must treat it as terminal (its
+  outcome is non-nil, so `loadInProgress` is already false) and as
+  UNSUCCESSFUL, and it deliberately leaves `failedAtPhase` unset
+  because that field's presence promises the old session survived
+  unchanged, which a post-publish failure cannot. The outcome
+  aggregates every failing module; `reconciliationFailures` carries the
+  per-module `{module, error}` breakdown. Callback isolation is
+  unchanged — the broadcast still attempts every module.
 - Typed persistent references (`World.Save.Reference`:
   `SamePageRef`/`CrossPageRef` newtypes; Lua `{__ref=kind, id=N}`
   wrapping in `unit_ai_save_refs.lua`/`building_spawn.lua`) feed the

@@ -392,10 +392,16 @@ def _run(args, root: str) -> int:
         # transaction's id (captured right after it was accepted) tells
         # the two cases apart: only a MATCHING id means we're actually
         # still observing the original, still-racing transaction.
+        # "LoadReconciliationFailed" (issue #1204) belongs in this
+        # terminal set for the same reason as the other two: it ends the
+        # transaction (its outcome is non-nil, so the engine's own
+        # mutual-exclusion gate stops rejecting), and treating it as
+        # in-flight would misread a finished load as a still-racing one.
         still_inflight = (isinstance(mid_status, dict)
                           and mid_status.get("id") == initial_id
                           and mid_status.get("phase") not in
-                          ("LoadPublished", "LoadFailed"))
+                          ("LoadPublished", "LoadFailed",
+                           "LoadReconciliationFailed"))
         if still_inflight:
             chk.ok(save_during_load.strip() == "false",
                    "engine.saveWorld rejected while a load is in flight")

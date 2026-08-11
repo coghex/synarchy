@@ -55,10 +55,14 @@ loadingScreen.worldGloss      = nil
 -- to it (a load no longer always targets "main_world"). Fired at most
 -- once per load, then cleared.
 loadingScreen.onLoadReady  = nil
--- Fired once a "load" mode transaction reaches LoadFailed, with the raw
--- engine.getLoadStatus().outcome string (diagnostic only — see the
--- engine log for the real reason). Fired at most once per load, then
--- cleared.
+-- Fired once a "load" mode transaction reaches EITHER terminal failure
+-- disposition — LoadFailed (pre-publication; the old session survived
+-- unchanged) or LoadReconciliationFailed (#1204: the session published
+-- but a module's onSaveLoaded raised, leaving it incompletely
+-- reconciled) — with the raw engine.getLoadStatus().outcome string
+-- (diagnostic only — see the engine log for the real reason, and
+-- status.reconciliationFailures for the per-module breakdown of the
+-- latter). Fired at most once per load, then cleared.
 loadingScreen.onLoadFailed = nil
 
 -- Texture handles for bar (loaded once)
@@ -121,6 +125,12 @@ local loadPhaseInfo = {
     LoadWaitingPublish     = {0.90, "Finalizing..."},
     LoadPublished          = {1.00, "Complete!"},
     LoadFailed             = {0.00, "Load failed"},
+    -- issue #1204: the session DID publish, but at least one module's
+    -- onSaveLoaded reconciliation callback raised, so it is only
+    -- partially reconciled. Terminal, and reported as a failure here
+    -- (see the poll below) -- an incompletely reconciled session must
+    -- not be handed to the player as a successful load.
+    LoadReconciliationFailed = {0.00, "Load incomplete"},
 }
 
 -----------------------------------------------------------
@@ -452,7 +462,17 @@ function loadingScreen.update(dt)
             label.setText(loadingScreen.statusLabelId, barText)
         end
 
-        if phase == "LoadFailed" then
+        -- Both terminal failure dispositions land here. LoadFailed is
+        -- the pre-publication one (the old session survived unchanged);
+        -- LoadReconciliationFailed (issue #1204) is the
+        -- post-publication one -- the swap already happened, but some
+        -- module's onSaveLoaded raised and the live session is
+        -- incompletely reconciled. They differ in what the engine did,
+        -- not in whether this was a successful load, so both route
+        -- through onLoadFailed rather than onLoadReady. Handling the
+        -- new one explicitly also keeps this poll from spinning on a
+        -- phase it does not recognize as terminal.
+        if phase == "LoadFailed" or phase == "LoadReconciliationFailed" then
             local reason = status and status.outcome or nil
             local onFailed = loadingScreen.onLoadFailed
             loadingScreen.onLoadReady  = nil
