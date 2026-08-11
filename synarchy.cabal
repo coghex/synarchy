@@ -311,6 +311,7 @@ library
                      Engine.Scripting.Lua.API.UI.Placement
                      Engine.Scripting.Lua.API.Faction
                      Engine.Scripting.Lua.API.Units
+                     Engine.Scripting.Lua.API.Units.Page
                      Engine.Scripting.Lua.API.Units.Yaml
                      Engine.Scripting.Lua.API.Units.Spawn
                      Engine.Scripting.Lua.API.Units.Survival
@@ -1064,6 +1065,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
+                   Test.Headless.Item.GroundPageOwnership
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier

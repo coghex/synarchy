@@ -12,6 +12,7 @@ module Engine.Scripting.Lua.API.Items.Ground
     , itemGetGroundTempFn
     , itemSetGroundTempFn
     , itemPickupGroundFn
+    , pickupGroundOnPage
     ) where
 
 import UPrelude
@@ -26,6 +27,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
+import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
 import Item.Roll (rollItemWeight)
@@ -279,55 +281,71 @@ itemSetGroundTempFn env = do
 --   fresh values. Remove-first ordering means two racing pickups
 --   can't duplicate the item: the loser's remove returns Nothing.
 --   If the unit vanished between remove and insert, the item is
---   re-spawned at its old position (new id).
+--   re-spawned at its old position (new id) on that same page.
+--
+--   The gid is resolved on the UNIT'S OWN page (#1208), never the
+--   active one: ground items are page-local, so a same-numbered gid
+--   on another page is a different item entirely and must not be
+--   removed. A missing unit, a unit whose page has no live world, and
+--   a gid absent from that page all return false with the ground
+--   collections, the unit, and the cursor untouched.
 itemPickupGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemPickupGroundFn env = do
     uidArg ← Lua.tointeger 1
     gidArg ← Lua.tointeger 2
     case (uidArg, gidArg) of
         (Just u, Just g) → do
-            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
+            let uid = UnitId (fromIntegral u)
+            mWs ← Lua.liftIO $ unitOwningWorldState env uid
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
-                    ok ← Lua.liftIO $ do
-                        mGi ← atomicModifyIORef' (wsGroundItemsRef ws) $
-                            removeGroundItem (fromIntegral g)
-                        case mGi of
-                            Nothing → return False
-                            Just gi → do
-                                let uid = UnitId (fromIntegral u)
-                                inserted ← atomicModifyIORef'
-                                    (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-                                        case HM.lookup uid
-                                                 (umInstances um) of
-                                            Nothing → (um, False)
-                                            Just inst →
-                                                let inst' = inst
-                                                      { uiInventory =
-                                                          uiInventory inst
-                                                          ++ [giInst gi] }
-                                                in (um { umInstances =
-                                                       HM.insert uid inst'
-                                                         (umInstances um) }
-                                                   , True)
-                                if inserted
-                                    then return True
-                                    else do
-                                        -- Unit gone: put it back.
-                                        _ ← atomicModifyIORef'
-                                            (wsGroundItemsRef ws) $
-                                            spawnGroundItem (giInst gi)
-                                                (giX gi) (giY gi)
-                                        return False
-                    -- Deselect if the picked item was selected.
-                    Lua.liftIO $
-                        atomicModifyIORef' (wsCursorRef ws) $ \cs →
-                            ( if selectedGroundItem cs
-                                   ≡ Just (fromIntegral g)
-                              then cs { selectedGroundItem = Nothing }
-                              else cs
-                            , () )
+                    ok ← Lua.liftIO $
+                        pickupGroundOnPage env ws uid (fromIntegral g)
                     Lua.pushboolean ok
                     return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | The remove → insert → rollback core of 'itemPickupGroundFn',
+--   scoped to ONE already-resolved page. Split out so the concurrent-
+--   disappearance rollback — which needs the unit to be gone at insert
+--   time — is reachable deterministically from the #1208 regression
+--   instead of only through a race.
+--
+--   Every ground and cursor write here targets @ws@ and nothing else,
+--   which is what makes "the item is restored to the page it was taken
+--   from" true by construction rather than by inspection.
+pickupGroundOnPage ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
+pickupGroundOnPage env ws uid gid = do
+    mGi ← atomicModifyIORef' (wsGroundItemsRef ws) $ removeGroundItem gid
+    case mGi of
+        -- Nothing was removed, so there is nothing to deselect either:
+        -- a pre-removal failure leaves ground, unit and cursor exactly
+        -- as they were.
+        Nothing → pure False
+        Just gi → do
+            inserted ← atomicModifyIORef'
+                (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, False)
+                        Just inst →
+                            let inst' = inst
+                                  { uiInventory =
+                                      uiInventory inst ++ [giInst gi] }
+                            in (um { umInstances =
+                                       HM.insert uid inst' (umInstances um) }
+                               , True)
+            unless inserted $ do
+                -- Unit gone: put it back, on the page we took it from.
+                _ ← atomicModifyIORef' (wsGroundItemsRef ws) $
+                        spawnGroundItem (giInst gi) (giX gi) (giY gi)
+                pure ()
+            -- Deselect if the picked item was selected. A rollback
+            -- clears it too: spawnGroundItem hands the restored
+            -- instance a NEW id, so this gid is stale either way.
+            atomicModifyIORef' (wsCursorRef ws) $ \cs →
+                ( if selectedGroundItem cs ≡ Just gid
+                  then cs { selectedGroundItem = Nothing }
+                  else cs
+                , () )
+            pure inserted

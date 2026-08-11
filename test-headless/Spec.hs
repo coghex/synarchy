@@ -31,6 +31,7 @@ import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
+import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -252,6 +253,10 @@ main = hspec $ do
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
     aroundAll withHeadlessEngine PowerPlacement.spec
+    -- Own engine for the same reason: the #1208 ground-ownership gate
+    -- installs TWO live pages and rewrites the unit/world manager refs
+    -- to put a unit on the non-active one.
+    aroundAll withHeadlessEngine GroundPageOwnership.spec
     -- Own engine (not the shared-worlds one above): needs a real
     -- pixel hit-test against loaded tile data (renderWorldCursorQuads),
     -- so it generates its own cheap private w8 page rather than sharing

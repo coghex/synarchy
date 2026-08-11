@@ -28,7 +28,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
+import Engine.Core.State (EngineEnv, freshItemInstanceId)
+import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Unit.Types
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Roll (rollItemSpec, rollItemWeight)
@@ -38,11 +39,6 @@ import World.Weather.Ambient (ambientTempAt)
 import Item.Temperature (effectiveItemTemp)
 import Item.Types (ItemInstance(..), itemMatches, itemContentsSig, ItemDef(..), ItemContainer(..), ItemFood(..), ItemWeapon(..), ItemBuff(..), lookupItemDef, itemTotalWeight, qualityTierLabel)
 
-
--- | The active (shown) world, or the first one if none is explicitly
---   shown. Mirrors the helper in API.Items.
-activeWorldU ∷ EngineEnv → IO (Maybe WorldState)
-activeWorldU env = activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
 
 -- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
 --   to the unit's inventory. Fill is clamped to the def's container
@@ -303,9 +299,11 @@ popFirstWhereIx p = go 0
 -- Removes whatever is equipped in `slotId` and drops it on the ground at
 -- the unit's tile, PRESERVING the exact ItemInstance (condition /
 -- sharpness / quality / fill). Used when a hand or arm is severed or
--- destroyed and the unit can no longer hold its weapon. Returns false if
--- the slot is empty, the unit is gone, or no world is active (the item is
--- left equipped rather than vanishing).
+-- destroyed and the unit can no longer hold its weapon. The drop lands on
+-- the unit's OWN page (#1208), which is the frame its coordinates belong
+-- to. Returns false if the slot is empty, the unit is gone, or the unit's
+-- page has no live world (the item is left equipped rather than
+-- vanishing).
 unitDropEquipmentToGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDropEquipmentToGroundFn env = do
     uidArg  ← Lua.tointeger 1
@@ -314,9 +312,10 @@ unitDropEquipmentToGroundFn env = do
         (Just n, Just slotBS) → do
             let uid    = UnitId (fromIntegral n)
                 slotId = TE.decodeUtf8Lenient slotBS
-            -- Resolve the world FIRST so we never strip the item from the
-            -- unit when there's nowhere to drop it.
-            mWs ← Lua.liftIO $ activeWorldU env
+            -- Resolve the unit's OWN page FIRST (#1208) so we never
+            -- strip the item when there's nowhere to drop it, and so
+            -- the drop lands in the frame uiGridX/uiGridY belong to.
+            mWs ← Lua.liftIO $ unitOwningWorldState env uid
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
@@ -354,9 +353,10 @@ unitDropEquipmentToGroundFn env = do
 --   of item.pickupGround, and the inventory sibling of
 --   unit.dropEquipmentToGround. First-match-by-def semantics, same as
 --   unit.removeItem; when the EXACT instance matters (the craft AI's
---   output deposit) use unit.dropItemById instead. Returns false if
---   the unit is gone, carries no such item, or no world is active
---   (the item stays in the inventory rather than vanishing).
+--   output deposit) use unit.dropItemById instead. The drop lands on
+--   the unit's OWN page (#1208). Returns false if the unit is gone,
+--   carries no such item, or the unit's page has no live world (the
+--   item stays in the inventory rather than vanishing).
 unitDropItemToGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDropItemToGroundFn env = do
     uidArg  ← Lua.tointeger 1
@@ -365,9 +365,10 @@ unitDropItemToGroundFn env = do
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8Lenient nameBS
-            -- Resolve the world FIRST so we never strip the item from
-            -- the unit when there's nowhere to drop it.
-            mWs ← Lua.liftIO $ activeWorldU env
+            -- Resolve the unit's OWN page FIRST (#1208) so we never
+            -- strip the item when there's nowhere to drop it, and so
+            -- the drop lands in the frame uiGridX/uiGridY belong to.
+            mWs ← Lua.liftIO $ unitOwningWorldState env uid
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
@@ -403,6 +404,7 @@ unitDropItemToGroundFn env = do
 --   craft.executeAt returns with this, so a same-def item already in
 --   the crafter's inventory is never dropped in place of the fresh
 --   output (whose quality / condition / temp belong to THIS craft).
+--   Same owning-page resolution as its two siblings (#1208).
 unitDropItemByIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDropItemByIdFn env = do
     uidArg ← Lua.tointeger 1
@@ -411,9 +413,10 @@ unitDropItemByIdFn env = do
         (Just n, Just i) → do
             let uid = UnitId (fromIntegral n)
                 iid = fromIntegral i ∷ Word64
-            -- Resolve the world FIRST so we never strip the item from
-            -- the unit when there's nowhere to drop it.
-            mWs ← Lua.liftIO $ activeWorldU env
+            -- Resolve the unit's OWN page FIRST (#1208) so we never
+            -- strip the item when there's nowhere to drop it, and so
+            -- the drop lands in the frame uiGridX/uiGridY belong to.
+            mWs ← Lua.liftIO $ unitOwningWorldState env uid
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
