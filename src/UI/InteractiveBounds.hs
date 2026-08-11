@@ -39,7 +39,6 @@
 --   cycle.
 module UI.InteractiveBounds
   ( clampOverflow
-  , elementRawOverflow
   , elementOverflow
   , contentRect
   , visualRect

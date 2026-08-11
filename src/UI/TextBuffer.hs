@@ -8,9 +8,6 @@ module UI.TextBuffer
   , cursorRight
   , cursorHome
   , cursorEnd
-    -- * Buffer Management
-  , clearBuffer
-  , submitBuffer
   ) where
 
 import UPrelude
@@ -55,11 +52,3 @@ cursorHome buf = buf { tbCursor = 0 }
 -- | Move cursor to end
 cursorEnd ∷ TextBuffer → TextBuffer
 cursorEnd buf = buf { tbCursor = T.length (tbContent buf) }
-
--- | Clear the buffer
-clearBuffer ∷ TextBuffer → TextBuffer
-clearBuffer buf = buf { tbContent = T.empty, tbCursor = 0 }
-
--- | Get content and clear (for submission)
-submitBuffer ∷ TextBuffer → (T.Text, TextBuffer)
-submitBuffer buf = (tbContent buf, clearBuffer buf)

@@ -65,8 +65,6 @@
 module UI.InputOwnership
   ( PointerKind(..)
   , InputRoute(..)
-  , inputBoundaryPage
-  , pagesInScope
   , isPageInScope
   , isGameplayBlocked
   , routePointer
