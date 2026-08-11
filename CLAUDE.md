@@ -457,15 +457,41 @@ are still being written is the normal case, so the rebase must tolerate a dirty
 tree — a plain `git rebase` aborts with "cannot rebase: You have unstaged
 changes" and strands the landing:
 
+**Use `tools/docs_land.sh`, not a hand-rolled sequence:**
+
+```bash
+tools/docs_land.sh -m "Commit subject" docs/foo.md [docs/bar.md …]
+tools/docs_land.sh -n -m "…" docs/foo.md      # dry run
+tools/docs_land.sh -f -m "…" docs/foo.md      # proceed despite the risk warning
+```
+
+It resolves the worktree by branch, commits ONLY the paths you name, skips the
+rebase entirely when master has not moved, judges success by `rev-list` rather
+than push output, and fast-forwards the primary checkout only when it is clean.
+
+Its reason to exist is the pre-flight check: it refuses, before committing or
+stashing anything, when a file that is dirty here but NOT being landed has also
+changed on master. That combination is exactly what makes a rebase autostash
+conflict — and it is what actually happens, repeatedly, on
+`docs/code_health_findings.md`, which merged PRs rewrite constantly.
+
+The equivalent by hand, if you ever need it:
+
 ```bash
 cd "$DOCS_WT" && git add -- <paths> && git commit -m "…" \
   && git fetch origin && git rebase --autostash origin/master \
   && git push origin docs-wip:master
 ```
 
-`--autostash` is required, not decorative. Should ITS restore conflict, the
-damage is confined to this worktree and surfaces immediately in front of you —
-it cannot wedge the drainer, which is the whole point of doing the work here.
+`--autostash` is required there, not decorative. Should ITS restore conflict,
+the damage is confined to this worktree and surfaces immediately in front of
+you — it cannot wedge the drainer, which is the whole point of doing the work
+here.
+
+**`docs-wip` is not a feature branch.** It tracks `origin/master` and lands by
+direct push, so it is a second working copy of master rather than something that
+accumulates and merges later. Uncommitted work can sit in it indefinitely
+without the drainer ever seeing it; that is its whole job.
 
 A bare `git push` from this worktree fails safe: `docs-wip` tracks
 `origin/master`, and the differing name makes `push.default=simple` refuse. Use
