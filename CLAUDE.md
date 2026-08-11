@@ -1525,6 +1525,16 @@ hangs the world thread on load — never use arenas as a save-test page.
 
 ## AI Asset Generation
 
+**Art is tracked work, exactly like code.** A texture, icon, sprite, or
+animation that does not exist yet is a first-class blocker, not a detail to
+route around: it gets its own issue and its own PR, and the project owner signs
+off on every texture before it lands. When you reach an art blocker, STOP and
+return to the owner with the exact list of missing assets and what each is for.
+They will either supply the file themselves or direct you to generate it via
+PixelLab. Never choose between those yourself, never ship a `wtNoTexture` or
+reused-sprite placeholder as if the work were done, and never quietly narrow a
+slice to avoid the art.
+
 Textures (flora, units, buildings, tiles) can be generated via the PixelLab MCP server.
 **Read `docs/asset_generation.md` before generating** — it has the validated pipelines
 (skeleton-freeze masks for multi-stage flora, character/state/animation flow for units),

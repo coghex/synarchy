@@ -58,6 +58,27 @@ What it does:
      generationW differ by a wide margin, not one shared global value.
      Runs after the arena's save (step 8) completes, so this second page
      never rides along in that save file.
+ 10. Wire topology survives real chunk EVICTION (#1207), on a THIRD page
+     — a worldSize=64 real world, because the arena cannot prove this:
+     an arena's chunks are all reconstructed at load behind a 100-chunk
+     cache, so its wire chunk is never demonstrably unloaded. A source +
+     storage pair joined by a five-tile wire run inside ONE chunk is
+     built, then the camera is driven into fresh territory until
+     world.getChunkInfo reports that chunk genuinely `loaded=false`, and:
+     both membership queries (getNetworkForNode AND listNetworks) still
+     report the network; the battery's storedWh keeps rising under
+     unpaused game time while detached; freezing the clock and walking
+     the camera back reloads the chunk with membership and stored energy
+     unchanged (no discontinuity); clearing ONE middle wire piece splits
+     the run into two networks and it STAYS split across another
+     eviction and reload (a stale historical WeSetStructure must never
+     resurrect connectivity); and structure.clearAll leaves no topology
+     derivable at all, evicted or resident.
+ 11. That same page is then saved with the camera parked far away and
+     reloaded in engine B (a FRESH process that never held the page):
+     the wire chunk comes up `loaded=false` and the network is still
+     reported without the camera ever visiting it or the chunk being
+     explicitly loaded.
 
 Usage: python3 tools/power_probe.py [--port 9358]
 Exit 0 = every check passed.
@@ -150,6 +171,102 @@ def check(passed: bool, ok: bool, label: str, detail: str = "") -> bool:
     return passed and ok
 
 
+# ── #1207 eviction fixture ──────────────────────────────────────────────
+# A worldSize=64 REAL world (the arena cannot show eviction — see the
+# module docstring). Seed 42's chunk (2,-1) is pre-verified completely dry
+# and flat at z=30, so the whole network — both nodes AND every wire tile
+# — lives inside that ONE chunk and a single eviction detaches all of it.
+# Topology is 2D (Power.Network.wireComponents is 4-adjacency on (gx,gy)
+# and a node's tile is its building anchor), so the z-level is incidental;
+# what matters is that placement succeeds and the tiles share a chunk.
+EV_PAGE = "evict_check"
+EV_SEED, EV_SIZE, EV_PLATES = 42, 64, 4
+EV_CHUNK = (2, -1)
+EV_PANEL_TILE = (36, -8)
+EV_BATT_TILE = (40, -8)
+EV_WIRE_RUN = [(36, -7), (37, -7), (38, -7), (39, -7), (40, -7)]
+EV_CUT_TILE = (38, -7)          # middle piece: clearing it splits the run
+EV_HOME_TILE = (38, -8)         # camera target that reloads EV_CHUNK
+
+# Chunks far enough from EV_CHUNK to fill the 200-chunk cache without
+# ever competing with it for eviction: 225 chunks at |cy| >= 10, all
+# inside this world's valid u/v diamond so none of them aliases another.
+EV_FILL_REGION = (-7, 10, 7, 24)
+
+# Camera stops that force eviction. Each is 3 chunks further east than
+# the last, so every stop needs NEW chunks generated — eviction only runs
+# on a tick that actually generates a batch, so re-parking on already-
+# loaded ground would be a silent no-op. Every stop is also much closer
+# to EV_CHUNK than any EV_FILL_REGION chunk is, which is what puts
+# EV_CHUNK in the evicted set under the existing distance policy.
+EV_CAMERA_STOPS = [(cx * 16 + 8, -8) for cx in (10, 13, 16, 19, 22, 25)]
+
+
+def chunk_loaded(port: int, coord: tuple[int, int]) -> bool | None:
+    info = jget(port, f"return world.getChunkInfo({coord[0]}, {coord[1]})")
+    if not isinstance(info, dict):
+        return None
+    return bool(info.get("loaded"))
+
+
+def force_eviction(port: int, coord: tuple[int, int], stop_from: int = 0,
+                    secs: float = 25.0) -> int | None:
+    """Drive the camera through fresh territory until @coord is GENUINELY
+    unloaded. Returns the index of the next unused camera stop, or None if
+    the chunk never evicted. Never asserts on its own — the caller reports
+    the outcome as a check so a policy change reads as a probe failure
+    rather than a hang."""
+    for idx in range(stop_from, len(EV_CAMERA_STOPS)):
+        gx, gy = EV_CAMERA_STOPS[idx]
+        send(port, f"camera.goToTile({gx}, {gy}); return 'ok'")
+        deadline = time.time() + secs
+        while time.time() < deadline:
+            if chunk_loaded(port, coord) is False:
+                return idx + 1
+            time.sleep(0.25)
+    return None
+
+
+def reload_chunk(port: int, coord: tuple[int, int], tile: tuple[int, int],
+                  secs: float = 30.0) -> bool:
+    """Walk the camera back onto @tile and wait for @coord to come back."""
+    send(port, f"camera.goToTile({tile[0]}, {tile[1]}); return 'ok'")
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        if chunk_loaded(port, coord) is True:
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def net_members(port: int, node_id: int) -> list[int] | None:
+    """The sorted node-id set of the network @node_id sits on, or None when
+    it is on no network at all."""
+    net = jget(port, f"return power.getNetworkForNode({node_id})")
+    if not isinstance(net, dict):
+        return None
+    return sorted(net.get("nodeIds", []))
+
+
+def listed_members(port: int) -> list[list[int]]:
+    """Every network listNetworks reports, as sorted node-id sets — the
+    second membership surface requirement 1 names, checked alongside
+    getNetworkForNode so the two cannot disagree."""
+    nets = jget(port, "return power.listNetworks()")
+    if not isinstance(nets, list):
+        return []
+    return sorted(sorted(n.get("nodeIds", [])) for n in nets
+                   if isinstance(n, dict))
+
+
+def stored_wh(port: int, bid: int) -> float | None:
+    node = jget(port, f"return power.getNodeForBuilding({bid})")
+    if not isinstance(node, dict):
+        return None
+    value = node.get("storedWh")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -172,6 +289,15 @@ def _run(port: int, root: str) -> int:
     save_dir = os.path.join(root, "saves", save_name)
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
+
+    # A SECOND save for the #1207 fresh-process check (step 11): it has to
+    # be taken with the camera far from the wire chunk, which the arena
+    # save above deliberately isn't, and it must not disturb any of that
+    # save's existing assertions.
+    ev_save_name = f"{SAVE_PREFIX}evict_{uuid.uuid4().hex[:12]}"
+    ev_save_dir = os.path.join(root, "saves", ev_save_name)
+    if os.path.exists(ev_save_dir):
+        sys.exit(f"refusing to run: {ev_save_dir} already exists")
 
     logA = "/tmp/power_probe_A.log"
     logB = "/tmp/power_probe_B.log"
@@ -423,6 +549,231 @@ def _run(port: int, root: str) -> int:
             "meridian and antipodal panels report meaningfully DIFFERENT "
             "generationW, not one shared global value", generation)
 
+        # --- 10. Wire topology is residency-INDEPENDENT (#1207) ---------
+        # A third page, because neither earlier one can show this: the
+        # arena's chunks are all rebuilt at load behind a 100-chunk cache,
+        # and longitude_check (worldSize 8, 64 chunk slots) can never
+        # exceed the 200-chunk cache eviction needs at all.
+        send(port, f"world.init('{EV_PAGE}', {EV_SEED}, {EV_SIZE}, "
+                   f"{EV_PLATES}); return 'ok'")
+        send(port, "return world.waitForInit(300)", timeout=310)
+        send(port, f"world.show('{EV_PAGE}'); return 'ok'")
+        if not wait_active(port, EV_PAGE):
+            sys.exit(f"FAIL: {EV_PAGE} world never became active")
+        # Clock frozen at midday for the whole phase: the panel generates
+        # (so the detached-charging check has something to measure) while
+        # every "unchanged across the reload" comparison stays exact,
+        # because a zero time scale makes the power tick a no-op.
+        send(port, f"world.setTimeScale('{EV_PAGE}', 0); return 'ok'")
+        send(port, f"world.setTime('{EV_PAGE}', 12, 0); return 'ok'")
+
+        ev_uid = as_int(send(port,
+            f"return unit.spawn('technomule', {EV_PANEL_TILE[0]}, "
+            f"{EV_PANEL_TILE[1] - 1})"))
+        if ev_uid is None:
+            sys.exit(f"FAIL: {EV_PAGE} technomule spawn rejected")
+        for _ in range(50):
+            if count_item(port, ev_uid, "solar_panel") >= 1:
+                break
+            time.sleep(0.1)
+        send(port, f"unit.select({ev_uid}); return 'ok'")
+
+        ev_panel_bid = as_int(send(port,
+            "return require('scripts.build_tool').commitPlacement("
+            f"'solar_panel', {EV_PANEL_TILE[0]}, {EV_PANEL_TILE[1]})"))
+        ev_batt_bid = as_int(send(port,
+            "return require('scripts.build_tool').commitPlacement("
+            f"'high_voltage_battery', {EV_BATT_TILE[0]}, {EV_BATT_TILE[1]})"))
+        passed = check(passed,
+            ev_panel_bid is not None and ev_batt_bid is not None,
+            "eviction-page source + storage placed",
+            {"panel": ev_panel_bid, "battery": ev_batt_bid})
+        if ev_panel_bid is None or ev_batt_bid is None:
+            sys.exit("FAIL: cannot continue the #1207 phase without both nodes")
+
+        for gx, gy in EV_WIRE_RUN:
+            send(port, f"require('scripts.wire').place({gx}, {gy}); return 'ok'")
+        ev_panel_node = jget(port, f"return power.getNodeForBuilding({ev_panel_bid})")
+        ev_batt_node = jget(port, f"return power.getNodeForBuilding({ev_batt_bid})")
+        if not (isinstance(ev_panel_node, dict) and isinstance(ev_batt_node, dict)):
+            sys.exit(f"FAIL: eviction-page nodes never registered: "
+                     f"{ev_panel_node} / {ev_batt_node}")
+        ev_panel_nid = as_int(ev_panel_node.get("id"))
+        ev_batt_nid = as_int(ev_batt_node.get("id"))
+        if ev_panel_nid is None or ev_batt_nid is None:
+            sys.exit(f"FAIL: eviction-page node ids unreadable: "
+                     f"{ev_panel_node} / {ev_batt_node}")
+        joined = sorted([ev_panel_nid, ev_batt_nid])
+        loaded_members = net_members(port, ev_panel_nid)
+        passed = check(passed,
+            chunk_loaded(port, EV_CHUNK) is True
+            and loaded_members == joined
+            and net_members(port, ev_batt_nid) == joined
+            and listed_members(port) == [joined],
+            "baseline: both nodes share ONE network while the wire chunk is loaded",
+            {"members": loaded_members, "listed": listed_members(port)})
+
+        # Fill the cache with chunks that are FAR from the wire chunk, then
+        # drive the camera east through fresh ground until the wire chunk
+        # itself is genuinely gone from wtdChunks.
+        send(port, f"return world.loadChunksInRegion({EV_FILL_REGION[0]}, "
+                   f"{EV_FILL_REGION[1]}, {EV_FILL_REGION[2]}, "
+                   f"{EV_FILL_REGION[3]})", timeout=30)
+        send(port, "return world.waitForChunks(300)", timeout=310)
+        next_stop = force_eviction(port, EV_CHUNK)
+        passed = check(passed, next_stop is not None,
+                       "wire chunk genuinely EVICTED (getChunkInfo loaded=false)",
+                       chunk_loaded(port, EV_CHUNK))
+        if next_stop is None:
+            sys.exit("FAIL: never forced a real eviction — the rest of the "
+                     "#1207 phase would assert nothing")
+
+        # Requirement 1: both membership surfaces still report the network.
+        passed = check(passed,
+            net_members(port, ev_panel_nid) == joined
+            and net_members(port, ev_batt_nid) == joined,
+            "getNetworkForNode reports the SAME network with the wire chunk evicted",
+            {"panel": net_members(port, ev_panel_nid),
+             "battery": net_members(port, ev_batt_nid)})
+        passed = check(passed, listed_members(port) == [joined],
+                       "listNetworks reports the same single network while evicted",
+                       listed_members(port))
+
+        # Requirement 1 (second half): stored charge keeps evolving with
+        # UNPAUSED game time while detached — the pre-fix freeze. The
+        # explicit unpause matters: step 8's save transaction leaves the
+        # engine paused (pause is a one-way ratchet per save attempt), and
+        # tickWorldTime forces effScale to 0 while paused, so without this
+        # the whole window would measure a stopped clock rather than a
+        # detached network.
+        was_paused = send(port, "return engine.isPaused()").strip()
+        send(port, "engine.setPaused(false); return 'ok'")
+        detached_before = stored_wh(port, ev_batt_bid)
+        send(port, f"world.setTimeScale('{EV_PAGE}', 120); return 'ok'")
+        time.sleep(2.5)
+        send(port, f"world.setTimeScale('{EV_PAGE}', 0); return 'ok'")
+        # Pause before the reload comparisons below, so membership and
+        # stored energy are compared with no tick timing ambiguity at all.
+        send(port, "engine.setPaused(true); return 'ok'")
+        time.sleep(0.5)
+        detached_after = stored_wh(port, ev_batt_bid)
+        detached_net = jget(port, f"return power.getNetworkForNode({ev_panel_nid})")
+        passed = check(passed,
+            detached_before is not None and detached_after is not None
+            and detached_after > detached_before,
+            "battery storedWh kept RISING while its wire chunk was evicted "
+            f"({detached_before} -> {detached_after})",
+            {"pausedOnEntry": was_paused,
+             "generationW": (detached_net.get("generationW")
+                             if isinstance(detached_net, dict) else None)})
+
+        # Requirement 2: reloading introduces no discontinuity. The clock
+        # is already frozen (timeScale 0) so the comparison carries no tick
+        # timing ambiguity.
+        frozen_members = net_members(port, ev_panel_nid)
+        frozen_listed = listed_members(port)
+        frozen_stored = stored_wh(port, ev_batt_bid)
+        passed = check(passed, reload_chunk(port, EV_CHUNK, EV_HOME_TILE),
+                       "wire chunk reloaded after walking the camera back",
+                       chunk_loaded(port, EV_CHUNK))
+        passed = check(passed,
+            net_members(port, ev_panel_nid) == frozen_members
+            and listed_members(port) == frozen_listed,
+            "membership unchanged across the reload (no discontinuity)",
+            {"before": frozen_members, "after": net_members(port, ev_panel_nid)})
+        reloaded_stored = stored_wh(port, ev_batt_bid)
+        passed = check(passed,
+            frozen_stored is not None and reloaded_stored is not None
+            and abs(reloaded_stored - frozen_stored) < 1e-3,
+            "stored energy unchanged across the reload "
+            f"({frozen_stored} -> {reloaded_stored})")
+
+        # Requirement 3: a cleared piece STAYS cleared. Cutting the middle
+        # of the run splits it, and no eviction/reload cycle may let the
+        # earlier WeSetStructure resurrect the connection.
+        send(port, f"return structure.clear({EV_CUT_TILE[0]}, "
+                   f"{EV_CUT_TILE[1]}, 'wire')")
+        time.sleep(1.0)
+        passed = check(passed,
+            net_members(port, ev_panel_nid) == [ev_panel_nid]
+            and net_members(port, ev_batt_nid) == [ev_batt_nid],
+            "clearing one middle wire piece splits the network in two",
+            {"panel": net_members(port, ev_panel_nid),
+             "battery": net_members(port, ev_batt_nid)})
+        next_stop = force_eviction(port, EV_CHUNK, stop_from=next_stop)
+        passed = check(passed, next_stop is not None,
+                       "wire chunk evicted again after the clear",
+                       chunk_loaded(port, EV_CHUNK))
+        passed = check(passed,
+            net_members(port, ev_panel_nid) == [ev_panel_nid]
+            and net_members(port, ev_batt_nid) == [ev_batt_nid],
+            "the cleared piece stays cleared while evicted — no stale "
+            "set-structure edit resurrects the link",
+            {"panel": net_members(port, ev_panel_nid),
+             "battery": net_members(port, ev_batt_nid)})
+        if next_stop is None:
+            sys.exit("FAIL: could not re-evict the wire chunk after the clear")
+        passed = check(passed, reload_chunk(port, EV_CHUNK, EV_HOME_TILE),
+                       "wire chunk reloaded after the clear")
+        passed = check(passed,
+            net_members(port, ev_panel_nid) == [ev_panel_nid]
+            and net_members(port, ev_batt_nid) == [ev_batt_nid],
+            "still split after the evict -> reload round trip",
+            {"panel": net_members(port, ev_panel_nid),
+             "battery": net_members(port, ev_batt_nid)})
+
+        # --- 11. Fresh-process load with the wire chunk still evicted ---
+        # Re-join the run, park the camera far away so the SAVED camera
+        # leaves the wire chunk out of the load's own chunk fill, and save.
+        send(port, f"require('scripts.wire').place({EV_CUT_TILE[0]}, "
+                   f"{EV_CUT_TILE[1]}); return 'ok'")
+        time.sleep(1.0)
+        passed = check(passed, net_members(port, ev_panel_nid) == joined,
+                       "re-placing the cut piece rejoins the network",
+                       net_members(port, ev_panel_nid))
+        next_stop = force_eviction(port, EV_CHUNK, stop_from=next_stop)
+        passed = check(passed, next_stop is not None,
+                       "wire chunk evicted with the camera parked for the save",
+                       chunk_loaded(port, EV_CHUNK))
+        ev_saved_members = net_members(port, ev_panel_nid)
+        ev_saved_stored = stored_wh(port, ev_batt_bid)
+        ev_saved = send(port,
+            f"return engine.saveWorld('{EV_PAGE}', '{ev_save_name}')")
+        passed = check(passed, ev_saved.strip() == "true",
+                       "engine.saveWorld returned true for the eviction page",
+                       ev_saved)
+        ev_save_file = os.path.join(ev_save_dir, "world.synworld")
+        for _ in range(150):
+            if os.path.exists(ev_save_file):
+                break
+            time.sleep(0.1)
+        passed = check(passed, os.path.exists(ev_save_file),
+                       f"eviction-page save file appeared at {ev_save_file}")
+
+        # structure.clearAll wipes every loaded overlay AND strips the
+        # structure edits from the log, so it must leave nothing derivable
+        # on EITHER side of residency. Runs after the save above, whose
+        # file is already on disk with the network intact.
+        send(port, "return structure.clearAll()")
+        time.sleep(1.0)
+        passed = check(passed,
+            net_members(port, ev_panel_nid) is None
+            and net_members(port, ev_batt_nid) is None
+            and listed_members(port) == [],
+            "structure.clearAll removes the page's wire topology entirely "
+            "(wire chunk still evicted)",
+            {"panel": net_members(port, ev_panel_nid),
+             "listed": listed_members(port)})
+        passed = check(passed, reload_chunk(port, EV_CHUNK, EV_HOME_TILE),
+                       "wire chunk reloaded after clearAll")
+        passed = check(passed,
+            net_members(port, ev_panel_nid) is None
+            and listed_members(port) == [],
+            "still no topology after reloading the cleared chunk — "
+            "connectivity is not derivable from stripped history",
+            {"panel": net_members(port, ev_panel_nid),
+             "listed": listed_members(port)})
+
         quit_engine(port, procA)
         procA = None
 
@@ -472,6 +823,60 @@ def _run(port: int, root: str) -> int:
                        f"listNodes still reports {expected_nodes} nodes after reload",
                        node_count_after)
 
+        # --- 11 (cont.). #1207 requirement 5, in a process that has never
+        # held this page: load the eviction save and query topology BEFORE
+        # any camera movement or explicit chunk load. World.Load.Stage
+        # fills chunks around the SAVED camera, which was parked far east,
+        # so the wire chunk must come up unloaded.
+        ev_loaded = send(port, f"return engine.loadSave('{ev_save_name}')")
+        passed = check(passed, ev_loaded.strip() == "true",
+                       "engine.loadSave returned true for the eviction save",
+                       ev_loaded)
+        ev_published, ev_status = wait_load_published(port, 300)
+        passed = check(passed, ev_published,
+                       "eviction-save load transaction published", ev_status)
+        # Activating the page is not a camera move and loads no chunk; the
+        # power queries all read the ACTIVE page.
+        send(port, f"world.show('{EV_PAGE}'); return 'ok'")
+        if not wait_active(port, EV_PAGE):
+            sys.exit(f"FAIL: {EV_PAGE} never became active after the load")
+        ev_still_evicted = chunk_loaded(port, EV_CHUNK)
+        passed = check(passed, ev_still_evicted is False,
+                       "the wire chunk is NOT loaded in the fresh process",
+                       ev_still_evicted)
+        # Re-resolve the node ids through their BUILDINGS rather than
+        # reusing engine A's, so this asserts topology and not id stability
+        # (which the reload checks above already own).
+        fresh_panel_node = jget(port,
+            f"return power.getNodeForBuilding({ev_panel_bid})")
+        fresh_batt_node = jget(port,
+            f"return power.getNodeForBuilding({ev_batt_bid})")
+        fresh_panel_nid = (as_int(fresh_panel_node.get("id"))
+                           if isinstance(fresh_panel_node, dict) else None)
+        fresh_batt_nid = (as_int(fresh_batt_node.get("id"))
+                          if isinstance(fresh_batt_node, dict) else None)
+        fresh_joined = (sorted([fresh_panel_nid, fresh_batt_nid])
+                        if fresh_panel_nid is not None
+                        and fresh_batt_nid is not None else None)
+        fresh_members = (net_members(port, fresh_panel_nid)
+                         if fresh_panel_nid is not None else None)
+        passed = check(passed,
+            fresh_joined is not None
+            and fresh_members == fresh_joined
+            and net_members(port, fresh_batt_nid) == fresh_joined
+            and listed_members(port) == [fresh_joined]
+            and len(ev_saved_members or []) == len(fresh_joined),
+            "fresh-process load reports the SAME network without the camera "
+            "ever visiting the wire's chunk",
+            {"saved": ev_saved_members, "fresh": fresh_members,
+             "listed": listed_members(port)})
+        fresh_stored = stored_wh(port, ev_batt_bid)
+        passed = check(passed,
+            ev_saved_stored is not None and fresh_stored is not None
+            and abs(fresh_stored - ev_saved_stored) < 1e-3,
+            "the battery's charge survived the round trip "
+            f"({ev_saved_stored} -> {fresh_stored})")
+
         print("\n" + ("ALL POWER CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
@@ -479,8 +884,9 @@ def _run(port: int, root: str) -> int:
             quit_engine(port, procA)
         if procB is not None:
             quit_engine(port, procB)
-        if os.path.exists(save_dir):
-            shutil.rmtree(save_dir, ignore_errors=True)
+        for path in (save_dir, ev_save_dir):
+            if os.path.exists(path):
+                shutil.rmtree(path, ignore_errors=True)
 
 
 if __name__ == "__main__":
