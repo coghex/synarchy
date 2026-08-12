@@ -14,6 +14,7 @@ module Test.Headless.Core.LoopStartup (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (forkIO, threadDelay)
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM')
@@ -29,7 +30,7 @@ import Engine.Loop.Headless (headlessMode)
 import Engine.Loop.Mode (runStartupHandshake)
 
 spec ∷ Spec
-spec = describe "shared main-loop startup handshake (#1022)" $
+spec = describe "shared main-loop startup handshake (#1022)" $ do
   it "flushes a non-empty input queue, reports it, and transitions to running" $ do
     EngineInitResult env ← initializeEngineHeadless
     capturedRef ← newIORef []
@@ -60,3 +61,51 @@ spec = describe "shared main-loop startup handshake (#1022)" $
       other → expectationFailure $
         "expected exactly one CatThread startup warning, got "
           ⧺ show (length other)
+
+  -- #1283: the promotion used to be an unconditional write, which
+  -- silently discarded a shutdown another thread had already
+  -- requested. engine.quit() runs on the debug console's own client
+  -- thread and only writes CleaningUp, so a quit accepted between the
+  -- READY print and this handshake left an engine that had already
+  -- acked "shutting down" running forever, unstoppable through the one
+  -- control surface a headless boot has.
+  forM_ [ (CleaningUp,    "a shutdown requested during startup")
+        , (EngineStopped, "an engine that already stopped")
+        ] $ \(advanced, label) →
+    it ("preserves " ⧺ label ⧺ " instead of overwriting it with running") $ do
+      EngineInitResult env ← initializeEngineHeadless
+      writeIORef (lifecycleRef env) advanced
+
+      let action ∷ EngineM' ()
+          action = runStartupHandshake headlessMode env
+      _ ← runEngineM action env pure
+
+      readIORef (lifecycleRef env) `shouldReturn` advanced
+
+  it "still promotes a genuinely starting engine, and is idempotent for one already running" $ do
+    forM_ [(EngineStarting, EngineRunning), (EngineRunning, EngineRunning)] $
+      \(before, after) → do
+        EngineInitResult env ← initializeEngineHeadless
+        writeIORef (lifecycleRef env) before
+        let action ∷ EngineM' ()
+            action = runStartupHandshake headlessMode env
+        _ ← runEngineM action env pure
+        readIORef (lifecycleRef env) `shouldReturn` after
+
+  -- The real interleaving, not just the resulting mapping: a quit that
+  -- lands WHILE the handshake is running. A separate read-then-write
+  -- would still lose this one, which is why the promotion has to be a
+  -- single atomic step.
+  it "keeps a quit that arrives midway THROUGH the handshake" $ do
+    EngineInitResult env ← initializeEngineHeadless
+    writeIORef (lifecycleRef env) EngineStarting
+    -- Inside the settle the handshake performs before promoting.
+    _ ← forkIO $ do
+          threadDelay 30000
+          writeIORef (lifecycleRef env) CleaningUp
+
+    let action ∷ EngineM' ()
+        action = runStartupHandshake headlessMode env
+    _ ← runEngineM action env pure
+
+    readIORef (lifecycleRef env) `shouldReturn` CleaningUp

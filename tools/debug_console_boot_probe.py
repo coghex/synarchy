@@ -87,6 +87,15 @@ FAIL_TIMEOUT = 60.0
 QUIT_HOLD = 20.0
 QUIT_TIMEOUT = 45.0
 
+# What the console replies to an accepted engine.quit() (the built-in in
+# Engine.Scripting.Lua.Thread.Console). Its presence is what separates
+# "accepted and then discarded" (#1283) from "never read at all".
+QUIT_ACK = "shutting down"
+
+# How often check 7 looks for READY. Deliberately far below the startup
+# window it is trying to land inside (see the poll loop's own comment).
+READY_POLL = 0.02
+
 FAILURE_MARK = "requires a working debug console"
 PORT_ZERO_REASON = "no TCP listener at all"
 BIND_REASON = "failed to start"
@@ -219,25 +228,27 @@ def check_dump_unchanged() -> bool:
                  f"rc={r.returncode} " + "; ".join(problems))
 
 
-def send_quit(port: int, hold: float) -> None:
-    """Send `engine.quit()` and hold the connection open for up to
-    `hold` s, draining whatever the server writes back.
+def send_quit(port: int, hold: float) -> str:
+    """Send `engine.quit()`, hold the connection open for up to `hold` s,
+    and return everything the server wrote back.
 
-    Draining matters for a reason that is TCP, not timing: the server
-    greets every client with a banner, so a client that closes without
-    reading it still has unread data queued — and closing THEN makes the
-    kernel send RST rather than FIN. The engine's console handler has no
-    handler for that (`DebugServer.hs` `handleClient` re-raises through
-    `finally`), so it dies with an uncaught `recv: ECONNRESET` on stderr.
-    Reading first means this side always closes cleanly.
+    The RETURN VALUE is the point: the console answers an accepted quit
+    with `shutting down` before the engine acts on it (the built-in runs
+    on this connection's own client thread), so it is the caller's proof
+    that the command was accepted rather than lost. Issue #1283 was
+    exactly an accepted-then-discarded quit, and only the reply
+    distinguishes that from a command the engine never read.
 
-    That is NOT, however, what makes this check reliable — measured, not
-    assumed. Under the CPU load that reproduces the CI failure, holding
-    the connection alone still hung 3/3; it is the caller's RETRY that
-    recovers it (5/5). Why the engine ignores the first `engine.quit()`
-    for tens of seconds under contention, and then acts on a second one
-    promptly, is NOT explained by this probe — see the tracking issue.
+    Draining before closing matters for a reason that is TCP, not
+    timing: the server greets every client with a banner, so a client
+    that closes without reading it still has unread data queued — and
+    closing THEN makes the kernel send RST rather than FIN. The engine's
+    console handler has no handler for that (`DebugServer.hs`
+    `handleClient` re-raises through `finally`), so it dies with an
+    uncaught `recv: ECONNRESET` on stderr. Reading first means this side
+    always closes cleanly.
     """
+    got = b""
     with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
         s.sendall(b"engine.quit()\n")
         # Read until the peer goes away (engine exiting closes it). Any
@@ -245,10 +256,14 @@ def send_quit(port: int, hold: float) -> None:
         # closes cleanly with an empty queue and never emits an RST.
         s.settimeout(hold)
         try:
-            while s.recv(4096):
-                pass
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                got += chunk
         except (TimeoutError, socket.timeout, OSError):
             pass
+    return got.decode("utf-8", "replace")
 
 
 # Every process group this probe started, so an INTERRUPTED run cleans
@@ -324,6 +339,12 @@ def check_successful_bind(port: int) -> bool:
             start_new_session=True)
     _LAUNCHED.append(proc)
     try:
+        # Poll TIGHTLY. This check is the regression gate for issue
+        # #1283, whose window opens at the READY print and closes when
+        # the main loop's startup handshake promotes the lifecycle — so
+        # the gate only bites if the quit lands inside it. A 0.3 s poll
+        # is longer than the window's own settle and would mostly send
+        # the quit AFTER the handshake, quietly testing nothing.
         deadline = time.time() + 180.0
         ready = False
         while time.time() < deadline:
@@ -332,32 +353,46 @@ def check_successful_bind(port: int) -> bool:
                 break
             if proc.poll() is not None:
                 break
-            time.sleep(0.3)
+            time.sleep(READY_POLL)
         if not ready:
             return check("successful bind", False,
                          f"no READY on stdout; see {log_out} / {log_err}")
         # The console is the surface this whole issue is about: prove it
         # actually answers, not merely that a marker was printed.
         #
-        # Two attempts. This is the part that actually removes the
-        # flake: under load the engine ignores the first quit for tens of
-        # seconds (hung 3/3 with the connection held; 5/5 pass with this
-        # retry), and from out here a dropped command and a starved one
-        # are indistinguishable. The retry costs nothing when the first
-        # send worked, and a SECOND failure is reported rather than
-        # retried away — that would be a genuine console regression.
-        rc = None
-        for attempt in (1, 2):
+        # The FIRST accepted quit has to be the one that works.
+        #
+        # Issue #1283: a quit accepted during the startup window was
+        # acked `shutting down` and then silently discarded, leaving an
+        # engine that could no longer be stopped through its only
+        # control surface. A second quit always worked (by then the
+        # lifecycle had advanced), so retrying is precisely what hid the
+        # bug — this check must never pass on the strength of one.
+        #
+        # So: assert the ack, then require a clean exit from that one
+        # send. The second send below runs ONLY after this check has
+        # already failed, purely to say whether a retry would have
+        # worked — a diagnosis in the failure text, never a pass.
+        ack = send_quit(port, hold=QUIT_HOLD)
+        if QUIT_ACK not in ack:
+            return check("successful bind", False,
+                         f"console did not acknowledge the quit with "
+                         f"{QUIT_ACK!r}; got {ack!r}")
+        try:
+            rc = proc.wait(timeout=QUIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
             send_quit(port, hold=QUIT_HOLD)
             try:
-                rc = proc.wait(timeout=QUIT_TIMEOUT)
-                break
+                proc.wait(timeout=QUIT_TIMEOUT)
+                retry_note = ("a SECOND quit did shut it down — the first was "
+                              "accepted and then discarded (issue #1283)")
             except subprocess.TimeoutExpired:
-                if attempt == 2:
-                    return check(
-                        "successful bind", False,
-                        f"still running {2 * QUIT_TIMEOUT:.0f}s after two "
-                        f"engine.quit() sends; see {log_out} / {log_err}")
+                retry_note = "a second quit did not shut it down either"
+            return check(
+                "successful bind", False,
+                f"still running {QUIT_TIMEOUT:.0f}s after a quit the console "
+                f"acknowledged with {QUIT_ACK!r}; {retry_note}; "
+                f"see {log_out} / {log_err}")
         err = open(log_err).read()
         problems = []
         if rc != 0:

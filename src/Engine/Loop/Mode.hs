@@ -20,7 +20,7 @@ module Engine.Loop.Mode
 
 import UPrelude
 import Control.Concurrent (threadDelay)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
@@ -135,7 +135,41 @@ runStartupHandshake mode env = do
                                  <> (T.pack (show (length flushed)) <> " events flushed")
 
     maybe (pure ()) (logDebugM CatSystem) (lmRunningLog mode)
-    liftIO $ writeIORef (lifecycleRef env) EngineRunning
+    liftIO $ promoteToRunning env
+
+-- | Promote a STARTING engine to 'EngineRunning', leaving any lifecycle
+--   another thread has already advanced exactly as it found it:
+--
+--   > EngineStarting → EngineRunning
+--   > EngineRunning  → EngineRunning
+--   > CleaningUp     → CleaningUp
+--   > EngineStopped  → EngineStopped
+--
+--   This used to be an unconditional @writeIORef ... EngineRunning@,
+--   which silently discarded a shutdown requested during startup
+--   (issue #1283). @engine.quit()@ is a debug-console BUILT-IN: it runs
+--   on the per-connection client thread, writes 'CleaningUp' and acks
+--   @"shutting down"@ without ever touching the Lua thread
+--   ('Engine.Scripting.Lua.Thread.Console.debugBuiltin'). The console
+--   prints its @READY@ marker when the LISTENER binds
+--   ('Engine.Scripting.Lua.DebugServer'), which happens before the
+--   remaining workers start and before this handshake runs — so a
+--   client following the documented "wait for READY, then send"
+--   contract lands inside the window where this write was still
+--   pending, and the engine went on running with no pending quit and
+--   no way to be stopped through its only control surface.
+--
+--   The vulnerable interval is NOT just 'startupSettleMicros': it spans
+--   every boot step between the READY print and this promotion, so
+--   widening the delay is not what fixes it. Monotonicity is.
+--
+--   The read and the write must be ONE atomic step. The console thread
+--   can advance the lifecycle between a separate read and write, which
+--   is the very interleaving being defended against.
+promoteToRunning ∷ EngineEnv → IO ()
+promoteToRunning env =
+    atomicModifyIORef' (lifecycleRef env) $ \cur →
+        (if cur ≡ EngineStarting then EngineRunning else cur, ())
 
 -- | Gate the mode's camera updates and Lua-to-engine message
 --   processing on the save barrier's capture lock, and genuinely
