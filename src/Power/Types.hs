@@ -5,8 +5,17 @@
 --   authority for position/page/lifetime, this registry only adds the
 --   power-specific role (source/storage) + its parameter (peak watts /
 --   capacity Wh). Mirrors 'Craft.Bills': a per-world, id-keyed registry
---   persisted as its own 'WorldPageSave' field, pruned to live buildings
---   on load.
+--   persisted as its own 'WorldPageSave' field.
+--
+--   That authority is honoured at BOTH ends of a node's life: placement
+--   spawns the building and registers the node together
+--   (@power.placeNode@), and demolition retires the node inside the same
+--   'Building.Command.Types.BuildingDestroy' transaction that removes
+--   the instance (#1206, "Power.Live"). Load does NOT prune: a save that
+--   already carries a node whose building is absent restores it verbatim
+--   (the #758\/#763 tolerance contract — see
+--   'docs/persistence_state_inventory.md'), which is exactly why live
+--   demolition has to clean up, since nothing later will.
 --
 --   Wire adjacency / connected-components + energy balance live in
 --   'Power.Network' (#360), including consumer drain (#361 — an
@@ -110,6 +119,10 @@ addPowerNode bid role param nodes =
                , pnsNextId = pnsNextId nodes + 1 }
        , nid )
 
+-- | Retire one node, reporting whether it was there. Leaves 'pnsNextId'
+--   alone: a demolished node's id must never be handed to a later
+--   placement. Driven in production by
+--   'Power.Live.retirePowerNodeEverywhere' (#1206).
 removePowerNode ∷ PowerNodeId → PowerNodes → (PowerNodes, Bool)
 removePowerNode nid nodes
     | HM.member nid (pnsNodes nodes) =

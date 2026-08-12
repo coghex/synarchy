@@ -45,9 +45,18 @@ What it does:
      panel reports no network at all.
   7. Fast-forwarding the world clock (world.setTimeScale) over real
      daylight hours shows the wired battery's storedWh actually rise.
-  8. Save -> quit -> fresh restart -> reload defs -> load: every placed
+  7b. Demolishing a node's host retires the node (#1206): building.destroy
+     on the UNWIRED second panel (chosen so no network membership or
+     charge is disturbed), waited out until the queued BuildingDestroy
+     genuinely completed, leaves getNodeForBuilding nil and drops the row
+     from listNodes while the battery's node is untouched.
+  8. Save -> quit -> fresh restart -> reload defs -> load: every surviving
      building, its power node, AND the battery's charged storedWh survive,
-     reconnected by BuildingId.
+     reconnected by BuildingId — while the demolished panel's building AND
+     node are both absent, and its retired node id was neither restored
+     nor handed to anything else. The save is taken AFTER 7b, so this is
+     the fresh-process half of #1206 requirement 2: cleanup happened in
+     the live destruction transaction, not at load time.
   9. Longitude-local generation (#794), on a SEPARATE small real world
      (worldSize=8) rather than the arena above (whose synthetic
      wgpWorldSize=100000 makes any two in-arena tiles' longitudes
@@ -439,6 +448,61 @@ def _run(port: int, root: str) -> int:
             "battery storedWh rose over simulated daylight "
             f"({stored_before} -> {stored_after})")
 
+        # --- 7b. Demolition retires the node (#1206), LIVE. Runs after
+        # every connectivity/charging assertion above and BEFORE the save
+        # below, so the same save file carries both halves: the surviving
+        # nodes (step 8) and this retired one, which the fresh process
+        # must not restore. The host is the UNWIRED second panel — it is
+        # on no network, so retiring it cannot perturb the wired pair's
+        # membership or the battery's charge.
+        battery_node_before = jget(port,
+            f"return power.getNodeForBuilding({batt_bid})")
+        demolished_node = jget(port,
+            f"return power.getNodeForBuilding({second_panel_bid})")
+        demolished_nid = (as_int(demolished_node.get("id"))
+                          if isinstance(demolished_node, dict) else None)
+        passed = check(passed, demolished_nid is not None,
+                       "the panel about to be demolished has a node",
+                       demolished_node)
+        send(port, f"building.destroy({second_panel_bid}); return 'ok'")
+        # building.destroy only ENQUEUES; the drain runs on the unit
+        # thread. Wait for the instance to genuinely be gone rather than
+        # racing it — the save below must be taken after the transaction
+        # completed, or it would prove nothing about requirement 2.
+        for _ in range(100):
+            if send(port, f"return building.getInfo({second_panel_bid}) "
+                          "and 'yes' or 'no'") == "no":
+                break
+            time.sleep(0.1)
+        gone = send(port, f"return building.getInfo({second_panel_bid}) "
+                          "and 'yes' or 'no'")
+        passed = check(passed, gone == "no",
+                       "BuildingDestroy completed for the second solar panel",
+                       gone)
+        passed = check(passed,
+            jget(port, f"return power.getNodeForBuilding({second_panel_bid})")
+                is None,
+            "getNodeForBuilding reports nil for the demolished panel")
+        listed_ids = jget(port,
+            "local out={}; for _,n in ipairs(power.listNodes()) do "
+            "out[#out+1]=n.id end; return out")
+        passed = check(passed,
+            isinstance(listed_ids, list) and demolished_nid not in listed_ids,
+            "listNodes no longer contains the demolished panel's node",
+            listed_ids)
+        battery_node_after = jget(port,
+            f"return power.getNodeForBuilding({batt_bid})")
+        passed = check(passed,
+            isinstance(battery_node_after, dict)
+            and battery_node_after == battery_node_before,
+            "the untouched battery node is unchanged by the demolition",
+            {"before": battery_node_before, "after": battery_node_after})
+        surviving_nodes = 2  # the wired panel + the battery
+        passed = check(passed,
+            as_int(send(port, "local ns=power.listNodes(); return #ns"))
+                == surviving_nodes,
+            f"listNodes reports {surviving_nodes} nodes after the demolition")
+
         # --- 8. Save -> quit -> fresh restart -> load ---
         saved = send(port, f"return engine.saveWorld('power_probe', '{save_name}')")
         passed = check(passed, saved.strip() == "true",
@@ -797,7 +861,6 @@ def _run(port: int, root: str) -> int:
         for bid, want_def, want_role, want_peak, want_cap in [
             (panel_bid, "solar_panel", "source", 400, 0),
             (batt_bid, "high_voltage_battery", "storage", 0, 5000),
-            (second_panel_bid, "solar_panel", "source", 400, 0),
         ]:
             info = jget(port, f"return building.getInfo({bid})")
             passed = check(passed,
@@ -818,9 +881,28 @@ def _run(port: int, root: str) -> int:
                     "battery's charged storedWh survived the reload "
                     f"({stored_after} -> {stored_reloaded})")
 
+        # #1206 requirement 2, in a process that never saw the demolition:
+        # the retired node must not come back, its building must not come
+        # back, and no id may have been renumbered or reused to make the
+        # count come out right.
+        passed = check(passed,
+            jget(port, f"return building.getInfo({second_panel_bid})") is None,
+            "the demolished panel's BUILDING is absent after a fresh-process load")
+        passed = check(passed,
+            jget(port, f"return power.getNodeForBuilding({second_panel_bid})")
+                is None,
+            "the demolished panel's NODE is absent after a fresh-process load")
+        reloaded_ids = jget(port,
+            "local out={}; for _,n in ipairs(power.listNodes()) do "
+            "out[#out+1]=n.id end; return out")
+        passed = check(passed,
+            isinstance(reloaded_ids, list) and demolished_nid not in reloaded_ids,
+            "the retired node id was neither restored nor reused after the load",
+            reloaded_ids)
+
         node_count_after = as_int(send(port, "local ns=power.listNodes(); return #ns"))
-        passed = check(passed, node_count_after == expected_nodes,
-                       f"listNodes still reports {expected_nodes} nodes after reload",
+        passed = check(passed, node_count_after == surviving_nodes,
+                       f"listNodes reports {surviving_nodes} nodes after reload",
                        node_count_after)
 
         # --- 11 (cont.). #1207 requirement 5, in a process that has never
