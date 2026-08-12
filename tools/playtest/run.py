@@ -31,8 +31,8 @@ Usage:
   python3 tools/playtest/run.py --replay <trace_dir>  # re-inject a session
   python3 tools/playtest/run.py --selftest            # offline loop/trace check
 
-The player model needs ANTHROPIC_API_KEY (or an `ant auth login`
-profile); scripted/smoke/replay/selftest runs don't.
+The player model runs through the installed Codex CLI using its existing
+login (`codex login status`); scripted/smoke/replay/selftest runs don't.
 """
 from __future__ import annotations
 
@@ -1106,6 +1106,51 @@ def selftest() -> int:
               "curious_carl" in prompt and "MANUAL" in prompt
               and "1280x720" in prompt)
 
+        # The naive-player backend is a hard pin, not a CLI-selectable
+        # default: every H1 player turn goes through Codex Luna at medium
+        # effort, with an empty cwd and all information-acquiring tools
+        # disabled. The critic/persona-flavor utilities are separate paths.
+        player_params = list(inspect.signature(agent_mod.PlayerAgent).parameters)
+        check("naive player has no provider/model/effort override",
+              player_params == ["persona", "manual", "decision_timeout"],
+              str(player_params))
+        codex_cmd = agent_mod._build_codex_command(
+            "/usr/bin/codex", "frame.png", os.path.join(tmp, "empty"),
+            os.path.join(tmp, "turn.schema.json"), os.path.join(tmp, "turn.json"))
+        check("naive player is pinned to Codex gpt-5.6-luna medium",
+              agent_mod.PLAYER_BACKEND == "codex-cli"
+              and agent_mod.PLAYER_MODEL == "gpt-5.6-luna"
+              and agent_mod.PLAYER_EFFORT == "medium"
+              and codex_cmd[:2] == ["/usr/bin/codex", "exec"]
+              and "gpt-5.6-luna" in codex_cmd
+              and 'model_reasoning_effort="medium"' in codex_cmd)
+        check("Codex player cannot inspect the repo or acquire oracle data",
+              "--ignore-user-config" in codex_cmd
+              and "--ignore-rules" in codex_cmd
+              and "--ephemeral" in codex_cmd
+              and 'web_search="disabled"' in codex_cmd
+              and all(feature in codex_cmd for feature in
+                      ("shell_tool", "multi_agent", "plugins", "skill_search")))
+        action_schema = agent_mod.TURN_SCHEMA["properties"]["action"]
+        check("Codex strict action schema requires every declared field",
+              set(action_schema["required"]) == set(action_schema["properties"])
+              and all("null" in spec["type"] for name, spec in
+                      action_schema["properties"].items() if name != "do"))
+        normalized_nulls = agent_mod.normalize_turn({
+            "observation": "",
+            "action": {"do": "wait", "x": None, "name": None},
+            "expectation": "", "note": ""})
+        check("strict-schema null placeholders stay out of trace actions",
+              normalized_nulls["action"] == {"do": "wait"},
+              str(normalized_nulls["action"]))
+        usage = agent_mod._parse_codex_usage(
+            '{"type":"thread.started"}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":123,'
+            '"cached_input_tokens":45,"output_tokens":67}}\n')
+        check("Codex JSONL token usage maps into the existing trace shape",
+              usage == {"input_tokens": 123, "output_tokens": 67,
+                        "cache_read_input_tokens": 45}, str(usage))
+
         # 7. event-log snapshots (#699): the engine-side store appends,
         # moves coalesced updates to the tail, and drops from the head at
         # capacity. Exercise those transitions through the real oracle state
@@ -1256,10 +1301,9 @@ def main() -> int:
     ap.add_argument("--goal", default=None, help="override the persona's goal")
     ap.add_argument("--manual", default=DEFAULT_MANUAL,
                     help="player manual path (C1; stubbed if missing)")
-    ap.add_argument("--model", default=agent_mod.DEFAULT_MODEL)
-    ap.add_argument("--effort", default=agent_mod.DEFAULT_EFFORT,
-                    choices=["low", "medium", "high"])
-    ap.add_argument("--max-tokens", type=int, default=agent_mod.DEFAULT_MAX_TOKENS)
+    ap.add_argument("--decision-timeout", type=float,
+                    default=agent_mod.DEFAULT_DECISION_TIMEOUT,
+                    help="maximum seconds for each pinned Codex Luna decision")
     ap.add_argument("--turns", type=int, default=40)
     ap.add_argument("--max-seconds", type=float, default=None,
                     help="wall-clock session budget")
@@ -1323,9 +1367,14 @@ def main() -> int:
         "replay_of": os.path.abspath(args.replay) if replaying else None,
     }
     if not replaying and args.agent == "llm":
-        meta["player_model"] = {"model": args.model, "effort": args.effort,
-                                "max_tokens": args.max_tokens,
-                                "thinking": "disabled"}
+        meta["player_model"] = {
+            "backend": agent_mod.PLAYER_BACKEND,
+            "model": agent_mod.PLAYER_MODEL,
+            "effort": agent_mod.PLAYER_EFFORT,
+            "decision_timeout_seconds": args.decision_timeout,
+            "session_persistence": "ephemeral",
+            "tools": "disabled",
+        }
 
     if replaying:
         player = None
@@ -1335,9 +1384,8 @@ def main() -> int:
     elif args.agent == "scripted":
         player = agent_mod.ScriptedAgent()
     else:
-        player = agent_mod.PlayerAgent(persona, manual, model=args.model,
-                                       effort=args.effort,
-                                       max_tokens=args.max_tokens)
+        player = agent_mod.PlayerAgent(
+            persona, manual, decision_timeout=args.decision_timeout)
 
     if args.render_mode == "windowed":
         print("playtest: this launches a WINDOWED instance that will take "
@@ -1346,6 +1394,8 @@ def main() -> int:
     else:
         print("playtest: offscreen instance (#650) — no window, no focus "
               "steal; needs a GPU.")
+    if player is not None and player.needs_llm:
+        print(f"playtest: player -> Codex {player.model} ({player.effort} effort)")
     print(f"playtest: trace -> {trace_dir}")
     trace = SessionTrace(trace_dir, meta)
     eng = PlaytestEngine(args.port,
