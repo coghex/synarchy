@@ -26,7 +26,9 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import Engine.Load.Status (advanceLoad, failLoad, LoadPhase(..))
+import Engine.Load.Status
+    (advanceLoad, failLoad, LoadPhase(..), awaitStageGate, readStageGate
+    , sgExpired)
 import Engine.Save.Barrier
     (releaseCaptureLock, finishSave, failSave, readSaveStatus, ssRequestId)
 import World.Types (SaveData)
@@ -57,6 +59,28 @@ import World.Thread.Command.Save.WriteWorld (handleWorldSaveCommand)
 handleWorldLoadTransactionCommand
     ∷ EngineEnv → LoggerState → Int → SaveData → MaterialRegistry → IO ()
 handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
+    -- Issue #1181: the test-only staging gate, and the only load-path
+    -- behaviour that is not identical to pre-#1181. Unarmed — which is
+    -- every load outside a probe that armed it via
+    -- @debug.armLoadStageGate@ — this is one IORef read returning
+    -- False, before any phase advance, log line or work, so an ordinary
+    -- load's phase sequence, status output, timing and logging are all
+    -- unchanged. Armed, it parks HERE (before staging, while the
+    -- transaction is non-terminal and 'loadInProgress' is therefore
+    -- true) so a mutual-exclusion test can race real save/load requests
+    -- against a genuinely in-flight transaction instead of against
+    -- however long this machine happens to take to regenerate the saved
+    -- world. The hold is bounded and self-releasing — see 'StageGate'.
+    held ← awaitStageGate (loadStatusRef env) requestId
+    when held $ do
+        gate ← readStageGate (loadStatusRef env)
+        logWarn logger CatWorld $
+            "Load transaction #" <> tShow requestId
+            <> " was held at the test-only staging gate and "
+            <> (if sgExpired gate
+                  then "resumed on the hold bound expiring (debug.releaseLoadStageGate \
+                       \was never called)"
+                  else "released")
     logInfo logger CatWorld $
         "Staging load transaction #" <> tShow requestId
     outcome ← try (stageSession env logger saveData matReg)

@@ -9,9 +9,12 @@ import Engine.Scripting.Lua.API.Input (getWindowPosFn)
 import Engine.Scripting.Lua.API.Screenshot (captureScreenshotFn)
 import Engine.Scripting.Lua.API.ActionOutcome
     (debugRecordOutcomeFn, debugDrainActionOutcomesFn)
+import Engine.Scripting.Lua.API.LoadGate
+    (armLoadStageGateFn, releaseLoadStageGateFn, getLoadStageGateFn)
 import qualified HsLua as Lua
 
--- | Populate the @debug@ global with engine debug verbs (#643, #646, #907).
+-- | Populate the @debug@ global with engine debug verbs
+--   (#643, #646, #907, #1181).
 --   openlibs already installed Lua's stock @debug@ stdlib table, so we
 --   add fields to it rather than replacing it — the stock functions
 --   (traceback etc.) stay available. Falls back to creating the table
@@ -28,6 +31,11 @@ registerDebugAPI env = do
   registerLuaFunction "getWindowPos" (getWindowPosFn env)
   registerLuaFunction "recordOutcome" (debugRecordOutcomeFn env)
   registerLuaFunction "drainActionOutcomes" (debugDrainActionOutcomesFn env)
+  -- #1181: the load-staging gate. Test-only coordination, so it lives
+  -- here rather than on a player-facing table.
+  registerLuaFunction "armLoadStageGate" (armLoadStageGateFn env)
+  registerLuaFunction "releaseLoadStageGate" (releaseLoadStageGateFn env)
+  registerLuaFunction "getLoadStageGate" (getLoadStageGateFn env)
 
   if isTbl
     then Lua.pop 1

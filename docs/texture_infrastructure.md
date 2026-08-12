@@ -12,14 +12,14 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Compile unit animations into validated runtime atlases
-- [ ] TEX-1. Make the unit asset inventory authoritative and enforceable
-- [ ] TEX-2. Build the deterministic per-animation atlas compiler and index
-- [ ] TEX-3. Add atlas-frame storage and sampling to the unit runtime
-- [ ] TEX-4. Migrate acolyte as the end-to-end atlas pilot
+- [x] EPIC. Compile unit animations into validated runtime atlases — [#1256]
+- [x] TEX-1. Make the unit asset inventory authoritative and enforceable — [#1257]
+- [x] TEX-2. Build the deterministic per-animation atlas compiler and index — [#1258]
+- [x] TEX-3. Add atlas-frame storage and sampling to the unit runtime — [#1259]
+- [x] TEX-4. Migrate acolyte as the end-to-end atlas pilot — [#1260]
 - [ ] TEX-5. Add portable KTX2 atlas loading when the memory budget requires it — [deferred]: resume after TEX-4 establishes the baseline and projected unit content would exceed its unit-texture memory budget
-- [ ] TEX-6. Migrate the remaining units and retire per-frame runtime loading
-- [ ] TEX-7. Close the pipeline with documentation and focused regression gates
+- [x] TEX-6. Migrate the remaining units and retire per-frame runtime loading — [#1261]
+- [x] TEX-7. Close the pipeline with documentation and focused regression gates — [#1262]
 
 ## Epic contract
 
@@ -394,6 +394,10 @@ eventually outweighs that convenience.
 
 ### TEX-1. Make the unit asset inventory authoritative and enforceable
 
+> **2026-08-11 — filed as [#1257].** Amended at processing time with user
+> signoff: genuinely-obsolete orphans are proposed in the PR and deleted only
+> after the owner's explicit confirmation.
+
 - **Outcome:** Strict unit-animation validation is clean, self-tested, and
   selectively enforced in CI.
 - **Scope:** Extend `tools/pack_atlas.py`; classify every current orphan warning
@@ -502,6 +506,12 @@ eventually outweighs that convenience.
 
 ### TEX-6. Migrate the remaining units and retire per-frame runtime loading
 
+> **2026-08-11 — filed as [#1261].** Amended at processing time with user
+> signoff: animation folders TEX-1 confirms as kept are promoted to real
+> unit-YAML entries (decoder defaults), so every browsable animation is
+> atlased and the per-frame retirement is clean; the preview's YAML-less
+> browsing convention ends with this slice.
+
 - **Outcome:** Brown bear, red squirrel, and technomule use the approved atlas
   representation, and no unit animation loads one image per frame.
 - **Scope:** Compile and migrate every remaining state-selected and asymmetric
@@ -522,6 +532,11 @@ eventually outweighs that convenience.
   preserves a format-neutral boundary for deferred TEX-5.
 
 ### TEX-7. Close the pipeline with documentation and focused regression gates
+
+> **2026-08-11 — filed as [#1262].** Amended at processing time with user
+> signoff: the TEX-5-activating unit-texture memory budget is proposed by the
+> solver from measured baselines and confirmed by the owner before being
+> recorded.
 
 - **Outcome:** Contributors can regenerate, validate, inspect, and review unit
   atlases from a fresh checkout, with regressions caught by focused automation.

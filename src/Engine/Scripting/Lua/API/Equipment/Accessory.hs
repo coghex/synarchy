@@ -6,6 +6,8 @@
 module Engine.Scripting.Lua.API.Equipment.Accessory
     ( equipmentEquipAccessoryFn
     , equipmentUnequipAccessoryFn
+    , unequipAccessoryAt
+    , unequipAccessoryFromUnit
     ) where
 
 import UPrelude
@@ -19,13 +21,15 @@ import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Equipment.Slot (removeFirstFromInventoryWhere)
-import Item.Types (ItemInstance(..), lookupItemDef, itemMatches, idKind,
-                   idDisplayName, idUnequippable, idBuffs)
+import Item.Types (ItemInstance(..), ItemManager, lookupItemDef, itemMatches,
+                   idKind, idDisplayName, idUnequippable, idBuffs)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), StatModifier(..))
-import Unit.Stats (applyItemBuffs)
+import Unit.Stats (applyItemBuffs, refreshAccessoryBuffs)
 
 -- | Remove every modifier with @source@ across all stats. Mirrors
---   `unit.removeModifier` exactly so equip/unequip stay symmetric.
+--   `unit.removeModifier` exactly. On the unequip path this is only the
+--   BASELINE step — see 'unequipAccessoryAt' for why the worn set is
+--   folded back over the result.
 removeModifiersBySource ∷ Text
                         → HM.HashMap Text [StatModifier]
                         → HM.HashMap Text [StatModifier]
@@ -99,6 +103,71 @@ equipmentEquipAccessoryFn env = do
             Lua.pushboolean False
             return 1
 
+-- | Pure core of `equipment.unequipAccessory` for ONE unit: pop the
+--   accessory at 0-based @idx0@, append it to the unit's inventory, and
+--   re-derive the worn-accessory buffs. Nothing — meaning no mutation at
+--   all — for an out-of-range index or an `unequippable`-flagged def.
+--
+--   The modifier rebuild is deliberately TWO steps: clear the departing
+--   item's display-name source, then fold the accessories STILL WORN
+--   back over the cleared map with 'refreshAccessoryBuffs' — the same
+--   ordered whole-list derivation the repair path uses, so the two
+--   boundaries cannot disagree about which copy of a duplicate is live.
+--
+--   Neither step works alone. Clearing alone was the #1209 bug:
+--   duplicate same-source accessories are a supported live state (two
+--   technogoggles, or two different defs sharing one display_name), and
+--   dropping every modifier carrying that source silently took the
+--   REMAINING copy's buff with it. Folding alone can't work either —
+--   the fold is additive and never removes a source, so unequipping the
+--   only copy would leave its modifier live forever. Modifiers from any
+--   other source are untouched by both steps, since both key strictly
+--   on this def's display name.
+--
+--   A target whose def is out of scope keeps today's behavior: it can
+--   have contributed no buff (equip resolves a def), and with no
+--   display name in hand there is no source to clear, so the modifier
+--   map passes through unchanged.
+unequipAccessoryAt ∷ ItemManager → Int → UnitInstance → Maybe UnitInstance
+unequipAccessoryAt itemMgr idx0 inst =
+    let xs = uiAccessories inst
+    in if idx0 < 0 ∨ idx0 >= length xs
+         then Nothing
+         else
+           let target = xs !! idx0
+               mDef   = lookupItemDef (iiDefName target) itemMgr
+               defLocked = case mDef of
+                   Just d  → idUnequippable d
+                   Nothing → False
+           in if defLocked
+                then Nothing
+                else
+                  let xs'   = take idx0 xs ++ drop (idx0 + 1) xs
+                      mods' = case mDef of
+                         Just d  → refreshAccessoryBuffs itemMgr xs'
+                                     (removeModifiersBySource
+                                        (idDisplayName d)
+                                        (uiModifiers inst))
+                         Nothing → uiModifiers inst
+                  in Just inst
+                       { uiAccessories = xs'
+                       , uiInventory   = uiInventory inst ++ [target]
+                       , uiModifiers   = mods'
+                       }
+
+-- | 'unequipAccessoryAt' against a whole 'UnitManager'. A missing unit
+--   is the third no-mutation branch, alongside the two the per-unit core
+--   reports.
+unequipAccessoryFromUnit ∷ ItemManager → UnitId → Int → UnitManager
+                         → (UnitManager, Bool)
+unequipAccessoryFromUnit itemMgr uid idx0 um =
+    case HM.lookup uid (umInstances um) of
+        Nothing → (um, False)
+        Just inst → case unequipAccessoryAt itemMgr idx0 inst of
+            Nothing    → (um, False)
+            Just inst' →
+                (um { umInstances = HM.insert uid inst' (umInstances um) }, True)
+
 -- | equipment.unequipAccessory(uid, index) → bool. Pops the accessory
 --   at the given 1-based index and appends it to the unit's
 --   inventory. Returns false on missing unit, out-of-range index, or
@@ -113,44 +182,8 @@ equipmentUnequipAccessoryFn env = do
                 idx0   = fromIntegral i - 1
             ok ← Lua.liftIO $ do
                 itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
-                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-                    case HM.lookup uid (umInstances um) of
-                        Nothing → (um, False)
-                        Just inst →
-                            let xs = uiAccessories inst
-                            in if idx0 < 0 ∨ idx0 >= length xs
-                                 then (um, False)
-                                 else
-                                   let target = xs !! idx0
-                                       mDef = lookupItemDef
-                                                (iiDefName target) itemMgr
-                                       defLocked = case mDef of
-                                           Just d  → idUnequippable d
-                                           Nothing → False
-                                   in if defLocked
-                                       then (um, False)
-                                       else
-                                         let xs' = take idx0 xs
-                                                 ++ drop (idx0 + 1) xs
-                                             -- Remove the accessory's
-                                             -- buffs from the unit's
-                                             -- modifier list (by source =
-                                             -- item display_name).
-                                             mods' = case mDef of
-                                                Just d  → removeModifiersBySource
-                                                            (idDisplayName d)
-                                                            (uiModifiers inst)
-                                                Nothing → uiModifiers inst
-                                             inst' = inst
-                                               { uiAccessories = xs'
-                                               , uiInventory   =
-                                                   uiInventory inst ++ [target]
-                                               , uiModifiers   = mods'
-                                               }
-                                         in (um { umInstances =
-                                                    HM.insert uid inst'
-                                                      (umInstances um) },
-                                             True)
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env))
+                    (unequipAccessoryFromUnit itemMgr uid idx0)
             Lua.pushboolean ok
             return 1
         _ → do

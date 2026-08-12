@@ -34,17 +34,17 @@ concrete precondition
 
 - [x] EPIC. Unified player-managed item transfers — [#1013]
 - [x] UIT-1A. Generalize the container window to any endpoint kind — [#1234]
-- [ ] UIT-1B. Render last-known container contents with an age indicator
-- [ ] UIT-1C. Add the nested container-window stack
-- [ ] UIT-3A. Select the nearest of several units instead of requiring exactly one
-- [ ] UIT-2A. Give transfer orders durable state and persistence
-- [ ] UIT-2B. Execute a transfer order as a unit job that commits on arrival
-- [ ] UIT-2C. Promote "Store in cargo" to a queued order-at-a-distance
-- [ ] UIT-3B. Add the escort transfer session
-- [ ] UIT-4. Extend escort transfers to unit-to-unit two-sided holds
-- [ ] UIT-5A. Handle Mode B order failures
-- [ ] UIT-5B. Handle Mode A session failures
-- [ ] UIT-6. Gate the unified transfer system end to end
+- [x] UIT-1B. Render last-known container contents with an age indicator — [#1237]
+- [x] UIT-1C. Add the nested container-window stack — [#1238]
+- [x] UIT-3A. Select the nearest of several units instead of requiring exactly one — [#1239]
+- [x] UIT-2A. Give transfer orders durable state and persistence — [#1246]
+- [x] UIT-2B. Execute a transfer order as a unit job that commits on arrival — [#1247]
+- [x] UIT-2C. Promote "Store in cargo" to a queued order-at-a-distance — [#1249]
+- [x] UIT-3B. Add the escort transfer session — [#1250]
+- [x] UIT-4. Extend escort transfers to unit-to-unit two-sided holds — [#1251]
+- [x] UIT-5A. Handle Mode B order failures — [#1253]
+- [x] UIT-5B. Handle Mode A session failures — [#1254]
+- [x] UIT-6. Gate the unified transfer system end to end — [#1255]
 
 **Slice-ID mapping.** Epic #1013's work order names these C1, C2, C3, C4, C5 and
 D1. This document renumbers them `UIT-1` … `UIT-6` because a slice called `D1`
@@ -424,7 +424,8 @@ None currently blocking. Every decision above carries prior signoff from epic
   commandable unit refreshes the snapshot while proximity alone does not.
 - **Phase:** 1 — window foundation
 - **Depends on:** `UIT-1A`
-- **Ordering:** `not on the critical path` — parallel with UIT-1C
+- **Ordering:** `critical path` — UIT-1C consumes its knowledge rendering
+  (amended 2026-08-11)
 - **Relevant decisions:** D-2, D-5
 - **Acceptance signals:** A never-inspected container reads as such and never as
   empty; a known-empty one reads as empty; capacity always shows even when
@@ -438,16 +439,24 @@ None currently blocking. Every decision above carries prior signoff from epic
 
 ### UIT-1C. Add the nested container-window stack
 
+> **2026-08-11 — filed as [#1238].** Amended at processing time with user
+> signoff: building-side nesting included (remembered nested contents from the
+> parent's snapshot, read-only engine surface), same-level rule is
+> replace-not-refuse, and the slice now depends on UIT-1B as well as UIT-1A.
+
 - **Outcome:** Opening a container inside an open container pushes a level, and
   only the deepest level is interactive.
 - **Scope:** A remembered nesting stack (D-9); a deeper level input-exclusive on
   `LayerModal` with shallower levels painted but unclickable; closing a level
-  restoring its parent's interactivity; refusing a second window at the SAME
-  level; and absorbing `scripts/item_contents_panel.lua` with its
+  restoring its parent's interactivity; replacing on a second open at the SAME
+  level (opening B closes A and any deeper levels); absorbing
+  `scripts/item_contents_panel.lua` with its
   `scripts/hud.lua:228` entry point so an item-container is a level rather than a
-  rival window (D-13).
+  rival window (D-13); and exposing a building-stored container's remembered
+  nested contents (read-only) so it opens as a level from the parent's own
+  knowledge snapshot.
 - **Phase:** 1 — window foundation
-- **Depends on:** `UIT-1A`
+- **Depends on:** `UIT-1A`, `UIT-1B`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-5, D-9, D-13
 - **Acceptance signals:** A second window at the same level cannot open; opening
@@ -461,6 +470,10 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Open questions:** None
 
 ### UIT-3A. Select the nearest of several units instead of requiring exactly one
+
+> **2026-08-11 — filed as [#1239].** Amended at processing time with user
+> signoff: distance is measured seam-aware in the target's local alias frame
+> (`world.localizeTile`), per the #1175 selection-gate rule.
 
 - **Outcome:** The existing Transfer gesture accepts a multi-unit selection and
   sends the nearest, breaking exact ties on lowest uid.
@@ -482,6 +495,10 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Open questions:** None
 
 ### UIT-2A. Give transfer orders durable state and persistence
+
+> **2026-08-11 — filed as [#1246].** Amended at processing time with user
+> signoff: the save component is OPTIONAL (absent = "no orders queued"), the
+> second optional component after `container-knowledge`.
 
 - **Outcome:** A queued transfer order exists as live state and survives
   save/load.
@@ -526,6 +543,10 @@ None currently blocking. Every decision above carries prior signoff from epic
 
 ### UIT-2C. Promote "Store in cargo" to a queued order-at-a-distance
 
+> **2026-08-11 — filed as [#1249].** Amended at processing time with user
+> signoff: Mode B row menus ship 1-and-all batch granularity; the fuller
+> 1/N/all menu remains Mode A's (UIT-3B).
+
 - **Outcome:** The player right-clicks an item row with a unit selected and gets
   a queued, persisted order instead of an immediate lax deposit.
 - **Scope:** Repoint `scripts/unit_info_v2_context_menu.lua:234`'s "Store in
@@ -547,13 +568,19 @@ None currently blocking. Every decision above carries prior signoff from epic
 
 ### UIT-3B. Add the escort transfer session
 
+> **2026-08-11 — filed as [#1250].** Amended at processing time with user
+> signoff: session row menus ship 1-and-all (the epic's "Store N" is
+> deferred); unit destinations open sessions source-held only until UIT-4;
+> and UIT-1C joins the dependencies — the session level integrates with the
+> real window stack.
+
 - **Outcome:** Right-clicking a container with units selected walks the nearest
   over and opens two flanking panels that commit immediately while adjacent.
 - **Scope:** The escort session lifecycle; camera snap centring the pair; two
   mutually-avoiding framebuffer-clamped panels via `UI.placePopup` and
   `reserved_regions`; coupled close that releases the unit; and the unit hold.
 - **Phase:** 4 — escort
-- **Depends on:** `UIT-1A`, `UIT-2C`, `UIT-3A`
+- **Depends on:** `UIT-1A`, `UIT-1C`, `UIT-2C`, `UIT-3A`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-4, D-9
 - **Acceptance signals:** The nearest selected unit walks and is held; two panels
@@ -565,6 +592,11 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Open questions:** None
 
 ### UIT-4. Extend escort transfers to unit-to-unit two-sided holds
+
+> **2026-08-11 — filed as [#1251].** Amended at processing time with user
+> signoff: the target's hold begins at session creation — it stops and waits
+> during the source's approach, preempting autonomous work like any player
+> order.
 
 - **Outcome:** Acolyte-to-acolyte and mule-to-acolyte escort transfers work, with
   both endpoints held.
@@ -581,6 +613,10 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Open questions:** None
 
 ### UIT-5A. Handle Mode B order failures
+
+> **2026-08-11 — filed as [#1253].** Amended at processing time with user
+> signoff: explicit cancellation lives on the unit context menu, and terminal
+> orders are pruned from the persisted store once their outcome is surfaced.
 
 - **Outcome:** Every way a queued order can fail resolves predictably, leaving no
   half-moved item and no unit stuck on a dead order.
@@ -602,6 +638,10 @@ None currently blocking. Every decision above carries prior signoff from epic
 - **Open questions:** None
 
 ### UIT-5B. Handle Mode A session failures
+
+> **2026-08-11 — filed as [#1254].** Amended at processing time with user
+> signoff: a new player command to a held unit ends the session cleanly and
+> proceeds — player intent wins.
 
 - **Outcome:** An escort session that is interrupted ends cleanly, releasing
   every held unit.

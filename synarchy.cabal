@@ -285,6 +285,7 @@ library
                      Engine.Scripting.Lua.API.Debug
                      Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
+                     Engine.Scripting.Lua.API.LoadGate
                      Engine.Scripting.Lua.API.Screenshot
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
@@ -529,6 +530,7 @@ library
                      Engine.Scripting.Lua.API.Craft.Execute
                      Engine.Scripting.Lua.API.Craft.Bill
                      Power.Types
+                     Power.Live
                      Power.Network
                      Engine.Scripting.Lua.API.Power
                      Engine.Scripting.Lua.API.Repair
@@ -1061,6 +1063,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.InjurySpeed
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.Stats
+                   Test.Headless.Unit.AccessoryUnequip
+                   Test.Headless.Unit.SpawnShed
                    Test.Headless.Unit.Transfer
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.NightPerception
@@ -1124,6 +1128,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
+                   Test.Headless.Power.Demolition
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated
@@ -1209,6 +1214,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
                    Test.Headless.Lua.TextWrapping
+                   Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Graphics.BindlessRebind
     build-depends: base >=4.20 && <5

@@ -128,8 +128,6 @@ combatLog.baseSizes = {
     -- Scroll buttons that bracket the battle-tab strip.
     arrowWidth   = 28,
     arrowHeight  = 36,
-    -- 12-char display cap per design; truncateTabName enforces.
-    tabNameMax   = 12,
     tileSize     = 64,
     panelFrac    = 0.85,
 }
@@ -178,17 +176,6 @@ end
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
-
--- Hard char cap, suffixing "..." when truncated. Battle tab names
--- come in as "HH:MM Name" — truncating by character (not pixel) is
--- fine because the font is roughly fixed-width at 14pt and the 80px
--- slot comfortably fits 12 chars plus ellipsis.
-local function truncateTabName(text)
-    text = text or ""
-    local maxLen = combatLog.baseSizes.tabNameMax
-    if #text <= maxLen then return text end
-    return string.sub(text, 1, maxLen - 3) .. "..."
-end
 
 -- Max scroll offset for the battle strip (tab units). Computed by
 -- renderContent from the variable tab widths; 0 when everything fits.
