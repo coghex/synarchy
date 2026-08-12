@@ -27,7 +27,11 @@ import Engine.Core.Log
   )
 import Engine.Input.Types (InputEvent(..))
 import Engine.Loop.Headless (headlessMode)
-import Engine.Loop.Mode (runStartupHandshake)
+import Engine.Loop.Mode (LoopMode(..), runStartupHandshake)
+
+-- | The running line both rendering modes carry ('Engine.Loop').
+runningLine ∷ Text
+runningLine = "Engine running"
 
 spec ∷ Spec
 spec = describe "shared main-loop startup handshake (#1022)" $ do
@@ -91,6 +95,38 @@ spec = describe "shared main-loop startup handshake (#1022)" $ do
             action = runStartupHandshake headlessMode env
         _ ← runEngineM action env pure
         readIORef (lifecycleRef env) `shouldReturn` after
+
+  -- #1263: the lifecycle is only half of what the handshake decides.
+  -- lmRunningLog belongs to the EngineStarting → EngineRunning
+  -- transition, so a handshake whose promotion was REFUSED must not go
+  -- on to announce that the engine is running. Headless carries no
+  -- running line at all (lmRunningLog = Nothing); both rendering modes
+  -- carry Just "Engine running", so the mode under test supplies one.
+  forM_ [ (EngineStarting, True,  "announces it when the promotion commits")
+        , (CleaningUp,     False, "withholds it when a shutdown already won")
+        , (EngineStopped,  False, "withholds it when the engine already stopped")
+        ] $ \(before, announced, label) →
+    it ("running line: " ⧺ label) $ do
+      EngineInitResult env ← initializeEngineHeadless
+      capturedRef ← newIORef []
+      testLogger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' capturedRef (e :))
+          -- The running line is a DEBUG line, suppressed by default.
+        , lcDebugCategories = [CatSystem]
+        }
+      writeIORef (loggerRef env) testLogger
+      writeIORef (lifecycleRef env) before
+
+      let action ∷ EngineM' ()
+          action = runStartupHandshake
+                     headlessMode { lmRunningLog = Just runningLine } env
+      _ ← runEngineM action env pure
+
+      entries ← readIORef capturedRef
+      any (\e → leMessage e ≡ runningLine) entries `shouldBe` announced
+      -- The announcement and the transition must agree.
+      readIORef (lifecycleRef env)
+        `shouldReturn` (if announced then EngineRunning else before)
 
   -- The real interleaving, not just the resulting mapping: a quit that
   -- lands WHILE the handshake is running. A separate read-then-write
