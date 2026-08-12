@@ -60,6 +60,24 @@ from the storage building's own tile and from each other, because
 `tryUnitMenu` -- a unit standing on the building's footprint would open
 the building menu instead of the unit menu.
 
+Targeting (#1286): every scenario puts its target on screen through
+`probelib.focus_and_locate`, which pins the camera's z-slice to the
+TARGET's own `gridZ` (and z-tracking off) after every `camera.goToTile`.
+`goToTile` alone leaves z-tracking ON, so the render loop holds the
+slice 25 levels above the surface and both the render and every hit test
+offset the target by `(gridZ - zSlice) * tileSideHeight` -- more than the
+viewport's half-height at `goToTile`'s own zoom, i.e. off-screen. With
+the slice pinned the placement is exact and needs no correction, so the
+camera is checked by where the PRODUCTION hit test finds the target, not
+by a `world.pickTile` reading (which answers about terrain, and on a
+coastal ridge names the right tile at the wrong height). Targets are
+LOCATED in window space (what the hit tests normalize by) and CLICKED in
+framebuffer space (what `input.*` takes); the two coincide under
+`--offscreen`, which is why the distinction has to hold by construction.
+The simulation stays PAUSED throughout -- these fixtures stand on a
+mountainous shoreline and an acolyte left walking on it accumulates fall
+damage until it dies (measured).
+
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py`
 per CLAUDE.md; the CI-blocking gate for this feature is
 `cabal test synarchy-test-headless --test-options='--match "Transfer
@@ -78,7 +96,10 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probelib import boot, poll_until, quit_engine, send, send_json
+from probelib import (boot, camera_state, centred_within,
+                      focus_and_locate, locate_building_pixel, poll_until,
+                      quit_engine, send, send_json, set_paused,
+                      targeting_report, viewport, win_to_fb)
 
 SPROOT = tempfile.gettempdir()
 TEST_BUILDING_YAML = os.path.join(SPROOT, "transfer_context_menu_probe_buildings.yaml")
@@ -246,61 +267,6 @@ def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
     return None
 
 
-def center_on_tile(port: int, target_gx: int, target_gy: int,
-                    screen_x: int, screen_y: int, tries: int = 8):
-    """camera.goToTile centers the CAMERA on (gx, gy), but the tile that
-    actually resolves under a given screen pixel is off by a few tiles
-    in practice (isometric projection + that tile's own terrain
-    height) -- iteratively correct the target by the observed
-    world.pickTile error until it converges (or gives up after
-    `tries`). Returns the tile actually resolved at (screen_x,
-    screen_y), matching the technique validated in
-    tools/portal_ghost_probe.py's center_on_tile /
-    tools/location_embark_probe.py's center_on_tile-driven flow."""
-    gx, gy = target_gx, target_gy
-    resolved = None
-    for _ in range(tries):
-        send(port, f"camera.goToTile({gx}, {gy}); return 'ok'")
-        # POLL rather than assume one fixed sleep is enough: the camera
-        # needs a frame or two to settle and the tile under the cursor
-        # has to be rendered before world.pickTile answers at all. A
-        # single 0.4 s wait returned nil for every try on one run
-        # (observed live), which failed the scenario for a reason that
-        # had nothing to do with the behaviour under test.
-        picked = poll_until(5.0, lambda: send_json(
-            port, f"return {{world.pickTile({screen_x}, {screen_y})}}") or None)
-        if not picked:
-            continue
-        resolved = (picked[0], picked[1])
-        if resolved == (target_gx, target_gy):
-            break
-        gx += target_gx - resolved[0]
-        gy += target_gy - resolved[1]
-    return resolved
-
-
-def set_paused(port: int, on: bool) -> None:
-    send(port, f"engine.setPaused({'true' if on else 'false'}); return 'ok'")
-    time.sleep(0.3)
-
-
-def centre_and_freeze(port: int, gx: int, gy: int, sx: int, sy: int):
-    """Centre the camera on a tile, then freeze the simulation.
-
-    Both halves are needed and they conflict: `world.pickTile` answers
-    nil while the simulation is PAUSED (so the camera convergence loop
-    must run unpaused), but units WANDER while it runs -- over the
-    several minutes these scenarios take, fixtures drift into each other
-    and a unit standing under a neighbour's sprite simply cannot be
-    clicked, which `locate_unit_pixel`'s hitTestAt confirmation then
-    (correctly) reports as "could not locate". Unpausing only for the
-    convergence loop gives both: a few seconds of drift instead of
-    minutes, and everything held still for the locate-and-click that
-    follows."""
-    set_paused(port, False)
-    resolved = center_on_tile(port, gx, gy, sx, sy)
-    set_paused(port, True)
-    return resolved
 
 
 def _hit_test_in_rect_has(port: int, uid: int, x1: int, y1: int,
@@ -323,8 +289,7 @@ def _hit_test_at_is(port: int, uid: int, x: int, y: int) -> bool:
         return False
 
 
-def locate_unit_pixel(port: int, uid: int, w: int, h: int,
-                       max_steps: int = 14):
+def locate_unit_pixel(port: int, uid: int, vp: dict, max_steps: int = 14):
     """Bisect unit.hitTestInRect down to the small screen-pixel box
     containing `uid`'s sprite quad, then CONFIRM the resulting pixel
     against unit.hitTestAt -- the same technique validated in
@@ -336,8 +301,12 @@ def locate_unit_pixel(port: int, uid: int, w: int, h: int,
     in this rect", so with several units milling around, the box's
     centre pixel can sit on a neighbour's overlapping sprite and the
     right-click then routes somewhere else entirely (observed live --
-    a self-transfer scenario that quietly hit the wrong acolyte)."""
-    x1, y1, x2, y2 = 0, 0, w, h
+    a self-transfer scenario that quietly hit the wrong acolyte).
+
+    Both verbs normalize by the WINDOW size, so this searches (and
+    returns) WINDOW-space pixels -- `input.click` wants FRAMEBUFFER ones,
+    which is `right_click_and_check_routing`'s job (#1286)."""
+    x1, y1, x2, y2 = 0, 0, vp["win_w"], vp["win_h"]
     if not _hit_test_in_rect_has(port, uid, x1, y1, x2, y2):
         return None
     for _ in range(max_steps):
@@ -367,11 +336,18 @@ def locate_unit_pixel(port: int, uid: int, w: int, h: int,
 # --------------------------------------------------------------------------
 # Scenario helpers
 # --------------------------------------------------------------------------
-def right_click_and_check_routing(port: int, x: int, y: int,
+def right_click_and_check_routing(port: int, x: int, y: int, vp: dict,
                                    expect_handler: str, scenario: str) -> None:
+    """Right-click a WINDOW-space pixel located by one of the hit tests.
+
+    `input.*` takes FRAMEBUFFER pixels and converts to window space
+    itself, so the located pixel has to cross back the other way first
+    (#1286); identity while the two extents agree, which is always the
+    case under `--offscreen`."""
     drain_outcomes(port)  # clear anything queued before this click
-    send(port, f"return input.moveMouse({x}, {y})")
-    send(port, f"return input.click({x}, {y}, 'right')")
+    fx, fy = win_to_fb(vp, x, y)
+    send(port, f"return input.moveMouse({fx}, {fy})")
+    send(port, f"return input.click({fx}, {fy}, 'right')")
     time.sleep(0.4)
     outcomes = drain_outcomes(port)
     handlers = [o.get("handler") for o in outcomes if isinstance(o, dict)]
@@ -398,55 +374,42 @@ def close_menu(port: int) -> None:
     time.sleep(0.2)
 
 
-def locate_building_pixel(port: int, bid: int, cx: int, cy: int,
-                           step: int = 6, rings: int = 8):
-    """The tile CENTRE pixel is not guaranteed to land on a building's
-    own clickable quad (sprites are anchored to the diamond bottom and
-    the tile's terrain height shifts them), so search outward from it
-    until `building.hitTestAt` actually reports `bid` -- the same
-    "locate the real target, never trust a computed coordinate" rule
-    `locate_unit_pixel` follows for units."""
-    def hits(x: int, y: int) -> bool:
-        raw = send(port, f"return building.hitTestAt({x}, {y})")
-        return raw.strip().strip('"') not in ("", "nil", "null") \
-            and int(float(raw)) == bid
+def right_click_unit(port: int, uid: int, vp: dict, scenario: str):
+    """Centre on the unit's LIVE tile (never its spawn tile -- fixtures
+    walk during the unpaused setup window, and #1286's chunk-loading
+    fallback can lift the freeze again), bisect to its own sprite pixel,
+    and right-click it. Returns True when the unit menu really opened.
 
-    if hits(cx, cy):
-        return cx, cy
-    for r in range(1, rings + 1):
-        d = r * step
-        for dx, dy in ((0, -d), (0, d), (-d, 0), (d, 0),
-                       (-d, -d), (d, -d), (-d, d), (d, d)):
-            if hits(cx + dx, cy + dy):
-                return cx + dx, cy + dy
-    return None
-
-
-def right_click_unit(port: int, uid: int, fb_w: int, fb_h: int,
-                      scenario: str):
-    """Centre on the unit's LIVE tile (never its spawn tile -- wildlife
-    and acolytes both wander, and by the last scenario a squirrel can be
-    tens of tiles from where it was spawned), bisect to its own sprite
-    pixel, and right-click it. Returns True when the unit menu really
-    opened."""
+    The unit's own `gridZ` is what the camera's z-slice is pinned to:
+    `Unit.HitTest` culls the same way `Building.HitTest` does, and a
+    sprite at any other relative height is drawn (and hit-tested) off the
+    centre by `(gridZ - zSlice) * tileSideHeight` (#1286)."""
     info = send_json(port, f"return unit.getInfo({uid})")
     if not check(f"{scenario}: unit still exists", isinstance(info, dict),
                  f"got {info!r}"):
         return False
     gx, gy = int(info.get("gridX", 0)), int(info.get("gridY", 0))
-    cx0, cy0 = fb_w // 2, fb_h // 2
-    resolved = centre_and_freeze(port, gx, gy, cx0, cy0)
-    near = resolved is not None \
-        and max(abs(resolved[0] - gx), abs(resolved[1] - gy)) <= 2
-    check(f"{scenario}: camera centres near the unit's live tile", near,
-          f"got {resolved!r} for live tile {(gx, gy)!r}")
-    time.sleep(0.3)
-    pixel = locate_unit_pixel(port, uid, fb_w, fb_h)
+    gz = int(info.get("gridZ", 0))
+    pixel = focus_and_locate(port, gx, gy, gz, vp,
+                             lambda: locate_unit_pixel(port, uid, vp))
+    cam = camera_state(port)
+    check(f"{scenario}: camera preconditions settled (z-tracking off, "
+          f"slice == the unit's gridZ, tile zoom band)",
+          cam.get("zTracking") is False and cam.get("zSlice") == gz
+          and isinstance(cam.get("zoom"), (int, float))
+          and cam.get("zoom") < 1.2, f"got {cam!r} for gridZ {gz}")
     if not check(f"{scenario}: located the unit's own screen pixel",
                  pixel is not None):
+        print(targeting_report(port, vp, "unit", uid,
+                               extra={"live tile": (gx, gy, gz)}))
         return False
+    check(f"{scenario}: the camera centres on the unit "
+          f"(its hit-test pixel is near the screen centre)",
+          centred_within(vp, pixel),
+          f"got {pixel!r} for a {vp['win_w']}x{vp['win_h']} window")
     px, py = pixel
-    right_click_and_check_routing(port, px, py, "context_menu_unit", scenario)
+    right_click_and_check_routing(port, px, py, vp, "context_menu_unit",
+                                  scenario)
     return True
 
 
@@ -485,7 +448,17 @@ def main() -> int:
     check("in-game HUD reached", bool(hud_up))
     time.sleep(2.0)  # let the first in-game frames render
 
-    fb_w, fb_h = (int(v) for v in args.size.split("x"))
+    # Ask the ENGINE for both screen spaces rather than trusting the
+    # `--size` string: that is the extent this run REQUESTED, and every
+    # hit test normalizes by the window while `input.*` speaks framebuffer
+    # (#1286). They coincide under `--offscreen`, which is exactly why the
+    # distinction has to be kept in code rather than proved by a run.
+    vp = viewport(port, fallback=tuple(int(v) for v in args.size.split("x")))
+    check("engine reports a usable window and framebuffer extent",
+          vp["win_w"] > 0 and vp["win_h"] > 0 and vp["fb_w"] > 0
+          and vp["fb_h"] > 0, f"got {vp!r}")
+    print(f"  (window {vp['win_w']}x{vp['win_h']}, "
+          f"framebuffer {vp['fb_w']}x{vp['fb_h']})")
 
     # -- Register the throwaway instantly-built storage fixture.
     with open(TEST_BUILDING_YAML, "w") as f:
@@ -523,10 +496,23 @@ def main() -> int:
     acolyte2_uid = int(float(a2_raw))
     wild_raw = send(port, f"return unit.spawn('red_squirrel', {wax}, {way})")
     wild_uid = int(float(wild_raw))
+    # Freeze the moment the last fixture exists, BEFORE the queries below
+    # (#1286). Everything from here on is a query or a click, and none of
+    # it needs the simulation running -- whereas the fixtures very much
+    # need it stopped: these sites are a mountainous shoreline, and an
+    # acolyte left walking on it takes enough small falls to be
+    # `injured_death` inside two minutes (measured). `unit.setFrozen` is
+    # deliberately NOT used: it only stops the render-side update, so a
+    # "frozen" unit keeps walking.
+    set_paused(port, True)
+
     wild_faction = send(port, f"return unit.getFaction({wild_uid})").strip('"')
     check("wildlife fixture is genuinely not player-commandable",
           wild_faction == "wildlife", f"got {wild_faction!r}")
 
+    # `build_work: 0.0` reports Built the instant it is spawned (a pure
+    # `Building.Types.currentActivity` computation), so this resolves
+    # while paused rather than waiting on a tick.
     built = poll_until(10.0, lambda: send(
         port, f"return building.getActivity({bid})").strip('"') == "built")
     check("storage building reaches Built activity", bool(built))
@@ -541,12 +527,6 @@ def main() -> int:
           and eligible.get("storedWeight") == 0.0,
           f"got {eligible!r}")
 
-    # Freeze between scenarios so no fixture wanders while the probe
-    # works; `centre_and_freeze` lifts it only for each camera move.
-    # `unit.setFrozen` is deliberately NOT used: it only stops the
-    # render-side update, so a "frozen" unit keeps walking.
-    set_paused(port, True)
-
     send(port, f"return unit.select({uid})")
     selected = send(port, "return unit.getSelected()")
     check("acolyte selected", str(uid) in selected, f"got {selected!r}")
@@ -555,18 +535,34 @@ def main() -> int:
     # Scenario 1: right-click the built storage building.
     # ------------------------------------------------------------------
     print("== building receiver ==")
-    cx0, cy0 = fb_w // 2, fb_h // 2
-    resolved_b = centre_and_freeze(port, bax, bay, cx0, cy0)
-    check("camera resolves the building's own tile", resolved_b == (bax, bay),
-          f"got {resolved_b!r}")
-    bpixel = locate_building_pixel(port, bid, cx0, cy0)
+    binfo = send_json(port, f"return building.getInfo({bid})")
+    bgz = int((binfo or {}).get("gridZ", 0)) if isinstance(binfo, dict) else 0
+    bpixel = focus_and_locate(port, bax, bay, bgz, vp,
+                              lambda: locate_building_pixel(port, bid, vp))
+    # State the preconditions the hit test depends on instead of
+    # inheriting whatever `camera.goToTile` left behind (#1286):
+    # `Building.HitTest` culls on `gridZ <= zSlice` and offsets the quad
+    # by `(gridZ - zSlice) * tileSideHeight`, so a slice anywhere but the
+    # building's own z draws it away from the tile the camera is on.
+    cam = camera_state(port)
+    check("camera preconditions settled for the hit test "
+          "(z-tracking off, slice == the building's gridZ, tile zoom band)",
+          cam.get("zTracking") is False and cam.get("zSlice") == bgz
+          and isinstance(cam.get("zoom"), (int, float))
+          and cam.get("zoom") < 1.2,
+          f"got {cam!r} for gridZ {bgz}")
     if not check("located the storage building's own screen pixel",
                  bpixel is not None):
+        print(targeting_report(port, vp, "building", bid, site=(bax, bay)))
         quit_engine(port, proc)
         return 1
+    check("the camera centres on the building "
+          "(its hit-test pixel is near the screen centre)",
+          centred_within(vp, bpixel),
+          f"got {bpixel!r} for a {vp['win_w']}x{vp['win_h']} window")
     bpx, bpy = bpixel
 
-    right_click_and_check_routing(port, bpx, bpy, "context_menu_building",
+    right_click_and_check_routing(port, bpx, bpy, vp, "context_menu_building",
                                   "building")
 
     contents_row = find_widget(port, "Contents")
@@ -593,7 +589,8 @@ def main() -> int:
         time.sleep(0.3)
         # Re-open the menu the rest of this scenario reads from: the
         # click above consumed it.
-        right_click_and_check_routing(port, bpx, bpy, "context_menu_building",
+        right_click_and_check_routing(port, bpx, bpy, vp,
+                                      "context_menu_building",
                                       "building (menu reopened)")
     transfer_row_b = find_widget(port, "Transfer")
     if check("building menu: 'Transfer' is visible", bool(transfer_row_b)):
@@ -625,7 +622,7 @@ def main() -> int:
     # Scenario 2: right-click the technomule.
     # ------------------------------------------------------------------
     print("== unit destination (technomule) ==")
-    if not right_click_unit(port, mule_uid, fb_w, fb_h, "technomule"):
+    if not right_click_unit(port, mule_uid, vp, "technomule"):
         quit_engine(port, proc)
         return 1
 
@@ -661,7 +658,7 @@ def main() -> int:
     # Scenario 3: #1085 section 9's widening -- a SECOND player acolyte.
     # ------------------------------------------------------------------
     print("== unit destination (a second player acolyte, A2 widening) ==")
-    if not right_click_unit(port, acolyte2_uid, fb_w, fb_h, "acolyte"):
+    if not right_click_unit(port, acolyte2_uid, vp, "acolyte"):
         quit_engine(port, proc)
         return 1
     check("acolyte menu: 'Info' appears", bool(find_widget(port, "Info")))
@@ -686,7 +683,7 @@ def main() -> int:
     # Scenario 4: the two exclusions that must survive the widening.
     # ------------------------------------------------------------------
     print("== exclusions (self-transfer, non-commandable) ==")
-    if right_click_unit(port, uid, fb_w, fb_h, "self"):
+    if right_click_unit(port, uid, vp, "self"):
         check("self menu: 'Info' appears", bool(find_widget(port, "Info")))
         check("self menu: 'Transfer' is ABSENT (no self-transfer)",
               find_widget(port, "Transfer") is None)
@@ -695,7 +692,7 @@ def main() -> int:
               self_session in (None, "null"), f"got {self_session!r}")
     close_menu(port)
 
-    if right_click_unit(port, wild_uid, fb_w, fb_h, "wildlife"):
+    if right_click_unit(port, wild_uid, vp, "wildlife"):
         check("wildlife menu: 'Info' appears", bool(find_widget(port, "Info")))
         check("wildlife menu: 'Transfer' is ABSENT (not player-commandable)",
               find_widget(port, "Transfer") is None)

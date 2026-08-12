@@ -385,3 +385,276 @@ def init_arena(port: int, name: str = "arena", show: bool = True,
     send(port, f"return world.waitForInit({int(timeout)})", timeout=timeout + 10)
     if show:
         send(port, f"world.show('{name}')", expect_result=False)
+
+
+# --------------------------------------------------------------------------
+# On-screen targeting (#1286)
+# --------------------------------------------------------------------------
+# THREE screen spaces, and an interaction probe crosses all three on every
+# scenario. They are equal under ``--offscreen`` (Engine.Loop.Frame writes
+# the same offscreen extent into both refs), so a run cannot demonstrate a
+# difference -- the conversions below exist so the code is correct by
+# construction rather than by coincidence:
+#
+#   (a) ``world.pickTile`` normalizes the pixel by the WINDOW size but takes
+#       its aspect from the FRAMEBUFFER (World.Render.HitTest.pickWorldTile,
+#       called from Engine.Scripting.Lua.API.WorldQuery.Pick) -> pass it
+#       WINDOW pixels.
+#   (b) ``building.hitTestAt`` / ``unit.hitTestAt`` / ``unit.hitTestInRect``
+#       use the WINDOW size for both pixel and aspect (Building.HitTest,
+#       Unit.HitTest) -> scan in WINDOW space. Their docstrings say
+#       "framebuffer"; the code says window, and the code is what runs.
+#   (c) ``input.click`` / ``input.moveMouse`` take FRAMEBUFFER pixels and
+#       convert to window space themselves
+#       (Engine.Scripting.Lua.API.InputInject.withWindowCoords) -> convert
+#       a located WINDOW pixel back to FRAMEBUFFER space before clicking.
+
+
+def viewport(port: int, fallback: tuple[int, int] | None = None) -> dict:
+    """Read BOTH screen spaces off the live engine.
+
+    Never derive them from a ``--size`` CLI string: that is the requested
+    offscreen extent, not what the engine ended up with. ``fallback`` is
+    used only if the console cannot answer at all.
+    """
+    got = send_json(port, "local ww, wh = engine.getWindowSize();"
+                          " local fw, fh = engine.getFramebufferSize();"
+                          " return {ww=ww, wh=wh, fw=fw, fh=fh}")
+    fw0, fh0 = fallback if fallback else (0, 0)
+
+    def _one(key: str, default: int) -> int:
+        v = got.get(key) if isinstance(got, dict) else None
+        try:
+            iv = int(float(v))
+        except (TypeError, ValueError):
+            return default
+        return iv if iv > 0 else default
+
+    win_w, win_h = _one("ww", fw0), _one("wh", fh0)
+    return {"win_w": win_w, "win_h": win_h,
+            "fb_w": _one("fw", win_w or fw0), "fb_h": _one("fh", win_h or fh0)}
+
+
+def win_to_fb(vp: dict, x: float, y: float) -> tuple[int, int]:
+    """WINDOW-space pixel -> the FRAMEBUFFER-space pixel ``input.*`` wants."""
+    win_w, win_h = vp.get("win_w") or 0, vp.get("win_h") or 0
+    if win_w <= 0 or win_h <= 0:
+        return int(round(x)), int(round(y))
+    return (int(round(x * (vp.get("fb_w") or win_w) / win_w)),
+            int(round(y * (vp.get("fb_h") or win_h) / win_h)))
+
+
+def camera_state(port: int) -> dict:
+    """``camera`` position/zoom/z-slice/z-tracking in one round trip."""
+    got = send_json(port, "local x, y = camera.getPosition();"
+                          " return {x=x, y=y, zoom=camera.getZoom(),"
+                          " zSlice=camera.getZSlice(),"
+                          " zTracking=camera.getZTracking()}")
+    return got if isinstance(got, dict) else {}
+
+
+def pin_camera_to_tile(port: int, gx: int, gy: int, z: int) -> bool:
+    """Point the camera at ``(gx, gy)`` and pin the z-slice to ``z``.
+
+    ``camera.goToTile`` alone is NOT enough to put a tile on screen, and
+    this is the whole of issue #1286. It sets ``camZTracking = True``
+    (Engine.Scripting.Lua.API.Camera), and while tracking is on the render
+    loop rewrites ``camZSlice`` to ``surfaceElev + surfaceHeadroom`` on
+    EVERY frame (World.Render; ``surfaceHeadroom`` is 25). Both the render
+    and every hit test then offset a tile at height ``z`` by
+    ``(z - zSlice) * tileSideHeight``, so with a 25-level headroom the
+    surface is drawn ~0.625 world units below the camera centre -- more
+    than the 0.5 half-height ``goToTile``'s own zoom of 0.5 gives, i.e.
+    the tile the camera "went to" is pushed clean off the bottom of the
+    viewport.
+
+    Pinning the slice to the TARGET's own z makes that offset exactly
+    zero, so the target lands at the screen centre. Order matters:
+    ``goToTile`` re-enables tracking, so the two pins must follow it,
+    every time it is called. (This is what
+    ``tools/item_list_widget_probe.py`` was already reaching for with a
+    bare ``camera.setZSlice`` -- z-tracking overwrote it on the next
+    frame.)
+
+    Verified and retried rather than fired once: the render thread reads
+    ``camZTracking`` at the top of a frame and writes ``camZSlice`` at the
+    bottom, so a pin landing inside that window is discarded by a frame
+    that had already decided to track. Once tracking really is off the
+    slice is stable -- at tile zoom the tile layer is fully opaque, so
+    the fade-band clause that can re-arm tracking never fires.
+    Returns whether the pin held.
+    """
+    for _ in range(3):
+        send(port, f"camera.goToTile({gx}, {gy});"
+                   f" camera.setZTracking(false); camera.setZSlice({int(z)});"
+                   " return 'ok'")
+        cam = camera_state(port)
+        if cam.get("zTracking") is False and cam.get("zSlice") == int(z):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def set_paused(port: int, on: bool, settle: float = 0.3) -> None:
+    """``engine.setPaused`` plus a short settle.
+
+    NB ``unit.setFrozen`` is not an alternative: it only makes
+    ``publishToRender`` skip the sim-derived update, so a "frozen" unit
+    keeps walking while ``unit.getInfo`` reports where it was when the
+    flag went up.
+    """
+    send(port, f"engine.setPaused({'true' if on else 'false'}); return 'ok'")
+    time.sleep(settle)
+
+
+def focus_and_locate(port: int, gx: int, gy: int, z: int, vp: dict, locate):
+    """Pin the camera on ``(gx, gy)`` at height ``z``, then locate the
+    target with ``locate()`` — a callable returning a WINDOW-space pixel
+    or ``None``. Returns that pixel (or ``None``).
+
+    Deliberately NOT an iterative ``world.pickTile`` convergence, which is
+    what the probes used to do. Once the slice is pinned to the target's
+    own z the placement is EXACT by construction: ``goToTile`` puts the
+    camera on the tile's flat world position, and at ``relativeZ == 0``
+    that position is also where the tile and anything standing on it are
+    drawn. Correcting on top of that made targeting worse, twice over:
+
+      * ``world.pickTile`` answers about TERRAIN, and it reports the
+        first solid column walking DOWN from the slice. On a coastal
+        ridge the centre pixel resolves the right tile at the WRONG
+        height (measured: tile ``(48, -119)`` at ``z = -3`` while the
+        target stood on it at ``z = 24``), and "correcting" toward that
+        reading walked the camera far enough that the target left the
+        viewport entirely;
+      * even when it converged cleanly it converged to the TILE centre,
+        which is not the sprite: it moved a 1x1 building's clickable box
+        from straddling the centre pixel to ending 2 px above it.
+
+    The simulation is expected to be PAUSED. The one thing still owed to
+    the world thread is CHUNK LOADING, which a just-teleported camera can
+    need, so a miss retries once with the simulation running.
+    """
+    pin_camera_to_tile(port, gx, gy, z)
+    pixel = locate()
+    if pixel is None:
+        set_paused(port, False)
+        time.sleep(1.0)
+        pin_camera_to_tile(port, gx, gy, z)
+        pixel = locate()
+        set_paused(port, True)
+    return pixel
+
+
+def centred_within(vp: dict, pixel, fraction: float = 0.25) -> bool:
+    """Is ``pixel`` within ``fraction`` of the smaller screen dimension of
+    the screen centre?
+
+    This is how a probe asks "did the camera actually centre on my
+    target", and it is a better question than the tile pick it replaces:
+    it is measured on the PRODUCTION hit test's own answer, so it is
+    terrain-independent and cannot be satisfied by the camera looking at
+    some other place that happens to sit over the same column. The
+    tolerance is loose on purpose — a sprite is anchored to its tile's
+    diamond bottom and extends upward, so its clickable box is offset
+    from the tile centre by design.
+    """
+    if not pixel:
+        return False
+    cx, cy = vp["win_w"] / 2, vp["win_h"] / 2
+    tol = min(vp["win_w"], vp["win_h"]) * fraction
+    return abs(pixel[0] - cx) <= tol and abs(pixel[1] - cy) <= tol
+
+
+def locate_building_pixel(port: int, bid: int, vp: dict, step: int = 4,
+                           centre: tuple[int, int] | None = None):
+    """WINDOW-space pixel where ``building.hitTestAt`` really reports
+    ``bid``, searched outward from the screen centre; ``None`` if the
+    building is nowhere on screen.
+
+    Asks the SAME single-target hit test the right-click router uses
+    (``scripts/init_context_menu.lua``'s ``tryBuildingMenu``), so it is
+    the only question that predicts where the menu will actually go. A
+    computed tile-centre pixel is not good enough -- a building's sprite
+    is anchored to the diamond bottom, so the quad sits ABOVE the tile
+    centre (measured: a 1x1 96x96 fixture's clickable box ends 2 px above
+    the centre pixel it stands on).
+
+    Runs engine-side in ONE debug-console statement: a per-pixel round
+    trip over a window is thousands of them.
+    """
+    cx, cy = centre if centre else (vp["win_w"] // 2, vp["win_h"] // 2)
+    sw, sh = vp["win_w"], vp["win_h"]
+    # Walks each square ring's PERIMETER, never a filtered full square:
+    # the filtered form re-tests the whole interior on every ring and
+    # turns an O(pixels) scan into an O(pixels x radius) one.
+    raw = send(port,
+               f"local b, cx, cy, sw, sh, st = {bid}, {cx}, {cy}, {sw}, {sh}, {step};"
+               " local function hit(x, y) return x >= 0 and y >= 0 and x <= sw"
+               "  and y <= sh and building.hitTestAt(x, y) == b end;"
+               " if hit(cx, cy) then return cx .. ',' .. cy end;"
+               " local maxr = math.max(cx, sw - cx, cy, sh - cy);"
+               " for r = st, maxr + st, st do"
+               "  for dx = -r, r, st do"
+               "   if hit(cx + dx, cy - r) then return (cx + dx) .. ',' .. (cy - r) end;"
+               "   if hit(cx + dx, cy + r) then return (cx + dx) .. ',' .. (cy + r) end"
+               "  end;"
+               "  for dy = -r + st, r - st, st do"
+               "   if hit(cx - r, cy + dy) then return (cx - r) .. ',' .. (cy + dy) end;"
+               "   if hit(cx + r, cy + dy) then return (cx + r) .. ',' .. (cy + dy) end"
+               "  end"
+               " end; return 'none'", timeout=120.0).strip().strip('"')
+    if "," not in raw:
+        return None
+    sx, sy = raw.split(",")
+    return int(sx), int(sy)
+
+
+def targeting_report(port: int, vp: dict, kind: str, tid: int,
+                     site: tuple[int, int] | None = None,
+                     extra: dict | None = None) -> str:
+    """Everything needed to diagnose -- and REPRODUCE -- a localization
+    failure (#1286 requirement 6).
+
+    The target's own identity, grid position, grid elevation, activity and
+    page; the camera's settled position, zoom, z-slice and z-tracking
+    state; both screen spaces; what the tile resolution and the hit tests
+    actually answered at the centre pixel; and the world's seed plus the
+    fixture site this run happened to choose -- without those last two,
+    nothing about a failing run can be reproduced, because both probes
+    generate a world through the UI and then search outward for their own
+    anchor sites.
+    """
+    info = send_json(port, f"return {kind}.getInfo({tid})")
+    info = info if isinstance(info, dict) else {}
+    cam = camera_state(port)
+    cx, cy = vp["win_w"] // 2, vp["win_h"] // 2
+    pick = send_json(port, f"return {{world.pickTile({cx}, {cy})}}")
+    bhit = send(port, f"return building.hitTestAt({cx}, {cy})").strip()
+    uhit = send(port, f"return unit.hitTestAt({cx}, {cy})").strip()
+    seed = send(port, "return world.getSeed()").strip()
+    defaults = send_json(port, "return world.getGenDefaults()")
+    size = (defaults or {}).get("world_size") if isinstance(defaults, dict) else None
+    # `unit.getInfo` reports neither field: it has `currentAnim` in place
+    # of an activity, and units are implicitly scoped to the active page
+    # (both hit tests filter on it), which is what to report instead.
+    activity = info.get("activity", info.get("currentAnim"))
+    page = info.get("page") or send(port, "return world.getActiveWorldId()").strip()
+    lines = [
+        f"  [diag] target: {kind} #{tid} {info.get('displayName')!r}"
+        f" at grid ({info.get('gridX')}, {info.get('gridY')})"
+        f" gridZ={info.get('gridZ')} activity={activity!r}"
+        f" page={page!r}",
+        f"  [diag] world: seed={seed} gen-default size={size} chunks"
+        + (f", fixture site {site}" if site else ""),
+        f"  [diag] camera: pos=({cam.get('x')}, {cam.get('y')})"
+        f" zoom={cam.get('zoom')} zSlice={cam.get('zSlice')}"
+        f" zTracking={cam.get('zTracking')}",
+        f"  [diag] window={vp['win_w']}x{vp['win_h']}"
+        f" framebuffer={vp['fb_w']}x{vp['fb_h']}",
+        f"  [diag] at window-space centre pixel ({cx}, {cy}):"
+        f" world.pickTile={pick!r} building.hitTestAt={bhit!r}"
+        f" unit.hitTestAt={uhit!r}",
+    ]
+    for k, v in (extra or {}).items():
+        lines.append(f"  [diag] {k}: {v}")
+    return "\n".join(lines)
