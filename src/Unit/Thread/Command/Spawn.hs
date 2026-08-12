@@ -1,6 +1,10 @@
 {-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Spawn
     ( handleUnitSpawnCommand
+    , spawnModifierMap
+    , spawnEffectiveCapacity
+    , shedPlan
+    , ShedEvent(..)
     ) where
 
 import UPrelude
@@ -18,7 +22,7 @@ import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState
 import Unit.Types
 import Unit.Faction (Faction(..))
 import Unit.Sim.Types
-import Unit.Stats (rollStat, pickName, applyItemBuffs)
+import Unit.Stats (rollStat, pickName, applyItemBuffs, effectiveStat)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         lookupEquipmentClass)
@@ -119,18 +123,29 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                                   (udStartingEquipment def)
             initialAccessories ← buildStartingAccessories env logger itemMgr
                                   (udStartingAccessories def)
+            -- The one spawn-time modifier map: the def's innate
+            -- modifiers (technomule's "cybernetic enhancements") plus
+            -- the just-built accessories' buffs (same effect as if the
+            -- player had right-click-equipped each). Built ONCE here so
+            -- the capacity shed decision below and the constructed
+            -- instance's uiModifiers can never drift (#1213).
+            let spawnMods = spawnModifierMap itemMgr def initialAccessories
             -- Spawn-time capacity check. Armor / weapons / survival
             -- kit always arrive; inventory entries with a drop
             -- priority shed (highest first — pick before shovel)
-            -- until the loadout fits the rolled carrying_capacity.
+            -- until the loadout fits the EFFECTIVE carrying_capacity —
+            -- the rolled base with spawnMods applied, the same measure
+            -- every live gameplay policy (pickup gating, the strict
+            -- transfer policy) judges against (#1213).
             -- Weights mirror getCarryingWeight: instance weight + fill
             -- (at the container's per-unit fill weight) + container
             -- contents, worn gear at full mass.
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             let itemW = itemTotalWeight itemMgr
                 fixedW = sum (map itemW (HM.elems initialEquipment))
                        + sum (map itemW initialAccessories)
-            initialInventory ← case HM.lookup "carrying_capacity"
-                                              initialStats of
+            initialInventory ← case spawnEffectiveCapacity now initialStats
+                                                           spawnMods of
                 Nothing  → return (map fst taggedInventory)
                 Just cap → shedToCapacity logger uid itemW cap fixedW
                                           taggedInventory
@@ -153,14 +168,9 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                     , uiPose        = "standing"
                     , uiAnimStride  = 1
                     , uiStats       = initialStats
-                    -- Seed modifiers from the def's innate modifiers
-                    -- (technomule's "cybernetic enhancements") plus
-                    -- the just-built accessories so their buffs are
-                    -- active at spawn (same effect as if the player
-                    -- had right-click-equipped each).
-                    , uiModifiers   = foldl' (applyAccessoryBuffs itemMgr)
-                                             (defModifierMap def)
-                                             initialAccessories
+                    -- The same map the capacity decision above used —
+                    -- one binding, so they agree by construction.
+                    , uiModifiers   = spawnMods
                     , uiSkills      = initialSkills
                     , uiKnowledge   = initialKnowledge
                     , uiInventory   = initialInventory
@@ -214,50 +224,86 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
 
--- | Spawn-time capacity shed: drop tagged inventory items (priority
---   descending, so the acolyte's pick goes before its shovel) until
---   the total loadout — fixedW (worn equipment + accessories) plus
---   the remaining inventory — fits the rolled carrying_capacity.
---   Untagged items (priority 0) are never shed; if the loadout still
---   doesn't fit after every sheddable item is gone, the unit spawns
---   over capacity (the pickup/store gates simply refuse until it
---   lightens) and we log it.
-shedToCapacity ∷ LoggerState → UnitId → (ItemInstance → Float)
-               → Float → Float → [(ItemInstance, Int)]
-               → IO [ItemInstance]
-shedToCapacity logger uid itemW cap fixedW = go
+-- | Effective carrying capacity at spawn: the rolled base stat with
+--   the spawn modifier map applied — the same
+--   'Unit.Stats.effectiveStat' measure live gameplay (pickup gating,
+--   the strict transfer policy) uses. Nothing when the def rolls no
+--   carrying_capacity stat at all (wildlife), which skips the shed
+--   entirely, exactly as before.
+spawnEffectiveCapacity ∷ Double → HM.HashMap Text Float
+                       → HM.HashMap Text [StatModifier] → Maybe Float
+spawnEffectiveCapacity now stats mods =
+    (\base → effectiveStat now base
+                 (HM.lookupDefault [] "carrying_capacity" mods))
+      ⊚ HM.lookup "carrying_capacity" stats
+
+-- | One entry of a spawn-shed decision's audit trail — pure so tests
+--   can assert exactly what the spawn path would log.
+data ShedEvent
+    = ShedDrop !Text !Float
+      -- ^ item def name left behind; total loadout weight before the
+      --   drop (an informational message, not a warning)
+    | ShedOverCapacity !Float
+      -- ^ still over capacity at this total with nothing left to shed
+      --   (the warning case)
+    deriving (Show, Eq)
+
+-- | Pure core of the spawn-time capacity shed: drop tagged inventory
+--   items (priority descending, so the acolyte's pick goes before its
+--   shovel) until the total loadout — fixedW (worn equipment +
+--   accessories) plus the remaining inventory — fits the effective
+--   carrying capacity. Untagged items (priority 0) are never shed; if
+--   the loadout still doesn't fit after every sheddable item is gone,
+--   the unit spawns over capacity (the pickup/store gates simply
+--   refuse until it lightens) and the trail ends in ShedOverCapacity.
+shedPlan ∷ (ItemInstance → Float) → Float → Float
+         → [(ItemInstance, Int)] → ([ItemInstance], [ShedEvent])
+shedPlan itemW cap fixedW = go
   where
     totalOf xs = fixedW + sum (map (itemW . fst) xs)
     go xs
-        | totalOf xs ≤ cap = return (map fst xs)
+        | totalOf xs ≤ cap = (map fst xs, [])
         | otherwise =
             let prios = [ p | (_, p) ← xs, p > 0 ]
             in case prios of
-                [] → do
-                    logWarn logger CatThread $
-                        "UnitSpawn " <> T.pack (show uid)
-                        <> ": loadout "
-                        <> T.pack (show (totalOf xs))
-                        <> " kg exceeds capacity "
-                        <> T.pack (show cap)
-                        <> " kg with nothing left to shed"
-                    return (map fst xs)
-                _  → do
+                [] → (map fst xs, [ShedOverCapacity (totalOf xs)])
+                _  →
                     let top = maximum prios
                         (name, rest) = removeFirstByPrio top xs
-                    logInfo logger CatThread $
-                        "UnitSpawn " <> T.pack (show uid)
-                        <> ": over capacity ("
-                        <> T.pack (show (totalOf xs)) <> " > "
-                        <> T.pack (show cap)
-                        <> " kg) — leaving " <> name <> " behind"
-                    go rest
+                        (kept, evs)  = go rest
+                    in (kept, ShedDrop name (totalOf xs) : evs)
 
     removeFirstByPrio _ [] = ("?", [])
     removeFirstByPrio p ((it, q) : rest)
         | q ≡ p     = (iiDefName it, rest)
         | otherwise = let (n, rest') = removeFirstByPrio p rest
                       in (n, (it, q) : rest')
+
+-- | IO wrapper over 'shedPlan': runs the pure decision and logs its
+--   audit trail (drops as info, the nothing-left-to-shed case as a
+--   warning).
+shedToCapacity ∷ LoggerState → UnitId → (ItemInstance → Float)
+               → Float → Float → [(ItemInstance, Int)]
+               → IO [ItemInstance]
+shedToCapacity logger uid itemW cap fixedW tagged = do
+    let (kept, events) = shedPlan itemW cap fixedW tagged
+    forM_ events $ \ev → case ev of
+        ShedDrop name total →
+            logInfo logger CatThread $
+                "UnitSpawn " <> T.pack (show uid)
+                <> ": over capacity ("
+                <> T.pack (show total) <> " > "
+                <> T.pack (show cap)
+                <> " kg) — leaving " <> name <> " behind"
+        ShedOverCapacity total →
+            logWarn logger CatThread $
+                "UnitSpawn " <> T.pack (show uid)
+                <> ": loadout "
+                <> T.pack (show total)
+                <> " kg exceeds capacity "
+                <> T.pack (show cap)
+                <> " kg with nothing left to shed"
+    return kept
 
 -- | Resolve a unit def's starting_inventory into concrete ItemInstance
 --   list, each tagged with its capacity-shed drop priority. Unknown
@@ -396,6 +442,15 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           }
                                         m
                 ) (return HM.empty) entries
+
+-- | The one spawn-time modifier map (#1213): the def's innate
+--   modifiers with the starting accessories' buffs folded on. Both
+--   the capacity shed decision and the constructed instance's
+--   uiModifiers read this — same set, same composition semantics.
+spawnModifierMap ∷ ItemManager → UnitDef → [ItemInstance]
+                 → HM.HashMap Text [StatModifier]
+spawnModifierMap itemMgr def =
+    foldl' (applyAccessoryBuffs itemMgr) (defModifierMap def)
 
 -- | Seed map of a def's innate modifiers (yaml `modifiers:` block) —
 --   the spawn-time base that accessory buffs then fold onto. Same
