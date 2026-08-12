@@ -34,21 +34,37 @@ that def's real `build_work` (240s, worker-driven) would leave a
 construct_job AI running. Mirrors tools/transfer_context_menu_probe.py's
 own throwaway-def technique.
 
+Since #1234 the cargo panel is an endpoint-kind agnostic CONTAINER
+WINDOW, so this probe is also the gate on a building endpoint rendering
+exactly as it did before that generalization, and on a unit endpoint
+reaching the same window through the same manager.
+
 Verifies, in order:
 
-  1. cargo Contents panel: the widget renders one row per STACK (not per
-     item) with the right counts and categories; its tab strip is one
-     shrink-to-fit row of `All` + first-appearance categories, entirely
-     inside the panel; clicking a category tab filters the rows to it;
-     a framebuffer resize keeps the panel open on the SAME building and
-     the SAME selected category; a rebuild leaks no duplicate rows.
+  1. cargo Contents panel (a BUILDING endpoint): its title and
+     capacity/stored-weight header name the real building; the widget
+     renders one row per STACK (not per item) with the right counts and
+     categories; its tab strip is one shrink-to-fit row of `All` +
+     first-appearance categories, entirely inside the panel; clicking a
+     category tab filters the rows to it; a framebuffer resize keeps the
+     panel open on the SAME endpoint identity and the SAME selected
+     category; a rebuild leaks no duplicate rows.
   2. cargo rows route a real right-click to the representative instance:
      the "Withdraw" menu that appears names the row the probe clicked.
-  3. first-aid-kit Contents panel: the Haskell-side pre-grouped rows
+  3. a UNIT endpoint (#1234) opens through that same manager: its title
+     names the unit, its header reports `transferEndpointInfo`'s own
+     capacity and stored weight (which counts equipment and accessories,
+     so it is deliberately NOT the rows' summed weight), its rows are
+     that call's loose inventory, its tab strip behaves like the
+     building's, a live inventory change refreshes it without reopening,
+     a resize preserves the endpoint identity AND the selected tab, unit
+     rows expose no row action, and a wildlife unit — not
+     player-commandable — cannot open the window at all.
+  4. first-aid-kit Contents panel: the Haskell-side pre-grouped rows
      appear unchanged (never re-split by the finer stack key), the rows
      expose NO right-click action at all, and an emptied container
      renders its "(empty)" state.
-  4. unit inventory section: rows and counts, a wrapped/centred tab
+  5. unit inventory section: rows and counts, a wrapped/centred tab
      strip inside the section rect, tab selection filtering, and a real
      right-click reaching the representative instance's Equip/Contents
      menu.
@@ -175,6 +191,19 @@ def tab_boxes(port: int, list_id_lua: str):
     order = [e["handle"] for e in own if isinstance(e, dict)]
     out.sort(key=lambda w: order.index(w["handle"]))
     return out
+
+
+def panel_chrome(port: int) -> dict:
+    """The container window's own host-owned chrome (#1234).
+
+    Read through scripts/ui/label's real accessors on the live element
+    ids the panel is holding, so this reports what is actually rendered
+    rather than what the probe expected to be rendered."""
+    got = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
+                          ".state; local l = require('scripts.ui.label');"
+                          " return {title = s.titleId and l.getText(s.titleId),"
+                          " subtitle = s.subtitleId and l.getText(s.subtitleId)}")
+    return got if isinstance(got, dict) else {}
 
 
 def click_widget_center(port: int, w: dict) -> None:
@@ -331,14 +360,35 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
         # real public entry point and keep every check below real.
         print("  (building pixel not located — opening the panel through "
               "its public entry point instead)")
-        send(port, f"require('scripts.cargo_inventory_panel').openFor({bid},"
-                   " 200, 200); return 'ok'")
+        send(port, "require('scripts.cargo_inventory_panel')"
+                   f".openFor('building', {bid}, 200, 200); return 'ok'")
         time.sleep(0.5)
 
     opened = send(port, "return require('scripts.cargo_inventory_panel')"
                         ".isOpen()").strip()
     if not check("cargo Contents panel opened", opened == "true", f"got {opened!r}"):
         return
+
+    # -- #1234: the window records the BUILDING endpoint's identity, and
+    #    its chrome names the real building and its real storage load.
+    ident = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
+                            ".state; return {kind = s.kind, id = s.id}")
+    check("the window records a 'building' endpoint identity",
+          isinstance(ident, dict) and ident.get("kind") == "building"
+          and ident.get("id") == bid, f"got {ident!r}")
+    chrome = panel_chrome(port)
+    binfo = send_json(port, f"return building.getInfo({bid})")
+    want_name = (binfo or {}).get("displayName") if isinstance(binfo, dict) else None
+    check("the cargo window's title names the building",
+          bool(want_name) and chrome.get("title") == want_name,
+          f"got {chrome.get('title')!r} want {want_name!r}")
+    cap = send(port, f"return building.getStorageCapacity({bid})").strip()
+    used = send(port, f"return building.getStorageWeight({bid})").strip()
+    want_sub = "Storage: %.2f / %.2f kg" % (float(used), float(cap))
+    check("the cargo window's header reports the building's real "
+          "stored weight and capacity",
+          chrome.get("subtitle") == want_sub,
+          f"got {chrome.get('subtitle')!r} want {want_sub!r}")
 
     rows = item_rows(port, CARGO_LIST_ID)
     check("cargo rows are one per STACK, not one per item",
@@ -409,9 +459,12 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
                   f"got {still_open!r}")
             after = send_json(port, "local s = require("
                                     "'scripts.cargo_inventory_panel').state;"
-                                    " return {bid = s.bid, tab = s.activeTab}")
-            check("a resize preserves the panel's building AND selected tab",
-                  isinstance(after, dict) and after.get("bid") == bid
+                                    " return {kind = s.kind, id = s.id,"
+                                    " tab = s.activeTab}")
+            check("a resize preserves the panel's endpoint identity AND "
+                  "selected tab",
+                  isinstance(after, dict) and after.get("kind") == "building"
+                  and after.get("id") == bid
                   and after.get("tab") == label, f"got {after!r}")
             resized_rows = item_rows(port, CARGO_LIST_ID)
             check_no_duplicate_rows(port, "cargo (after resize)", resized_rows)
@@ -441,6 +494,181 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
     send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
                " return 'ok'")
     time.sleep(0.3)
+
+
+def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
+                            fb_w: int, fb_h: int) -> None:
+    """#1234: the SAME container window, opened on a unit endpoint.
+
+    Every expected value is read from the engine's own
+    `unit.transferEndpointInfo` rather than restated here, so this
+    checks that the window renders that endpoint — not that it renders
+    numbers the probe happened to pick."""
+    print("== unit endpoint (same container window) ==")
+    ep = send_json(port, "return unit.transferEndpointInfo("
+                         f"{{kind = 'unit', id = {uid}}})")
+    if not check("engine reports the acolyte as an eligible endpoint",
+                 isinstance(ep, dict) and ep.get("eligible") is True,
+                 f"got {ep!r}"):
+        return
+    contents = ep.get("contents")
+    if not check("the endpoint carries loose inventory to render",
+                 isinstance(contents, list) and contents,
+                 f"got {contents!r}"):
+        return
+
+    accepted = send(port, "return require('scripts.cargo_inventory_panel')"
+                          f".openFor('unit', {uid}, 240, 240)").strip()
+    check("the manager accepts a unit endpoint", accepted == "true",
+          f"got {accepted!r}")
+    time.sleep(0.5)
+    opened = send(port, "return require('scripts.cargo_inventory_panel')"
+                        ".isOpen()").strip()
+    if not check("the container window opened on the unit", opened == "true",
+                 f"got {opened!r}"):
+        return
+
+    ident = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
+                            ".state; return {kind = s.kind, id = s.id}")
+    check("the window records a 'unit' endpoint identity",
+          isinstance(ident, dict) and ident.get("kind") == "unit"
+          and ident.get("id") == uid, f"got {ident!r}")
+
+    # -- Title and header come from the endpoint, not from a building.
+    chrome = panel_chrome(port)
+    info = send_json(port, f"return unit.getInfo({uid})")
+    want_title = None
+    if isinstance(info, dict):
+        want_title = (info.get("name") or info.get("displayName")
+                      or info.get("defName"))
+    want_title = want_title or ep.get("displayName")
+    check("the unit window's title names the unit",
+          chrome.get("title") == want_title,
+          f"got {chrome.get('title')!r} want {want_title!r}")
+    want_sub = "Carrying: %.2f / %.2f kg" % (float(ep.get("storedWeight") or 0),
+                                             float(ep.get("capacity") or 0))
+    check("the unit window's header reports transferEndpointInfo's own "
+          "capacity and stored weight",
+          chrome.get("subtitle") == want_sub,
+          f"got {chrome.get('subtitle')!r} want {want_sub!r}")
+    # storedWeight counts equipment and accessories too, so it must not
+    # be mistakable for the rendered rows' summed weight.
+    loose = sum(float(c.get("weight") or 0) for c in contents
+                if isinstance(c, dict))
+    check("stored weight is the recursive load, not the loose rows' sum",
+          abs(float(ep.get("storedWeight") or 0) - loose) > 1e-6
+          or not loose,
+          f"storedWeight={ep.get('storedWeight')!r} loose sum={loose!r}")
+
+    # -- Rows are that call's loose inventory, one per stack.
+    rows = item_rows(port, CARGO_LIST_ID)
+    want_defs = {c.get("defName") for c in contents if isinstance(c, dict)}
+    got_defs = {r.get("defName") for r in rows}
+    check("the unit window renders its loose inventory, one row per stack",
+          got_defs == want_defs,
+          f"got {sorted(d for d in got_defs if d)!r} "
+          f"want {sorted(d for d in want_defs if d)!r}")
+    check_no_duplicate_rows(port, "unit endpoint", rows)
+    check("unit rows expose NO row action in this slice",
+          all(r.get("rightClick") is False for r in rows),
+          f"got {[r.get('rightClick') for r in rows]!r}")
+
+    # -- Tab strip, and selecting a category.
+    tabs = tab_boxes(port, CARGO_LIST_ID)
+    label = None
+    if check("the unit window renders a tab strip", len(tabs) >= 2,
+             f"got {len(tabs)}"):
+        check("the unit window's tab strip starts with 'All'",
+              (tabs[0].get("label") or "").startswith("All"),
+              f"got {tabs[0].get('label')!r}")
+        target = next((t for t in tabs
+                       if not (t.get("label") or "").startswith("All")), None)
+        if check("a non-All category tab exists on the unit window",
+                 bool(target)):
+            label = (target.get("label") or "").split(" (")[0]
+            click_widget_center(port, target)
+            time.sleep(0.5)
+            filtered = item_rows(port, CARGO_LIST_ID)
+            check(f"selecting '{label}' filters the unit rows to it",
+                  bool(filtered) and all(r.get("category") == label
+                                         for r in filtered),
+                  f"got {[(r.get('defName'), r.get('category')) for r in filtered]!r}")
+
+            # -- A resize preserves the endpoint identity AND the tab.
+            send(port, f"return engine.setWindowSize({fb_w - 160}, {fb_h - 120})")
+            time.sleep(1.5)
+            check("a resize keeps the unit window open",
+                  send(port, "return require('scripts.cargo_inventory_panel')"
+                             ".isOpen()").strip() == "true")
+            after = send_json(port, "local s = require("
+                                    "'scripts.cargo_inventory_panel').state;"
+                                    " return {kind = s.kind, id = s.id,"
+                                    " tab = s.activeTab}")
+            check("a resize preserves the unit endpoint identity AND tab",
+                  isinstance(after, dict) and after.get("kind") == "unit"
+                  and after.get("id") == uid and after.get("tab") == label,
+                  f"got {after!r}")
+            send(port, f"return engine.setWindowSize({fb_w}, {fb_h})")
+            time.sleep(1.5)
+            all_tab = next((t for t in tab_boxes(port, CARGO_LIST_ID)
+                            if (t.get("label") or "").startswith("All")), None)
+            if all_tab:
+                click_widget_center(port, all_tab)
+                time.sleep(0.5)
+
+    # -- Contents are read LIVE: an inventory change reaches the open
+    #    window through its own per-tick refresh, with no reopen.
+    before = {r.get("defName") for r in item_rows(port, CARGO_LIST_ID)}
+    send(port, f"return unit.addItem({uid}, 'quinoa_sack')")
+    live = poll_until(6.0, lambda: "quinoa_sack" in
+                      {r.get("defName") for r in item_rows(port, CARGO_LIST_ID)},
+                      interval=0.4)
+    check("a live inventory change refreshes the open unit window",
+          bool(live), f"rows before={sorted(d for d in before if d)!r}")
+    after_rows = item_rows(port, CARGO_LIST_ID)
+    check_no_duplicate_rows(port, "unit endpoint (after live change)", after_rows)
+    refreshed = panel_chrome(port)
+    ep2 = send_json(port, "return unit.transferEndpointInfo("
+                          f"{{kind = 'unit', id = {uid}}})")
+    if isinstance(ep2, dict):
+        want_sub2 = "Carrying: %.2f / %.2f kg" % (
+            float(ep2.get("storedWeight") or 0), float(ep2.get("capacity") or 0))
+        check("the header follows the live stored weight too",
+              refreshed.get("subtitle") == want_sub2,
+              f"got {refreshed.get('subtitle')!r} want {want_sub2!r}")
+
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
+
+    # -- A unit that is not player-commandable is not an endpoint.
+    faction = send(port, f"return unit.getFaction({wild_uid})").strip().strip('"')
+    check("wildlife fixture is genuinely not player-commandable",
+          faction == "wildlife", f"got {faction!r}")
+    wild_ep = send_json(port, "return unit.transferEndpointInfo("
+                              f"{{kind = 'unit', id = {wild_uid}}})")
+    check("engine reports the wildlife unit as ineligible",
+          not isinstance(wild_ep, dict) or wild_ep.get("eligible") is not True,
+          f"got {wild_ep!r}")
+    refused = send(port, "return require('scripts.cargo_inventory_panel')"
+                         f".openFor('unit', {wild_uid}, 240, 240)").strip()
+    check("the manager refuses a non-commandable unit", refused == "false",
+          f"got {refused!r}")
+    check("a refused open leaves the window closed",
+          send(port, "return require('scripts.cargo_inventory_panel')"
+                     ".isOpen()").strip() == "false")
+    state = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
+                            ".state; return {panel = s.panelId ~= nil,"
+                            " list = s.listId ~= nil}")
+    check("a refused open creates no panel or list state",
+          isinstance(state, dict) and state.get("panel") is False
+          and state.get("list") is False, f"got {state!r}")
+
+    # An unknown kind is refused the same way.
+    unknown = send(port, "return require('scripts.cargo_inventory_panel')"
+                         ".openFor('item_container', 1, 240, 240)").strip()
+    check("the manager refuses an unknown endpoint kind", unknown == "false",
+          f"got {unknown!r}")
 
 
 def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
@@ -625,19 +853,23 @@ def main() -> int:
     check("probe building def loaded", float(n) == 1.0, f"got {n!r}")
 
     print("  (scanning terrain outward from the origin for dry anchor sites)")
-    sites = allocate_dry_anchors(port, 3)
-    if not check("found three separated dry sites for the fixtures",
+    sites = allocate_dry_anchors(port, 4)
+    if not check("found four separated dry sites for the fixtures",
                  sites is not None):
         quit_engine(port, proc)
         return 1
-    (bax, bay), (aax, aay), (max_, may_) = sites
+    (bax, bay), (aax, aay), (max_, may_), (wax, way) = sites
     print(f"  (fixture sites: building={(bax, bay)} acolyte={(aax, aay)} "
-          f"technomule={(max_, may_)})")
+          f"technomule={(max_, may_)} wildlife={(wax, way)})")
 
     uid = int(float(send(port,
         f"return unit.spawn('acolyte', {aax}, {aay}, nil, 'player')")))
     mule_uid = int(float(send(port,
         f"return unit.spawn('technomule', {max_}, {may_}, nil, 'player')")))
+    # unit.spawn defaults to the WILDLIFE faction when no tag is given —
+    # the #1234 ineligible-endpoint fixture.
+    wild_uid = int(float(send(port,
+        f"return unit.spawn('red_squirrel', {wax}, {way})")))
     bid_raw = send(port, f"return building.spawn('{DEF_CARGO}', {bax}, {bay})")
     if not check("storage building spawned",
                  bid_raw.strip() not in ("", "nil", "null"), f"got {bid_raw!r}"):
@@ -685,6 +917,7 @@ def main() -> int:
               f"zoom={send(port, 'return camera.getZoom()').strip()!r})")
     cargo_scenario(port, bid, bpixel, fb_w, fb_h)
 
+    unit_endpoint_scenario(port, uid, wild_uid, fb_w, fb_h)
     unit_inventory_scenario(port, uid)
     item_contents_scenario(port, mule_uid, uid)
 
