@@ -536,20 +536,27 @@ end
 -- (closeIfOpen's own reset), so the saved tab is re-applied afterward
 -- via the same rebuild path a tab click uses, IF it's still a valid tab
 -- for the (possibly changed) current contents.
+--
+-- A REFUSED open must abandon the whole call, not fall through to the
+-- tab step. openFor deliberately leaves an already-open valid window
+-- alone when it refuses, so `state` afterwards describes THAT window —
+-- continuing here would apply this call's requested tab to an unrelated
+-- endpoint the caller never named.
 function cargoInventoryPanel.reopenWithTab(kind, id, mx, my, tab)
-    cargoInventoryPanel.openFor(kind, id, mx, my)
+    if not cargoInventoryPanel.openFor(kind, id, mx, my) then return false end
     local s = cargoInventoryPanel.state
-    if not s.open or not tab or tab == s.activeTab then return end
+    if not s.open or not tab or tab == s.activeTab then return true end
     local stillValid = false
     for _, t in ipairs(itemList.getTabs(s.listId)) do
         if t.key == tab then stillValid = true; break end
     end
     if stillValid then
         local view = endpointView(s.kind, s.id)
-        if not view then return end
+        if not view then return true end
         s.activeTab = tab
         buildLayout(view)
     end
+    return true
 end
 
 function cargoInventoryPanel.closeIfOpen()

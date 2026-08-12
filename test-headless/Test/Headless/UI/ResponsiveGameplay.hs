@@ -2474,6 +2474,59 @@ spec = aroundAll withSharedFixture $ do
                     etpIdAfterReopen p `shouldBe` 5
                     etpTabAfterFresh p `shouldBe` "All"
 
+        it "a REFUSED reopen leaves the surviving window's endpoint AND tab untouched, rather than re-tabbing an endpoint the caller never named" $ \(env, ls) → do
+            resetFixture env ls
+            -- Round-1 review: openFor deliberately leaves an
+            -- already-open valid window alone when it refuses, so
+            -- `state` afterwards describes THAT window. reopenWithTab
+            -- ignoring the result therefore applied ITS requested tab to
+            -- an unrelated endpoint — a rebuild of a window the caller
+            -- never asked about.
+            r ← evalJSON ls $ luaLines
+                [ "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1', weight=1.0 },"
+                , "    { defName='i2', category='Cat2', weight=1.0 },"
+                , "} end;"
+                , "local pg = UI.newPage('cargo_reject_reopen', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "cip.openFor('building', 3, 200, 200);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local targetBox = nil;"
+                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "    if t.key == 'Cat2' then targetBox = t.boxId end"
+                , "end;"
+                , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
+                , "local tabBefore = cip.state.activeTab;"
+                , "local rowsBefore = #il.getRows(cip.state.listId);"
+                -- Ask for a DIFFERENT, genuinely valid tab so the only
+                -- thing stopping it is the refusal itself.
+                , "local accepted ="
+                , "    cip.reopenWithTab('item_container', 9, 400, 400, 'Cat1');"
+                , "local out = {accepted = accepted, kind = cip.state.kind,"
+                , "  id = cip.state.id, tabBefore = tabBefore,"
+                , "  tabAfter = cip.state.activeTab, rowsBefore = rowsBefore,"
+                , "  rowsAfter = #il.getRows(cip.state.listId)};"
+                , "cip.closeIfOpen();"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RejectedReopenProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    crrAccepted p `shouldBe` False
+                    crrKind p `shouldBe` Just "building"
+                    crrId p `shouldBe` Just 3
+                    crrTabBefore p `shouldBe` "Cat2"
+                    -- The survivor keeps ITS tab, not the refused
+                    -- call's, and its rendered rows are still Cat2's.
+                    crrTabAfter p `shouldBe` "Cat2"
+                    crrRowsAfter p `shouldBe` crrRowsBefore p
+
         it "the context menu's 'Contents' row still routes into the window, naming the building endpoint it hit-tested" $ \(env, ls) → do
             resetFixture env ls
             -- #1234 changed `openFor`'s signature, and the context menu
@@ -3847,6 +3900,18 @@ instance FromJSON EndpointRejectProbe where
         EndpointRejectProbe <$> o .: "accepted" <*> o .: "open"
                             <*> o .:? "panelId" <*> o .:? "listId"
                             <*> o .:? "survivorKind" <*> o .:? "survivorId"
+
+-- #1234: a REFUSED reopen must not touch the window that survived it.
+data RejectedReopenProbe = RejectedReopenProbe
+    { crrAccepted ∷ Bool, crrKind ∷ Maybe Text, crrId ∷ Maybe Int
+    , crrTabBefore ∷ Text, crrTabAfter ∷ Text
+    , crrRowsBefore ∷ Int, crrRowsAfter ∷ Int } deriving Show
+instance FromJSON RejectedReopenProbe where
+    parseJSON = withObject "RejectedReopenProbe" $ \o →
+        RejectedReopenProbe <$> o .: "accepted" <*> o .:? "kind"
+                            <*> o .:? "id" <*> o .: "tabBefore"
+                            <*> o .: "tabAfter" <*> o .: "rowsBefore"
+                            <*> o .: "rowsAfter"
 
 -- #1234: fresh open resets the tab; the resize path preserves it.
 data EndpointTabProbe = EndpointTabProbe
