@@ -10,15 +10,21 @@ own dump records. `--offscreen` (GPU on, window off) is required: the
 real HUD/panel flow never boots headless (it gates on `fontsReady`, a
 GPU font atlas), and `--headless` refuses `input.*` injection outright.
 
-The cargo panel is reached by a real right-click on the building when
-`building.hitTestAt` can locate its screen pixel, and otherwise through
-the panel's own public entry point — that route into the panel is
-tools/transfer_context_menu_probe.py's gate, whereas everything #1088
-changed lives INSIDE the panel and is checked through the real UI either
-way. (On the runs used to build this probe the runtime-registered
-throwaway building def never resolved through `building.hitTestAt` at
-any pixel, which is a pre-existing offscreen hit-test condition unrelated
-to this widget.)
+The cargo panel is reached by a REAL right-click on the building, routed
+through `building.hitTestAt` exactly as `scripts/init_context_menu.lua`
+does. Localizing that building is a required observation: if the pixel
+cannot be found the probe FAILS, and only then falls back to the panel's
+public entry point so the remaining #1088 checks (which all live INSIDE
+the panel) still report something useful. Before #1286 that fallback was
+silent — the context-menu check sat inside `if bpixel:`, so a failed
+localization removed it and the run still passed.
+
+Localization itself is #1286's fix, in `probelib.focus_and_locate`: a bare
+`camera.goToTile` leaves z-tracking ON, which pins the z-slice 25 levels
+above the surface, and both the render and every hit test then offset the
+target by `(gridZ - zSlice) * tileSideHeight` — far enough at
+`goToTile`'s own zoom to push it off the bottom of the viewport. The
+slice has to be re-pinned to the target's own z AFTER every `goToTile`.
 
 The widget's rows are reported by `scripts/ui/item_list.lua`'s own
 `dump()`, aggregated by `scripts/ui/registry.lua` — which matters for
@@ -87,7 +93,10 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probelib import boot, poll_until, quit_engine, send, send_json
+from probelib import (boot, camera_state, centred_within,
+                      focus_and_locate, locate_building_pixel, poll_until,
+                      quit_engine, send, send_json, set_paused,
+                      targeting_report, viewport, win_to_fb)
 
 SPROOT = tempfile.gettempdir()
 TEST_BUILDING_YAML = os.path.join(SPROOT, "item_list_widget_probe_buildings.yaml")
@@ -296,39 +305,38 @@ def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
     return None
 
 
-def set_paused(port: int, on: bool) -> None:
-    send(port, f"engine.setPaused({'true' if on else 'false'}); return 'ok'")
-    time.sleep(0.3)
+def focus_building(port: int, bid: int, gx: int, gy: int, vp: dict):
+    """Put the built storage fixture on a targetable screen pixel.
 
-
-def locate_building_pixel(port: int, bid: int, fb_w: int, fb_h: int,
-                           step: int = 4):
-    """Find a screen pixel that really resolves to `bid`.
-
-    Scans engine-side in ONE debug-console statement rather than a
-    per-pixel round trip, and asks `building.hitTestAt` — the SAME
-    single-target hit test the right-click router uses, so it is the
-    only question that predicts where the menu will actually go. A
-    computed tile-centre pixel is not good enough: sprites are anchored
-    to the diamond bottom and the tile's terrain height shifts them."""
-    # hitTestBuildingAt normalizes the pixel by the WINDOW size, so scan
-    # that space rather than the framebuffer's (they can differ).
-    win = send_json(port, "local w, h = engine.getWindowSize(); return {w=w, h=h}")
-    sw = int((win or {}).get("w") or fb_w) if isinstance(win, dict) else fb_w
-    sh = int((win or {}).get("h") or fb_h) if isinstance(win, dict) else fb_h
-    raw = send(port,
-               f"local b = {bid};"
-               f" for y = 0, {sh}, {step} do"
-               f"  for x = 0, {sw}, {step} do"
-               "   local h = building.hitTestAt(x, y);"
-               "   if h and h == b then return x .. ',' .. y end"
-               "  end"
-               " end; return 'none'", timeout=90.0).strip().strip('"')
-    if "," not in raw:
-        print(f"  (diag: hit-test scan over {sw}x{sh} returned {raw!r})")
-        return None
-    sx, sy = raw.split(",")
-    return int(sx), int(sy)
+    `camera.goToTile` alone leaves z-tracking ON, which pins the z-slice
+    25 levels above the surface and pushes the tile it just "went to"
+    clean off the bottom of the viewport — #1286. `focus_and_locate`
+    pins the slice to the building's OWN `gridZ` after `goToTile`, which
+    is what both the render and `Building.HitTest` measure their vertical
+    offset from. Returns the window-space pixel, or None."""
+    binfo = send_json(port, f"return building.getInfo({bid})")
+    gz = int((binfo or {}).get("gridZ", 0)) if isinstance(binfo, dict) else 0
+    # Freeze BEFORE targeting: the fixtures stand on a mountainous
+    # shoreline and an acolyte left walking on it collapses from
+    # accumulated falls (#1286).
+    set_paused(port, True)
+    pixel = focus_and_locate(port, gx, gy, gz, vp,
+                             lambda: locate_building_pixel(port, bid, vp))
+    cam = camera_state(port)
+    check("camera preconditions settled for the hit test "
+          "(z-tracking off, slice == the building's gridZ, tile zoom band)",
+          cam.get("zTracking") is False and cam.get("zSlice") == gz
+          and isinstance(cam.get("zoom"), (int, float))
+          and cam.get("zoom") < 1.2,
+          f"got {cam!r} for gridZ {gz}")
+    if pixel is None:
+        print(targeting_report(port, vp, "building", bid, site=(gx, gy)))
+    else:
+        check("the camera centres on the building "
+              "(its hit-test pixel is near the screen centre)",
+              centred_within(vp, pixel),
+              f"got {pixel!r} for a {vp['win_w']}x{vp['win_h']} window")
+    return pixel
 
 
 # --------------------------------------------------------------------------
@@ -342,10 +350,27 @@ def check_no_duplicate_rows(port: int, scenario: str, rows: list) -> None:
           len(ids) == len(set(ids)), f"got {ids!r}")
 
 
-def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
+def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
     print("== cargo Contents panel ==")
-    if bpixel:
-        bpx, bpy = bpixel
+    # The `Contents` context-menu route is a REQUIRED observation, not an
+    # optional one (#1286 requirement 4). It used to sit inside `if
+    # bpixel:`, so a failed localization silently REMOVED the check and
+    # the run still printed "all checks passed" — the one shape that lets
+    # a future regression re-enter the fallback path unnoticed. Failing
+    # the localization here is what makes the fallback diagnostic-only.
+    if not check("located the storage building's own screen pixel "
+                 "(the real context-menu route)", bool(bpixel)):
+        # Everything #1088 changed lives INSIDE the panel, so still open
+        # it — through its real public entry point — and keep every check
+        # below real. The run has already been marked failed above.
+        print("  (building pixel not located — opening the panel through "
+              "its public entry point instead; this run is a FAILURE, the "
+              "fallback only keeps the remaining panel checks meaningful)")
+        send(port, "require('scripts.cargo_inventory_panel')"
+                   f".openFor('building', {bid}, 200, 200); return 'ok'")
+        time.sleep(0.5)
+    else:
+        bpx, bpy = win_to_fb(vp, *bpixel)
         send(port, f"return input.moveMouse({bpx}, {bpy})")
         send(port, f"return input.click({bpx}, {bpy}, 'right')")
         time.sleep(0.4)
@@ -353,16 +378,6 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
         if check("cargo context menu offers 'Contents'", bool(contents)):
             click_widget_center(port, contents)
             time.sleep(0.5)
-    else:
-        # The context-menu route to this panel is
-        # tools/transfer_context_menu_probe.py's own gate; everything
-        # #1088 changed lives INSIDE the panel, so open it through its
-        # real public entry point and keep every check below real.
-        print("  (building pixel not located — opening the panel through "
-              "its public entry point instead)")
-        send(port, "require('scripts.cargo_inventory_panel')"
-                   f".openFor('building', {bid}, 200, 200); return 'ok'")
-        time.sleep(0.5)
 
     opened = send(port, "return require('scripts.cargo_inventory_panel')"
                         ".isOpen()").strip()
@@ -451,7 +466,8 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
                   active == label, f"got {active!r}")
 
             # -- A resize keeps the panel open on the same target AND tab.
-            send(port, f"return engine.setWindowSize({fb_w - 160}, {fb_h - 120})")
+            send(port, "return engine.setWindowSize("
+                       f"{vp['fb_w'] - 160}, {vp['fb_h'] - 120})")
             time.sleep(1.5)
             still_open = send(port, "return require('scripts.cargo_inventory_panel')"
                                     ".isOpen()").strip()
@@ -468,7 +484,8 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
                   and after.get("tab") == label, f"got {after!r}")
             resized_rows = item_rows(port, CARGO_LIST_ID)
             check_no_duplicate_rows(port, "cargo (after resize)", resized_rows)
-            send(port, f"return engine.setWindowSize({fb_w}, {fb_h})")
+            send(port, "return engine.setWindowSize("
+                       f"{vp['fb_w']}, {vp['fb_h']})")
             time.sleep(1.5)
 
             # Back to All so the right-click scenario sees every row.
@@ -497,7 +514,7 @@ def cargo_scenario(port: int, bid: int, bpixel, fb_w: int, fb_h: int) -> None:
 
 
 def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
-                            fb_w: int, fb_h: int) -> None:
+                            vp: dict) -> None:
     """#1234: the SAME container window, opened on a unit endpoint.
 
     Every expected value is read from the engine's own
@@ -595,7 +612,8 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
                   f"got {[(r.get('defName'), r.get('category')) for r in filtered]!r}")
 
             # -- A resize preserves the endpoint identity AND the tab.
-            send(port, f"return engine.setWindowSize({fb_w - 160}, {fb_h - 120})")
+            send(port, "return engine.setWindowSize("
+                       f"{vp['fb_w'] - 160}, {vp['fb_h'] - 120})")
             time.sleep(1.5)
             check("a resize keeps the unit window open",
                   send(port, "return require('scripts.cargo_inventory_panel')"
@@ -608,7 +626,8 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
                   isinstance(after, dict) and after.get("kind") == "unit"
                   and after.get("id") == uid and after.get("tab") == label,
                   f"got {after!r}")
-            send(port, f"return engine.setWindowSize({fb_w}, {fb_h})")
+            send(port, "return engine.setWindowSize("
+                       f"{vp['fb_w']}, {vp['fb_h']})")
             time.sleep(1.5)
             all_tab = next((t for t in tab_boxes(port, CARGO_LIST_ID)
                             if (t.get("label") or "").startswith("All")), None)
@@ -845,7 +864,15 @@ def main() -> int:
     check("in-game HUD reached", bool(hud_up))
     time.sleep(2.0)
 
-    fb_w, fb_h = (int(v) for v in args.size.split("x"))
+    # Both screen spaces, read off the ENGINE rather than the `--size`
+    # string it was asked for: every hit test normalizes by the window
+    # while `input.*` speaks framebuffer (#1286).
+    vp = viewport(port, fallback=tuple(int(v) for v in args.size.split("x")))
+    check("engine reports a usable window and framebuffer extent",
+          vp["win_w"] > 0 and vp["win_h"] > 0 and vp["fb_w"] > 0
+          and vp["fb_h"] > 0, f"got {vp!r}")
+    print(f"  (window {vp['win_w']}x{vp['win_h']}, "
+          f"framebuffer {vp['fb_w']}x{vp['fb_h']})")
 
     with open(TEST_BUILDING_YAML, "w") as f:
         f.write(TEST_BUILDINGS)
@@ -901,23 +928,16 @@ def main() -> int:
 
     # Bring the cargo on screen AND onto the camera's own z-slice:
     # Building.HitTest only considers buildings at or below the slice
-    # (matching the render cull), so a building standing above it is
-    # unclickable no matter where the camera points.
-    binfo = send_json(port, f"return building.getInfo({bid})")
-    gz = int((binfo or {}).get("gridZ", 0)) if isinstance(binfo, dict) else 0
-    send(port, f"camera.goToTile({bax}, {bay}); camera.setZSlice({gz});"
-               " return 'ok'")
-    time.sleep(1.5)
-    set_paused(port, True)
-    bpixel = locate_building_pixel(port, bid, fb_w, fb_h)
-    if not bpixel:
-        print(f"  (diag: building gridZ={gz} camera="
-              f"{send(port, 'return camera.getPosition()').strip()!r} "
-              f"zslice={send(port, 'return camera.getZSlice()').strip()!r} "
-              f"zoom={send(port, 'return camera.getZoom()').strip()!r})")
-    cargo_scenario(port, bid, bpixel, fb_w, fb_h)
+    # (matching the render cull), and offsets the quad by the difference,
+    # so a building standing anywhere but ON the slice is drawn away from
+    # the tile the camera converged on — unclickable no matter where the
+    # camera points. The bare `camera.setZSlice` this used to do could not
+    # achieve that: `goToTile` re-enables z-tracking, which rewrote the
+    # slice back to `surface + 25` on the very next frame (#1286).
+    bpixel = focus_building(port, bid, bax, bay, vp)
+    cargo_scenario(port, bid, bpixel, vp)
 
-    unit_endpoint_scenario(port, uid, wild_uid, fb_w, fb_h)
+    unit_endpoint_scenario(port, uid, wild_uid, vp)
     unit_inventory_scenario(port, uid)
     item_contents_scenario(port, mule_uid, uid)
 
