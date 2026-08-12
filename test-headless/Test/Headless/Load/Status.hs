@@ -1,6 +1,9 @@
 module Test.Headless.Load.Status (spec) where
 
 import UPrelude
+import Control.Concurrent
+    (forkIO, threadDelay, newEmptyMVar, putMVar, tryTakeMVar)
+import GHC.Clock (getMonotonicTime)
 import qualified Data.Text as T
 import Test.Hspec
 import Engine.Load.Status
@@ -152,3 +155,142 @@ spec = describe "transactional load" $ do
             let (authorized, deferred) =
                     partitionAuthorized ([] ∷ [WorldCommand])
             (null authorized, null deferred) `shouldBe` (True, True)
+
+    -- Issue #1181: the test-only staging gate that makes
+    -- tools/transactional_load_probe.py's mutual-exclusion scenario
+    -- deterministic. The probe drives it end to end through a real
+    -- engine; what is pinned here is the lifecycle every one of those
+    -- checks depends on — above all that an UNARMED gate is completely
+    -- inert, since that is what keeps every ordinary load unaffected.
+    describe "test-only staging gate (issue #1181)" $ do
+        it "is unarmed on a fresh ref and holds nothing" $ do
+            ref ← newLoadStatusRef
+            gate ← readStageGate ref
+            gate `shouldBe` unarmedStageGate
+
+        it "an unarmed gate never holds: awaitStageGate returns\
+           \ immediately, reports that it did not hold, and leaves the\
+           \ gate untouched" $ do
+            ref ← newLoadStatusRef
+            before ← readStageGate ref
+            -- Timed, because "inert" here means "does not sleep": a
+            -- hold that silently ran its bound would change every
+            -- ordinary load's timing.
+            started ← getMonotonicTime
+            awaitStageGate ref 1 `shouldReturn` False
+            elapsed ← subtract started <$> getMonotonicTime
+            elapsed `shouldSatisfy` (< 0.5)
+            readStageGate ref `shouldReturn` before
+
+        it "an unarmed gate leaves the load status completely alone —\
+           \ an ordinary load still moves through the same phase\
+           \ sequence" $ do
+            -- The gate sits immediately before staging in
+            -- World.Thread.Command.Save.handleWorldLoadTransactionCommand,
+            -- i.e. between LoadContentValidated and LoadStaged. Drive
+            -- the full phase sequence with the (unarmed) gate call in
+            -- exactly that position and require the observed phases to
+            -- equal the untouched sequence.
+            let sequence' = [ LoadPaused, LoadSourceSelected
+                            , LoadEnvelopeValidated, LoadComponentsDecoded
+                            , LoadComponentsMigrated, LoadSnapshotAssembled
+                            , LoadContentValidated ]
+            ref ← newLoadStatusRef
+            Right n ← beginLoad ref "ordinary_save"
+            observed ← forM sequence' $ \phase → do
+                advanceLoad ref n phase
+                fmap lsPhase <$> readLoadStatus ref
+            beforeGate ← readLoadStatus ref
+            awaitStageGate ref n `shouldReturn` False
+            readLoadStatus ref `shouldReturn` beforeGate
+            mapM_ (advanceLoad ref n) [LoadStaged, LoadWaitingPublish]
+            finishLoad ref n
+            after ← readLoadStatus ref
+            observed `shouldBe` map Just sequence'
+            lsPhase <$> after `shouldBe` Just LoadPublished
+            lsFailedAtPhase <$> after `shouldBe` Just Nothing
+            loadInProgress ref `shouldReturn` False
+
+        it "an armed gate holds the transaction until it is released,\
+           \ naming the held request id while it does" $ do
+            ref ← newLoadStatusRef
+            Right n ← beginLoad ref "held_save"
+            advanceLoad ref n LoadContentValidated
+            armStageGate ref 60
+            armed ← readStageGate ref
+            sgArmed armed `shouldBe` True
+            sgHeldRequest armed `shouldBe` Nothing
+            done ← newEmptyMVar
+            _ ← forkIO $ awaitStageGate ref n >>= putMVar done
+            -- The hold is positively observed by request id, which is
+            -- what a black-box caller must do before racing anything
+            -- against it.
+            held ← pollUntil 5 $ do
+                g ← readStageGate ref
+                pure $ if sgHeldRequest g ≡ Just n then Just g else Nothing
+            fmap sgHeldRequest held `shouldBe` Just (Just n)
+            -- Still parked, and the transaction is still in flight —
+            -- which is exactly what the engine's own mutual-exclusion
+            -- gates key off.
+            tryTakeMVar done `shouldReturn` Nothing
+            loadInProgress ref `shouldReturn` True
+            releaseStageGate ref
+            resumed ← pollUntil 5 (tryTakeMVar done)
+            resumed `shouldBe` Just True
+            final ← readStageGate ref
+            -- One-shot: the hold disarmed the gate on its way out, so
+            -- the NEXT load in the same session is not held by a stale
+            -- arm; and it ended by release, not by its bound.
+            sgArmed final `shouldBe` False
+            sgHeldRequest final `shouldBe` Nothing
+            sgExpired final `shouldBe` False
+            awaitStageGate ref (n + 1) `shouldReturn` False
+
+        it "a hold is bounded: it self-releases on its own deadline and\
+           \ says so, so an abandoned arm cannot wedge the world thread" $ do
+            ref ← newLoadStatusRef
+            Right n ← beginLoad ref "abandoned_save"
+            -- Deliberately never released.
+            armStageGate ref 0.3
+            awaitStageGate ref n `shouldReturn` True
+            gate ← readStageGate ref
+            sgExpired gate `shouldBe` True
+            sgArmed gate `shouldBe` False
+            sgHeldRequest gate `shouldBe` Nothing
+
+        it "clamps the requested hold into the engine's own bound, so\
+           \ no arming mistake can hold forever" $ do
+            ref ← newLoadStatusRef
+            let holdFor s = armStageGate ref s >> (sgHoldSeconds <$> readStageGate ref)
+            holdFor 5 `shouldReturn` 5
+            holdFor (maxStageGateHold * 10) `shouldReturn` maxStageGateHold
+            holdFor 0 `shouldReturn` defaultStageGateHold
+            holdFor (-1) `shouldReturn` defaultStageGateHold
+            holdFor (0 / 0) `shouldReturn` defaultStageGateHold
+            holdFor (1 / 0) `shouldReturn` defaultStageGateHold
+
+        it "releasing a gate nothing ever reached just disarms it, so a\
+           \ test's cleanup path can call it unconditionally" $ do
+            ref ← newLoadStatusRef
+            armStageGate ref 60
+            releaseStageGate ref
+            gate ← readStageGate ref
+            sgArmed gate `shouldBe` False
+            awaitStageGate ref 1 `shouldReturn` False
+
+-- | Poll @act@ every 20 ms for up to @secs@ seconds, returning its
+--   first 'Just'. Keeps the gate tests off fixed sleeps for the same
+--   reason the probe itself is being changed.
+pollUntil ∷ Double → IO (Maybe a) → IO (Maybe a)
+pollUntil secs act = do
+    deadline ← (+ secs) <$> getMonotonicTime
+    let loop = do
+            r ← act
+            case r of
+                Just _ → pure r
+                Nothing → do
+                    now ← getMonotonicTime
+                    if now ≥ deadline
+                      then pure Nothing
+                      else threadDelay 20000 >> loop
+    loop

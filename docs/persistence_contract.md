@@ -110,7 +110,14 @@ section used to call for: it asserts, within one running engine, that a
 page live only pre-load does not survive a real published load,
 alongside the mutual-exclusion, missing-definition-rejection, and
 no-ghost-accumulation-on-repeat guarantees the transaction also
-establishes. `tools/multiworld_save_probe.py`'s gold-standard save →
+establishes. Its mutual-exclusion window is ESTABLISHED rather than
+raced for (issue #1181): the test-only `debug.armLoadStageGate` parks
+the transaction on the world thread immediately before staging, the
+probe positively observes that park by request id before checking
+anything, and it FAILS if the window cannot be established. Before
+#1181 those checks sat behind a timing branch that printed `[SKIP]` and
+still exited 0 on a fast machine, so this paragraph described coverage
+the probe could silently decline to run. `tools/multiworld_save_probe.py`'s gold-standard save →
 quit → fresh-restart → load round trip (which starts every run with
 zero pre-load pages, and so could never itself exercise merge-vs-replace)
 is unaffected and still passes unmodified in spirit — only its two
@@ -384,7 +391,7 @@ persistence envelope itself:
 | Probe | Covers | Disposition | Responsible future child |
 |---|---|---|---|
 | `tools/multiworld_save_probe.py` | Multi-page save/load (#214/#219), world-identity round-trip (#707), the gold-standard save→quit→restart→load pattern | **Retained (updated by #763)**, save-file-shape changes untouched by #759 (B1) needed no changes there. #763 removed the active-page-to-`main_world` remap it exercised, so its two pages now stay under their own saved ids — the probe's assertions were updated to match, not its structure. | Done (#763) |
-| `tools/transactional_load_probe.py` | The genuinely new session-replacement-not-merge case, mutual exclusion, missing-def rejection, no-ghost-on-repeat (#763) | **Added by #763.** A same-process load test the multiworld probe structurally cannot be (that probe starts every run with zero pre-load pages): builds a live pre-load page never part of ANY save and proves it does not survive a real published load. | Done (#763) |
+| `tools/transactional_load_probe.py` | The genuinely new session-replacement-not-merge case, mutual exclusion, missing-def rejection, no-ghost-on-repeat (#763) | **Added by #763.** A same-process load test the multiworld probe structurally cannot be (that probe starts every run with zero pre-load pages): builds a live pre-load page never part of ANY save and proves it does not survive a real published load. **#1181** made its mutual-exclusion scenario deterministic — the in-flight window is held open by the test-only `debug.armLoadStageGate` staging gate and positively observed by request id, instead of being raced for and skipped when the race was lost. | Done (#763, #1181) |
 | `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite by A2/#757.** A coordinated save keeps the engine paused and must not restore a prior simulation speed; the positional compatibility field remains decode-compatible until format work. | A2/#757 |
 | `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
 | `tools/save_compat_migration_probe.py` | Every tracked complete-session baseline's fixture(s) (B1, the #760-only B2 transitional shape, C3's typed-reference/multi-page/items variants, B3's Lua-versioned session) load→publish→resave→restart→reload round trip (#766) | **Added by #766.** The one thing the pure hspec "save components"/"save compatibility" gates cannot prove: a real fixture on disk survives the normal whole-session transaction and a genuine process restart. | Done (#766) |
