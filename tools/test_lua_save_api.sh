@@ -103,6 +103,51 @@ wait_load_published() {
     return 1
 }
 
+# issue #1177: engine.saveWorld only ACCEPTS a request synchronously --
+# the encode and disk publication happen after it returns, and
+# Engine.Save.Barrier.beginSave keeps saves mutually exclusive until the
+# transaction reaches a terminal outcome (#757/#767), so a repeat save
+# submitted while the first is still active is correctly rejected.
+# Waiting on phase alone would be satisfied instantly by a stale
+# terminal status left behind by an EARLIER save, so this captures the
+# accepted request's id from engine.getSaveStatus() (written
+# synchronously inside saveWorld and only superseded by another
+# beginSave; scripts/autosave.lua cannot fire headless) and requires
+# BOTH that id AND a terminal phase, mirroring tools/probelib.py's
+# wait_save_complete. On success it touches neither counter; on failure
+# or timeout it increments FAIL with a diagnostic naming the request id
+# and the last observed phase (the same idiom as the load-transaction
+# wait in [8]).
+wait_save_complete() {
+    local desc="$1" secs="${2:-60}"
+    local req_id
+    req_id=$(lua "local s = engine.getSaveStatus(); if s == nil then return 'nil' end; return s.id")
+    case "$req_id" in
+        ''|*[!0-9]*)
+            echo "  FAIL: $desc -- no accepted save request to wait on (getSaveStatus id: [$req_id])"
+            FAIL=$((FAIL + 1))
+            return 1 ;;
+    esac
+    local _i result last_phase="(no status observed)"
+    for _i in $(seq 1 $((secs * 4))); do
+        result=$(lua "local s = engine.getSaveStatus(); if s == nil then return 'no-status' end; if s.id ~= ${req_id} then return 'other-request' end; if s.phase == 'SaveCaptureComplete' and s.outcome == 'SaveSucceeded' then return 'done' end; if s.phase == 'SaveFailed' then return 'failed: ' .. tostring(s.outcome) end; return s.phase")
+        case "$result" in
+            '"done"')
+                return 0 ;;
+            '"failed: '*)
+                echo "  FAIL: $desc -- save request $req_id failed ($result)"
+                FAIL=$((FAIL + 1))
+                return 1 ;;
+            *)
+                last_phase="$result" ;;
+        esac
+        sleep 0.25
+    done
+    echo "  FAIL: $desc -- save request $req_id never reached terminal completion (last phase: $last_phase)"
+    FAIL=$((FAIL + 1))
+    return 1
+}
+
 # ── Tests ────────────────────────────────────────────────────────────
 echo "[1] saveWorld validation rejects bad inputs (no world initialized)"
 assert_eq "missing page"          "false" "engine.saveWorld('nonexistent_page', 'test')"
@@ -126,10 +171,18 @@ assert_eq "engine starts unpaused"  "false" "engine.isPaused()"
 echo "[3] saveWorld accepts a valid name on an initialized world"
 assert_eq "good save"             "true"  "engine.saveWorld('test', '${TEST_SAVE_NAME}')"
 assert_eq "engine paused after save" "true" "engine.isPaused()"
+# The save stays mutually exclusive through encoding and disk
+# publication (issue #757), so a repeat submitted while the first
+# request is still active is correctly rejected. Wait for THIS
+# request's terminal completion before repeating.
+wait_save_complete "first save reaches terminal completion"
 # Reset before the next save assertion so we can re-verify the pause-flip.
 lua "engine.setPaused(false)" > /dev/null
 assert_eq "good save can repeat"  "true"  "engine.saveWorld('test', '${TEST_SAVE_NAME}')"
 assert_eq "engine paused after repeat" "true" "engine.isPaused()"
+# The step [5] timestamp inspection reads this same slot's listing, so
+# gate it on the repeat request's own terminal completion too.
+wait_save_complete "repeat save reaches terminal completion"
 
 echo "[4] saveWorld still rejects bad inputs on an initialized world"
 # Validation failures should NOT pause the engine (no side effects on reject).
@@ -145,9 +198,15 @@ assert_eq "no pause on wrong page" "false" "engine.isPaused()"
 
 echo "[5] saved file has ISO 8601 timestamp populated"
 # Iterate engine.listSaves(), find our test save, verify its timestamp
-# matches the YYYY-MM-DDTHH:MM:SSZ pattern produced at save time.
+# matches the canonical fixed-width microsecond form (issue #98's
+# %FT%T%6QZ). normalizeTimestamp (src/World/Save/Serialize.hs)
+# canonicalizes every listed save -- legacy second-precision shapes
+# included -- into exactly six fractional digits, so the fraction is
+# REQUIRED here: tolerating the old second-resolution form as an
+# alternative would silently re-admit the drift this assertion exists
+# to catch. Missing (nil) and malformed timestamps still fail.
 assert_eq "timestamp is ISO 8601" "true" \
-    "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}' then return s.timestamp:match('^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ\$') ~= nil end end return false end)()"
+    "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}' then return s.timestamp ~= nil and s.timestamp:match('^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d%.%d%d%d%d%d%dZ\$') ~= nil end end return false end)()"
 
 echo "[6] pause.toggle works on first press after a direct setPaused"
 # Simulate the auto-pause-on-save desync condition: engine flag flipped
@@ -250,8 +309,13 @@ sleep 0.2
 assert_eq "popup queue grew" "$((PRE_QUEUE + 1))" \
     "require('scripts.popup').queueLength()"
 
-echo "[13] engine.getNotificationCfg returns 10 categories in registry order"
-assert_eq "category count" "10" "#engine.getNotificationCfg()"
+echo "[13] engine.getNotificationCfg returns the authored categories in registry order"
+# Compare the full ordered id list against the authored registry order
+# (data/notification_categories.yaml). The count is derived from this
+# same expected list, so there is no separately maintained category
+# count left to go stale (issue #1177).
+assert_eq "category ids match registry order" "true" \
+    "(function() local expected = {'save_load', 'survival_critical', 'survival_warning', 'combat', 'building', 'weather', 'unit_status', 'unit_event', 'unit_warning', 'location_discovery', 'debug'}; local cfg = engine.getNotificationCfg(); if #cfg ~= #expected then return false end; for i, id in ipairs(expected) do if cfg[i].id ~= id then return false end end; return true end)()"
 assert_eq "first id is save_load"        "true" \
     "engine.getNotificationCfg()[1].id == 'save_load'"
 assert_eq "second id is survival_critical" "true" \
