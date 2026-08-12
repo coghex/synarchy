@@ -2,7 +2,7 @@
 
 These entries record focused evidence from the senior review of merged PRs #1210 through #1183 for later one-at-a-time disposition.
 
-`[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without an issue · `[deferred]` blocked on a concrete precondition
+Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without an issue · `[deferred]` blocked on a concrete precondition
 
 ## Status
 
