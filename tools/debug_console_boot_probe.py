@@ -58,14 +58,20 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
 import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The user's graphical instance. Never bind it, never kill anything on
+# it — same rule probelib.GUI_PORT enforces for every other probe.
+GUI_PORT = 8008
 
 # Clear of the GUI port 8008 and of run_probes.py's parallel range base.
 DEFAULT_PORT = 9457
@@ -74,6 +80,12 @@ DEFAULT_PORT = 9457
 # that leaves the process alive (the exact bug #1190 fixed) must FAIL
 # fast here rather than hang the probe.
 FAIL_TIMEOUT = 60.0
+
+# Check 7's shutdown budget. `hold` keeps the quit connection open while
+# the engine acts on the command (see send_quit for why closing early
+# loses it); the wait is per ATTEMPT, and there are two.
+QUIT_HOLD = 20.0
+QUIT_TIMEOUT = 45.0
 
 FAILURE_MARK = "requires a working debug console"
 PORT_ZERO_REASON = "no TCP listener at all"
@@ -207,6 +219,97 @@ def check_dump_unchanged() -> bool:
                  f"rc={r.returncode} " + "; ".join(problems))
 
 
+def send_quit(port: int, hold: float) -> None:
+    """Send `engine.quit()` and hold the connection open for up to
+    `hold` s, draining whatever the server writes back.
+
+    Draining matters for a reason that is TCP, not timing: the server
+    greets every client with a banner, so a client that closes without
+    reading it still has unread data queued — and closing THEN makes the
+    kernel send RST rather than FIN. The engine's console handler has no
+    handler for that (`DebugServer.hs` `handleClient` re-raises through
+    `finally`), so it dies with an uncaught `recv: ECONNRESET` on stderr.
+    Reading first means this side always closes cleanly.
+
+    That is NOT, however, what makes this check reliable — measured, not
+    assumed. Under the CPU load that reproduces the CI failure, holding
+    the connection alone still hung 3/3; it is the caller's RETRY that
+    recovers it (5/5). Why the engine ignores the first `engine.quit()`
+    for tens of seconds under contention, and then acts on a second one
+    promptly, is NOT explained by this probe — see the tracking issue.
+    """
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"engine.quit()\n")
+        # Read until the peer goes away (engine exiting closes it). Any
+        # banner/echo the server wrote is consumed here, so this side
+        # closes cleanly with an empty queue and never emits an RST.
+        s.settimeout(hold)
+        try:
+            while s.recv(4096):
+                pass
+        except (TimeoutError, socket.timeout, OSError):
+            pass
+
+
+# Every process group this probe started, so an INTERRUPTED run cleans
+# up too. `start_new_session=True` is what makes the group killable as a
+# unit, but it also detaches the child from signals aimed at this
+# process — so a `timeout`-ed or Ctrl-C'd probe would otherwise leave the
+# engine running and the port held, which is the very failure this
+# cleanup exists to prevent. Caught that way while testing this change.
+_LAUNCHED: list[subprocess.Popen] = []
+
+
+def _cleanup_launched(signum=None, frame=None) -> None:
+    for proc in list(_LAUNCHED):
+        kill_process_tree(proc)
+    _LAUNCHED.clear()
+    if signum is not None:
+        sys.exit(128 + signum)
+
+
+def install_cleanup_handlers() -> None:
+    atexit.register(_cleanup_launched)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _cleanup_launched)
+        except (OSError, ValueError):
+            pass
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill the launched process AND its children.
+
+    `proc` is `cabal`, not the engine it spawns, so `proc.kill()` alone
+    reparents a live engine to init and leaves it holding the listener —
+    which then fails EVERY later boot on that port with a bind error
+    that looks nothing like the original fault. Observed exactly that
+    way (a `synarchy --headless` with PPID 1) while diagnosing this
+    check.
+
+    The kill is by PROCESS GROUP, which is why the launch passes
+    `start_new_session=True`: it reaches the engine child without
+    naming it, needs no external tool (the CI image ships no `lsof`),
+    and — unlike asking who holds the port — can only ever touch
+    processes this probe itself started.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        # Group already gone, or never created; fall back to the direct
+        # child so cleanup still does something.
+        try:
+            proc.kill()
+        except OSError:
+            return
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def check_successful_bind(port: int) -> bool:
     print(f"7. a successful headless bind on {port} behaves exactly as before")
     log_out = f"/tmp/debug_console_boot_probe_{port}.out"
@@ -215,7 +318,11 @@ def check_successful_bind(port: int) -> bool:
         proc = subprocess.Popen(
             ["cabal", "run", "-v0", "exe:synarchy", "--", "--headless",
              "--port", str(port)],
-            stdout=fo, stderr=fe, cwd=REPO_ROOT)
+            stdout=fo, stderr=fe, cwd=REPO_ROOT,
+            # Own process group, so cleanup can reach the engine child
+            # without naming it and without touching anything else.
+            start_new_session=True)
+    _LAUNCHED.append(proc)
     try:
         deadline = time.time() + 180.0
         ready = False
@@ -231,10 +338,26 @@ def check_successful_bind(port: int) -> bool:
                          f"no READY on stdout; see {log_out} / {log_err}")
         # The console is the surface this whole issue is about: prove it
         # actually answers, not merely that a marker was printed.
-        with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
-            s.sendall(b"engine.quit()\n")
-            time.sleep(0.5)
-        rc = proc.wait(timeout=60)
+        #
+        # Two attempts. This is the part that actually removes the
+        # flake: under load the engine ignores the first quit for tens of
+        # seconds (hung 3/3 with the connection held; 5/5 pass with this
+        # retry), and from out here a dropped command and a starved one
+        # are indistinguishable. The retry costs nothing when the first
+        # send worked, and a SECOND failure is reported rather than
+        # retried away — that would be a genuine console regression.
+        rc = None
+        for attempt in (1, 2):
+            send_quit(port, hold=QUIT_HOLD)
+            try:
+                rc = proc.wait(timeout=QUIT_TIMEOUT)
+                break
+            except subprocess.TimeoutExpired:
+                if attempt == 2:
+                    return check(
+                        "successful bind", False,
+                        f"still running {2 * QUIT_TIMEOUT:.0f}s after two "
+                        f"engine.quit() sends; see {log_out} / {log_err}")
         err = open(log_err).read()
         problems = []
         if rc != 0:
@@ -242,12 +365,13 @@ def check_successful_bind(port: int) -> bool:
         if FAILURE_MARK in err:
             problems.append("a successful bind still reported a listener failure")
         return check("successful bind", not problems, "; ".join(problems))
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except OSError as e:
         return check("successful bind", False, f"{type(e).__name__}: {e}")
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=10)
+        # `proc` is cabal; the engine is its child and outlives it.
+        kill_process_tree(proc)
+        if proc in _LAUNCHED:
+            _LAUNCHED.remove(proc)
 
 
 def main() -> int:
@@ -255,8 +379,15 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help="base port for the two checks that need a real one")
     args = ap.parse_args()
-    if args.port == 8008:
-        sys.exit("refusing to use port 8008 (the GUI port); pass a 9xxx port")
+    install_cleanup_handlers()
+    # `--port` is a BASE: check 4 binds it and check 7 binds port + 1.
+    # Guarding only the base let `--port 8007` put check 7 on the GUI
+    # port, where it would boot against the user's own running game and
+    # then kill that process tree on the way out.
+    used = (args.port, args.port + 1)
+    if GUI_PORT in used:
+        sys.exit(f"refusing to use port {GUI_PORT} (the GUI port): --port "
+                 f"{args.port} binds {used[0]} and {used[1]}; pass a 9xxx port")
 
     results = [
         check_port_zero(),
