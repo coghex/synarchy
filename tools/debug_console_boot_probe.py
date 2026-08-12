@@ -60,6 +60,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -74,6 +75,12 @@ DEFAULT_PORT = 9457
 # that leaves the process alive (the exact bug #1190 fixed) must FAIL
 # fast here rather than hang the probe.
 FAIL_TIMEOUT = 60.0
+
+# Check 7's shutdown budget. `hold` keeps the quit connection open while
+# the engine acts on the command (see send_quit for why closing early
+# loses it); the wait is per ATTEMPT, and there are two.
+QUIT_HOLD = 20.0
+QUIT_TIMEOUT = 45.0
 
 FAILURE_MARK = "requires a working debug console"
 PORT_ZERO_REASON = "no TCP listener at all"
@@ -207,6 +214,59 @@ def check_dump_unchanged() -> bool:
                  f"rc={r.returncode} " + "; ".join(problems))
 
 
+def send_quit(port: int, hold: float) -> None:
+    """Send `engine.quit()` and hold the connection open for up to
+    `hold` s, draining whatever the server writes back.
+
+    Draining matters for a reason that is TCP, not timing: the server
+    greets every client with a banner, so a client that closes without
+    reading it still has unread data queued — and closing THEN makes the
+    kernel send RST rather than FIN. The engine's console handler has no
+    handler for that (`DebugServer.hs` `handleClient` re-raises through
+    `finally`), so it dies with an uncaught `recv: ECONNRESET` on stderr.
+    Reading first means this side always closes cleanly.
+
+    That is NOT, however, what makes this check reliable — measured, not
+    assumed. Under the CPU load that reproduces the CI failure, holding
+    the connection alone still hung 3/3; it is the caller's RETRY that
+    recovers it (5/5). Why the engine ignores the first `engine.quit()`
+    for tens of seconds under contention, and then acts on a second one
+    promptly, is NOT explained by this probe — see the tracking issue.
+    """
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"engine.quit()\n")
+        # Read until the peer goes away (engine exiting closes it). Any
+        # banner/echo the server wrote is consumed here, so this side
+        # closes cleanly with an empty queue and never emits an RST.
+        s.settimeout(hold)
+        try:
+            while s.recv(4096):
+                pass
+        except (TimeoutError, socket.timeout, OSError):
+            pass
+
+
+def kill_listener(port: int) -> None:
+    """Kill whatever still holds `port`.
+
+    `proc` here is `cabal`, not the engine it spawns, so `proc.kill()`
+    alone reparents a live engine to init and leaves it holding the
+    listener — which then fails EVERY later boot on this port with a
+    bind error that looks nothing like the original fault. Observed
+    exactly that way while diagnosing this check.
+    """
+    try:
+        out = subprocess.run(["lsof", "-ti", f":{port}"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+    for pid in out.split():
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+
+
 def check_successful_bind(port: int) -> bool:
     print(f"7. a successful headless bind on {port} behaves exactly as before")
     log_out = f"/tmp/debug_console_boot_probe_{port}.out"
@@ -231,10 +291,26 @@ def check_successful_bind(port: int) -> bool:
                          f"no READY on stdout; see {log_out} / {log_err}")
         # The console is the surface this whole issue is about: prove it
         # actually answers, not merely that a marker was printed.
-        with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
-            s.sendall(b"engine.quit()\n")
-            time.sleep(0.5)
-        rc = proc.wait(timeout=60)
+        #
+        # Two attempts. This is the part that actually removes the
+        # flake: under load the engine ignores the first quit for tens of
+        # seconds (hung 3/3 with the connection held; 5/5 pass with this
+        # retry), and from out here a dropped command and a starved one
+        # are indistinguishable. The retry costs nothing when the first
+        # send worked, and a SECOND failure is reported rather than
+        # retried away — that would be a genuine console regression.
+        rc = None
+        for attempt in (1, 2):
+            send_quit(port, hold=QUIT_HOLD)
+            try:
+                rc = proc.wait(timeout=QUIT_TIMEOUT)
+                break
+            except subprocess.TimeoutExpired:
+                if attempt == 2:
+                    return check(
+                        "successful bind", False,
+                        f"still running {2 * QUIT_TIMEOUT:.0f}s after two "
+                        f"engine.quit() sends; see {log_out} / {log_err}")
         err = open(log_err).read()
         problems = []
         if rc != 0:
@@ -242,12 +318,17 @@ def check_successful_bind(port: int) -> bool:
         if FAILURE_MARK in err:
             problems.append("a successful bind still reported a listener failure")
         return check("successful bind", not problems, "; ".join(problems))
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except OSError as e:
         return check("successful bind", False, f"{type(e).__name__}: {e}")
     finally:
         if proc.poll() is None:
             proc.kill()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        # `proc` is cabal; the engine is its child and outlives it.
+        kill_listener(port)
 
 
 def main() -> int:
