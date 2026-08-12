@@ -58,6 +58,7 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import signal
@@ -67,6 +68,10 @@ import sys
 import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The user's graphical instance. Never bind it, never kill anything on
+# it — same rule probelib.GUI_PORT enforces for every other probe.
+GUI_PORT = 8008
 
 # Clear of the GUI port 8008 and of run_probes.py's parallel range base.
 DEFAULT_PORT = 9457
@@ -246,25 +251,63 @@ def send_quit(port: int, hold: float) -> None:
             pass
 
 
-def kill_listener(port: int) -> None:
-    """Kill whatever still holds `port`.
+# Every process group this probe started, so an INTERRUPTED run cleans
+# up too. `start_new_session=True` is what makes the group killable as a
+# unit, but it also detaches the child from signals aimed at this
+# process — so a `timeout`-ed or Ctrl-C'd probe would otherwise leave the
+# engine running and the port held, which is the very failure this
+# cleanup exists to prevent. Caught that way while testing this change.
+_LAUNCHED: list[subprocess.Popen] = []
 
-    `proc` here is `cabal`, not the engine it spawns, so `proc.kill()`
-    alone reparents a live engine to init and leaves it holding the
-    listener — which then fails EVERY later boot on this port with a
-    bind error that looks nothing like the original fault. Observed
-    exactly that way while diagnosing this check.
-    """
-    try:
-        out = subprocess.run(["lsof", "-ti", f":{port}"],
-                             capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.SubprocessError):
-        return
-    for pid in out.split():
+
+def _cleanup_launched(signum=None, frame=None) -> None:
+    for proc in list(_LAUNCHED):
+        kill_process_tree(proc)
+    _LAUNCHED.clear()
+    if signum is not None:
+        sys.exit(128 + signum)
+
+
+def install_cleanup_handlers() -> None:
+    atexit.register(_cleanup_launched)
+    for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            os.kill(int(pid), signal.SIGKILL)
+            signal.signal(sig, _cleanup_launched)
         except (OSError, ValueError):
             pass
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill the launched process AND its children.
+
+    `proc` is `cabal`, not the engine it spawns, so `proc.kill()` alone
+    reparents a live engine to init and leaves it holding the listener —
+    which then fails EVERY later boot on that port with a bind error
+    that looks nothing like the original fault. Observed exactly that
+    way (a `synarchy --headless` with PPID 1) while diagnosing this
+    check.
+
+    The kill is by PROCESS GROUP, which is why the launch passes
+    `start_new_session=True`: it reaches the engine child without
+    naming it, needs no external tool (the CI image ships no `lsof`),
+    and — unlike asking who holds the port — can only ever touch
+    processes this probe itself started.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        # Group already gone, or never created; fall back to the direct
+        # child so cleanup still does something.
+        try:
+            proc.kill()
+        except OSError:
+            return
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def check_successful_bind(port: int) -> bool:
@@ -275,7 +318,11 @@ def check_successful_bind(port: int) -> bool:
         proc = subprocess.Popen(
             ["cabal", "run", "-v0", "exe:synarchy", "--", "--headless",
              "--port", str(port)],
-            stdout=fo, stderr=fe, cwd=REPO_ROOT)
+            stdout=fo, stderr=fe, cwd=REPO_ROOT,
+            # Own process group, so cleanup can reach the engine child
+            # without naming it and without touching anything else.
+            start_new_session=True)
+    _LAUNCHED.append(proc)
     try:
         deadline = time.time() + 180.0
         ready = False
@@ -321,14 +368,10 @@ def check_successful_bind(port: int) -> bool:
     except OSError as e:
         return check("successful bind", False, f"{type(e).__name__}: {e}")
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
         # `proc` is cabal; the engine is its child and outlives it.
-        kill_listener(port)
+        kill_process_tree(proc)
+        if proc in _LAUNCHED:
+            _LAUNCHED.remove(proc)
 
 
 def main() -> int:
@@ -336,8 +379,15 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help="base port for the two checks that need a real one")
     args = ap.parse_args()
-    if args.port == 8008:
-        sys.exit("refusing to use port 8008 (the GUI port); pass a 9xxx port")
+    install_cleanup_handlers()
+    # `--port` is a BASE: check 4 binds it and check 7 binds port + 1.
+    # Guarding only the base let `--port 8007` put check 7 on the GUI
+    # port, where it would boot against the user's own running game and
+    # then kill that process tree on the way out.
+    used = (args.port, args.port + 1)
+    if GUI_PORT in used:
+        sys.exit(f"refusing to use port {GUI_PORT} (the GUI port): --port "
+                 f"{args.port} binds {used[0]} and {used[1]}; pass a 9xxx port")
 
     results = [
         check_port_zero(),
