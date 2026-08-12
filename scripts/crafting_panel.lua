@@ -63,6 +63,7 @@ local button   = require("scripts.ui.button")
 local textbox  = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local scale    = require("scripts.ui.scale")
+local utf8Safe = require("scripts.ui.utf8_safe")
 
 -----------------------------------------------------------
 -- Layout constants (base units; uiscale applied at draw time)
@@ -244,11 +245,26 @@ function craftingPanel.recipeAvailability(def, tally)
     return { ready = (#missing == 0), missing = missing }
 end
 
+-- Cap `text` at `maxChars` CODE POINTS, suffixing ".." when it has to cut.
+--
+-- #1189: this was a byte count and a byte slice, which both split multi-byte
+-- UTF-8 sequences AND made `maxChars` a lie — an accented or CJK name was cut
+-- at a third to a half of the advertised length. On pure ASCII, code points
+-- and bytes coincide, so this is byte-for-byte the pre-#1189 output.
+--
+-- Every caller feeds this engine-delivered Text (recipe/item display names,
+-- unit.getInfo names), which is valid UTF-8 by construction — the same
+-- premise shell.lua's editing path relies on — so the utf8_safe primitives
+-- are used directly rather than guarded.
 local function truncate(text, maxChars)
     text = text or ""
-    if #text <= maxChars then return text end
-    return string.sub(text, 1, maxChars - 2) .. ".."
+    if utf8Safe.codepointLength(text) <= maxChars then return text end
+    return utf8Safe.prefix(text, maxChars - 2) .. ".."
 end
+
+-- Exposed for the #1189 regression test, which exercises the real helper
+-- (a copied algorithm would not be evidence about these four call sites).
+craftingPanel.truncate = truncate
 
 local function claimantName(uid)
     if not uid then return nil end

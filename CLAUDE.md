@@ -1050,8 +1050,19 @@ before touching each area:
   transition, cleared on exit/release/complete).
   `power.isStationPoweredForRecipe(bid, recipeId[, billId])` is the
   gating query — pass the bill's own id so its already-registered draw
-  isn't double-counted, while other consumers still sum. Gates:
-  `power_probe.py`, `power_workshop_probe.py`, `machine_shop_probe.py`;
+  isn't double-counted, while other consumers still sum.
+  **A node's LIFETIME is its building's** (#1206): `BuildingDestroy`
+  retires the node in the same live transaction that removes the
+  instance (`Power.Live.retirePowerNodeEverywhere`, resolving the
+  session-global `BuildingId` across every live page — the
+  `forgetContainerEverywhere` pattern), so a demolition never reaches
+  the save. That is NOT load-time pruning: the #758/#763 tolerance
+  stands, and a save already carrying a dangling node still restores it
+  verbatim. Retirement is a delete, never a compaction — surviving ids
+  are untouched and `pnsNextId` keeps advancing, so a retired id is
+  never handed to a later placement. There is deliberately no public
+  `power.removeNode`. Gates: `power_probe.py`, `power_workshop_probe.py`,
+  `machine_shop_probe.py`, hspec `--match "power node demolition"`;
   pure algorithm in `Test.Headless.Power.Network`.
 - **Farming (#331-#336, growth #332, tilling #333)** — flora growth is
   DERIVED state from the advancing calendar (nothing per-instance in
