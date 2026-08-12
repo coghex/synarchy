@@ -98,7 +98,6 @@ injuryLog.baseSizes = {
     tabGap       = 4,
     arrowWidth   = 28,
     arrowHeight  = 36,
-    tabNameMax   = 12,
     tileSize     = 64,
     panelFrac    = 0.85,
 }
@@ -148,13 +147,6 @@ end
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
-
-local function truncateTabName(text)
-    text = text or ""
-    local maxLen = injuryLog.baseSizes.tabNameMax
-    if #text <= maxLen then return text end
-    return string.sub(text, 1, maxLen - 3) .. "..."
-end
 
 local function maxScrollOffset()
     return injuryLog.tabMaxScroll or 0

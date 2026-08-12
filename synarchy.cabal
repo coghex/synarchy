@@ -1209,6 +1209,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
                    Test.Headless.Lua.TextWrapping
+                   Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Graphics.BindlessRebind
     build-depends: base >=4.20 && <5

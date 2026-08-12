@@ -13,6 +13,7 @@ local label     = require("scripts.ui.label")
 local scrollbar = require("scripts.ui.scrollbar")
 local L         = require("scripts.unit_info_v2_layout")
 local statDefs  = require("scripts.unit_info_v2_stat_defs")
+local utf8Safe  = require("scripts.ui.utf8_safe")
 
 local M = {}
 
@@ -59,21 +60,32 @@ local function loadIconFor(iconKey, kind)
 end
 
 -- Trim `text` with a trailing "…" so it fits `maxW` px at `fontSize`.
+--
+-- #1189: the search walks CODE POINTS down, not bytes. The byte walk it
+-- replaces handed engine.getTextWidth candidates cut inside a multi-byte
+-- UTF-8 sequence — a dangling lead byte, so mojibake or a measurement
+-- failure — and re-measured the same visible prefix once per byte of every
+-- multi-byte character. On pure ASCII code points and bytes coincide, so
+-- this is byte-for-byte the pre-#1189 scan, ellipsis and all.
 local function abbreviateToWidth(text, maxW, fontSize)
     if maxW <= 0 then return text end
     if engine.getTextWidth(hud.menuFont, text, fontSize) <= maxW then
         return text
     end
-    local n = #text
-    while n > 1 do
-        local cand = text:sub(1, n) .. "…"
+    local chars = utf8Safe.codepointLength(text)
+    while chars > 1 do
+        local cand = utf8Safe.prefix(text, chars) .. "…"
         if engine.getTextWidth(hud.menuFont, cand, fontSize) <= maxW then
             return cand
         end
-        n = n - 1
+        chars = chars - 1
     end
     return "…"
 end
+
+-- Exposed for the #1189 regression test, which measures the real helper
+-- (a copied algorithm would not be evidence about this call path).
+M.abbreviateToWidth = abbreviateToWidth
 
 -- Place a single content row: stat icon on the left, bright value on
 -- the right. The icon owns the description tooltip (from STAT_DEFS or
