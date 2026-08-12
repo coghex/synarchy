@@ -1,8 +1,9 @@
--- Cargo Inventory Panel
+-- Container Window (historically the cargo inventory panel)
 --
--- Floating popup showing a cargo building's stored items as a
--- tabbed icon list. Triggered by right-click on the cargo →
--- context menu → "Contents".
+-- Floating popup showing ONE transfer endpoint's stored items as a
+-- tabbed icon list. A BUILDING endpoint is reached by right-click on
+-- the cargo → context menu → "Contents"; a UNIT endpoint is reached
+-- through this module's public API.
 --
 -- Since #1088 the tabbed list itself is the shared item-list widget
 -- (scripts/ui/item_list.lua) — this module owns only the popup window,
@@ -11,15 +12,34 @@
 -- truncation and rebuild invalidation all live in the widget, which the
 -- unit-info inventory section and the item-contents popup share.
 --
--- Singleton: opening for a new cargo destroys the old popup.
--- Pinned at the mouse position when opened; doesn't follow the
--- building if the camera moves. Esc closes; clicking the cargo
--- again re-opens fresh.
+-- Since #1234 the window is ENDPOINT-KIND AGNOSTIC: everything that
+-- differs between a cargo and an acolyte lives in the ENDPOINTS table
+-- below (one live read, one weight label, one optional row action), and
+-- nothing else in this file knows which kind is open. An unknown kind
+-- is REJECTED rather than assumed, the same way
+-- scripts/etymology_panel.lua's own openFor(kind, id) rejects one.
+-- A building endpoint's rendered rows, tabs, header and row menu are
+-- deliberately unchanged by that generalization.
 --
--- Public API:
---   openFor(bid, mx, my)  — open on this cargo at framebuffer pixel (mx, my)
---   closeIfOpen()         — destroy the popup if shown
---   isOpen()              — bool
+-- Contents are read LIVE on every tick. Last-known contents
+-- (building.getContainerKnowledge) belong to UIT-1B and are
+-- deliberately not consulted here — mixing the two would make a
+-- regression in either impossible to attribute.
+--
+-- Singleton: opening for a new endpoint destroys the old popup.
+-- Pinned at the mouse position when opened; doesn't follow the
+-- endpoint if the camera moves (or if a unit walks away). Esc closes;
+-- opening again re-opens fresh.
+--
+-- Public API — an endpoint identity is a KIND plus an id, never a bare
+-- building id:
+--   openFor(kind, id, mx, my)            — open on this endpoint at
+--                                          framebuffer pixel (mx, my);
+--                                          false if it isn't one
+--   reopenWithTab(kind, id, mx, my, tab) — the resize-restore entry point
+--   closeIfOpen()                        — destroy the popup if shown
+--   isOpen()                             — bool
+--   showRowMenu(item)                    — the open endpoint's row action
 --
 -- Engine script hooks: setup / init / update / shutdown.
 --
@@ -87,13 +107,16 @@ local CARGO_TABS = {
 -----------------------------------------------------------
 -- State
 -----------------------------------------------------------
--- `activeTab` is the panel's own durable selection (hud.lua snapshots
--- it across a resize and hands it back through reopenWithTab); the
--- rendered tab strip, the rows and the rebuild comparison all belong
--- to the shared item-list widget (#1088), reachable through `listId`.
+-- `kind` + `id` are the open endpoint's identity (#1234) — the pair
+-- hud.lua snapshots across a resize, not a bare building id.
+-- `activeTab` is the panel's own durable selection (also snapshotted,
+-- and handed back through reopenWithTab); the rendered tab strip, the
+-- rows and the rebuild comparison all belong to the shared item-list
+-- widget (#1088), reachable through `listId`.
 cargoInventoryPanel.state = cargoInventoryPanel.state or {
     open          = false,
-    bid           = nil,
+    kind          = nil,
+    id            = nil,
     panelId       = nil,
     activeTab     = "All",
     titleId       = nil,
@@ -113,34 +136,6 @@ end
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
-
--- The item-list parameters that describe THIS panel's data and
--- presentation policy. Everything the widget needs to group, tab,
--- render and invalidate; bounds are added by buildLayout once the
--- panel has been sized from the resulting row count.
-local function listDataParams(bid, activeTab)
-    return {
-        items     = building.getStorage(bid) or {},
-        activeTab = activeTab,
-        uiscale   = scale.get(),
-        tabs      = CARGO_TABS,
-        maxRows   = MAX_ROWS,
-        rowName   = function(g)
-            local n = qualityTier.withSuffix(
-                g.displayName or g.defName or "?", g)
-            if (g.count or 1) > 1 then
-                n = string.format("%s ×%d", n, g.count)
-            end
-            return n
-        end,
-        rowWeightText = function(g)
-            return string.format("%.2f kg", (g.weight or 0) * (g.count or 1))
-        end,
-        rowColor  = function() return ROW_NAME_COL end,
-        onTabChange     = cargoInventoryPanel.onTabChange,
-        onRowRightClick = cargoInventoryPanel.showRowMenu,
-    }
-end
 
 -- Chebyshev tile distance from (utx, uty) to the cargo footprint.
 local function chebToFootprint(utx, uty, bx, by, tileW, tileH)
@@ -173,6 +168,171 @@ local function adjacentSelectedUnit(bid)
     return nil
 end
 
+-- The window's row action for a BUILDING endpoint, unchanged by #1234:
+-- withdraw the right-clicked stack into an adjacent selected acolyte.
+-- The widget deliberately never learns what "Withdraw" means, so this
+-- is the host's answer and belongs to this endpoint kind alone.
+local function buildingRowMenu(bid, item)
+    local defName = item.defName
+    local instId  = item.instanceId
+    local target  = adjacentSelectedUnit(bid)
+
+    local items = {}
+    if target then
+        local info = unit.getInfo(target)
+        -- Prefer the unit's personal name, else its species label (#264).
+        local who  = "unit"
+        if info then
+            if info.name and info.name ~= "" then
+                who = info.name
+            elseif info.displayName and info.displayName ~= "" then
+                who = info.displayName
+            elseif info.defName then
+                who = info.defName
+            end
+        end
+        items[1] = {
+            label    = "Withdraw with " .. who,
+            callback = function()
+                unit.withdrawFromCargo(target, bid, defName, instId)
+                -- Redraw on the SAME frame rather than waiting for the
+                -- next tick's comparison to notice.
+                itemList.invalidate(cargoInventoryPanel.state.listId)
+            end,
+        }
+    else
+        items[1] = {
+            label   = "Withdraw (select an adjacent unit first)",
+            enabled = false,
+        }
+    end
+    return items
+end
+
+-- A unit's own display text, mirroring buildingRowMenu's #264
+-- precedence so the window titles a unit the same way its withdraw
+-- menu names one. transferEndpointInfo reports only the species-level
+-- displayName, which is the fallback rather than the answer.
+local function unitTitle(uid, info)
+    local live = unit.getInfo(uid)
+    if live then
+        if live.name and live.name ~= "" then return live.name end
+        if live.displayName and live.displayName ~= "" then
+            return live.displayName
+        end
+        if live.defName then return live.defName end
+    end
+    if info.displayName and info.displayName ~= "" then
+        return info.displayName
+    end
+    return "Inventory"
+end
+
+-----------------------------------------------------------
+-- Endpoint kinds (#1234)
+--
+-- ONE window, two data sources. Each entry answers exactly the
+-- questions that differ between kinds; everything below this table is
+-- kind-blind. `view` is the SINGLE live read — nil means "not an
+-- eligible endpoint", which covers an unknown id, a destroyed
+-- instance, and a unit that is not player-commandable alike, so open
+-- and the per-tick lifecycle check share one definition of eligible.
+--
+-- `stillThere` exists only where liveness is a DIFFERENT question from
+-- eligibility: a cargo's capacity is def-declared, so a building's
+-- popup must not outlive the instance rather than its storage. A kind
+-- that omits it is governed by `view` alone.
+--
+-- `rowMenu` is optional and a kind that omits it renders rows with no
+-- right-click action at all (the widget's own `rc=` signature covers
+-- that, so the two kinds can never share a stale list). Unit rows have
+-- none in this slice: transfer gestures and orders are UIT-2's, and
+-- `unit.withdrawFromCargo` is a building-only verb.
+-----------------------------------------------------------
+local ENDPOINTS = {
+    building = {
+        weightLabel = "Storage",
+        view = function(id)
+            local cap = building.getStorageCapacity(id)
+            if not cap or cap <= 0 then return nil end
+            local binfo = building.getInfo(id)
+            return {
+                title    = (binfo and (binfo.displayName or binfo.defName))
+                             or "Cargo",
+                capacity = cap,
+                stored   = building.getStorageWeight(id) or 0,
+                contents = building.getStorage(id) or {},
+            }
+        end,
+        stillThere = function(id) return building.getInfo(id) ~= nil end,
+        rowMenu = buildingRowMenu,
+    },
+    unit = {
+        weightLabel = "Carrying",
+        -- `contents` is LOOSE INVENTORY; `storedWeight` deliberately is
+        -- not its sum — it is the endpoint's whole recursive load
+        -- (inventory + equipment + accessories), measured by the same
+        -- rule the capacity gate uses. Both come from the one engine
+        -- read so the header and the rows can never disagree about
+        -- which instant they describe.
+        view = function(id)
+            local info = unit.transferEndpointInfo({ kind = "unit", id = id })
+            if not info or info.eligible ~= true then return nil end
+            return {
+                title    = unitTitle(id, info),
+                capacity = info.capacity or 0,
+                stored   = info.storedWeight or 0,
+                contents = info.contents or {},
+            }
+        end,
+    },
+}
+
+-- The one live read, and the one place an unknown kind is refused.
+local function endpointView(kind, id)
+    local def = ENDPOINTS[kind]
+    if not def or id == nil then return nil end
+    return def.view(id)
+end
+
+-- The item-list parameters that describe THIS panel's data and
+-- presentation policy. Everything the widget needs to group, tab,
+-- render and invalidate; bounds are added by buildLayout once the
+-- panel has been sized from the resulting row count.
+--
+-- The host-owned title/subtitle chrome rides in `presentationKey`
+-- because the widget cannot see it: a unit's stored weight moves when
+-- it equips something its loose inventory never listed, and without
+-- this the header would keep reporting the load it had at open.
+local function listDataParams(kind, view, activeTab)
+    local def = ENDPOINTS[kind]
+    return {
+        items     = view.contents,
+        activeTab = activeTab,
+        uiscale   = scale.get(),
+        tabs      = CARGO_TABS,
+        maxRows   = MAX_ROWS,
+        rowName   = function(g)
+            local n = qualityTier.withSuffix(
+                g.displayName or g.defName or "?", g)
+            if (g.count or 1) > 1 then
+                n = string.format("%s ×%d", n, g.count)
+            end
+            return n
+        end,
+        rowWeightText = function(g)
+            return string.format("%.2f kg", (g.weight or 0) * (g.count or 1))
+        end,
+        rowColor  = function() return ROW_NAME_COL end,
+        presentationKey = string.format("%s|%s|%.3f/%.3f", tostring(kind),
+                                        tostring(view.title),
+                                        view.stored, view.capacity),
+        onTabChange     = cargoInventoryPanel.onTabChange,
+        onRowRightClick = (def and def.rowMenu)
+                            and cargoInventoryPanel.showRowMenu or nil,
+    }
+end
+
 -----------------------------------------------------------
 -- Element teardown
 -----------------------------------------------------------
@@ -203,17 +363,15 @@ end
 -----------------------------------------------------------
 -- Render: title row
 -----------------------------------------------------------
-local function buildTitle(originX, originY, bid)
+local function buildTitle(originX, originY, kind, view)
     local s = cargoInventoryPanel.state
     local h = cargoInventoryPanel.hud
     if not h then return end
     local uiscale = scale.get()
-    local binfo = building.getInfo(bid)
-    local name = (binfo and (binfo.displayName or binfo.defName)) or "Cargo"
 
     s.titleId = label.new({
         name     = "cargo_inv_title",
-        text     = name,
+        text     = view.title,
         font     = h.menuFont,
         fontSize = TITLE_FONT,
         color    = TITLE_COL,
@@ -225,11 +383,12 @@ local function buildTitle(originX, originY, bid)
                  originY + math.floor(TITLE_FONT * 0.85))
     UI.setZIndex(th, 132)
 
-    local cap  = building.getStorageCapacity(bid) or 0
-    local used = building.getStorageWeight(bid)   or 0
+    local def   = ENDPOINTS[kind]
+    local wlabel = (def and def.weightLabel) or "Storage"
     s.subtitleId = label.new({
         name     = "cargo_inv_subtitle",
-        text     = string.format("Storage: %.2f / %.2f kg", used, cap),
+        text     = string.format("%s: %.2f / %.2f kg", wlabel,
+                                 view.stored, view.capacity),
         font     = h.menuFont,
         fontSize = SUBTITLE_FONT,
         color    = SUBTITLE_COL,
@@ -246,17 +405,18 @@ end
 -----------------------------------------------------------
 -- Open / refresh
 -----------------------------------------------------------
-local function buildLayout(bid, mx, my)
+local function buildLayout(view)
     local s = cargoInventoryPanel.state
     local h = cargoInventoryPanel.hud
     if not h or not h.page then return end
+    local mx, my = s.mx, s.my
 
     -- Normalize the data ONCE through the shared widget, then size the
     -- panel from the row count it produces. The widget snaps a
     -- no-longer-present selection back to "All"; mirror that into the
     -- panel's own durable activeTab so hud.lua's resize snapshot and
     -- reopenWithTab never carry a dead category forward.
-    local dataParams = listDataParams(bid, s.activeTab)
+    local dataParams = listDataParams(s.kind, view, s.activeTab)
     local model = itemList.prepare(dataParams)
     dataParams.model = model
     s.activeTab = model.activeTab
@@ -321,7 +481,7 @@ local function buildLayout(bid, mx, my)
 
     destroyTitle()
     destroyList()
-    buildTitle(cx, cy, bid)
+    buildTitle(cx, cy, s.kind, view)
 
     dataParams.name         = "cargo_inv"
     dataParams.page         = h.page
@@ -342,16 +502,26 @@ local function buildLayout(bid, mx, my)
     s.listId = itemList.new(dataParams)
 end
 
-function cargoInventoryPanel.openFor(bid, mx, my)
-    if not bid then return end
-    local cap = building.getStorageCapacity(bid)
-    if not cap or cap <= 0 then return end
+-- Open on one endpoint. `kind` is "building" or "unit"; `id` is that
+-- kind's own id. Returns true when the window opened.
+--
+-- The eligibility read comes FIRST, before closeIfOpen — an unknown
+-- kind, a vanished id, or a unit that is not player-commandable is
+-- refused without creating any panel or list state and without
+-- disturbing a window that is already open on a valid endpoint. Same
+-- ordering scripts/etymology_panel.lua's openFor uses, and the same
+-- ordering the building path already had.
+function cargoInventoryPanel.openFor(kind, id, mx, my)
+    local view = endpointView(kind, id)
+    if not view then return false end
     cargoInventoryPanel.closeIfOpen()
     cargoInventoryPanel.state.open = true
-    cargoInventoryPanel.state.bid  = bid
+    cargoInventoryPanel.state.kind = kind
+    cargoInventoryPanel.state.id   = id
     cargoInventoryPanel.state.mx   = mx
     cargoInventoryPanel.state.my   = my
-    buildLayout(bid, mx, my)
+    buildLayout(view)
+    return true
 end
 
 -- #750 round-13 review: hud.lua's "resize" teardown (scripts/ui/
@@ -359,15 +529,15 @@ end
 -- is mounted on — gets deleted and replaced; a resize/rescale otherwise
 -- silently discarded the player's open cargo panel (and which tab they
 -- had selected) rather than treating it as the layout-only change #750
--- requires it to survive. hud.lua snapshots isOpen()/state.bid/mx/my/
--- activeTab BEFORE the teardown runs and calls this to rebuild the SAME
--- panel, on the SAME tab, once its own rebuild is done. Plain openFor()
--- always resets to the "All" tab (closeIfOpen's own reset), so the
--- saved tab is re-applied afterward via the same rebuild path a tab
--- click uses, IF it's still a valid tab for the (possibly changed)
--- current contents.
-function cargoInventoryPanel.reopenWithTab(bid, mx, my, tab)
-    cargoInventoryPanel.openFor(bid, mx, my)
+-- requires it to survive. hud.lua snapshots isOpen()/state.kind/state.id/
+-- mx/my/activeTab BEFORE the teardown runs and calls this to rebuild the
+-- SAME panel, on the SAME endpoint and the SAME tab, once its own
+-- rebuild is done. Plain openFor() always resets to the "All" tab
+-- (closeIfOpen's own reset), so the saved tab is re-applied afterward
+-- via the same rebuild path a tab click uses, IF it's still a valid tab
+-- for the (possibly changed) current contents.
+function cargoInventoryPanel.reopenWithTab(kind, id, mx, my, tab)
+    cargoInventoryPanel.openFor(kind, id, mx, my)
     local s = cargoInventoryPanel.state
     if not s.open or not tab or tab == s.activeTab then return end
     local stillValid = false
@@ -375,8 +545,10 @@ function cargoInventoryPanel.reopenWithTab(bid, mx, my, tab)
         if t.key == tab then stillValid = true; break end
     end
     if stillValid then
+        local view = endpointView(s.kind, s.id)
+        if not view then return end
         s.activeTab = tab
-        buildLayout(s.bid, s.mx, s.my)
+        buildLayout(view)
     end
 end
 
@@ -384,7 +556,8 @@ function cargoInventoryPanel.closeIfOpen()
     if not cargoInventoryPanel.state.open then return end
     destroyAll()
     cargoInventoryPanel.state.open      = false
-    cargoInventoryPanel.state.bid       = nil
+    cargoInventoryPanel.state.kind      = nil
+    cargoInventoryPanel.state.id        = nil
     cargoInventoryPanel.state.activeTab = "All"
 end
 
@@ -402,51 +575,24 @@ end
 function cargoInventoryPanel.onTabChange(category)
     local s = cargoInventoryPanel.state
     if not s.open or category == s.activeTab then return end
+    local view = endpointView(s.kind, s.id)
+    if not view then return end
     s.activeTab = category
-    buildLayout(s.bid, s.mx, s.my)
+    buildLayout(view)
 end
 
 -- The widget hands back the exact rendered row's representative
--- instance; this decides what "Withdraw" means, which the widget
--- deliberately never learns.
+-- instance; the OPEN ENDPOINT'S KIND decides what a row action means,
+-- which the widget deliberately never learns. A kind with no row
+-- action never reaches here (the widget is handed no callback at all),
+-- so the guard below is the belt to that braces.
 function cargoInventoryPanel.showRowMenu(item)
     local s = cargoInventoryPanel.state
     if not s.open or not item then return false end
-
-    local bid     = s.bid
-    local defName = item.defName
-    local instId  = item.instanceId
-    local target  = adjacentSelectedUnit(bid)
-
-    local items = {}
-    if target then
-        local info = unit.getInfo(target)
-        -- Prefer the unit's personal name, else its species label (#264).
-        local who  = "unit"
-        if info then
-            if info.name and info.name ~= "" then
-                who = info.name
-            elseif info.displayName and info.displayName ~= "" then
-                who = info.displayName
-            elseif info.defName then
-                who = info.defName
-            end
-        end
-        items[1] = {
-            label    = "Withdraw with " .. who,
-            callback = function()
-                unit.withdrawFromCargo(target, bid, defName, instId)
-                -- Redraw on the SAME frame rather than waiting for the
-                -- next tick's comparison to notice.
-                itemList.invalidate(cargoInventoryPanel.state.listId)
-            end,
-        }
-    else
-        items[1] = {
-            label   = "Withdraw (select an adjacent unit first)",
-            enabled = false,
-        }
-    end
+    local def = ENDPOINTS[s.kind]
+    if not def or not def.rowMenu then return false end
+    local items = def.rowMenu(s.id, item)
+    if not items or #items == 0 then return false end
 
     local contextMenu = require("scripts.ui.context_menu")
     local mx, my = engine.getMousePosition()
@@ -461,21 +607,24 @@ function cargoInventoryPanel.showRowMenu(item)
 end
 
 -----------------------------------------------------------
--- Per-tick refresh. The rebuild comparison belongs to the shared
--- widget (this panel keeps no hash of its own); the "target went
--- away" check below is host-owned lifecycle, not invalidation — the
--- popup must not outlive the cargo it describes.
+-- Per-tick refresh, reading the endpoint's contents LIVE. The rebuild
+-- comparison belongs to the shared widget (this panel keeps no hash of
+-- its own); the "target went away" check below is host-owned
+-- lifecycle, not invalidation — the popup must not outlive the
+-- endpoint it describes. A cargo that is demolished, a unit that dies,
+-- and a unit that stops being player-commandable all close it.
 -----------------------------------------------------------
 function cargoInventoryPanel.update(dt)
     local s = cargoInventoryPanel.state
-    if not s.open or not s.bid then return end
-    if not building.getInfo(s.bid) then
-        -- Cargo destroyed while popup was open — close.
+    if not s.open or not s.kind or s.id == nil then return end
+    local def  = ENDPOINTS[s.kind]
+    local view = def and def.view(s.id)
+    if not view or (def.stillThere and not def.stillThere(s.id)) then
         cargoInventoryPanel.closeIfOpen()
         return
     end
-    if itemList.isStale(s.listId, listDataParams(s.bid, s.activeTab)) then
-        buildLayout(s.bid, s.mx, s.my)
+    if itemList.isStale(s.listId, listDataParams(s.kind, view, s.activeTab)) then
+        buildLayout(view)
     end
 end
 
