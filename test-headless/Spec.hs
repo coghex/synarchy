@@ -25,6 +25,8 @@ import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
+import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
+import qualified Test.Headless.Unit.SpawnShed as SpawnShedTest
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
 import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.NightPerception as NightPerception
@@ -89,6 +91,7 @@ import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
+import qualified Test.Headless.Power.Demolition as PowerDemolition
 import qualified Test.Headless.Power.Network as PowerNetwork
 import qualified Test.Headless.Language.Semantic as LanguageSemantic
 import qualified Test.Headless.Language.Generated as LanguageGenerated
@@ -254,6 +257,10 @@ main = hspec $ do
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
     aroundAll withHeadlessEngine PowerPlacement.spec
+    -- Own engine for the same reason (#1206): the demolition gate
+    -- installs its own two-page world manager and drives the real
+    -- building-command drain, which would disturb the shared engine.
+    aroundAll withHeadlessEngine PowerDemolition.spec
     -- Own engine for the same reason: the #1208 ground-ownership gate
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
@@ -281,6 +288,8 @@ main = hspec $ do
     describe "Unit.InjurySpeed" InjurySpeedTest.spec
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
+    AccessoryUnequip.spec
+    SpawnShedTest.spec
     UnitTransfer.spec
     describe "Unit.NightPerception" NightPerception.spec
     describe "Unit.LineOfSight (multi-world page ownership)" LineOfSightTest.spec

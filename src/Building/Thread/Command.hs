@@ -27,6 +27,7 @@ import Building.Knowledge.Live
     ( containerObserver, forgetAllContainers, forgetContainerEverywhere
     , markPendingSeed, sweepPendingSeeds )
 import Building.Command.Types (BuildingCommand(..))
+import Power.Live (retirePowerNodeEverywhere)
 
 -- | Drain the building command queue in one pass. Called from the
 --   unit thread's tick so we don't need a dedicated building thread —
@@ -124,6 +125,15 @@ handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
     -- reads as never-inspected again rather than as a permanently
     -- stale ghost with no surface to clear it.
     forgetContainerEverywhere (wsWorldManagerRef sim) bid
+    -- #1206: same reasoning for the power registry, which declares the
+    -- building manager the authority for a node's lifetime. Demolition
+    -- has to honour that HERE, in the live transaction, because a node
+    -- has no cancel surface of its own: unlike a demolished station's
+    -- craft bills (which linger deliberately, visible + cancellable —
+    -- the #758 tolerance), nothing the player can reach could ever
+    -- clear a node whose building is gone, and load staging restores
+    -- such a row verbatim, so it would persist forever.
+    retirePowerNodeEverywhere (wsWorldManagerRef sim) bid
 
 handleBuildingCommand _ sim _ bld BuildingClearAll = do
     -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
