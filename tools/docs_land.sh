@@ -79,11 +79,20 @@ if [ -n "$RISK" ]; then
 fi
 
 # --- Commit only the named paths ---
+# Both git calls are scoped to "$@" on purpose. A bare `git commit` records the
+# WHOLE index and a bare `git diff --cached --quiet` inspects it, so an unrelated
+# file left staged in this worktree would otherwise ride along -- or, when the
+# named paths are unchanged, be pushed to master entirely on its own. The
+# pathspec form commits only the named paths and leaves other index entries
+# staged, which is what makes the named-path-only promise above hold no matter
+# what state the index was already in.
 run git add -- "$@"
-if [ "$DRY" = 0 ] && git diff --cached --quiet; then
+if [ "$DRY" = 0 ] && git diff --cached --quiet -- "$@"; then
+  # Not an early exit: a prior interrupted run may already have made the commit,
+  # and the push/verify steps below still need to finish that landing.
   echo "nothing staged from the named paths; already committed?"
 else
-  run git commit -q -m "$MSG"
+  run git commit -q -m "$MSG" -- "$@"
 fi
 
 # --- Rebase ONLY if master actually moved (no move => nothing to stash) ---
