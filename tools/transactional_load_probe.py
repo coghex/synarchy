@@ -30,7 +30,15 @@ narrower and focuses on what's NEW here:
   2. Mutual exclusion (requirement 1): a save request while a load is in
      flight, and a second load request while one is already in flight,
      are both rejected with a clear result — never silently queued or
-     merged.
+     merged; and `scripts.pause.set(false)` attempted in the same window
+     applies none of its side effects. The in-flight state is
+     ESTABLISHED, not raced for (issue #1181): `debug.armLoadStageGate`
+     parks the transaction on the world thread immediately before
+     staging, and the probe positively observes that park BY REQUEST ID
+     before running a single check. There is no timing-dependent
+     fallback — if the hold cannot be established the probe FAILS,
+     because a mutual-exclusion scenario that quietly skips itself is
+     the coverage gap this section exists to close.
   3. A successful load REPLACES the complete session rather than merging:
      a page that existed only in the pre-load session (never part of the
      save) does not survive publication.
@@ -43,14 +51,24 @@ narrower and focuses on what's NEW here:
   6. Repeated loads in the same session do not accumulate ghost pages —
      loading twice leaves exactly the second load's pages live.
   7. Stale old-session work (requirement 12): commands fired for the
-     replacement page's own id WHILE staging is still running have no
-     effect on the published result — staging builds the new page
-     entirely from the decoded save, never from any live ref. The
-     narrower captureLocked-boundary case (a command still queued at the
-     exact instant publication starts) isn't reproducible from a
-     black-box TCP client — that's covered instead by the deterministic
-     pure hspec case, Test.Headless.Load.Status's "captureLocked
-     authorized-command discard" group.
+     replacement page's own id while the transaction is in flight and
+     staging has NOT completed have no effect on the published result —
+     staging builds the new page entirely from the decoded save, never
+     from any live ref, and publication then replaces the whole session.
+     They are issued during the section-2 hold, so this no longer
+     depends on staging happening to still be running when they land.
+     What they actually exercise is unchanged by that, because the world
+     thread is serial: a `world.setDate` queued behind the load
+     transaction was never applied *concurrently* with staging in the
+     first place — it is applied to the still-live OLD session once
+     staging returns, in the window before the publish barrier engages
+     (`World.Thread.processAllCommands`), which is exactly where a stale
+     old-session write is dangerous and exactly what the assertion
+     pins. The narrower captureLocked-boundary case (a command still
+     queued at the exact instant publication starts) isn't reproducible
+     from a black-box TCP client — that's covered instead by the
+     deterministic pure hspec case, Test.Headless.Load.Status's
+     "captureLocked authorized-command discard" group.
 
 Usage:
   python3 tools/transactional_load_probe.py [--port 9220] [--seed 42]
@@ -72,6 +90,19 @@ from probelib import boot, quit_engine, send, send_json, wait_load_published
 
 SAVE_PREFIX = "tload_probe_"
 REPO = Path(__file__).resolve().parent.parent
+
+# Issue #1181. How long the engine may park the load transaction at the
+# staging gate (`debug.armLoadStageGate`). Generous next to the handful
+# of console round trips section 2 runs inside the window, and safely
+# under the engine's own 120 s ceiling — the engine clamps and
+# self-releases regardless, so this only has to be long enough, never
+# trusted to be short enough.
+MUTEX_HOLD_SECONDS = 60
+# How long to wait for the parked transaction to become observable. The
+# gate is reached as soon as the world thread drains the queued
+# transaction command, so this only has to cover a tick plus whatever
+# else was queued ahead of it.
+GATE_OBSERVE_SECONDS = 60
 
 
 def make_isolated_root(base: str) -> str:
@@ -221,6 +252,69 @@ def load_status(port: int):
     return send_json(port, "return engine.getLoadStatus()")
 
 
+def stage_gate(port: int):
+    return send_json(port, "return debug.getLoadStageGate()")
+
+
+def arm_stage_gate(port: int, hold_seconds: float) -> None:
+    """Arm the test-only staging gate (issue #1181) so the NEXT load
+    transaction parks on the world thread immediately before staging.
+
+    The engine clamps the hold into its own bound and self-releases at
+    the deadline, so an aborted run can never wedge the world thread —
+    this probe still releases explicitly from a `finally`, which is what
+    keeps the remaining sections from each burning their full timeout on
+    a stuck world thread."""
+    send(port, f"return debug.armLoadStageGate({hold_seconds})")
+
+
+def release_stage_gate(port: int) -> None:
+    """Release the gate. Safe (and deliberately unconditional) whether or
+    not a transaction is actually parked."""
+    send(port, "return debug.releaseLoadStageGate()")
+
+
+def wait_stage_gate_held(port: int, request_id, secs: float = 60.0):
+    """Poll until the staging gate is positively holding ``request_id``
+    AND that transaction is still non-terminal, or the budget runs out.
+
+    Returns the observed ``engine.getLoadStatus()`` dict on success, or
+    None. The id match is the whole point (issue #1181): a phase check
+    alone cannot tell "the load I armed the gate for is parked" from
+    "some other, already-finished load left a status behind", which is
+    precisely the confusion the old timing-raced version had to branch
+    around."""
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        gate = stage_gate(port)
+        if isinstance(gate, dict) and gate.get("heldRequestId") == request_id:
+            status = load_status(port)
+            if isinstance(status, dict) and inflight(status, request_id):
+                return status
+        time.sleep(0.1)
+    return None
+
+
+# The three phases that END a load transaction. "LoadReconciliationFailed"
+# (issue #1204) belongs here with the other two: it ends the transaction
+# (its outcome is non-nil, so the engine's own mutual-exclusion gate stops
+# rejecting), and treating it as in-flight would misread a finished load
+# as a still-racing one.
+TERMINAL_LOAD_PHASES = ("LoadPublished", "LoadFailed", "LoadReconciliationFailed")
+
+
+def inflight(status, request_id) -> bool:
+    """Is ``status`` the ORIGINAL transaction, still non-terminal?
+
+    Comparing the status's own request id against the id captured right
+    after `engine.loadSave` accepted it is what distinguishes "the
+    original is still in flight" from "it finished and a later request
+    became the current transaction"."""
+    return (isinstance(status, dict)
+            and status.get("id") == request_id
+            and status.get("phase") not in TERMINAL_LOAD_PHASES)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9220)
@@ -350,63 +444,83 @@ def _run(args, root: str) -> int:
         # left it alone" apart from "it was already wrong".
         send(args.port, "require('scripts.pause').set(true); return 'ok'",
              expect_result=False)
+
+        # Issue #1181: ESTABLISH the in-flight window instead of racing
+        # it. Armed, the engine parks the next load transaction on the
+        # world thread immediately before staging, while the transaction
+        # is non-terminal and `loadInProgress` is therefore true — which
+        # is exactly the state `engine.saveWorld` / `engine.loadSave` /
+        # `engine.setPaused` gate on. The hold is bounded and
+        # self-releasing engine-side; the `finally` below releases it
+        # promptly so the remaining sections never run against a parked
+        # world thread.
+        race_slot = f"{SAVE_PREFIX}race_{run_id}"
+        race_dir = os.path.join(root, "saves", race_slot)
+        poison_year = 9999
+        arm_stage_gate(args.port, MUTEX_HOLD_SECONDS)
         loaded = send(args.port, f"return engine.loadSave('{slot_valid}')")
         chk.ok(loaded.strip() == "true", "valid load: engine.loadSave accepted")
         initial_status = load_status(args.port)
         initial_id = initial_status.get("id") if isinstance(initial_status, dict) else None
 
-        # Inject stale old-session work (requirement 12): staging builds
-        # the replacement page entirely from the decoded save file, never
-        # from any live ref, so old-session commands for the SAME page id
-        # ("alpha") processed normally (unlocked) WHILE staging is still
-        # running must have no effect on the published result — this is
-        # deterministic (staging is measurably slow: real chunk gen, not
-        # a sub-tick race) unlike the captureLocked boundary itself,
-        # which is covered instead by the always-reproducible pure
-        # hspec case (Test.Headless.Load.Status's "captureLocked
-        # authorized-command discard" group, World.Thread.partitionAuthorized)
-        # — a live black-box TCP round trip can't reliably land a call
-        # inside a window that narrow.
-        poison_year = 9999
-        for _ in range(5):
-            send(args.port, f"world.setDate('alpha', {poison_year}, 12, 31); "
-                             "return 'ok'", expect_result=False, timeout=2)
-            time.sleep(0.2)
+        try:
+            # POSITIVELY observe the window before checking anything in
+            # it, by request id. A check that merely assumed the load was
+            # still running would be the same unfalsifiable pass the old
+            # `[SKIP]` branch produced.
+            held_status = wait_stage_gate_held(args.port, initial_id,
+                                               GATE_OBSERVE_SECONDS)
+            observed = (f"observed {held_status}" if held_status is not None
+                        else f"gate={stage_gate(args.port)}, "
+                             f"status={load_status(args.port)}")
+            chk.ok(held_status is not None,
+                   f"load transaction #{initial_id} is positively observed "
+                   f"parked at the staging gate and still non-terminal "
+                   f"({observed})")
+            if held_status is None:
+                # Deliberately fatal: every check below is about this
+                # window, and reporting them as passed (or skipped)
+                # without it is precisely the bug issue #1181 fixes.
+                print("FAIL: could not establish an in-flight load "
+                      "transaction; refusing to report mutual-exclusion "
+                      "coverage that never ran", file=sys.stderr)
+                return 1
 
-        # Race the mutual-exclusion window: fire these immediately, before
-        # the async staging transaction can possibly have published yet.
-        save_during_load = send(args.port,
-            f"return engine.saveWorld('alpha', '{SAVE_PREFIX}race_{run_id}')")
-        second_load = send(args.port, f"return engine.loadSave('{slot_valid}')")
-        mid_status = load_status(args.port)
-        # Round 9 review fallout (issue #763): on a fast machine/small
-        # world the FIRST load can finish (LoadPublished) in the gap
-        # between the two racing calls above -- in which case
-        # engine.loadSave's mutual-exclusion gate correctly ACCEPTS
-        # second_load as a brand-new transaction, and mid_status (polled
-        # after both calls) reports THAT new transaction's own, freshly-
-        # non-terminal status. Checking only "phase not terminal" then
-        # misreads a legitimately-accepted new load as "the original is
-        # still in flight, so second_load should have been rejected" --
-        # comparing mid_status's own request id against the ORIGINAL
-        # transaction's id (captured right after it was accepted) tells
-        # the two cases apart: only a MATCHING id means we're actually
-        # still observing the original, still-racing transaction.
-        # "LoadReconciliationFailed" (issue #1204) belongs in this
-        # terminal set for the same reason as the other two: it ends the
-        # transaction (its outcome is non-nil, so the engine's own
-        # mutual-exclusion gate stops rejecting), and treating it as
-        # in-flight would misread a finished load as a still-racing one.
-        still_inflight = (isinstance(mid_status, dict)
-                          and mid_status.get("id") == initial_id
-                          and mid_status.get("phase") not in
-                          ("LoadPublished", "LoadFailed",
-                           "LoadReconciliationFailed"))
-        if still_inflight:
+            def assert_original_still_authoritative(label: str) -> None:
+                """The rejected request was neither substituted for the
+                original transaction nor queued behind it: the status
+                still names the ORIGINAL id and is still non-terminal."""
+                now = load_status(args.port)
+                chk.ok(inflight(now, initial_id),
+                       f"{label}: the original load (#{initial_id}) is still "
+                       f"the authoritative, non-terminal transaction "
+                       f"(got {now})")
+
+            save_status_before = send_json(args.port,
+                                           "return engine.getSaveStatus()")
+            save_during_load = send(args.port,
+                f"return engine.saveWorld('alpha', '{race_slot}')")
             chk.ok(save_during_load.strip() == "false",
                    "engine.saveWorld rejected while a load is in flight")
+            save_status_after = send_json(args.port,
+                                          "return engine.getSaveStatus()")
+            # Non-vacuous "did not create a save", half 1: the rejection
+            # happened before `beginSave`, so it started no transaction
+            # at all. (Half 2 — nothing on disk — is checked once the
+            # original load is terminal, below: a real save is written
+            # asynchronously through the barrier, so an existence check
+            # taken here would pass even if the save HAD been accepted.)
+            chk.ok(save_status_after == save_status_before,
+                   f"the rejected engine.saveWorld started no save "
+                   f"transaction (engine.getSaveStatus() unchanged: "
+                   f"{save_status_before} -> {save_status_after})")
+            assert_original_still_authoritative("rejected save")
+
+            second_load = send(args.port, f"return engine.loadSave('{slot_valid}')")
             chk.ok(second_load.strip() == "false",
                    "a second engine.loadSave rejected while one is in flight")
+            assert_original_still_authoritative("rejected second load")
+
             # Round 16 rereview: scripts.pause.set(false) — the real
             # module every actual unpause goes through, not the raw
             # engine.setPaused binding — attempted while this load is
@@ -417,18 +531,32 @@ def _run(args, root: str) -> int:
             # the module's mirror from the true (still-paused) engine
             # state (and, on a load that goes on to FAIL rather than
             # publish, corrupting the retained old session's stored time
-            # scale — a successful publish here would just overwrite
-            # 'alpha' outright, so that specific consequence isn't
-            # independently observable through this always-succeeds
-            # race window; the checks below instead verify the fix at
-            # its actual mechanism — pause.set skipping every side
-            # effect the instant engine.setPaused reports rejection —
-            # which is what protects the failing-load case too).
+            # scale).
+            #
+            # pause.paused and pause.prevTimeScale are the right
+            # observables here, and world.getTimeScale is not: the
+            # side effect a wrongly-applied unpause would have is
+            # `world.setTimeScale`, a QUEUED world command, so while the
+            # world thread is parked it would be invisible — and after
+            # publication the old page's scale is gone anyway, since
+            # publish replaces the whole session. These two are the
+            # state pause.set writes on the very code path being pinned,
+            # immediately after the `applied == false` early return.
+            mirror_before = send(args.port,
+                "return require('scripts.pause').paused").strip()
+            prev_ts_before = send(args.port,
+                "return require('scripts.pause').prevTimeScale").strip()
+            chk.ok(mirror_before == "true",
+                   f"setup: the pre-load re-sync left pause.paused true, so "
+                   f"the rejection check below is not vacuous (got "
+                   f"{mirror_before!r})")
             send(args.port, "require('scripts.pause').set(false); return 'ok'",
                  expect_result=False)
             still_paused = send(args.port, "return engine.isPaused()").strip()
             mirror = send(args.port,
                 "return require('scripts.pause').paused").strip()
+            prev_ts = send(args.port,
+                "return require('scripts.pause').prevTimeScale").strip()
             chk.ok(still_paused == "true",
                    "scripts.pause.set(false) during an in-flight load "
                    "leaves the engine paused")
@@ -437,28 +565,79 @@ def _run(args, root: str) -> int:
                    f"does not desync pause.paused from the true "
                    f"(still-paused) engine state (got pause.paused="
                    f"{mirror!r})")
-        else:
-            # The race window closed before either racing call landed
-            # (a very fast machine/small world) — the mutual-exclusion
-            # CODE PATH is still covered by the two checks above whenever
-            # it wins the race; when it doesn't, print rather than fail so
-            # this probe doesn't flake on timing alone.
-            print("  [SKIP] mutual-exclusion race window closed before the "
-                  "racing calls landed (load already terminal) — timing-"
-                  "dependent, not a failure")
+            chk.ok(prev_ts == prev_ts_before,
+                   f"scripts.pause.set(false) during an in-flight load "
+                   f"applies no time-scale side effect — pause."
+                   f"prevTimeScale is untouched ({prev_ts_before!r} -> "
+                   f"{prev_ts!r})")
+            assert_original_still_authoritative("rejected unpause")
+
+            # Inject stale old-session work (requirement 12) from inside
+            # the same established window: staging builds the
+            # replacement page entirely from the decoded save file, never
+            # from any live ref, so old-session commands for the SAME
+            # page id ("alpha") must have no effect on the published
+            # result. The world thread is serial, so these queue behind
+            # the parked transaction and are applied to the still-live
+            # OLD session in the gap between staging returning and the
+            # publish barrier engaging — which is where a stale
+            # old-session write would do damage, and is where they
+            # landed before this section was made deterministic too
+            # (a world command was never applied concurrently with
+            # staging: staging owns the world thread while it runs). The
+            # narrower captureLocked boundary — a command still queued at
+            # the exact instant publication starts — isn't reproducible
+            # from a black-box TCP client at all, and is covered instead
+            # by the pure hspec case (Test.Headless.Load.Status's
+            # "captureLocked authorized-command discard" group,
+            # World.Thread.partitionAuthorized).
+            for _ in range(5):
+                send(args.port, f"world.setDate('alpha', {poison_year}, 12, 31); "
+                                 "return 'ok'", expect_result=False, timeout=2)
+            assert_original_still_authoritative("stale old-session work")
+        finally:
+            release_stage_gate(args.port)
+
+        # The hold ended because this probe released it, not because it
+        # hit its own bound — i.e. every check above genuinely ran inside
+        # the window rather than after it silently expired.
+        gate_after = None
+        gate_deadline = time.time() + 30
+        while time.time() < gate_deadline:
+            g = stage_gate(args.port)
+            if isinstance(g, dict) and "heldRequestId" not in g:
+                gate_after = g
+                break
+            time.sleep(0.1)
+        chk.ok(isinstance(gate_after, dict) and gate_after.get("expired") is False,
+               f"the staging hold ended on this probe's release, not on the "
+               f"engine's hold bound (gate={gate_after})")
 
         # ── 3. Wait for the (first) valid load to publish ───────────────
-        published, status = wait_load_published(args.port, 180)
-        chk.ok(published, f"valid load: transaction publishes ({status})")
+        # Tied to the ORIGINAL request id: a bare wait would accept a
+        # terminal status left behind by any other transaction.
+        published, status = wait_load_published(args.port, 180,
+                                                request_id=initial_id)
+        chk.ok(published,
+               f"valid load #{initial_id}: transaction resumes past the "
+               f"released gate and publishes ({status})")
         if not published:
             print("FAIL: cannot continue without a published load", file=sys.stderr)
             return 1
 
+        # Non-vacuous "did not create a save", half 2: now that the
+        # original transaction is terminal, a save that had been ACCEPTED
+        # would have had its whole asynchronous barrier+write window to
+        # land. Nothing is on disk for the rejected slot.
+        chk.ok(not os.path.exists(race_dir),
+               f"the engine.saveWorld rejected mid-load created no save "
+               f"(nothing at {race_dir})")
+
         post_date = send(args.port, "return world.getDate('alpha')")
         chk.ok(f'"year":{poison_year}' not in post_date,
                f"stale world.setDate('alpha', {poison_year}, ...) fired "
-               f"during staging did not survive into the replacement "
-               f"session (got {post_date})")
+               f"while the transaction was in flight did not survive into "
+               f"the replacement session (got {post_date})")
 
         send(args.port, "return world.waitForInit(180)", timeout=190)
         time.sleep(1.5)

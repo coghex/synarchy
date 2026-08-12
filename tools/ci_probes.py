@@ -159,7 +159,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "save_storage": (SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
                                      "atomic storage transaction's restart-and-select fallback"),
     "transactional_load": (SCENARIO_HEAVY, "three real engine boots, three real world pages, "
-                                            "a mutual-exclusion race, and a repeated-load loop "
+                                            "a deterministically-held in-flight mutual-exclusion "
+                                            "window (#1181), and a repeated-load loop "
                                             "(#763)"),
     # --- targeted: useful regression probes, but too narrow for the default
     # PR gate. Run them when touching the named feature. ---
