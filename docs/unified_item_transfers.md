@@ -322,6 +322,16 @@ building path still behaves.
 Item-container contents are rendered by the same window manager from the start,
 rather than left in a separate panel until the portable-container arc needs them.
 
+> **2026-08-12 (#1234):** the absorption lands in **UIT-1C**, not UIT-1A. The
+> 6→12 slice split above put the nested window stack and modal exclusivity in
+> UIT-1C, and folding a second panel into the manager is that same concern:
+> UIT-1A generalizes the manager's own API from a building id to an endpoint
+> identity and explicitly leaves `scripts/item_contents_panel.lua` untouched, so
+> a regression in either half stays attributable. The decision itself is
+> unchanged — the panel is still folded in during UIT-1, and item-containers
+> still become renderable levels without becoming endpoints. Only the slice that
+> does it moved. UIT-1C's own delivery entry already records this.
+
 *Rationale:* D-5 already says the widget renders item-container contents "so
 `item_contents_panel.lua` collapses into it", and leaving it separate would ship
 a D-9 that is demonstrably false — today `cargo_inventory_panel` and

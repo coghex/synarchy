@@ -26,7 +26,12 @@ Verifies, in order:
   1. a selected acolyte + a right-click on the built storage building
      -> a "Transfer" row is visible on the resulting context menu
      (located via `ui.dumpWidgets()`, alongside the pre-existing
-     "Contents" row -- #1014 requirement 7's regression check);
+     "Contents" row -- #1014 requirement 7's regression check).
+     "Contents" is then ACTIVATED and the container window it opens is
+     asked which endpoint it opened for: #1234 generalized that window
+     from a bare building id to an endpoint identity (kind + id), and
+     only activating the row proves the route survived the signature
+     change;
   2. that right-click's `debug.drainActionOutcomes()` record shows
      `handler = "context_menu_building"`, never `"move_order"` --
      requirement 7's "the existing right-click move-order path is not
@@ -565,8 +570,31 @@ def main() -> int:
                                   "building")
 
     contents_row = find_widget(port, "Contents")
-    check("building menu: 'Contents' still appears (requirement 7 regression)",
-          bool(contents_row))
+    if check("building menu: 'Contents' still appears (requirement 7 regression)",
+             bool(contents_row)):
+        # #1234 generalized the container window to an endpoint identity
+        # (kind + id). Merely seeing the row does not prove the route
+        # into the window survived that signature change, so ACTIVATE it
+        # and read back which endpoint the manager actually opened for.
+        click_widget_center(port, contents_row)
+        time.sleep(0.5)
+        opened = send(port, "return require('scripts.cargo_inventory_panel')"
+                            ".isOpen()").strip()
+        check("activating 'Contents' opens the container window",
+              opened == "true", f"got {opened!r}")
+        target = send_json(port, "local s = require("
+                                 "'scripts.cargo_inventory_panel').state;"
+                                 " return {kind = s.kind, id = s.id}")
+        check("the container window opened on THIS building endpoint",
+              isinstance(target, dict) and target.get("kind") == "building"
+              and target.get("id") == bid, f"got {target!r}")
+        send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+                   " return 'ok'")
+        time.sleep(0.3)
+        # Re-open the menu the rest of this scenario reads from: the
+        # click above consumed it.
+        right_click_and_check_routing(port, bpx, bpy, "context_menu_building",
+                                      "building (menu reopened)")
     transfer_row_b = find_widget(port, "Transfer")
     if check("building menu: 'Transfer' is visible", bool(transfer_row_b)):
         check("building menu: 'Transfer' is enabled",

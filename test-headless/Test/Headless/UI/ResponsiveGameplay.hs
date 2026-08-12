@@ -2046,7 +2046,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_test_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
-                , "cip.openFor(1, 400, 400);"
+                , "cip.openFor('building', 1, 400, 400);"
                 , "local p = require('scripts.ui.panel');"
                 , "local x, y = p.getPosition(cip.state.panelId);"
                 , "local pw, ph = p.getSize(cip.state.panelId);"
@@ -2075,7 +2075,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_tab_test_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
-                , "cip.openFor(1, 400, 400);"
+                , "cip.openFor('building', 1, 400, 400);"
                 , "local out = {};"
                 , "local il = require('scripts.ui.item_list');"
                 , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
@@ -2121,7 +2121,7 @@ spec = aroundAll withSharedFixture $ do
                 , "    { defName='i1', category='Cat1' } } end;"
                 , "local pg1 = UI.newPage('cargo_lbl_test_1', 'overlay');"
                 , "cip.setup({page = pg1, fbW = 800, fbH = 2160, boxTexSet = 1});"
-                , "cip.openFor(1, 400, 400);"
+                , "cip.openFor('building', 1, 400, 400);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local _, unshunkH = label.getSize(il.getTabs(cip.state.listId)[1].labelId);"
                 , "building.getStorage = function() return {"
@@ -2132,7 +2132,7 @@ spec = aroundAll withSharedFixture $ do
                 , "} end;"
                 , "local pg2 = UI.newPage('cargo_lbl_test_2', 'overlay');"
                 , "cip.setup({page = pg2, fbW = 800, fbH = 2160, boxTexSet = 1});"
-                , "cip.openFor(1, 400, 400);"
+                , "cip.openFor('building', 1, 400, 400);"
                 , "local _, shrunkH = label.getSize(il.getTabs(cip.state.listId)[2].labelId);"
                 , "building.getStorageCapacity = origCap;"
                 , "building.getStorage = origStorage;"
@@ -2164,7 +2164,7 @@ spec = aroundAll withSharedFixture $ do
                 , "hud.init(1,2,1920,1080);"
                 , "hud.createUI();"
                 , "local cip = require('scripts.cargo_inventory_panel');"
-                , "cip.openFor(42, 400, 400);"
+                , "cip.openFor('building', 42, 400, 400);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local targetBox = nil;"
                 , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
@@ -2177,7 +2177,8 @@ spec = aroundAll withSharedFixture $ do
                 , "building.getStorageCapacity = origCap;"
                 , "building.getStorage = origStorage;"
                 , "return {wasOpenBefore = wasOpenBefore, tabBefore = tabBefore,"
-                , "        isOpenAfter = cip.isOpen(), bidAfter = cip.state.bid,"
+                , "        isOpenAfter = cip.isOpen(), kindAfter = cip.state.kind,"
+                , "        idAfter = cip.state.id,"
                 , "        tabAfter = cip.state.activeTab}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CargoResizeProbe of
@@ -2186,7 +2187,11 @@ spec = aroundAll withSharedFixture $ do
                     crpWasOpenBefore p `shouldBe` True
                     crpTabBefore p `shouldBe` "Cat2"
                     crpIsOpenAfter p `shouldBe` True
-                    crpBidAfter p `shouldBe` 42
+                    -- #1234: the resize snapshot carries the whole
+                    -- endpoint IDENTITY through hud's rebuild, not a
+                    -- bare building id.
+                    crpKindAfter p `shouldBe` "building"
+                    crpIdAfter p `shouldBe` 42
                     crpTabAfter p `shouldBe` "Cat2"
 
         it "cargo_inventory_panel: the migrated tab strip adds no content frame, and its rows keep a working right-click (#1088)" $ \(env, ls) → do
@@ -2214,7 +2219,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_frame_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
-                , "cip.openFor(7, 100, 100);"
+                , "cip.openFor('building', 7, 100, 100);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local tb = require('scripts.ui.tabbar');"
                 , "local rows = il.getRows(cip.state.listId);"
@@ -2237,6 +2242,399 @@ spec = aroundAll withSharedFixture $ do
                     cmpInteractive p `shouldBe` True
                     cmpRouted p `shouldBe` True
                     cmpMenuShown p `shouldBe` True
+
+    describe "cargo_inventory_panel.lua is an endpoint-kind agnostic container window (#1234)" $ do
+        it "a building endpoint opens through the generalized signature with the same rows, tabs, header and row action" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "local origWeight = building.getStorageWeight;"
+                , "local origInfo = building.getInfo;"
+                , "building.getStorageCapacity = function() return 400 end;"
+                , "building.getStorageWeight = function() return 12.5 end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold', gridX=0, gridY=0,"
+                , "      tileW=1, tileH=1 } end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='steel_bar', displayName='Steel Bar',"
+                , "      category='Materials', weight=2.0 },"
+                , "    { defName='steel_bar', displayName='Steel Bar',"
+                , "      category='Materials', weight=2.0 },"
+                , "    { defName='bandage', displayName='Bandage',"
+                , "      category='Medical', weight=0.1 },"
+                , "} end;"
+                , "local origSel = unit.getSelected;"
+                , "unit.getSelected = function() return {} end;"
+                , "local cm = require('scripts.ui.context_menu');"
+                , "local origShow = cm.show; cm.show = function() end;"
+                , "local pg = UI.newPage('cargo_ep_building', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "local accepted = cip.openFor('building', 11, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local names = {};"
+                , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
+                , "local out = {accepted = accepted, open = cip.isOpen(),"
+                , "  kind = cip.state.kind, id = cip.state.id,"
+                , "  title = lbl.getText(cip.state.titleId),"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  rowCount = #rows, tabCount = #il.getTabs(cip.state.listId),"
+                , "  rowNames = names,"
+                , "  rightClick = (rows[1] ~= nil and rows[1].hitId ~= nil"
+                , "      and il.handleCallback('onItemListRightClick', rows[1].hitId)"
+                , "      or false)};"
+                , "cip.closeIfOpen();"
+                , "cm.show = origShow; unit.getSelected = origSel;"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "building.getStorageWeight = origWeight;"
+                , "building.getInfo = origInfo;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointOpenProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cwoAccepted p `shouldBe` True
+                    cwoOpen p `shouldBe` True
+                    cwoKind p `shouldBe` Just "building"
+                    cwoId p `shouldBe` Just 11
+                    cwoTitle p `shouldBe` "Cargo Hold"
+                    -- Byte-identical to the pre-#1234 header.
+                    cwoSubtitle p `shouldBe` "Storage: 12.50 / 400.00 kg"
+                    cwoRowCount p `shouldBe` 2      -- steel_bar x2 stacks
+                    cwoTabCount p `shouldBe` 3      -- All + Materials + Medical
+                    cwoRowNames p `shouldContain` ["steel_bar"]
+                    -- The building's Withdraw menu is still its row action.
+                    cwoRightClick p `shouldBe` True
+
+        it "a unit endpoint opens through the SAME manager, reading capacity and stored weight from transferEndpointInfo and its rows from that call's loose inventory" $ \(env, ls) → do
+            resetFixture env ls
+            -- The unit endpoint's whole data source is ONE engine read
+            -- (#1234 / the issue's review correction): `contents` is
+            -- loose inventory, while `storedWeight` deliberately
+            -- includes equipment and accessories too — so the header
+            -- here must NOT equal the rows' summed weight.
+            r ← evalJSON ls $ luaLines
+                [ "local origEp = unit.transferEndpointInfo;"
+                , "local origInfo = unit.getInfo;"
+                , "unit.getInfo = function() return { name = 'Sister Vela' } end;"
+                , "unit.transferEndpointInfo = function(ep)"
+                , "  if ep.kind ~= 'unit' or ep.id ~= 5 then return nil end;"
+                , "  return { eligible = true, displayName = 'Acolyte',"
+                , "           capacity = 40.0, storedWeight = 31.25,"
+                , "           contents = {"
+                , "    { defName='wood_log', displayName='Wood Log',"
+                , "      category='Materials', weight=5.0 },"
+                , "    { defName='wood_log', displayName='Wood Log',"
+                , "      category='Materials', weight=5.0 },"
+                , "    { defName='ration', displayName='Ration',"
+                , "      category='Food', weight=0.5 } } } end;"
+                , "local pg = UI.newPage('cargo_ep_unit', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "local accepted = cip.openFor('unit', 5, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local names = {};"
+                , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
+                , "local out = {accepted = accepted, open = cip.isOpen(),"
+                , "  kind = cip.state.kind, id = cip.state.id,"
+                , "  title = lbl.getText(cip.state.titleId),"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  rowCount = #rows, tabCount = #il.getTabs(cip.state.listId),"
+                , "  rowNames = names,"
+                , "  rightClick = (rows[1] ~= nil and rows[1].hitId ~= nil"
+                , "      and il.handleCallback('onItemListRightClick', rows[1].hitId)"
+                , "      or false)};"
+                , "cip.closeIfOpen();"
+                , "unit.transferEndpointInfo = origEp; unit.getInfo = origInfo;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointOpenProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    cwoAccepted p `shouldBe` True
+                    cwoOpen p `shouldBe` True
+                    cwoKind p `shouldBe` Just "unit"
+                    cwoId p `shouldBe` Just 5
+                    cwoTitle p `shouldBe` "Sister Vela"
+                    -- 31.25 is the recursive load, NOT the 10.5 kg of
+                    -- loose inventory the rows below add up to.
+                    cwoSubtitle p `shouldBe` "Carrying: 31.25 / 40.00 kg"
+                    cwoRowCount p `shouldBe` 2      -- wood_log x2 stacks
+                    cwoTabCount p `shouldBe` 3      -- All + Materials + Food
+                    cwoRowNames p `shouldContain` ["ration"]
+                    -- No building-only Withdraw path on a unit row, and
+                    -- no new row action in this slice.
+                    cwoRightClick p `shouldBe` False
+
+        it "an unknown endpoint kind is refused, creating no panel state and leaving an already-open window alone" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1' } } end;"
+                , "local pg = UI.newPage('cargo_ep_unknown', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "cip.openFor('building', 3, 200, 200);"
+                , "local accepted = cip.openFor('item_container', 9, 300, 300);"
+                , "local out = {accepted = accepted, open = cip.isOpen(),"
+                , "  survivorKind = cip.state.kind, survivorId = cip.state.id,"
+                , "  panelId = cip.state.panelId, listId = cip.state.listId};"
+                , "cip.closeIfOpen();"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointRejectProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    erpAccepted p `shouldBe` False
+                    -- The valid window it could have replaced survives
+                    -- intact — validation happens BEFORE the teardown.
+                    erpOpen p `shouldBe` True
+                    erpSurvivorKind p `shouldBe` Just "building"
+                    erpSurvivorId p `shouldBe` Just 3
+
+        it "a unit that is not player-commandable is not an eligible endpoint, and creates no panel or list state" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origEp = unit.transferEndpointInfo;"
+                -- Exactly what the engine reports for a live wildlife
+                -- unit: a real view, eligible = false.
+                , "unit.transferEndpointInfo = function() return"
+                , "  { eligible = false, displayName = 'Red Squirrel',"
+                , "    capacity = 0.5, storedWeight = 0.0, contents = {} } end;"
+                , "local pg = UI.newPage('cargo_ep_wildlife', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "local accepted = cip.openFor('unit', 77, 300, 300);"
+                , "local out = {accepted = accepted, open = cip.isOpen(),"
+                , "  survivorKind = cip.state.kind, survivorId = cip.state.id,"
+                , "  panelId = cip.state.panelId, listId = cip.state.listId};"
+                , "unit.transferEndpointInfo = origEp;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointRejectProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    erpAccepted p `shouldBe` False
+                    erpOpen p `shouldBe` False
+                    erpPanelId p `shouldBe` Nothing
+                    erpListId p `shouldBe` Nothing
+                    erpSurvivorKind p `shouldBe` Nothing
+                    erpSurvivorId p `shouldBe` Nothing
+
+        it "a unit endpoint distinguishes a genuine fresh open (resets the tab) from a resize (preserves kind, id and tab)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origEp = unit.transferEndpointInfo;"
+                , "unit.transferEndpointInfo = function() return"
+                , "  { eligible = true, displayName = 'Acolyte',"
+                , "    capacity = 40.0, storedWeight = 4.0, contents = {"
+                , "    { defName='i1', category='Cat1', weight=1.0 },"
+                , "    { defName='i2', category='Cat2', weight=1.0 } } } end;"
+                , "local pg = UI.newPage('cargo_ep_tabs', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "cip.openFor('unit', 5, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local targetBox = nil;"
+                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "    if t.key == 'Cat2' then targetBox = t.boxId end"
+                , "end;"
+                , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
+                , "local afterClick = cip.state.activeTab;"
+                -- The resize path: same endpoint, same tab.
+                , "cip.reopenWithTab('unit', 5, 300, 300, afterClick);"
+                , "local afterReopen = cip.state.activeTab;"
+                , "local kindAfter, idAfter = cip.state.kind, cip.state.id;"
+                -- A genuine fresh open starts back at All.
+                , "cip.openFor('unit', 5, 300, 300);"
+                , "local afterFresh = cip.state.activeTab;"
+                , "cip.closeIfOpen();"
+                , "unit.transferEndpointInfo = origEp;"
+                , "return {tabAfterClick = afterClick, tabAfterReopen = afterReopen,"
+                , "        tabAfterFresh = afterFresh, kindAfterReopen = kindAfter,"
+                , "        idAfterReopen = idAfter}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointTabProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    etpTabAfterClick p `shouldBe` "Cat2"
+                    etpTabAfterReopen p `shouldBe` "Cat2"
+                    etpKindAfterReopen p `shouldBe` "unit"
+                    etpIdAfterReopen p `shouldBe` 5
+                    etpTabAfterFresh p `shouldBe` "All"
+
+        it "a REFUSED reopen leaves the surviving window's endpoint AND tab untouched, rather than re-tabbing an endpoint the caller never named" $ \(env, ls) → do
+            resetFixture env ls
+            -- Round-1 review: openFor deliberately leaves an
+            -- already-open valid window alone when it refuses, so
+            -- `state` afterwards describes THAT window. reopenWithTab
+            -- ignoring the result therefore applied ITS requested tab to
+            -- an unrelated endpoint — a rebuild of a window the caller
+            -- never asked about.
+            r ← evalJSON ls $ luaLines
+                [ "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "building.getStorageCapacity = function() return 100 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1', weight=1.0 },"
+                , "    { defName='i2', category='Cat2', weight=1.0 },"
+                , "} end;"
+                , "local pg = UI.newPage('cargo_reject_reopen', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "cip.openFor('building', 3, 200, 200);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local targetBox = nil;"
+                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "    if t.key == 'Cat2' then targetBox = t.boxId end"
+                , "end;"
+                , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
+                , "local tabBefore = cip.state.activeTab;"
+                , "local rowsBefore = #il.getRows(cip.state.listId);"
+                -- Ask for a DIFFERENT, genuinely valid tab so the only
+                -- thing stopping it is the refusal itself.
+                , "local accepted ="
+                , "    cip.reopenWithTab('item_container', 9, 400, 400, 'Cat1');"
+                , "local out = {accepted = accepted, kind = cip.state.kind,"
+                , "  id = cip.state.id, tabBefore = tabBefore,"
+                , "  tabAfter = cip.state.activeTab, rowsBefore = rowsBefore,"
+                , "  rowsAfter = #il.getRows(cip.state.listId)};"
+                , "cip.closeIfOpen();"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RejectedReopenProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    crrAccepted p `shouldBe` False
+                    crrKind p `shouldBe` Just "building"
+                    crrId p `shouldBe` Just 3
+                    crrTabBefore p `shouldBe` "Cat2"
+                    -- The survivor keeps ITS tab, not the refused
+                    -- call's, and its rendered rows are still Cat2's.
+                    crrTabAfter p `shouldBe` "Cat2"
+                    crrRowsAfter p `shouldBe` crrRowsBefore p
+
+        it "the context menu's 'Contents' row still routes into the window, naming the building endpoint it hit-tested" $ \(env, ls) → do
+            resetFixture env ls
+            -- #1234 changed `openFor`'s signature, and the context menu
+            -- is the ONE player-facing route into this window. Merely
+            -- building the menu would not prove the route survived, so
+            -- this ACTIVATES the real row's real callback and reads back
+            -- which endpoint the manager opened for.
+            --
+            -- tools/transfer_context_menu_probe.py checks the same thing
+            -- against a real Vulkan-rendered menu, but it is manual-only
+            -- (needs-gpu) AND currently aborts before its building
+            -- scenario on master (e573a8c64e9b) — so this is the gate
+            -- that actually runs.
+            r ← evalJSON ls $ luaLines
+                [ "local origHit = building.hitTestAt;"
+                , "local origAct = building.getActivity;"
+                , "local origCap = building.getStorageCapacity;"
+                , "local origOps = building.getOperations;"
+                , "local origStorage = building.getStorage;"
+                , "local origWeight = building.getStorageWeight;"
+                , "local origInfo = building.getInfo;"
+                , "local origSession = package.loaded['scripts.transfer_session'];"
+                , "building.hitTestAt = function() return 77 end;"
+                , "building.getActivity = function() return 'built' end;"
+                , "building.getStorageCapacity = function() return 200 end;"
+                , "building.getStorageWeight = function() return 3.0 end;"
+                , "building.getOperations = function() return {} end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold', gridX=0, gridY=0,"
+                , "      tileW=1, tileH=1 } end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='i1', category='Cat1', weight=1.0 } } end;"
+                -- Keep this test on the Contents row alone: an absent
+                -- source is exactly how the real module omits Transfer.
+                , "package.loaded['scripts.transfer_session'] ="
+                , "    { resolveSource = function() return nil end };"
+                , "local cm = require('scripts.ui.context_menu');"
+                , "local origShow = cm.show; local captured = nil;"
+                , "cm.show = function(items) captured = items end;"
+                , "local pg = UI.newPage('cargo_ctx_route', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "local claimed ="
+                , "    require('scripts.init_context_menu').tryBuildingMenu(10, 10);"
+                , "local row = nil;"
+                , "for _, itm in ipairs(captured or {}) do"
+                , "    if itm.label == 'Contents' then row = itm end"
+                , "end;"
+                , "local fired = false;"
+                , "if row and row.callback then row.callback(); fired = true end;"
+                , "local out = {accepted = (claimed == true and fired),"
+                , "  open = cip.isOpen(), survivorKind = cip.state.kind,"
+                , "  survivorId = cip.state.id, panelId = cip.state.panelId,"
+                , "  listId = cip.state.listId};"
+                , "cip.closeIfOpen(); cm.show = origShow;"
+                , "package.loaded['scripts.transfer_session'] = origSession;"
+                , "building.hitTestAt = origHit; building.getActivity = origAct;"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getOperations = origOps;"
+                , "building.getStorage = origStorage;"
+                , "building.getStorageWeight = origWeight;"
+                , "building.getInfo = origInfo;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointRejectProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- The menu claimed the click and offered a real,
+                    -- callable Contents row.
+                    erpAccepted p `shouldBe` True
+                    erpOpen p `shouldBe` True
+                    erpSurvivorKind p `shouldBe` Just "building"
+                    erpSurvivorId p `shouldBe` Just 77
+
+        it "an open unit endpoint that stops being eligible closes on the next refresh" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origEp = unit.transferEndpointInfo;"
+                , "_G.__epEligible = true;"
+                , "unit.transferEndpointInfo = function() return"
+                , "  { eligible = _G.__epEligible, displayName = 'Acolyte',"
+                , "    capacity = 40.0, storedWeight = 1.0, contents = {"
+                , "    { defName='i1', category='Cat1', weight=1.0 } } } end;"
+                , "local pg = UI.newPage('cargo_ep_lifecycle', 'overlay');"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
+                , "cip.openFor('unit', 5, 300, 300);"
+                , "local openBefore = cip.isOpen();"
+                , "cip.update(0.1);"
+                , "local openAfterTick = cip.isOpen();"
+                , "_G.__epEligible = false;"
+                , "cip.update(0.1);"
+                , "local out = {accepted = openBefore, open = cip.isOpen(),"
+                , "  panelId = cip.state.panelId, listId = cip.state.listId,"
+                , "  survivorKind = cip.state.kind, survivorId = cip.state.id};"
+                , "unit.transferEndpointInfo = origEp;"
+                , "if not openAfterTick then out.accepted = false end;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointRejectProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- Open, and still open after an ordinary tick.
+                    erpAccepted p `shouldBe` True
+                    erpOpen p `shouldBe` False
+                    erpPanelId p `shouldBe` Nothing
+                    erpListId p `shouldBe` Nothing
+                    erpSurvivorKind p `shouldBe` Nothing
 
         it "item_contents_panel: rows expose NO right-click action, and an empty container still renders its empty state (#1088)" $ \(env, ls) → do
             resetFixture env ls
@@ -3468,11 +3866,63 @@ instance FromJSON PlantResizeProbe where
 
 data CargoResizeProbe = CargoResizeProbe
     { crpWasOpenBefore ∷ Bool, crpTabBefore ∷ Text
-    , crpIsOpenAfter ∷ Bool, crpBidAfter ∷ Int, crpTabAfter ∷ Text } deriving Show
+    , crpIsOpenAfter ∷ Bool, crpKindAfter ∷ Text, crpIdAfter ∷ Int
+    , crpTabAfter ∷ Text } deriving Show
 instance FromJSON CargoResizeProbe where
     parseJSON = withObject "CargoResizeProbe" $ \o →
         CargoResizeProbe <$> o .: "wasOpenBefore" <*> o .: "tabBefore"
-                          <*> o .: "isOpenAfter" <*> o .: "bidAfter" <*> o .: "tabAfter"
+                          <*> o .: "isOpenAfter" <*> o .: "kindAfter"
+                          <*> o .: "idAfter" <*> o .: "tabAfter"
+
+-- #1234: one endpoint-kind-agnostic open, read back through the
+-- generalized state.
+data EndpointOpenProbe = EndpointOpenProbe
+    { cwoAccepted ∷ Bool, cwoOpen ∷ Bool, cwoKind ∷ Maybe Text
+    , cwoId ∷ Maybe Int, cwoTitle ∷ Text, cwoSubtitle ∷ Text
+    , cwoRowCount ∷ Int, cwoTabCount ∷ Int, cwoRowNames ∷ [Text]
+    , cwoRightClick ∷ Bool } deriving Show
+instance FromJSON EndpointOpenProbe where
+    parseJSON = withObject "EndpointOpenProbe" $ \o →
+        EndpointOpenProbe <$> o .: "accepted" <*> o .: "open"
+                          <*> o .:? "kind" <*> o .:? "id"
+                          <*> o .: "title" <*> o .: "subtitle"
+                          <*> o .: "rowCount" <*> o .: "tabCount"
+                          <*> o .: "rowNames" <*> o .: "rightClick"
+
+-- #1234: a refused open must leave NO panel state behind, and must not
+-- disturb a window already open on a valid endpoint.
+data EndpointRejectProbe = EndpointRejectProbe
+    { erpAccepted ∷ Bool, erpOpen ∷ Bool, erpPanelId ∷ Maybe Int
+    , erpListId ∷ Maybe Int, erpSurvivorKind ∷ Maybe Text
+    , erpSurvivorId ∷ Maybe Int } deriving Show
+instance FromJSON EndpointRejectProbe where
+    parseJSON = withObject "EndpointRejectProbe" $ \o →
+        EndpointRejectProbe <$> o .: "accepted" <*> o .: "open"
+                            <*> o .:? "panelId" <*> o .:? "listId"
+                            <*> o .:? "survivorKind" <*> o .:? "survivorId"
+
+-- #1234: a REFUSED reopen must not touch the window that survived it.
+data RejectedReopenProbe = RejectedReopenProbe
+    { crrAccepted ∷ Bool, crrKind ∷ Maybe Text, crrId ∷ Maybe Int
+    , crrTabBefore ∷ Text, crrTabAfter ∷ Text
+    , crrRowsBefore ∷ Int, crrRowsAfter ∷ Int } deriving Show
+instance FromJSON RejectedReopenProbe where
+    parseJSON = withObject "RejectedReopenProbe" $ \o →
+        RejectedReopenProbe <$> o .: "accepted" <*> o .:? "kind"
+                            <*> o .:? "id" <*> o .: "tabBefore"
+                            <*> o .: "tabAfter" <*> o .: "rowsBefore"
+                            <*> o .: "rowsAfter"
+
+-- #1234: fresh open resets the tab; the resize path preserves it.
+data EndpointTabProbe = EndpointTabProbe
+    { etpTabAfterClick ∷ Text, etpTabAfterReopen ∷ Text
+    , etpTabAfterFresh ∷ Text, etpKindAfterReopen ∷ Text
+    , etpIdAfterReopen ∷ Int } deriving Show
+instance FromJSON EndpointTabProbe where
+    parseJSON = withObject "EndpointTabProbe" $ \o →
+        EndpointTabProbe <$> o .: "tabAfterClick" <*> o .: "tabAfterReopen"
+                         <*> o .: "tabAfterFresh" <*> o .: "kindAfterReopen"
+                         <*> o .: "idAfterReopen"
 
 data ShrinkHeightProbe = ShrinkHeightProbe
     { shpUnshrunkH ∷ Double, shpShrunkH ∷ Double } deriving Show

@@ -222,7 +222,8 @@ function hud.createUI()
             local m = require("scripts.cargo_inventory_panel")
             if not m.isOpen() then return nil end
             local s = m.state
-            return { bid = s.bid, mx = s.mx, my = s.my, tab = s.activeTab }
+            return { kind = s.kind, id = s.id, mx = s.mx, my = s.my,
+                     tab = s.activeTab }
         end)
         reopenItem = trySnapshot(function()
             local m = require("scripts.item_contents_panel")
@@ -756,7 +757,8 @@ function hud.createUI()
     if reopenCargo then
         tryReopen(function()
             require("scripts.cargo_inventory_panel").reopenWithTab(
-                reopenCargo.bid, reopenCargo.mx, reopenCargo.my, reopenCargo.tab)
+                reopenCargo.kind, reopenCargo.id, reopenCargo.mx,
+                reopenCargo.my, reopenCargo.tab)
         end)
     end
     if reopenItem then

@@ -60,7 +60,7 @@ function M.tryBuildingMenu(x, y)
             require("scripts.cargo_inventory_panel")
         table.insert(items, { label = "Contents",
             callback = function()
-                cargoPanel.openFor(hitBid, mx, my)
+                cargoPanel.openFor("building", hitBid, mx, my)
             end })
     end
     if hasStation then
