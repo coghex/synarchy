@@ -634,10 +634,14 @@ def targeting_report(port: int, vp: dict, kind: str, tid: int,
     seed = send(port, "return world.getSeed()").strip()
     defaults = send_json(port, "return world.getGenDefaults()")
     size = (defaults or {}).get("world_size") if isinstance(defaults, dict) else None
-    # `unit.getInfo` reports neither field: it has `currentAnim` in place
-    # of an activity, and units are implicitly scoped to the active page
-    # (both hit tests filter on it), which is what to report instead.
-    activity = info.get("activity", info.get("currentAnim"))
+    # ACTIVITY IS ITS OWN VERB, not a `getInfo` field. `building.getInfo`
+    # reports identity/position/gridZ/page and no activity at all, so
+    # reading one off it emits a bare `None` and silently drops what
+    # requirement 6 asks for. `building.getActivity` / `unit.getActivity`
+    # are both registered, so the same call shape serves either kind.
+    activity = send(port, f"return {kind}.getActivity({tid})").strip().strip('"')
+    # `unit.getInfo` has no page either; units are implicitly scoped to
+    # the active page (both hit tests filter on it), so report that.
     page = info.get("page") or send(port, "return world.getActiveWorldId()").strip()
     lines = [
         f"  [diag] target: {kind} #{tid} {info.get('displayName')!r}"
