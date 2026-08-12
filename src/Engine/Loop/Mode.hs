@@ -62,8 +62,10 @@ data LoopMode σ = LoopMode
   { lmStartingLog   ∷ Text
     -- ^ Debug line for the 'EngineStarting' tick.
   , lmRunningLog    ∷ Maybe Text
-    -- ^ Debug line logged just before the 'EngineRunning' transition;
-    --   'Nothing' for headless, which has never logged one.
+    -- ^ Debug line belonging to the 'EngineStarting' → 'EngineRunning'
+    --   transition, and so logged only when that promotion actually
+    --   commits ('runStartupHandshake'); 'Nothing' for headless, which
+    --   has never logged one.
   , lmShutdownLog   ∷ Text
     -- ^ Info line logged when the loop decides to stop.
   , lmCleaningUpLog ∷ Text
@@ -134,8 +136,9 @@ runStartupHandshake mode env = do
         logWarnM CatThread $ "Unexpected inputs during startup: "
                                  <> (T.pack (show (length flushed)) <> " events flushed")
 
-    maybe (pure ()) (logDebugM CatSystem) (lmRunningLog mode)
-    liftIO $ promoteToRunning env
+    promoted ← liftIO $ promoteToRunning env
+    when promoted $
+        maybe (pure ()) (logDebugM CatSystem) (lmRunningLog mode)
 
 -- | Promote a STARTING engine to 'EngineRunning', leaving any lifecycle
 --   another thread has already advanced exactly as it found it:
@@ -166,10 +169,19 @@ runStartupHandshake mode env = do
 --   The read and the write must be ONE atomic step. The console thread
 --   can advance the lifecycle between a separate read and write, which
 --   is the very interleaving being defended against.
-promoteToRunning ∷ EngineEnv → IO ()
+--
+--   Answers whether the transition COMMITTED, decided inside that same
+--   atomic step for the same reason: 'lmRunningLog' describes this
+--   transition, so a handshake the promotion refused must not go on to
+--   announce that the engine is running (issue #1263). Re-reading the
+--   lifecycle afterwards to find out would reintroduce the race in the
+--   report rather than the write.
+promoteToRunning ∷ EngineEnv → IO Bool
 promoteToRunning env =
     atomicModifyIORef' (lifecycleRef env) $ \cur →
-        (if cur ≡ EngineStarting then EngineRunning else cur, ())
+        if cur ≡ EngineStarting
+            then (EngineRunning, True)
+            else (cur, False)
 
 -- | Gate the mode's camera updates and Lua-to-engine message
 --   processing on the save barrier's capture lock, and genuinely
