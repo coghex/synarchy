@@ -23,6 +23,20 @@
 --   inspected — that one river. An undiscovered location, another river,
 --   and every inactive page are absent by construction rather than by a
 --   filter that could be relaxed.
+--
+--   /The target page and the recurrence page are separate scopes/
+--   (#1265). An explicit @pageId@ selects the TARGET — its stored name,
+--   gloss, source, and the language its decomposition is validated
+--   against all come from the page that was named. Recurrence candidates
+--   never do: they come exclusively from 'resolveActiveWorld''s page,
+--   whichever page the target came from, which is what makes the
+--   paragraph above true of the PUBLIC query and not merely of its
+--   omitted-argument case. The two scopes meeting means identity has to
+--   carry the page ('eePage'): every page's world entry is
+--   @(\"world\", Nothing)@ and location ids are page-local, so
+--   self-exclusion that compared kind and id alone would silently drop
+--   the active page's own world name — or an unrelated same-numbered
+--   location — from an inactive-page target's recurrence.
 module Engine.Scripting.Lua.API.WorldQuery.Etymology
     ( worldGetEtymologyFn
     , worldGetRiverAtFn
@@ -41,7 +55,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import qualified HsLua as Lua
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
-import Engine.Core.State (activeWorldStateFrom)
+import Engine.Core.State (resolveActiveWorld)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LanguageCache(..))
 import Language.Etymology
 import Language.Etymology.Source (EtymologySource)
@@ -71,30 +85,46 @@ import Control.Exception (IOException, evaluate, try)
 --   The identity fields are here only so an entity can recognize
 --   ITSELF and drop out of its own recurrence list; they are never
 --   pushed to Lua.
+--
+--   That identity is PAGE-QUALIFIED (#1265). Neither of the other two
+--   fields is unique on its own across pages: every page's world entry
+--   is @(\"world\", Nothing)@, and a 'LocationInstanceId' is allocated
+--   per page, so two pages routinely hold locations numbered alike.
+--   Since an explicit @pageId@ can put the target on a different page
+--   from the candidates, dropping the page here would make an
+--   inactive-page target silently censor the active page's own world
+--   name, and an equal-numbered active location, from its recurrence.
 data EtyEntity = EtyEntity
-    { eeKind   ∷ !Text            -- ^ @world@ \/ @location@ \/ @river@
+    { eePage   ∷ !WorldPageId     -- ^ the page this entity lives on
+    , eeKind   ∷ !Text            -- ^ @world@ \/ @location@ \/ @river@
     , eeRef    ∷ !(Maybe Int)     -- ^ its own id within that kind
     , eeName   ∷ !Text
     , eeGloss  ∷ !(Maybe Text)
     , eeSource ∷ !(Maybe EtymologySource)
     } deriving (Show, Eq)
 
--- | The eligible set for one query (#1104 requirement 8).
+-- | The eligible set for one query (#1104 requirement 8), for the page
+--   the caller is enumerating — which is always the ACTIVE one for a
+--   real query (#1265).
 --
 --   @mRiver@ is the river currently being inspected, and is 'Nothing'
 --   for a world or location target — which is what makes \"no river
 --   participates at all\" the behavior for those two, rather than
---   \"every named river on the page\".
+--   \"every named river on the page\". It is 'Nothing' for a river
+--   target on ANOTHER page too: the inspected river is not on this page,
+--   and re-resolving its numeric id here would admit a different river
+--   that merely shares a 'GeoFeatureId'.
 eligibleEntities
-    ∷ Maybe WorldIdentity
+    ∷ WorldPageId
+    → Maybe WorldIdentity
     → [LocationInstance]
     → Maybe (GeoFeatureId, RiverName)
     → [EtyEntity]
-eligibleEntities mIdent instances mRiver =
+eligibleEntities pid mIdent instances mRiver =
     worldEntry ⧺ locationEntries ⧺ riverEntry
   where
     worldEntry =
-        [ EtyEntity "world" Nothing (wiName i) (wiGloss i) (wiEtymology i)
+        [ EtyEntity pid "world" Nothing (wiName i) (wiGloss i) (wiEtymology i)
         | Just i ← [mIdent] ]
 
     -- 'isDiscoveredLifecycle' rather than a fresh comparison: it is the
@@ -102,14 +132,14 @@ eligibleEntities mIdent instances mRiver =
     -- already share, so this cannot drift from what the rest of the game
     -- calls discovered.
     locationEntries =
-        [ EtyEntity "location" (Just (unLocationInstanceId (liId li)))
+        [ EtyEntity pid "location" (Just (unLocationInstanceId (liId li)))
                     (liDisplayName li) (liGloss li) (liEtymology li)
         | li ← instances
         , isDiscoveredLifecycle (liLifecycle li)
         ]
 
     riverEntry =
-        [ EtyEntity "river" (Just fid) (rvnDisplayName rn) (rvnGloss rn)
+        [ EtyEntity pid "river" (Just fid) (rvnDisplayName rn) (rvnGloss rn)
                     (rvnEtymology rn)
         | Just (GeoFeatureId fid, rn) ← [mRiver] ]
 
@@ -122,6 +152,10 @@ eligibleEntities mIdent instances mRiver =
 --   back unavailable is simply absent, never matched on its raw text.
 --   The inspected entity itself is excluded — it is the thing being
 --   explained, not a place the morpheme also turns up.
+--
+--   \"Itself\" is decided by the full page-qualified identity (#1265):
+--   an entity on ANOTHER page is a different thing however its kind and
+--   id read.
 recurrenceFor
     ∷ Catalogue → EtyEntity → [EtyEntity] → Etymology
     → [(MorphemeIdentity, [EtyEntity])]
@@ -136,7 +170,8 @@ recurrenceFor cat self eligible ety =
         , EtyAvailable o ← [ decomposeName cat (eeName e) (eeGloss e)
                                           (eeSource e) ]
         ]
-    isSelf e = eeKind e ≡ eeKind self ∧ eeRef e ≡ eeRef self
+    isSelf e = eePage e ≡ eePage self ∧ eeKind e ≡ eeKind self
+               ∧ eeRef e ≡ eeRef self
 
 -- * River selection ---------------------------------------------------
 
@@ -216,8 +251,32 @@ riverAtTile worldSize timeline gx gy =
 --
 --   @kind@ is @\"world\"@, @\"location\"@, or @\"river\"@. A location
 --   takes its 'LocationInstanceId'; a river takes the @id@
---   @world.getRivers@ / @world.getRiverAt@ reports. @pageId@ defaults to
---   the active page.
+--   @world.getRivers@ / @world.getRiverAt@ reports. A world target has
+--   no id of its own, so an explicit page for one is the THIRD
+--   positional argument with a @nil@ second:
+--   @world.getEtymology(\"world\", nil, pageId)@.
+--
+--   /Which page (#1265)./ @pageId@ names the TARGET only; recurrence has
+--   its own scope and is never widened by it:
+--
+--   * Omitted — target and recurrence are both the canonical active page
+--     ('resolveActiveWorld'). The whole query is one page, as before.
+--   * A live page that is not active — the target is resolved there, and
+--     its stored name, gloss, source, decomposition and page-language
+--     validation are all that page's. Recurrence candidates still come
+--     only from the active page, so an inactive page's names can never
+--     appear as recurrence. Its own world entry and its equal-numbered
+--     locations stay eligible, because self-exclusion is page-qualified;
+--     no river participates at all, since the inspected river is not on
+--     the active page.
+--   * A page that does not exist (and likewise an entity that does not)
+--     — @available = false@ with @reason = \"no_entity\"@, unchanged.
+--   * No visible page at all (a mid-transition window) — recurrence
+--     follows 'resolveActiveWorld' exactly, including its head-of-
+--     @wmWorlds@ fallback, and substitutes nothing when that resolves to
+--     'Nothing'. A target selected by an explicit page keeps its full
+--     result with recurrence simply empty; a missing ingredient on the
+--     RECURRENCE page never downgrades a valid target.
 --
 --   A successful result is
 --   @{ available = true, name, gloss?, language = { seed, version },
@@ -301,10 +360,13 @@ resolveEtymology
     ∷ WorldSimCapability → LuaBackendState → Text → Maybe Int
     → Maybe WorldPageId → IO ResolvedEtymology
 resolveEtymology wsc backendState kind mId mPid = do
-    mState ← worldStateFor wsc mPid
-    case mState of
+    -- ONE read of the manager, so the target page and the active page
+    -- are decided against the same registry rather than against two
+    -- snapshots a concurrent page switch could have moved between.
+    mgr ← readIORef (wsWorldManagerRef wsc)
+    case pageFor mgr mPid of
         Nothing → pure ResolvedNoEntity
-        Just ws → do
+        Just (targetPid, ws) → do
             mIdent  ← readIORef (wsIdentityRef ws)
             mParams ← readIORef (wsGenParamsRef ws)
             case mParams of
@@ -316,14 +378,13 @@ resolveEtymology wsc backendState kind mId mPid = do
                             let fid = GeoFeatureId rid
                             rn ← lookupRiverName fid (wgpRiverNames params)
                             pure (fid, rn)
-                        -- Only a RIVER target admits a river into the
-                        -- eligible set (requirement 8).
-                        eligible = eligibleEntities mIdent instances
-                                       (if kind ≡ "river" then mRiver else Nothing)
-                        mSelf = selfEntity kind mId mIdent instances params
+                        mSelf = selfEntity targetPid kind mId mIdent instances
+                                           params
                     case mSelf of
                         Nothing → pure ResolvedNoEntity
                         Just self → do
+                            eligible ← recurrenceCandidates mgr kind targetPid
+                                                            mRiver
                             eCat ← resolveCatalogue backendState
                             let stored = Just (eeName self, eeGloss self)
                             pure $ case eCat of
@@ -353,6 +414,41 @@ resolveEtymology wsc backendState kind mId mPid = do
                                     EtyAvailable ety → ResolvedOk ety
                                         (recurrenceFor cat self eligible ety)
 
+-- | The names a decomposition may be linked against, sourced
+--   EXCLUSIVELY from the canonical active page (#1265) — whichever page
+--   the target itself came from.
+--
+--   This is the one place the module's active-page contract is enforced
+--   for the public query, and it is enforced by never READING another
+--   page rather than by filtering one out afterwards.
+--
+--   Three absences all mean \"no candidates\", never \"no result\": no
+--   page resolves ('resolveActiveWorld' returning 'Nothing' during a
+--   transition — nothing may be substituted for it), the active page has
+--   no gen params, or it has neither an identity nor a discovered
+--   location. A target the caller legitimately selected keeps its own
+--   result in every one of them.
+recurrenceCandidates
+    ∷ WorldManager → Text → WorldPageId → Maybe (GeoFeatureId, RiverName)
+    → IO [EtyEntity]
+recurrenceCandidates mgr kind targetPid mRiver = case resolveActiveWorld mgr of
+    Nothing → pure []
+    Just (activePid, ws) → do
+        mIdent  ← readIORef (wsIdentityRef ws)
+        mParams ← readIORef (wsGenParamsRef ws)
+        pure $ case mParams of
+            Nothing → []
+            Just params → eligibleEntities activePid mIdent
+                (instancesToList (wgpLocationInstances params))
+                -- Only a RIVER target admits a river into the eligible
+                -- set (requirement 8) — and only when the inspected
+                -- river is genuinely ON this page. Resolving the same
+                -- numeric id against another page's 'wgpRiverNames'
+                -- would admit a DIFFERENT river, which is precisely the
+                -- inspected-river-only rule this query promises.
+                (if kind ≡ "river" ∧ activePid ≡ targetPid
+                     then mRiver else Nothing)
+
 -- | Which of requirement 7's absences applies when a name has no
 --   etymology source.
 --
@@ -378,31 +474,40 @@ absentReason kind mIdent = case wiLanguage =≪ mIdent of
 --   resolved by ONE piece of code and cannot disagree about what an
 --   entity's stored name is.
 selfEntity
-    ∷ Text → Maybe Int → Maybe WorldIdentity → [LocationInstance]
-    → WorldGenParams → Maybe EtyEntity
-selfEntity kind mId mIdent instances params = case kind of
+    ∷ WorldPageId → Text → Maybe Int → Maybe WorldIdentity
+    → [LocationInstance] → WorldGenParams → Maybe EtyEntity
+selfEntity pid kind mId mIdent instances params = case kind of
     "world" → do
         i ← mIdent
-        pure (EtyEntity "world" Nothing (wiName i) (wiGloss i) (wiEtymology i))
+        pure (EtyEntity pid "world" Nothing (wiName i) (wiGloss i)
+                        (wiEtymology i))
     "location" → do
         lid ← mId
         li  ← listToMaybe [ l | l ← instances
                           , unLocationInstanceId (liId l) ≡ lid ]
-        pure (EtyEntity "location" (Just lid) (liDisplayName li)
+        pure (EtyEntity pid "location" (Just lid) (liDisplayName li)
                         (liGloss li) (liEtymology li))
     "river" → do
         rid ← mId
         rn  ← lookupRiverName (GeoFeatureId rid) (wgpRiverNames params)
-        pure (EtyEntity "river" (Just rid) (rvnDisplayName rn)
+        pure (EtyEntity pid "river" (Just rid) (rvnDisplayName rn)
                         (rvnGloss rn) (rvnEtymology rn))
     _ → Nothing
 
+-- | The page an optional @pageId@ argument selects, with its id — the
+--   one resolution both entry points here share. An omitted argument is
+--   the canonical active page; an explicit one is looked up directly,
+--   active or not.
+pageFor
+    ∷ WorldManager → Maybe WorldPageId → Maybe (WorldPageId, WorldState)
+pageFor mgr Nothing    = resolveActiveWorld mgr
+pageFor mgr (Just pid) = (,) pid <$> lookup pid (wmWorlds mgr)
+
 worldStateFor
     ∷ WorldSimCapability → Maybe WorldPageId → IO (Maybe WorldState)
-worldStateFor wsc Nothing    = activeWorldStateFrom (wsWorldManagerRef wsc)
-worldStateFor wsc (Just pid) = do
+worldStateFor wsc mPid = do
     mgr ← readIORef (wsWorldManagerRef wsc)
-    pure (lookup pid (wmWorlds mgr))
+    pure (snd <$> pageFor mgr mPid)
 
 genParamsFor
     ∷ WorldSimCapability → Maybe WorldPageId → IO (Maybe WorldGenParams)

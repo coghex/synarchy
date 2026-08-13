@@ -98,6 +98,8 @@ import qualified Test.Headless.Language.Semantic as LanguageSemantic
 import qualified Test.Headless.Language.Generated as LanguageGenerated
 import qualified Test.Headless.Language.Suggest as LanguageSuggest
 import qualified Test.Headless.Language.Etymology as LanguageEtymology
+import qualified Test.Headless.Language.EtymologyPageScope
+    as LanguageEtymologyPageScope
 import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.Blood.Texture as BloodTexture
 import qualified Test.Headless.Blood.Impact as BloodImpact
@@ -268,6 +270,14 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1265): the etymology page-scope
+    -- gate installs its own two-page world manager, one page inactive,
+    -- to drive world.getEtymology across the target/recurrence boundary.
+    -- Named so `--match "Language etymology"` reaches it alongside the
+    -- pure suite below.
+    aroundAll withHeadlessEngine $
+        describe "Language etymology (page scope)"
+            LanguageEtymologyPageScope.spec
     -- Own engine (not the shared-worlds one above): needs a real
     -- pixel hit-test against loaded tile data (renderWorldCursorQuads),
     -- so it generates its own cheap private w8 page rather than sharing

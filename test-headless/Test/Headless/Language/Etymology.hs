@@ -49,7 +49,7 @@ import World.Geology.Timeline.Types
     , defaultErosionParams, emptyTimeline, noBBox )
 import World.Hydrology.Types
     (HydroFeature(..), RiverParams(..), RiverSegment(..))
-import World.Page.Types (WorldIdentity(..))
+import World.Page.Types (WorldIdentity(..), WorldPageId(..))
 import World.River.Naming (RiverName(..))
 
 -- * Fixtures ----------------------------------------------------------
@@ -166,14 +166,23 @@ dependentForm roots cid = fromMaybe
 ghostE ∷ NameExpr
 ghostE = Modifier (ConceptId "ASH") (ConceptId "NOT_A_REAL_CONCEPT")
 
+-- | The one page every example here lives on. These specs cover the
+--   WITHIN-page eligibility rules, so a single page is the whole world
+--   as far as they are concerned; the cross-page target\/recurrence
+--   split (#1265) is 'Test.Headless.Language.EtymologyPageScope', which
+--   drives the registered Lua query against two live pages.
+purePage ∷ WorldPageId
+purePage = WorldPageId "pure_page"
+
 -- | An entity carrying a real generated name.
 entityFor
     ∷ Catalogue → Text → Maybe Int → LanguageProvenance → NameExpr
     → EtyEntity
 entityFor cat kind ref prov expr =
     let (name, gloss) = storedFor cat prov expr
-    in EtyEntity { eeKind = kind, eeRef = ref, eeName = name
-                 , eeGloss = gloss, eeSource = Just (sourceFor prov expr) }
+    in EtyEntity { eePage = purePage, eeKind = kind, eeRef = ref
+                 , eeName = name, eeGloss = gloss
+                 , eeSource = Just (sourceFor prov expr) }
 
 spec ∷ Spec
 spec = beforeAll loadRealCatalogue $ do
@@ -564,7 +573,7 @@ spec = beforeAll loadRealCatalogue $ do
                              (Modifier (ConceptId "ASH") (ConceptId "KEEP"))
                 hidden = entityFor cat "location" (Just 2) provA
                              (Modifier (ConceptId "ASH") (ConceptId "GATE"))
-                eligible = eligibleEntities
+                eligible = eligibleEntities purePage
                     (Just (identityOf worldE))
                     [ instanceOf found LifecycleDiscovered
                     , instanceOf hidden LifecycleUnknown ]
@@ -580,7 +589,7 @@ spec = beforeAll loadRealCatalogue $ do
             let worldE = entityFor cat "world" Nothing provA modE
                 found  = entityFor cat "location" (Just 1) provA
                              (Modifier (ConceptId "ASH") (ConceptId "KEEP"))
-                eligible = eligibleEntities (Just (identityOf worldE))
+                eligible = eligibleEntities purePage (Just (identityOf worldE))
                                [instanceOf found LifecycleDiscovered] Nothing
                 ety   = available (explain cat provA modE)
                 links = recurrenceFor cat worldE eligible ety
@@ -591,8 +600,8 @@ spec = beforeAll loadRealCatalogue $ do
         it "the inspected entity never appears in its OWN recurrence" $
             \cat → do
                 let worldE = entityFor cat "world" Nothing provA modE
-                    eligible = eligibleEntities (Just (identityOf worldE))
-                                   [] Nothing
+                    eligible = eligibleEntities purePage
+                                   (Just (identityOf worldE)) [] Nothing
                     ety   = available (explain cat provA modE)
                     links = recurrenceFor cat worldE eligible ety
                 concatMap snd links `shouldBe` []
@@ -604,8 +613,8 @@ spec = beforeAll loadRealCatalogue $ do
                              (Modifier (ConceptId "ASH") (ConceptId "RIVER"))
                 -- The world/location adapters pass Nothing for the river
                 -- slot; this is that call.
-                eligible = eligibleEntities (Just (identityOf worldE)) []
-                               Nothing
+                eligible = eligibleEntities purePage
+                               (Just (identityOf worldE)) [] Nothing
             map eeKind eligible `shouldSatisfy` all (≢ "river")
             eeName riverE `shouldSatisfy` (not ∘ T.null)
 
@@ -616,7 +625,7 @@ spec = beforeAll loadRealCatalogue $ do
                              (Modifier (ConceptId "ASH") (ConceptId "RIVER"))
                 riverB = entityFor cat "river" (Just 8) provA
                              (Modifier (ConceptId "IRON") (ConceptId "RIVER"))
-                admit r = [ eeRef e | e ← eligibleEntities Nothing []
+                admit r = [ eeRef e | e ← eligibleEntities purePage Nothing []
                                           (Just (GeoFeatureId (fromMaybe 0
                                                      (eeRef r)), riverNameOf r))
                           , eeKind e ≡ "river" ]
@@ -629,7 +638,7 @@ spec = beforeAll loadRealCatalogue $ do
                 -- Same expression, DIFFERENT language: its own rendering,
                 -- and its own morpheme identities.
                 foreign_ = entityFor cat "location" (Just 1) provB modE
-                eligible = eligibleEntities (Just (identityOf worldE))
+                eligible = eligibleEntities purePage (Just (identityOf worldE))
                                [instanceOf foreign_ LifecycleDiscovered]
                                Nothing
                 ety   = available (explain cat provA modE)
@@ -642,8 +651,9 @@ spec = beforeAll loadRealCatalogue $ do
             let worldE = entityFor cat "world" Nothing provA modE
                 (nm, gl) = storedFor cat provA
                                (Modifier (ConceptId "ASH") (ConceptId "KEEP"))
-                sourceless = EtyEntity "location" (Just 1) nm gl Nothing
-                eligible = eligibleEntities (Just (identityOf worldE))
+                sourceless = EtyEntity purePage "location" (Just 1) nm gl
+                                       Nothing
+                eligible = eligibleEntities purePage (Just (identityOf worldE))
                                [instanceOf sourceless LifecycleDiscovered]
                                Nothing
                 ety   = available (explain cat provA modE)
