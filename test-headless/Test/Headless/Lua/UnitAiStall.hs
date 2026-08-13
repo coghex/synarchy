@@ -295,6 +295,35 @@ spec = describe "commanded order stall budget" $ do
                 , "  'and the budget then runs from the approach, not from zero')"
                 ]
 
+        it "an interruption that happens to carry the unit CLOSER does \
+           \not refund the budget already spent — the reset is the \
+           \order's own action's to make, and it still fires on the \
+           \first eligible sample afterwards" $
+            runsOk $ lns
+                [ prelude
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW }"
+                , "tick(50, 'follow_command')"
+                , "local spent = s.commandedTask.stalledFor"
+                , "assert(spent > 49 and spent < 51,"
+                , "  'about 50 s charged: ' .. tostring(spent))"
+                -- treat_ally / a combat chase drags the unit 30 tiles
+                -- toward the commanded tile while it owns the unit.
+                , "place(10, 0)"
+                , "tick(5, 'treat_ally')"
+                , "assert(s.commandedTask.stalledFor == spent,"
+                , "  'an interrupted approach must not refund the spent budget: '"
+                , "  .. tostring(s.commandedTask.stalledFor))"
+                , "assert(s.commandedTask.bestDist == 40,"
+                , "  'nor record an approach the order did not make')"
+                -- Nothing is lost: the order's own action records it.
+                , "tick(5, 'follow_command')"
+                , "assert(s.commandedTask.bestDist < 31,"
+                , "  'the resumed order records the approach: '"
+                , "  .. tostring(s.commandedTask.bestDist))"
+                , "assert(s.commandedTask.stalledFor < 5,"
+                , "  'and its budget starts over there')"
+                ]
+
         it "an improvement smaller than TASK_PROGRESS_TILES does NOT \
            \reset it — path jitter is not progress" $
             runsOk $ lns
@@ -357,6 +386,27 @@ spec = describe "commanded order stall budget" $ do
                 , "tick(5, 'pickup_ground')"
                 , "assert(s.pickupOrder == nil,"
                 , "  'and the remaining budget still runs out')"
+                ]
+
+        it "an interruption that carries the carrier closer does not \
+           \refund its budget either" $
+            runsOk $ lns
+                [ pickupPrelude
+                , "tick(20, 'pickup_ground')"
+                , "local spent = s.pickupOrder.stalledFor"
+                , "assert(spent > 18 and spent < 21,"
+                , "  'about 19 s charged: ' .. tostring(spent))"
+                , "place(20, 0)"
+                , "tick(5, 'eat_from_inventory')"
+                , "assert(s.pickupOrder.stalledFor == spent,"
+                , "  'an interrupted approach must not refund the spent budget')"
+                , "assert(s.pickupOrder.bestDist == 40,"
+                , "  'nor record an approach the order did not make')"
+                , "tick(3, 'pickup_ground')"
+                , "assert(s.pickupOrder.bestDist < 21,"
+                , "  'the resumed order records the approach')"
+                , "assert(s.pickupOrder.stalledFor < 3,"
+                , "  'and its budget starts over there')"
                 ]
 
         it "a new closest approach starts its budget over too" $

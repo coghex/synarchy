@@ -24,6 +24,15 @@
 -- IS free to pursue and makes no headway on still gives up on
 -- schedule, and no order becomes immortal.
 --
+-- That reset is the ORDER'S OWN action's to make, so it is gated on
+-- the same eligibility the charging is: an interruption that happens
+-- to carry the unit closer (a `treat_ally` walk, a combat chase in the
+-- same direction) must not refund a budget the order had already
+-- spent, which is the accumulation rule read in the other direction.
+-- Nothing is lost by waiting: the approach is a fact about where the
+-- unit now IS, so the first eligible sample after the interruption
+-- records it and starts the budget over then.
+--
 -- An interval is eligible when the order's own action is the one
 -- arbitration left in control of the unit. Callers pass that as
 -- `s.currentAction`, read BEFORE this tick re-scores, so it describes
@@ -163,11 +172,13 @@ local function maintainTask(uid, s)
     -- player-visible report on an unreachable commanded move is the
     -- stuck-walk watchdog's (unit_ai.lua), not this one's.
     local now = engine.gameTime()
-    if not task.bestDist or d < task.bestDist - TASK_PROGRESS_TILES then
+    local eligible = s.currentAction == "follow_command"
+    if eligible and (not task.bestDist
+                     or d < task.bestDist - TASK_PROGRESS_TILES) then
         task.bestDist = d
         M.reset(task, now)
     end
-    if M.charge(task, s.currentAction == "follow_command", now) > TASK_TIMEOUT_SEC then
+    if M.charge(task, eligible, now) > TASK_TIMEOUT_SEC then
         s.commandedTask = nil
     end
 end

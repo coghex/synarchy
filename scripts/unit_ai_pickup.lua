@@ -117,11 +117,14 @@ local function pickupUtility(uid, s, params)
     -- approach, so a unit circling or oscillating never refreshes it —
     -- the same progress rule as unit_ai.lua's stuck-walk watchdog — and
     -- only time the carrier was actually free to walk is charged
-    -- against it (#1291, unit_ai_stall.lua). This runs on the thought
-    -- tick rather than every update the way maintainTask does; the
-    -- accounting is written to tolerate both cadences.
+    -- against it (#1291, unit_ai_stall.lua) — including the reset,
+    -- which is this order's own to make: an interruption that carries
+    -- the carrier closer must not refund a budget already spent. This
+    -- runs on the thought tick rather than every update the way
+    -- maintainTask does; the accounting tolerates both cadences.
     local now = engine.gameTime()
-    local info = unit.getInfo(uid)
+    local eligible = s.currentAction == "pickup_ground"
+    local info = eligible and unit.getInfo(uid)
     if info then
         local d = distance(info.gridX, info.gridY, g.x, g.y)
         if not order.bestDist or d < order.bestDist - PICKUP_PROGRESS_TILES then
@@ -129,7 +132,7 @@ local function pickupUtility(uid, s, params)
             stall.reset(order, now)
         end
     end
-    if stall.charge(order, s.currentAction == "pickup_ground", now)
+    if stall.charge(order, eligible, now)
        > (params.pickup_timeout or 30) then
         -- Stalled out short of a still-present item: a real failure.
         reportFailure(uid, "Couldn't reach item to pick up")
