@@ -14,7 +14,11 @@ one-shot:
               mule's pre-stocked first-aid kit is moved onto the selected
               expedition acolyte, who then takes a real fall; the injury,
               the treatment attempt/outcome, the kit state and the final
-              unit state are reported.
+              unit state are reported. Its roster setup, provisioning and
+              pre-fall baseline all run with the simulation STOPPED, so
+              ambient AI cannot move or injure the scout between the kit
+              issue and the fall (#1218); the fall itself and everything
+              after it stay live and observational.
 
 THIS IS NOT A BEHAVIOR PROBE AND NOT A CI GATE. It is deliberately
 absent from ``tools/run_probes.py`` and ``tools/ci_probes.py``, is never
@@ -167,7 +171,62 @@ def _install_snapshot_fn(port: int) -> None:
         raise ScenarioError("could not install the checkpoint reader")
 
 
-def spawn_roster(port: int, page: str, tiles) -> list[int]:
+# ---------------------------------------------------------------------
+# Simulation hold (#1218)
+# ---------------------------------------------------------------------
+# `engine.setPaused` is the ONLY real hold. `unit.setFrozen` is not one:
+# it merely stops the render-facing snapshot while the sim keeps moving
+# the unit, so a "frozen" unit walks on and `unit.getInfo` reports where
+# it used to be (CLAUDE.md's expedition-loop notes). Movement ticks are
+# gated on the engine pause flag (src/Unit/Thread.hs) and the utility AI
+# returns early while it is set (scripts/unit_ai.lua), so a stopped
+# simulation is the only window in which a baseline read is coherent.
+#
+# What still works under the hold is what makes a paused setup possible:
+# the unit thread drains its command queue regardless of the flag, so
+# spawns and `unit.transferItemToUnit` complete, and every read verb is
+# a plain query.
+def is_paused(port: int) -> bool:
+    return send(port, "return tostring(engine.isPaused())") == "true"
+
+
+def hold_simulation(port: int) -> None:
+    """Stop the simulation and prove it stopped, rather than assuming the
+    request took."""
+    send(port, "engine.setPaused(true); return 'ok'")
+    if not is_paused(port):
+        raise ScenarioError(
+            "the simulation would not stop — engine.setPaused(true) did not "
+            "take, so no baseline can be captured under a controlled "
+            "simulation")
+
+
+def release_simulation(port: int) -> None:
+    send(port, "engine.setPaused(false); return 'ok'")
+
+
+def _retire_find_water_stopped(port: int, uid: int) -> str:
+    """Retire a spawned acolyte's standing `find_water` goal while the
+    simulation is stopped.
+
+    probelib's `clear_find_water` polls `unitAi.getState`, which only
+    becomes non-nil once the AI has TICKED the unit — and the AI tick
+    returns early while paused, so that helper can never succeed under a
+    hold. Reaching for the AI's own state constructor instead retires the
+    goal before the unit is ever ticked: `seedInitialGoal` skips a unit
+    whose `goalStatus` is already non-empty, so `find_water` is never
+    handed out at all rather than being handed out and then withdrawn.
+
+    Returns the goal's resulting status for the caller to check."""
+    return send(port,
+                "local core = require('scripts.unit_ai_core'); "
+                f"local s = core.ensureState({uid}); "
+                "if type(s) ~= 'table' then return 'nostate' end; "
+                "core.markGoalAccomplished(s, 'find_water'); "
+                "return tostring((s.goalStatus or {}).find_water)")
+
+
+def spawn_roster(port: int, page: str, tiles, hold: bool = False) -> list[int]:
     """Spawn the real starting party at `tiles` ([(x, y), ...], one per
     ROSTER entry) as PLAYER-faction units, the same way the acolyte
     portal spawns them (scripts/building_spawn.lua) — engine-side spawn
@@ -177,9 +236,19 @@ def spawn_roster(port: int, page: str, tiles) -> list[int]:
     A fresh acolyte's standing `find_water` goal is retired: its search
     utility out-competes a commanded route and can walk a scout off a
     cliff, so every probe in tools/ quiets it. That is a deliberate
-    scenario condition, and the report says so."""
+    scenario condition, and the report says so.
+
+    `hold=False` (the default, and what `expedition` uses) keeps the
+    historical LIVE setup: the roster materializes with the simulation
+    running and the goal is cleared by polling for each acolyte's first
+    AI tick. `hold=True` stops the simulation before the first spawn and
+    RETURNS WITH IT STILL STOPPED, so the caller owns the release — the
+    whole materialize-and-quiet window then runs with no ambient AI, and
+    nothing can move or injure a unit before the caller's baseline."""
     if len(tiles) != len(ROSTER):
         raise ScenarioError("roster/tile count mismatch")
+    if hold:
+        hold_simulation(port)
     uids: list[int] = []
     for defname, (x, y) in zip(ROSTER, tiles):
         raw = send(port, f"return unit.spawn('{defname}', {x}, {y}, nil, "
@@ -193,8 +262,23 @@ def spawn_roster(port: int, page: str, tiles) -> list[int]:
         uids.append(uid)
     time.sleep(1.5)   # let the unit thread materialize inventories
     for uid, defname in zip(uids, ROSTER):
-        if defname == "acolyte" and not clear_find_water(port, uid):
+        if defname != "acolyte":
+            continue
+        if hold:
+            status = _retire_find_water_stopped(port, uid)
+            if status != "accomplished":
+                raise ScenarioError(
+                    f"unit {uid}'s find_water goal could not be retired under "
+                    f"the simulation hold (goal status {status!r})")
+        elif not clear_find_water(port, uid):
             raise ScenarioError(f"unit {uid} never got AI state")
+    if hold and not is_paused(port):
+        # Nothing here unpauses, but a notification category configured
+        # to pause/unpause could; the roster is only usable as a baseline
+        # if the hold survived the whole setup.
+        raise ScenarioError(
+            "the simulation restarted during roster setup — the spawned "
+            "party is no longer a controlled baseline")
     return uids
 
 
@@ -208,12 +292,26 @@ def snapshot(port: int, uid: int) -> dict:
     return snap
 
 
-def checkpoint(port: int, label: str, uids: list[int], t0: float) -> dict:
-    return {
+def checkpoint(port: int, label: str, uids: list[int], t0: float,
+               snaps: dict[int, dict] | None = None,
+               paused: bool | None = None) -> dict:
+    """Read every unit in `uids` into one checkpoint record.
+
+    `snaps` supplies already-taken snapshots, so a read that has already
+    been VALIDATED under a stopped simulation is the very one reported
+    rather than a second, unvalidated re-read. `paused`, when given,
+    records the `engine.isPaused()` state the checkpoint was captured
+    under, so the report demonstrates the hold instead of implying it."""
+    snaps = snaps or {}
+    cp = {
         "label": label,
         "elapsed": time.time() - t0,
-        "units": {uid: snapshot(port, uid) for uid in uids},
+        "units": {uid: (snaps[uid] if uid in snaps else snapshot(port, uid))
+                  for uid in uids},
     }
+    if paused is not None:
+        cp["paused"] = paused
+    return cp
 
 
 def _as_list(v):
@@ -326,7 +424,11 @@ def print_unit(uid: int, snap: dict, indent: str = "    ") -> None:
 
 
 def print_checkpoint(cp: dict) -> None:
-    print(f"\n  -- checkpoint: {cp['label']}  (t+{cp['elapsed']:.1f}s) --")
+    paused = cp.get("paused")
+    sim = "" if paused is None else (
+        f"  [simulation {'STOPPED' if paused else 'RUNNING'}: "
+        f"engine.isPaused() == {'true' if paused else 'false'}]")
+    print(f"\n  -- checkpoint: {cp['label']}  (t+{cp['elapsed']:.1f}s){sim} --")
     for uid, snap in cp["units"].items():
         print_unit(uid, snap)
 
@@ -630,9 +732,67 @@ def kit_state(port: int, uids: list[int]) -> str:
     return "; ".join(out)
 
 
+def baseline_scout(port: int, scout: int) -> dict:
+    """Read the scout ONCE with the simulation stopped and prove the
+    pre-fall preconditions against that very read (#1218).
+
+    The whole point of the hold is that this snapshot is coherent, so the
+    stopped state is re-checked on BOTH sides of the read: a value
+    sampled while the sim was running again would describe a unit that
+    has since moved. A violated precondition is a `ScenarioError` naming
+    what drifted, because continuing into the fall from an invalid
+    baseline is exactly what makes the before/after treatment
+    observations ambiguous.
+
+    Returns the validated snapshot for the caller to report as-is."""
+    if not is_paused(port):
+        raise ScenarioError(
+            "the simulation was running when the pre-fall baseline was read — "
+            "the checkpoint would not be a stopped-simulation snapshot")
+    snap = snapshot(port, scout)
+    if snap.get("gone"):
+        raise ScenarioError(
+            f"the scout (unit {scout}) no longer exists at the pre-fall "
+            f"baseline")
+    sx, sy = _num(snap.get("gridX")), _num(snap.get("gridY"))
+    if sx is None or sy is None:
+        raise ScenarioError(
+            f"the scout (unit {scout}) reported no usable position at the "
+            f"pre-fall baseline: gridX={snap.get('gridX')!r}, "
+            f"gridY={snap.get('gridY')!r}")
+    tx, ty = FA_SCOUT_TILE
+    drift = ((sx - tx) ** 2 + (sy - ty) ** 2) ** 0.5
+    if drift > ARRIVAL_TILES:
+        raise ScenarioError(
+            f"the scout (unit {scout}) left its staging tile before the "
+            f"baseline: at ({sx:.2f}, {sy:.2f}), {drift:.2f} tiles from "
+            f"{FA_SCOUT_TILE} (limit {ARRIVAL_TILES})")
+    wounds = _as_list(snap.get("wounds"))
+    if wounds:
+        raise ScenarioError(
+            f"the scout (unit {scout}) was already injured before the fall: "
+            f"{len(wounds)} wound(s) — {fmt_wounds(snap)}")
+    if not any(isinstance(item, dict) and item.get("defName") == "first_aid_kit"
+               for item in _as_list(snap.get("inventory"))):
+        raise ScenarioError(
+            f"the scout (unit {scout}) is not carrying the issued "
+            f"first_aid_kit at the pre-fall baseline (inventory: "
+            f"{fmt_inventory(snap)})")
+    if not is_paused(port):
+        raise ScenarioError(
+            "the simulation restarted while the pre-fall baseline was being "
+            "read — the snapshot is not coherent")
+    return snap
+
+
 def descend_and_fall(port: int, scout: int, tx: float, ty: float,
                      budget: float, observations: list[str]) -> tuple:
     """Send the scout off the ridge and watch tightly for the landing.
+
+    The descent ORDER is issued under the caller's simulation hold and
+    the sim is released immediately afterwards (#1218), so no ambient-AI
+    window ever separates the verified baseline from the intended
+    command. Everything from that release on is live and observational.
 
     A shallow fall opens a live bleed measured in whole litres per
     second, so this polls as fast as the console allows rather than on
@@ -640,6 +800,7 @@ def descend_and_fall(port: int, scout: int, tx: float, ty: float,
     observed after the patient has already bled out, and there is no
     treatment situation left to stage."""
     command_move(port, [scout], tx, ty)
+    release_simulation(port)
     deadline = time.time() + budget
     pose, nwounds, where = "unknown", 0, "unknown"
     while time.time() < deadline:
@@ -716,7 +877,12 @@ def run_first_aid(port: int) -> int:
                       (FA_CAMP_X, 1), (FA_CAMP_X, -1),
                       (FA_CAMP_X + 1, 0),                   # 3 more acolytes
                       (FA_CAMP_X + 1, 1)]                   # technomule
-        uids = spawn_roster(port, page, camp_tiles)
+        # From here to the descent order the simulation is STOPPED
+        # (#1218): the roster materializes, the kit is issued and the
+        # baseline is read with no ambient AI running, so nothing can
+        # walk the scout off the ridge or injure it before the fall the
+        # scenario means to stage. spawn_roster returns still holding.
+        uids = spawn_roster(port, page, camp_tiles, hold=True)
         acolytes, mule = uids[:5], uids[5]
         scout, medic = acolytes[0], acolytes[1]
 
@@ -726,9 +892,19 @@ def run_first_aid(port: int) -> int:
                 "the mule's stocked first-aid kit could not be moved onto "
                 "the expedition acolyte via unit.transferItemToUnit")
         kit_before = kit_state(port, uids)
-        checkpoints.append(checkpoint(port, "kit issued, before the fall",
-                                      [scout, medic, mule], t0))
+        scout_baseline = baseline_scout(port, scout)
+        pre_fall = checkpoint(port, "kit issued, before the fall",
+                              [scout, medic, mule], t0,
+                              snaps={scout: scout_baseline},
+                              paused=is_paused(port))
+        if not pre_fall["paused"]:
+            raise ScenarioError(
+                "the simulation restarted while the pre-fall checkpoint was "
+                "being recorded — the baseline is not a stopped-simulation "
+                "snapshot")
+        checkpoints.append(pre_fall)
 
+        # descend_and_fall issues the order under the hold, then releases.
         print("  sending the scout off the ridge ...")
         pose, nwounds, landing = descend_and_fall(
             port, scout, FA_CAMP_X, 0, budget=90.0, observations=observations)
@@ -794,6 +970,13 @@ def run_first_aid(port: int) -> int:
         print(f"supply point   technomule {mule}, stationary at camp")
         print("kit issue      1x first_aid_kit moved mule -> scout via "
               "unit.transferItemToUnit")
+        print("baseline       spawn, provisioning and the pre-fall "
+              "checkpoint all ran with the simulation STOPPED "
+              "(engine.isPaused() == true, re-read either side of the "
+              "snapshot);")
+        print(f"               the scout was verified within "
+              f"{ARRIVAL_TILES} tiles of {FA_SCOUT_TILE}, unwounded and "
+              f"holding the kit before the descent order released it")
         print(f"kit before     {kit_before}")
         print(f"kit after      {kit_state(port, uids)}")
         print(f"landing        {landing}, pose {pose}, {nwounds} wound(s); "
