@@ -846,8 +846,13 @@ def baseline_scout(port: int, scout: int, expect_kit: bool = True) -> dict:
 
     `expect_kit=False` says the kit was legitimately refused for want of
     carrying room (#1212) — a gameplay outcome the caller has already
-    recorded as an observation — so the run continues into an untreated
-    fall rather than aborting. Every other precondition still holds.
+    recorded as an observation — so the run continues into the fall
+    rather than aborting, and the report says the precondition was
+    dropped instead of claiming a kit the scout does not hold. The fall
+    is still TREATED in that case: `unit.treatBleeding` improvises a
+    makeshift tourniquet when the kit owner has no supplies
+    (`src/Engine/Scripting/Lua/API/Units/Medical.hs`), which is itself
+    worth observing. Every other precondition still holds.
 
     The whole point of the hold is that this snapshot is coherent, so the
     stopped state is re-checked on BOTH sides of the read: a value
@@ -1111,8 +1116,11 @@ def run_first_aid(port: int) -> int:
               "(engine.isPaused() == true, re-read either side of the "
               "snapshot);")
         print(f"               the scout was verified within "
-              f"{ARRIVAL_TILES} tiles of {FA_SCOUT_TILE}, unwounded and "
-              f"holding the kit before the descent order released it")
+              f"{ARRIVAL_TILES} tiles of {FA_SCOUT_TILE} and unwounded"
+              + (", and holding the kit," if kit_issued else
+                 " (the kit precondition was dropped with the refused "
+                 "issue),")
+              + "\n               before the descent order released it")
         print(f"kit before     {kit_before}")
         print(f"kit after      {kit_state(port, uids)}")
         print(f"landing        {landing}, pose {pose}, {nwounds} wound(s); "

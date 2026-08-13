@@ -526,8 +526,11 @@ tear the engine down in a `finally`, and save nothing.
 - **`first-aid`** (~2 min) builds a wide arena ridge, issues the mule's
   pre-stocked `first_aid_kit` to the selected expedition acolyte via that
   same capacity-gated transfer path — a kit refused for want of room is
-  recorded as an observation and the run continues into an untreated fall
-  rather than aborting — walks that acolyte off the ridge for a real fall,
+  recorded as an observation and the run continues rather than aborting,
+  with the pre-fall baseline dropping only its kit precondition (and
+  saying so) and `unit.treatBleeding` falling back to the makeshift
+  tourniquet it improvises when the kit owner has no supplies — walks
+  that acolyte off the ridge for a real fall,
   administers first aid through `unit.treatBleeding` the moment the injury
   lands, and reports the injury, the treatment call's full result
   (part/kind/method/bandages used/attempts/residual seep/message), the
