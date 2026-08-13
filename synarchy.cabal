@@ -225,6 +225,7 @@ library
                      Engine.Graphics.Vulkan.Texture.System
                      Engine.Graphics.Vulkan.Texture.Handle
                      Engine.Graphics.Vulkan.Texture.Rebind
+                     Engine.Graphics.Vulkan.Texture.Release
                      Engine.Graphics.Vulkan.Texture.Bindless
                      Engine.Graphics.Vulkan.Uniform.Layout
                      Engine.Graphics.Vulkan.Vertex
@@ -1220,6 +1221,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Graphics.BindlessRebind
+                   Test.Headless.Graphics.BindlessRelease
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers
