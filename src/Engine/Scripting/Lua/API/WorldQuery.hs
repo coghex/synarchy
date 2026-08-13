@@ -6,7 +6,8 @@
 --   scans, WorldQuery.Chunk is chunk-info + region loading,
 --   WorldQuery.River is the river-network dump, WorldQuery.Climate is
 --   climate/ambient-temperature/sun-angle sampling, WorldQuery.Pick is
---   screen-pixel/cursor hit-testing, and WorldQuery.Location is the
+--   screen-pixel/cursor hit-testing (plus the u-seam frame helpers
+--   world.localizeTile / world.getWrapWidth), and WorldQuery.Location is the
 --   placed-location queries. WorldQuery.Lookup holds the read-only
 --   world/tile/gen-params resolution helpers shared across those
 --   submodules and stays internal (not re-exported here), matching
@@ -32,6 +33,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldPickPosFn
     , worldPickChunkFn
     , worldLocalizeTileFn
+    , worldGetWrapWidthFn
     , worldGetClimateAtFn
     , worldGetAmbientAtFn
     , worldGetSunAngleAtFn
