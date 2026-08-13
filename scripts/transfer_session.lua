@@ -171,6 +171,19 @@ end
 -- otherwise never be chosen. Identity away from the seam and in
 -- arena / non-wrapping worlds.
 --
+-- Both sides are FLOORED to whole tiles first, and that is load-bearing
+-- rather than tidiness. unit.getInfo's gridX/gridY are the CONTINUOUS
+-- position (Unit.Types.Instance's uiGridX is a Float, pushed with
+-- Lua.pushnumber), while transferEndpointInfo reports an already-whole
+-- tile -- and it derives a unit endpoint's tile with FLOOR
+-- (Unit.Transfer's uevTile). world.localizeTile rounds whatever it is
+-- handed, so feeding it a raw position would rank a source standing at
+-- x=10.6 -- inside tile 10, possibly the destination's own tile -- as
+-- tile 11. That mixed floor/round frame invents distance-1 gaps, which
+-- both manufactures artificial ties and lets a genuinely farther unit
+-- win. Flooring here puts candidates in exactly the tile frame the
+-- endpoint already reports.
+--
 -- An exact distance tie breaks on the LOWEST uid (D-8), never on
 -- selection order -- unit.getSelected() converts a HashSet, so its
 -- order is not contractual and two equidistant acolytes would otherwise
@@ -184,8 +197,8 @@ end
 -- error.
 function M.resolveSource(selectedUids, excludeUid, target)
     if not selectedUids then return nil end
-    local tx = target and target.gridX
-    local ty = target and target.gridY
+    local tx = target and target.gridX and math.floor(target.gridX)
+    local ty = target and target.gridY and math.floor(target.gridY)
     local best, bestUid = nil, nil
     for _, uid in ipairs(selectedUids) do
         if excludeUid == nil or uid ~= excludeUid then
@@ -195,11 +208,10 @@ function M.resolveSource(selectedUids, excludeUid, target)
                and faction.isPlayerCommandable(fac) then
                 local d = 0
                 if tx and ty then
-                    local lx, ly = world.localizeTile(tx, ty,
-                                                      info.gridX, info.gridY)
-                    if not (lx and ly) then
-                        lx, ly = info.gridX, info.gridY
-                    end
+                    local cx = math.floor(info.gridX)
+                    local cy = math.floor(info.gridY)
+                    local lx, ly = world.localizeTile(tx, ty, cx, cy)
+                    if not (lx and ly) then lx, ly = cx, cy end
                     d = (lx - tx) * (lx - tx) + (ly - ty) * (ly - ty)
                 end
                 if bestUid == nil or d < best

@@ -199,6 +199,33 @@ spec = describe "Transfer context menu" $ do
             labels `shouldSatisfy` T.isInfixOf "Contents"
             labels `shouldNotSatisfy` T.isInfixOf "Transfer"
 
+        it "a FRACTIONAL unit position is floored to its tile, matching the endpoint's own frame" $ \env → do
+            -- Review round 1: unit.getInfo reports the CONTINUOUS
+            -- position (uiGridX is a Float), while transferEndpointInfo
+            -- reports a whole tile it derived with FLOOR, and
+            -- world.localizeTile ROUNDS its inputs. Ranking raw
+            -- positions therefore mixed two frames.
+            --
+            -- uid 12 stands at x = 10.6 -- inside tile 10, which is the
+            -- destination's own tile, so it must win at distance 0.
+            -- uid 3 stands at x = 9.6, genuinely one tile away. Under
+            -- the rounding bug the pair inverts (12 -> tile 11 at
+            -- distance 1, 3 -> tile 10 at distance 0) and 3 wins; 3 is
+            -- also the LOWER uid, so the tiebreak cannot rescue the
+            -- right answer either.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (buildingStub 522 "built" 200 [] <> selectedStub [12, 3]
+                    <> unitInfoStubF [(12, (10.6, 20.0)), (3, (9.6, 20.0))]
+                    <> endpointInfoStubAt "building" 522 True "Cargo Hold" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Transfer"
+            _ ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 12
+
         it "distance is measured in the TARGET's local alias frame, so a seam-adjacent unit wins" $ \env → do
             -- Requirement 3 (#1175's selection-gate rule), kept
             -- self-contained: a --match run initializes no world, and
@@ -638,11 +665,20 @@ endpointInfoStubAt kind rid eligible displayName (gx, gy) = T.concat
 -- selection and resolution reads, which 'resolveSource' must skip
 -- rather than trip over.
 unitInfoStub ∷ [(Int, (Int, Int))] → Text
-unitInfoStub entries = T.concat
+unitInfoStub entries = unitInfoStubF
+    [ (uid, (fromIntegral gx, fromIntegral gy)) | (uid, (gx, gy)) ← entries ]
+
+-- | The same stub at the CONTINUOUS resolution 'unit.getInfo' actually
+-- reports: @Unit.Types.Instance@'s @uiGridX@/@uiGridY@ are Floats
+-- pushed with @Lua.pushnumber@, so a unit standing anywhere but a tile
+-- corner has a fractional position. 'resolveSource' has to floor those
+-- into the whole-tile frame @unit.transferEndpointInfo@ reports.
+unitInfoStubF ∷ [(Int, (Double, Double))] → Text
+unitInfoStubF entries = T.concat
     [ "unit.getInfo = function(uid) return ({"
     , T.intercalate ", "
-        [ T.concat [ "[", tshow uid, "]={gridX=", tshow gx
-                   , ",gridY=", tshow gy, "}" ]
+        [ T.concat [ "[", tshow uid, "]={gridX=", dshow gx
+                   , ",gridY=", dshow gy, "}" ]
         | (uid, (gx, gy)) ← entries ]
     , "})[uid] end; "
     ]
@@ -689,6 +725,9 @@ seamLocalizeStub step = T.concat
 
 tshow ∷ Int → Text
 tshow = T.pack . show
+
+dshow ∷ Double → Text
+dshow = T.pack . show
 
 -- | @building.hitTestAt@ (fixed to this bid), @getActivity@,
 -- @getStorageCapacity@, @getOperations@ for one building.
