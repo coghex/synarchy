@@ -26,7 +26,7 @@ import Test.Hspec
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
@@ -222,6 +222,19 @@ buildingLoose env bid = do
         Nothing → []
         Just b  → [(iiInstanceId i, iiDefName i) | i ← biStorage b]
 
+-- | Presence, which the *Loose readers deliberately cannot report: an
+--   absent instance and a present-but-empty one both read as @[]@, so
+--   #1274's "the source really is gone" assertion needs its own query.
+unitPresent ∷ EngineEnv → UnitId → IO Bool
+unitPresent env uid = do
+    um ← readIORef (unitManagerRef env)
+    pure (HM.member uid (umInstances um))
+
+buildingPresent ∷ EngineEnv → BuildingId → IO Bool
+buildingPresent env bid = do
+    bm ← readIORef (buildingManagerRef env)
+    pure (HM.member bid (bmInstances bm))
+
 -- * Lua plumbing
 
 newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
@@ -305,6 +318,26 @@ tshow = T.pack . show
 --   'commitCross' has to run its rollback.
 refusingPush ∷ PushStep
 refusingPush _ _ _ = pure (Left ReasonReceiverFull)
+
+-- | The same refusal, but it first DESTROYS the source — standing in
+--   for @handleUnitDestroyCommand@ landing on another thread inside
+--   'commitCross''s pop→restore window (#1274). Teardown deletes the
+--   whole instance with its inventory, exactly as this does, so the
+--   rollback that follows genuinely has nowhere to splice the item
+--   back into.
+vanishingUnitPush ∷ UnitId → PushStep
+vanishingUnitPush uid env _ _ = do
+    modifyIORef' (unitManagerRef env) $ \um →
+        um { umInstances = HM.delete uid (umInstances um) }
+    pure (Left ReasonReceiverFull)
+
+-- | The building mirror: @BuildingDestroy@ removing the instance with
+--   its whole 'biStorage'.
+vanishingBuildingPush ∷ BuildingId → PushStep
+vanishingBuildingPush bid env _ _ = do
+    modifyIORef' (buildingManagerRef env) $ \bm →
+        bm { bmInstances = HM.delete bid (bmInstances bm) }
+    pure (Left ReasonReceiverFull)
 
 check ∷ LuaBackendState → Text → IO Text
 check ls request =
@@ -740,6 +773,49 @@ spec = describe "Unit transfer Lua API" $ do
             src ← buildingLoose env holdBid
             src `shouldBe` [ (201, "ration"), (202, "canteen")
                            , (203, "steel_bar") ]
+            dst ← unitLoose env acolyteUid
+            dst `shouldBe` []
+
+        -- #1274: the SAME rollback branch, with the source torn down
+        -- between the pop and the restore. The item is consumed with
+        -- the source — teardown deletes a unit's whole uiInventory and
+        -- a building's whole biStorage without spilling either, so an
+        -- item in flight ends up where the rest of the contents did.
+        -- What must not happen is reporting the destination's refusal
+        -- as though the splice-back had completed. Both source kinds
+        -- have their own restoration branch, so both are gated.
+        it "reports source_missing when the UNIT source vanishes mid-rollback (#1274)" $ \env → do
+            let inv = [ mkItem "ration" 101 0.5, mkItem "canteen" 102 0.5
+                      , mkItem "steel_bar" 103 2.5 ]
+            resetWorld env inv [] [] []
+            r ← commitCross env (EndpointUnit acolyteUid)
+                                (EndpointBuilding holdBid)
+                                (popUnit acolyteUid)
+                                (vanishingUnitPush acolyteUid)
+                                (TransferItemRef 102 "canteen")
+            -- Precedence: the source-side truth OVERRIDES the
+            -- destination's receiver_full, which the surviving-source
+            -- case above still returns.
+            fmap iiInstanceId r `shouldBe`
+                Left (staleFailure ReasonSourceMissing)
+            present ← unitPresent env acolyteUid
+            present `shouldBe` False
+            dst ← buildingLoose env holdBid
+            dst `shouldBe` []
+
+        it "reports source_missing when the BUILDING source vanishes mid-rollback (#1274)" $ \env → do
+            let stored = [ mkItem "ration" 201 0.5, mkItem "canteen" 202 0.5
+                         , mkItem "steel_bar" 203 2.5 ]
+            resetWorld env [] [] stored []
+            r ← commitCross env (EndpointBuilding holdBid)
+                                (EndpointUnit acolyteUid)
+                                (popBuilding holdBid)
+                                (vanishingBuildingPush holdBid)
+                                (TransferItemRef 202 "canteen")
+            fmap iiInstanceId r `shouldBe`
+                Left (staleFailure ReasonSourceMissing)
+            present ← buildingPresent env holdBid
+            present `shouldBe` False
             dst ← unitLoose env acolyteUid
             dst `shouldBe` []
 
