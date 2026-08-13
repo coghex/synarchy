@@ -993,10 +993,12 @@ end
 -- "apply every row" precisely so that unwinding stays verbatim.
 --
 -- Issue #1279 gives each component its OWN copy of that context
--- (`copyEntityContext`), so what a component observes no longer depends
--- on apply order or on what the components before it did with the value
--- they were handed -- every one of them sees exactly the membership and
--- owner pages Haskell supplied.
+-- (`copyEntityContext`), built for EVERY component before the first
+-- apply() runs and with the raw source dropped at that point, so what a
+-- component observes no longer depends on apply order, on what the
+-- components before it did with the value they were handed, or on what
+-- they did to `_pendingEntities` behind its back -- every one of them
+-- sees exactly the membership and owner pages Haskell supplied.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
@@ -1078,14 +1080,37 @@ function saveModules.applyAll()
         return failures
     end
 
+    -- Issue #1279: every component's context is built HERE, before the
+    -- first apply() runs, rather than lazily inside the loop below.
+    -- Copying per iteration would still have read the live
+    -- `_pendingEntities` each time, and that field is public on the module
+    -- table -- an earlier apply could reach it as
+    -- `require('scripts.lib.save_modules')._pendingEntities.unit[7] = nil`
+    -- and every LATER copy would carry the deletion, leaving filtering
+    -- apply-order-dependent by a different route than the original one.
+    -- Precomputing removes the question: by the time any component can run,
+    -- every context already exists and none of them shares anything with
+    -- the source or with each other. `nil` stays nil -- a contextless apply
+    -- still means "apply every row".
+    local contexts = {}
+    for _, id in ipairs(applyOrder) do
+        if prepared[id] ~= nil then
+            contexts[id] = copyEntityContext(entities)
+        end
+    end
+    -- Nothing reads the raw source past this point (the rollback pass is
+    -- contextless by design), so drop it now rather than at the end: a
+    -- component that goes looking for it mid-apply finds nothing to
+    -- mutate, and the load's own copy of the entity sets stops being
+    -- reachable the moment it stops being needed.
+    entities = nil
+    saveModules._pendingEntities = nil
+
     local applied = {}
     for _, id in ipairs(applyOrder) do
         if prepared[id] ~= nil then
-            -- Issue #1279: a FRESH independent copy per component, so no
-            -- component can change what any other one observes (nil stays
-            -- nil -- a contextless apply still means "apply every row").
             local ok, err = pcall(saveModules.registry[id].apply, prepared[id],
-                                  copyEntityContext(entities))
+                                  contexts[id])
             if not ok then
                 -- Round 5 review: `apply` is ordinary Lua code, not
                 -- guaranteed all-or-nothing -- it may have mutated

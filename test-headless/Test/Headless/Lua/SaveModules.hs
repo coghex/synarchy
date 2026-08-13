@@ -1687,6 +1687,63 @@ spec = do
             , "  'the source itself must come through untouched')"
             ]
 
+        it "is unaffected by an earlier component reaching AROUND its own \
+           \context to mutate the module's pending source directly, since \
+           \every context exists before the first apply runs and the raw \
+           \source is dropped at that point" $ runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "local seen = {}"
+            -- _pendingEntities is a public field on the module table, so
+            -- this is a route that needs no debug library and no reference
+            -- captured from the value the component was handed.
+            , "saveModules.register('src_a_mutator', "
+              <> mutatorSpec (T.concat
+                  [ "local sm = require('scripts.lib.save_modules');"
+                  , "seen.pendingCleared = (sm._pendingEntities == nil);"
+                  , "if sm._pendingEntities ~= nil then"
+                  , "  sm._pendingEntities.unit[7] = nil;"
+                  , "  sm._pendingEntities.unitPage[7] = 'HIJACKED' end;"
+                  , "sm._pendingEntities = { unit = { [999]=true },"
+                  , "  building = {}, unitPage = {} }"
+                  ]) <> ")"
+            , "saveModules.register('src_z_observer', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    seen.unit7 = entities.unit[7]"
+            , "    seen.unit999 = entities.unit[999]"
+            , "    seen.page7 = entities.unitPage[7]"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='src_z_observer' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='src_a_mutator', version=1, payload=codec.encode({}) },"
+            , "    { id='src_z_observer', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [9]={tag='nine'} }) } },"
+            , "  1, false, { unit = { [7]=true }, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(seen.pendingCleared, 'the raw source must already be "
+              <> "gone by the time any component runs')"
+            , "assert(seen.unit7 == true, 'the later component must still "
+              <> "see unit 7 present, got ' .. tostring(seen.unit7))"
+            , "assert(seen.unit999 == nil, 'a wholesale replacement of the "
+              <> "pending source must not reach it either')"
+            , "assert(seen.page7 == 'alpha', 'the later component must see "
+              <> "Haskell owner page, got ' .. tostring(seen.page7))"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'the present-owner row must still be retained')"
+            , "assert(live[9] == nil, 'the absent-owner row must still be "
+              <> "dropped')"
+            ]
+
         it "is an ORDINARY table under every standard idiom -- next, pairs \
            \and getmetatable included -- so a component using raw iteration \
            \cannot silently conclude the restored session is empty" $
