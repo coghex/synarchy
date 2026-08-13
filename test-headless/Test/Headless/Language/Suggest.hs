@@ -15,6 +15,7 @@ module Test.Headless.Language.Suggest (spec) where
 import UPrelude
 import Test.Hspec
 import Data.List (nub, sort)
+import Data.IORef (newIORef, readIORef)
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Language.Semantic.Types
@@ -26,9 +27,16 @@ import Language.Generated.Signature (profileSignature)
 import Language.Generated.Render (renderNative)
 import Language.Generated.Orthography (outputInventory)
 import Language.Suggest
-import Engine.Scripting.Lua.Types (LanguageCache(..))
+import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Thread (ThreadControl(..))
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LanguageCache(..), LuaBackendState(..))
 import Engine.Scripting.Lua.API.World.Lifecycle
-    (suggestionStep, suggestionStepLabel, readCatalogueForSuggestions)
+    ( suggestionStep, suggestionStepLabel, readCatalogueForSuggestions
+    , maxSuggestNameOrdinal )
+import Test.Headless.Harness (withHeadlessEngine)
 
 -- | Provenance for one world seed at the current generator.
 provFor ∷ Word64 → LanguageProvenance
@@ -283,6 +291,97 @@ spec = describe "world-name suggestions" $ do
         it "still reads the real catalogue" $ do
             result ← readCatalogueForSuggestions conceptCataloguePath
             fmap catVersion result `shouldBe` Right (catVersion prodCat)
+
+    -- #1272: the reroll chain is a replay from ordinal zero, so its
+    -- cost is Θ(ordinal) — and it runs synchronously on the shared Lua
+    -- thread. The domain is therefore bounded at the PUBLIC boundary
+    -- (world.suggestName), leaving Language.Suggest's sequence contract
+    -- above untouched. These drive the registered Lua function itself,
+    -- because both halves of what the bound promises — the return SHAPE
+    -- on each side and the guard sitting ahead of resolveSuggestion —
+    -- live at that boundary and nowhere else.
+    around withHeadlessEngine $
+      describe "the ordinal bound at world.suggestName" $ do
+        let atOrdinal ∷ Int → Text
+            atOrdinal k = T.concat
+                [ "local sug, err = world.suggestName(42, ", tshow k, "); "
+                , "if sug == nil then return 'nil|' .. tostring(err) end; "
+                , "return 'ok|' .. sug.name .. '|' .. sug.gloss" ]
+            expectedAt k = case suggestNameAt (suggesterFor prodCat 42) k of
+                Left err  → error (T.unpack (suggestErrorText err))
+                Right sug → T.concat ["ok|", nsName sug, "|", nsGloss sug]
+
+        it "accepts the documented maximum and suggests the real name" $ \env → do
+            ls ← newBareLuaBackend env
+            evalDebug ls (atOrdinal maxSuggestNameOrdinal)
+                ≫= (`shouldBe` expectedAt maxSuggestNameOrdinal)
+
+        -- The first refused ordinal: nil plus a reason naming the
+        -- maximum, exactly the missing-catalogue failure's shape.
+        it "refuses the first ordinal past it, naming the maximum" $ \env → do
+            ls ← newBareLuaBackend env
+            reply ← evalDebug ls (atOrdinal (maxSuggestNameOrdinal + 1))
+            reply `shouldSatisfy` T.isPrefixOf "nil|"
+            reply `shouldSatisfy` T.isInfixOf (tshow (maxSuggestNameOrdinal + 1))
+            reply `shouldSatisfy` T.isInfixOf (tshow maxSuggestNameOrdinal)
+            reply `shouldSatisfy` T.isInfixOf "out of range"
+
+        -- The guard has to sit AHEAD of resolveSuggestion, not inside
+        -- it: a refused ordinal must perform no ordinal-proportional
+        -- work and change nothing. An untouched cache on a backend
+        -- whose only call was the refused one is what proves it — the
+        -- cache is written by every path through resolveSuggestion,
+        -- including its failures.
+        it "leaves a fresh backend's language cache untouched" $ \env → do
+            ls ← newBareLuaBackend env
+            let cached = isJust ⊚ readIORef (lbsLanguageCache ls)
+            cached ≫= (`shouldBe` False)
+            _ ← evalDebug ls (atOrdinal (maxSuggestNameOrdinal + 1))
+            cached ≫= (`shouldBe` False)
+            -- Not vacuous: an ACCEPTED ordinal on the same backend does
+            -- populate it, so the check above is measuring the guard.
+            _ ← evalDebug ls (atOrdinal 0)
+            cached ≫= (`shouldBe` True)
+
+        -- Preserved from before the bound: an omitted, non-numeric, or
+        -- negative ordinal is still normalized to 0 rather than refused.
+        it "still normalizes an omitted or negative ordinal to zero" $ \env → do
+            ls ← newBareLuaBackend env
+            let zero = expectedAt 0
+            evalDebug ls (atOrdinal (-1)) ≫= (`shouldBe` zero)
+            evalDebug ls (T.concat
+                [ "local sug = world.suggestName(42); "
+                , "return 'ok|' .. sug.name .. '|' .. sug.gloss" ])
+                ≫= (`shouldBe` zero)
+
+-- | A real Lua backend with the full API registered and nothing
+--   preloaded — the same helper 'Test.Headless.UI.Slider' uses, so
+--   @world.suggestName@ is reached exactly as a script reaches it.
+newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
+newBareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                               (assetPoolRef env) (nextObjectIdRef env)
+                               (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls
+
+-- | Run one command through the exact loadstring+pcall primitive the
+--   real TCP debug console uses, and unwrap the string it returned.
+--
+--   That primitive serializes its reply, so a returned Lua string
+--   arrives JSON-quoted. Every chunk below returns one string, so this
+--   strips the quoting once rather than writing it into each expected
+--   value, where it would read as part of the contract.
+evalDebug ∷ LuaBackendState → Text → IO Text
+evalDebug ls src = unquote ⊚ executeDebugLua (lbsLuaState ls) src
+  where
+    unquote t = case T.stripPrefix "\"" t ≫= T.stripSuffix "\"" of
+        Just inner → inner
+        Nothing    → t
+
+tshow ∷ Int → Text
+tshow = T.pack ∘ show
 
 -- | Which of the five shapes an expression took, as report text.
 shapeOf ∷ NameExpr → String
