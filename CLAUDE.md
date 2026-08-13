@@ -1193,7 +1193,26 @@ before touching each area:
   later locations + ONLY the river being inspected (a world or location
   target admits no river at all), the inspected entity excluded from its
   own links, entries exposing nothing but an entity kind and an
-  already-visible name. There is no session history. `world.getRiverAt`
+  already-visible name. There is no session history. The optional
+  `pageId` names the TARGET only (#1265) and never widens that set:
+  omitted, target and recurrence are both `resolveActiveWorld`'s page; a
+  live INACTIVE page resolves the target there — its stored name, gloss,
+  source and page-language validation all that page's — while candidates
+  still come only from the active page, so no inactive name is ever a
+  recurrence entry; a page that does not exist is the unchanged
+  `available=false`/`no_entity`. With no visible page, recurrence follows
+  `resolveActiveWorld` exactly, head-of-`wmWorlds` fallback included, and
+  substitutes nothing when that resolves to `Nothing` — a missing
+  ingredient on the RECURRENCE page (no active page, no gen params)
+  leaves an explicitly selected target's result intact with recurrence
+  empty, never downgrading it. That crossing is what makes
+  self-exclusion PAGE-QUALIFIED: every page's world entry is
+  `("world", Nothing)` and location ids are page-local, so comparing kind
+  and id alone would silently drop the active page's own world name, or
+  an equal-numbered active location, from an inactive target's links.
+  A river target on another page admits no river at all — the inspected
+  river is not on the active page, and its `GeoFeatureId` re-resolved
+  there is a different river. `world.getRiverAt`
   is the minimal selected-segment→identity resolution (channel
   containment, nearest wins, no global river list). The expression
   travels the whole Create World chain — `world.suggestName`'s `expr` →

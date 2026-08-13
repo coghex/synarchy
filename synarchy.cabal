@@ -1137,6 +1137,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Language.Generated
                    Test.Headless.Language.Suggest
                    Test.Headless.Language.Etymology
+                   Test.Headless.Language.EtymologyPageScope
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact
